@@ -11,7 +11,6 @@ import {
 
 export type Route =
   | { name: "home" }
-  | { name: "agents"; agentId?: string; create: boolean }
   | {
       name: "thread";
       threadId: string;
@@ -67,20 +66,6 @@ export function parseRoute(pathname: string, hash = ""): Route {
   }
   if (pathname === "/archived") return { name: "archived" };
   if (pathname === "/usage") return { name: "usage" };
-  if (pathname === "/agents") return { name: "agents", create: false };
-  if (pathname === "/agents/new") return { name: "agents", create: true };
-  const agentMatch = /^\/agents\/([^/]+)$/.exec(pathname);
-  if (agentMatch?.[1]) {
-    try {
-      return {
-        name: "agents",
-        agentId: decodeURIComponent(agentMatch[1]),
-        create: false,
-      };
-    } catch {
-      return { name: "home" };
-    }
-  }
   const automationMatch = /^\/threads\/([^/]+)\/automation$/.exec(pathname);
   if (automationMatch?.[1]) {
     try {
@@ -293,18 +278,6 @@ export function settingsPath(page?: SettingsPage, resource: SettingsResourceRout
   return isSettingsResourcePage(page) ? `${base}${settingsResourceSuffix(resource)}` : base;
 }
 
-export function agentsPath(): string {
-  return "/agents";
-}
-
-export function newAgentPath(): string {
-  return "/agents/new";
-}
-
-export function agentPath(agentId: string): string {
-  return `/agents/${encodeURIComponent(agentId)}`;
-}
-
 export function usagePath(): string {
   return "/usage";
 }
@@ -323,10 +296,6 @@ export function routePath(route: Route): string {
   if (route.name === "archived") return "/archived";
   if (route.name === "usage") return usagePath();
   if (route.name === "settings") return settingsPath(route.page, route);
-  if (route.name === "agents") {
-    if (route.create) return newAgentPath();
-    return route.agentId ? agentPath(route.agentId) : agentsPath();
-  }
   if (route.automationOpen) return threadAutomationPath(route.threadId);
   if (route.focusTurnId) return threadTurnPath(route.threadId, route.focusTurnId);
   return threadPath(route.threadId);

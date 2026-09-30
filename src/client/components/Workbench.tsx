@@ -18,8 +18,6 @@ import {
   createWorkspaceFileLinkHandler,
   WorkspaceFileLinkProvider,
 } from "../workspace-files/workspace-file-link-routing";
-import { AgentClientStore } from "../agents/AgentClientStore";
-import { AgentsView } from "./agents/AgentsView";
 import { UsageView } from "../usage/UsageView";
 import { useSidebarViewPreferences } from "../app/sidebar-view-store";
 import { useEnvironmentColorsEnabled } from "../app/use-environment-colors-enabled";
@@ -47,14 +45,9 @@ export function Workbench({
   const application = useApplicationStore(applicationStore);
   const sidebarScope = useSidebarViewPreferences();
   const environmentColorsEnabled = useEnvironmentColorsEnabled();
-  const agentStore = useMemo(
-    () => new AgentClientStore(applicationStore.api),
-    [applicationStore],
-  );
   const lastThreadRoute = useRef<string | undefined>(
     route.name === "thread" ? route.threadId : undefined,
   );
-  useEffect(() => () => agentStore.dispose(), [agentStore]);
   const selectedThreadId = route.name === "thread" ? route.threadId : undefined;
   useEffect(() => {
     if (!selectedThreadId) return;
@@ -114,22 +107,6 @@ export function Workbench({
     }
   }, [panelLayoutStore, route]);
 
-  if (route.name === "agents") {
-    return (
-      <main className="workbench">
-        <div className="pane-host pane-host-nav-header">
-          <div className="pane-nav-header">
-            <SidebarNavTrigger />
-          </div>
-          <AgentsView
-            route={route}
-            store={agentStore}
-            workspaces={application.snapshot?.workspaces ?? []}
-          />
-        </div>
-      </main>
-    );
-  }
   if (route.name === "archived") {
     return (
       <main className="workbench">

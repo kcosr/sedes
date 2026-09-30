@@ -12,6 +12,7 @@ export type SettingsPage =
   | "connection"
   | "environments"
   | "backends"
+  | "agents"
   | "projects"
   | "server";
 
@@ -28,6 +29,7 @@ export const settingsPageSlugs = {
   connection: "connection",
   environments: "environments",
   backends: "backends",
+  agents: "agents",
   projects: "projects",
   server: "server",
 } as const satisfies Readonly<Record<SettingsPage, string>>;
@@ -36,9 +38,10 @@ export const settingsPageSlugs = {
  * Inventory pages whose entities have their own URLs. Selection and editing
  * are route state, so browser and Android Back walk the same path.
  */
-export type SettingsResourcePage = "environments" | "backends";
+export type SettingsResourcePage = "environments" | "backends" | "agents";
 /** `view` shows an entity, `edit` its editor, `new` a creation flow and
- * `pending` a host registration awaiting approval (environments only). */
+ * `pending` a host registration awaiting approval (environments only). An
+ * Agent is a small preset whose view is its editor, so Agents have no `edit`. */
 export type SettingsResourceMode = "view" | "edit" | "new" | "pending";
 
 export interface SettingsResourceRoute {
@@ -46,14 +49,14 @@ export interface SettingsResourceRoute {
   readonly mode?: SettingsResourceMode;
 }
 
-export const settingsResourcePages: readonly SettingsResourcePage[] = ["environments", "backends"];
+export const settingsResourcePages: readonly SettingsResourcePage[] = ["environments", "backends", "agents"];
 
 /** Creation starts for environments: `/new` is the chooser, `/new/:kind` the form or pairing setup. */
 export const environmentCreationKinds = ["local", "ssh", "pair"] as const;
 export type EnvironmentCreationKind = typeof environmentCreationKinds[number];
 
 export function isSettingsResourcePage(page: SettingsPage | undefined): page is SettingsResourcePage {
-  return page === "environments" || page === "backends";
+  return (settingsResourcePages as readonly (SettingsPage | undefined)[]).includes(page);
 }
 
 function decodeSegment(segment: string): string | undefined {
@@ -86,7 +89,7 @@ export function parseSettingsResource(page: SettingsResourcePage, segments: read
   const resourceId = decodeSegment(first);
   if (!resourceId || resourceId === "new" || resourceId === "pending") return undefined;
   if (second === undefined) return { mode: "view", resourceId };
-  return second === "edit" ? { mode: "edit", resourceId } : undefined;
+  return second === "edit" && page !== "agents" ? { mode: "edit", resourceId } : undefined;
 }
 
 /**

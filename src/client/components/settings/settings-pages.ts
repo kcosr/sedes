@@ -16,7 +16,6 @@ import {
   SunMoon,
   type LucideIcon,
 } from "lucide-react";
-import { agentsPath } from "../../app/router.js";
 import type { SettingsPage } from "../../app/settings-route.js";
 
 /** The settings nav and the compact list group pages in this order. */
@@ -39,6 +38,8 @@ export interface SettingsAvailability {
   readonly notifications: boolean;
   readonly execution: boolean;
   readonly projects: boolean;
+  /** Saved Agents: the client can reach the principal's Agent presets. */
+  readonly agents: boolean;
   readonly toolClients: boolean;
   readonly pairedClients: boolean;
   /** The Electron desktop app's connection profiles. */
@@ -47,35 +48,21 @@ export interface SettingsAvailability {
   readonly serverProfiles: boolean;
 }
 
-interface SettingsEntryBase {
+export interface SettingsPageEntry {
+  readonly id: SettingsPage;
   readonly label: string;
   /** One line, shown in the compact list. */
   readonly description: string;
   readonly icon: LucideIcon;
   readonly group: SettingsGroupId;
-}
-
-export interface SettingsPageEntry extends SettingsEntryBase {
-  readonly kind: "page";
-  readonly id: SettingsPage;
   readonly available: (availability: SettingsAvailability) => boolean;
 }
-
-/** A related Workbench page listed beside the settings pages. */
-export interface SettingsLinkEntry extends SettingsEntryBase {
-  readonly kind: "link";
-  readonly id: string;
-  readonly href: string;
-}
-
-export type SettingsEntry = SettingsPageEntry | SettingsLinkEntry;
 
 const always = (): boolean => true;
 
 /** Every settings page, in nav order within its group. */
 export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
   {
-    kind: "page",
     id: "general",
     label: "General",
     description: "Sidebar, panels, history and the composer.",
@@ -84,7 +71,6 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     available: always,
   },
   {
-    kind: "page",
     id: "appearance",
     label: "Appearance",
     description: "Theme, environment colors and motion.",
@@ -93,7 +79,6 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     available: always,
   },
   {
-    kind: "page",
     id: "mobile",
     label: "Mobile",
     description: "Composer focus and history on phones.",
@@ -102,7 +87,6 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     available: always,
   },
   {
-    kind: "page",
     id: "terminal",
     label: "Terminal",
     description: "Cursor, text size and scrollback.",
@@ -111,7 +95,6 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     available: always,
   },
   {
-    kind: "page",
     id: "prompts",
     label: "Prompts",
     description: "Reusable prompts for the composer.",
@@ -120,7 +103,6 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     available: ({ prompts }) => prompts,
   },
   {
-    kind: "page",
     id: "notifications",
     label: "Notifications",
     description: "Alerts when agents finish or need you.",
@@ -129,7 +111,6 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     available: ({ notifications }) => notifications,
   },
   {
-    kind: "page",
     id: "environments",
     label: "Environments",
     description: "Where agents run and what they can reach.",
@@ -138,7 +119,6 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     available: ({ execution }) => execution,
   },
   {
-    kind: "page",
     id: "backends",
     label: "Backends",
     description: "Model providers in each environment.",
@@ -147,7 +127,6 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     available: ({ execution }) => execution,
   },
   {
-    kind: "page",
     id: "projects",
     label: "Projects",
     description: "Remembered project directories.",
@@ -156,7 +135,14 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     available: ({ projects }) => projects,
   },
   {
-    kind: "page",
+    id: "agents",
+    label: "Agents",
+    description: "Saved presets for new threads.",
+    icon: Bot,
+    group: "execution",
+    available: ({ agents }) => agents,
+  },
+  {
     id: "tool_clients",
     label: "Tool clients",
     description: "Credentials for external CLI clients.",
@@ -165,7 +151,6 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     available: ({ toolClients }) => toolClients,
   },
   {
-    kind: "page",
     id: "paired_clients",
     label: "Paired clients",
     description: "Devices paired with this server.",
@@ -174,7 +159,6 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     available: ({ pairedClients }) => pairedClients,
   },
   {
-    kind: "page",
     id: "connection",
     label: "Connection",
     description: "The server this app connects to.",
@@ -183,7 +167,6 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     available: ({ electronConnection }) => electronConnection,
   },
   {
-    kind: "page",
     id: "server",
     label: "Server",
     description: "Sedes servers this device can connect to.",
@@ -193,7 +176,6 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
       serverProfiles && !electronConnection,
   },
   {
-    kind: "page",
     id: "diagnostics",
     label: "Diagnostics",
     description: "Traces for bug reports, and the version.",
@@ -202,17 +184,6 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     available: always,
   },
 ];
-
-/** Agents are a Workbench page; Execution links to them. */
-export const SETTINGS_AGENTS_LINK: SettingsLinkEntry = {
-  kind: "link",
-  id: "agents",
-  label: "Agents",
-  description: "Saved presets for new threads.",
-  icon: Bot,
-  group: "execution",
-  href: agentsPath(),
-};
 
 export function availableSettingsPages(
   availability: SettingsAvailability,
@@ -223,16 +194,15 @@ export function availableSettingsPages(
 export interface SettingsNavGroup {
   readonly id: SettingsGroupId;
   readonly label: string;
-  readonly entries: readonly SettingsEntry[];
+  readonly entries: readonly SettingsPageEntry[];
 }
 
-/** Available pages (and the Agents link) by group, skipping empty groups. */
+/** Available pages by group, skipping empty groups. */
 export function groupSettingsEntries(
   pages: readonly SettingsPageEntry[],
 ): SettingsNavGroup[] {
-  const entries: SettingsEntry[] = [...pages, SETTINGS_AGENTS_LINK];
   return SETTINGS_GROUPS.flatMap(({ id, label }) => {
-    const members = entries.filter((entry) => entry.group === id);
+    const members = pages.filter((entry) => entry.group === id);
     return members.length > 0 ? [{ id, label, entries: members }] : [];
   });
 }

@@ -26,12 +26,12 @@ import type {
   ThreadArchiveImpact,
 } from "../../shared/index.js";
 import {
-  agentsPath,
   navigate,
   threadPath,
   threadTurnPath,
   usagePath,
 } from "../app/router.js";
+import type { SettingsPage } from "../app/settings-route.js";
 import {
   resolveModePreferences,
   sidebarEffectiveTimestamp,
@@ -398,7 +398,8 @@ export function InventorySidebar({
   selectedThreadId?: string;
   onSelectThread?: SelectThread;
   onNavigate: (options?: { readonly keepDrawerOpen?: boolean }) => void;
-  onOpenSettings: (trigger: HTMLButtonElement) => void;
+  /** Opens Settings (a page of it, when given); focus returns to `trigger` afterwards. */
+  onOpenSettings: (trigger: HTMLButtonElement, page?: SettingsPage) => void;
   /** Desktop fallback for routes whose navigation trigger is not rendered. */
   showFooterConnectionStatus?: boolean;
   /** Desktop-only detail preview; the full-screen mobile drawer disables it. */
@@ -2134,10 +2135,7 @@ export function InventorySidebar({
               navigate(usagePath());
               onNavigate();
             }}
-            onOpenAgents={() => {
-              navigate(agentsPath());
-              onNavigate();
-            }}
+            onOpenAgents={(trigger) => onOpenSettings(trigger, "agents")}
             onOpenArchivedThreads={() => {
               navigate("/archived");
               onNavigate();

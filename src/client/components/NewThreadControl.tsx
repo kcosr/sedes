@@ -16,7 +16,7 @@ import {
   type ThreadTemplate,
   type UpdateThreadTemplateRequest,
 } from "../../shared/index.js";
-import { navigate, newAgentPath } from "../app/router.js";
+import { navigate, settingsPath } from "../app/router.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { messageFrom } from "../stores/ApplicationClientStore.js";
 import { usePickerFocus } from "../lib/use-picker-focus.js";
@@ -1567,7 +1567,11 @@ export function NewThreadControl({
                   type="button"
                   size="sm"
                   variant="outline"
-                  onClick={() => navigate(newAgentPath())}
+                  onClick={() => {
+                    // The dialog would otherwise stay over Settings.
+                    closePicker(false);
+                    navigate(settingsPath("agents", { mode: "new" }));
+                  }}
                 >
                   Create an Agent
                 </Button>

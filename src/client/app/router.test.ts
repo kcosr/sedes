@@ -3,13 +3,10 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  agentPath,
-  agentsPath,
   historyStepsBackTo,
   installNavigationBlocker,
   navigate,
   navigateUp,
-  newAgentPath,
   parseRoute,
   routePath,
   sameRoute,
@@ -98,9 +95,16 @@ describe("automation routes", () => {
       name: "home",
     });
     expect(parseRoute("/threads/%E0%A4%A/automation")).toEqual({ name: "home" });
-    expect(parseRoute("/agents/one/extra")).toEqual({ name: "home" });
-    expect(parseRoute("/agents/%E0%A4%A")).toEqual({ name: "home" });
     expect(parseRoute("/usage/extra")).toEqual({ name: "home" });
+  });
+
+  it("has no Workbench Agents route: Agents live in Settings, and the old paths fall home like any unknown path", () => {
+    for (const pathname of ["/agents", "/agents/new", "/agents/agent-1", "/agents/agent-1/extra"]) {
+      expect(parseRoute(pathname)).toEqual({ name: "home" });
+    }
+    expect(parseRoute("/settings/agents")).toEqual({ name: "settings", page: "agents" });
+    expect(parseRoute("/settings/agents/new")).toEqual({ name: "settings", page: "agents", mode: "new" });
+    expect(parseRoute("/settings/agents/agent%2Fone")).toEqual({ name: "settings", page: "agents", mode: "view", resourceId: "agent/one" });
   });
 });
 
@@ -111,16 +115,11 @@ describe("routePath", () => {
     expect(usagePath()).toBe("/usage");
     expect(routePath({ name: "usage" })).toBe(usagePath());
     expect(parseRoute(usagePath())).toEqual({ name: "usage" });
-    expect(routePath({ name: "agents", create: false })).toBe(agentsPath());
-    expect(routePath({ name: "agents", create: true })).toBe(newAgentPath());
+    expect(routePath({ name: "settings", page: "agents" })).toBe("/settings/agents");
+    expect(routePath({ name: "settings", page: "agents", mode: "new" })).toBe("/settings/agents/new");
     expect(
-      routePath({ name: "agents", agentId: "agent/one", create: false }),
-    ).toBe(agentPath("agent/one"));
-    expect(parseRoute(agentPath("agent/one"))).toEqual({
-      name: "agents",
-      agentId: "agent/one",
-      create: false,
-    });
+      routePath({ name: "settings", page: "agents", mode: "view", resourceId: "agent/one" }),
+    ).toBe("/settings/agents/agent%2Fone");
     expect(
       routePath({ name: "thread", threadId: "t1", automationOpen: false }),
     ).toBe(threadPath("t1"));

@@ -18,6 +18,10 @@ describe("settings resource routes", () => {
     ["/settings/backends/codex-stdio-e2e", { name: "settings", page: "backends", mode: "view", resourceId: "codex-stdio-e2e" }],
     ["/settings/backends/codex-stdio-e2e/edit", { name: "settings", page: "backends", mode: "edit", resourceId: "codex-stdio-e2e" }],
     ["/settings/backends/new", { name: "settings", page: "backends", mode: "new" }],
+    ["/settings/agents", { name: "settings", page: "agents" }],
+    ["/settings/agents/11111111-1111-4111-8111-111111111111",
+      { name: "settings", page: "agents", mode: "view", resourceId: "11111111-1111-4111-8111-111111111111" }],
+    ["/settings/agents/new", { name: "settings", page: "agents", mode: "new" }],
   ];
 
   it.each(cases)("round-trips %s", (pathname, route) => {
@@ -51,6 +55,11 @@ describe("settings resource routes", () => {
     "/settings/environments/%E0%A4%A",
     "/settings/backends/new/ssh",
     "/settings/backends/pending/reg-1",
+    // An Agent's view is its editor: no /edit, no creation kinds, no pending.
+    "/settings/agents/agent-1/edit",
+    "/settings/agents/new/local",
+    "/settings/agents/pending/reg-1",
+    "/settings/agents/",
     "/settings/general/abc",
     "/settings/projects/abc",
   ])("rejects the unknown entity URL %s", pathname => {

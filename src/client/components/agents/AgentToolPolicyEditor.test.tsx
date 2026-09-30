@@ -83,7 +83,9 @@ describe("AgentToolPolicyEditor", () => {
 
   it("switches between inherited and explicit complete policy", () => {
     const onChange = vi.fn();
-    render(<AgentToolPolicyEditor catalog={catalog} onChange={onChange} />);
+    render(<AgentToolPolicyEditor id="agent-tools" catalog={catalog} onChange={onChange} />);
+    // The section is the target of the Agent editor's "Sedes tools" anchor.
+    expect(screen.getByRole("region", { name: "Sedes tools" })).toHaveAttribute("id", "agent-tools");
     fireEvent.click(
       screen.getByRole("switch", { name: "Use default tool policy" }),
     );

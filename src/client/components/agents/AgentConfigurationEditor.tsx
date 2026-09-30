@@ -13,11 +13,14 @@ import { SwitchField } from "../settings/SettingsField.js";
 import { SettingsSection } from "../settings/SettingsSection.js";
 
 export function AgentConfigurationEditor({
+  id,
   descriptor,
   overrides = descriptor.canonicalOverrides,
   disabled = false,
   onChange,
 }: {
+  /** The section's id, a target for the editor's section anchors. */
+  readonly id?: string;
   readonly descriptor: NormalizedAgentConfigurationDescriptor;
   readonly overrides?: NormalizedAgentConfigurationOverrides;
   readonly disabled?: boolean;
@@ -40,6 +43,7 @@ export function AgentConfigurationEditor({
 
   return (
     <SettingsSection
+      id={id}
       title="Agent configuration"
       description="Override only the settings this Agent should carry between targets."
       card

@@ -23,7 +23,8 @@ import {
 export interface SidebarFooterActionsProps {
   readonly onOpenSettings: (trigger: HTMLButtonElement) => void;
   readonly onOpenUsage: () => void;
-  readonly onOpenAgents: () => void;
+  /** Opens Settings › Agents; `trigger` is the More button, where focus returns. */
+  readonly onOpenAgents: (trigger: HTMLButtonElement) => void;
   readonly onOpenArchivedThreads: () => void;
   readonly connection?: ConnectionState;
   readonly api?: ApiClient;
@@ -47,12 +48,13 @@ export function SidebarFooterActions({
   const useSheet = useUsageSheetLayout();
   const [usageSheetOpen, setUsageSheetOpen] = useState(false);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
+  const moreTriggerRef = useRef<HTMLButtonElement>(null);
   const usageApi = providerPulseEnabled ? api : undefined;
   return (
     <div className="sidebar-footer-actions">
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" className="sidebar-footer-menu-trigger">
+          <Button ref={moreTriggerRef} variant="ghost" className="sidebar-footer-menu-trigger">
             More
             <ChevronUp aria-hidden="true" />
           </Button>
@@ -70,7 +72,10 @@ export function SidebarFooterActions({
             )
           ) : null}
           {(experimentalUsageEnabled || usageApi) && <DropdownMenuSeparator />}
-          <DropdownMenuItem onSelect={onOpenAgents}>
+          <DropdownMenuItem onSelect={() => {
+            const trigger = moreTriggerRef.current;
+            if (trigger) onOpenAgents(trigger);
+          }}>
             <Bot aria-hidden="true" />
             Agents
           </DropdownMenuItem>

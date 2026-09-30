@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import { Plus, RefreshCw, Server } from "lucide-react";
 import { acceptHostRegistrationRequestSchema } from "../../../shared/protocol/host-pairing.js";
 import { historyStepsBackTo, installNavigationBlocker, navigate, settingsPath, useRoute, type Route } from "../../app/router.js";
-import { isSettingsResourcePage, settingsResourceParent, type SettingsResourceMode, type SettingsResourcePage } from "../../app/settings-route.js";
+import { settingsResourceParent, type SettingsPage as SettingsPageId, type SettingsResourceMode } from "../../app/settings-route.js";
 import { EntityList } from "../settings/EntityList.js";
 import { SettingsBackLink, SettingsPage } from "../settings/SettingsPage.js";
 import { SettingsDetailHeader, SettingsSplit } from "../settings/SettingsSplit.js";
@@ -28,7 +28,12 @@ import type { BackendDefinition, Configuration, EnvironmentDefinition } from "./
 import { mapConfigurationIssues, mapRequestIssues, noErrors, validationIssues, type MappedErrors, type ValidationIssue } from "./validation.js";
 import "./execution-settings.css";
 
-export type ExecutionPage = SettingsResourcePage;
+/** The execution inventories: one mounted controller serves both. */
+export type ExecutionPage = "environments" | "backends";
+
+export function isExecutionPage(page: SettingsPageId | undefined): page is ExecutionPage {
+  return page === "environments" || page === "backends";
+}
 
 interface Location {
   readonly page: ExecutionPage;
@@ -37,7 +42,7 @@ interface Location {
 }
 
 function executionLocation(route: Route): Location | undefined {
-  if (route.name !== "settings" || !isSettingsResourcePage(route.page)) return undefined;
+  if (route.name !== "settings" || !isExecutionPage(route.page)) return undefined;
   return { page: route.page, ...(route.resourceId ? { resourceId: route.resourceId } : {}), ...(route.mode ? { mode: route.mode } : {}) };
 }
 

@@ -1036,11 +1036,6 @@
   color: inherit;
 }
 
-[data-slot="settings-nav-link"] > [data-slot="settings-nav-external"] {
-  width: var(--icon-sm);
-  height: var(--icon-sm);
-}
-
 /* ── Page parts ── */
 
 /* Appearance: palette choices with a swatch preview, and tint sliders. */
