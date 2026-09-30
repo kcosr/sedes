@@ -55,7 +55,7 @@ encrypt HTTP. Use the already configured trusted private access boundary in
 ## Download and start
 
 In **Settings → Environments → Add environment → Pair a host**
-(`/settings/environments/new/pair`), use **Download connector** and copy the
+(`/settings/environments/~new/pair`), use **Download connector** and copy the
 displayed commands. Save `sedes-sidecar.mjs` on the connecting host. The
 single downloaded JavaScript file is sufficient when invoked through Node; it
 does not require an npm installation on that host.

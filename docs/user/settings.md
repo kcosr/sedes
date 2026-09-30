@@ -89,10 +89,13 @@ directly and browser or Android Back walks back through it:
 | --- | --- |
 | `/settings/environments/ID` | One environment |
 | `/settings/environments/ID/edit` | Its editor |
-| `/settings/environments/new` | The **Add environment** chooser |
-| `/settings/environments/new/local`, `…/new/ssh`, `…/new/pair` | One kind of new environment |
-| `/settings/environments/pending/ID` | A host awaiting approval |
-| `/settings/backends/ID`, `…/ID/edit`, `/settings/backends/new` | A backend, its editor, a new backend |
+| `/settings/environments/~new` | The **Add environment** chooser |
+| `/settings/environments/~new/local`, `…/~new/ssh`, `…/~new/pair` | One kind of new environment |
+| `/settings/environments/~pending/ID` | A host awaiting approval |
+| `/settings/backends/ID`, `…/ID/edit`, `/settings/backends/~new` | A backend, its editor, a new backend |
+
+Action addresses start with `~` so that they never collide with an item's ID;
+an item can be named `new` or `pending` and still has its own address.
 
 A link to a removed item, or to a host that was already accepted, denied, or
 has expired, says the item is unavailable.
@@ -295,7 +298,7 @@ a **‹ Agents** link on narrow ones. Each row shows the Agent's backend, name,
 override count, and Sedes tool policy.
 
 An Agent's editor is its detail: `/settings/agents/ID` opens it, and
-`/settings/agents/new` (**Create Agent**) starts a new one. Links at the top of
+`/settings/agents/~new` (**Create Agent**) starts a new one. Links at the top of
 the editor jump to its sections, the bar at the bottom saves or cancels, and
 **Danger zone** holds **Delete Agent**. The old `/agents` addresses now open
 the workspace instead; update bookmarks to `/settings/agents`. See
