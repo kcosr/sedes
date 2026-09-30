@@ -1182,20 +1182,20 @@ describe("ThreadContextMenu content per thread state", () => {
 });
 
 describe("searchable Move to group", () => {
-  function groupFixture(groupId: string | null = "current") {
+  function groupFixture(
+    groupId: string | null = "current",
+    groups = [
+      { id: "current", name: "Current work", memberCount: 2 },
+      { id: "backend", name: "Backend cleanup", memberCount: 4 },
+      { id: "release", name: "Release planning", memberCount: 1 },
+    ],
+  ) {
     const thread = makeThread({ groupId });
     const store = makeStore();
     const state = store.getSnapshot();
     store.getSnapshot.mockReturnValue({
       ...state,
-      snapshot: {
-        ...state.snapshot,
-        groups: [
-          { id: "current", name: "Current work", memberCount: 2 },
-          { id: "backend", name: "Backend cleanup", memberCount: 4 },
-          { id: "release", name: "Release planning", memberCount: 1 },
-        ],
-      },
+      snapshot: { ...state.snapshot, groups },
     });
     const assignThreadGroup = vi.fn().mockResolvedValue(undefined);
     const createThreadGroup = vi.fn().mockResolvedValue(undefined);
@@ -1322,6 +1322,18 @@ describe("searchable Move to group", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Ungroup" }));
     expect(removeThreadGroup).toHaveBeenCalledExactlyOnceWith(thread);
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
+  });
+
+  it("prompts to create the first group instead of an empty search", async () => {
+    const { thread, store, createThreadGroup } = groupFixture(null, []);
+    const dialog = await openGroups(renderMenu(thread, store));
+    expect(within(dialog).getByText("No groups yet")).toBeVisible();
+    expect(within(dialog).queryByRole("combobox", { name: "Search groups" })).toBeNull();
+    expect(within(dialog).queryByText("No matching groups")).toBeNull();
+    const name = within(dialog).getByRole("textbox", { name: "Create group" });
+    await waitFor(() => expect(name).toHaveFocus());
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create and move" }));
+    expect(createThreadGroup).toHaveBeenCalledExactlyOnceWith(thread, thread.title.text);
   });
 
   it("cancels without changing the group", async () => {

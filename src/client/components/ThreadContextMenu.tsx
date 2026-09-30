@@ -79,7 +79,9 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  initialFocusTarget,
 } from "@client/components/ui/dialog";
+import { EmptyState } from "@client/components/ui/empty-state";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -794,8 +796,10 @@ export function ThreadContextMenu({
             }
             if (groupDialogOpen) {
               event.preventDefault();
-              if (!groupDialogRef.current?.contains(document.activeElement)) {
-                groupPickerFocus.focusPicker(groupDialogRef.current);
+              const dialog = groupDialogRef.current;
+              if (dialog && !dialog.contains(document.activeElement)) {
+                if (groupCatalog.length > 0) groupPickerFocus.focusPicker(dialog);
+                else initialFocusTarget(dialog).focus({ preventScroll: true });
               }
               return;
             }
@@ -849,7 +853,8 @@ export function ThreadContextMenu({
           className="thread-group-dialog"
           layer="over-dialog"
           data-testid="thread-group-dialog"
-          onOpenAutoFocus={groupPickerFocus.onOpenAutoFocus}
+          // With no groups to search, focus starts on the name field.
+          onOpenAutoFocus={groupCatalog.length > 0 ? groupPickerFocus.onOpenAutoFocus : undefined}
           returnFocusRef={returnFocusRef}
         >
           <DialogHeader>
@@ -858,26 +863,35 @@ export function ThreadContextMenu({
               Choose a persistent group, or create one from this thread.
             </DialogDescription>
           </DialogHeader>
-          <div className="thread-group-search">
-            <SearchableSelectList
-              label="Group"
-              searchLabel="Search groups"
-              emptyLabel="No matching groups"
-              value={thread.groupId ?? ""}
-              disabled={groupPending}
-              searchInputRef={groupSearchRef}
-              options={groupCatalog.map((group) => ({
-                value: group.id,
-                label: group.name,
-                description: `${group.memberCount} ${group.memberCount === 1 ? "thread" : "threads"}`,
-                icon: <Layers3 size={14} aria-hidden="true" />,
-                disabled: group.id === thread.groupId,
-              }))}
-              onValueChange={(groupId) =>
-                mutateGroup(() => store.assignThreadGroup(thread, groupId))
-              }
+          {groupCatalog.length === 0 ? (
+            <EmptyState
+              variant="inline"
+              icon={<Layers3 />}
+              title="No groups yet"
+              description="Name the first one below to create it with this thread."
             />
-          </div>
+          ) : (
+            <div className="thread-group-search">
+              <SearchableSelectList
+                label="Group"
+                searchLabel="Search groups"
+                emptyLabel="No matching groups"
+                value={thread.groupId ?? ""}
+                disabled={groupPending}
+                searchInputRef={groupSearchRef}
+                options={groupCatalog.map((group) => ({
+                  value: group.id,
+                  label: group.name,
+                  description: `${group.memberCount} ${group.memberCount === 1 ? "thread" : "threads"}`,
+                  icon: <Layers3 size={14} aria-hidden="true" />,
+                  disabled: group.id === thread.groupId,
+                }))}
+                onValueChange={(groupId) =>
+                  mutateGroup(() => store.assignThreadGroup(thread, groupId))
+                }
+              />
+            </div>
+          )}
           <Field label="Create group">
             <Input
               maxLength={120}
