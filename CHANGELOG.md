@@ -68,7 +68,7 @@
 - Escape in Settings goes up one level, like the **‹** links: from an editor
   to its item, from an item to its list, and from a page to the Settings list
   or the workspace. An open dialog, menu, or picker closes first, a text field
-  only loses focus, and unsaved edits still ask before they are discarded.
+  only loses focus, and unsaved edits still ask before they are discarded. (#21)
 
 - Completed Pi turns show tokens per second at the left of the turn footer
   when every main-agent response was measured. The rate excludes tool time
@@ -158,7 +158,7 @@
   descriptions and each page has a **‹ Settings** link. The **Settings
   category** picker and **All settings** are gone. Every page shares one
   layout: one title size, switches for on/off settings, and a sticky save bar
-  on forms.
+  on forms. (#21)
 
 - Environments and Backends show the list beside the selected item when the
   Settings content is at least 960px wide, and stack below that. Each
@@ -169,11 +169,11 @@
   happens beside the list; removal and pairing revocation are in a **Danger
   zone**; internal IDs appear only under **Activity**. Pending hosts are listed
   under **Awaiting approval** instead of **Review hosts**, and the backend
-  defaults sit above the backend list. Projects uses the same page layout.
+  defaults sit above the backend list. Projects uses the same page layout. (#21)
 
 - Agents move to **Settings → Execution → Agents** (`/settings/agents`) with
   the same list and detail layout; **More → Agents** and **Create an Agent**
-  open it there.
+  open it there. (#21)
 
 - Dialogs share one design: fixed sizes, a pinned title and actions with the
   primary action last, errors shown inside the dialog, and no backdrop blur.
@@ -182,7 +182,7 @@
   Unsaved-changes prompts share one dialog with **Keep editing**. On touch
   screens and narrow windows, medium and larger dialogs and long menus open as
   bottom sheets with 44px rows, while confirmations stay centered. Deleting an
-  automation now confirms in the app instead of the browser.
+  automation now confirms in the app instead of the browser. (#21)
 
 - Menus and pickers share one style: rows show their current value or why
   they are disabled, and searchable pickers dim unavailable choices. The
@@ -195,7 +195,7 @@
   isolated workspace need a choice. **Move to group** is a searchable list that
   can create a Group from the search, and **New group…** asks only for a name.
   **Thread actions** starts with the thread's settings, such as the model and
-  reasoning level, on every device, even though the composer also shows them.
+  reasoning level, on every device, even though the composer also shows them. (#21)
 
 - The workbench bar and panel headers grow with their text, so a title no
   longer crowds the top edge under Android text zoom. They are slightly taller
@@ -203,16 +203,16 @@
   touch); the chat header's action icons are one step smaller. The chat
   header's title and project rows are evenly balanced beside the worktree
   picker, the phone's expandable Search and worktree row is larger, and the
-  sidebar separates a thread's details from its Group label.
+  sidebar separates a thread's details from its Group label. (#21)
 
 - The composer's buttons and model and reasoning selectors are larger. When
   the composer's controls do not fit, for example during a turn in a narrow
   window, the reasoning selector steps aside and returns when there is room;
-  it is always available in **Thread actions**.
+  it is always available in **Thread actions**. (#21)
 
 - Opening a thread on a touch tablet, or by touch or pen on a hybrid device, no
   longer focuses the composer and raises the on-screen keyboard. Mouse and
-  keyboard use on desktop still focus it.
+  keyboard use on desktop still focus it. (#21)
 
 - Codex archives now unsubscribe Sedes from the native conversation and refuse
   while a native turn or goal is active. Archiving or changing tools also
@@ -297,26 +297,26 @@
 
 - Keep terminal output visible after a live theme switch. The terminal now
   recolors in place instead of reattaching, keeps explicit truecolor output,
-  and its frame follows the light theme instead of staying dark.
+  and its frame follows the light theme instead of staying dark. (#21)
 
 - Serve deep links such as `/settings/backends` or a thread URL when the
   server's checkout or install path contains a dot-directory, such as
-  `~/.local`. They previously failed with HTTP 500. Update the server.
+  `~/.local`. They previously failed with HTTP 500. Update the server. (#21)
 
 - Restore rounded corners and borders that undefined styles had removed:
   Settings cards, fieldsets, and status blocks, workpads, context excerpts, and
   the stack group label. Environment and backend status colors follow the
-  theme instead of fixed hex colors.
+  theme instead of fixed hex colors. (#21)
 
 - Show Settings validation errors on the fields that need fixing, described in
   words instead of raw paths, and clear them when you move to another page or
   item. Review comment errors appear inside their dialog instead of behind it,
   the operation-error dialog has a title, and archive and terminal errors are
-  shown as errors instead of grey text.
+  shown as errors instead of grey text. (#21)
 
 - Keep row and approval option menus from covering their own trigger or card,
   and keep sidebar filter pickers as wide as their trigger instead of spilling
-  over the chat.
+  over the chat. (#21)
 
 - Load Codex histories containing newer per-item timestamps or MCP display
   metadata without reporting an invalid protocol response. The fix also covers
@@ -556,7 +556,7 @@
 ### Removed
 
 - The `/agents`, `/agents/new`, and `/agents/<id>` addresses. They now open
-  the workspace without a redirect; update bookmarks to `/settings/agents`.
+  the workspace without a redirect; update bookmarks to `/settings/agents`. (#21)
 
 ## [0.1.1] - 2026-09-21
 
