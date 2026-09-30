@@ -1,18 +1,33 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Checkbox } from "./checkbox.js";
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "./context-menu.js";
+import { Dialog, DialogContent, DialogTitle } from "./dialog.js";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "./dropdown-menu.js";
 import { Field } from "./field.js";
 import { Input } from "./input.js";
 import { NativeSelect } from "./native-select.js";
+import { Popover, PopoverContent, PopoverTrigger } from "./popover.js";
 import { SegmentedControl, SegmentedControlItem } from "./segmented-control.js";
-import { Select, SelectTrigger, SelectValue } from "./select.js";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select.js";
 import { Switch } from "./switch.js";
 import { Textarea } from "./textarea.js";
 
-afterEach(cleanup);
+beforeEach(() => {
+  vi.stubGlobal("ResizeObserver", class {
+    observe(): void {}
+    disconnect(): void {}
+    unobserve(): void {}
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("Field", () => {
   it("labels the control and describes it with its description", async () => {
@@ -121,5 +136,105 @@ describe("Field", () => {
     );
     expect(container.querySelector("[data-slot=field]")).toHaveAttribute("data-disabled", "true");
     expect(screen.getByRole("textbox", { name: "Name" })).toBeDisabled();
+  });
+});
+
+describe("Field context across portals", () => {
+  // React context flows through portals, so floating and modal content
+  // rendered under a Field must start outside it.
+  function expectUnwired(input: HTMLElement, fieldControl: HTMLElement) {
+    expect(input.id).not.toBe(fieldControl.id);
+    expect(input).not.toHaveAttribute("aria-describedby");
+    expect(input).not.toHaveAttribute("aria-invalid");
+  }
+
+  function FieldWith({ children }: { readonly children: React.ReactNode }) {
+    return (
+      <Field label="Name" description="Shown in the sidebar." error="Enter a name.">
+        <Input />
+        {children}
+      </Field>
+    );
+  }
+
+  it.each([
+    [
+      "popover",
+      <Popover open key="popover">
+        <PopoverTrigger>Open</PopoverTrigger>
+        <PopoverContent aria-label="Details">
+          <Input aria-label="Inner" />
+        </PopoverContent>
+      </Popover>,
+    ],
+    [
+      "dropdown menu",
+      <DropdownMenu open key="dropdown">
+        <DropdownMenuTrigger>Open</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <Input aria-label="Inner" />
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    ],
+    [
+      "dropdown menu as a sheet",
+      <DropdownMenu open presentation="sheet" key="sheet">
+        <DropdownMenuTrigger>Open</DropdownMenuTrigger>
+        <DropdownMenuContent sheetTitle="Actions">
+          <Input aria-label="Inner" />
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    ],
+    [
+      "dialog",
+      <Dialog open key="dialog">
+        <DialogContent aria-describedby={undefined}>
+          <DialogTitle>Rename</DialogTitle>
+          <Input aria-label="Inner" />
+        </DialogContent>
+      </Dialog>,
+    ],
+  ] as const)("does not wire a control inside a %s", (_name, surface) => {
+    render(<FieldWith>{surface}</FieldWith>);
+    const fieldControl = screen.getByRole("textbox", { name: "Name", hidden: true });
+    expect(fieldControl).toHaveAttribute("aria-invalid", "true");
+    expectUnwired(screen.getByRole("textbox", { name: "Inner", hidden: true }), fieldControl);
+  });
+
+  it("does not wire a control inside a context menu", () => {
+    render(
+      <FieldWith>
+        <ContextMenu>
+          <ContextMenuTrigger>Row</ContextMenuTrigger>
+          <ContextMenuContent>
+            <Input aria-label="Inner" />
+          </ContextMenuContent>
+        </ContextMenu>
+      </FieldWith>,
+    );
+    fireEvent.contextMenu(screen.getByText("Row"));
+    expectUnwired(
+      screen.getByRole("textbox", { name: "Inner" }),
+      screen.getByRole("textbox", { name: "Name", hidden: true }),
+    );
+  });
+
+  it("does not wire a control inside select content", () => {
+    render(
+      <Field label="Environment" error="Choose one.">
+        <Select open value="local">
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="local">Local</SelectItem>
+            <Input aria-label="Inner" />
+          </SelectContent>
+        </Select>
+      </Field>,
+    );
+    const trigger = screen.getByRole("combobox", { name: "Environment", hidden: true });
+    expect(trigger).toHaveAttribute("aria-invalid", "true");
+    expectUnwired(screen.getByRole("textbox", { name: "Inner" }), trigger);
   });
 });

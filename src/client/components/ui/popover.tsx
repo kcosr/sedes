@@ -1,6 +1,7 @@
 import * as React from "react"
 import { Popover as PopoverPrimitive } from "radix-ui"
 
+import { FieldControlContext } from "./control.js"
 import { DialogPortalContainerContext } from "./dialog.js"
 import {
   FLOATING_COLLISION_PADDING,
@@ -27,6 +28,7 @@ function PopoverContent({
   align = "center",
   sideOffset = FLOATING_SIDE_OFFSET,
   collisionPadding = FLOATING_COLLISION_PADDING,
+  children,
   ...props
 }: React.ComponentProps<typeof PopoverPrimitive.Content>) {
   const dialogContainer = React.useContext(DialogPortalContainerContext)
@@ -49,7 +51,10 @@ function PopoverContent({
           className
         )}
         {...props}
-      />
+      >
+        {/* React context crosses the portal: a control in the popover is not the Field's control. */}
+        <FieldControlContext.Provider value={null}>{children}</FieldControlContext.Provider>
+      </PopoverPrimitive.Content>
     </PopoverPrimitive.Portal>
   )
 }

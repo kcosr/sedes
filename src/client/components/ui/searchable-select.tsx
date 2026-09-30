@@ -12,6 +12,7 @@ import {
 import { Slot } from "radix-ui";
 import { Check, ChevronDown, Search } from "lucide-react";
 import { Button } from "./button.js";
+import { useFieldControl } from "./control.js";
 import { Input } from "./input.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover.js";
 import {
@@ -155,7 +156,15 @@ export function SearchableSelect({
     if (disabled) updateOpen(false);
   }, [disabled]);
 
+  // Inside a Field, the trigger is the Field's control: its id, error and
+  // description wiring, and invalid state.
+  const fieldProps = useFieldControl({
+    id: triggerProps?.id,
+    "aria-describedby": triggerProps?.["aria-describedby"],
+    "aria-invalid": triggerProps?.["aria-invalid"],
+  });
   const comboboxProps = {
+    ...fieldProps,
     type: "button" as const,
     role: "combobox",
     "aria-label": label,

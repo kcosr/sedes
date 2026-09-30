@@ -15,7 +15,11 @@ import {
   menuSeparatorClass,
 } from "@client/components/ui/floating"
 import { cn } from "@client/lib/utils"
-import { controlVariants, useFieldControl } from "@client/components/ui/control"
+import {
+  controlVariants,
+  FieldControlContext,
+  useFieldControl,
+} from "@client/components/ui/control"
 
 function Select({
   ...props
@@ -98,7 +102,8 @@ function SelectContent({
               "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)] scroll-my-1"
           )}
         >
-          {children}
+          {/* React context crosses the portal: an option is not the Field's control. */}
+          <FieldControlContext.Provider value={null}>{children}</FieldControlContext.Provider>
         </SelectPrimitive.Viewport>
         <SelectScrollDownButton />
       </SelectPrimitive.Content>

@@ -4,6 +4,7 @@ import * as React from "react"
 import { CheckIcon, ChevronRightIcon, LoaderCircleIcon } from "lucide-react"
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui"
 
+import { FieldControlContext } from "@client/components/ui/control"
 import { DialogPortalContainerContext } from "@client/components/ui/dialog"
 import {
   FLOATING_COLLISION_PADDING,
@@ -149,7 +150,8 @@ function DropdownMenuContent({
         )}
         {...props}
       >
-        {children}
+        {/* React context crosses the portal: a control in the menu is not the Field's control. */}
+        <FieldControlContext.Provider value={null}>{children}</FieldControlContext.Provider>
       </DropdownMenuPrimitive.Content>
     </DropdownMenuPrimitive.Portal>
   )

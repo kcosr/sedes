@@ -6,6 +6,7 @@ import { useKeyboardInset } from "@client/app/use-keyboard-inset"
 import { useTouchDensity } from "@client/app/use-touch-density"
 import { Button } from "@client/components/ui/button"
 import { Callout } from "@client/components/ui/callout"
+import { FieldControlContext } from "@client/components/ui/control"
 
 // Floating content opened inside a dialog portals into the dialog node, so
 // it layers above the dialog and stays inside its focus and scroll lock.
@@ -202,7 +203,9 @@ function DialogContent({
         {...props}
       >
         <DialogPortalContainerContext.Provider value={container}>
-          {children}
+          {/* React context crosses the portal: a dialog opened from inside a
+              Field starts a new form. */}
+          <FieldControlContext.Provider value={null}>{children}</FieldControlContext.Provider>
           {showClose && (
             <DialogPrimitive.Close data-slot="dialog-close" asChild>
               <Button

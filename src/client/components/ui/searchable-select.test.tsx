@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SearchableSelect, type SearchableSelectOption } from "./searchable-select.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover.js";
 import { Dialog, DialogContent, DialogTitle } from "./dialog.js";
+import { Field } from "./field.js";
 
 const options: readonly SearchableSelectOption[] = [
   { value: "all", label: "All", pinned: true },
@@ -349,5 +350,29 @@ describe("SearchableSelect", () => {
     fireEvent.keyDown(screen.getByRole("combobox", { name: "Search projects" }), { key: "Enter", isComposing: true });
     await user.click(screen.getByRole("option", { name: "Offline project" }));
     expect(onValueChange).not.toHaveBeenCalled();
+  });
+
+  it.each(["popover", "dialog"] as const)("is the enclosing Field's control, and its %s search field is not", async (presentation) => {
+    const user = userEvent.setup();
+    render(
+      <Field label="Project" description="Threads start here." error="Choose a project.">
+        <SearchableSelect presentation={presentation} label="Project" searchLabel="Search projects" emptyLabel="No matching projects" value="" placeholder="Choose" options={options} triggerProps={{ "aria-describedby": "hint" }} onValueChange={vi.fn()} />
+      </Field>,
+    );
+    const trigger = screen.getByRole("combobox", { name: "Project" });
+    const label = screen.getByText("Project", { selector: "label" });
+    expect(label).toHaveAttribute("for", trigger.id);
+    expect(trigger).toHaveAttribute("aria-invalid", "true");
+    const describedBy = trigger.getAttribute("aria-describedby")!.split(" ");
+    expect(describedBy[0]).toBe("hint");
+    expect(describedBy.slice(1).map((id) => document.getElementById(id)?.textContent)).toEqual([
+      "Choose a project.",
+      "Threads start here.",
+    ]);
+    await user.click(trigger);
+    const search = screen.getByRole("combobox", { name: "Search projects" });
+    expect(search.id).not.toBe(trigger.id);
+    expect(search).not.toHaveAttribute("aria-describedby");
+    expect(search).not.toHaveAttribute("aria-invalid");
   });
 });
