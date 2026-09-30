@@ -89,6 +89,17 @@ export function parseSettingsResource(page: SettingsResourcePage, segments: read
   return second === "edit" ? { mode: "edit", resourceId } : undefined;
 }
 
+/**
+ * One level up from an entity route, where its "‹" link and Escape go: an
+ * editor's entity, a creation kind's chooser, otherwise the page's list.
+ */
+export function settingsResourceParent(resource: SettingsResourceRoute): SettingsResourceRoute {
+  const { mode, resourceId } = resource;
+  if (mode === "edit" && resourceId) return { mode: "view", resourceId };
+  if (mode === "new" && resourceId) return { mode: "new" };
+  return {};
+}
+
 /** The path suffix (after `/settings/<slug>`) for an entity route. */
 export function settingsResourceSuffix(resource: SettingsResourceRoute): string {
   const { mode, resourceId } = resource;

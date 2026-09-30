@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import { Plus, RefreshCw, Server } from "lucide-react";
 import { acceptHostRegistrationRequestSchema } from "../../../shared/protocol/host-pairing.js";
 import { historyStepsBackTo, installNavigationBlocker, navigate, settingsPath, useRoute, type Route } from "../../app/router.js";
-import { isSettingsResourcePage, type SettingsResourceMode, type SettingsResourcePage } from "../../app/settings-route.js";
+import { isSettingsResourcePage, settingsResourceParent, type SettingsResourceMode, type SettingsResourcePage } from "../../app/settings-route.js";
 import { EntityList } from "../settings/EntityList.js";
 import { SettingsPage } from "../settings/SettingsPage.js";
 import { Button } from "../ui/button.js";
@@ -420,9 +420,8 @@ export function ExecutionSettings({ controls }: {
     if (routeEditorOpen) { afterExit.current = () => { void state.refresh(); void pairing.refresh(); }; navigate(exitPath()); return; }
     void state.refresh(); void pairing.refresh();
   };
-  /** Where an editor returns to: the entity it edits, or its list. */
-  const exitPath = () => mode === "edit" && resourceId ? settingsPath(page, { mode: "view", resourceId })
-    : mode === "new" && page === "environments" && resourceId ? settingsPath("environments", { mode: "new" }) : settingsPath(page);
+  /** Where an editor returns to (its "‹" link and Escape): the entity it edits, the add chooser, or its list. */
+  const exitPath = () => settingsPath(page, settingsResourceParent(location));
 
   const selection = !mode ? "none" : mode === "view" ? "detail" : "editor";
   const selectedEnvironment = page === "environments" && mode === "view" ? configuration?.executionEnvironments.find(entry => entry.id === resourceId) : undefined;
@@ -444,7 +443,7 @@ export function ExecutionSettings({ controls }: {
       description={mode === "pending" ? "It was accepted, denied or expired." : "It may have been removed, or the link is out of date."} /></div>;
     if (mode === "new" && page === "environments" && !resourceId) return <EnvironmentChooser configuration={configuration} back={listBack} />;
     if (mode === "new" && page === "environments" && resourceId === "pair") return <PairHostSetup controls={controls} registrations={registrations}
-      back={<BackLink href={settingsPath("environments", { mode: "new" })} label="Add environment" />} />;
+      back={<BackLink href={exitPath()} label="Add environment" />} />;
     if (key?.startsWith("environments:") && environmentDraft && environmentDraft.key === key) {
       const draft = environmentDraft;
       const owner = draft.key;

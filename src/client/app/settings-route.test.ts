@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { parseRoute, routePath, settingsPath, type Route } from "./router.js";
-import { parseSettingsResource, settingsResourceSuffix } from "./settings-route.js";
+import { parseSettingsResource, settingsResourceParent, settingsResourceSuffix } from "./settings-route.js";
 
 describe("settings resource routes", () => {
   const cases: ReadonlyArray<readonly [string, Route]> = [
@@ -62,6 +62,15 @@ describe("settings resource routes", () => {
     expect(parseSettingsResource("backends", ["pending", "x"])).toBeUndefined();
     expect(parseSettingsResource("environments", ["%6Eew"])).toBeUndefined();
     expect(parseSettingsResource("environments", ["x".repeat(161)])).toBeUndefined();
+  });
+
+  it("names one level up from each entity route, as its ‹ link does", () => {
+    expect(settingsResourceParent({ mode: "edit", resourceId: "e1" })).toEqual({ mode: "view", resourceId: "e1" });
+    expect(settingsResourceParent({ mode: "view", resourceId: "e1" })).toEqual({});
+    expect(settingsResourceParent({ mode: "new", resourceId: "ssh" })).toEqual({ mode: "new" });
+    expect(settingsResourceParent({ mode: "new" })).toEqual({});
+    expect(settingsResourceParent({ mode: "pending", resourceId: "r1" })).toEqual({});
+    expect(settingsResourceParent({})).toEqual({});
   });
 
   it("serializes only complete resource routes", () => {

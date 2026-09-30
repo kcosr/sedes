@@ -5,7 +5,7 @@ import type { NotificationSettingsStore } from "../stores/NotificationSettingsSt
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { ArrowLeft, ChevronLeft } from "lucide-react";
 import { Button } from "@client/components/ui/button";
-import { navigate, navigateUp, settingsPath } from "../app/router.js";
+import { navigate, navigateUp, settingsPath, useRoute } from "../app/router.js";
 import { isSettingsResourcePage, type SettingsPage } from "../app/settings-route.js";
 import { SidebarNavTrigger } from "./SidebarNavTrigger.js";
 import type { ServerSettingsControls } from "./ServerSettingsForm.js";
@@ -40,6 +40,7 @@ import {
   settingsLandingRedirect,
   useSettingsNavInSidebar,
 } from "./settings/settings-navigation.js";
+import { useSettingsEscape } from "./settings/settings-escape.js";
 import { AppearanceSettingsPage } from "./settings/pages/AppearanceSettingsPage.js";
 import { DiagnosticsSettingsPage } from "./settings/pages/DiagnosticsSettingsPage.js";
 import {
@@ -108,6 +109,9 @@ export function SettingsView({
   } = sources;
   const pages = useSettingsPages(sources);
   const navInSidebar = useSettingsNavInSidebar();
+  const route = useRoute();
+  // Escape goes up a level, to the same places as the "‹" links and the return control.
+  useSettingsEscape({ location: route.name === "settings" ? route : { page }, navInSidebar, onReturn });
   const content = useRef<HTMLElement>(null);
   const available = page === undefined || pages.some(entry => entry.id === page);
   const pageIds = pages.map(entry => entry.id).join(" ");

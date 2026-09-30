@@ -24,6 +24,7 @@ import {
 import { Button } from "@client/components/ui/button";
 import { Callout } from "@client/components/ui/callout";
 import { ConfirmDialog } from "@client/components/ui/confirm-dialog";
+import { DiscardChangesDialog } from "@client/components/ui/discard-changes-dialog";
 import { EmptyState } from "@client/components/ui/empty-state";
 import { Field } from "@client/components/ui/field";
 import { Input } from "@client/components/ui/input";
@@ -38,6 +39,7 @@ import { SettingsField, SwitchField } from "./settings/SettingsField.js";
 import { SettingsPage } from "./settings/SettingsPage.js";
 import { SettingsSection } from "./settings/SettingsSection.js";
 import { useTransientNotice } from "./settings/use-transient-notice.js";
+import { useSettingsEscapeLevel } from "./settings/settings-escape.js";
 
 interface PromptDraft {
   readonly mode: "create" | "edit";
@@ -60,6 +62,7 @@ export function CannedPromptsSettingsPage({
   const [draft, setDraft] = useState<PromptDraft>();
   const [draftErrors, setDraftErrors] = useState<DraftErrors>({});
   const [deleting, setDeleting] = useState<CannedPrompt>();
+  const [discarding, setDiscarding] = useState(false);
   const [error, setError] = useState("");
   const [notice, showNotice, clearNotice] = useTransientNotice();
   const [showTab, setShowTabState] = useState(getShowPromptsTab);
@@ -101,6 +104,8 @@ export function CannedPromptsSettingsPage({
     setDraftErrors({});
     clearMessages();
   };
+  // Escape closes an open editor (its "‹ Prompts"), asking first when it has edits.
+  useSettingsEscapeLevel(draft ? () => (dirty ? setDiscarding(true) : openDraft(undefined)) : undefined);
 
   const handleMutationError = (cause: unknown, fallback: string): void => {
     if (cause instanceof ApiError && cause.code === "conflict") {
@@ -457,6 +462,16 @@ export function CannedPromptsSettingsPage({
         confirmLabel="Delete prompt"
         pendingLabel="Deleting…"
         onConfirm={() => (deleting ? confirmDelete(deleting) : undefined)}
+      />
+      <DiscardChangesDialog
+        open={discarding && Boolean(draft)}
+        onOpenChange={setDiscarding}
+        description="This prompt has edits that have not been saved."
+        discardLabel="Discard and close"
+        onDiscard={() => {
+          setDiscarding(false);
+          openDraft(undefined);
+        }}
       />
     </SettingsPage>
   );

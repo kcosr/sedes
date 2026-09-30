@@ -14,6 +14,7 @@ import { Button } from "@client/components/ui/button";
 import { Callout } from "@client/components/ui/callout";
 import { Checkbox } from "@client/components/ui/checkbox";
 import { ConfirmDialog } from "@client/components/ui/confirm-dialog";
+import { DiscardChangesDialog } from "@client/components/ui/discard-changes-dialog";
 import {
   Dialog,
   DialogAlert,
@@ -36,6 +37,7 @@ import { SaveBar } from "../settings/SaveBar.js";
 import { SettingsField, SwitchField } from "../settings/SettingsField.js";
 import { SettingsPage } from "../settings/SettingsPage.js";
 import { SettingsSection } from "../settings/SettingsSection.js";
+import { useSettingsEscapeLevel } from "../settings/settings-escape.js";
 
 type ToolClientApi = Pick<
   ApiClient,
@@ -110,6 +112,8 @@ export function ToolClientsSettingsPage({
   const [credential, setCredential] =
     useState<ToolClientCredentialResult>();
   const [confirmation, setConfirmation] = useState<Confirmation>();
+  const [createOrigin, setCreateOrigin] = useState<ToolClientDraft>();
+  const [discarding, setDiscarding] = useState(false);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -145,7 +149,7 @@ export function ToolClientsSettingsPage({
     const defaultEnvironment =
       options.environments.find(({ available }) => available) ??
       options.environments[0];
-    openDraft({
+    const next: ToolClientDraft = {
       mode: "create",
       requestId: crypto.randomUUID(),
       name: "",
@@ -155,7 +159,9 @@ export function ToolClientsSettingsPage({
       allowedEnvironmentIds: defaultEnvironment ? [defaultEnvironment.id] : [],
       defaultWorkspaceId: "",
       defaultThreadId: "",
-    });
+    };
+    setCreateOrigin(next);
+    openDraft(next);
   };
   const replaceClient = (client: ToolClient): void => {
     setClients((current) =>
@@ -282,6 +288,12 @@ export function ToolClientsSettingsPage({
     draft?.mode === "edit"
       ? clients.find(({ id }) => id === draft.clientId)
       : undefined;
+  const draftEdited =
+    draft !== undefined &&
+    JSON.stringify(draft) !==
+      JSON.stringify(draft.mode === "create" ? createOrigin : selectedClient && draftFromClient(selectedClient));
+  // Escape closes an open editor (its "‹ Tool clients"), asking first when it has edits.
+  useSettingsEscapeLevel(draft ? () => (draftEdited ? setDiscarding(true) : openDraft(undefined)) : undefined);
 
   return (
     <SettingsPage
@@ -421,6 +433,16 @@ export function ToolClientsSettingsPage({
         pendingLabel="Revoking…"
         onConfirm={async () => {
           if (confirmation) await confirmAction(confirmation);
+        }}
+      />
+      <DiscardChangesDialog
+        open={discarding && draft !== undefined}
+        onOpenChange={setDiscarding}
+        description="This tool client has edits that have not been saved."
+        discardLabel="Discard and close"
+        onDiscard={() => {
+          setDiscarding(false);
+          openDraft(undefined);
         }}
       />
     </SettingsPage>
