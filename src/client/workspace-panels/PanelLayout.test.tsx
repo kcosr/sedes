@@ -570,7 +570,8 @@ describe("PanelLayout singleton surfaces", () => {
     await openPanelsMenu();
     fireEvent.click(screen.getByRole("menuitem", { name: "Terminals" }));
     const dialog = await screen.findByRole("dialog", { name: "Could not open Terminals" });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(dialog).toHaveAccessibleDescription("Inventory unavailable");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Panels" })).toHaveFocus());
   });
 
@@ -650,7 +651,7 @@ describe("PanelLayout singleton surfaces", () => {
     expect(unmounted).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Close Workpads panel" }));
     expect(await screen.findByRole("dialog", { name: "Discard unsaved changes?" })).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(draft).toHaveValue("Keep this draft");
     expect(store.hasPanel("workpads")).toBe(true);
   });
@@ -671,13 +672,13 @@ describe("PanelLayout singleton surfaces", () => {
     expect(screen.getByRole("textbox", { name: "Workpad draft" })).toBe(draft);
     fireEvent.click(screen.getByRole("button", { name: "Close Workpads panel" }));
     const closeDialog = await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
-    fireEvent.click(within(closeDialog).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(closeDialog).getByRole("button", { name: "Keep editing" }));
     expect(draft).toHaveValue("Retain this across workspaces");
     expect(store.hasPanel("workpads")).toBe(true);
     await openPanelsMenu();
     fireEvent.click(screen.getByRole("menuitem", { name: "Reset layout" }));
     const resetDialog = await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
-    fireEvent.click(within(resetDialog).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(resetDialog).getByRole("button", { name: "Keep editing" }));
     expect(draft).toHaveValue("Retain this across workspaces");
     expect(store.hasPanel("workpads")).toBe(true);
   });
@@ -903,7 +904,7 @@ describe("PanelLayout singleton surfaces", () => {
     expect(await screen.findByRole("dialog", { name: "Discard unsaved changes?" }))
       .toHaveTextContent("Resetting the layout will discard unsaved changes in Workpads.");
     expect(store.getSnapshot().tree).toBe(tree);
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(store.getSnapshot().tree).toBe(tree);
     expect(screen.getByRole("textbox", { name: "Workpad draft" })).toBe(draft);
     expect(draft).toHaveValue("Unsynced draft");

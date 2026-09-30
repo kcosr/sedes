@@ -3352,52 +3352,6 @@ body:has(.thread-settings-sheet[data-state="open"])
   color: var(--foreground);
 }
 
-/* The Files sheet is portalled to the body, so it anchors to the viewport and
-   subtracts the bar itself. It is deliberately non-modal: the bar stays
-   visible and usable while Files covers the rest of the stage. */
-.workspace-panel-mobile-sheet {
-  top: var(--workbench-bar-height);
-  left: 0;
-  display: flex;
-  width: 100vw;
-  height: calc(100dvh - var(--workbench-bar-height));
-  min-width: 0;
-  min-height: 0;
-  max-width: none;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--background);
-  color: var(--foreground);
-  /* DialogContent's centering utilities are emitted after product CSS. Reset
-     both their variables and the longhand so the sheet spans the viewport. */
-  --tw-translate-x: 0 !important;
-  --tw-translate-y: 0 !important;
-  translate: 0 0 !important;
-  transform: none;
-  gap: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  --tw-ring-shadow: 0 0 #0000;
-}
-
-.workspace-panel-mobile-sheet > [data-slot="dialog-close"] {
-  display: none;
-}
-
-.workspace-panel-mobile-sheet > header {
-  display: flex;
-  height: 48px;
-  flex: 0 0 48px;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 8px 6px 14px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.workspace-panel-mobile-sheet > .workspace-panel-content,
 .workspace-panel-mobile-base > .workspace-panel-content {
   position: relative;
   min-width: 0;
@@ -4023,12 +3977,6 @@ body:has(.thread-settings-sheet[data-state="open"])
   font-size: 1rem;
 }
 
-.terminal-operation-message {
-  margin: 3px 0 0;
-  color: var(--muted-foreground);
-  font-size: 0.78rem;
-}
-
 .terminal-panel-search input {
   min-width: 0;
   min-height: 32px;
@@ -4037,14 +3985,6 @@ body:has(.thread-settings-sheet[data-state="open"])
   padding: 0 9px;
   background: var(--background);
   color: var(--foreground);
-}
-
-[data-slot="dialog-overlay"].terminal-lifecycle-confirm-overlay {
-  z-index: var(--z-blocking);
-}
-
-[data-slot="dialog-content"].terminal-lifecycle-confirm-dialog {
-  z-index: calc(var(--z-blocking) + 1);
 }
 
 .workspace-panel-terminals .workspace-panel-chrome {
@@ -4374,10 +4314,6 @@ body:has(.thread-settings-sheet[data-state="open"])
 }
 
 @media (max-width: 819px), (pointer: coarse) {
-  .terminal-operation-message {
-    flex: 0 0 auto;
-  }
-
   .workspace-panel-terminals .workspace-panel-chrome {
     height: 52px;
     flex-basis: 52px;
@@ -13528,7 +13464,7 @@ tr.diff-hunk td {
 
 .precheck-options {
   display: grid;
-  grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr);
+  grid-template-columns: minmax(150px, 0.4fr) minmax(0, 1fr);
   align-items: end;
   gap: 14px;
 }
@@ -15059,7 +14995,6 @@ tr.diff-hunk td {
 }
 
 .electron-connection-card__error,
-.electron-connections__dialog-error,
 .electron-connection-editor__error {
   color: var(--destructive);
 }
@@ -15213,8 +15148,7 @@ tr.diff-hunk td {
   font-family: var(--font-mono);
 }
 
-.electron-connection-editor__error,
-.electron-connections__dialog-error {
+.electron-connection-editor__error {
   margin: 0;
   font-size: 12px;
   line-height: 1.4;

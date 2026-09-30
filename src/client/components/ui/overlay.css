@@ -221,6 +221,10 @@
   line-height: var(--leading-normal);
 }
 
+[data-slot="dialog-description"] code {
+  overflow-wrap: anywhere;
+}
+
 [data-slot="dialog-description"] a {
   text-decoration: underline;
   text-underline-offset: 3px;

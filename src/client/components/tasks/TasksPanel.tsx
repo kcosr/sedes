@@ -13,7 +13,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type DragEvent as ReactDragEvent,
 } from "react";
 import {

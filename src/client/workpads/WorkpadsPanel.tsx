@@ -5,7 +5,7 @@ import { WORKPAD_CONTENT_MAX_CHARACTERS } from "../../shared/protocol/workpads.j
 import { installNavigationBlocker } from "../app/router.js";
 import type { WorkspacePanelContext } from "../workspace-panels/registry.js";
 import { useApplicationStore } from "../stores/ApplicationClientStore.js";
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from "../components/ui/dialog.js";
+import { DiscardChangesDialog } from "../components/ui/discard-changes-dialog.js";
 import { Button } from "../components/ui/button.js";
 import { Input } from "../components/ui/input.js";
 import { Textarea } from "../components/ui/textarea.js";
@@ -272,18 +272,17 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
         <div className="workpads-reading">{revision && <><WorkpadDocument active={open} content={revision.content} attribution={revision.attribution} showAttribution={attribution} /><details className="workpads-revision-details"><summary>Revision details</summary><p>{revision.author.name} · {new Date(revision.createdAt).toLocaleString()}</p>{revision.changes.length ? (["removed", "added"] as const).map(kind => { const changes = revision.changes.filter(change => change.kind === kind); return changes.length ? <div key={kind}><strong>{kind === "removed" ? "Removed" : "Added"} by {revision.author.name}</strong>{changes.map((change,index) => <blockquote key={index}>{change.text}</blockquote>)}</div> : null; }) : <p>Document metadata updated.</p>}</details></>}</div>
       </>}
     </>}
-    <Dialog open={Boolean(leaveRequest)} onOpenChange={value => { if (!value) setLeaveRequest(undefined); }}>
-      <DialogContent><DialogTitle>Leave unsynced workpad?</DialogTitle>
-        <DialogDescription>Your latest workpad draft changes have not synced. Leave anyway?</DialogDescription>
-        <div className="workpads-toolbar">
-          <Button variant="outline" onClick={() => setLeaveRequest(undefined)}>Keep editing</Button>
-          <Button variant="destructive" onClick={() => {
-            const request = leaveRequest;
-            setLeaveRequest(undefined);
-            request?.proceed();
-          }}>Leave anyway</Button>
-        </div>
-      </DialogContent>
-    </Dialog>
+    <DiscardChangesDialog
+      open={Boolean(leaveRequest)}
+      onOpenChange={value => { if (!value) setLeaveRequest(undefined); }}
+      title="Leave unsynced workpad?"
+      description="Your latest workpad draft changes have not synced. Leave anyway?"
+      discardLabel="Leave anyway"
+      onDiscard={() => {
+        const request = leaveRequest;
+        setLeaveRequest(undefined);
+        request?.proceed();
+      }}
+    />
   </section>;
 }

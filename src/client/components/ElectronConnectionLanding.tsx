@@ -18,14 +18,7 @@ import {
 import { serverFromPairingInput } from "../authentication/pairing-link.js";
 import { Button } from "./ui/button.js";
 import { Checkbox } from "./ui/checkbox.js";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "./ui/dialog.js";
+import { ConfirmDialog } from "./ui/confirm-dialog.js";
 import { Input } from "./ui/input.js";
 import { Label } from "./ui/label.js";
 import { RadioGroup, RadioGroupItem } from "./ui/radio-group.js";
@@ -107,7 +100,6 @@ export function ElectronConnectionLanding({
   >({});
   const [deleteProfile, setDeleteProfile] =
     useState<ElectronConnectionProfile | null>(null);
-  const [deleteError, setDeleteError] = useState("");
   const [switchTarget, setSwitchTarget] =
     useState<ElectronConnectionProfile | null>(null);
   const [savedSwitch, setSavedSwitch] = useState<{
@@ -208,13 +200,12 @@ export function ElectronConnectionLanding({
     if (!deleteProfile) return;
     const profileId = deleteProfile.id;
     setPending({ kind: "delete", profileId });
-    setDeleteError("");
     try {
       await onDelete(profileId);
       setDeleteProfile(null);
       setLocalProfileErrors((current) => omitKey(current, profileId));
     } catch (error) {
-      setDeleteError(messageFrom(error, "Could not delete this connection."));
+      throw new Error(messageFrom(error, "Could not delete this connection."));
     } finally {
       setPending(null);
     }
@@ -459,7 +450,6 @@ export function ElectronConnectionLanding({
                               disabled={interactionLocked}
                               onClick={() => {
                                 setDeleteProfile(profile);
-                                setDeleteError("");
                               }}
                             >
                               <Trash2 aria-hidden="true" />
@@ -507,7 +497,7 @@ export function ElectronConnectionLanding({
         )}
       </div>
 
-      <Dialog
+      <ConfirmDialog
         open={switchTarget !== null || savedSwitch !== null}
         onOpenChange={(open) => {
           if (!open) {
@@ -515,91 +505,35 @@ export function ElectronConnectionLanding({
             setSavedSwitch(null);
           }
         }}
-      >
-        <DialogContent showClose={false}>
-          <DialogHeader>
-            <DialogTitle>Switch away from Local?</DialogTitle>
-            <DialogDescription>
-              After{" "}
-              {switchTarget?.name ??
-                savedSwitch?.input.name ??
-                "the new connection"}{" "}
-              connects, the desktop app will stop the local Sedes server. Active
-              local agents and terminals will stop. Local data and
-              configuration will remain.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setSwitchTarget(null);
-                setSavedSwitch(null);
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              onClick={() => {
-                const target = switchTarget;
-                const saved = savedSwitch;
-                setSwitchTarget(null);
-                setSavedSwitch(null);
-                if (target) void connect(target.id);
-                if (saved) void saveValidated(saved.input, saved.profileId);
-              }}
-            >
-              Connect to{" "}
-              {switchTarget?.name ?? savedSwitch?.input.name ?? "connection"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        title="Switch away from Local?"
+        description={`After ${
+          switchTarget?.name ?? savedSwitch?.input.name ?? "the new connection"
+        } connects, the desktop app will stop the local Sedes server. Active local agents and terminals will stop. Local data and configuration will remain.`}
+        confirmLabel={`Connect to ${
+          switchTarget?.name ?? savedSwitch?.input.name ?? "connection"
+        }`}
+        onConfirm={() => {
+          const target = switchTarget;
+          const saved = savedSwitch;
+          setSwitchTarget(null);
+          setSavedSwitch(null);
+          if (target) void connect(target.id);
+          if (saved) void saveValidated(saved.input, saved.profileId);
+        }}
+      />
 
-      <Dialog
+      <ConfirmDialog
         open={deleteProfile !== null}
         onOpenChange={(open) => {
-          if (!open && pending?.kind !== "delete") {
-            setDeleteProfile(null);
-            setDeleteError("");
-          }
+          if (!open) setDeleteProfile(null);
         }}
-      >
-        <DialogContent showClose={false}>
-          <DialogHeader>
-            <DialogTitle>Delete connection?</DialogTitle>
-            <DialogDescription>
-              Delete {deleteProfile?.name ?? "this connection"}? You will need
-              to enter its details again to reconnect.
-            </DialogDescription>
-            {deleteError ? (
-              <p role="alert" className="electron-connections__dialog-error">
-                {deleteError}
-              </p>
-            ) : null}
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending?.kind === "delete"}
-              onClick={() => setDeleteProfile(null)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={pending?.kind === "delete"}
-              onClick={() => void remove()}
-            >
-              {pending?.kind === "delete" ? "Deleting…" : "Delete connection"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        title="Delete connection?"
+        description={`Delete ${deleteProfile?.name ?? "this connection"}? You will need to enter its details again to reconnect.`}
+        confirmLabel="Delete connection"
+        pendingLabel="Deleting…"
+        tone="danger"
+        onConfirm={remove}
+      />
     </main>
   );
 }

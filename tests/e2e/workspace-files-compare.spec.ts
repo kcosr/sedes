@@ -281,7 +281,7 @@ test.describe.serial("workspace files compare", () => {
     await compareSurface.getByRole("button", { name: "Review controls", exact: true }).click();
     await page.getByRole("dialog", { name: "Review options", exact: true }).getByRole("button", { name: "Comments (0)", exact: true }).click();
     const review = page.getByRole("dialog", { name: "Review", exact: true });
-    await expect(review.getByRole("button", { name: "Current review", exact: true })).toBeVisible();
+    await expect(review.getByRole("radio", { name: "Current review", exact: true })).toBeChecked();
     const reviewBounds = await review.boundingBox();
     expect(reviewBounds!.y).toBeGreaterThanOrEqual(0);
     expect(reviewBounds!.x + reviewBounds!.width).toBeLessThanOrEqual(1440);
