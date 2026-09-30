@@ -156,6 +156,7 @@
   mobile Search and worktree controls.
 - Enlarge composer buttons and model/reasoning selectors.
 - Reduce chat header action icons slightly while preserving their tap targets.
+- Add space between sidebar thread metadata and its group label.
 
 - Settings has a new navigation. On desktop the sidebar lists its pages in
   five groups while Settings is open, under **Back to chat** or **Back to
