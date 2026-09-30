@@ -122,11 +122,14 @@ export function useSettingsEscapeLevel(onUp: (() => void) | undefined): void {
 }
 
 /**
- * Installs Escape-to-go-up while Settings is shown. It listens on the window
- * in the bubble phase, after Radix's document-level Escape handling and
- * every control's own handlers, so an event that closed a layer is already
- * marked handled. Navigation goes through `navigateUp` (or the return
- * callback), so the dirty guards run as they do for the "‹" links.
+ * Installs Escape-to-go-up while Settings is shown. The open layers and the
+ * focused element are read in the window's capture phase, before any
+ * handler runs, so a layer that this Escape closes still counts (also for
+ * the non-cancelable Escape Android Back dispatches). The decision runs in
+ * the window's bubble phase, after Radix's document-level handling and
+ * every control's own handlers, so a handled event is already marked.
+ * Navigation goes through `navigateUp` (or the return callback), so the
+ * dirty guards run as they do for the "‹" links.
  */
 export function useSettingsEscape({
   location,
@@ -140,17 +143,25 @@ export function useSettingsEscape({
   const current = useRef({ location, navInSidebar, onReturn });
   current.current = { location, navInSidebar, onReturn };
   useEffect(() => {
+    let arrival: { readonly event: Event; readonly layerOpen: boolean; readonly active: Element | null } | undefined;
+    const onArrival = (event: KeyboardEvent) => {
+      arrival = event.key === "Escape"
+        ? { event, layerOpen: hasOpenLayer(), active: document.activeElement }
+        : undefined;
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      const active = document.activeElement;
+      const state = arrival?.event === event ? arrival : { layerOpen: hasOpenLayer(), active: document.activeElement };
+      arrival = undefined;
+      const { active } = state;
       const action = settingsEscapeAction(event, {
-        layerOpen: hasOpenLayer(),
+        layerOpen: state.layerOpen,
         editing: isEditingElement(active),
       });
       if (action === "none") return;
       if (action === "blur") {
         // Not prevented: a control's native Escape (a search field clearing) still runs.
-        (active as HTMLElement).blur();
+        if (active === document.activeElement) (active as HTMLElement).blur();
         return;
       }
       event.preventDefault();
@@ -163,7 +174,11 @@ export function useSettingsEscape({
       if (target.kind === "workspace") current.current.onReturn();
       else navigateUp(target.path);
     };
+    window.addEventListener("keydown", onArrival, { capture: true });
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onArrival, { capture: true });
+      window.removeEventListener("keydown", onKeyDown);
+    };
   }, []);
 }

@@ -201,6 +201,24 @@ describe("useSettingsEscape", () => {
     expect(onReturn).not.toHaveBeenCalled();
   });
 
+  it("counts a layer the same Escape closes, even when the event cannot be canceled", () => {
+    navigate("/settings/general", { replace: true });
+    const onReturn = vi.fn();
+    renderHook(() => useSettingsEscape({ location: { page: "general" }, navInSidebar: true, onReturn }));
+    // Android Back dispatches a non-cancelable Escape; a layer that closes
+    // synchronously would be gone by the time the bubble phase runs.
+    document.body.innerHTML = '<div role="dialog" data-state="open"></div>';
+    const closeLayer = () => document.querySelector('[role="dialog"]')?.remove();
+    document.addEventListener("keydown", closeLayer, { capture: true });
+    const event = press(document, { cancelable: false });
+    document.removeEventListener("keydown", closeLayer, { capture: true });
+    expect(event.defaultPrevented).toBe(false);
+    expect(onReturn).not.toHaveBeenCalled();
+    // The next Escape, with nothing open, goes up.
+    press(document, { cancelable: false });
+    expect(onReturn).toHaveBeenCalledOnce();
+  });
+
   it("blurs a focused field first, without preventing its own Escape", () => {
     navigate("/settings/general", { replace: true });
     renderHook(() => useSettingsEscape({ location: { page: "general" }, navInSidebar: false, onReturn: vi.fn() }));
