@@ -4374,6 +4374,20 @@ textarea:disabled {
   z-index: calc(var(--z-sticky) + 3);
 }
 
+/* Quieter chat-header actions; preserve the shared button hit areas. */
+.thread-header .thread-tools-shell > button svg,
+.thread-header > .workspace-panel-actions > button svg {
+  width: calc(var(--bar-icon) - 2px);
+  height: calc(var(--bar-icon) - 2px);
+}
+
+@media (min-width: 820px) {
+  .thread-header .thread-find-trigger svg {
+    width: calc(var(--bar-icon) - 2px);
+    height: calc(var(--bar-icon) - 2px);
+  }
+}
+
 .thread-heading {
   display: flex;
   min-width: 0;
@@ -4394,9 +4408,20 @@ textarea:disabled {
   gap: 6px;
 }
 
+/* Balance the title against the taller worktree control. Equal rows also
+   adapt to its touch height without shifting the text with an offset. */
+.thread-heading:has(.thread-worktree-trigger) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: 1fr;
+  align-items: stretch;
+  gap: 0;
+}
+
 .thread-panel-brand {
   display: inline-flex;
   flex: 0 0 auto;
+  margin-inline-end: 3px;
   align-items: center;
   align-self: stretch;
   justify-content: center;
@@ -8503,11 +8528,60 @@ tr.diff-hunk td {
 
 .composer-footer {
   display: flex;
-  min-height: 44px;
+  min-height: 52px;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
   padding: 4px 8px 8px 8px;
+}
+
+/* Roomier composer actions and setting selectors. */
+.composer-footer :is(.skill-button, .attachment-button, .stash-button,
+  .context-usage-meter, .composer-prompt-toolbar, .codex-goal-indicator,
+  .codex-fast-mode-toggle) {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+}
+
+.composer-footer .send-button {
+  width: 40px;
+  height: 40px;
+}
+
+.composer-footer :is(.skill-button, .attachment-button, .stash-button,
+  .composer-prompt-toolbar, .codex-goal-indicator, .codex-fast-mode-toggle) svg {
+  width: 18px;
+  height: 18px;
+}
+
+.composer-footer .thread-setting-pill > :is(button, [role="combobox"]) {
+  height: 32px;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 13px;
+}
+
+.composer-footer .thread-setting-pill > :is(button, [role="combobox"]) svg {
+  width: 14px;
+  height: 14px;
+}
+
+.composer-footer .delivery-split {
+  height: 40px;
+}
+
+.composer-footer .delivery-split-submit,
+.composer-footer .delivery-split-menu {
+  height: 38px;
+}
+
+.composer-footer .delivery-split-submit {
+  width: 38px;
+}
+
+.composer-footer .delivery-split-menu {
+  width: 28px;
 }
 
 .composer-tools {
@@ -10740,16 +10814,20 @@ tr.diff-hunk td {
     display: inline-flex;
   }
 
-  /* The toolbar row under the header keeps its compact find button. */
+  .thread-header {
+    --thread-toolbar-height: 56px;
+  }
+
+  /* Roomier controls in the expandable mobile toolbar. */
   .thread-controls > .thread-find-trigger {
-    width: 28px;
-    height: 28px;
-    flex: 0 0 28px;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
   }
 
   .thread-controls > .thread-find-trigger svg {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
   }
 
   .thread-tools-toggle svg {
@@ -10761,7 +10839,7 @@ tr.diff-hunk td {
   }
 
   .thread-header:has(.thread-controls:not([hidden])) {
-    margin-bottom: 40px;
+    margin-bottom: var(--thread-toolbar-height);
   }
 
   .thread-controls {
@@ -10770,9 +10848,9 @@ tr.diff-hunk td {
     top: 100%;
     right: 0;
     left: 0;
-    height: 40px;
+    height: var(--thread-toolbar-height);
     justify-content: flex-start;
-    gap: 6px;
+    gap: 8px;
     padding: 5px 9px;
     border-bottom: 1px solid var(--border-soft);
     background: var(--background);
@@ -10783,7 +10861,7 @@ tr.diff-hunk td {
   }
 
   .thread-controls > .thread-worktree-trigger {
-    height: 28px;
+    height: 44px;
     min-width: 0;
     max-width: none;
     flex: 1 1 auto;
@@ -10792,7 +10870,7 @@ tr.diff-hunk td {
     border-radius: var(--radius-ctl);
     background: var(--secondary);
     color: var(--foreground);
-    font-size: 12px;
+    font-size: 14px;
   }
 
   .thread-controls > .thread-worktree-trigger::before {
@@ -10800,8 +10878,8 @@ tr.diff-hunk td {
   }
 
   .thread-controls > .thread-worktree-trigger svg {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
   }
 
   /* Keep the existing reasoning shortcut on mobile; other settings remain

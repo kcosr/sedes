@@ -151,6 +151,12 @@
 
 ### Changed
 
+- Balance chat header rows vertically when the worktree picker is shown.
+- Add space after the chat header backend icon and enlarge the expandable
+  mobile Search and worktree controls.
+- Enlarge composer buttons and model/reasoning selectors.
+- Reduce chat header action icons slightly while preserving their tap targets.
+
 - Settings has a new navigation. On desktop the sidebar lists its pages in
   five groups while Settings is open, under **Back to chat** or **Back to
   workspace**, and `/settings` opens the last page viewed or **General**. On
