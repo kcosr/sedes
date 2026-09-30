@@ -572,8 +572,8 @@ export function installGhosttyImeBridge(input: {
     padding: "0 2px",
     borderRadius: "2px",
     textDecoration: "underline",
-    background: "rgba(17, 19, 24, .9)",
-    color: "#f3f4f6",
+    background: "color-mix(in oklch, var(--terminal-background) 90%, transparent)",
+    color: "var(--terminal-foreground)",
   });
   input.container.append(overlay);
   let processedValue = "";
