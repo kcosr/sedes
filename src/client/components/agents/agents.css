@@ -7,24 +7,15 @@
   min-height: 0;
   flex: 1 1 auto;
   align-content: start;
-  padding: var(--space-8) var(--space-8) 0;
+  /* The sticky SaveBar stops at the bottom padding edge and bleeds over it. */
+  padding: var(--space-8) var(--space-8) var(--space-6);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
-/* Bottom breathing room that the sticky SaveBar can bleed into. */
-.agents-view::after {
-  height: var(--space-8);
-  content: "";
-}
-
 @media (max-width: 819px) {
   .agents-view {
-    padding: var(--space-5) var(--space-4) 0;
-  }
-
-  .agents-view::after {
-    height: var(--space-5);
+    padding: var(--space-5) var(--space-4);
   }
 }
 

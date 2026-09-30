@@ -11732,15 +11732,10 @@ tr.diff-hunk td {
   min-height: 0;
   flex: 1 1 auto;
   align-content: start;
-  padding: var(--space-8) var(--space-8) 0;
+  /* A sticky SaveBar stops at the bottom padding edge and bleeds over it. */
+  padding: var(--space-8) var(--space-8) var(--space-6);
   overflow-y: auto;
   overscroll-behavior: contain;
-}
-
-/* Bottom breathing room that a sticky SaveBar can bleed into. */
-.settings-content::after {
-  height: var(--space-8);
-  content: "";
 }
 
 .settings-content > [hidden] {
@@ -11749,11 +11744,7 @@ tr.diff-hunk td {
 
 @media (max-width: 819px) {
   .settings-content {
-    padding: var(--space-5) var(--space-4) 0;
-  }
-
-  .settings-content::after {
-    height: var(--space-5);
+    padding: var(--space-5) var(--space-4);
   }
 }
 

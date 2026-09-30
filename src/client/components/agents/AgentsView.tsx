@@ -95,7 +95,7 @@ export function AgentsView({
           </Callout>
         ) : null}
         <div
-          className="settings-master-detail agents-layout"
+          className="settings-master-detail"
           data-detail-open={editorOpen || undefined}
         >
           <section
@@ -161,7 +161,7 @@ export function AgentsView({
             )}
           </section>
           <section
-            className="settings-master-detail-pane agents-editor"
+            className="settings-master-detail-pane"
             aria-label="Agent editor"
           >
             {route.create ? (
@@ -428,7 +428,7 @@ function AgentEditor({
   return (
     <>
       <form
-        className="settings-pane-form agents-editor-form"
+        className="settings-pane-form"
         noValidate
         onSubmit={(event) => {
           event.preventDefault();
@@ -559,7 +559,7 @@ function AgentEditor({
             </Select>
           </SettingsField>
           {optionsLoading && (
-            <p className="settings-loading agents-options-status" role="status" aria-live="polite">
+            <p className="settings-loading" role="status" aria-live="polite">
               Refreshing available settings…
             </p>
           )}
