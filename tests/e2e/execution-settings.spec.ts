@@ -86,8 +86,10 @@ test("execution settings persist typed configuration and distinguish unreachable
   const connected = configurationLifecycleResultSchema.parse(await (await connectResponse).json());
   expect(connected.state).toBe("unavailable");
   expect(connected.runtime.connectionState).toBe("unreachable");
-  await expect(status.getByText("Unreachable", { exact: true })).toBeVisible();
-  await expect(status.getByRole("alert")).toBeVisible();
+  // One pill (the header's) and one Callout for the error.
+  await expect(host.getByText("Unreachable", { exact: true })).toHaveCount(1);
+  await expect(host.getByRole("alert")).toHaveCount(1);
+  await expect(host.getByRole("button", { name: "Retry connection", exact: true })).toHaveCount(1);
 
   const disconnectResponse = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/api/configuration/lifecycle") && response.request().postDataJSON()?.action === "disconnect");
   await expect(headerActions(settings, "Temporary build host").getByRole("button", { name: "Retry connection", exact: true })).toBeVisible();
@@ -95,7 +97,7 @@ test("execution settings persist typed configuration and distinguish unreachable
   await page.getByRole("menuitem", { name: "Disconnect", exact: true }).click();
   const disconnected = configurationLifecycleResultSchema.parse(await (await disconnectResponse).json());
   expect(disconnected.runtime.preference).toBe("disconnected");
-  await expect(status.getByText("Intentionally disconnected", { exact: true })).toBeVisible();
+  await expect(host.getByText("Intentionally disconnected", { exact: true })).toBeVisible();
   await capture(page, testInfo, "execution-settings-disconnected-desktop.png");
 
   await page.reload();
@@ -374,6 +376,15 @@ test("unknown lifecycle receipts survive remount and retain confirmed Stop contr
   await page.goto("/");
   await expect(page.getByTestId("desktop-sidebar")).toBeVisible();
   let settings = await openSettings(page, "Environments");
+  // Stop is in the runtime actions menu; while the earlier outcome is unknown it is the one command left.
+  const runtimeMenu = () => settings.getByRole("button", { name: "Runtime actions for Uncertain lifecycle host", exact: true });
+  const expectStopAlone = async () => {
+    await runtimeMenu().click();
+    await expect(page.getByRole("menuitem", { name: "Stop", exact: true })).toBeEnabled();
+    await expect(page.getByRole("menuitem", { disabled: false })).toHaveText(["Stop"]);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+  };
   await settings.getByRole("link", { name: "Uncertain lifecycle host", exact: true }).click();
   const connectResponse = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith("/api/configuration/lifecycle") && response.request().postDataJSON()?.resourceId === environmentId);
   await headerActions(settings, "Uncertain lifecycle host").getByRole("button", { name: "Connect", exact: true }).click();
@@ -393,20 +404,21 @@ test("unknown lifecycle receipts survive remount and retain confirmed Stop contr
   await expect(uncertain.getByRole("tab", { name: "Activity", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(headerActions(settings, "Uncertain lifecycle host").getByRole("button", { name: "Refresh status", exact: true })).toBeEnabled();
   await uncertain.getByRole("tab", { name: "Overview", exact: true }).click();
-  await expect(uncertain.getByRole("button", { name: "Stop", exact: true })).toBeEnabled();
+  await expectStopAlone();
   await page.reload();
   await expect(page.getByTestId("desktop-sidebar")).toBeVisible();
   settings = await openSettings(page, "Environments");
   await settings.getByRole("link", { name: "Uncertain lifecycle host", exact: true }).click();
   await expect(uncertain).toContainText("outcome is unknown");
-  await expect(uncertain.getByRole("button", { name: "Stop", exact: true })).toBeEnabled();
+  await expectStopAlone();
   const receiptResponse = page.waitForResponse(response => response.request().method() === "GET" && response.url().endsWith(`/api/configuration/lifecycle/${original.mutationId}`));
   await headerActions(settings, "Uncertain lifecycle host").getByRole("button", { name: "Refresh status", exact: true }).click();
   const recovered = configurationLifecycleResultSchema.parse(await (await receiptResponse).json());
   expect(recovered).toMatchObject({ mutationId: original.mutationId, state: "unknown" });
-  await expect(uncertain.getByRole("button", { name: "Stop", exact: true })).toBeEnabled();
+  await expectStopAlone();
   const impactResponse = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith("/api/configuration/lifecycle/impact"));
-  await uncertain.getByRole("button", { name: "Stop", exact: true }).click();
+  await runtimeMenu().click();
+  await page.getByRole("menuitem", { name: "Stop", exact: true }).click();
   const impact = configurationLifecycleImpactSchema.parse(await (await impactResponse).json());
   expect(impact).toMatchObject({ resourceId: environmentId, action: "stop", activeResources: 1 });
   const confirmation = page.getByRole("dialog", { name: "Stop Uncertain lifecycle host?", exact: true });
@@ -424,7 +436,7 @@ test("unknown lifecycle receipts survive remount and retain confirmed Stop contr
   const stopped = configurationLifecycleResultSchema.parse(await (await stopResponse).json());
   expect(stopped).toMatchObject({ state: "applied", runtime: { connectionState: "stopped", preference: "stopped", activeResources: 0 } });
   expect((await stopResponse).request().postDataJSON()).toMatchObject({ resourceId: environmentId, impactToken: impact.token, expectedIncarnation: impact.incarnation });
-  await expect(uncertain.getByRole("region", { name: "Uncertain lifecycle host status", exact: true })).toContainText("Intentionally stopped");
+  await expect(uncertain.getByText("Intentionally stopped", { exact: true })).toBeVisible();
   await expect(uncertain.getByRole("button", { name: "Refresh status", exact: true })).toHaveCount(0);
   const settled = configurationLifecycleResultSchema.parse(await (await request.get(`/api/configuration/lifecycle/${original.mutationId}`)).json());
   expect(settled.state).toBe("rejected");

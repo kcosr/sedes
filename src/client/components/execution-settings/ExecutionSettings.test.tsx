@@ -89,7 +89,9 @@ describe("execution configuration administration", () => {
     expect(detailHeading("Build host")).toHaveFocus();
     expect(rowOf("Build host").querySelector("a")).toHaveAttribute("aria-current", "page");
     const view = detail("Build host");
-    expect(within(view).getByRole("region", { name: "Build host status" })).toHaveTextContent("Connected");
+    // One status pill, in the header; the health summary says it in words.
+    expect(within(view).getAllByText("Connected")).toHaveLength(1);
+    expect(within(view).getByRole("region", { name: "Build host status" })).toHaveTextContent("Sidecar 1 is up to date.");
     expect(within(view).getByText("build-host")).toBeVisible();
     await user.click(within(view).getByRole("tab", { name: /^Backends/u }));
     expect(within(view).getByRole("link", { name: "Build Pi" })).toHaveAttribute("href", "/settings/backends/pi-remote");
@@ -126,9 +128,12 @@ describe("execution configuration administration", () => {
     const status = await screen.findByRole("region", { name: "Build host status" });
     expect(rowOf("Build host")).toHaveTextContent("Recovery required");
     expect(rowOf("Build host")).not.toHaveTextContent("Unreachable");
-    expect(within(status).getByText("Recovery required")).toBeVisible();
-    expect(within(status).getByRole("alert")).toHaveTextContent("Confirm the previous sidecar and its children have stopped.");
-    expect(within(status).getByRole("button", { name: "Retry connection" })).toBeEnabled();
+    // The header carries the one pill and the primary action; one Callout the error.
+    const view = detail("Build host");
+    expect(within(view).getAllByText("Recovery required")).toHaveLength(1);
+    expect(within(view).getAllByRole("alert").map(alert => alert.textContent)).toEqual(["Confirm the previous sidecar and its children have stopped."]);
+    expect(within(view).getAllByRole("button", { name: "Retry connection" })).toHaveLength(1);
+    expect(within(within(view).getByRole("group", { name: "Actions" })).getByRole("button", { name: "Retry connection" })).toBeEnabled();
     expect(within(status).getByRole("button", { name: "Review" })).toBeVisible();
     const user = userEvent.setup();
     await user.click(within(detail("Build host")).getByRole("tab", { name: "Activity" }));

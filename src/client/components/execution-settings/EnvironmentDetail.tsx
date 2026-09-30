@@ -20,7 +20,7 @@ import { CopyableValue } from "./detail-parts.js";
 import { capabilityLabels, environmentKindNames } from "./EnvironmentEditor.js";
 import { environmentBackends, EnvironmentIcon, environmentKindLabels, hostPlatform, hostPresence, runtimeFor } from "./ExecutionInventory.js";
 import { RecoveredOperations } from "./RecoveredOperations.js";
-import { hasDestructiveRuntimeMenuItems, hasRuntimeMenuItems, runtimeDiagnostics, RuntimeFeedback, RuntimeHealth, RuntimeImpactDialog, RuntimeMenuItems, RuntimePrimaryAction, useRuntimeController, type RuntimeController } from "./RuntimeControls.js";
+import { hasAvailableRuntimeMenuItems, hasDestructiveRuntimeMenuItems, hasRuntimeMenuItems, runtimeDiagnostics, RuntimeFeedback, RuntimeHealth, RuntimeImpactDialog, RuntimeMenuItems, RuntimePrimaryAction, useRuntimeController, type RuntimeController } from "./RuntimeControls.js";
 import { worstStatus } from "./runtime-presentation.js";
 import type { ConfigurationSnapshot, EnvironmentDefinition } from "./types.js";
 import type { ConfigurationControls } from "./useConfiguration.js";
@@ -70,7 +70,7 @@ export function DetailMenu({ label, controller, extra }: { readonly label: strin
   const regular = Boolean(extra) || controller.presentation.secondary.some(entry => entry.emphasis !== "destructive");
   return <DropdownMenu>
     <DropdownMenuTrigger asChild><Button type="button" variant="outline" size="icon" aria-label={`Runtime actions for ${label}`}
-      disabled={!extra && (controller.paused || controller.unsettled)} aria-describedby={controller.describedBy}><Ellipsis /></Button></DropdownMenuTrigger>
+      disabled={!extra && !hasAvailableRuntimeMenuItems(controller)} aria-describedby={controller.describedBy}><Ellipsis /></Button></DropdownMenuTrigger>
     <DropdownMenuContent align="end" aria-label={`Runtime actions for ${label}`}>
       <RuntimeMenuItems controller={controller} emphasis="default" />
       {extra}
@@ -140,7 +140,7 @@ export function EnvironmentDetail({ environment, selected, tab, onTab, hosts, st
   return <section aria-label={`${environment.label} details`} className="execution-detail">
     <SettingsDetailHeader back={<SettingsBackLink stackOnly href={settingsPath("environments")} label="Environments" />}
       icon={<EnvironmentIcon kind={environment.kind} />} title={environment.label} headingRef={headingRef}
-      tags={<Tag>{environmentKindLabels[environment.kind]}</Tag>} status={<StatusPill tone={status.tone}>{status.label}</StatusPill>}
+      tags={environmentKindLabels[environment.kind] === environment.label ? undefined : <Tag>{environmentKindLabels[environment.kind]}</Tag>} status={<StatusPill tone={status.tone}>{status.label}</StatusPill>}
       actions={<>
         <RuntimePrimaryAction controller={controller} />
         <Button type="button" variant="outline" aria-label={`Edit ${environment.label}`} onClick={() => navigate(editPath)}>Edit</Button>
@@ -155,7 +155,7 @@ export function EnvironmentDetail({ environment, selected, tab, onTab, hosts, st
         <TabsTrigger value="activity">Activity</TabsTrigger>
       </TabsList>
       <TabsContent value="overview" className="execution-tab">
-        <RuntimeHealth controller={controller}>
+        <RuntimeHealth controller={controller} status={status}>
           {remote && controller.presentation.recoveryEmphasis ? <Callout tone="warning"
             action={<Button type="button" size="sm" variant="outline" onClick={() => setRecoveryOpen(true)}>Review</Button>}>
             Retained results may need recovery before lifecycle actions can succeed.</Callout> : null}

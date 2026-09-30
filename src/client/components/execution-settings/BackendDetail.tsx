@@ -82,7 +82,7 @@ export function BackendDetail({ backend, selected, tab, onTab, headingRef, onRem
         <TabsTrigger value="activity">Activity</TabsTrigger>
       </TabsList>
       <TabsContent value="overview" className="execution-tab">
-        <RuntimeHealth controller={controller}>
+        <RuntimeHealth controller={controller} status={status}>
           {unsupported ? <Callout tone="warning" role="status">Remote execution is unsupported. This retained configuration cannot run here.</Callout> : null}
         </RuntimeHealth>
         <SettingsSection title="Provider and connection" card><KeyValueList className="execution-facts" items={connectionFacts} /></SettingsSection>

@@ -48,8 +48,8 @@
 
 .execution-health { display: grid; gap: var(--space-2-5); padding: var(--space-4); border: 1px solid var(--border-soft); border-radius: var(--radius-card); background: var(--card); }
 .execution-health-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1-5); }
+.execution-health-label { color: var(--muted-foreground-2); font-size: var(--text-meta); font-weight: var(--weight-medium); }
 .execution-health-detail { margin: 0; color: var(--muted-foreground); font-size: var(--text-ui); line-height: var(--leading-normal); }
-.execution-health-unsettled { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .execution-runtime-summary { display: grid; gap: var(--space-2); padding-block: var(--space-3); }
 
 .execution-facts { padding-block: var(--space-3); }
