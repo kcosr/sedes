@@ -126,8 +126,8 @@
 .execution-settings-editor > form > fieldset { border: 0; padding: 0; }
 .execution-settings-editor > form > fieldset > legend { display: none; }
 .execution-settings-editor > form > h4 { display: none; }
-.execution-settings-save-bar { position: sticky; bottom: -24px; z-index: 2; background: var(--background); border-top: 1px solid var(--border); padding: 14px 0 16px; margin-top: 8px; }
-.execution-settings-leave-dialog { z-index: 110; }
+.execution-settings-save-bar { position: sticky; bottom: -24px; z-index: calc(var(--z-sticky) + 1); background: var(--background); border-top: 1px solid var(--border); padding: 14px 0 16px; margin-top: 8px; }
+.execution-settings-leave-dialog { z-index: var(--z-blocking); }
 @media (max-width: 760px), (max-width: 1000px) and (max-height: 500px) {
   .execution-settings-page[data-view="list"] { gap: 12px; }
   .execution-settings-page[data-view="list"] .execution-settings-header { flex-direction: row; align-items: center; gap: 8px; margin: 0; }

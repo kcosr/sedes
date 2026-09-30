@@ -64,7 +64,7 @@
 }
 .workspace-files-compare-dirty-note {
   position: absolute;
-  z-index: 7;
+  z-index: calc(var(--z-sticky) + 6);
   right: 12px;
   bottom: 12px;
   max-width: min(360px, calc(100% - 24px));
@@ -410,7 +410,7 @@
   top: 0;
   bottom: 0;
   width: 6px;
-  z-index: 5;
+  z-index: calc(var(--z-sticky) + 4);
   cursor: col-resize;
   touch-action: none;
 }
@@ -492,7 +492,7 @@
 .workspace-compare-drawer {
   position: absolute;
   inset: 0;
-  z-index: 15;
+  z-index: calc(var(--z-sticky) + 14);
 }
 .workspace-compare-drawer .workspace-compare-sidebar {
   position: absolute;
@@ -662,7 +662,7 @@
 }
 .workspace-compare-toolbar {
   position: relative;
-  z-index: 3;
+  z-index: calc(var(--z-sticky) + 2);
   display: flex;
   align-items: center;
   gap: 4px;

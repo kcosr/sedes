@@ -283,8 +283,8 @@ export function DirectoryPickerDialog({
         data-mobile-sheet={mobileSheet || undefined}
         style={mobileSheet ? { "--directory-keyboard-inset": `${keyboardInset}px` } as CSSProperties : undefined}
         showCloseButton={false}
-        overlayClassName="z-[110]"
-        className="directory-picker-dialog z-[111] max-h-[min(90dvh,44rem)] grid-rows-[auto_auto_minmax(8rem,1fr)_auto] sm:max-w-xl"
+        overlayClassName="z-(--z-blocking)"
+        className="directory-picker-dialog z-[calc(var(--z-blocking)+1)] max-h-[min(90dvh,44rem)] grid-rows-[auto_auto_minmax(8rem,1fr)_auto] sm:max-w-xl"
       >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
@@ -308,7 +308,7 @@ export function DirectoryPickerDialog({
                 placeholder="Choose environment"
                 disabled={submitting}
                 value={environmentId}
-                contentClassName="z-[112]"
+                contentClassName="z-[calc(var(--z-blocking)+2)]"
                 options={environments.map((option) => ({
                   value: option.id,
                   label: `${environmentDisplayLabel(option, environments)}${option.available ? "" : " — Unavailable"}`,

@@ -997,9 +997,9 @@ export function ThreadContextMenu({
       <Dialog open={groupDialogOpen} onOpenChange={setGroupDialogOpen}>
         <DialogContent
           ref={groupDialogRef}
-          className="thread-group-dialog z-[101]"
+          className="thread-group-dialog z-[calc(var(--z-over-dialog)+1)]"
           style={{ "--thread-group-keyboard-inset": `${groupKeyboardInset}px` } as CSSProperties}
-          overlayClassName="z-[100]"
+          overlayClassName="z-(--z-over-dialog)"
           data-testid="thread-group-dialog"
           onOpenAutoFocus={groupPickerFocus.onOpenAutoFocus}
           onCloseAutoFocus={(event) => {

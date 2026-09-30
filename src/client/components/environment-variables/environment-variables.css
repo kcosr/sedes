@@ -35,8 +35,8 @@
 .environment-variable-tabs button { padding: 8px 0; border-bottom: 2px solid transparent; color: var(--muted-foreground); font-size: 12px; }
 .environment-variable-tabs button[aria-selected="true"] { color: var(--foreground); border-bottom-color: var(--foreground); }
 .environment-variable-tabs button:disabled { opacity: .55; cursor: default; }
-.environment-variable-dialog[data-slot="dialog-content"] { z-index: 101; width: 780px; max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); display: flex; flex-direction: column; gap: 0; padding: 0; overflow: hidden; }
-.environment-variable-dialog-overlay[data-slot="dialog-overlay"] { z-index: 100; }
+.environment-variable-dialog[data-slot="dialog-content"] { z-index: calc(var(--z-over-dialog) + 1); width: 780px; max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); display: flex; flex-direction: column; gap: 0; padding: 0; overflow: hidden; }
+.environment-variable-dialog-overlay[data-slot="dialog-overlay"] { z-index: var(--z-over-dialog); }
 .environment-variable-dialog-header { padding: 22px 24px 18px; border-bottom: 1px solid var(--border); }
 .environment-variable-dialog-header [data-slot="dialog-description"] { margin-top: 8px; }
 .environment-variable-dialog-body { display: grid; gap: 16px; overflow: auto; padding: 20px 24px; }

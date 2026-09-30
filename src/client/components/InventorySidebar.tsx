@@ -2256,7 +2256,7 @@ function GroupManagementControl({
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align="end"
-          className={elevated ? "z-[100]" : undefined}
+          className={elevated ? "z-(--z-over-dialog)" : undefined}
         >
           <DropdownMenuItem onSelect={() => open("rename")}>
             Rename group…
@@ -2274,8 +2274,8 @@ function GroupManagementControl({
         onOpenChange={(value) => !value && close()}
       >
         <DialogContent
-          className={elevated ? "z-[101]" : undefined}
-          overlayClassName={elevated ? "z-[100]" : undefined}
+          className={elevated ? "z-[calc(var(--z-over-dialog)+1)]" : undefined}
+          overlayClassName={elevated ? "z-(--z-over-dialog)" : undefined}
         >
           <DialogHeader>
             <DialogTitle>

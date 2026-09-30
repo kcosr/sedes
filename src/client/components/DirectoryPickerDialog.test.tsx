@@ -164,9 +164,9 @@ describe("DirectoryPickerDialog", () => {
       }),
     );
 
-    expect(screen.getByRole("dialog")).toHaveClass("z-[111]");
+    expect(screen.getByRole("dialog")).toHaveClass("z-[calc(var(--z-blocking)+1)]");
     expect(document.querySelector('[data-slot="dialog-overlay"]')).toHaveClass(
-      "z-[110]",
+      "z-(--z-blocking)",
     );
   });
 

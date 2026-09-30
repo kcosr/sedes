@@ -119,7 +119,7 @@ function ResourceActions({ label, disabled, onOpen, onEdit }: {
   return <div className="execution-inventory-actions">
     <Button type="button" size="sm" variant="ghost" disabled={disabled} aria-label={`Edit ${label}`} onClick={onEdit}>Edit</Button>
     <DropdownMenu><DropdownMenuTrigger asChild><Button size="icon-sm" variant="ghost" aria-label={`Actions for ${label}`}><MoreHorizontal size={16} /></Button></DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="execution-settings-menu z-[100]">
+      <DropdownMenuContent align="end" className="execution-settings-menu z-(--z-over-dialog)">
         <DropdownMenuItem onSelect={onOpen}>Runtime and actions</DropdownMenuItem>
         <DropdownMenuItem disabled={disabled} onSelect={onEdit}>Edit configuration</DropdownMenuItem>
       </DropdownMenuContent>

@@ -1556,7 +1556,7 @@ function PanelLayoutReady({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent
-                className="workspace-panel-open-menu-content z-[82]"
+                className="workspace-panel-open-menu-content z-[calc(var(--z-drawer)+1)]"
                 align="end"
                 sideOffset={6}
                 onCloseAutoFocus={(event) => {

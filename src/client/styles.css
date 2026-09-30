@@ -124,6 +124,111 @@
     BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 
+  /* type ramp — role names; values are today's dominant steps */
+  --text-micro: 10px; /* counts, tiny tags */
+  --text-label: 11px; /* eyebrows, uppercase labels, table heads */
+  --text-meta: 12px; /* help, descriptions, secondary rows */
+  --text-ui: 13px; /* rows, controls, menus, dialog body */
+  --text-body: 14.5px; /* chat, markdown, composer (reference surfaces) */
+  --text-title: 15px; /* dialog, sheet and panel titles */
+  --text-page: 20px; /* settings page titles */
+  --text-display: 24px; /* auth and landing display */
+  --text-transcript-meta: 12.5px; /* reference surface, preserved */
+  --text-input: var(--text-ui); /* text inputs; 16px under the density switch */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --leading-tight: 1.2;
+  --leading-snug: 1.35;
+  --leading-normal: 1.45;
+  --leading-relaxed: 1.6;
+  --tracking-label: 0.06em; /* the one uppercase-label recipe: 11px/600/0.06em */
+
+  /* spacing — 4px grid, 2px half steps for dense chrome */
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-2-5: 10px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* controls and icons */
+  --control-xs: 24px;
+  --control-sm: 28px;
+  --control-md: 32px;
+  --control-lg: 36px;
+  --control-touch: 44px;
+  --control-default: var(--control-md); /* swapped by the density switch */
+  --icon-xs: 12px;
+  --icon-sm: 14px;
+  --icon-md: 16px;
+  --icon-lg: 20px;
+
+  /* status pairs — mixes of the status colors, so the dark theme follows
+     automatically. Mix in oklab, not oklch: --border is a tinted gray, and
+     oklch interpolates the hue along the way (warning turns purple, success
+     blue or orange) while oklab keeps the status hue. */
+  --success-soft: color-mix(in oklab, var(--success) 12%, transparent);
+  --success-border: color-mix(in oklab, var(--success) 35%, var(--border));
+  --info-soft: color-mix(in oklab, var(--info) 12%, transparent);
+  --info-border: color-mix(in oklab, var(--info) 35%, var(--border));
+  --warning-soft: color-mix(in oklab, var(--warning) 12%, transparent);
+  --warning-border: color-mix(in oklab, var(--warning) 35%, var(--border));
+  --destructive-soft: color-mix(in oklab, var(--destructive) 12%, transparent);
+  --destructive-border: color-mix(in oklab, var(--destructive) 35%, var(--border));
+
+  /* interaction */
+  --hover: var(--accent); /* the one wash for rows, ghost buttons, menu items */
+  --selected: color-mix(in oklch, var(--foreground) 9%, transparent);
+  --disabled-opacity: 0.5;
+  /* equals Button's `ring-3 ring-ring/50` */
+  --focus-ring: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+
+  /* elevation */
+  --elevation-1: 0 1px 2px oklch(0 0 0 / 0.05); /* raised pill or card */
+  --elevation-2: var(--shadow-small); /* menus, popovers, pickers */
+  --elevation-3: var(--shadow); /* dialogs, sheets */
+
+  /* z-index layers. Every positive z-index in client CSS and app TSX names
+     one of these; 0 and negative values stay local to their stacking
+     context. The values are today's stacking bands, kept exactly, so a
+     declaration that must stay above another in its band adds
+     `calc(var(--z-x) + n)`. Today's order is sticky < floating < dialog
+     < drawer < over-dialog < blocking < toast: in-page popovers and the
+     DropdownMenu primitive (z-50) sit below the Dialog primitive
+     (z-[80]/z-[81]), and the Popover, Select and ContextMenu primitives
+     (z-[90]) clear it from inside the dialog band. The overlay primitives
+     keep those literals until they become dialog-aware. */
+  --z-sticky: 1; /* in-page raised and sticky chrome (+0…+20) */
+  --z-floating: 50; /* in-page popovers, tasks panel and sheet, legacy dialog cards (+0…+12) */
+  --z-dialog: 80; /* Dialog primitive band; floating content above dialogs (+8…+11) */
+  --z-drawer: 81; /* mobile drawer; menus opened over it +1 */
+  --z-over-dialog: 100; /* sheets and dialogs over the drawer and dialog band, tooltips */
+  --z-blocking: 110; /* operation overlay; confirmations and pickers over sheets */
+  --z-toast: 120;
+
+  /* floating surfaces and dialogs */
+  --menu-row-height: 32px;
+  --menu-row-radius: var(--radius-ctl);
+  --menu-panel-padding: 4px;
+  --menu-panel-radius: var(--radius-card);
+  --dialog-width-sm: 400px;
+  --dialog-width-md: 560px;
+  --dialog-width-lg: 760px;
+  --dialog-width-xl: 1000px;
+  --dialog-padding: 20px;
+  --dialog-radius: var(--radius-lg);
+  --dialog-viewport-margin: 16px;
+
+  /* layout */
+  --settings-page-width: 880px;
+  --settings-page-width-wide: 1120px;
+
   /* Managed terminal presentation follows the resolved app theme. */
   --terminal-background: #f7f7f8;
   --terminal-panel: #eceef1;
@@ -167,6 +272,7 @@
   --scrim: oklch(0 0 0 / 0.6);
   --shadow: 0 2px 6px oklch(0 0 0 / 0.4), 0 16px 44px oklch(0 0 0 / 0.5);
   --shadow-small: 0 1px 2px oklch(0 0 0 / 0.3), 0 8px 28px oklch(0 0 0 / 0.35);
+  --elevation-1: 0 1px 2px oklch(0 0 0 / 0.3);
   --terminal-background: #111318;
   --terminal-panel: #171a20;
   --terminal-foreground: #e5e7eb;
@@ -174,6 +280,19 @@
   --terminal-border: #3b4049;
   --terminal-action-background: #242831;
   --terminal-action-hover: #303641;
+}
+
+/* The one density switch. 819/820px is the app breakpoint; coarse pointers
+   get the same touch density at any width. Components read these tokens
+   instead of repeating the query. Text inputs go to 16px so iOS does not
+   zoom on focus. */
+@media (max-width: 819px), (pointer: coarse) {
+  :root {
+    --control-default: var(--control-touch);
+    --menu-row-height: 44px;
+    --dialog-padding: 16px;
+    --text-input: 16px;
+  }
 }
 
 @theme inline {
@@ -201,6 +320,14 @@
   --color-success: var(--success);
   --color-info: var(--info);
   --color-warning: var(--warning);
+  --color-success-soft: var(--success-soft);
+  --color-success-border: var(--success-border);
+  --color-info-soft: var(--info-soft);
+  --color-info-border: var(--info-border);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-border: var(--warning-border);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-destructive-border: var(--destructive-border);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
@@ -216,6 +343,18 @@
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-xl: 16px;
+  /* Tailwind type scale pinned to the ramp. `--text-sm` stays at its
+     stock 14px, which is off the ramp: moving it to `--text-ui` (13px) is
+     the primitive alignment's visible change, not a token change.
+     `--text-base` stays 16px for mobile inputs (iOS does not zoom). */
+  --text-xs: var(--text-meta);
+  --text-sm: 14px;
+  --text-base: 16px;
+  /* Tailwind shadow scale pinned to the app elevations (dark-aware). */
+  --shadow-xs: var(--elevation-1);
+  --shadow-sm: var(--elevation-1);
+  --shadow-md: var(--elevation-2);
+  --shadow-lg: var(--elevation-3);
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
 }
@@ -517,7 +656,7 @@ textarea:disabled {
    own border is the hairline; hover/focus/drag brighten a centered line. */
 .sidebar-resize-handle {
   position: absolute;
-  z-index: 10;
+  z-index: calc(var(--z-sticky) + 9);
   top: 0;
   bottom: 0;
   left: calc(var(--sidebar-width, 260px) - 2px);
@@ -584,7 +723,7 @@ textarea:disabled {
 
 .sidebar-header {
   position: relative;
-  z-index: 2;
+  z-index: calc(var(--z-sticky) + 1);
   display: grid;
   flex: 0 0 auto;
   gap: 8px;
@@ -854,7 +993,7 @@ textarea:disabled {
 
 .new-thread-target-picker {
   position: fixed;
-  z-index: 89;
+  z-index: calc(var(--z-dialog) + 9);
   top: 0;
   bottom: 0;
   left: var(--sidebar-width, 260px);
@@ -1076,18 +1215,18 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
 @media (max-width: 819px), (pointer: coarse) {
   [data-slot="select-content"].new-thread-select-content,
   [data-slot="popover-content"].new-thread-searchable-content {
-    z-index: 102;
+    z-index: calc(var(--z-over-dialog) + 2);
   }
 
   [data-slot="dialog-overlay"].new-thread-sheet-overlay {
-    z-index: 100;
+    z-index: var(--z-over-dialog);
   }
 
   /* Root this selector so its specificity matches the persisted desktop
      sidebar-collapse rule above. That state remains on `html` in the mobile
      shell and must not restore the desktop drawer's 370px width cap. */
   html [data-slot="dialog-content"].new-thread-target-picker {
-    z-index: 101;
+    z-index: calc(var(--z-over-dialog) + 1);
     top: auto;
     right: 0;
     bottom: var(--new-thread-keyboard-inset, 0px);
@@ -1311,7 +1450,7 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
 /* Surface, motion, and dismissal come from the ui/popover primitive; the
    z-index lifts the portalled content above the mobile drawer (z 81). */
 .workspace-popover {
-  z-index: 90;
+  z-index: calc(var(--z-dialog) + 10);
   width: min(280px, calc(100vw - 16px));
 }
 
@@ -1700,7 +1839,7 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
 .thread-row-actions {
   position: absolute;
   right: 0;
-  z-index: 1;
+  z-index: var(--z-sticky);
   display: flex;
   align-items: center;
   justify-self: end;
@@ -2238,7 +2377,7 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
 }
 
 [data-slot="dialog-overlay"].advisory-center-sheet-overlay {
-  z-index: 100;
+  z-index: var(--z-over-dialog);
 }
 
 [data-slot="dialog-content"].advisory-center-sheet {
@@ -2246,7 +2385,7 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   right: 0;
   bottom: 0;
   left: auto;
-  z-index: 101;
+  z-index: calc(var(--z-over-dialog) + 1);
   display: flex;
   width: min(420px, calc(100vw - 24px));
   min-width: 0;
@@ -2369,7 +2508,7 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
 .sidebar-footer-menu {
   /* DropdownMenu content is portalled; clear the full-screen mobile drawer
      (z 81) so the menu remains visible and receives touch input. */
-  z-index: 90;
+  z-index: calc(var(--z-dialog) + 10);
   min-width: 190px;
 }
 
@@ -2382,7 +2521,7 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
 
 .sidebar-usage-menu,
 .sidebar-usage-detail {
-  z-index: 91;
+  z-index: calc(var(--z-dialog) + 11);
   min-width: 232px;
 }
 
@@ -2592,7 +2731,7 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
 }
 
 [data-slot="dialog-overlay"].sidebar-usage-sheet-overlay {
-  z-index: 100;
+  z-index: var(--z-over-dialog);
 }
 
 [data-slot="dialog-content"].sidebar-usage-sheet {
@@ -2600,7 +2739,7 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   right: 0;
   bottom: 0;
   left: 0;
-  z-index: 101;
+  z-index: calc(var(--z-over-dialog) + 1);
   display: flex;
   width: 100vw;
   min-width: 0;
@@ -2632,7 +2771,7 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
 /* Touch/pen long-press uses a viewport-anchored action sheet instead of a
    pointer-positioned menu. */
 [data-slot="dialog-overlay"].thread-actions-sheet-overlay {
-  z-index: 100;
+  z-index: var(--z-over-dialog);
 }
 
 [data-slot="dialog-content"].thread-actions-sheet {
@@ -2640,7 +2779,7 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   right: 0;
   bottom: 0;
   left: 0;
-  z-index: 101;
+  z-index: calc(var(--z-over-dialog) + 1);
   display: flex;
   width: 100vw;
   min-width: 0;
@@ -2723,7 +2862,7 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
 /* The chat header's mixed configuration/action surface becomes a modal sheet
    on coarse pointers and narrow layouts; desktop retains its anchored popover. */
 [data-slot="dialog-overlay"].thread-settings-sheet-overlay {
-  z-index: 100;
+  z-index: var(--z-over-dialog);
 }
 
 [data-slot="dialog-content"].thread-settings-sheet {
@@ -2731,7 +2870,7 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   right: 0;
   bottom: var(--thread-settings-keyboard-inset, 0px);
   left: 0;
-  z-index: 101;
+  z-index: calc(var(--z-over-dialog) + 1);
   display: flex;
   width: 100vw;
   min-width: 0;
@@ -2841,7 +2980,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   [data-slot="select-content"],
 body:has(.thread-settings-sheet[data-state="open"])
   [data-model-picker-content] {
-  z-index: 110;
+  z-index: var(--z-blocking);
 }
 
 @media (max-width: 819px) {
@@ -2903,7 +3042,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .workspace-workbench-bar {
   position: relative;
-  z-index: 21;
+  z-index: calc(var(--z-sticky) + 20);
   display: flex;
   height: var(--workbench-bar-height);
   min-width: 0;
@@ -2985,7 +3124,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 .workspace-panel-availability-notice,
 .workspace-panel-availability {
   position: absolute;
-  z-index: 3;
+  z-index: calc(var(--z-sticky) + 2);
   inset: 48px 0 auto;
   padding: 9px 12px;
   border-bottom: 1px solid var(--border-soft);
@@ -3531,7 +3670,7 @@ body:has(.thread-settings-sheet[data-state="open"])
    opening it never resizes or reflows the active file. */
 .workspace-files-tree {
   position: absolute;
-  z-index: 8;
+  z-index: calc(var(--z-sticky) + 7);
   top: 6px;
   left: clamp(
     8px,
@@ -3824,7 +3963,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .workspace-files-seek-notice {
   position: absolute;
-  z-index: 5;
+  z-index: calc(var(--z-sticky) + 4);
   top: 8px;
   right: 8px;
   max-width: min(320px, calc(100% - 16px));
@@ -3876,7 +4015,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .workspace-files-boundary-note {
   position: absolute;
-  z-index: 2;
+  z-index: calc(var(--z-sticky) + 1);
   right: 8px;
   bottom: 8px;
   margin: 0;
@@ -3900,7 +4039,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .workspace-panel-resize-handle {
   position: relative;
-  z-index: 5;
+  z-index: calc(var(--z-sticky) + 4);
   align-self: stretch;
   justify-self: stretch;
   cursor: col-resize;
@@ -4026,11 +4165,11 @@ body:has(.thread-settings-sheet[data-state="open"])
 }
 
 [data-slot="dialog-overlay"].terminal-lifecycle-confirm-overlay {
-  z-index: 110;
+  z-index: var(--z-blocking);
 }
 
 [data-slot="dialog-content"].terminal-lifecycle-confirm-dialog {
-  z-index: 111;
+  z-index: calc(var(--z-blocking) + 1);
 }
 
 .workspace-panel-terminals .workspace-panel-chrome {
@@ -4326,7 +4465,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 .terminal-transcript {
   position: absolute;
   inset: 8px;
-  z-index: 3;
+  z-index: calc(var(--z-sticky) + 2);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -4466,7 +4605,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .chat-thread-panel > :not(.chat-atmosphere) {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-sticky);
 }
 
 .chat-atmosphere {
@@ -4517,7 +4656,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .thread-view-floating-controls {
   position: absolute;
-  z-index: 3;
+  z-index: calc(var(--z-sticky) + 2);
   top: 10px;
   right: 14px;
   display: inline-flex;
@@ -4527,7 +4666,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   border: 1px solid var(--border);
   border-radius: 999px;
   background: color-mix(in srgb, var(--background) 94%, transparent);
-  box-shadow: var(--shadow-xs);
+  box-shadow: var(--elevation-1);
   backdrop-filter: blur(8px);
   pointer-events: auto;
 }
@@ -5202,7 +5341,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .thread-header {
   position: relative;
-  z-index: 4;
+  z-index: calc(var(--z-sticky) + 3);
 }
 
 .thread-heading {
@@ -5429,7 +5568,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 }
 
 .thread-worktree-popover {
-  z-index: 50;
+  z-index: var(--z-floating);
   width: min(390px, calc(100vw - 16px));
   max-height: min(520px, var(--radix-popover-content-available-height), calc(100dvh - 24px));
   display: flex;
@@ -5485,7 +5624,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .thread-worktree-search > svg {
   position: absolute;
-  z-index: 1;
+  z-index: var(--z-sticky);
   top: 50%;
   left: 9px;
   color: var(--muted-foreground-2);
@@ -5709,14 +5848,14 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .turn-bookmarks-popover,
 .turn-bookmarks-sheet {
-  z-index: 52;
+  z-index: calc(var(--z-floating) + 2);
   width: min(390px, calc(100vw - 24px));
   max-height: min(70vh, 620px);
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--popover);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--elevation-3);
 }
 
 .turn-bookmarks-popover h2 {
@@ -5820,7 +5959,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   container-name: thread-find;
   container-type: inline-size;
   position: relative;
-  z-index: 4;
+  z-index: calc(var(--z-sticky) + 3);
   display: flex;
   max-height: 0;
   min-width: 0;
@@ -5949,7 +6088,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .thread-find-marker-rail {
   position: absolute;
-  z-index: 5;
+  z-index: calc(var(--z-sticky) + 4);
   top: 8px;
   right: 18px;
   bottom: 8px;
@@ -6119,11 +6258,11 @@ body:has(.thread-settings-sheet[data-state="open"])
 }
 
 .searchable-select-dialog-overlay {
-  z-index: 110;
+  z-index: var(--z-blocking);
 }
 
 .searchable-select-dialog {
-  z-index: 111;
+  z-index: calc(var(--z-blocking) + 1);
   left: 50%;
   bottom: calc(var(--select-keyboard-inset, 0px) + 16px);
   transform: translateX(-50%);
@@ -6586,7 +6725,7 @@ body:has(.thread-settings-sheet[data-state="open"])
    the viewport remains the primary mobile control. */
 .chat-history-rail {
   position: absolute;
-  z-index: 3;
+  z-index: calc(var(--z-sticky) + 2);
   top: 16px;
   bottom: 16px;
   left: max(12px, calc(50% - (var(--measure) / 2) - 36px));
@@ -6673,7 +6812,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .chat-history-preview {
   position: absolute;
-  z-index: 4;
+  z-index: calc(var(--z-sticky) + 3);
   top: 50%;
   left: 42px;
   width: min(360px, calc(100cqw - 72px));
@@ -6759,7 +6898,7 @@ body:has(.thread-settings-sheet[data-state="open"])
    still leaves the selection fixed until release. */
 .mobile-chat-history-thumbstick {
   position: absolute;
-  z-index: 6;
+  z-index: calc(var(--z-sticky) + 5);
   top: 16px;
   right: max(28px, env(safe-area-inset-right));
   bottom: 16px;
@@ -6813,7 +6952,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   overflow: hidden;
   box-shadow:
     inset 0 0 0 5px color-mix(in srgb, var(--background) 28%, transparent),
-    var(--shadow-xs);
+    var(--elevation-1);
   opacity: 0;
   scale: 1 0.04;
   translate: 0 -50%;
@@ -6853,7 +6992,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .mobile-chat-history-thumbstick-dot {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-sticky);
   width: 8px;
   height: 8px;
   border: 1px solid color-mix(in srgb, var(--foreground) 24%, transparent);
@@ -7024,7 +7163,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .source-turn-status {
   position: relative;
-  z-index: 3;
+  z-index: calc(var(--z-sticky) + 2);
   max-width: min(90%, 520px);
   flex: 0 0 auto;
   align-self: center;
@@ -7033,7 +7172,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   border: 1px solid var(--border);
   border-radius: var(--radius-ctl);
   background: var(--popover);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--elevation-1);
   color: var(--muted-foreground);
   font-size: 12px;
 }
@@ -7194,13 +7333,13 @@ body:has(.thread-settings-sheet[data-state="open"])
 }
 
 .lineage-tooltip {
-  z-index: 100;
+  z-index: var(--z-over-dialog);
   max-width: 300px;
   padding: 6px 9px;
   border: 1px solid var(--border);
   border-radius: var(--radius-ctl);
   background: var(--popover);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--elevation-2);
   color: var(--popover-foreground);
   font-size: 12px;
   line-height: 1.35;
@@ -7245,7 +7384,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--background);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--elevation-1);
   color: var(--muted-foreground-2);
   opacity: 0;
   transition:
@@ -7827,7 +7966,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .markdown-code-copy {
   position: absolute;
-  z-index: 1;
+  z-index: var(--z-sticky);
   top: 8px;
   right: 8px;
   display: inline-flex;
@@ -7937,7 +8076,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .markdown .mermaid-diagram-expand {
   position: absolute;
-  z-index: 1;
+  z-index: var(--z-sticky);
   top: 8px;
   right: 8px;
   display: inline-flex;
@@ -8368,7 +8507,7 @@ button.activity-group-summary:hover {
 
 .file-block-controls {
   position: relative;
-  z-index: 2;
+  z-index: calc(var(--z-sticky) + 1);
   display: inline-flex;
   justify-self: end;
   gap: 4px;
@@ -8411,7 +8550,7 @@ button.activity-group-summary:hover {
   position: absolute;
   top: calc(100% + 4px);
   right: 0;
-  z-index: 4;
+  z-index: calc(var(--z-sticky) + 3);
   width: max-content;
   max-width: min(280px, 75vw);
   padding: 5px 7px;
@@ -9009,7 +9148,7 @@ tr.diff-hunk td {
   --composer-inline-inset: clamp(14px, 4vw, 48px);
   --composer-prompt-tab-height: 30px;
   position: relative;
-  z-index: 3;
+  z-index: calc(var(--z-sticky) + 2);
   width: 100%;
   flex: 0 0 auto;
   padding: 0 var(--composer-inline-inset)
@@ -9027,7 +9166,7 @@ tr.diff-hunk td {
 
 .input-activity-bar {
   position: absolute;
-  z-index: 1;
+  z-index: var(--z-sticky);
   top: -1px;
   left: calc(var(--radius-lg) - 1px);
   width: calc(100% - var(--radius-lg) - var(--radius-lg) + 2px);
@@ -9459,7 +9598,7 @@ tr.diff-hunk td {
 }
 
 .composer-prompt-popover {
-  z-index: 55;
+  z-index: calc(var(--z-floating) + 5);
   display: grid;
   width: min(500px, calc(100vw - 24px));
   max-height: min(520px, var(--radix-popover-content-available-height, 70dvh));
@@ -9858,7 +9997,7 @@ tr.diff-hunk td {
   content: "Add task to prompt";
   position: absolute;
   inset: 6px;
-  z-index: 4;
+  z-index: calc(var(--z-sticky) + 3);
   display: grid;
   place-items: center;
   border: 1px dashed var(--primary);
@@ -9884,7 +10023,7 @@ tr.diff-hunk td {
 .thread-task-drop-indicator {
   position: absolute;
   inset: 52px 8px 8px;
-  z-index: 20;
+  z-index: calc(var(--z-sticky) + 19);
   display: grid;
   place-items: center;
   border: 2px dashed var(--primary);
@@ -10019,7 +10158,7 @@ tr.diff-hunk td {
 }
 
 .context-usage-popover {
-  z-index: 50;
+  z-index: var(--z-floating);
   display: grid;
   width: max-content;
   max-width: calc(100vw - 24px);
@@ -10741,7 +10880,7 @@ tr.diff-hunk td {
 .stash-popover,
 .skill-popover,
 .menu-popover {
-  z-index: 50;
+  z-index: var(--z-floating);
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
   background: var(--popover);
@@ -11155,7 +11294,7 @@ tr.diff-hunk td {
 }
 
 .archive-choice-menu {
-  z-index: 90;
+  z-index: calc(var(--z-dialog) + 10);
   width: min(300px, calc(100vw - 16px));
 }
 
@@ -11522,7 +11661,7 @@ tr.diff-hunk td {
 /* Interaction requests dock in flow between the transcript and the composer:
    they stay visible without obscuring, overlapping, or disabling the thread. */
 .interaction-takeover {
-  z-index: 20;
+  z-index: calc(var(--z-sticky) + 19);
   display: flex;
   min-width: 0;
   flex: 0 0 auto;
@@ -11778,7 +11917,7 @@ tr.diff-hunk td {
 
 .interaction-unanswered-confirm {
   position: absolute;
-  z-index: 2;
+  z-index: calc(var(--z-sticky) + 1);
   inset: auto calc(var(--interaction-pad-x) * -1)
     calc(var(--interaction-pad-b) * -1);
   display: grid;
@@ -11837,7 +11976,7 @@ tr.diff-hunk td {
 
 .dialog-overlay {
   position: fixed;
-  z-index: 60;
+  z-index: calc(var(--z-floating) + 10);
   inset: 0;
   background: var(--scrim);
   animation: fade-in 130ms ease-out;
@@ -11845,7 +11984,7 @@ tr.diff-hunk td {
 
 .dialog-card {
   position: fixed;
-  z-index: 61;
+  z-index: calc(var(--z-floating) + 11);
   top: 50%;
   left: 50%;
   width: min(420px, calc(100vw - 30px));
@@ -11863,11 +12002,11 @@ tr.diff-hunk td {
 /* Dialogs launched from a drawer or popover must clear both interactive
    surfaces so their scrim and card remain modal at every viewport width. */
 .dialog-overlay.over-drawer {
-  z-index: 100;
+  z-index: var(--z-over-dialog);
 }
 
 .dialog-card.over-drawer {
-  z-index: 101;
+  z-index: calc(var(--z-over-dialog) + 1);
 }
 
 .dialog-card h2 {
@@ -12561,7 +12700,7 @@ tr.diff-hunk td {
 
 .canned-prompt-select:focus-visible {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-sticky);
   outline: 2px solid var(--ring);
   outline-offset: -2px;
 }
@@ -13641,7 +13780,7 @@ tr.diff-hunk td {
 
 .automation-dialog {
   position: fixed;
-  z-index: 62;
+  z-index: calc(var(--z-floating) + 12);
   inset: 0 0 0 auto;
   width: min(860px, calc(100vw - 260px));
   min-width: 0;
@@ -13665,7 +13804,7 @@ tr.diff-hunk td {
    two focus rings can never overlap. */
 .automation-dialog-close {
   position: absolute;
-  z-index: 2;
+  z-index: calc(var(--z-sticky) + 1);
   top: var(--editor-pad);
   right: var(--editor-pad);
 }
@@ -14181,13 +14320,13 @@ tr.diff-hunk td {
 }
 
 .codex-fast-mode-tooltip {
-  z-index: 100;
+  z-index: var(--z-over-dialog);
   max-width: 300px;
   padding: 6px 9px;
   border: 1px solid var(--border);
   border-radius: var(--radius-ctl);
   background: var(--popover);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--elevation-2);
   color: var(--popover-foreground);
   font-size: 12px;
   line-height: 1.35;
@@ -14252,7 +14391,7 @@ tr.diff-hunk td {
 }
 
 .codex-goal-popover {
-  z-index: 50;
+  z-index: var(--z-floating);
   display: grid;
   width: min(340px, calc(100vw - 24px));
   gap: 10px;
@@ -14644,7 +14783,7 @@ tr.diff-hunk td {
 
   .mobile-drawer {
     position: fixed;
-    z-index: 81;
+    z-index: var(--z-drawer);
     top: var(--workbench-bar-height);
     right: auto;
     bottom: 0;
@@ -14690,7 +14829,7 @@ tr.diff-hunk td {
 
   .thread-controls {
     position: absolute;
-    z-index: 5;
+    z-index: calc(var(--z-sticky) + 4);
     top: 100%;
     right: 0;
     left: 0;
@@ -15180,7 +15319,7 @@ tr.diff-hunk td {
 
 .pierre-selection-action {
   position: fixed;
-  z-index: 90;
+  z-index: calc(var(--z-dialog) + 10);
   display: flex;
   width: max-content;
   max-width: min(560px, calc(100vw - 24px));
@@ -15192,7 +15331,7 @@ tr.diff-hunk td {
   border-radius: 10px;
   background: var(--popover);
   color: var(--popover-foreground);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--elevation-3);
 }
 
 .pierre-selection-anchor {
@@ -15249,7 +15388,7 @@ tr.diff-hunk td {
 
 .context-selection-confirmation {
   position: absolute;
-  z-index: 11;
+  z-index: calc(var(--z-sticky) + 10);
   right: 12px;
   bottom: 12px;
   display: flex;
@@ -15652,7 +15791,7 @@ tr.diff-hunk td {
 
 .electron-switch-failure {
   position: fixed;
-  z-index: 80;
+  z-index: var(--z-dialog);
   right: 18px;
   bottom: 18px;
   display: flex;
@@ -15829,7 +15968,7 @@ tr.diff-hunk td {
   top: 100%;
   left: 0;
   width: min(18rem, 80vw);
-  z-index: 50;
+  z-index: var(--z-floating);
   background: var(--background);
   color: var(--foreground);
   padding: 0.5rem;

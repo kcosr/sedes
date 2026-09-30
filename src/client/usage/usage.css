@@ -108,7 +108,7 @@
 .usage-toolbar {
   position: sticky;
   top: calc(-1 * clamp(16px, 3.4vw, 36px));
-  z-index: 6;
+  z-index: calc(var(--z-sticky) + 5);
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -828,7 +828,7 @@
 .usage-chart-tooltip {
   position: absolute;
   top: 2px;
-  z-index: 3;
+  z-index: calc(var(--z-sticky) + 2);
   min-width: 180px;
   max-width: 290px;
   padding: 9px 11px;
@@ -1281,7 +1281,7 @@ button.usage-bar-row[aria-pressed="true"] {
 .usage-table thead th {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: var(--z-sticky);
   background: var(--card);
   color: var(--muted-foreground-2);
   font-size: 11.5px;

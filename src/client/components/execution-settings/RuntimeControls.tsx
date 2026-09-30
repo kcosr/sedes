@@ -257,7 +257,7 @@ export function RuntimeControls({ controls, revision, resourceKind, resourceId, 
           </Button>
         </DropdownMenuTrigger>
         {/* Settings renders inside a modal dialog whose overlay sits above the menu's default layer. */}
-        <DropdownMenuContent align="start" className="execution-settings-menu z-[100]">
+        <DropdownMenuContent align="start" className="execution-settings-menu z-(--z-over-dialog)">
           {menuActions.map((entry) => <DropdownMenuItem key={entry.action} variant={entry.emphasis} onSelect={() => { initiatedFrom.current = "actions"; void requestAction(entry.action); }}>{entry.label}</DropdownMenuItem>)}
         </DropdownMenuContent>
       </DropdownMenu>}

@@ -566,7 +566,7 @@ export function installGhosttyImeBridge(input: {
   overlay.hidden = true;
   Object.assign(overlay.style, {
     position: "fixed",
-    zIndex: "6",
+    zIndex: "calc(var(--z-sticky) + 5)",
     pointerEvents: "none",
     whiteSpace: "pre",
     padding: "0 2px",
@@ -788,7 +788,7 @@ function positionGhosttyTextarea(
     fontFamily: FONT_FAMILY,
     fontSize: `${terminal.options.fontSize}px`,
     lineHeight: `${height}px`,
-    zIndex: "5",
+    zIndex: "calc(var(--z-sticky) + 4)",
   });
 }
 

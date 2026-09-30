@@ -9,7 +9,7 @@
      controls impossible to click. */
   top: 96px;
   right: 12px;
-  z-index: 50;
+  z-index: var(--z-floating);
   width: var(--tasks-panel-width, 340px);
   max-width: calc(100vw - 24px);
   max-height: min(70dvh, calc(100dvh - 108px));
@@ -22,7 +22,7 @@
 
 .tasks-panel-resize-handle {
   position: absolute;
-  z-index: 1;
+  z-index: var(--z-sticky);
   top: 8px;
   bottom: 8px;
   left: -5px;
@@ -56,7 +56,7 @@
   right: 0;
   top: auto;
   bottom: var(--tasks-keyboard-inset, 0px);
-  z-index: 61;
+  z-index: calc(var(--z-floating) + 11);
   width: 100%;
   display: flex;
   max-height: min(80dvh, calc(100dvh - var(--tasks-keyboard-inset, 0px)));
@@ -503,7 +503,7 @@ button.tasks-file-row:hover {
 /* The shared .menu-popover layer sits at z-index 50, which is beneath the
    mobile sheet dialog (61); this menu must stack above both surfaces. */
 .menu-popover.tasks-panel-menu {
-  z-index: 90;
+  z-index: calc(var(--z-dialog) + 10);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -537,7 +537,7 @@ button.tasks-file-row:hover {
   position: absolute;
   top: 8px;
   right: 12px;
-  z-index: 5;
+  z-index: calc(var(--z-sticky) + 4);
   display: flex;
   align-items: center;
 }

@@ -1,10 +1,10 @@
 .dialog-overlay.operation-overlay-backdrop {
-  z-index: 110;
+  z-index: var(--z-blocking);
   animation: none;
 }
 .operation-overlay-content {
   position: fixed;
-  z-index: 111;
+  z-index: calc(var(--z-blocking) + 1);
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
@@ -46,11 +46,11 @@
   animation: operation-spin 900ms linear infinite;
 }
 .dialog-card.operation-error {
-  z-index: 111;
+  z-index: calc(var(--z-blocking) + 1);
   animation: none;
 }
 .dialog-card.operation-confirmation {
-  z-index: 111;
+  z-index: calc(var(--z-blocking) + 1);
   animation: none;
 }
 .operation-error-actions {
