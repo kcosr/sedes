@@ -1,0 +1,19 @@
+/* Settings › Tool clients editor. The credential dialog's rules live with
+   the settings kit (settings.css). */
+.tool-client-editor {
+  container: tool-client-editor / inline-size;
+}
+
+/* Allowed environments: one column, two when the editor has room. */
+.tool-client-environments {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2) var(--space-6);
+  padding-block: var(--space-1);
+}
+
+@container tool-client-editor (width >= 480px) {
+  .tool-client-environments {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

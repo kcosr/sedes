@@ -91,6 +91,8 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     });
     await expect(enableTools).toBeEnabled();
     await enableTools.click();
+    // Tool groups are collapsed: open Context to reach its tools.
+    await page.getByRole("button", { name: "Context", exact: true }).click();
     const agentContext = page.getByRole("checkbox", { name: "Agent context" });
     await expect(agentContext).toBeEnabled();
     await agentContext.click();
