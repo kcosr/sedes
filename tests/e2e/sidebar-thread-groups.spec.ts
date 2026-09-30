@@ -786,8 +786,10 @@ test("move to group searches destinations on desktop and mobile", async ({
   const newGroupName = newGroupDialog.getByRole("textbox", { name: "Group name", exact: true });
 
   await openDesktopMove();
-  await expect(groupRows).toHaveText(["Alpha planning", "Beta delivery"]);
+  // Every group is listed (this file's earlier groups too); the current one
+  // carries the check.
   await expect(submenu.getByRole("menuitemradio", { name: "Alpha planning" })).toBeChecked();
+  await expect(submenu.getByRole("menuitemradio", { name: "Beta delivery" })).not.toBeChecked();
   await expect(submenu.getByRole("menuitem", { name: "New group…", exact: true })).toBeVisible();
   await expect(submenu.getByRole("menuitem", { name: "Remove from group", exact: true })).toBeVisible();
   // Enter with nothing typed picks nothing.
@@ -864,8 +866,8 @@ test("move to group searches destinations on desktop and mobile", async ({
   await openMobileMove();
   await expect(mobileSearch).toBeVisible();
   await expect(mobileSearch).not.toBeFocused();
-  await expect(mobileGroupRows).toHaveCount(4);
   await expect(actions.getByRole("menuitemradio", { name: "New release planning" })).toBeChecked();
+  await expect(actions.getByRole("menuitemradio", { name: "Ops rotation" })).not.toBeChecked();
   await mobileSearch.click();
   await expect(mobileSearch).toBeFocused();
   await mobileSearch.fill("ALPHA");
