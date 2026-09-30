@@ -339,14 +339,27 @@ test.describe.serial("normalized target and mobile navigation", () => {
       await expect(control).toBeVisible();
       const box = await control.boundingBox();
       expect(box).not.toBeNull();
-      expect(box!.width).toBeGreaterThanOrEqual(28);
-      expect(box!.height).toBeGreaterThanOrEqual(28);
+      // Touch-sized header targets.
+      expect(box!.width).toBeGreaterThanOrEqual(40);
+      expect(box!.height).toBeGreaterThanOrEqual(40);
       headerBoxes.push(box!);
     }
     for (let index = 1; index < headerBoxes.length; index += 1) {
       expect(headerBoxes[index]!.x).toBeGreaterThan(headerBoxes[index - 1]!.x);
       expect(Math.abs(headerBoxes[index]!.y - headerBoxes[0]!.y)).toBeLessThanOrEqual(1);
     }
+    // The title block is centred above the header's hairline, and the header
+    // is as tall as the workbench bar above it.
+    const headerBox = await page.locator(".thread-header").boundingBox();
+    const headingBox = await page.getByTestId("thread-heading").boundingBox();
+    const barBox = await page.getByTestId("workspace-workbench-bar").boundingBox();
+    expect(headerBox).not.toBeNull();
+    expect(headingBox).not.toBeNull();
+    expect(barBox).not.toBeNull();
+    const aboveTitle = headingBox!.y - headerBox!.y;
+    const belowMeta = headerBox!.y + headerBox!.height - 1 - (headingBox!.y + headingBox!.height);
+    expect(Math.abs(aboveTitle - belowMeta)).toBeLessThanOrEqual(1);
+    expect(Math.abs(headerBox!.height - barBox!.height)).toBeLessThanOrEqual(1);
     await capture(page, testInfo, "thread-header-mobile-collapsed.png");
     await threadToolbarToggle.click();
     await expect(

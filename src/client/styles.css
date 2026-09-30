@@ -107,8 +107,13 @@
 
   /* The workbench bar is the one chrome row above every panel surface. It
      lives here, not on .workspace-panel-layout, because the mobile Files
-     sheet is portalled to the body and still has to subtract it. */
-  --workbench-bar-height: 48px;
+     sheet is portalled to the body and still has to subtract it. The bars
+     and panel headers take it as a minimum: they grow with their text
+     (Android's WebView text zoom enlarges text, not px heights). */
+  --workbench-bar-height: 52px;
+  /* Icon buttons in the bars and panel headers, and their glyphs. */
+  --bar-control: var(--control-md);
+  --bar-icon: 18px;
 
   /* motion */
   --duration-fast: 120ms;
@@ -301,6 +306,9 @@
     --menu-row-height: 44px;
     --dialog-padding: 16px;
     --text-input: 16px;
+    --workbench-bar-height: 54px;
+    --bar-control: 40px;
+    --bar-icon: var(--icon-lg);
   }
 }
 
@@ -2161,30 +2169,17 @@ textarea:disabled {
   position: relative;
   z-index: calc(var(--z-sticky) + 20);
   display: flex;
-  height: var(--workbench-bar-height);
   min-width: 0;
-  flex: 0 0 var(--workbench-bar-height);
+  min-height: var(--workbench-bar-height);
+  flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   /* Matches .workspace-panel-chrome, minus its text-only left inset: this row
      leads with an icon button, so both ends carry the button inset. */
-  padding: 4px 5px;
+  padding: var(--space-1-5) 5px;
   border-bottom: 1px solid var(--border-soft);
   background: color-mix(in oklch, var(--sidebar) 72%, var(--background));
-}
-
-/* The bar's controls match the panel chrome's 28px/16px cluster. The trigger
-   is 20px elsewhere in the app, so the bar overrides it rather than letting
-   one control in this row outsize its neighbours. */
-.workspace-workbench-bar .sidebar-nav-trigger {
-  width: 28px;
-  height: 28px;
-}
-
-.workspace-workbench-bar .sidebar-nav-trigger svg {
-  width: 16px;
-  height: 16px;
 }
 
 .workspace-panel-stage {
@@ -2238,7 +2233,6 @@ textarea:disabled {
   box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--ring) 36%, transparent);
 }
 
-.workspace-panel-availability-notice,
 .workspace-panel-availability {
   position: absolute;
   z-index: calc(var(--z-sticky) + 2);
@@ -2248,6 +2242,11 @@ textarea:disabled {
   background: var(--secondary);
   color: var(--secondary-foreground);
   font-size: 12px;
+}
+
+/* After a panel header, the notice starts where the header ends. */
+.workspace-panel-chrome ~ .workspace-panel-availability {
+  top: var(--workbench-bar-height);
 }
 
 .workspace-panel-portal-target,
@@ -2266,12 +2265,12 @@ textarea:disabled {
 
 .workspace-panel-chrome {
   display: flex;
-  height: 48px;
   min-width: 0;
-  flex: 0 0 48px;
+  min-height: var(--workbench-bar-height);
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  padding: 4px 5px 4px 12px;
+  padding: var(--space-1-5) 5px var(--space-1-5) 12px;
   border-bottom: 1px solid var(--border-soft);
   background: var(--background);
 }
@@ -2375,6 +2374,45 @@ textarea:disabled {
   color: inherit;
 }
 
+/* Icon buttons in the bars and panel headers: --bar-control targets with
+   --bar-icon glyphs (32/18px, and 40/20px under the density switch), so a
+   bar's controls match their neighbours. The Button base sizes child SVGs
+   to 16px unless they carry a size-* class, so the glyphs are set here. */
+.sidebar-nav-trigger,
+.notification-silence-button,
+.tasks-panel-toggle,
+.workspace-panel-open-icon,
+.workspace-panel-open-trigger,
+.thread-find-trigger,
+.thread-tools-shell > button,
+.workspace-panel-actions > button {
+  width: var(--bar-control);
+  height: var(--bar-control);
+}
+
+/* Inside its border, the panels group is as tall as its neighbours. */
+.workspace-panel-open-icon,
+.workspace-panel-open-trigger {
+  height: calc(var(--bar-control) - 2px);
+}
+
+.sidebar-nav-trigger svg,
+.notification-silence-button svg,
+.tasks-panel-toggle svg,
+.workspace-panel-open-icon svg,
+.thread-find-trigger svg,
+.thread-tools-shell > button svg,
+.workspace-panel-actions > button svg {
+  width: var(--bar-icon);
+  height: var(--bar-icon);
+}
+
+/* The panels menu's chevron stays a step below its neighbours. */
+.workspace-panel-open-trigger svg {
+  width: calc(var(--bar-icon) - 2px);
+  height: calc(var(--bar-icon) - 2px);
+}
+
 .workspace-panel-chrome-actions-slot,
 .workspace-panel-chrome-actions-target,
 .workspace-files-toolbar-actions {
@@ -2435,17 +2473,6 @@ textarea:disabled {
   gap: 8px;
 }
 
-.workspace-workbench-actions .tasks-panel-toggle {
-  width: 28px;
-  height: 28px;
-  flex: 0 0 auto;
-}
-
-.workspace-workbench-actions .tasks-panel-toggle svg {
-  width: 16px;
-  height: 16px;
-}
-
 .workspace-panel-open-menu {
   display: flex;
   min-width: 0;
@@ -2477,12 +2504,6 @@ textarea:disabled {
 
 .workspace-panel-open-icon + .workspace-panel-open-icon {
   border-left: 1px solid var(--border-soft);
-}
-
-.workspace-panel-open-icon svg,
-.workspace-panel-open-trigger svg {
-  width: 16px;
-  height: 16px;
 }
 
 /* A collapsed surface is still open, so it keeps its place in the glyph row
@@ -3190,8 +3211,7 @@ textarea:disabled {
 }
 
 .workspace-panel-terminals .workspace-panel-chrome {
-  height: 38px;
-  flex-basis: 38px;
+  min-height: 38px;
   gap: 4px;
   padding-block: 2px;
 }
@@ -3517,8 +3537,7 @@ textarea:disabled {
 
 @media (max-width: 819px), (pointer: coarse) {
   .workspace-panel-terminals .workspace-panel-chrome {
-    height: 52px;
-    flex-basis: 52px;
+    min-height: 52px;
   }
 
   .workspace-panel-terminals .workspace-panel-chrome button,
@@ -4284,27 +4303,13 @@ textarea:disabled {
   background: var(--destructive);
 }
 
-/* Header icon buttons: the shadcn Button base forces child SVGs to size-4
-   (16px) unless they carry a Tailwind size-* class. Lucide width/height props
-   lose to that rule, so pin the glyph size here for the header cluster.
-   Defaults are mobile/touch-friendly; desktop steps down after the base
-   hit-target rules below. */
-.sidebar-nav-trigger svg,
-.thread-find-trigger svg,
-.tasks-panel-toggle svg,
-.thread-settings-button svg,
-.automation-thread-button svg {
-  width: 20px;
-  height: 20px;
-}
 
 .pane-nav-header {
   display: none;
-  height: var(--workbench-bar-height);
   min-height: var(--workbench-bar-height);
-  flex: 0 0 var(--workbench-bar-height);
+  flex: 0 0 auto;
   align-items: center;
-  padding: 4px 10px;
+  padding: var(--space-1-5) 10px;
 }
 
 .pane-host-nav-header {
@@ -4966,8 +4971,6 @@ textarea:disabled {
 }
 
 .thread-settings-button {
-  width: 32px;
-  height: 32px;
   margin-left: 2px;
   color: inherit;
 }
@@ -4976,8 +4979,6 @@ textarea:disabled {
    word badge is gone. Paused reads as a warning tint. */
 .automation-thread-button {
   display: inline-flex;
-  width: 32px;
-  height: 32px;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--border);
@@ -4996,28 +4997,6 @@ textarea:disabled {
 
 .automation-thread-button[data-status="paused"] {
   color: var(--warning);
-}
-
-/* Desktop header chrome: slightly smaller glyphs/targets than mobile. */
-@media (min-width: 820px) {
-  .sidebar-nav-trigger svg,
-  .thread-find-trigger svg,
-  .tasks-panel-toggle svg,
-  .thread-settings-button svg,
-  .automation-thread-button svg {
-    width: 18px;
-    height: 18px;
-  }
-
-  .sidebar-nav-trigger,
-  .thread-find-trigger,
-  .tasks-panel-toggle,
-  .thread-settings-button,
-  .automation-thread-button {
-    width: 28px;
-    height: 28px;
-  }
-
 }
 
 /* ── Thread notices: quiet marker rows on semantic tones (Phase 4).
@@ -9849,11 +9828,11 @@ tr.diff-hunk td {
    the workspace from the list. It matches the full-pane routes' nav bar. */
 .settings-view-header {
   display: flex;
-  height: var(--workbench-bar-height);
-  flex: 0 0 var(--workbench-bar-height);
+  min-height: var(--workbench-bar-height);
+  flex: 0 0 auto;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-2-5);
+  padding: var(--space-1-5) var(--space-2-5);
   border-bottom: 1px solid var(--border-soft);
 }
 
@@ -10680,14 +10659,13 @@ tr.diff-hunk td {
     display: inline-flex;
   }
 
-  .thread-tools-shell > button,
+  /* The toolbar row under the header keeps its compact find button. */
   .thread-controls > .thread-find-trigger {
     width: 28px;
     height: 28px;
     flex: 0 0 28px;
   }
 
-  .thread-tools-shell > button svg,
   .thread-controls > .thread-find-trigger svg {
     width: 16px;
     height: 16px;
