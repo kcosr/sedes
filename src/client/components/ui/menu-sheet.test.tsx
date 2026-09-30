@@ -480,3 +480,142 @@ describe("menu sheets return focus when they close", () => {
     expect(trigger).not.toHaveFocus();
   });
 });
+
+describe("sheet drill-in labels", () => {
+  function SettingsSheet() {
+    const [thinking, setThinking] = useState("low");
+    return (
+      <DropdownMenu presentation="sheet">
+        <DropdownMenuTrigger>Thread settings</DropdownMenuTrigger>
+        <DropdownMenuContent sheetTitle="Thread settings">
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              Thinking<DropdownMenuShortcut>Low</DropdownMenuShortcut>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuRadioGroup value={thinking} onValueChange={setThinking}>
+                <DropdownMenuRadioItem value="low">Low</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="high">High</DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <span>
+                Draft workspace
+                <DropdownMenuItemDescription>acme-web</DropdownMenuItemDescription>
+              </span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuItem>billing-service</DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger textValue="Permission mode">
+              Permissions<span>Default</span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuItem>Plan</DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
+
+  it.each([
+    [/^Thinking/, "Thinking", "High"],
+    [/^Draft workspace/, "Draft workspace", "billing-service"],
+    [/^Permissions/, "Permission mode", "Plan"],
+  ] as const)("names the %s pane without its trailing value", async (trigger, label, child) => {
+    const user = userEvent.setup();
+    render(<SettingsSheet />);
+    await user.click(screen.getByRole("button", { name: "Thread settings" }));
+    await user.click(screen.getByRole("menuitem", { name: trigger }));
+    expect(screen.getByRole("group", { name: label })).toContainElement(
+      screen.getByRole(child === "High" ? "menuitemradio" : "menuitem", { name: child }),
+    );
+    expect(screen.getByRole("menuitem", { name: label })).toHaveAttribute("data-slot", "menu-sheet-back");
+  });
+});
+
+describe("sheet presentation keeps the content's props", () => {
+  it("forwards classes, data attributes and handlers from DropdownMenuContent", async () => {
+    const user = userEvent.setup();
+    const onPointerDownCapture = vi.fn();
+    const onKeyDownCapture = vi.fn();
+    const onEscapeKeyDown = vi.fn();
+    render(
+      <DropdownMenu presentation="sheet">
+        <DropdownMenuTrigger>Thread actions</DropdownMenuTrigger>
+        <DropdownMenuContent
+          aria-label="Thread actions"
+          sheetTitle="MCP events"
+          className="thread-actions-custom"
+          data-testid="thread-actions-menu"
+          data-thread-id="thread-1"
+          side="bottom"
+          align="end"
+          sideOffset={8}
+          loop
+          onPointerDownCapture={onPointerDownCapture}
+          onKeyDownCapture={onKeyDownCapture}
+          onEscapeKeyDown={onEscapeKeyDown}
+        >
+          <DropdownMenuItem onSelect={(event) => event.preventDefault()}>Pin</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+    await user.click(screen.getByRole("button", { name: "Thread actions" }));
+    const sheet = screen.getByRole("dialog", { name: "MCP events" });
+    expect(sheet).toBe(screen.getByTestId("thread-actions-menu"));
+    expect(sheet).toHaveClass("thread-actions-custom");
+    expect(sheet).toHaveAttribute("data-thread-id", "thread-1");
+    expect(sheet).toHaveAttribute("data-menu-sheet");
+    for (const floatingOnly of ["side", "align", "sideoffset", "loop", "aria-label"]) {
+      expect(sheet).not.toHaveAttribute(floatingOnly);
+    }
+    expect(screen.getByRole("menu", { name: "Thread actions" })).toBeVisible();
+    await user.click(screen.getByRole("menuitem", { name: "Pin" }));
+    expect(onPointerDownCapture).toHaveBeenCalled();
+    await user.keyboard("{ArrowDown}");
+    expect(onKeyDownCapture).toHaveBeenCalled();
+    await user.keyboard("{Escape}");
+    expect(onEscapeKeyDown).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("forwards handlers from ContextMenuContent and still returns focus", async () => {
+    const user = userEvent.setup();
+    const onKeyDownCapture = vi.fn();
+    const onCloseAutoFocus = vi.fn();
+    render(
+      <ContextMenu presentation="sheet">
+        <ContextMenuTrigger asChild>
+          <button type="button">MCP events row</button>
+        </ContextMenuTrigger>
+        <ContextMenuContent
+          sheetTitle="MCP events"
+          className="thread-context-custom"
+          data-testid="thread-context-menu"
+          collisionPadding={12}
+          onKeyDownCapture={onKeyDownCapture}
+          onCloseAutoFocus={onCloseAutoFocus}
+        >
+          <ContextMenuItem>Pin</ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>,
+    );
+    const row = screen.getByRole("button", { name: "MCP events row" });
+    row.focus();
+    fireEvent.contextMenu(row);
+    const sheet = screen.getByTestId("thread-context-menu");
+    expect(sheet).toHaveClass("thread-context-custom");
+    expect(sheet).not.toHaveAttribute("collisionpadding");
+    await user.keyboard("{ArrowDown}");
+    expect(onKeyDownCapture).toHaveBeenCalled();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(onCloseAutoFocus).toHaveBeenCalledOnce());
+    await waitFor(() => expect(row).toHaveFocus());
+  });
+});

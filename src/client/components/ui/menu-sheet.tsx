@@ -227,6 +227,52 @@ export function MenuSheetContextTrigger({
   )
 }
 
+/**
+ * Menu content props that only place or scope a floating menu. A sheet
+ * drops them and takes every other prop (class, data attributes, handlers);
+ * the menu's aria-label names the sheet's list.
+ */
+const FLOATING_ONLY_PROPS = [
+  "side",
+  "sideOffset",
+  "align",
+  "alignOffset",
+  "avoidCollisions",
+  "collisionBoundary",
+  "collisionPadding",
+  "arrowPadding",
+  "sticky",
+  "hideWhenDetached",
+  "updatePositionStrategy",
+  "loop",
+  "onEntryFocus",
+  "asChild",
+  "aria-label",
+] as const
+
+/** A menu content's props for its sheet presentation. */
+export function menuSheetContentProps(
+  props: object
+): Omit<React.ComponentProps<typeof MenuSheetContent>, "title" | "description" | "label"> {
+  const sheetProps: Record<string, unknown> = { ...props }
+  for (const key of FLOATING_ONLY_PROPS) delete sheetProps[key]
+  return sheetProps
+}
+
+/**
+ * A row's name for the drill-in back row and pane: its text without the
+ * trailing value, shortcut or description, or `textValue` when given.
+ */
+function rowLabel(row: HTMLElement): string {
+  const copy = row.cloneNode(true) as HTMLElement
+  copy
+    .querySelectorAll(
+      '[data-slot$="-shortcut"], [data-slot$="-item-description"], [aria-hidden="true"]'
+    )
+    .forEach((node) => node.remove())
+  return copy.textContent?.replace(/\s+/g, " ").trim() ?? ""
+}
+
 const ROW_SELECTOR = '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]'
 
 function visibleRows(list: HTMLElement): HTMLElement[] {
@@ -616,7 +662,7 @@ export function MenuSheetSubTrigger({
   className,
   inset,
   variant = "default",
-  textValue: _textValue,
+  textValue,
   children,
   disabled,
   dataSlot,
@@ -646,7 +692,7 @@ export function MenuSheetSubTrigger({
       className={cn(menuSheetRowClass, inset && SHEET_INSET_CLASS, className)}
       onClick={composeHandlers(onClick, (event) => {
         if (id === null || !state || disabled) return
-        state.drillIn({ id, label: event.currentTarget.textContent?.trim() ?? "" })
+        state.drillIn({ id, label: textValue ?? rowLabel(event.currentTarget) })
       })}
     >
       {children}
