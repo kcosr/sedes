@@ -1,11 +1,22 @@
-import { ChoiceList, SelectField, TextField } from "./fields.js";
+import type { ReactNode } from "react";
+import { Callout } from "../ui/callout.js";
+import type { KeyValueItem } from "../ui/key-value-list.js";
+import { AdvancedGroup, CheckboxGroup, SelectField, TextField, type ChoiceOption } from "./fields.js";
 import type { BackendDefinition, EnvironmentDefinition, TargetDefinition } from "./types.js";
+import { FieldErrors } from "./validation.js";
 
 type BackendKind = BackendDefinition["kind"];
 type BackendOf<K extends BackendKind> = Extract<BackendDefinition, { kind: K }>;
 type TargetOf<K extends TargetDefinition["kind"]> = Extract<TargetDefinition, { kind: K }>;
-type BackendEditorProps = { readonly value: BackendDefinition; readonly onChange: (value: BackendDefinition) => void };
-type TargetEditorProps = { readonly value: TargetDefinition; readonly onChange: (value: TargetDefinition) => void };
+interface EditorProps<T> {
+  readonly value: T;
+  readonly onChange: (value: T) => void;
+  /** Errors keyed relative to the edited backend or connection. */
+  readonly errors: FieldErrors;
+  readonly disabled: boolean;
+}
+type BackendEditorProps = EditorProps<BackendDefinition>;
+type TargetEditorProps = EditorProps<TargetDefinition>;
 
 interface BackendEditorRegistration {
   readonly label: string;
@@ -14,27 +25,45 @@ interface BackendEditorRegistration {
   readonly supportsRemoteWorkspace: boolean;
   createBackend(id: string): BackendDefinition;
   createTarget(id: string, backendId: string, environmentId: string): TargetDefinition;
-  renderBackend(props: BackendEditorProps): React.JSX.Element;
-  renderTarget(props: TargetEditorProps): React.JSX.Element;
+  /** The Connection section: how Sedes reaches the provider. */
+  renderConnection(props: BackendEditorProps): ReactNode;
+  /** The Policy section, for providers with an execution policy. */
+  renderPolicy?(props: BackendEditorProps): ReactNode;
+  /** A connection's defaults for new threads. */
+  renderTarget(props: TargetEditorProps): ReactNode;
+  /** One line describing a connection's defaults, for its collapsed row. */
+  summarizeTarget(value: TargetDefinition): string;
+  /** Overview facts about the provider and its connection. */
+  describeConnection(value: BackendDefinition): KeyValueItem[];
+  /** Overview facts about the execution policy. */
+  describePolicy?(value: BackendDefinition): KeyValueItem[];
 }
 
 const sandboxOptions = [
   { value: "read-only", label: "Read only" },
   { value: "workspace-write", label: "Workspace write" },
-  { value: "danger-full-access", label: "Full filesystem access" },
-] as const;
+  { value: "danger-full-access", label: "Full filesystem access", risky: true },
+] as const satisfies ReadonlyArray<ChoiceOption<string>>;
 const networkOptions = [{ value: "disabled", label: "Disabled" }, { value: "enabled", label: "Enabled" }] as const;
 const approvalOptions = [
   { value: "untrusted", label: "Untrusted commands require approval" },
   { value: "on-request", label: "Approve on request" },
-  { value: "never", label: "Never request approval" },
-] as const;
+  { value: "never", label: "Never request approval", risky: true },
+] as const satisfies ReadonlyArray<ChoiceOption<string>>;
 const reviewerOptions = [{ value: "user", label: "User" }, { value: "auto_review", label: "Automatic review" }] as const;
 const permissionOptions = [
   { value: "default", label: "Default" }, { value: "acceptEdits", label: "Accept edits" },
   { value: "dontAsk", label: "Do not ask" }, { value: "auto", label: "Automatic" },
-  { value: "bypassPermissions", label: "Bypass permissions" },
-] as const;
+  { value: "bypassPermissions", label: "Bypass permissions", risky: true },
+] as const satisfies ReadonlyArray<ChoiceOption<string>>;
+const transportLabels = { process_stdio: "Managed stdio process", unix_websocket: "External Unix socket (UDS)", tcp_websocket: "External WebSocket over TCP" } as const;
+
+function labelOf(options: ReadonlyArray<{ readonly value: string; readonly label: string }>, value: string): string {
+  return options.find(option => option.value === value)?.label ?? value;
+}
+function labelsOf(options: ReadonlyArray<{ readonly value: string; readonly label: string }>, values: readonly string[]): string {
+  return values.map(value => labelOf(options, value)).join(", ") || "None";
+}
 
 function commonBackend(id: string) { return { id, label: "", enabled: true, modelPolicy: { type: "catalog" as const } }; }
 function commonTarget(id: string, backendInstanceId: string, executionEnvironmentId: string) {
@@ -48,8 +77,10 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
     supportsProviderIds: true, supportsRemoteWorkspace: true,
     createBackend: (id) => ({ ...commonBackend(id), kind: "pi" }),
     createTarget: (id, backend, environment) => ({ ...commonTarget(id, backend, environment), kind: "pi_sdk" }),
-    renderBackend: () => <p className="execution-settings-muted">Uses the Pi installation and authentication available to the Sedes server account.</p>,
-    renderTarget: () => <p className="execution-settings-muted">Models and reasoning defaults come from the Pi catalog and thread settings.</p>,
+    renderConnection: () => <p className="execution-muted">Uses the Pi installation and authentication available to the Sedes server account.</p>,
+    renderTarget: () => <p className="execution-muted">Models and reasoning defaults come from the Pi catalog and thread settings.</p>,
+    summarizeTarget: () => "Pi catalog and thread defaults",
+    describeConnection: () => [{ label: "Runs", value: "In the Sedes server process" }, { label: "Authentication", value: "The Sedes server account's Pi installation" }],
   },
   codex_app_server: {
     label: "Codex", description: "Connect to an existing app-server, or let the execution environment manage a stdio process.",
@@ -61,8 +92,42 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
     createTarget: (id, backend, environment) => ({ ...commonTarget(id, backend, environment), kind: "codex_app_server", moduleConfiguration: {
       defaults: { sandboxMode: "read-only", networkAccess: "disabled", approvalPolicy: "on-request", approvalReviewer: "user", model: { type: "catalogDefault" } },
     } }),
-    renderBackend: (props) => props.value.kind === "codex_app_server" ? <CodexBackendEditor value={props.value} onChange={props.onChange} /> : unsupportedEditor(),
-    renderTarget: (props) => props.value.kind === "codex_app_server" ? <CodexTargetEditor value={props.value} onChange={props.onChange} /> : unsupportedEditor(),
+    renderConnection: (props) => props.value.kind === "codex_app_server" ? <CodexConnectionEditor {...props} value={props.value} /> : unsupportedEditor(),
+    renderPolicy: (props) => props.value.kind === "codex_app_server" ? <CodexPolicyEditor {...props} value={props.value} /> : unsupportedEditor(),
+    renderTarget: (props) => props.value.kind === "codex_app_server" ? <CodexTargetEditor {...props} value={props.value} /> : unsupportedEditor(),
+    summarizeTarget: (value) => {
+      if (value.kind !== "codex_app_server") return "";
+      const defaults = value.moduleConfiguration.defaults;
+      return [labelOf(sandboxOptions, defaults.sandboxMode), `Network ${labelOf(networkOptions, defaults.networkAccess).toLowerCase()}`,
+        labelOf(approvalOptions, defaults.approvalPolicy), defaults.model.type === "fixed" ? defaults.model.modelId || "Specific model" : "Catalog default model"].join(" · ");
+    },
+    describeConnection: (value) => {
+      if (value.kind !== "codex_app_server") return [];
+      const configuration = value.moduleConfiguration;
+      const channel = configuration.connection.channel;
+      return [
+        { label: "Transport", value: transportLabels[channel.type] },
+        ...(channel.type === "process_stdio" ? [
+          { label: "Working directory", value: channel.workingDirectory, mono: true },
+          ...(channel.executablePath ? [{ label: "Executable", value: channel.executablePath, mono: true }] : []),
+          ...(channel.codexHome ? [{ label: "Codex home", value: channel.codexHome, mono: true }] : []),
+        ] : channel.type === "unix_websocket" ? [{ label: "Socket", value: channel.socketPath, mono: true }] : [
+          { label: "Endpoint", value: channel.url, mono: true },
+          { label: "Token", value: channel.authentication.secret.source === "environment" ? `Environment variable ${channel.authentication.secret.variable}` : `File ${channel.authentication.secret.path}` },
+        ]),
+        ...(configuration.tuiExecutablePath ? [{ label: "TUI executable", value: configuration.tuiExecutablePath, mono: true }] : []),
+      ];
+    },
+    describePolicy: (value) => {
+      if (value.kind !== "codex_app_server") return [];
+      const policy = value.moduleConfiguration.policy;
+      return [
+        { label: "Filesystem", value: labelsOf(sandboxOptions, policy.allowedSandboxModes) },
+        { label: "Network", value: labelsOf(networkOptions, policy.allowedNetworkAccess) },
+        { label: "Approval", value: labelsOf(approvalOptions, policy.allowedApprovalPolicies) },
+        { label: "Reviewers", value: labelsOf(reviewerOptions, policy.allowedApprovalReviewers) },
+      ];
+    },
   },
   claude_agent_sdk: {
     label: "Claude", description: "Uses an authenticated Claude Code installation with Node.js 24.18 or newer on a Linux or macOS execution host. SSH and outbound connections are supported; native Windows Claude is unsupported.",
@@ -71,11 +136,24 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
       initializationTimeoutMs: 20_000, permissionPolicy: { allowedModes: ["default"] },
     } }),
     createTarget: (id, backend, environment) => ({ ...commonTarget(id, backend, environment), kind: "claude_agent_sdk", moduleConfiguration: { defaults: { permissionMode: "default" } } }),
-    renderBackend: (props) => props.value.kind === "claude_agent_sdk" ? <ClaudeBackendEditor value={props.value} onChange={props.onChange} /> : unsupportedEditor(),
-    renderTarget: (props) => props.value.kind === "claude_agent_sdk" ? <SelectField label="Default permission mode" value={props.value.moduleConfiguration.defaults.permissionMode}
+    renderConnection: (props) => props.value.kind === "claude_agent_sdk" ? <ClaudeConnectionEditor {...props} value={props.value} /> : unsupportedEditor(),
+    renderPolicy: (props) => props.value.kind === "claude_agent_sdk" ? <ClaudePolicyEditor {...props} value={props.value} /> : unsupportedEditor(),
+    renderTarget: (props) => props.value.kind === "claude_agent_sdk" ? <SelectField label="Default permission mode" layout="stacked" disabled={props.disabled}
+      error={props.errors.under("moduleConfiguration.defaults.permissionMode")} value={props.value.moduleConfiguration.defaults.permissionMode}
       options={permissionOptions.filter((entry) => entry.value !== "bypassPermissions")} onChange={(permissionMode) => {
         if (props.value.kind === "claude_agent_sdk") props.onChange({ ...props.value, moduleConfiguration: { defaults: { permissionMode } } });
       }} /> : unsupportedEditor(),
+    summarizeTarget: (value) => value.kind === "claude_agent_sdk" ? `Permission mode ${labelOf(permissionOptions, value.moduleConfiguration.defaults.permissionMode).toLowerCase()}` : "",
+    describeConnection: (value) => {
+      if (value.kind !== "claude_agent_sdk") return [];
+      const configuration = value.moduleConfiguration;
+      return [
+        { label: "Configuration", value: configuration.configDirectory ?? "The account's CLAUDE_CONFIG_DIR or ~/.claude", mono: Boolean(configuration.configDirectory) },
+        { label: "Executable", value: configuration.executablePath ?? "Installed Claude Code", mono: Boolean(configuration.executablePath) },
+        { label: "Start timeout", value: `${configuration.initializationTimeoutMs / 1000} s` },
+      ];
+    },
+    describePolicy: (value) => value.kind === "claude_agent_sdk" ? [{ label: "Permission modes", value: labelsOf(permissionOptions, value.moduleConfiguration.permissionPolicy.allowedModes) }] : [],
   },
   grok_build: {
     label: "Grok", description: "A local Grok ACP process uses the execution account's native authentication. Remote Grok is unsupported.",
@@ -85,8 +163,20 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
       authentication: { type: "native" }, security: { profile: "unrestricted_v1", sandboxProfile: "off", networkAccess: "enabled", approvalMode: "full_access" },
     } }),
     createTarget: (id, backend, environment) => ({ ...commonTarget(id, backend, environment), kind: "grok_acp", moduleConfiguration: { defaults: { model: { type: "catalogDefault" }, reasoningEffort: { type: "modelDefault" } } } }),
-    renderBackend: (props) => props.value.kind === "grok_build" ? <GrokBackendEditor value={props.value} onChange={props.onChange} /> : unsupportedEditor(),
-    renderTarget: (props) => props.value.kind === "grok_acp" ? <GrokTargetEditor value={props.value} onChange={props.onChange} /> : unsupportedEditor(),
+    renderConnection: (props) => props.value.kind === "grok_build" ? <GrokConnectionEditor {...props} value={props.value} /> : unsupportedEditor(),
+    renderPolicy: () => <Callout tone="warning">Grok runs in the workspace with full access, networking enabled, and no sandbox. Authentication is managed by its native installation.</Callout>,
+    renderTarget: (props) => props.value.kind === "grok_acp" ? <GrokTargetEditor {...props} value={props.value} /> : unsupportedEditor(),
+    summarizeTarget: (value) => {
+      if (value.kind !== "grok_acp") return "";
+      const defaults = value.moduleConfiguration.defaults;
+      return [defaults.model.type === "fixed" ? defaults.model.modelId || "Specific model" : "Catalog default model",
+        defaults.reasoningEffort.type === "fixed" ? `Effort ${defaults.reasoningEffort.effortId}` : "Model default effort"].join(" · ");
+    },
+    describeConnection: (value) => value.kind === "grok_build" ? [
+      { label: "Process", value: "Local ACP process in the workspace" },
+      { label: "Executable", value: value.moduleConfiguration.connection.channel.executablePath ?? "Installed Grok", mono: Boolean(value.moduleConfiguration.connection.channel.executablePath) },
+    ] : [],
+    describePolicy: () => [{ label: "Access", value: "Full access · networking enabled · no sandbox" }],
   },
 };
 
@@ -95,122 +185,170 @@ export function allowedEnvironments(backend: BackendDefinition, environments: re
     && !(backend.kind === "claude_agent_sdk" && environment.kind === "outbound" && environment.platform === "win32"));
 }
 
-function unsupportedEditor(): React.JSX.Element { return <p role="alert">This backend's configuration editor does not support the stored connection type.</p>; }
+function unsupportedEditor(): React.JSX.Element {
+  return <Callout tone="danger" role="alert">This backend's configuration editor does not support the stored connection type.</Callout>;
+}
 
-function CodexBackendEditor({ value, onChange }: { readonly value: BackendOf<"codex_app_server">; readonly onChange: (value: BackendDefinition) => void }): React.JSX.Element {
+function CodexConnectionEditor({ value, onChange, errors, disabled }: EditorProps<BackendOf<"codex_app_server">> & { readonly onChange: (value: BackendDefinition) => void }): React.JSX.Element {
   const configuration = value.moduleConfiguration;
   const connection = configuration.connection;
   const update = (next: typeof configuration) => onChange({ ...value, moduleConfiguration: next });
   const channel = connection.channel;
+  const error = (field: string) => errors.under(`moduleConfiguration.connection.channel.${field}`);
+  const tuiError = errors.under("moduleConfiguration.tuiExecutablePath");
+  const tui = <TextField label="Codex TUI executable path" mono disabled={disabled} value={configuration.tuiExecutablePath ?? ""} error={tuiError}
+    description="Optional absolute path for the separately admitted Codex TUI."
+    onChange={(tuiExecutablePath) => update({ ...configuration, tuiExecutablePath: tuiExecutablePath || undefined })} />;
   return <>
-    <fieldset><legend>App-server connection</legend>
-      <SelectField label="Connection transport" value={channel.type} options={[
-        { value: "process_stdio", label: "Managed stdio process" }, { value: "unix_websocket", label: "External Unix socket (UDS)" }, { value: "tcp_websocket", label: "External WebSocket over TCP" },
-      ]} onChange={(type) => {
-        const next: typeof connection = type === "process_stdio" ? { ownership: "owned", channel: { type, workingDirectory: "" } }
-          : type === "unix_websocket" ? { ownership: "external", channel: { type, socketPath: "" } }
-          : { ownership: "external", channel: { type, url: "", authentication: { type: "capability_token", secret: { source: "protected_file", path: "" } } } };
-        update({ ...configuration, connection: next });
-      }} />
-      {channel.type === "process_stdio" ? <>
-        <TextField label="Working directory" value={channel.workingDirectory} required onChange={(workingDirectory) => update({ ...configuration, connection: { ownership: "owned", channel: { ...channel, workingDirectory } } })} />
-        <TextField label="Codex executable path" value={channel.executablePath ?? ""} description="Optional absolute path on the execution host. Leave blank to use its installed executable."
+    <SelectField label="Connection transport" disabled={disabled} value={channel.type} options={[
+      { value: "process_stdio", label: transportLabels.process_stdio }, { value: "unix_websocket", label: transportLabels.unix_websocket }, { value: "tcp_websocket", label: transportLabels.tcp_websocket },
+    ]} onChange={(type) => {
+      const next: typeof connection = type === "process_stdio" ? { ownership: "owned", channel: { type, workingDirectory: "" } }
+        : type === "unix_websocket" ? { ownership: "external", channel: { type, socketPath: "" } }
+        : { ownership: "external", channel: { type, url: "", authentication: { type: "capability_token", secret: { source: "protected_file", path: "" } } } };
+      update({ ...configuration, connection: next });
+    }} />
+    {channel.type === "process_stdio" ? <>
+      <TextField label="Working directory" mono required disabled={disabled} value={channel.workingDirectory} error={error("workingDirectory")}
+        description="Absolute directory on the execution host where Sedes starts Codex."
+        onChange={(workingDirectory) => update({ ...configuration, connection: { ownership: "owned", channel: { ...channel, workingDirectory } } })} />
+      <AdvancedGroup summary="Executable, Codex home, TUI" defaultOpen={Boolean(channel.executablePath || channel.codexHome || configuration.tuiExecutablePath)}
+        forceOpen={Boolean(error("executablePath") || error("codexHome") || tuiError)}>
+        <TextField label="Codex executable path" mono disabled={disabled} value={channel.executablePath ?? ""} error={error("executablePath")}
+          description="Optional absolute path on the execution host. Leave blank to use its installed executable."
           onChange={(executablePath) => update({ ...configuration, connection: { ownership: "owned", channel: { ...channel, executablePath: executablePath || undefined } } })} />
-        <TextField label="Codex home directory" value={channel.codexHome ?? ""} description="Optional native configuration and authentication directory on the execution host."
+        <TextField label="Codex home directory" mono disabled={disabled} value={channel.codexHome ?? ""} error={error("codexHome")}
+          description="Optional native configuration and authentication directory on the execution host."
           onChange={(codexHome) => update({ ...configuration, connection: { ownership: "owned", channel: { ...channel, codexHome: codexHome || undefined } } })} />
-      </> : channel.type === "unix_websocket" ? <TextField label="Unix socket path" value={channel.socketPath} required
+        {tui}
+      </AdvancedGroup>
+    </> : channel.type === "unix_websocket" ? <>
+      <TextField label="Unix socket path" mono required disabled={disabled} value={channel.socketPath} error={error("socketPath")}
         description="Absolute socket path on the selected execution host. Sedes does not own the external app-server process."
-        onChange={(socketPath) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, socketPath } } })} /> : <>
-        <TextField label="WebSocket endpoint" value={channel.url} required description="Use an explicit port. Plain ws:// is limited to literal loopback; other hosts require wss://."
-          onChange={(url) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, url } } })} />
-        <SelectField label="Capability token source" value={channel.authentication.secret.source}
-          options={[{ value: "protected_file", label: "Protected file" }, { value: "environment", label: "Approved environment variable" }]}
-          onChange={(source) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, authentication: {
-            type: "capability_token", secret: source === "environment" ? { source, variable: "" } : { source, path: "" },
-          } } } })} />
-        {channel.authentication.secret.source === "protected_file" ? <TextField label="Token file reference" value={channel.authentication.secret.path} required
-          description="An approved protected file on the execution host; enter its path, never the token."
-          onChange={(path) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, authentication: { type: "capability_token", secret: { source: "protected_file", path } } } } })} />
-          : <TextField label="Token environment variable" value={channel.authentication.secret.variable} required
-            description="An approved SEDES_CODEX_…TOKEN… variable on the execution host; enter its name, never the token."
-            onChange={(variable) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, authentication: { type: "capability_token", secret: { source: "environment", variable } } } } })} />}
-      </>}
-      <TextField label="Codex TUI executable path" value={configuration.tuiExecutablePath ?? ""} description="Optional absolute path for the separately admitted Codex TUI."
-        onChange={(tuiExecutablePath) => update({ ...configuration, tuiExecutablePath: tuiExecutablePath || undefined })} />
-    </fieldset>
-    <fieldset><legend>Execution policy</legend>
-      <p className="execution-settings-muted">Connection defaults and thread selections must stay within these allowed values.</p>
-      <ChoiceList label="Allowed filesystem access" value={configuration.policy.allowedSandboxModes} options={sandboxOptions}
-        onChange={(allowedSandboxModes) => update({ ...configuration, policy: { ...configuration.policy, allowedSandboxModes } })} />
-      <ChoiceList label="Allowed network access" value={configuration.policy.allowedNetworkAccess} options={networkOptions}
-        onChange={(allowedNetworkAccess) => update({ ...configuration, policy: { ...configuration.policy, allowedNetworkAccess } })} />
-      <ChoiceList label="Allowed approval policies" value={configuration.policy.allowedApprovalPolicies} options={approvalOptions}
-        onChange={(allowedApprovalPolicies) => update({ ...configuration, policy: { ...configuration.policy, allowedApprovalPolicies } })} />
-      <ChoiceList label="Allowed approval reviewers" value={configuration.policy.allowedApprovalReviewers} options={reviewerOptions}
-        onChange={(allowedApprovalReviewers) => update({ ...configuration, policy: { ...configuration.policy, allowedApprovalReviewers } })} />
-    </fieldset>
+        onChange={(socketPath) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, socketPath } } })} />
+      <AdvancedGroup summary="TUI" defaultOpen={Boolean(configuration.tuiExecutablePath)} forceOpen={Boolean(tuiError)}>{tui}</AdvancedGroup>
+    </> : <>
+      <TextField label="WebSocket endpoint" mono required disabled={disabled} value={channel.url} error={error("url")}
+        description="Use an explicit port. Plain ws:// is limited to literal loopback; other hosts require wss://."
+        onChange={(url) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, url } } })} />
+      <SelectField label="Capability token source" disabled={disabled} value={channel.authentication.secret.source}
+        options={[{ value: "protected_file", label: "Protected file" }, { value: "environment", label: "Approved environment variable" }]}
+        onChange={(source) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, authentication: {
+          type: "capability_token", secret: source === "environment" ? { source, variable: "" } : { source, path: "" },
+        } } } })} />
+      {channel.authentication.secret.source === "protected_file" ? <TextField label="Token file reference" mono required disabled={disabled}
+        value={channel.authentication.secret.path} error={error("authentication.secret.path")}
+        description="An approved protected file on the execution host; enter its path, never the token."
+        onChange={(path) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, authentication: { type: "capability_token", secret: { source: "protected_file", path } } } } })} />
+        : <TextField label="Token environment variable" mono required disabled={disabled}
+          value={channel.authentication.secret.variable} error={error("authentication.secret.variable")}
+          description="The name of an approved SEDES_CODEX_…TOKEN… variable on the execution host; never the token itself."
+          onChange={(variable) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, authentication: { type: "capability_token", secret: { source: "environment", variable } } } } })} />}
+      <AdvancedGroup summary="TUI" defaultOpen={Boolean(configuration.tuiExecutablePath)} forceOpen={Boolean(tuiError)}>{tui}</AdvancedGroup>
+    </>}
   </>;
 }
 
-function CodexTargetEditor({ value, onChange }: { readonly value: TargetOf<"codex_app_server">; readonly onChange: (value: TargetDefinition) => void }): React.JSX.Element {
+function CodexPolicyEditor({ value, onChange, errors, disabled }: EditorProps<BackendOf<"codex_app_server">> & { readonly onChange: (value: BackendDefinition) => void }): React.JSX.Element {
+  const configuration = value.moduleConfiguration;
+  const policy = configuration.policy;
+  const update = (next: Partial<typeof policy>) => onChange({ ...value, moduleConfiguration: { ...configuration, policy: { ...policy, ...next } } });
+  const error = (field: string) => errors.under(`moduleConfiguration.policy.${field}`);
+  return <div className="execution-policy-grid">
+    <CheckboxGroup label="Filesystem access" disabled={disabled} value={policy.allowedSandboxModes} options={sandboxOptions} error={error("allowedSandboxModes")}
+      onChange={(allowedSandboxModes) => update({ allowedSandboxModes })} />
+    <CheckboxGroup label="Network access" disabled={disabled} value={policy.allowedNetworkAccess} options={networkOptions} error={error("allowedNetworkAccess")}
+      onChange={(allowedNetworkAccess) => update({ allowedNetworkAccess })} />
+    <CheckboxGroup label="Approval policies" disabled={disabled} value={policy.allowedApprovalPolicies} options={approvalOptions} error={error("allowedApprovalPolicies")}
+      onChange={(allowedApprovalPolicies) => update({ allowedApprovalPolicies })} />
+    <CheckboxGroup label="Approval reviewers" disabled={disabled} value={policy.allowedApprovalReviewers} options={reviewerOptions} error={error("allowedApprovalReviewers")}
+      onChange={(allowedApprovalReviewers) => update({ allowedApprovalReviewers })} />
+  </div>;
+}
+
+function CodexTargetEditor({ value, onChange, errors, disabled }: EditorProps<TargetOf<"codex_app_server">> & { readonly onChange: (value: TargetDefinition) => void }): React.JSX.Element {
   const defaults = value.moduleConfiguration.defaults;
   const update = (next: typeof defaults) => onChange({ ...value, moduleConfiguration: { defaults: next } });
-  return <>
-    <SelectField label="Default filesystem access" value={defaults.sandboxMode} options={sandboxOptions} onChange={(sandboxMode) => update({ ...defaults, sandboxMode })} />
-    <SelectField label="Default network access" value={defaults.networkAccess} options={networkOptions} onChange={(networkAccess) => update({ ...defaults, networkAccess })} />
-    <SelectField label="Default approval policy" value={defaults.approvalPolicy} options={approvalOptions} onChange={(approvalPolicy) => update({ ...defaults, approvalPolicy })} />
-    <SelectField label="Default approval reviewer" value={defaults.approvalReviewer} options={reviewerOptions} onChange={(approvalReviewer) => update({ ...defaults, approvalReviewer })} />
-    <DefaultModelEditor value={defaults.model} onChange={(model) => update({ ...defaults, model })} />
-  </>;
+  const error = (field: string) => errors.under(`moduleConfiguration.defaults.${field}`);
+  return <div className="execution-field-grid">
+    <SelectField label="Default filesystem access" layout="stacked" disabled={disabled} value={defaults.sandboxMode} options={sandboxOptions} error={error("sandboxMode")} onChange={(sandboxMode) => update({ ...defaults, sandboxMode })} />
+    <SelectField label="Default network access" layout="stacked" disabled={disabled} value={defaults.networkAccess} options={networkOptions} error={error("networkAccess")} onChange={(networkAccess) => update({ ...defaults, networkAccess })} />
+    <SelectField label="Default approval policy" layout="stacked" disabled={disabled} value={defaults.approvalPolicy} options={approvalOptions} error={error("approvalPolicy")} onChange={(approvalPolicy) => update({ ...defaults, approvalPolicy })} />
+    <SelectField label="Default approval reviewer" layout="stacked" disabled={disabled} value={defaults.approvalReviewer} options={reviewerOptions} error={error("approvalReviewer")} onChange={(approvalReviewer) => update({ ...defaults, approvalReviewer })} />
+    <DefaultModelEditor value={defaults.model} disabled={disabled} error={error("model")} onChange={(model) => update({ ...defaults, model })} />
+  </div>;
 }
 
-function ClaudeBackendEditor({ value, onChange }: { readonly value: BackendOf<"claude_agent_sdk">; readonly onChange: (value: BackendDefinition) => void }): React.JSX.Element {
+function ClaudeConnectionEditor({ value, onChange, errors, disabled }: EditorProps<BackendOf<"claude_agent_sdk">> & { readonly onChange: (value: BackendDefinition) => void }): React.JSX.Element {
   const configuration = value.moduleConfiguration;
   const update = (next: typeof configuration) => onChange({ ...value, moduleConfiguration: next });
-  return <fieldset><legend>Claude installation</legend>
-    <TextField label="Claude configuration directory" value={configuration.configDirectory ?? ""} description="Optional absolute directory on the execution host. Leave blank to use that account's CLAUDE_CONFIG_DIR or ~/.claude, locally, over SSH, or through an outbound connection."
-      onChange={(configDirectory) => {
-        const { configDirectory: _previous, ...remaining } = configuration;
-        update(configDirectory ? { ...remaining, configDirectory } : remaining);
-      }} />
-    <TextField label="Claude executable path" value={configuration.executablePath ?? ""} description="Optional absolute path on the execution host. Leave blank to use its installed executable."
-      onChange={(executablePath) => update({ ...configuration, executablePath: executablePath || undefined })} />
-    <TextField label="Initialization timeout (milliseconds)" type="number" value={String(configuration.initializationTimeoutMs)}
-      onChange={(timeout) => update({ ...configuration, initializationTimeoutMs: Number(timeout) })} />
-    <ChoiceList label="Allowed permission modes" value={configuration.permissionPolicy.allowedModes} options={permissionOptions}
-      onChange={(allowedModes) => update({ ...configuration, permissionPolicy: { allowedModes } })} />
-  </fieldset>;
-}
-
-function GrokBackendEditor({ value, onChange }: { readonly value: BackendOf<"grok_build">; readonly onChange: (value: BackendDefinition) => void }): React.JSX.Element {
-  const configuration = value.moduleConfiguration;
-  return <fieldset><legend>Local ACP process</legend>
-    <TextField label="Grok executable path" value={configuration.connection.channel.executablePath ?? ""} description="Optional absolute path on the Sedes host."
-      onChange={(executablePath) => onChange({ ...value, moduleConfiguration: { ...configuration, connection: { ownership: "owned", channel: { ...configuration.connection.channel, executablePath: executablePath || undefined } } } })} />
-    <p className="execution-settings-muted">Grok runs in the workspace with full access, networking enabled, and no sandbox. Authentication is managed by its native installation.</p>
-  </fieldset>;
-}
-
-function GrokTargetEditor({ value, onChange }: { readonly value: TargetOf<"grok_acp">; readonly onChange: (value: TargetDefinition) => void }): React.JSX.Element {
-  const defaults = value.moduleConfiguration.defaults;
-  const update = (next: typeof defaults) => onChange({ ...value, moduleConfiguration: { defaults: next } });
+  const error = (field: string) => errors.under(`moduleConfiguration.${field}`);
   return <>
-    <DefaultModelEditor value={defaults.model} onChange={(model) => update({ ...defaults, model })} />
-    <SelectField label="Default reasoning effort" value={defaults.reasoningEffort.type}
-      options={[{ value: "modelDefault", label: "Model default" }, { value: "fixed", label: "Specific effort" }]}
-      onChange={(type) => update({ ...defaults, reasoningEffort: type === "modelDefault" ? { type } : { type, effortId: "" } })} />
-    {defaults.reasoningEffort.type === "fixed" ? <TextField label="Reasoning effort identifier" value={defaults.reasoningEffort.effortId} required
-      onChange={(effortId) => update({ ...defaults, reasoningEffort: { type: "fixed", effortId } })} /> : null}
+    <p className="execution-muted">Uses the Claude Code installation and authentication of the execution host's account.</p>
+    <AdvancedGroup summary="Configuration directory, executable, start timeout"
+      defaultOpen={Boolean(configuration.configDirectory || configuration.executablePath || configuration.initializationTimeoutMs !== 20_000)}
+      forceOpen={Boolean(error("configDirectory") || error("executablePath") || error("initializationTimeoutMs"))}>
+      <TextField label="Claude configuration directory" mono disabled={disabled} value={configuration.configDirectory ?? ""} error={error("configDirectory")}
+        description="Optional absolute directory on the execution host. Leave blank to use that account's CLAUDE_CONFIG_DIR or ~/.claude, locally, over SSH, or through an outbound connection."
+        onChange={(configDirectory) => {
+          const { configDirectory: _previous, ...remaining } = configuration;
+          update(configDirectory ? { ...remaining, configDirectory } : remaining);
+        }} />
+      <TextField label="Claude executable path" mono disabled={disabled} value={configuration.executablePath ?? ""} error={error("executablePath")}
+        description="Optional absolute path on the execution host. Leave blank to use its installed executable."
+        onChange={(executablePath) => update({ ...configuration, executablePath: executablePath || undefined })} />
+      <TextField label="Initialization timeout" type="number" suffix="ms" disabled={disabled} value={String(configuration.initializationTimeoutMs)} error={error("initializationTimeoutMs")}
+        description="How long Sedes waits for Claude to start, from 1000 to 120000 ms."
+        onChange={(timeout) => update({ ...configuration, initializationTimeoutMs: Number(timeout) })} />
+    </AdvancedGroup>
   </>;
 }
 
-function DefaultModelEditor({ value, onChange }: {
+function ClaudePolicyEditor({ value, onChange, errors, disabled }: EditorProps<BackendOf<"claude_agent_sdk">> & { readonly onChange: (value: BackendDefinition) => void }): React.JSX.Element {
+  const configuration = value.moduleConfiguration;
+  return <CheckboxGroup label="Allowed permission modes" columns={2} disabled={disabled} value={configuration.permissionPolicy.allowedModes} options={permissionOptions}
+    error={errors.under("moduleConfiguration.permissionPolicy")}
+    onChange={(allowedModes) => onChange({ ...value, moduleConfiguration: { ...configuration, permissionPolicy: { allowedModes } } })} />;
+}
+
+function GrokConnectionEditor({ value, onChange, errors, disabled }: EditorProps<BackendOf<"grok_build">> & { readonly onChange: (value: BackendDefinition) => void }): React.JSX.Element {
+  const configuration = value.moduleConfiguration;
+  const error = errors.under("moduleConfiguration.connection.channel.executablePath");
+  return <>
+    <p className="execution-muted">Sedes starts a local Grok ACP process in each workspace.</p>
+    <AdvancedGroup summary="Executable" defaultOpen={Boolean(configuration.connection.channel.executablePath)} forceOpen={Boolean(error)}>
+      <TextField label="Grok executable path" mono disabled={disabled} value={configuration.connection.channel.executablePath ?? ""} error={error}
+        description="Optional absolute path on the Sedes host."
+        onChange={(executablePath) => onChange({ ...value, moduleConfiguration: { ...configuration, connection: { ownership: "owned", channel: { ...configuration.connection.channel, executablePath: executablePath || undefined } } } })} />
+    </AdvancedGroup>
+  </>;
+}
+
+function GrokTargetEditor({ value, onChange, errors, disabled }: EditorProps<TargetOf<"grok_acp">> & { readonly onChange: (value: TargetDefinition) => void }): React.JSX.Element {
+  const defaults = value.moduleConfiguration.defaults;
+  const update = (next: typeof defaults) => onChange({ ...value, moduleConfiguration: { defaults: next } });
+  const effort = defaults.reasoningEffort;
+  return <div className="execution-field-grid">
+    <DefaultModelEditor value={defaults.model} disabled={disabled} error={errors.under("moduleConfiguration.defaults.model")} onChange={(model) => update({ ...defaults, model })} />
+    <SelectField label="Default reasoning effort" layout="stacked" disabled={disabled} value={effort.type}
+      options={[{ value: "modelDefault", label: "Model default" }, { value: "fixed", label: "Specific effort" }]}
+      onChange={(type) => update({ ...defaults, reasoningEffort: type === "modelDefault" ? { type } : { type, effortId: "" } })} />
+    {effort.type === "fixed" ? <TextField label="Reasoning effort identifier" layout="stacked" mono required disabled={disabled} value={effort.effortId}
+      error={errors.under("moduleConfiguration.defaults.reasoningEffort")}
+      onChange={(effortId) => update({ ...defaults, reasoningEffort: { type: "fixed", effortId } })} /> : null}
+  </div>;
+}
+
+function DefaultModelEditor({ value, onChange, disabled, error }: {
   readonly value: { type: "catalogDefault" } | { type: "fixed"; modelId: string };
   readonly onChange: (value: { type: "catalogDefault" } | { type: "fixed"; modelId: string }) => void;
+  readonly disabled: boolean;
+  readonly error?: string;
 }): React.JSX.Element {
   return <>
-    <SelectField label="Default model" value={value.type} options={[{ value: "catalogDefault", label: "Provider catalog default" }, { value: "fixed", label: "Specific model" }]}
+    <SelectField label="Default model" layout="stacked" disabled={disabled} value={value.type} options={[{ value: "catalogDefault", label: "Provider catalog default" }, { value: "fixed", label: "Specific model" }]}
       onChange={(type) => onChange(type === "catalogDefault" ? { type } : { type, modelId: "" })} />
-    {value.type === "fixed" ? <TextField label="Default model identifier" value={value.modelId} required onChange={(modelId) => onChange({ type: "fixed", modelId })} /> : null}
+    {value.type === "fixed" ? <TextField label="Default model identifier" layout="stacked" mono required disabled={disabled} value={value.modelId} error={error}
+      onChange={(modelId) => onChange({ type: "fixed", modelId })} /> : null}
   </>;
 }

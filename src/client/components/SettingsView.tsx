@@ -98,7 +98,7 @@ import type {
 } from "../../shared/protocol/application-preferences.js";
 import { Button } from "@client/components/ui/button";
 import { Checkbox } from "@client/components/ui/checkbox";
-import { installNavigationBlocker, navigate, settingsPath } from "../app/router.js";
+import { navigate, settingsPath } from "../app/router.js";
 import type { SettingsPage } from "../app/settings-route.js";
 import { SidebarNavTrigger } from "./SidebarNavTrigger.js";
 import { Label } from "@client/components/ui/label";
@@ -117,7 +117,7 @@ import {
   ElectronConnectionSettings,
   type ElectronConnectionSettingsControls,
 } from "./ElectronConnectionSettings.js";
-import { ExecutionSettings, type ExecutionSettingsNavigation } from "./execution-settings/ExecutionSettings.js";
+import { ExecutionSettings } from "./execution-settings/ExecutionSettings.js";
 import { ProjectsSettingsPage } from "./execution-settings/ProjectsSettingsPage.js";
 import type { HostPairingControls } from "./execution-settings/useHostPairings.js";
 import type { ConfigurationControls } from "./execution-settings/useConfiguration.js";
@@ -167,7 +167,6 @@ export function SettingsView({
   configuration?: ConfigurationControls & HostPairingControls;
 }): React.JSX.Element {
   const hasCannedPrompts = Boolean(cannedPrompts);
-  const executionNavigation = useRef<ExecutionSettingsNavigation>(null);
   const hasToolClients = Boolean(toolClients);
   const authentication = useAuthenticationControls();
   const hasElectronConnectionSettings = Boolean(electronConnectionSettings);
@@ -212,38 +211,21 @@ export function SettingsView({
     { id: "diagnostics" as const, label: "Diagnostics", icon: Activity },
   ];
   const content = useRef<HTMLElement>(null);
-  const internalPageChange = useRef<SettingsPage | undefined>(undefined);
-  const internalNavigation = useRef(false);
   const available = page === undefined || pages.some(entry => entry.id === page);
   useEffect(() => {
     if (!available) navigate(settingsPath(), { replace: true });
   }, [available]);
-  useEffect(() => installNavigationBlocker((_current, _next, proceed) => {
-    const execution = executionNavigation.current;
-    // Internal execution navigation has already passed its draft guard.
-    if (internalNavigation.current || !execution?.blocksNavigation()) return true;
-    execution.requestLeave(proceed);
-    return false;
-  }), []);
   useEffect(() => {
-    if (!available) return;
-    const internal = internalPageChange.current === page;
-    internalPageChange.current = undefined;
-    if (page === "environments" || page === "backends") {
-      if (!internal) executionNavigation.current?.openPage(page);
-    } else {
-      content.current?.scrollTo?.({ top: 0 });
-      const heading = content.current?.querySelector<HTMLElement>("h1, h2, h3");
-      if (heading) heading.tabIndex = -1;
-      (heading ?? content.current)?.focus({ preventScroll: true });
-    }
+    // Environments and Backends route their own selection, scroll and focus.
+    if (!available || page === "environments" || page === "backends") return;
+    content.current?.scrollTo?.({ top: 0 });
+    const heading = content.current?.querySelector<HTMLElement>("h1, h2, h3");
+    if (heading) heading.tabIndex = -1;
+    (heading ?? content.current)?.focus({ preventScroll: true });
   }, [page, available]);
   const selectPage = (next?: SettingsPage) => {
-    if (next === page) {
-      if (next === "environments" || next === "backends") executionNavigation.current?.openPage(next);
-      return;
-    }
-    navigate(settingsPath(next));
+    // A page's own link returns from one of its entities to its list.
+    if (settingsPath(next) !== window.location.pathname) navigate(settingsPath(next));
   };
   const currentLabel = pages.find(entry => entry.id === page)?.label;
   return (
@@ -314,16 +296,7 @@ export function SettingsView({
             <ServerPage controls={serverSettings} />
           ) : null}
           {configuration ? <div hidden={page !== "environments" && page !== "backends"}>
-            <ExecutionSettings controls={configuration} initialPage={page === "backends" ? "backends" : "environments"}
-              visible={page === "environments" || page === "backends"}
-              navigationRef={executionNavigation} onPageChange={next => {
-                if (next === page) return;
-                internalPageChange.current = next;
-                internalNavigation.current = true;
-                try { navigate(settingsPath(next)); }
-                finally { internalNavigation.current = false; }
-                if (window.location.pathname !== settingsPath(next)) internalPageChange.current = undefined;
-              }} />
+            <ExecutionSettings controls={configuration} />
           </div> : null}
           </div>
         </section>

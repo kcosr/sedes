@@ -1,372 +1,548 @@
-import { useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Plus, RefreshCw, Server } from "lucide-react";
+import { acceptHostRegistrationRequestSchema } from "../../../shared/protocol/host-pairing.js";
+import { installNavigationBlocker, navigate, settingsPath, useRoute, type Route } from "../../app/router.js";
+import { isSettingsResourcePage, type SettingsResourceMode, type SettingsResourcePage } from "../../app/settings-route.js";
+import { EntityList } from "../settings/EntityList.js";
+import { SettingsPage } from "../settings/SettingsPage.js";
 import { Button } from "../ui/button.js";
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from "../ui/dialog.js";
-import { BackendEditor, type BackendDraft } from "./BackendEditor.js";
-import { EnvironmentEditor } from "./EnvironmentEditor.js";
-import { BackendInventory, EnvironmentInventory, InventoryToolbar, emptyFilters, environmentDescription, hostPresence, type InventoryFilters } from "./ExecutionInventory.js";
-import { RuntimeControls } from "./RuntimeControls.js";
-import { RecoveredOperations } from "./RecoveredOperations.js";
-import { PendingHosts, HostConnectorSetup, hostPlatform } from "./PendingHosts.js";
-import { useConfiguration, type ConfigurationControls } from "./useConfiguration.js";
+import { Callout } from "../ui/callout.js";
+import { ConfirmDialog } from "../ui/confirm-dialog.js";
+import { DiscardChangesDialog } from "../ui/discard-changes-dialog.js";
+import { EmptyState } from "../ui/empty-state.js";
+import { Skeleton } from "../ui/skeleton.js";
+import { BackendDefaults, defaultsFields, defaultsOf, type DefaultsDraft } from "./BackendDefaults.js";
+import { BackendDetail } from "./BackendDetail.js";
+import { BackendEditor, backendFields, type BackendDraft } from "./BackendEditor.js";
+import { backendEditors } from "./backend-editors.js";
+import { BackLink, DetailHeader, useFocusReturn } from "./detail-parts.js";
+import { EnvironmentChooser, EnvironmentEditor, environmentFields, newEnvironment } from "./EnvironmentEditor.js";
+import { EnvironmentDetail, type DetailTab } from "./EnvironmentDetail.js";
+import { BackendList, BackendRow, countLabel, emptyFilters, environmentBackends, EnvironmentList, type InventoryFilters, type RowAction } from "./ExecutionInventory.js";
+import { acceptDraftFor, acceptFields, PairHostSetup, PendingHostDetail, type AcceptDraft } from "./PendingHosts.js";
+import { useConfiguration, type ConfigurationControls, type SaveFailure } from "./useConfiguration.js";
 import { useHostPairings, type HostPairingControls } from "./useHostPairings.js";
-import { allowedEnvironments, backendEditors } from "./backend-editors.js";
-import { SelectField, TextField, Toggle } from "./fields.js";
-import { presentRuntime } from "./runtime-presentation.js";
 import type { BackendDefinition, Configuration, EnvironmentDefinition } from "./types.js";
+import { mapConfigurationIssues, mapRequestIssues, noErrors, validationIssues, type MappedErrors, type ValidationIssue } from "./validation.js";
 import "./execution-settings.css";
 
-export type ExecutionPage = "environments" | "backends";
-type View =
-  | { readonly section: ExecutionPage; readonly kind: "list" }
-  | { readonly section: "environments"; readonly kind: "environment"; readonly id: string; readonly tab: "backends" | "runtime" }
-  | { readonly section: ExecutionPage; readonly kind: "backend"; readonly id: string }
-  | { readonly section: "environments"; readonly kind: "environment-editor" | "add-environment" | "pair-host" | "pending-hosts" }
-  | { readonly section: ExecutionPage; readonly kind: "backend-editor" }
-  | { readonly section: "backends"; readonly kind: "research" | "default" };
+export type ExecutionPage = SettingsResourcePage;
 
-export interface ExecutionSettingsNavigation {
-  openPage(page: ExecutionPage): void;
-  requestLeave(action: () => void): void;
-  blocksNavigation(): boolean;
+interface Location {
+  readonly page: ExecutionPage;
+  readonly resourceId?: string;
+  readonly mode?: SettingsResourceMode;
 }
 
-/** Configuration is principal-owned. Inventory filters and navigation are client-local.
+function executionLocation(route: Route): Location | undefined {
+  if (route.name !== "settings" || !isSettingsResourcePage(route.page)) return undefined;
+  return { page: route.page, ...(route.resourceId ? { resourceId: route.resourceId } : {}), ...(route.mode ? { mode: route.mode } : {}) };
+}
+
+function pathOf(location: Location): string {
+  return settingsPath(location.page, location);
+}
+
+/** The editor a location opens, if any: its drafts live exactly as long as the location. */
+function editorKey(location: Location | undefined): string | undefined {
+  if (!location) return undefined;
+  const { page, mode, resourceId } = location;
+  if (mode === "edit" && resourceId) return `${page}:edit:${resourceId}`;
+  if (mode === "new") return page === "backends" ? "backends:new" : resourceId === "local" || resourceId === "ssh" ? `environments:new:${resourceId}` : undefined;
+  if (mode === "pending" && resourceId) return `pending:${resourceId}`;
+  return undefined;
+}
+
+/** Every editor open at a location; the account defaults are open beside the backend list. */
+function openEditors(location: Location | undefined): Set<string> {
+  const keys = new Set<string>();
+  const key = editorKey(location);
+  if (key) keys.add(key);
+  if (location?.page === "backends" && (!location.mode || location.mode === "view")) keys.add("defaults");
+  return keys;
+}
+
+interface Draft<T> {
+  readonly key: string;
+  readonly value: T;
+  /** The value when editing began, to tell whether it changed. */
+  readonly initial: string;
+}
+
+function draftOf<T>(key: string, value: T): Draft<T> {
+  return { key, value, initial: JSON.stringify(value) };
+}
+
+function changed<T>(draft: Draft<T> | undefined): boolean {
+  return Boolean(draft && JSON.stringify(draft.value) !== draft.initial);
+}
+
+type Confirmation =
+  | { readonly kind: "remove-environment" | "remove-backend"; readonly id: string; readonly label: string; readonly revision: number }
+  | { readonly kind: "revoke" | "reapprove"; readonly environmentId: string; readonly label: string; readonly pairingId: string; readonly pairingRevision: number; readonly revision: number };
+
+/** Whether an element is rendered: not hidden by an attribute or by the split/stack layout. */
+function isVisible(element: Element): boolean {
+  if (!element.isConnected) return false;
+  for (let node: Element | null = element; node; node = node.parentElement) {
+    if (node instanceof HTMLElement && (node.hidden || node.inert)) return false;
+    const style = getComputedStyle(node);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+  }
+  return true;
+}
+
+/** Configuration is principal-owned. Inventory filters, tabs and selection are client-local.
  * There is exactly one configuration snapshot and one mounted lifecycle controller
  * per resource, independent of visible inventory, filters, or detail selection. */
-export function ExecutionSettings({ controls, initialPage = "environments", onPageChange, navigationRef, visible = true }: {
+export function ExecutionSettings({ controls }: {
   readonly controls: ConfigurationControls & HostPairingControls;
-  readonly initialPage?: ExecutionPage;
-  readonly onPageChange?: (page: ExecutionPage) => void;
-  readonly navigationRef?: Ref<ExecutionSettingsNavigation>;
-  readonly visible?: boolean;
 }): React.JSX.Element {
-  const [view, setView] = useState<View>({ section: initialPage, kind: "list" });
-  const [environmentDraft, setEnvironmentDraft] = useState<{ value: EnvironmentDefinition; creating: boolean }>();
-  const [backendDraft, setBackendDraft] = useState<BackendDraft>();
-  const [research, setResearch] = useState<{ value: Configuration["webSearch"] }>();
-  const [defaultDraft, setDefaultDraft] = useState<string>();
-  const [pairingEditing, setPairingEditing] = useState(false);
-  const [pairingEpoch, setPairingEpoch] = useState(0);
-  const [confirmation, setConfirmation] = useState<{ kind: "remove-environment" | "remove-backend" | "pairing"; id: string; revision: number; pairingRevision?: number; revoke?: boolean }>();
-  const [leaveAction, setLeaveAction] = useState<{ run: () => void }>();
-  const [queuedLeave, setQueuedLeave] = useState<{ run: () => void; mutation: "configuration" | "pairing" }>();
+  const route = useRoute();
+  const current = executionLocation(route);
+  const lastLocation = useRef<Location>(current ?? { page: "environments" });
+  if (current) lastLocation.current = current;
+  const location = current ?? lastLocation.current;
+  const visible = Boolean(current);
+  const { page, resourceId, mode } = location;
+  const key = editorKey(current);
+
+  const [environmentDraft, setEnvironmentDraft] = useState<Draft<EnvironmentDefinition>>();
+  const [backendDraft, setBackendDraft] = useState<Draft<BackendDraft>>();
+  const [acceptDraft, setAcceptDraft] = useState<Draft<AcceptDraft>>();
+  const [defaultsDraft, setDefaultsDraft] = useState<DefaultsDraft>();
   const [filters, setFilters] = useState<Record<string, InventoryFilters>>({});
-  const initialDraft = useRef("");
-  const editorReturn = useRef<View>({ section: initialPage, kind: "list" });
-  const backendReturn = useRef<View>({ section: initialPage, kind: "list" });
+  const [tabs, setTabs] = useState<Record<string, DetailTab>>({});
+  const [leave, setLeave] = useState<{ readonly proceed: () => void; readonly discard: readonly string[] }>();
+  const [queuedLeave, setQueuedLeave] = useState<{ readonly proceed: () => void; readonly leaving: readonly string[]; readonly mutation: "configuration" | "pairing" }>();
+  const [confirmation, setConfirmation] = useState<Confirmation>();
+  const [saveOwner, setSaveOwner] = useState<string>();
+  const [acceptIssues, setAcceptIssues] = useState<readonly ValidationIssue[]>();
   const root = useRef<HTMLDivElement>(null);
-  const heading = useRef<HTMLHeadingElement>(null);
+  const bypass = useRef(false);
+  const traversalBypass = useRef(false);
+  const previousLocation = useRef<Location | undefined>(undefined);
+  const previousPath = useRef<string | undefined>(undefined);
+  const focusRequest = useRef<{ readonly fromId?: string } | undefined>(undefined);
+  const afterExit = useRef<(() => void) | undefined>(undefined);
   const scrollPositions = useRef(new Map<string, number>());
-  const focusResource = useRef<string | undefined>(undefined);
-  const previousView = useRef(view);
-  const discarded = useRef(false);
-  const destinationOwnsFocus = useRef(false);
-  const destinationFocus = useRef<HTMLElement | null>(null);
-  const confirmationElement = useRef<HTMLElement>(null);
-  const confirmationTrigger = useRef<HTMLElement | null>(null);
-  const restoreConfirmationFocus = useRef(false);
-  const editing = Boolean(environmentDraft || backendDraft || research || defaultDraft !== undefined || pairingEditing);
-  const state = useConfiguration(controls, editing || Boolean(confirmation), visible);
+  const backendSeed = useRef<string | undefined>(undefined);
+
+  const routeEditorOpen = Boolean(key);
+  const defaultsDirty = Boolean(defaultsDraft);
+  const state = useConfiguration(controls, routeEditorOpen || defaultsDirty || Boolean(confirmation), visible);
   const pairing = useHostPairings(controls, state.refresh, visible);
   const snapshot = state.snapshot;
   const configuration = snapshot?.configuration;
   const pending = state.loading || state.saving || state.needsRefresh || pairing.busy;
-  const draftText = JSON.stringify(environmentDraft ?? backendDraft ?? research ?? defaultDraft ?? null);
-  const dirty = pairingEditing || (editing && draftText !== initialDraft.current);
+  const registrations = pairing.hosts?.registrations ?? [];
+  const registration = mode === "pending" ? registrations.find(entry => entry.id === resourceId && entry.state === "pending") : undefined;
+
+  const dirtyKeys = new Set<string>([
+    ...(changed(environmentDraft) ? [environmentDraft!.key] : []),
+    ...(changed(backendDraft) ? [backendDraft!.key] : []),
+    ...(changed(acceptDraft) ? [acceptDraft!.key] : []),
+    ...(configuration && defaultsDraft && JSON.stringify(defaultsDraft) !== JSON.stringify(defaultsOf(configuration)) ? ["defaults"] : []),
+  ]);
+  const guard = useRef({ dirtyKeys, saving: state.saving, busy: pairing.busy, owner: saveOwner, queued: Boolean(queuedLeave) });
+  guard.current = { dirtyKeys, saving: state.saving, busy: pairing.busy, owner: saveOwner, queued: Boolean(queuedLeave) };
+
+  const discard = useCallback((keys: readonly string[]) => {
+    for (const entry of keys) {
+      if (entry === "defaults") setDefaultsDraft(undefined);
+      else if (entry.startsWith("environments:")) setEnvironmentDraft(undefined);
+      else if (entry.startsWith("backends:")) setBackendDraft(undefined);
+      else if (entry.startsWith("pending:")) setAcceptDraft(undefined);
+    }
+  }, []);
+
+  // Selection and editing are routes, so the one guard covers links, the
+  // sidebar, browser and Android Back, and leaving Settings.
+  useEffect(() => installNavigationBlocker((currentRoute, next, proceed) => {
+    if (bypass.current) return true;
+    if (traversalBypass.current) { traversalBypass.current = false; return true; }
+    const staying = openEditors(executionLocation(next));
+    const leaving = [...openEditors(executionLocation(currentRoute))].filter(entry => !staying.has(entry));
+    if (!leaving.length) return true;
+    const { dirtyKeys: dirty, saving, busy } = guard.current;
+    if (saving || busy) { setQueuedLeave({ proceed, leaving, mutation: saving ? "configuration" : "pairing" }); return false; }
+    const lost = leaving.filter(entry => dirty.has(entry));
+    if (!lost.length) return true;
+    setLeave({ proceed, discard: lost });
+    return false;
+  }), []);
   useEffect(() => {
-    if (!dirty) return;
+    if (!queuedLeave || state.saving || pairing.busy) return;
+    setQueuedLeave(undefined);
+    const succeeded = queuedLeave.mutation === "configuration" ? state.lastSaveSucceeded : pairing.lastMutationSucceeded;
+    if (!succeeded) { focusRequest.current = {}; return; }
+    // The saved editor's content is kept; any other unsaved editor still asks.
+    const lost = queuedLeave.leaving.filter(entry => entry !== guard.current.owner && guard.current.dirtyKeys.has(entry));
+    if (lost.length) setLeave({ proceed: queuedLeave.proceed, discard: lost });
+    else queuedLeave.proceed();
+  }, [queuedLeave, state.saving, state.lastSaveSucceeded, pairing.busy, pairing.lastMutationSucceeded]);
+  useEffect(() => {
+    if (!dirtyKeys.size) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [dirty]);
-  const viewKey = JSON.stringify(view);
-  const filterKey = view.kind === "environment" ? `environment:${view.id}` : view.section;
-  const currentFilters = filters[filterKey] ?? emptyFilters;
-  const setCurrentFilters = (next: InventoryFilters) => setFilters(current => ({ ...current, [filterKey]: next }));
+  }, [dirtyKeys.size > 0]);
 
-  const clearEditors = () => {
-    setEnvironmentDraft(undefined); setBackendDraft(undefined); setResearch(undefined); setDefaultDraft(undefined);
-    setPairingEditing(false); setPairingEpoch(value => value + 1); setConfirmation(undefined);
+  /** Navigates after a decision already made here (a save, Cancel, a confirmed removal). */
+  const go = (path: string, replace = false) => {
+    bypass.current = true;
+    try { navigate(path, { replace }); } finally { bypass.current = false; }
   };
-  const go = (next: View, returnFocus?: string) => {
-    destinationOwnsFocus.current = true;
-    destinationFocus.current = null;
-    const scroll = root.current?.closest(".settings-content");
-    scrollPositions.current.set(viewKey, scroll?.scrollTop ?? 0);
-    focusResource.current = returnFocus;
-    setView(next); onPageChange?.(next.section);
+  /** Leaves an editor without asking: Back when it was opened from `path`, otherwise a replace. */
+  const returnTo = (path: string) => {
+    if (previousPath.current === path) { traversalBypass.current = true; window.history.back(); }
+    else go(path, true);
   };
-  const requestLeave = (action: () => void) => {
-    if (state.saving || pairing.busy) { setQueuedLeave({ run: action, mutation: state.saving ? "configuration" : "pairing" }); return; }
-    const run = () => { clearEditors(); action(); };
-    if (dirty) setLeaveAction({ run }); else run();
-  };
-  useEffect(() => {
-    if (queuedLeave && !state.saving && !pairing.busy) {
-      setQueuedLeave(undefined);
-      const succeeded = queuedLeave.mutation === "configuration" ? state.lastSaveSucceeded : pairing.lastMutationSucceeded;
-      if (succeeded) requestLeave(queuedLeave.run);
-      else heading.current?.focus({ preventScroll: true });
-    }
-  }, [queuedLeave, state.saving, state.lastSaveSucceeded, pairing.busy, pairing.lastMutationSucceeded]);
-  const navigate = (next: View) => requestLeave(() => go(next));
-  useImperativeHandle(navigationRef, () => ({
-    openPage: page => navigate({ section: page, kind: "list" }),
-    requestLeave,
-    blocksNavigation: () => dirty || state.saving || pairing.busy,
-  }));
+
+  // Drafts belong to their route: create them on entry and drop them on exit.
   useLayoutEffect(() => {
-    const prior = previousView.current;
-    previousView.current = view;
-    if (!visible) return;
-    const scroll = root.current?.closest(".settings-content");
-    if (scroll) scroll.scrollTop = scrollPositions.current.get(viewKey) ?? 0;
-    // Environment tabs are navigation controls: activating one keeps its focus.
-    if (prior.kind === "environment" && view.kind === "environment" && prior.id === view.id && prior.tab !== view.tab) return;
-    const target = focusResource.current ? Array.from(root.current?.querySelectorAll<HTMLElement>("[data-resource-id]") ?? []).find(entry => entry.dataset.resourceId === focusResource.current) : undefined;
-    destinationFocus.current = target ?? (!editing ? heading.current : null);
-    destinationFocus.current?.focus({ preventScroll: true });
-    focusResource.current = undefined;
-  }, [viewKey, visible]);
-  useEffect(() => {
-    if (confirmation) confirmationElement.current?.focus();
-    else if (restoreConfirmationFocus.current) {
-      restoreConfirmationFocus.current = false;
-      if (queuedLeave) return; // The queued destination owns the next focus change.
-      const trigger = confirmationTrigger.current;
-      if (trigger?.isConnected && !trigger.closest("[hidden]") && !trigger.matches(":disabled")) trigger.focus();
-      else if (visible) heading.current?.focus({ preventScroll: true });
-    }
-  }, [confirmation]);
-  const cancelConfirmation = () => {
-    restoreConfirmationFocus.current = true;
-    setConfirmation(undefined);
-  };
+    if (!configuration) return;
+    if (key?.startsWith("environments:")) {
+      if (environmentDraft?.key !== key) {
+        const value = mode === "edit" ? configuration.executionEnvironments.find(entry => entry.id === resourceId) : newEnvironment(resourceId === "local" ? "local" : "ssh");
+        setEnvironmentDraft(value ? draftOf(key, structuredClone(value)) : undefined);
+      }
+    } else if (environmentDraft) setEnvironmentDraft(undefined);
+    if (key?.startsWith("backends:")) {
+      if (backendDraft?.key !== key) {
+        if (mode === "edit") {
+          const backend = configuration.backends.find(entry => entry.id === resourceId);
+          setBackendDraft(backend ? draftOf(key, { creating: false, backend: structuredClone(backend),
+            targets: structuredClone(configuration.targets.filter(entry => entry.backendInstanceId === backend.id)), defaultTargetId: configuration.defaultTargetId }) : undefined);
+        } else {
+          const seed = backendSeed.current ?? existingEnvironment(configuration, filters.backends?.environment);
+          backendSeed.current = undefined;
+          const backend = backendEditors.codex_app_server.createBackend(crypto.randomUUID());
+          const target = backendEditors.codex_app_server.createTarget(crypto.randomUUID(), backend.id, seed ?? "");
+          setBackendDraft(draftOf(key, { creating: true, backend, targets: [target], defaultTargetId: configuration.defaultTargetId ?? target.id }));
+        }
+      }
+    } else if (backendDraft) setBackendDraft(undefined);
+    if (key?.startsWith("pending:") && registration && snapshot) {
+      if (acceptDraft?.key !== key) setAcceptDraft(draftOf(key, acceptDraftFor(registration, snapshot.revision)));
+    } else if (!key?.startsWith("pending:") && acceptDraft) setAcceptDraft(undefined);
+    if (!openEditors(current).has("defaults") && current && defaultsDraft) setDefaultsDraft(undefined);
+  }, [key, Boolean(configuration), registration?.id]);
 
-  const openEnvironment = (environment: EnvironmentDefinition, tab: "backends" | "runtime" = "backends") => navigate({ section: "environments", kind: "environment", id: environment.id, tab });
-  const openBackend = (backend: BackendDefinition) => {
-    backendReturn.current = view;
-    navigate({ section: view.section, kind: "backend", id: backend.id });
+  // A new location: clear feedback that belonged to the last one, restore
+  // the list's scroll position or start at the top, and ask for focus.
+  const locationKey = current ? pathOf(current) : "";
+  useLayoutEffect(() => {
+    const previous = previousLocation.current;
+    if (!current) return;
+    previousLocation.current = current;
+    previousPath.current = previous ? pathOf(previous) : undefined;
+    if (previous && pathOf(previous) === pathOf(current)) return;
+    state.clearFeedback();
+    setSaveOwner(undefined);
+    setAcceptIssues(undefined);
+    const scroller = root.current?.closest(".settings-content");
+    if (scroller) {
+      if (previous) scrollPositions.current.set(pathOf(previous), scroller.scrollTop);
+      scroller.scrollTop = !current.mode ? scrollPositions.current.get(pathOf(current)) ?? 0 : 0;
+    }
+    focusRequest.current = { ...(previous?.resourceId && !current.mode ? { fromId: previous.resourceId } : {}) };
+    if (!editorKey(current) && afterExit.current) { const run = afterExit.current; afterExit.current = undefined; run(); }
+  }, [locationKey]);
+  // Move focus once the location's content has rendered. Focus on a list
+  // row that stays visible beside its detail (the split layout) stays there.
+  useLayoutEffect(() => {
+    const request = focusRequest.current;
+    if (!request || !visible || !root.current) return;
+    const active = document.activeElement as HTMLElement | null;
+    if (active?.closest(".execution-list-pane") && root.current.contains(active) && isVisible(active)) { focusRequest.current = undefined; return; }
+    const row = request.fromId ? Array.from(root.current.querySelectorAll<HTMLElement>("[data-resource-id]"))
+      .find(entry => entry.dataset.resourceId === request.fromId)?.querySelector<HTMLElement>("[data-slot=entity-row-main]") : undefined;
+    // A selection waits for its own heading (an editor renders once its draft exists).
+    const headings = Array.from(root.current.querySelectorAll<HTMLElement>(mode ? "[data-execution-heading]" : "[data-slot=settings-page-title]"));
+    const target = (row && isVisible(row) ? row : undefined) ?? headings.find(isVisible);
+    if (!target) return;
+    focusRequest.current = undefined;
+    // A dialog whose action moved to this location hands focus here as it closes.
+    if (active?.closest("[role=dialog], [role=alertdialog]")) { confirmationFocus.returnFocusRef.current = target; leaveFocus.returnFocusRef.current = target; return; }
+    target.focus({ preventScroll: true });
+  });
+  const confirmationFocus = useFocusReturn();
+  const leaveFocus = useFocusReturn();
+
+  const currentFilters = filters[page] ?? emptyFilters;
+  const setCurrentFilters = useCallback((next: InventoryFilters) => setFilters(existing => ({ ...existing, [page]: next })), [page]);
+  const tabOf = (kind: ExecutionPage, id: string): DetailTab => tabs[`${kind}:${id}`] ?? "overview";
+  const setTab = (kind: ExecutionPage, id: string, tab: DetailTab) => setTabs(existing => ({ ...existing, [`${kind}:${id}`]: tab }));
+  const pausedReason = state.needsRefresh ? "Refresh the configuration before issuing runtime commands."
+    : routeEditorOpen ? "Runtime controls are paused while configuration is being edited."
+    : state.loading || state.saving ? "Runtime controls are paused while configuration is loading or saving." : undefined;
+  const failureFor = (owner: string): SaveFailure | undefined => saveOwner === owner ? state.saveFailure : undefined;
+  const mappedFailure = (owner: string, edited: Parameters<typeof mapConfigurationIssues>[2], fields: RegExp): MappedErrors => {
+    const failure = failureFor(owner);
+    return failure?.issues.length ? mapConfigurationIssues(failure.issues, failure.document, edited, fields) : noErrors;
   };
-  const editEnvironment = (environment: EnvironmentDefinition, creating = false) => {
-    requestLeave(() => {
-      editorReturn.current = view;
-      const draft = { value: structuredClone(environment), creating };
-      initialDraft.current = JSON.stringify(draft); setEnvironmentDraft(draft);
-      go({ section: "environments", kind: "environment-editor" });
-    });
+  const saveMessage = (owner: string): ReactNode => {
+    const failure = failureFor(owner);
+    return failure ? failure.message ?? (failure.issues.length ? "Fix the highlighted fields to save." : undefined) : undefined;
   };
-  const editBackend = (backend: BackendDefinition) => {
-    if (!configuration) return;
-    requestLeave(() => {
-      editorReturn.current = view;
-      const draft: BackendDraft = { creating: false, backend: structuredClone(backend), targets: structuredClone(configuration.targets.filter(entry => entry.backendInstanceId === backend.id)), defaultTargetId: configuration.defaultTargetId };
-      initialDraft.current = JSON.stringify(draft); setBackendDraft(draft);
-      go({ section: view.section, kind: "backend-editor" });
-    });
-  };
-  const createBackend = (environmentId?: string) => {
-    if (!configuration) return;
-    requestLeave(() => {
-      editorReturn.current = view;
-      const backend = backendEditors.codex_app_server.createBackend(crypto.randomUUID());
-      const target = backendEditors.codex_app_server.createTarget(crypto.randomUUID(), backend.id, environmentId ?? "");
-      const draft: BackendDraft = { creating: true, backend, targets: [target], defaultTargetId: configuration.defaultTargetId ?? target.id };
-      initialDraft.current = JSON.stringify(draft); setBackendDraft(draft);
-      go({ section: view.section, kind: "backend-editor" });
-    });
-  };
-  const closeEditor = (resourceId?: string) => { clearEditors(); go(editorReturn.current, resourceId); };
+  const savedAtFor = (owner: string) => saveOwner === owner ? state.savedAt : undefined;
+  useEffect(() => {
+    // After a failed save, take the person to the first field that needs a fix.
+    if (!state.saveFailure?.issues.length) return;
+    const invalid = root.current?.querySelector<HTMLElement>("[aria-invalid=true]");
+    invalid?.scrollIntoView?.({ block: "center" });
+    invalid?.focus({ preventScroll: true });
+  }, [state.saveFailure]);
+
   const saveEnvironment = async () => {
     if (!configuration || !environmentDraft) return;
-    const { value, creating } = environmentDraft;
-    if (await state.save({ ...configuration, executionEnvironments: creating ? [...configuration.executionEnvironments, value] : configuration.executionEnvironments.map(entry => entry.id === value.id ? value : entry) })) {
-      clearEditors(); go({ section: "environments", kind: "environment", id: value.id, tab: "backends" });
-    }
+    const { key: owner, value } = environmentDraft;
+    const creating = mode === "new";
+    setSaveOwner(owner);
+    const result = await state.save({ ...configuration, executionEnvironments: creating ? [...configuration.executionEnvironments, value]
+      : configuration.executionEnvironments.map(entry => entry.id === value.id ? value : entry) });
+    // A navigation queued behind the save takes over once it succeeds.
+    if (!result.ok || guard.current.owner !== owner || guard.current.queued) return;
+    if (creating) go(settingsPath("environments", { mode: "view", resourceId: value.id }), true);
+    else setEnvironmentDraft(draftOf(owner, value));
   };
   const saveBackend = async () => {
     if (!configuration || !backendDraft) return;
-    const { backend, targets, creating, defaultTargetId } = backendDraft;
-    if (await state.save({ ...configuration,
+    const { key: owner, value } = backendDraft;
+    const { backend, targets, creating, defaultTargetId } = value;
+    setSaveOwner(owner);
+    const result = await state.save({ ...configuration,
       backends: creating ? [...configuration.backends, backend] : configuration.backends.map(entry => entry.id === backend.id ? backend : entry),
       targets: [...configuration.targets.filter(entry => entry.backendInstanceId !== backend.id), ...targets], defaultTargetId,
-    })) closeEditor(backend.id);
+    });
+    if (!result.ok || guard.current.owner !== owner || guard.current.queued) return;
+    if (creating) go(settingsPath("backends", { mode: "view", resourceId: backend.id }), true);
+    else setBackendDraft(draftOf(owner, { ...value, creating: false }));
   };
-  const confirmChange = async () => {
-    if (!configuration || !confirmation || confirmation.revision !== snapshot?.revision || pending) return;
-    if (confirmation.kind === "pairing") {
-      const request = { mutationId: crypto.randomUUID(), pairingId: confirmation.id, expectedPairingRevision: confirmation.pairingRevision!, expectedConfigurationRevision: confirmation.revision };
-      if (await pairing.mutate(() => confirmation.revoke ? controls.revokeHostPairing(request) : controls.reapproveHostPairing(request), true)) cancelConfirmation();
+  const saveDefaults = async () => {
+    if (!configuration || !defaultsDraft) return;
+    setSaveOwner("defaults");
+    const result = await state.save({ ...configuration, defaultTargetId: defaultsDraft.defaultTargetId || null, webSearch: defaultsDraft.webSearch });
+    if (result.ok) setDefaultsDraft(undefined);
+  };
+  const acceptHost = async () => {
+    if (!acceptDraft || !registration) return;
+    const draft = acceptDraft.value;
+    const parsed = acceptHostRegistrationRequestSchema.safeParse({ mutationId: crypto.randomUUID(), registrationId: draft.registrationId,
+      expectedRegistrationRevision: draft.registrationRevision, expectedConfigurationRevision: draft.configurationRevision,
+      label: draft.label, workspaceRoots: draft.workspaceRoots, operations: draft.operations });
+    if (!parsed.success) { setAcceptIssues(validationIssues(parsed.error)); return; }
+    setAcceptIssues(undefined);
+    setSaveOwner(acceptDraft.key);
+    const result = await pairing.mutate(() => controls.acceptHostRegistration(parsed.data), true);
+    if (result.ok && !guard.current.queued) go(settingsPath("environments", { mode: "view", resourceId: result.value.pairing.executionEnvironmentId }), true);
+  };
+  const denyHost = async () => {
+    if (!registration) return;
+    const result = await pairing.mutate(() => controls.denyHostRegistration({ mutationId: crypto.randomUUID(), registrationId: registration.id, expectedRegistrationRevision: registration.revision }), false);
+    if (!result.ok) throw new Error(result.error);
+    go(settingsPath("environments"), true);
+  };
+  const confirm = async () => {
+    if (!configuration || !snapshot || !confirmation) return;
+    if (confirmation.kind === "revoke" || confirmation.kind === "reapprove") {
+      const request = { mutationId: crypto.randomUUID(), pairingId: confirmation.pairingId, expectedPairingRevision: confirmation.pairingRevision, expectedConfigurationRevision: confirmation.revision };
+      const result = await pairing.mutate(() => confirmation.kind === "revoke" ? controls.revokeHostPairing(request) : controls.reapproveHostPairing(request), true);
+      if (!result.ok) throw new Error(result.error);
       return;
     }
+    const removal = confirmation.kind === "remove-environment" || confirmation.kind === "remove-backend" ? confirmation : undefined;
+    if (!removal) return;
     let next: Configuration;
-    if (confirmation.kind === "remove-environment") next = { ...configuration, executionEnvironments: configuration.executionEnvironments.filter(entry => entry.id !== confirmation.id) };
+    if (removal.kind === "remove-environment") next = { ...configuration, executionEnvironments: configuration.executionEnvironments.filter(entry => entry.id !== removal.id) };
     else {
-      const removed = new Set(configuration.targets.filter(entry => entry.backendInstanceId === confirmation.id).map(entry => entry.id));
-      next = { ...configuration, backends: configuration.backends.filter(entry => entry.id !== confirmation.id), targets: configuration.targets.filter(entry => !removed.has(entry.id)), defaultTargetId: removed.has(configuration.defaultTargetId ?? "") ? null : configuration.defaultTargetId };
+      const removed = new Set(configuration.targets.filter(entry => entry.backendInstanceId === removal.id).map(entry => entry.id));
+      next = { ...configuration, backends: configuration.backends.filter(entry => entry.id !== removal.id), targets: configuration.targets.filter(entry => !removed.has(entry.id)), defaultTargetId: removed.has(configuration.defaultTargetId ?? "") ? null : configuration.defaultTargetId };
     }
-    if (await state.save(next)) { setConfirmation(undefined); go(confirmation.kind === "remove-environment" ? { section: "environments", kind: "list" } : backendReturn.current); }
+    setSaveOwner("confirmation");
+    const result = await state.save(next);
+    if (!result.ok) throw new Error(result.failure?.message ?? result.failure?.issues[0]?.message ?? "The configuration could not be saved. Refresh and try again.");
+    // Leave the removed entity's page: back to where it was opened from, or its list.
+    const removedPage: ExecutionPage = removal.kind === "remove-environment" ? "environments" : "backends";
+    if (page !== removedPage || resourceId !== removal.id) return;
+    const origin = previousPath.current;
+    const ownPath = settingsPath(removedPage, { mode: "view", resourceId: removal.id });
+    if (origin && origin !== ownPath && !origin.startsWith(`${ownPath}/`)) returnTo(origin);
+    else go(settingsPath(removedPage), true);
+  };
+  const confirmationBlockers = (): string[] => {
+    if (!confirmation || !configuration || !snapshot) return [];
+    const blockers: string[] = [];
+    if (confirmation.revision !== snapshot.revision) blockers.push("The configuration changed after this opened. Close this and review the latest state.");
+    if (state.needsRefresh) blockers.push("The configuration changed or could not be confirmed. Close this and refresh it first.");
+    if ((confirmation.kind === "revoke" || confirmation.kind === "reapprove") && pairing.stale) blockers.push("Refresh host registrations first.");
+    if (confirmation.kind === "remove-environment") {
+      const environmentId = confirmation.id;
+      const environment = configuration.executionEnvironments.find(entry => entry.id === environmentId);
+      const referencing = environmentBackends(configuration, environmentId);
+      if (referencing.length) blockers.push(`Referenced by ${referencing.map(backend => backend.label).join(", ")}. Remove ${referencing.length === 1 ? "that backend" : "those backends"} first.`);
+      if (environment?.kind === "outbound" && pairing.hosts?.pairings.find(entry => entry.id === environment.pairingId)?.state !== "revoked") blockers.push("Revoke the pairing first.");
+    }
+    return blockers;
   };
 
-  const selectedEnvironment = view.kind === "environment" ? configuration?.executionEnvironments.find(entry => entry.id === view.id) : undefined;
-  const selectedBackend = view.kind === "backend" ? configuration?.backends.find(entry => entry.id === view.id) : undefined;
-  const selectedBackendEnvironment = selectedBackend ? configuration?.executionEnvironments.find(entry => configuration.targets.some(target => target.backendInstanceId === selectedBackend.id && target.executionEnvironmentId === entry.id)) : undefined;
-  const pendingHosts = pairing.hosts?.registrations.filter(entry => entry.state === "pending").length ?? 0;
-  const title = view.kind === "list" ? (view.section === "environments" ? "Execution environments" : "Backends")
-    : view.kind === "environment" ? selectedEnvironment?.label ?? "Environment unavailable"
-    : view.kind === "backend" ? selectedBackend?.label ?? "Backend unavailable"
-    : view.kind === "environment-editor" ? (environmentDraft?.creating ? "New environment" : `Edit ${environmentDraft?.value.label ?? "environment"}`)
-    : view.kind === "backend-editor" ? (backendDraft?.creating ? "New backend" : `Edit ${backendDraft?.backend.label ?? "backend"}`)
-    : view.kind === "add-environment" ? "Add environment" : view.kind === "pair-host" ? "Pair a host"
-    : view.kind === "pending-hosts" ? "Pending hosts" : view.kind === "default" ? "Default connection" : "Research provider settings";
-  const description = selectedEnvironment ? environmentDescription(selectedEnvironment)
-    : selectedBackend ? `${backendEditors[selectedBackend.kind].label} · ${selectedBackendEnvironment?.label ?? "Environment unavailable"}`
-    : view.kind === "list" && view.section === "environments" ? "Choose an environment to manage its backends and workspace access."
-    : view.kind === "list" ? "Browse provider configurations across your environments." : undefined;
-  const addBackendButton = (environmentId?: string) => <Button size="sm" aria-label="Add backend" disabled={!configuration || pending || configuration.backends.length >= 32 || configuration.executionEnvironments.length === 0}
-    onClick={() => createBackend(environmentId)}><span>Add<span className="execution-settings-add-kind"> backend</span></span></Button>;
-  const backendInventory = (environmentId?: string) => snapshot ? <>
-    <InventoryToolbar kind="backends" filters={currentFilters} onChange={setCurrentFilters} environments={snapshot.configuration.executionEnvironments} scoped={Boolean(environmentId)} />
-    <BackendInventory snapshot={snapshot} filters={currentFilters} disabled={pending} environmentId={environmentId} onOpen={openBackend} onEdit={editBackend} onEnvironment={openEnvironment} />
-  </> : null;
-  const refresh = () => {
-    if (editing && !state.needsRefresh) {
-      void state.refreshRuntime(); void pairing.refresh();
-    } else requestLeave(() => { if (editing) go(editorReturn.current); void state.refresh(); void pairing.refresh(); });
-  };
-  const goBack = () => {
-    if (editing) requestLeave(() => go(editorReturn.current, environmentDraft?.value.id ?? backendDraft?.backend.id));
-    else if (view.kind === "backend") requestLeave(() => go(backendReturn.current, view.id));
-    else if (view.kind === "environment") requestLeave(() => go({ section: "environments", kind: "list" }, view.id));
-    else navigate({ section: view.section, kind: "list" });
-  };
-  const pausedReason = state.needsRefresh ? "Refresh the configuration before issuing runtime commands." : editing ? "Runtime controls are paused while configuration is being edited." : state.loading || state.saving ? "Runtime controls are paused while configuration is loading or saving." : undefined;
-
-  return <div ref={root} className="execution-settings-page" data-view={view.kind}>
-    {view.kind !== "list" ? <Button className="execution-settings-back" variant="ghost" size="sm" disabled={state.saving || pairing.busy} onClick={goBack}><ArrowLeft size={14} />{view.kind === "backend" && backendReturn.current.kind === "environment" ? "Back to environment" : "Back"}</Button> : null}
-    <header className="execution-settings-header"><div><h3 ref={heading} tabIndex={-1} className="settings-page-title">{title}</h3>{description ? <p>{description}</p> : null}</div>
-      <div className="execution-settings-actions">
-        <Button className="execution-settings-refresh" size="sm" variant="outline" disabled={state.loading || state.saving || pairing.busy} onClick={refresh}><RefreshCw size={15} aria-hidden="true" /><span>Refresh</span></Button>
-        {view.kind === "list" && view.section === "environments" ? <Button size="sm" aria-label="Add environment" disabled={!configuration || pending || configuration.executionEnvironments.length >= 16} onClick={() => navigate({ section: "environments", kind: "add-environment" })}><span>Add<span className="execution-settings-add-kind"> environment</span></span></Button> : null}
-        {view.kind === "list" && view.section === "backends" ? addBackendButton(currentFilters.environment || undefined) : null}
-        {selectedEnvironment ? <Button size="sm" variant="outline" disabled={pending} data-resource-id={selectedEnvironment.id} aria-label={`Edit ${selectedEnvironment.label}`} onClick={() => editEnvironment(selectedEnvironment)}>Edit configuration</Button> : null}
-        {selectedBackend ? <Button size="sm" variant="outline" disabled={pending} data-resource-id={selectedBackend.id} aria-label={`Edit ${selectedBackend.label}`} onClick={() => editBackend(selectedBackend)}>Edit configuration</Button> : null}
+  const editPath = (kind: ExecutionPage, id: string) => settingsPath(kind, { mode: "edit", resourceId: id });
+  const environmentActions = (environment: EnvironmentDefinition): RowAction[] => [
+    { label: "Edit", onSelect: () => navigate(editPath("environments", environment.id)) },
+    { label: "View activity", onSelect: () => { setTab("environments", environment.id, "activity"); navigate(settingsPath("environments", { mode: "view", resourceId: environment.id })); } },
+    { label: "Remove…", destructive: true, disabled: !snapshot, onSelect: () => snapshot && setConfirmation({ kind: "remove-environment", id: environment.id, label: environment.label, revision: snapshot.revision }) },
+  ];
+  const backendActions = (backend: BackendDefinition): RowAction[] => [
+    { label: "Edit", onSelect: () => navigate(editPath("backends", backend.id)) },
+    { label: "View activity", onSelect: () => { setTab("backends", backend.id, "activity"); navigate(settingsPath("backends", { mode: "view", resourceId: backend.id })); } },
+    { label: "Remove…", destructive: true, disabled: !snapshot, onSelect: () => snapshot && setConfirmation({ kind: "remove-backend", id: backend.id, label: backend.label, revision: snapshot.revision }) },
+  ];
+  const canAddBackend = Boolean(configuration && configuration.backends.length < 32 && configuration.executionEnvironments.length > 0);
+  const addBackend = (environmentId?: string) => { backendSeed.current = environmentId; navigate(settingsPath("backends", { mode: "new" })); };
+  const renderEnvironmentBackends = (environment: EnvironmentDefinition) => {
+    if (!snapshot) return null;
+    const backends = environmentBackends(snapshot.configuration, environment.id);
+    return <div className="execution-related">
+      <div className="execution-related-header">
+        <p className="execution-muted">{backends.length ? `${countLabel(backends.length, "backend")} run in this environment.` : "No backends run here yet."}</p>
+        <Button type="button" size="sm" variant="outline" disabled={pending || !canAddBackend} onClick={() => addBackend(environment.id)}><Plus />Add backend</Button>
       </div>
-    </header>
-    {state.loading ? <p role="status">Loading execution configuration…</p> : null}
-    {queuedLeave ? <div className="execution-settings-actions"><p role="status">Waiting for the current save to finish before leaving.</p><Button size="sm" variant="ghost" onClick={() => { setQueuedLeave(undefined); heading.current?.focus({ preventScroll: true }); }}>Stay here</Button></div>
-      : state.saving || pairing.busy ? <p role="status">Saving changes…</p> : null}
-    {state.error ? <p role="alert" className="execution-settings-error">{state.error}</p> : null}
-    {state.notice ? <p role="status" className="execution-settings-notice">{state.notice}</p> : null}
-    {pairing.error ? <p role="alert" className="execution-settings-error">{pairing.error}</p> : null}
-    {configuration && snapshot ? <>
-      {view.kind === "list" && view.section === "environments" ? <>
-        {pendingHosts > 0 ? <div className="execution-settings-attention"><span>{pendingHosts} host{pendingHosts === 1 ? "" : "s"} awaiting approval</span><Button size="sm" variant="link" onClick={() => navigate({ section: "environments", kind: "pending-hosts" })}>Review hosts</Button></div> : null}
-        <InventoryToolbar kind="environments" filters={currentFilters} onChange={setCurrentFilters} environments={configuration.executionEnvironments} />
-        <EnvironmentInventory snapshot={snapshot} filters={currentFilters} disabled={pending} hosts={pairing.hosts} stale={pairing.stale} onOpen={openEnvironment} onEdit={editEnvironment} onRuntime={environment => openEnvironment(environment, "runtime")} />
-      </> : null}
-      {view.kind === "list" && view.section === "backends" ? <>
-        {backendInventory()}
-        <section className="execution-settings-preference"><div><h4>Default connection for new threads</h4><p>{connectionLabel(configuration, configuration.defaultTargetId)}</p></div><Button size="sm" variant="outline" disabled={pending} onClick={() => {
-          editorReturn.current = view; const value = configuration.defaultTargetId ?? ""; initialDraft.current = JSON.stringify(value); setDefaultDraft(value); go({ section: "backends", kind: "default" });
-        }}>Change default</Button></section>
-        <section className="execution-settings-preference"><div><h4>Research provider</h4><p>Local research tool on the Sedes host.</p></div><Button size="sm" variant="outline" disabled={pending} onClick={() => {
-          editorReturn.current = view; const draft = { value: structuredClone(configuration.webSearch) }; initialDraft.current = JSON.stringify(draft); setResearch(draft); go({ section: "backends", kind: "research" });
-        }}>Research provider settings</Button></section>
-      </> : null}
-      {selectedEnvironment && view.kind === "environment" ? <>
-        <dl className="execution-settings-overview"><div><dt>Host connection</dt><dd>{hostPresence(selectedEnvironment, pairing.hosts, pairing.stale)}</dd></div><div><dt>Backends</dt><dd>{new Set(configuration.targets.filter(entry => entry.executionEnvironmentId === selectedEnvironment.id).map(entry => entry.backendInstanceId)).size} configured</dd></div></dl>
-        <nav className="execution-settings-tabs" aria-label="Environment sections">
-          <Button variant="ghost" aria-current={view.tab === "backends" ? "page" : undefined} onClick={() => navigate({ ...view, tab: "backends" })}>Backends</Button>
-          <Button variant="ghost" disabled={pending} onClick={() => editEnvironment(selectedEnvironment)}>Configuration</Button>
-          <Button variant="ghost" aria-current={view.tab === "runtime" ? "page" : undefined} onClick={() => navigate({ ...view, tab: "runtime" })}>Activity & diagnostics</Button>
-        </nav>
-        {view.tab === "backends" ? <><div className="execution-settings-subheader"><h4>Associated backends</h4>{addBackendButton(selectedEnvironment.id)}</div>{backendInventory(selectedEnvironment.id)}</> : null}
-      </> : null}
-      {view.kind === "add-environment" ? <div className="execution-settings-choices">
-        <Choice title="Local machine" disabled={configuration.executionEnvironments.some(entry => entry.kind === "local")} onClick={() => editEnvironment({ id: crypto.randomUUID(), label: "", kind: "local", workspaceRoots: [], workspaceIsolation: { kind: "bubblewrap", networkProfiles: ["isolated"] } }, true)}>Workspace access on the Sedes host. One local environment per account.</Choice>
-        <Choice title="SSH host" onClick={() => editEnvironment({ id: crypto.randomUUID(), label: "", kind: "ssh", hostAlias: "", workspaceRoots: [], operations: { kind: "sidecar", enabledCapabilities: ["directory_browser", "workspace_files"] } }, true)}>Connect using an SSH alias configured on the Sedes server.</Choice>
-        <Choice title="Pair a host" onClick={() => navigate({ section: "environments", kind: "pair-host" })}>Let a remote connector connect to Sedes, then approve its workspace access.</Choice>
+      {backends.length ? <EntityList>{backends.map(backend => <BackendRow key={backend.id} backend={backend} snapshot={snapshot} />)}</EntityList>
+        : <EmptyState variant="inline" title="No backends in this environment." description="Add a backend to make a provider available." />}
+    </div>;
+  };
+  const refresh = () => {
+    if (routeEditorOpen && !state.needsRefresh) { void state.refreshRuntime(); void pairing.refresh(); return; }
+    if (routeEditorOpen) { afterExit.current = () => { void state.refresh(); void pairing.refresh(); }; navigate(exitPath()); return; }
+    void state.refresh(); void pairing.refresh();
+  };
+  /** Where an editor returns to: the entity it edits, or its list. */
+  const exitPath = () => mode === "edit" && resourceId ? settingsPath(page, { mode: "view", resourceId })
+    : mode === "new" && page === "environments" && resourceId ? settingsPath("environments", { mode: "new" }) : settingsPath(page);
+
+  const selection = !mode ? "none" : mode === "view" ? "detail" : "editor";
+  const selectedEnvironment = page === "environments" && mode === "view" ? configuration?.executionEnvironments.find(entry => entry.id === resourceId) : undefined;
+  const selectedBackend = page === "backends" && mode === "view" ? configuration?.backends.find(entry => entry.id === resourceId) : undefined;
+  const listLabel = page === "environments" ? "Environments" : "Backends";
+  const listBack = <BackLink href={settingsPath(page)} label={listLabel} />;
+  const selectionMissing = Boolean(configuration && (mode === "view" || mode === "edit")
+    && !(page === "environments" ? configuration.executionEnvironments : configuration.backends).some(entry => entry.id === resourceId))
+    || Boolean(pairing.hosts && mode === "pending" && !registration);
+
+  const runtimeProps = snapshot ? { controls, snapshot, runtimeDisabled: pending || routeEditorOpen, pausedReason,
+    onRuntime: state.updateRuntime, onRefresh: state.refreshRuntime } : undefined;
+  const detailPane = (): ReactNode => {
+    if (!configuration || !snapshot) return null;
+    if (!mode) return <EmptyState className="execution-detail-empty" icon={<Server />} title={page === "environments" ? "Select an environment" : "Select a backend"}
+      description={page === "environments" ? "Its status, backends and activity appear here." : "Its status, connections and activity appear here."} />;
+    if (selectionMissing) return <div className="execution-detail"><DetailHeader back={listBack}
+      title={mode === "pending" ? "Registration unavailable" : page === "environments" ? "Environment unavailable" : "Backend unavailable"}
+      description={mode === "pending" ? "It was accepted, denied or expired." : "It may have been removed, or the link is out of date."} /></div>;
+    if (mode === "new" && page === "environments" && !resourceId) return <EnvironmentChooser configuration={configuration} back={listBack} />;
+    if (mode === "new" && page === "environments" && resourceId === "pair") return <PairHostSetup controls={controls} registrations={registrations}
+      back={<BackLink href={settingsPath("environments", { mode: "new" })} label="Add environment" />} />;
+    if (key?.startsWith("environments:") && environmentDraft && environmentDraft.key === key) {
+      const draft = environmentDraft;
+      const owner = draft.key;
+      const creating = mode === "new";
+      return <EnvironmentEditor draft={draft.value} creating={creating} setDraft={value => setEnvironmentDraft({ ...draft, value })}
+        errors={mappedFailure(owner, { kind: "environment", id: environmentDraft.value.id }, environmentFields)} disabled={state.saving || state.loading}
+        saving={state.saving && saveOwner === owner} dirty={changed(environmentDraft)} savedAt={savedAtFor(owner)} saveError={saveMessage(owner)}
+        saveDisabled={pending}
+        back={<BackLink href={exitPath()} label={creating ? "Add environment" : environmentDraft.value.label || "Environment"} />}
+        onSave={() => void saveEnvironment()} onCancel={() => returnTo(exitPath())} />;
+    }
+    if (key?.startsWith("backends:") && backendDraft && backendDraft.key === key) {
+      const draft = backendDraft;
+      const owner = draft.key;
+      const original = configuration.backends.find(entry => entry.id === draft.value.backend.id);
+      return <BackendEditor draft={draft.value} setDraft={value => setBackendDraft({ ...draft, value })} configuration={configuration}
+        errors={mappedFailure(owner, { kind: "backend", id: backendDraft.value.backend.id }, backendFields)} disabled={state.saving || state.loading}
+        saving={state.saving && saveOwner === owner} dirty={changed(backendDraft)} savedAt={savedAtFor(owner)} saveError={saveMessage(owner)}
+        saveDisabled={pending}
+        back={<BackLink href={exitPath()} label={backendDraft.value.creating ? "Backends" : original?.label || "Backend"} />}
+        onSave={() => void saveBackend()} onCancel={() => returnTo(exitPath())} />;
+    }
+    if (mode === "pending" && registration && acceptDraft && acceptDraft.key === key) {
+      const draft = acceptDraft;
+      return <PendingHostDetail registration={registration} draft={draft.value} setDraft={value => setAcceptDraft({ ...draft, value })}
+        errors={acceptIssues ? mapRequestIssues(acceptIssues, acceptFields) : noErrors} disabled={pending || pairing.stale}
+        saving={pairing.busy && saveOwner === draft.key} saveError={acceptIssues?.length ? "Fix the highlighted fields to accept this host." : undefined}
+        back={<BackLink stackOnly href={settingsPath("environments")} label="Environments" />}
+        onAccept={() => void acceptHost()} onCancel={() => returnTo(settingsPath("environments"))} onDeny={denyHost} />;
+    }
+    return null;
+  };
+
+  const defaultsValue = configuration ? defaultsDraft ?? defaultsOf(configuration) : undefined;
+  const blockers = confirmationBlockers();
+  const confirmationCopy = confirmation ? {
+    "remove-environment": { title: `Remove ${confirmation.label}?`, description: "Existing sessions and history are retained. Running work may prevent removal.", confirmLabel: "Remove environment", pendingLabel: "Removing…", tone: "danger" as const },
+    "remove-backend": { title: `Remove ${confirmation.label}?`, description: "Its connection definitions are removed too. Existing threads and history are retained. Running work may prevent removal.", confirmLabel: "Remove backend", pendingLabel: "Removing…", tone: "danger" as const },
+    revoke: { title: `Revoke ${confirmation.label}?`, description: "This installation’s connection to Sedes is revoked. The environment and history are retained. This disconnects access but does not stop host-owned processes; stop running work first if you want it terminated.", confirmLabel: "Revoke pairing", pendingLabel: "Revoking…", tone: "danger" as const },
+    reapprove: { title: `Reapprove ${confirmation.label}?`, description: "The same connector installation can reconnect with this environment’s saved roots and grants. Then create a fresh sidecar pairing code on the Sedes server and restart the connector with --pairing-code CODE --resume-pairing and the same state directory.", confirmLabel: "Reapprove pairing", pendingLabel: "Reapproving…", tone: "neutral" as const },
+  }[confirmation.kind] : undefined;
+
+  return <div ref={root} className="execution-settings" data-page={page} data-selection={selection}
+    data-wide-editor={page === "backends" && selection === "editor" ? "" : undefined}>
+    <SettingsPage width="wide" title={listLabel}
+      description={page === "environments" ? "Where agents run and which folders they can reach." : "Model providers available in each environment."}
+      actions={<>
+        <Button type="button" variant="ghost" size="icon" aria-label="Refresh" title="Refresh" disabled={state.loading || state.saving || pairing.busy} onClick={refresh}><RefreshCw /></Button>
+        {page === "environments"
+          ? <Button type="button" aria-label="Add environment" disabled={!configuration || pending || configuration.executionEnvironments.length >= 16}
+            onClick={() => navigate(settingsPath("environments", { mode: "new" }))}><Plus />Add environment</Button>
+          : <Button type="button" aria-label="Add backend" disabled={!configuration || pending || !canAddBackend}
+            title={configuration && !configuration.executionEnvironments.length ? "Add an execution environment first" : undefined}
+            onClick={() => addBackend(currentFilters.environment || undefined)}><Plus />Add backend</Button>}
+      </>}>
+      {state.loading && !snapshot ? <div className="execution-loading" role="status" aria-label="Loading execution configuration">
+        <Skeleton className="h-9" /><Skeleton className="h-14" /><Skeleton className="h-14" /></div> : null}
+      {state.error ? <Callout tone={state.needsRefresh ? "warning" : "danger"} role="alert"
+        action={state.needsRefresh ? <Button type="button" size="sm" variant="outline" onClick={refresh}>{routeEditorOpen ? "Discard and reload" : "Reload"}</Button> : undefined}>{state.error}</Callout> : null}
+      {pairing.error ? <Callout tone="danger" role="alert">{pairing.error}</Callout> : null}
+      {queuedLeave ? <Callout tone="info" role="status" action={<Button type="button" size="sm" variant="outline" onClick={() => { setQueuedLeave(undefined); focusRequest.current = {}; }}>Stay here</Button>}>
+        Waiting for the current save to finish before leaving.</Callout> : null}
+      {page === "backends" && configuration && defaultsValue && (!mode || mode === "view") ? <BackendDefaults configuration={configuration} value={defaultsValue}
+        onChange={value => setDefaultsDraft(JSON.stringify(value) === JSON.stringify(defaultsOf(configuration)) ? undefined : value)}
+        dirty={dirtyKeys.has("defaults")} saving={state.saving && saveOwner === "defaults"} savedAt={savedAtFor("defaults")}
+        errors={mappedFailure("defaults", { kind: "document" }, defaultsFields)} error={failureFor("defaults")?.message} disabled={pending}
+        onSave={() => void saveDefaults()} onCancel={() => { setDefaultsDraft(undefined); state.clearFeedback(); }} /> : null}
+      {snapshot && configuration ? <div className="execution-panes">
+        <section className="execution-list-pane" aria-label={page === "environments" ? "Configured environments" : "Configured backends"}>
+          {page === "environments"
+            ? <EnvironmentList snapshot={snapshot} filters={currentFilters} onFilters={setCurrentFilters} hosts={pairing.hosts} stale={pairing.stale}
+              selectedId={mode === "view" || mode === "edit" ? resourceId : undefined} selectedRegistrationId={mode === "pending" ? resourceId : undefined} actions={environmentActions} />
+            : <BackendList snapshot={snapshot} filters={currentFilters} onFilters={setCurrentFilters}
+              selectedId={mode === "view" || mode === "edit" ? resourceId : undefined} actions={backendActions} />}
+        </section>
+        <div className="execution-detail-pane">
+          {detailPane()}
+          {/* Never unmount a retained resource because navigation, a filter or an editor hides it. */}
+          {runtimeProps ? <>
+            {configuration.executionEnvironments.map(environment => <EnvironmentDetail key={environment.id} environment={environment} {...runtimeProps}
+              selected={environment.id === selectedEnvironment?.id} tab={tabOf("environments", environment.id)} onTab={tab => setTab("environments", environment.id, tab)}
+              hosts={pairing.hosts} stale={pairing.stale} renderBackends={renderEnvironmentBackends}
+              onRemove={entry => setConfirmation({ kind: "remove-environment", id: entry.id, label: entry.label, revision: snapshot.revision })}
+              onPairing={(entry, binding) => setConfirmation({ kind: binding.state === "revoked" ? "reapprove" : "revoke", environmentId: entry.id, label: entry.label,
+                pairingId: binding.id, pairingRevision: binding.revision, revision: snapshot.revision })} />)}
+            {configuration.backends.map(backend => <BackendDetail key={backend.id} backend={backend} {...runtimeProps}
+              selected={backend.id === selectedBackend?.id} tab={tabOf("backends", backend.id)} onTab={tab => setTab("backends", backend.id, tab)}
+              onRemove={entry => setConfirmation({ kind: "remove-backend", id: entry.id, label: entry.label, revision: snapshot.revision })} />)}
+          </> : null}
+        </div>
       </div> : null}
-      {view.kind === "pair-host" ? <HostConnectorSetup controls={controls} /> : null}
-      {view.kind === "pair-host" || view.kind === "pending-hosts" ? <PendingHosts key={pairingEpoch} registrations={pairing.hosts?.registrations ?? []} controls={controls} revision={snapshot.revision} disabled={pending || pairing.stale} mutate={pairing.mutate} onEditing={active => { if (active) editorReturn.current = view; setPairingEditing(active); }} /> : null}
-      {environmentDraft && view.kind === "environment-editor" ? <EnvironmentEditor draft={environmentDraft.value} creating={environmentDraft.creating} setDraft={value => setEnvironmentDraft({ ...environmentDraft, value })} configuration={configuration} pending={pending} saving={state.saving} loading={state.loading} onSave={saveEnvironment} onCancel={() => closeEditor(environmentDraft.value.id)} /> : null}
-      {backendDraft && view.kind === "backend-editor" ? <BackendEditor draft={backendDraft} setDraft={setBackendDraft} configuration={configuration} pending={pending} saving={state.saving} loading={state.loading} onSave={saveBackend} onCancel={() => closeEditor(backendDraft.backend.id)} /> : null}
-      {view.kind === "default" && defaultDraft !== undefined ? <form className="execution-settings-editor" onSubmit={event => { event.preventDefault(); void state.save({ ...configuration, defaultTargetId: defaultDraft || null }).then(saved => { if (saved) closeEditor(); }); }}>
-        <SelectField autoFocus label="Default connection for new threads" value={defaultDraft} disabled={state.saving}
-          options={[{ value: "", label: "No default — choose a connection" }, ...configuration.targets.filter(target => target.enabled && configuration.backends.some(backend => backend.id === target.backendInstanceId && backend.enabled)).map(target => ({ value: target.id, label: connectionLabel(configuration, target.id) }))]} onChange={setDefaultDraft} />
-        <p className="execution-settings-muted">Applies across all environments for this account.</p><SaveBar label="Save default" pending={pending} saving={state.saving} onCancel={() => closeEditor()} />
-      </form> : null}
-      {view.kind === "research" && research ? <form className="execution-settings-editor" onSubmit={event => { event.preventDefault(); void state.save({ ...configuration, webSearch: research.value }).then(saved => { if (saved) closeEditor(); }); }}>
-        <fieldset disabled={state.saving || state.loading}><legend>Local research tool</legend><Toggle autoFocus label="Enable Grok CLI research" checked={research.value !== null} onChange={enabled => setResearch({ value: enabled ? { provider: "grok_cli" } : null })} />
-          {research.value ? <TextField label="Grok home directory" value={research.value.grokHome ?? ""} description="Optional native configuration directory on the Sedes host. Authentication remains host-managed." onChange={grokHome => setResearch({ value: { provider: "grok_cli", grokHome: grokHome || undefined } })} /> : null}
-        </fieldset><SaveBar label="Save research settings" pending={pending} saving={state.saving} onCancel={() => closeEditor()} />
-      </form> : null}
-      {/* Never unmount a retained resource because navigation or a filter hides it. */}
-      {configuration.executionEnvironments.map(environment => {
-        const visible = view.kind === "environment" && view.id === environment.id && view.tab === "runtime";
-        const runtime = snapshot.runtimes.find(entry => entry.resourceKind === "environment" && entry.resourceId === environment.id);
-        const binding = environment.kind === "outbound" ? pairing.hosts?.pairings.find(entry => entry.id === environment.pairingId) : undefined;
-        const referenced = configuration.targets.some(entry => entry.executionEnvironmentId === environment.id);
-        return <section key={environment.id} hidden={!visible} className="execution-settings-detail" aria-label={`${environment.label} activity`}>
-          <RuntimeControls controls={controls} revision={snapshot.revision} resourceKind="environment" resourceId={environment.id} label={environment.label} runtime={runtime} showSidecar={environment.kind !== "local"} disabled={pending || editing} disabledReason={pausedReason} onRuntime={state.updateRuntime} onRefresh={state.refreshRuntime} />
-          <div className="execution-settings-detail-actions">
-            {environment.kind !== "local" ? <RecoveredOperations controls={controls} environmentId={environment.id} label={environment.label} disabled={pending || editing} emphasized={presentRuntime(runtime, { resourceKind: "environment", sidecar: true }).recoveryEmphasis} /> : null}
-            {binding ? <Button size="sm" variant="outline" disabled={pending || pairing.stale} aria-label={`${binding.state === "revoked" ? "Reapprove" : "Revoke"} ${environment.label}`} onClick={event => { confirmationTrigger.current = event.currentTarget; setConfirmation({ kind: "pairing", id: binding.id, revision: snapshot.revision, pairingRevision: binding.revision, revoke: binding.state !== "revoked" }); }}>{binding.state === "revoked" ? "Reapprove pairing" : "Revoke pairing"}</Button> : null}
-            <Button size="sm" variant="outline" disabled={pending || referenced || (environment.kind === "outbound" && binding?.state !== "revoked")} aria-label={`Remove ${environment.label}`} onClick={event => { confirmationTrigger.current = event.currentTarget; setConfirmation({ kind: "remove-environment", id: environment.id, revision: snapshot.revision }); }}>Remove environment</Button>
-          </div>
-          {referenced ? <p className="execution-settings-muted">Referenced by backend connections. <button className="execution-settings-inline-link" onClick={() => openEnvironment(environment)}>View associated backends</button> before removing this environment.</p> : null}
-          {environment.kind === "outbound" && binding?.state !== "revoked" ? <p className="execution-settings-muted">Revoke the pairing before removing this environment.</p> : null}
-          {environment.kind === "outbound" ? <section className="execution-settings-card"><h4>Host connection</h4><p>{hostPresence(environment, pairing.hosts, pairing.stale)} · {hostPlatform(environment.platform)}</p>
-            {binding ? <><p>{binding.metadata.hostname} · {binding.metadata.architecture} · {binding.metadata.account} · Connector {binding.metadata.connectorVersion}</p><p>Paired installation: {binding.connectorId}</p><p>Last seen {new Date(binding.lastSeenAt).toLocaleString()}. Host presence is separate from runtime availability.</p></> : null}
-          </section> : null}
-        </section>;
-      })}
-      {configuration.backends.map(backend => {
-        const runtime = snapshot.runtimes.find(entry => entry.resourceKind === "backend" && entry.resourceId === backend.id);
-        const targets = configuration.targets.filter(entry => entry.backendInstanceId === backend.id);
-        const environment = configuration.executionEnvironments.find(entry => entry.id === targets[0]?.executionEnvironmentId);
-        const unsupported = Boolean(environment && !allowedEnvironments(backend, [environment]).length);
-        return <section key={backend.id} hidden={view.kind !== "backend" || view.id !== backend.id} className="execution-settings-detail" aria-label={`${backend.label} overview`}>
-          {unsupported ? <p role="status">Remote execution is unsupported. This retained configuration cannot run here.</p> : null}
-          <RuntimeControls controls={controls} revision={snapshot.revision} resourceKind="backend" resourceId={backend.id} label={backend.label} runtime={runtime} enabled={backend.enabled} disabled={pending || editing || unsupported} disabledReason={unsupported ? "Remote execution is unsupported for this backend." : pausedReason} onRuntime={state.updateRuntime} onRefresh={state.refreshRuntime} />
-          <section className="execution-settings-card"><h4>Connections and defaults</h4><p>{backendEditors[backend.kind].description}</p><ul className="execution-settings-connections">{targets.map(target => <li key={target.id}><strong>{target.label}</strong><span>{environment?.label} · {target.enabled ? "Enabled" : "Disabled"}{configuration.defaultTargetId === target.id ? " · Default for new threads" : ""}</span></li>)}</ul></section>
-          <div className="execution-settings-detail-actions"><Button size="sm" variant="outline" disabled={pending} aria-label={`Remove ${backend.label}`} onClick={event => { confirmationTrigger.current = event.currentTarget; setConfirmation({ kind: "remove-backend", id: backend.id, revision: snapshot.revision }); }}>Remove backend</Button></div>
-        </section>;
-      })}
-      {confirmation ? <section ref={confirmationElement} tabIndex={-1} className="execution-settings-confirmation" role="group" aria-label="Confirm configuration change">
-        <p>{confirmation.kind === "pairing" ? confirmation.revoke
-          ? "Revoke this installation’s connection to Sedes? The environment and history are retained. This disconnects access but does not stop host-owned processes. Stop running work first if you want it terminated."
-          : "Allow this same connector installation to reconnect with this environment’s saved roots and grants? After reapproval, generate a fresh sidecar pairing code on the Sedes server, then restart the connector with --pairing-code CODE --resume-pairing and the same state directory."
-          : confirmation.kind === "remove-backend" ? "Remove this backend and its connection definitions? Existing threads and history are retained. Running work may prevent removal." : "Remove this environment definition? Existing sessions and history are retained. Running work may prevent removal."}</p>
-        <div className="execution-settings-actions"><Button size="sm" variant={confirmation.kind === "pairing" && !confirmation.revoke ? "default" : "destructive"} disabled={pending || snapshot.revision !== confirmation.revision || (confirmation.kind === "pairing" && pairing.stale)} onClick={() => void confirmChange()}>Confirm {confirmation.kind === "pairing" ? confirmation.revoke ? "revocation" : "reapproval" : "removal"}</Button><Button size="sm" variant="outline" disabled={state.saving || pairing.busy} onClick={cancelConfirmation}>Cancel</Button></div>
-      </section> : null}
-    </> : null}
-    <Dialog open={Boolean(leaveAction)} onOpenChange={open => { if (!open) setLeaveAction(undefined); }}><DialogContent className="execution-settings-leave-dialog" onCloseAutoFocus={event => {
-      if (discarded.current) {
-        event.preventDefault();
-        // The destination rendered while the nested dialog still owned focus.
-        // Reapply its target after that dialog's focus trap has been removed.
-        if (destinationOwnsFocus.current) destinationFocus.current?.focus({ preventScroll: true });
-      }
-      discarded.current = false;
-    }}><DialogTitle>Discard unsaved changes?</DialogTitle><DialogDescription>Your edits have not been saved. Discard them to continue, or keep editing.</DialogDescription><div className="execution-settings-actions"><Button variant="outline" onClick={() => setLeaveAction(undefined)}>Keep editing</Button><Button variant="destructive" onClick={() => { const action = leaveAction; discarded.current = true; destinationOwnsFocus.current = false; setLeaveAction(undefined); action?.run(); }}>Discard changes</Button></div></DialogContent></Dialog>
+    </SettingsPage>
+    {confirmationCopy ? <ConfirmDialog open={Boolean(confirmation)} onOpenChange={open => { if (!open) setConfirmation(undefined); }}
+      title={confirmationCopy.title} description={confirmationCopy.description} confirmLabel={confirmationCopy.confirmLabel} pendingLabel={confirmationCopy.pendingLabel}
+      tone={confirmationCopy.tone} blockers={blockers} onConfirm={confirm} {...confirmationFocus} /> : null}
+    <DiscardChangesDialog open={Boolean(leave)} onOpenChange={open => { if (!open) setLeave(undefined); }}
+      description="Your edits have not been saved. Discard them to continue, or keep editing."
+      onDiscard={() => { const request = leave; setLeave(undefined); if (request) { discard(request.discard); request.proceed(); } }} {...leaveFocus} />
   </div>;
 }
 
-function connectionLabel(configuration: Configuration, targetId: string | null): string {
-  const target = configuration.targets.find(entry => entry.id === targetId);
-  if (!target) return "No default — choose a connection";
-  const environment = configuration.executionEnvironments.find(entry => entry.id === target.executionEnvironmentId);
-  const backend = configuration.backends.find(entry => entry.id === target.backendInstanceId);
-  return `${environment?.label ?? "Environment unavailable"} / ${backend?.label ?? "Backend unavailable"} / ${target.label}`;
-}
-
-function SaveBar({ label, pending, saving, onCancel }: { readonly label: string; readonly pending: boolean; readonly saving: boolean; readonly onCancel: () => void }): React.JSX.Element {
-  return <div className="execution-settings-actions execution-settings-save-bar"><Button type="submit" size="sm" disabled={pending}>{label}</Button><Button type="button" size="sm" variant="outline" disabled={saving} onClick={onCancel}>Cancel</Button></div>;
-}
-
-function Choice({ title, disabled, onClick, children }: { readonly title: string; readonly disabled?: boolean; readonly onClick: () => void; readonly children: ReactNode }): React.JSX.Element {
-  return <button className="execution-settings-choice" disabled={disabled} onClick={onClick}><strong>{title}</strong><span>{children}</span></button>;
+function existingEnvironment(configuration: Configuration, id: string | undefined): string | undefined {
+  return configuration.executionEnvironments.some(entry => entry.id === id) ? id : undefined;
 }

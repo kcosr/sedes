@@ -210,22 +210,28 @@ test("dirty settings guard browser Back and return without saving discarded envi
     if (request.method() === "PUT" && new URL(request.url()).pathname === "/api/configuration") writes++;
   });
   await settings.getByRole("button", { name: "Add environment", exact: true }).click();
-  await settings.getByRole("button", { name: /^SSH host/u }).click();
+  await settings.getByRole("link", { name: "SSH host", exact: true }).click();
+  await expect(page).toHaveURL("/settings/environments/new/ssh");
   await settings.getByLabel("Environment name", { exact: true }).fill("Discard this draft");
   await page.goBack();
   const discard = page.getByRole("dialog", { name: "Discard unsaved changes?", exact: true });
   await expect(discard).toBeVisible();
   await discard.getByRole("button", { name: "Keep editing", exact: true }).click();
-  await expect(page).toHaveURL("/settings/environments");
+  await expect(page).toHaveURL("/settings/environments/new/ssh");
   await expect(settings.getByLabel("Environment name", { exact: true })).toHaveValue("Discard this draft");
   await page.goBack();
   await discard.getByRole("button", { name: "Discard changes", exact: true }).click();
+  // Back walks the add flow's own steps: the kind chooser, then the list.
+  await expect(page).toHaveURL("/settings/environments/new");
+  await page.goBack();
+  await expect(page).toHaveURL("/settings/environments");
+  await page.goBack();
   await expect(page).toHaveURL("/settings/general");
   await page.goForward();
   await expect(page).toHaveURL("/settings/environments");
   await expect(settings.getByRole("region", { name: "Configured environments", exact: true })).toBeVisible();
   await settings.getByRole("button", { name: "Add environment", exact: true }).click();
-  await settings.getByRole("button", { name: /^SSH host/u }).click();
+  await settings.getByRole("link", { name: "SSH host", exact: true }).click();
   await settings.getByLabel("Environment name", { exact: true }).fill("Another unsaved draft");
   await settings.getByTestId("settings-return").click();
   await expect(discard).toBeVisible();
@@ -307,10 +313,10 @@ test.describe("sidebar name filtering preference", () => {
     // remote backend or thread exists. No remote connection is needed here.
     const environments = await openSettingsPage(page, "environments");
     await environments.getByRole("button", { name: "Add environment", exact: true }).click();
-    await environments.getByRole("button", { name: /^SSH host/u }).click();
+    await environments.getByRole("link", { name: "SSH host", exact: true }).click();
     await environments.getByLabel("Environment name", { exact: true }).fill("AW personal");
     await environments.getByLabel("SSH host alias", { exact: true }).fill("e2e-unreachable");
-    await environments.getByLabel("Workspace roots", { exact: true }).fill("/work/e2e");
+    await environments.getByLabel("Workspace root 1", { exact: true }).fill("/work/e2e");
     await environments.getByRole("button", { name: "Save environment", exact: true }).click();
     await expect(environments.getByRole("heading", { name: "AW personal", exact: true })).toBeVisible();
     await returnFromSettings(page);

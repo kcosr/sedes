@@ -9,7 +9,6 @@
     "workspace-files/workspace-compare.css": 1
   },
   "fontSizeLiterals": {
-    "components/execution-settings/execution-settings.css": 45,
     "components/sidebar-view-controls.css": 4,
     "components/tasks/tasks-panel.css": 17,
     "components/thread/flat-thread-row.css": 12,
@@ -24,7 +23,6 @@
     "workspace-files/workspace-revision-picker.css": 10
   },
   "fontWeightLiterals": {
-    "components/execution-settings/execution-settings.css": 5,
     "components/sidebar-view-controls.css": 2,
     "components/tasks/tasks-panel.css": 3,
     "components/thread/flat-thread-row.css": 5,
@@ -37,7 +35,6 @@
     "workspace-files/workspace-revision-picker.css": 3
   },
   "borderRadiusLiterals": {
-    "components/execution-settings/execution-settings.css": 2,
     "components/tasks/tasks-panel.css": 1,
     "components/thread/flat-thread-row.css": 3,
     "components/thread/question-inbox.css": 3,
@@ -52,7 +49,6 @@
     "usage/usage.css": 2
   },
   "mediaQueries": {
-    "components/execution-settings/execution-settings.css": 3,
     "styles.css": 11,
     "usage/usage.css": 2,
     "workspace-files/workspace-compare.css": 1
