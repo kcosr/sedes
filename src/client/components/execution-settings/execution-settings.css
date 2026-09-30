@@ -70,8 +70,10 @@
 .execution-inline-icon svg { width: var(--icon-sm); height: var(--icon-sm); }
 .execution-copyable { display: inline-flex; align-items: center; gap: var(--space-1); min-width: 0; max-width: 100%; }
 .execution-copyable code { min-width: 0; font-size: var(--text-meta); overflow-wrap: anywhere; }
-/* Paths wrap after a separator (PathText's <wbr>); a lone overlong segment still breaks. */
+/* Paths wrap after a separator (PathText): a segment is one unit on a line,
+   and breaks inside only when it alone is wider than the line. */
 .execution-path { font-family: var(--font-mono); font-size: var(--text-meta); }
+.execution-path-segment { display: inline-block; max-width: 100%; }
 .execution-related { display: grid; gap: var(--space-2); }
 .execution-related-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .execution-connection-list { display: grid; margin: 0; padding: 0; list-style: none; border: 1px solid var(--border-soft); border-radius: var(--radius-card); background: var(--card); }

@@ -323,7 +323,7 @@ export function RuntimeHealth({ controller, status, children }: {
     </div> : null}
     <p className="execution-health-detail">{presentation.detail}</p>
     {unsettled ? <p className="execution-muted">{awaitingOutcome ? "Checking the outcome automatically. " : ""}
-      {canStopUnknown ? "Other actions wait until it settles; Stop, in the actions menu, checks it first." : "Other actions wait until this operation settles."}</p> : null}
+      {canStopUnknown ? "Other actions wait until it settles; Stop is in the actions menu." : "Other actions wait until this operation settles."}</p> : null}
     {children}
   </section>;
 }

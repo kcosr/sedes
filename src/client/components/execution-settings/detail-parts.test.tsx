@@ -11,7 +11,9 @@ describe("PathText", () => {
     const { container } = render(<PathText value="/home/kevin/worktrees/ui-polish" />);
     const path = container.querySelector(".execution-path")!;
     expect(path).toHaveTextContent("/home/kevin/worktrees/ui-polish");
-    expect(path.innerHTML).toBe("/<wbr>home/<wbr>kevin/<wbr>worktrees/<wbr>ui-polish");
+    const segments = [...path.querySelectorAll(".execution-path-segment")].map((segment) => segment.textContent);
+    expect(segments).toEqual(["/", "home/", "kevin/", "worktrees/", "ui-polish"]);
+    expect(path.querySelectorAll("wbr")).toHaveLength(4);
   });
 
   it("treats Windows separators and URLs the same way", () => {

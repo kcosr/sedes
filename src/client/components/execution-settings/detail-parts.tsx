@@ -22,12 +22,15 @@ export function CopyableValue({ value, label }: { readonly value: string; readon
 }
 
 /**
- * A path in the mono face that wraps only after a separator, never inside a
- * segment unless one alone is wider than the line.
+ * A path in the mono face that wraps only after a separator: each segment
+ * (up to and including its "/") stays whole unless it alone is wider than
+ * the line, so "test-results" never breaks at its hyphen.
  */
 export function PathText({ value }: { readonly value: string }): React.JSX.Element {
   const segments = value.split(/(?<=[/\\])/u);
-  return <span className="execution-path">{segments.map((segment, index) => <Fragment key={index}>{index > 0 ? <wbr /> : null}{segment}</Fragment>)}</span>;
+  return <span className="execution-path">{segments.map((segment, index) => <Fragment key={index}>
+    {index > 0 ? <wbr /> : null}<span className="execution-path-segment">{segment}</span>
+  </Fragment>)}</span>;
 }
 
 /** Errors that belong to no single field, described in words. */
