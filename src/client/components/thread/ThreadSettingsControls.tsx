@@ -100,11 +100,14 @@ export function ThreadSettingsControls({
   store,
   snapshot,
   disabled,
+  onReasoningPickerOpenChange,
 }: {
   store: ThreadClientStore;
   snapshot: NormalizedThreadSnapshot;
   disabled: boolean;
+  onReasoningPickerOpenChange?: (open: boolean) => void;
 }): React.JSX.Element {
+  const reasoningTrigger = useRef<HTMLButtonElement>(null);
   return (
     <div
       className="desktop-config"
@@ -143,8 +146,18 @@ export function ThreadSettingsControls({
                 value={value}
                 disabled={settingDisabled}
                 onValueChange={(next) => performSetting(store, setting.id, next)}
+                onOpenChange={(open) => {
+                  // Keep the trigger mounted through the close animation and
+                  // focus restoration, not just while Select's open is true.
+                  if (setting.id === "thinking_level" && open) {
+                    onReasoningPickerOpenChange?.(true);
+                  }
+                }}
               >
                 <SelectTrigger
+                  ref={
+                    setting.id === "thinking_level" ? reasoningTrigger : undefined
+                  }
                   size="sm"
                   aria-label={setting.label.text}
                   className={`data-[size=sm]:h-6 ${PILL_CLASS}`}
@@ -153,7 +166,14 @@ export function ThreadSettingsControls({
                     {value && selectedLabel ? selectedLabel : undefined}
                   </SelectValue>
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent
+                  onCloseAutoFocus={(event) => {
+                    if (setting.id !== "thinking_level" || !onReasoningPickerOpenChange) return;
+                    event.preventDefault();
+                    reasoningTrigger.current?.focus({ preventScroll: true });
+                    onReasoningPickerOpenChange(false);
+                  }}
+                >
                   {setting.options.map((option) => (
                     <SelectItem
                       key={option.value}

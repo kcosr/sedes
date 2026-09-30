@@ -151,6 +151,8 @@
 
 ### Changed
 
+- Automatically hide the composer's reasoning selector when controls no longer
+  fit, restoring it when space returns; it remains available in Thread actions.
 - Keep the composer unfocused when opening threads on touch tablets or by
   touch/pen on hybrid devices, while preserving desktop mouse/keyboard focus.
 - Balance chat header rows vertically when the worktree picker is shown.

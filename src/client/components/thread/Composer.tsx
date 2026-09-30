@@ -1,4 +1,5 @@
 import { usePickerFocus } from "../../lib/use-picker-focus.js";
+import { useComposerReasoningFit } from "./use-composer-reasoning-fit.js";
 import { QuestionInboxButton, QuestionInboxPanel } from "./QuestionInbox.js";
 import {
   useCallback,
@@ -342,6 +343,8 @@ export function Composer({
   onImmediateSend?: (operationId: string) => void;
 }): React.JSX.Element | null {
   const state = useThreadStore(store);
+  const { footerRef: composerFooterRef, onReasoningPickerOpenChange } =
+    useComposerReasoningFit();
   const chatViewVisible = useContext(ChatViewVisibilityContext);
   const resolvedApplicationStore = applicationStore ?? EMPTY_APPLICATION_STORE;
   const application = useApplicationStore(resolvedApplicationStore);
@@ -3189,7 +3192,7 @@ export function Composer({
                     ))}
                   </div>
                 )}
-                <div className="composer-footer">
+                <div className="composer-footer" ref={composerFooterRef}>
                   <div className="composer-tools">
                     <Popover
                       open={active && skillPickerOpen}
@@ -3390,6 +3393,7 @@ export function Composer({
                       store={store}
                       snapshot={snapshot}
                       disabled={effectiveDisabled}
+                      onReasoningPickerOpenChange={onReasoningPickerOpenChange}
                     />
                   </div>
                   <div className="send-group">

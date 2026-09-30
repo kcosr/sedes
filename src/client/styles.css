@@ -8593,6 +8593,21 @@ tr.diff-hunk td {
   gap: 2px;
 }
 
+.composer-footer[data-reasoning-collapsed]:not([data-reasoning-measuring])
+  [data-setting-id="thinking_level"] {
+  display: none;
+}
+
+.composer-footer[data-reasoning-measuring] .composer-tools {
+  flex-wrap: nowrap;
+}
+
+.composer-footer[data-reasoning-measuring]
+  [data-setting-id="thinking_level"] > button {
+  flex-shrink: 0;
+  max-width: none;
+}
+
 .send-group {
   display: flex;
   flex: 0 0 auto;

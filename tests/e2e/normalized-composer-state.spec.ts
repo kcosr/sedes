@@ -15,6 +15,58 @@ import {
 
 const repositoryDisplayName = path.basename(process.cwd());
 
+test("composer reasoning yields to active-turn controls and returns when space is available", async ({ page }, testInfo) => {
+  await openSedesWorkspace(page);
+  await page.getByTestId("desktop-sidebar").getByTestId("new-thread-trigger").click();
+  await selectCustomNewThreadTarget(page, "Codex TCP external · Codex TCP");
+  const created = page.waitForResponse((response) =>
+    response.request().method() === "POST" &&
+    response.url().endsWith("/api/threads") && response.status() === 201,
+  );
+  await page.getByRole("button", { name: "Create thread" }).click();
+  await created;
+  await page.setViewportSize({ width: 360, height: 844 });
+  const footer = page.getByTestId("composer").locator(".composer-footer");
+  const reasoning = footer.locator('[data-setting-id="thinking_level"] [role="combobox"]');
+  await expect(reasoning).toBeVisible();
+  const value = await reasoning.innerText();
+  expect((await page.request.post("/__e2e/codex/turn-completion/arm")).status()).toBe(204);
+  try {
+    await fillAndPersistDraft(page, "Keep running while I check the composer controls.", "Message Codex");
+    await sendCurrentDraft(page);
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+    await expect(reasoning).toBeHidden();
+    await expect(footer).toHaveAttribute("data-reasoning-collapsed", "");
+    await expectNoPageOverflow(page);
+    await capture(page, testInfo, "reasoning-hidden-active-turn.png");
+
+    await page.setViewportSize({ width: 760, height: 844 });
+    await expect(reasoning).toBeVisible();
+    await expect(reasoning).toHaveText(value);
+    await page.setViewportSize({ width: 360, height: 844 });
+    await expect(reasoning).toBeHidden();
+  } finally {
+    expect((await page.request.post("/__e2e/codex/turn-completion/release")).status()).toBe(204);
+  }
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeHidden();
+  await expect(reasoning).toBeVisible();
+  await expect(reasoning).toHaveText(value);
+  await expect(footer).not.toHaveAttribute("data-reasoning-collapsed");
+  await capture(page, testInfo, "reasoning-restored-idle.png");
+
+  // Resizing must not remove an open picker's anchor or keyboard focus.
+  await reasoning.click();
+  await expect(page.getByRole("listbox")).toBeVisible();
+  await page.setViewportSize({ width: 300, height: 844 });
+  await expect(reasoning).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(reasoning).toBeFocused();
+  await page.getByRole("textbox", { name: "Message Codex" }).click();
+  await expect(reasoning).toBeHidden();
+  await page.setViewportSize({ width: 360, height: 844 });
+  await expect(reasoning).toBeVisible();
+});
+
 test("active chat notes deliver the combined composer draft with Steer and Queue", async ({ page }, testInfo) => {
   await openSedesWorkspace(page);
   await page.getByTestId("desktop-sidebar").getByTestId("new-thread-trigger").click();
