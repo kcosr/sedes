@@ -468,16 +468,32 @@ describe("SettingsView", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/threads/retained-thread"));
   });
 
-  it("redirects /settings to the last page shown when the sidebar nav is visible", () => {
+  it("redirects /settings to the last page shown when the sidebar nav is visible", async () => {
     renderSettings({ page: "terminal" });
     expect(sessionStorage.getItem("sedes-settings-last-page")).toBe("terminal");
+    act(() => navigate("/threads/retained-thread"));
     act(() => navigate(settingsPath()));
     expect(window.location.pathname).toBe("/settings/terminal");
     expect(screen.getByRole("heading", { name: "Terminal", level: 1 })).toBeVisible();
     expect(screen.getByTestId("settings-view")).toHaveAttribute("data-nav", "sidebar");
     // The redirect replaces the landing entry, so Back leaves Settings.
     act(() => window.history.back());
-    return waitFor(() => expect(window.location.pathname).not.toBe("/settings"));
+    await waitFor(() => expect(window.location.pathname).toBe("/threads/retained-thread"));
+  });
+
+  it("lands on the list of the last entity's page, not on the entity or its editor", async () => {
+    const { controls, snapshot } = executionControls();
+    const local = snapshot.configuration.executionEnvironments[0]!;
+    navigate(settingsPath("environments", { mode: "edit", resourceId: local.id }), { replace: true });
+    render(<RoutedSettings configuration={controls} onReturn={() => navigate("/")} />);
+    expect(await screen.findByLabelText("Environment name")).toHaveValue("Local");
+    expect(sessionStorage.getItem("sedes-settings-last-page")).toBe("environments");
+    fireEvent.click(screen.getByTestId("settings-return"));
+    expect(window.location.pathname).toBe("/");
+    act(() => navigate(settingsPath()));
+    expect(window.location.pathname).toBe("/settings/environments");
+    expect(await screen.findByRole("heading", { name: "Environments", level: 1 })).toBeVisible();
+    expect(screen.queryByLabelText("Environment name")).toBeNull();
   });
 
   it("navigates category pages from the sidebar nav", () => {

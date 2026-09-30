@@ -58,6 +58,11 @@ export function rememberSettingsPage(page: SettingsPage): void {
  * Where `/settings` goes. With the nav in the sidebar the list would repeat
  * it, so the landing opens the last page shown (if still available) or
  * General; without the sidebar nav, `/settings` is the grouped list.
+ *
+ * Only the page is remembered, never an entity route under it: after an
+ * environment, a backend or one of their editors, the landing opens that
+ * page's list. The entity may be gone by then, and reopening an editor or
+ * an add flow would silently start a fresh draft.
  */
 export function settingsLandingRedirect({
   navInSidebar,
