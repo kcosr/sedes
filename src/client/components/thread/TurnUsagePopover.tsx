@@ -43,7 +43,8 @@ export function TurnUsagePopover({ cache, turnId, onOpenChange }: {
       onClick={() => { clearTimeout(timer.current); if (modeRef.current === "pinned") dismiss(); else { dismissed.current = false; change("pinned"); } }}>
       <CircleDollarSign size={16} aria-hidden="true" />
     </button></PopoverAnchor>
-    <PopoverContent ref={content} id={contentId} className="w-66 max-w-[calc(100vw-16px)] gap-2 p-3" side="top" align="end"
+    {/* Below the action row (flipping up only without room), so it never covers the turn it measures. */}
+    <PopoverContent ref={content} id={contentId} className="w-66 max-w-[calc(100vw-16px)] gap-2 p-3" side="bottom" align="end"
       aria-label="Turn usage" onOpenAutoFocus={event => event.preventDefault()}
       onCloseAutoFocus={event => { event.preventDefault(); if (restoreFocus.current) trigger.current?.focus(); restoreFocus.current = false; }}
       onEscapeKeyDown={() => { restoreFocus.current = modeRef.current === "pinned" || Boolean(trigger.current?.contains(document.activeElement) || content.current?.contains(document.activeElement)); dismiss(); }}
