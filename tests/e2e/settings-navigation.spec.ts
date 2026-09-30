@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator } from "@playwright/test";
+import { configurationSnapshotSchema } from "../../src/shared/protocol/configuration-admin.js";
 import { expect, test } from "./fixtures.js";
 import {
   capture,
@@ -290,6 +291,80 @@ test("dirty settings guard browser Back and return without saving discarded envi
   await expect(page).toHaveURL("/");
   await expect(settings).toBeHidden();
   expect(writes).toBe(0);
+});
+
+test("environment and backend routes live inside the settings shell: nav, history, deep links and the ‹ links", async ({ page }) => {
+  const { configuration } = configurationSnapshotSchema.parse(await (await page.request.get("/api/configuration")).json());
+  const local = configuration.executionEnvironments[0]!;
+  const backend = configuration.backends[0]!;
+  const localPath = `/settings/environments/${local.id}`;
+  const settings = page.getByTestId("settings-view");
+  const sidebar = page.getByTestId("desktop-sidebar");
+  const navigation = sidebar.getByRole("navigation", { name: "Settings pages", exact: true });
+  const list = settings.getByRole("region", { name: "Configured environments", exact: true });
+  const detail = settings.getByRole("region", { name: `${local.label} details`, exact: true });
+  const editorBack = settings.getByRole("region", { name: "Environment editor", exact: true }).getByRole("link", { name: local.label, exact: true });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/settings/general");
+  await navigation.getByRole("link", { name: "Environments", exact: true }).click();
+  await list.getByRole("link", { name: local.label, exact: true }).click();
+  await expect(page).toHaveURL(localPath);
+  await expect(navigation.getByRole("link", { name: "Environments", exact: true })).toHaveAttribute("aria-current", "page");
+  // With the nav in the sidebar slot the settings column splits at 1440.
+  const [listBounds, detailBounds] = await Promise.all([list.boundingBox(), detail.boundingBox()]);
+  expect(listBounds!.x + listBounds!.width).toBeLessThanOrEqual(detailBounds!.x);
+  await detail.getByRole("button", { name: `Edit ${local.label}`, exact: true }).click();
+  await expect(page).toHaveURL(`${localPath}/edit`);
+  await editorBack.click();
+  await expect(page).toHaveURL(localPath);
+  await navigation.getByRole("link", { name: "Appearance", exact: true }).click();
+  await expect(page).toHaveURL("/settings/appearance");
+  // The ‹ link went back instead of stacking an entry, so Back walks the same path.
+  await page.goBack();
+  await expect(page).toHaveURL(localPath);
+  await expect(detail.getByRole("heading", { name: local.label, level: 2 })).toBeFocused();
+  await page.goBack();
+  await expect(page).toHaveURL("/settings/environments");
+  await page.goForward();
+  await expect(page).toHaveURL(localPath);
+  // From an entity, its page's nav link returns to the list.
+  await navigation.getByRole("link", { name: "Environments", exact: true }).click();
+  await expect(page).toHaveURL("/settings/environments");
+  await expect(detail).toBeHidden();
+
+  // A deep link opens an editor; the landing afterwards opens its page's list.
+  await page.goto(`/settings/backends/${encodeURIComponent(backend.id)}/edit`);
+  await expect(settings.getByRole("region", { name: "Backend editor", exact: true })).toBeVisible();
+  await expect(navigation.getByRole("link", { name: "Backends", exact: true })).toHaveAttribute("aria-current", "page");
+  await page.getByTestId("settings-return").click();
+  await expect(settings).toBeHidden();
+  await sidebar.getByTestId("settings-trigger").click();
+  await expect(page).toHaveURL("/settings/backends");
+  await expect(settings.getByRole("region", { name: "Backend editor", exact: true })).toHaveCount(0);
+
+  // A phone: the list, Environments, the entity and its editor, then up again.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open thread navigation", exact: true }).click();
+  await page.locator('[data-testid="settings-trigger"]:not([inert] *)').filter({ visible: true }).click();
+  await expect(page).toHaveURL("/settings");
+  await settings.getByRole("link", { name: "Environments", exact: true }).click();
+  await list.getByRole("link", { name: local.label, exact: true }).click();
+  await expect(page).toHaveURL(localPath);
+  await expect(list).toBeHidden();
+  await detail.getByRole("button", { name: `Edit ${local.label}`, exact: true }).click();
+  await expect(page).toHaveURL(`${localPath}/edit`);
+  await editorBack.click();
+  await expect(page).toHaveURL(localPath);
+  await detail.getByRole("link", { name: "Environments", exact: true }).click();
+  await expect(page).toHaveURL("/settings/environments");
+  await expect(list).toBeVisible();
+  await settings.getByTestId("settings-list-link").click();
+  await expect(page).toHaveURL("/settings");
+  // Each step went back through history, so Back now leaves Settings.
+  await page.goBack();
+  await expect(page).toHaveURL("/");
 });
 
 test.describe("sidebar name filtering preference", () => {

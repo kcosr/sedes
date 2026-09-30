@@ -322,18 +322,30 @@ test("entity routes deep-link, walk back, and split or stack with the settings c
   await discard.getByRole("button", { name: "Discard changes", exact: true }).click();
   await expect(page).toHaveURL(detailPath);
 
-  // A collapsed desktop sidebar gives the settings column room to split.
+  // The panes split when the settings column is at least 960px: with the
+  // sidebar collapsed that holds down to 1024 (1024 - 2 x 32 padding).
   await page.evaluate(() => localStorage.setItem("sedes-sidebar-collapsed", "true"));
   await page.reload();
   const list = settings.getByRole("region", { name: "Configured environments", exact: true });
   const detail = details(settings, local.label);
-  await expect(detail).toBeVisible();
+  for (const viewport of [{ width: 1440, height: 1000 }, { width: 1024, height: 768 }]) {
+    await page.setViewportSize(viewport);
+    await expect(detail).toBeVisible();
+    await expect(list).toBeVisible();
+    const [listBox, detailBox] = [(await list.boundingBox())!, (await detail.boundingBox())!];
+    expect(listBox.x + listBox.width).toBeLessThanOrEqual(detailBox.x);
+    expect(listBox.width).toBeGreaterThanOrEqual(300);
+    expect(listBox.width).toBeLessThanOrEqual(340);
+    await expect(detail.locator("a.execution-back")).toBeHidden();
+  }
+  await capture(page, testInfo, "execution-settings-split-collapsed-1024.png");
+  // Restoring the sidebar at 1024 leaves a 700px column: the panes stack.
+  await settings.getByRole("button", { name: "Show sidebar", exact: true }).click();
+  await expect(settings).toHaveAttribute("data-nav", "sidebar");
+  await expect(list).toBeHidden();
+  await expect(detail.getByRole("link", { name: "Environments", exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await expect(list).toBeVisible();
-  const [listBox, detailBox] = [(await list.boundingBox())!, (await detail.boundingBox())!];
-  expect(listBox.x + listBox.width).toBeLessThanOrEqual(detailBox.x);
-  expect(listBox.width).toBeGreaterThanOrEqual(300);
-  expect(listBox.width).toBeLessThanOrEqual(340);
-  await expect(detail.locator("a.execution-back")).toBeHidden();
   await capture(page, testInfo, "execution-settings-split-desktop.png");
   // Narrow, the list and the detail stack, with a way back to the list.
   await page.setViewportSize({ width: 390, height: 844 });
