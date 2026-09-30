@@ -166,11 +166,14 @@ const LONG_PRESS_SLOP_PX = 10
 /**
  * The sheet-mode context-menu trigger: a secondary click or a touch long
  * press opens the sheet, as Radix's ContextMenu trigger opens its menu. The
- * element focused when it opens gets focus back when it closes.
+ * element focused when it opens gets focus back when it closes. The click
+ * a touch press produces when the finger lifts after a long press opened
+ * the sheet is swallowed, so the row under it does not act as well.
  */
 export function MenuSheetContextTrigger({
   asChild = false,
   disabled = false,
+  onClickCapture,
   onContextMenu,
   onPointerDown,
   onPointerMove,
@@ -182,12 +185,18 @@ export function MenuSheetContextTrigger({
   const state = useMenuSheet()
   const timer = React.useRef<ReturnType<typeof setTimeout>>(undefined)
   const origin = React.useRef<{ x: number; y: number }>(undefined)
+  const suppressClick = React.useRef(false)
   const clear = () => {
     if (timer.current !== undefined) clearTimeout(timer.current)
     timer.current = undefined
     origin.current = undefined
   }
   React.useEffect(() => clear, [])
+  const openFromLongPress = () => {
+    clear()
+    suppressClick.current = true
+    state?.openFrom(focusedElement())
+  }
   const Comp = asChild ? Slot.Root : "span"
   return (
     <Comp
@@ -195,19 +204,37 @@ export function MenuSheetContextTrigger({
       data-slot="context-menu-trigger"
       data-disabled={disabled ? "" : undefined}
       style={{ WebkitTouchCallout: "none", ...style }}
+      onClickCapture={(event: React.MouseEvent<HTMLSpanElement>) => {
+        onClickCapture?.(event)
+        if (!suppressClick.current) return
+        suppressClick.current = false
+        // A keyboard click (detail 0) is an interaction of its own.
+        if (event.detail === 0) return
+        event.preventDefault()
+        event.stopPropagation()
+      }}
       onContextMenu={(event: React.MouseEvent<HTMLSpanElement>) => {
         onContextMenu?.(event)
         if (event.defaultPrevented || disabled) return
-        clear()
         event.preventDefault()
+        // Android fires contextmenu during a touch hold: that is the long
+        // press, and its release clicks too.
+        if (origin.current !== undefined) {
+          openFromLongPress()
+          return
+        }
+        clear()
         state?.openFrom(focusedElement())
       }}
       onPointerDown={(event: React.PointerEvent<HTMLSpanElement>) => {
         onPointerDown?.(event)
+        // A new press: a long press that produced no click leaves nothing
+        // to swallow.
+        suppressClick.current = false
         if (event.defaultPrevented || disabled || event.pointerType === "mouse") return
         clear()
         origin.current = { x: event.clientX, y: event.clientY }
-        timer.current = setTimeout(() => state?.openFrom(focusedElement()), LONG_PRESS_MS)
+        timer.current = setTimeout(openFromLongPress, LONG_PRESS_MS)
       }}
       onPointerMove={(event: React.PointerEvent<HTMLSpanElement>) => {
         onPointerMove?.(event)

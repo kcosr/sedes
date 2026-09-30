@@ -564,10 +564,12 @@ describe("ThreadContextMenu content per thread state", () => {
         clientX: 40,
         clientY: 50,
       });
-      // The release lands on the sheet's modal layer, not on the row: the
-      // page behind the sheet takes no pointer events.
+      // The page behind the sheet takes no pointer events, but the pressed
+      // row keeps the touch pointer captured, so the release clicks it; the
+      // long press swallows that click.
       expect(screen.getByTestId("dialog-overlay")).toBeInTheDocument();
       expect(document.body.style.pointerEvents).toBe("none");
+      fireEvent.click(trigger, { detail: 1 });
       expect(onClick).not.toHaveBeenCalled();
     },
   );

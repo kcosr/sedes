@@ -261,6 +261,82 @@ describe("context menu presented as a sheet", () => {
     act(() => vi.advanceTimersByTime(800));
     expect(screen.getByRole("dialog", { name: "MCP events" })).toBeVisible();
   });
+
+  function LinkRowMenu({ onRowClick }: { readonly onRowClick: () => void }) {
+    return (
+      <ContextMenu presentation="sheet">
+        <ContextMenuTrigger asChild>
+          <button type="button" onClick={onRowClick}>
+            MCP events row
+          </button>
+        </ContextMenuTrigger>
+        <ContextMenuContent sheetTitle="MCP events">
+          <ContextMenuItem>Pin</ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  }
+
+  it("swallows the click that ends a long press that opened the sheet", () => {
+    vi.useFakeTimers();
+    const onRowClick = vi.fn();
+    render(<LinkRowMenu onRowClick={onRowClick} />);
+    const row = screen.getByRole("button", { name: "MCP events row" });
+    fireEvent.pointerDown(row, { pointerType: "touch", clientX: 10, clientY: 10 });
+    act(() => vi.advanceTimersByTime(800));
+    expect(screen.getByRole("dialog", { name: "MCP events" })).toBeVisible();
+    // Lifting the finger clicks the pressed row (touch captures the pointer).
+    fireEvent.pointerUp(row, { pointerType: "touch", clientX: 10, clientY: 10 });
+    const release = new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 });
+    act(() => {
+      row.dispatchEvent(release);
+    });
+    expect(release.defaultPrevented).toBe(true);
+    expect(onRowClick).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "MCP events" })).toBeVisible();
+  });
+
+  it("swallows the release click after Android's contextmenu during a hold", () => {
+    const onRowClick = vi.fn();
+    render(<LinkRowMenu onRowClick={onRowClick} />);
+    const row = screen.getByRole("button", { name: "MCP events row" });
+    fireEvent.pointerDown(row, { pointerType: "touch", clientX: 10, clientY: 10 });
+    expect(fireEvent.contextMenu(row)).toBe(false);
+    expect(screen.getByRole("dialog", { name: "MCP events" })).toBeVisible();
+    fireEvent.pointerUp(row, { pointerType: "touch", clientX: 10, clientY: 10 });
+    fireEvent.click(row, { detail: 1 });
+    expect(onRowClick).not.toHaveBeenCalled();
+  });
+
+  it("lets taps, and a keyboard click after an unfinished long press, through", () => {
+    vi.useFakeTimers();
+    const onRowClick = vi.fn();
+    render(<LinkRowMenu onRowClick={onRowClick} />);
+    const row = screen.getByRole("button", { name: "MCP events row" });
+    // A tap: no long press, so its click acts.
+    fireEvent.pointerDown(row, { pointerType: "touch", clientX: 10, clientY: 10 });
+    act(() => vi.advanceTimersByTime(200));
+    fireEvent.pointerUp(row, { pointerType: "touch", clientX: 10, clientY: 10 });
+    fireEvent.click(row, { detail: 1 });
+    expect(onRowClick).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    // A long press whose release produced no click on the row, then Enter.
+    fireEvent.pointerDown(row, { pointerType: "touch", clientX: 10, clientY: 10 });
+    act(() => vi.advanceTimersByTime(800));
+    fireEvent.pointerUp(row, { pointerType: "touch", clientX: 10, clientY: 10 });
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    act(() => vi.advanceTimersByTime(500));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(row, { detail: 0 });
+    expect(onRowClick).toHaveBeenCalledTimes(2);
+
+    // The next press starts over: its tap acts.
+    fireEvent.pointerDown(row, { pointerType: "touch", clientX: 10, clientY: 10 });
+    fireEvent.pointerUp(row, { pointerType: "touch", clientX: 10, clientY: 10 });
+    fireEvent.click(row, { detail: 1 });
+    expect(onRowClick).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("sheet rows compose consumer click handlers", () => {
