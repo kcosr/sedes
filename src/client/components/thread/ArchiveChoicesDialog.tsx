@@ -163,13 +163,16 @@ function OpenArchiveChoicesDialog({
         mobile={checking ? "card" : undefined}
         layer="blocking"
         showClose={!checking}
-        dismissible={!pending}
+        dismissible={!checking && !pending}
         className={checking ? "operation-progress-surface" : undefined}
-        data-blocking-operation="true"
-        onKeyDown={(event) => event.stopPropagation()}
-        // A blocking check or choice: only Cancel or the X leave it.
-        onEscapeKeyDown={(event) => event.preventDefault()}
-        onInteractOutside={(event) => event.preventDefault()}
+        // The impact check is a blocking operation (only its Cancel leaves
+        // it); the choices are an ordinary form dialog.
+        {...(checking
+          ? {
+              "data-blocking-operation": "true",
+              onKeyDown: (event: React.KeyboardEvent) => event.stopPropagation(),
+            }
+          : {})}
         returnFocusRef={returnFocusRef}
       >
         {checking ? (
