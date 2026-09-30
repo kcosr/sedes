@@ -385,6 +385,16 @@ export function ApplicationShell({
               onInteractOutside={(event) => {
                 const target = event.target;
                 if (!(target instanceof Element)) return;
+                if (
+                  event.detail.originalEvent.type === "focusin" &&
+                  target.closest('[data-slot="dialog-content"]')
+                ) {
+                  // A dialog opened from the drawer (a confirmation, a
+                  // blocking check) layers above it and takes focus; the
+                  // drawer stays open beneath it.
+                  event.preventDefault();
+                  return;
+                }
                 if (target.closest(".sidebar-nav-trigger")) {
                   // Let the persistent toggle own the state transition. If the
                   // dismissable layer closed first, the click would reopen it.

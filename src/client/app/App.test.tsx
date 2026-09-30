@@ -74,6 +74,10 @@ vi.mock("../api/FetchEventSource.js", () => ({
 }));
 
 import { App } from "./App.js";
+import {
+  getBlockingOperation,
+  runBlockingOperation,
+} from "../operations/blocking-operation.js";
 import { navigate } from "./router.js";
 import {
   getSidebarViewPreferences,
@@ -1439,6 +1443,45 @@ describe("application endpoint startup", () => {
         String(url).endsWith("/api/application/session"),
       ),
     ).toHaveLength(2);
+  });
+
+  it("keeps the mobile drawer open under a blocking operation it starts", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(applicationBootstrap)),
+    );
+    stubMediaQueries(true);
+    render(<App />);
+    await screen.findByRole("heading", {
+      name: "What should the agent work on?",
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open thread navigation" }),
+    );
+    const drawer = await screen.findByRole("dialog", {
+      name: "Thread navigation",
+    });
+
+    // A drawer action's check (a direct Archive) takes focus above it.
+    act(() => {
+      void runBlockingOperation({
+        message: "Checking thread activity…",
+        run: () => new Promise<never>(() => undefined),
+      });
+    });
+    const progress = await screen.findByRole("dialog", {
+      name: "Checking thread activity…",
+    });
+    await waitFor(() =>
+      expect(progress).toContainElement(document.activeElement as HTMLElement),
+    );
+    expect(drawer).toBeInTheDocument();
+
+    act(() => getBlockingOperation()?.cancel());
+    await waitFor(() => expect(progress).not.toBeInTheDocument());
+    expect(
+      screen.getByRole("dialog", { name: "Thread navigation" }),
+    ).toBe(drawer);
   });
 
   it("opens packaged server settings from the mobile drawer", async () => {
