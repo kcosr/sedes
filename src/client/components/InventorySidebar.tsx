@@ -2405,7 +2405,8 @@ function ScopeSelect({
         })),
       ]}
       triggerProps={{
-        className: "sidebar-scope-select",
+        // The sidebar's filled controls, like its thread search field.
+        className: "sidebar-scope-select border-border bg-background shadow-none",
         "data-testid": testId,
         "data-scope-value": value,
       }}
