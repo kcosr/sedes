@@ -192,7 +192,8 @@
   **Archive** and **Force reset…**. Codex execution settings are submenus
   instead of a form inside the menu. **Archive** archives at once and opens a
   dialog only when forks, open Tasks, stashed prompts, pending questions, or an
-  isolated workspace need a choice.
+  isolated workspace need a choice. **Move to group** is a searchable list that
+  can create a Group from the search, and **New group…** asks only for a name.
 
 - The workbench bar and panel headers grow with their text, so a title no
   longer crowds the top edge under Android text zoom. They are slightly taller

@@ -172,13 +172,14 @@ you can:
 - move the thread into an existing Group; or
 - remove it from its current Group.
 
-**Move to group** lists your Groups with the current one checked; select one
-to move the thread there, or choose **Remove from group**. **New group…** opens
-the **Move to group** dialog: type to filter Group names and select one with
-the pointer or arrow keys and Enter, or enter a name under **Create group** and
-choose **Create and move**. Your current Group is disabled there, and
-**Ungroup** removes the thread from it. Escape or **Cancel** closes the dialog
-without moving the thread; typing a search never changes membership.
+**Move to group** opens a searchable list of your Groups with the current one
+checked; on a phone it opens as a sheet. Type in **Search groups** to filter,
+then select a Group with the pointer or the arrow keys and Enter to move the
+thread there. When nothing matches, **Create group “name”** creates that Group
+and moves the thread into it in one step. **Remove from group** takes the
+thread out of its current Group, and **New group…** opens a small dialog that
+asks only for the **Group name** (prefilled with your search) and creates the
+Group with this thread in it. Typing a search never changes membership.
 
 Select a Group in Scope to filter to it. From that Scope menu you can rename or
 delete the selected Group. Deleting a populated Group requires confirmation

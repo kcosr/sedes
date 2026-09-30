@@ -668,7 +668,7 @@ function AgentEditor({
                 <Button
                   ref={deleteTrigger}
                   type="button"
-                  variant="outline"
+                  variant="destructive-outline"
                   disabled={pending}
                   onClick={() => setDeleteOpen(true)}
                 >

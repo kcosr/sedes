@@ -173,17 +173,17 @@ describe("DangerZone", () => {
         <DangerZoneItem
           title="Remove environment"
           description="Its backends are removed too. This can't be undone."
-          action={<Button variant="outline">Remove…</Button>}
+          action={<Button variant="destructive-outline">Remove…</Button>}
         />
-        <DangerZoneItem tone="neutral" title="Reapprove pairing" action={<Button variant="outline">Reapprove…</Button>} />
+        <DangerZoneItem title="Reapprove pairing" action={<Button variant="outline">Reapprove…</Button>} />
       </DangerZone>,
     );
     const section = screen.getByRole("region", { name: "Danger zone" });
     expect(section).toHaveAttribute("data-variant", "danger");
     expect(container.querySelector("[data-slot=settings-section-body]")).toHaveAttribute("data-card", "true");
     expect(within(section).getByText("Remove environment")).toHaveAttribute("data-slot", "danger-zone-title");
-    // Items are destructive unless marked neutral; the kit styles their outline triggers red.
-    const items = container.querySelectorAll("[data-slot=danger-zone-item]");
-    expect([...items].map((item) => item.getAttribute("data-tone"))).toEqual(["danger", "neutral"]);
+    // Each item's trigger carries its own emphasis: a destructive outline, or a plain outline when reversible.
+    const triggers = container.querySelectorAll("[data-slot=danger-zone-action] [data-slot=button]");
+    expect([...triggers].map((trigger) => trigger.getAttribute("data-variant"))).toEqual(["destructive-outline", "outline"]);
   });
 });

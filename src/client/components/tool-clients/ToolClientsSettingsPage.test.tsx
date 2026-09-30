@@ -391,9 +391,9 @@ describe("Tool clients settings", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /External CLI/u }));
     expect(screen.getByRole("button", { name: "New client" })).toHaveAttribute("data-variant", "outline");
-    // Danger-zone triggers are outline; only the confirmation is solid red.
-    expect(screen.getByRole("button", { name: "Revoke…" })).toHaveAttribute("data-variant", "outline");
-    expect(screen.getByRole("button", { name: "Rotate credential…" })).toHaveAttribute("data-variant", "outline");
+    // Danger-zone triggers are destructive outlines; only the confirmation is solid red.
+    expect(screen.getByRole("button", { name: "Revoke…" })).toHaveAttribute("data-variant", "destructive-outline");
+    expect(screen.getByRole("button", { name: "Rotate credential…" })).toHaveAttribute("data-variant", "destructive-outline");
     fireEvent.click(screen.getByRole("switch", { name: "Enable tool client" }));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>

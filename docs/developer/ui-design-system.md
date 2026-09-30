@@ -81,9 +81,11 @@ reduced motion). The sidebar-to-drawer swap uses `(max-width: 819px)` alone.
 
 **Buttons.** `Button` variants: `default` for the primary action, `outline`
 for secondary actions and Cancel, `secondary`, `ghost` for toolbars and icon
-buttons, `link`, and `destructive`. `destructive` is a solid fill reserved for
-irreversible actions (delete, revoke, deny, discard, Force reset); reversible
-actions such as Archive stay neutral. Sizes: `xs`, `sm`, `default`, `lg`
+buttons, `link`, `destructive`, and `destructive-outline`. `destructive` is a
+solid fill reserved for confirming irreversible actions (delete, revoke, deny,
+discard, Force reset); `destructive-outline` is the trigger that opens such a
+confirmation, as in a Danger zone. Reversible actions such as Archive stay
+neutral. Sizes: `xs`, `sm`, `default`, `lg`
 (24/28/32/36) and `icon`, `icon-xs`, `icon-sm`, `icon-lg`.
 
 **Controls.** `Input`, `Textarea`, `NativeSelect` (plain option lists; the
@@ -195,7 +197,7 @@ description, availability). A new page needs a registry entry, a slug in
 | `SettingsField`, `SwitchField`, `SettingsActionRow` | A labelled row with the control in a 220–360px column (stacking under the density switch or below 640px of page), an on/off row, an item row with buttons |
 | `SaveBar` | The sticky footer of a form: state on the left, Cancel then Save on the right; "Saved" is transient here |
 | `EntityList`, `EntityRow` | Inventory rows at least 56px tall: the whole row opens the item; one `StatusPill`; the actions menu is its own tab stop |
-| `DangerZone`, `DangerZoneItem` | Always the last section; each action opens a `ConfirmDialog` |
+| `DangerZone`, `DangerZoneItem` | Always the last section; each `destructive-outline` trigger opens a `ConfirmDialog` (a reversible item uses a plain outline) |
 | `SettingsSearch`, `SettingsBackLink` | The search above a list; the "‹" link, which goes up through history so it and Back agree |
 
 Use one save model per page type: switches apply at once, forms save through

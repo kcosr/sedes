@@ -733,7 +733,7 @@ function ToolClientEditor({
               title="Rotate credential"
               description="Issue a new credential. The current one stops working immediately."
               action={
-                <Button variant="outline" disabled={disabled} onClick={onRotate}>
+                <Button variant="destructive-outline" disabled={disabled} onClick={onRotate}>
                   Rotate credential…
                 </Button>
               }
@@ -744,7 +744,7 @@ function ToolClientEditor({
               title="Revoke client"
               description="Permanently stop every credential for this client. This can't be undone."
               action={
-                <Button variant="outline" disabled={disabled} onClick={onRevoke}>
+                <Button variant="destructive-outline" disabled={disabled} onClick={onRevoke}>
                   Revoke…
                 </Button>
               }
