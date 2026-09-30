@@ -194,7 +194,7 @@ export function CannedPromptsSettingsPage({
         <>
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="icon"
             aria-label="Refresh prompts"
             title="Refresh prompts"
@@ -209,6 +209,7 @@ export function CannedPromptsSettingsPage({
           </Button>
           <Button
             type="button"
+            variant="outline"
             disabled={state.status !== "ready" || pending || atLimit}
             title={atLimit ? `A library holds at most ${CANNED_PROMPT_MAX_ITEMS} prompts.` : undefined}
             onClick={startCreate}

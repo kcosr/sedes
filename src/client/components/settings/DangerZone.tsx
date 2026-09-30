@@ -16,13 +16,19 @@ export function DangerZone({ title = "Danger zone", ...props }: DangerZoneProps)
 export type DangerZoneItemProps = Omit<React.ComponentProps<"div">, "title"> & {
   readonly title: React.ReactNode;
   readonly description?: React.ReactNode;
-  /** The destructive action, usually `<Button variant="destructive">Remove…</Button>`. */
+  /**
+   * The trigger, usually `<Button variant="outline">Remove…</Button>`: it
+   * reads as a destructive outline here, and its ConfirmDialog carries the
+   * solid red confirm.
+   */
   readonly action: React.ReactNode;
+  /** `neutral` for the zone's one reversible item (Reapprove), whose trigger stays a plain outline. */
+  readonly tone?: "danger" | "neutral";
 };
 
-export function DangerZoneItem({ title, description, action, ...props }: DangerZoneItemProps): React.JSX.Element {
+export function DangerZoneItem({ title, description, action, tone = "danger", ...props }: DangerZoneItemProps): React.JSX.Element {
   return (
-    <div data-slot="danger-zone-item" {...props}>
+    <div data-slot="danger-zone-item" data-tone={tone} {...props}>
       <div data-slot="danger-zone-text">
         <p data-slot="danger-zone-title">{title}</p>
         {description ? <p data-slot="danger-zone-description">{description}</p> : null}

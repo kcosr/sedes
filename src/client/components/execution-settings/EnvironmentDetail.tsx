@@ -164,15 +164,15 @@ export function EnvironmentDetail({ environment, selected, tab, onTab, hosts, st
         <SettingsSection title="Workspace access" card><KeyValueList className="execution-facts" items={accessFacts} /></SettingsSection>
         <SettingsSection title="Environment variables" card><KeyValueList className="execution-facts" items={variableFacts(environment.environmentVariables)} /></SettingsSection>
         <DangerZone>
-          {binding ? <DangerZoneItem title={revoked ? "Reapprove pairing" : "Revoke pairing"}
+          {binding ? <DangerZoneItem tone={revoked ? "neutral" : "danger"} title={revoked ? "Reapprove pairing" : "Revoke pairing"}
             description={revoked ? "Let the same connector installation reconnect with this environment's saved access." : "Disconnect this installation. The environment and its history are kept."}
-            action={<Button key="pairing" type="button" variant={revoked ? "outline" : "destructive"} aria-label={`${revoked ? "Reapprove" : "Revoke"} ${environment.label}`}
+            action={<Button key="pairing" type="button" variant="outline" aria-label={`${revoked ? "Reapprove" : "Revoke"} ${environment.label}`}
               onClick={() => onPairing(environment, binding)}>{revoked ? "Reapprove…" : "Revoke…"}</Button>} /> : null}
           <DangerZoneItem title="Remove environment"
             description={backends.length ? `Referenced by ${backends.length === 1 ? "1 backend" : `${backends.length} backends`}; remove ${backends.length === 1 ? "it" : "them"} first.`
               : environment.kind === "outbound" && !revoked ? "Revoke the pairing first. Existing sessions and history are retained."
               : "Existing sessions and history are retained."}
-            action={<Button type="button" variant="destructive" aria-label={`Remove ${environment.label}`} onClick={() => onRemove(environment)}>Remove…</Button>} />
+            action={<Button type="button" variant="outline" aria-label={`Remove ${environment.label}`} onClick={() => onRemove(environment)}>Remove…</Button>} />
         </DangerZone>
       </TabsContent>
       <TabsContent value="related" className="execution-tab">{renderBackends(environment)}</TabsContent>

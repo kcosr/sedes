@@ -471,9 +471,9 @@ export function ExecutionSettings({ controls }: {
       actions={<>
         <Button type="button" variant="ghost" size="icon" aria-label="Refresh" title="Refresh" disabled={state.loading || state.saving || pairing.busy} onClick={refresh}><RefreshCw /></Button>
         {page === "environments"
-          ? <Button type="button" aria-label="Add environment" disabled={!configuration || pending || configuration.executionEnvironments.length >= 16}
+          ? <Button type="button" variant="outline" aria-label="Add environment" disabled={!configuration || pending || configuration.executionEnvironments.length >= 16}
             onClick={() => navigate(settingsPath("environments", { mode: "new" }))}><Plus />Add environment</Button>
-          : <Button type="button" aria-label="Add backend" disabled={!configuration || pending || !canAddBackend}
+          : <Button type="button" variant="outline" aria-label="Add backend" disabled={!configuration || pending || !canAddBackend}
             title={configuration && !configuration.executionEnvironments.length ? "Add an execution environment first" : undefined}
             onClick={() => addBackend(currentFilters.environment || undefined)}><Plus />Add backend</Button>}
       </>}>

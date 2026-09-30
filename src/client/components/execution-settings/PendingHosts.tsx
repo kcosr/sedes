@@ -90,7 +90,7 @@ export function PendingHostDetail({ registration, draft, setDraft, errors, disab
       </SettingsSection>
       <SaveBar creating dirty={dirty} saving={saving} error={saveError} onCancel={onCancel} saveLabel="Accept host" savingLabel="Accepting…" saveDisabled={disabled} />
     </form>
-    <ConfirmDialog open={denying} onOpenChange={setDenying} tone="danger" title={`Deny ${metadata.hostname}?`}
+    <ConfirmDialog open={denying} onOpenChange={setDenying} title={`Deny ${metadata.hostname}?`}
       description="The connector's request is rejected and no environment is created. The host can register again later."
       confirmLabel="Deny host" pendingLabel="Denying…" onConfirm={onDeny} {...focusReturn} />
   </section>;

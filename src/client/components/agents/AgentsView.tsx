@@ -181,7 +181,7 @@ export function AgentsView({
         selection={creating || agentId ? "editor" : "none"}
         actions={
           !creating ? (
-            <Button onClick={() => navigate(newPath)}>
+            <Button variant="outline" onClick={() => navigate(newPath)}>
               <Plus aria-hidden="true" /> Create Agent
             </Button>
           ) : undefined
@@ -654,7 +654,7 @@ function AgentEditor({
                 <Button
                   ref={deleteTrigger}
                   type="button"
-                  variant="destructive"
+                  variant="outline"
                   disabled={pending}
                   onClick={() => setDeleteOpen(true)}
                 >

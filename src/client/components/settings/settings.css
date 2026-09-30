@@ -632,6 +632,19 @@
   gap: var(--space-2);
 }
 
+/* A trigger is a destructive outline; the solid red is its ConfirmDialog's. */
+[data-slot="danger-zone-item"][data-tone="danger"] [data-slot="button"][data-variant="outline"] {
+  border-color: var(--destructive-border);
+  color: var(--destructive);
+}
+
+@media (hover: hover) {
+  [data-slot="danger-zone-item"][data-tone="danger"] [data-slot="button"][data-variant="outline"]:hover {
+    background: var(--destructive-soft);
+    color: var(--destructive);
+  }
+}
+
 /* ── Search above an inventory list ── */
 [data-slot="settings-search"] {
   position: relative;
