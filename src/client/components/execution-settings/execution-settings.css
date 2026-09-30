@@ -328,3 +328,28 @@
   .execution-anchors button, .execution-advanced-trigger, .execution-item-trigger, .execution-token button { min-height: var(--control-default); }
   .execution-token button { min-width: var(--control-default); }
 }
+
+/* ── Projects ── */
+.projects-list { container: execution-list / inline-size; display: grid; min-width: 0; gap: var(--space-3); }
+.projects-toolbar .execution-filters { grid-template-columns: minmax(0, 1fr); }
+@container execution-list (width >= 560px) {
+  .projects-toolbar { grid-template-columns: minmax(0, 1fr) repeat(2, minmax(0, 13rem)); }
+}
+.projects-rows { display: grid; margin: 0; padding: var(--space-1); list-style: none; border: 1px solid var(--border-soft); border-radius: var(--radius-card); background: var(--card); }
+.projects-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-1) var(--space-3); min-height: 56px; padding: var(--space-2-5) var(--space-3); border-radius: var(--radius-ctl); }
+.projects-row + .projects-row { box-shadow: 0 -1px 0 var(--border-soft); }
+.projects-row-icon { display: grid; place-items: center; width: var(--icon-lg); color: var(--muted-foreground); }
+.projects-row-icon svg { width: var(--icon-md); height: var(--icon-md); }
+.projects-row[data-removed] .projects-row-icon, .projects-row[data-removed] .projects-row-title { color: var(--muted-foreground); }
+.projects-row-text { display: grid; min-width: 0; gap: var(--space-0-5); }
+.projects-row-title { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1-5); font-size: var(--text-ui); font-weight: var(--weight-medium); overflow-wrap: anywhere; }
+.projects-row-path { overflow: hidden; color: var(--muted-foreground); font-family: var(--font-mono); font-size: var(--text-meta); text-overflow: ellipsis; white-space: nowrap; }
+.projects-row-meta { color: var(--muted-foreground-2); font-size: var(--text-meta); }
+@container execution-list (width < 560px) {
+  .projects-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .projects-row-status { grid-column: 2; grid-row: 2; }
+  .projects-row-actions { grid-column: 3; grid-row: 1 / span 2; }
+}
+@media (max-width: 819px), (pointer: coarse) {
+  .projects-row-actions [data-slot="button"], .execution-filter-toggle, .execution-filter-done { min-height: var(--control-default); }
+}

@@ -118,7 +118,7 @@ describe("SettingsView", () => {
     const applicationStore = { api: { listProjects }, getSnapshot: () => state, subscribe: () => () => {} } as unknown as ApplicationClientStore;
     renderSettings({ configuration: controls, applicationStore, page: "projects" });
 
-    expect(await screen.findByText("No projects yet. Add a directory to start a thread.")).toBeVisible();
+    expect(await screen.findByText("No projects yet")).toBeVisible();
     expect(screen.getByRole("heading", { name: "Projects" })).toBeVisible();
     expect(screen.getByRole("region", { name: "Projects" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute("aria-current", "page");
