@@ -3335,7 +3335,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   align-items: center;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: calc(var(--radius) + 2px);
+  border-radius: calc(var(--radius-ctl) + 2px);
   background: color-mix(in oklch, var(--background) 88%, var(--sidebar));
 }
 
@@ -7707,7 +7707,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   width: 24px;
   height: 24px;
   place-items: center;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-ctl);
   color: var(--muted-foreground);
 }
 
@@ -7735,7 +7735,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   margin: 0;
   padding: 8px;
   overflow: auto;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-ctl);
   background: var(--background);
   font: 11.5px/1.5 var(--font-mono);
   white-space: pre-wrap;
@@ -7765,7 +7765,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   resize: vertical;
   padding: 7px 8px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-ctl);
   background: var(--background);
   color: var(--foreground);
   font: inherit;
@@ -7782,7 +7782,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   align-items: center;
   gap: 4px;
   padding: 4px 7px;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-ctl);
   background: var(--secondary);
   font-size: 11px;
 }
@@ -10263,7 +10263,7 @@ tr.diff-hunk td {
   gap: 7px;
   padding: 5px 7px 5px 9px;
   border: 1px solid var(--border-soft);
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-ctl);
   background: color-mix(in oklch, var(--card) 76%, transparent);
   color: var(--muted-foreground);
 }
@@ -10322,7 +10322,7 @@ tr.diff-hunk td {
   margin-block: 6px;
   padding: 8px 10px;
   border: 1px solid var(--border-soft);
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-ctl);
   background: color-mix(in oklch, var(--card) 74%, transparent);
 }
 
@@ -13026,8 +13026,8 @@ tr.diff-hunk td {
   overflow-x: auto;
   padding: 7px 8px;
   border-radius: var(--radius-ctl);
-  background: var(--code-bg);
-  color: var(--code-text);
+  background: var(--code);
+  color: var(--foreground);
   white-space: nowrap;
 }
 
@@ -13177,7 +13177,7 @@ tr.diff-hunk td {
   width: min(calc(100vw - 2rem), 34rem);
   padding: 1rem;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-card);
   background: var(--card);
 }
 
@@ -15803,7 +15803,7 @@ tr.diff-hunk td {
   border: 1px solid color-mix(in oklch, var(--destructive), transparent 55%);
   border-radius: var(--radius-ctl);
   background: var(--card);
-  box-shadow: var(--shadow-large);
+  box-shadow: var(--elevation-3);
   color: var(--destructive);
   font-size: 12px;
 }

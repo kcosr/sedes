@@ -116,7 +116,7 @@
   max-width: calc(100% - 86px);
   overflow: hidden;
   padding: 2px 5px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border);
   border-radius: 3px;
   background: var(--background);
   color: var(--muted-foreground);
