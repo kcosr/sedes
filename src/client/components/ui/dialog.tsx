@@ -314,9 +314,68 @@ function DialogHeader({ ...props }: React.ComponentProps<"div">) {
   return <div data-slot="dialog-header" {...props} />
 }
 
-/** The dialog's only scroll region, between the pinned header and footer. */
-function DialogBody({ ...props }: React.ComponentProps<"div">) {
-  return <div data-slot="dialog-body" {...props} />
+/**
+ * Whether a scroll region has content below its visible end. It follows
+ * scrolling, the region's own size and the size of its direct children
+ * (content that grows or wraps), and children that come and go.
+ */
+function useScrollMore(): [React.RefCallback<HTMLElement>, boolean] {
+  const [more, setMore] = React.useState(false)
+  const ref = React.useCallback((region: HTMLElement | null) => {
+    if (!region) return
+    const update = () =>
+      setMore(region.scrollTop + region.clientHeight < region.scrollHeight - 1)
+    update()
+    region.addEventListener("scroll", update, { passive: true })
+    if (typeof ResizeObserver === "undefined") {
+      return () => region.removeEventListener("scroll", update)
+    }
+    const sizes = new ResizeObserver(update)
+    const observe = () => {
+      sizes.disconnect()
+      sizes.observe(region)
+      for (const child of region.children) sizes.observe(child)
+    }
+    observe()
+    const children = new MutationObserver(() => {
+      observe()
+      update()
+    })
+    children.observe(region, { childList: true })
+    return () => {
+      region.removeEventListener("scroll", update)
+      sizes.disconnect()
+      children.disconnect()
+    }
+  }, [])
+  return [ref, more]
+}
+
+/**
+ * The dialog's only scroll region, between the pinned header and footer.
+ * While it has more content below, the footer draws a hairline where the
+ * content scrolls under it (overlay.css).
+ */
+function DialogBody({ ref, ...props }: React.ComponentProps<"div">) {
+  const [scrollRef, more] = useScrollMore()
+  const bodyRef = React.useCallback((node: HTMLDivElement | null) => {
+    const cleanup = scrollRef(node)
+    if (typeof ref === "function") ref(node)
+    else if (ref) ref.current = node
+    return () => {
+      cleanup?.()
+      if (typeof ref === "function") ref(null)
+      else if (ref) ref.current = null
+    }
+  }, [ref, scrollRef])
+  return (
+    <div
+      ref={bodyRef}
+      data-slot="dialog-body"
+      data-scroll-more={more ? "" : undefined}
+      {...props}
+    />
+  )
 }
 
 /**

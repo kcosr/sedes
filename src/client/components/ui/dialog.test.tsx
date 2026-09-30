@@ -371,6 +371,33 @@ describe("Dialog slots", () => {
     ]);
   });
 
+  it("marks the body while it has content below, for the footer's hairline", async () => {
+    const bodyRef = { current: null as HTMLDivElement | null };
+    renderDialog(
+      <>
+        <DialogBody ref={bodyRef}>Long content</DialogBody>
+        <DialogFooter><Button>Save</Button></DialogFooter>
+      </>,
+    );
+    const body = screen.getByText("Long content");
+    expect(bodyRef.current).toBe(body);
+    expect(body).not.toHaveAttribute("data-scroll-more");
+    const scroll = (top: number) => {
+      Object.defineProperties(body, {
+        clientHeight: { configurable: true, value: 200 },
+        scrollHeight: { configurable: true, value: 500 },
+        scrollTop: { configurable: true, value: top },
+      });
+      act(() => body.dispatchEvent(new Event("scroll")));
+    };
+    scroll(0);
+    expect(body).toHaveAttribute("data-scroll-more");
+    scroll(150);
+    expect(body).toHaveAttribute("data-scroll-more");
+    scroll(300);
+    expect(body).not.toHaveAttribute("data-scroll-more");
+  });
+
   it("names a section by its label", () => {
     render(
       <Dialog open>

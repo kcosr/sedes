@@ -299,37 +299,23 @@
   margin-inline-end: auto;
 }
 
-/* While the body has more content below, a hairline across the dialog marks
-   where it scrolls under the pinned footer: on the body's clip edge (the
-   gap above the footer, less the body's focus-ring inset). The body's
-   scroll progress drives it, so it fades out at the end of the content and
-   is absent when nothing scrolls. Browsers without scroll-driven animations
-   draw no line. */
-@supports (animation-timeline: scroll()) {
-  [data-slot="dialog-content"] {
-    timeline-scope: --dialog-body;
-  }
+/* While the body has more content below (DialogBody sets data-scroll-more),
+   a hairline across the dialog marks where it scrolls under the pinned
+   footer, on the body's clip edge: the gap above the footer, less the
+   body's focus-ring inset. */
+[data-slot="dialog-footer"] {
+  position: relative;
+}
 
-  [data-slot="dialog-body"] {
-    scroll-timeline: --dialog-body block;
-  }
-
-  [data-slot="dialog-footer"] {
-    position: relative;
-  }
-
+[data-slot="dialog-content"]:has([data-slot="dialog-body"][data-scroll-more])
   [data-slot="dialog-footer"]::before {
-    position: absolute;
-    top: calc(var(--space-1) - var(--space-4));
-    inset-inline: calc(-1 * var(--dialog-padding));
-    height: 1px;
-    background: var(--border-soft);
-    content: "";
-    opacity: 0;
-    pointer-events: none;
-    animation: ui-dialog-footer-rule linear both;
-    animation-timeline: --dialog-body;
-  }
+  position: absolute;
+  top: calc(var(--space-1) - var(--space-4));
+  inset-inline: calc(-1 * var(--dialog-padding));
+  height: 1px;
+  background: var(--border);
+  content: "";
+  pointer-events: none;
 }
 
 @media (max-width: 519px) {
@@ -507,17 +493,6 @@
 [data-slot="dialog-content"][data-state="closed"],
 [data-radix-popper-content-wrapper]:has(> [data-state="closed"]) {
   pointer-events: none;
-}
-
-@keyframes ui-dialog-footer-rule {
-  from,
-  98% {
-    opacity: 1;
-  }
-
-  to {
-    opacity: 0;
-  }
 }
 
 @keyframes ui-fade-in {
