@@ -428,7 +428,8 @@ export function ExecutionSettings({ controls }: {
   const listBack = <SettingsBackLink href={settingsPath(page)} label={listLabel} />;
   const selectionMissing = Boolean(configuration && (mode === "view" || mode === "edit")
     && !(page === "environments" ? configuration.executionEnvironments : configuration.backends).some(entry => entry.id === resourceId))
-    || Boolean(pairing.hosts && mode === "pending" && !registration);
+    // A registration is missing once the list has loaded without it, or when the list could not load.
+    || Boolean(mode === "pending" && !registration && (pairing.hosts || pairing.error));
 
   const runtimeProps = snapshot ? { controls, snapshot, runtimeDisabled: pending || routeEditorOpen, pausedReason,
     onRuntime: state.updateRuntime, onRefresh: state.refreshRuntime } : undefined;
@@ -445,7 +446,8 @@ export function ExecutionSettings({ controls }: {
       description={page === "environments" ? "Its status, backends and activity appear here." : "Its status, connections and activity appear here."} />;
     if (selectionMissing) return <div className="execution-detail"><SettingsDetailHeader back={listBack}
       title={mode === "pending" ? "Registration unavailable" : page === "environments" ? "Environment unavailable" : "Backend unavailable"}
-      description={mode === "pending" ? "It was accepted, denied or expired." : "It may have been removed, or the link is out of date."} /></div>;
+      description={mode !== "pending" ? "It may have been removed, or the link is out of date."
+        : pairing.hosts ? "It was accepted, denied or expired." : "Host registrations could not be loaded. Refresh to try again."} /></div>;
     if (mode === "new" && page === "environments" && !resourceId) return <EnvironmentChooser configuration={configuration} back={listBack} />;
     if (mode === "new" && page === "environments" && resourceId === "pair") return <PairHostSetup controls={controls} registrations={registrations}
       back={<SettingsBackLink href={exitPath()} label="Add environment" />} />;

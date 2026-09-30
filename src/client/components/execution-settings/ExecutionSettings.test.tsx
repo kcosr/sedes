@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigurationDocument, ConfigurationSnapshot, ConfigurationRuntimeState } from "../../../shared/protocol/configuration-admin.js";
 import { ApiError } from "../../api/ApiClient.js";
-import { navigate } from "../../app/router.js";
+import { navigate, settingsPath } from "../../app/router.js";
 import { ExecutionSettings } from "./ExecutionSettings.js";
 import { backendEditors } from "./backend-editors.js";
 import type { HostPairingControls } from "./useHostPairings.js";
@@ -330,6 +330,22 @@ describe("execution configuration administration", () => {
     renderAt(environmentPath("10000000-0000-4000-8000-00000000ffff"), api);
     expect(await screen.findByText("Environment unavailable")).toBeVisible();
     expect(screen.getByRole("link", { name: "Environments" })).toHaveAttribute("href", "/settings/environments");
+    cleanup();
+    renderAt(settingsPath("backends", { mode: "edit", resourceId: "missing-backend" }), api);
+    expect(await screen.findByText("Backend unavailable")).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Backend editor" })).toBeNull();
+  });
+
+  it("names a pending registration unavailable when it is gone or the registrations cannot load", async () => {
+    const api = renderAt(settingsPath("environments", { mode: "pending", resourceId: "reg-gone" }));
+    expect(await screen.findByText("Registration unavailable")).toBeVisible();
+    expect(screen.getByText("It was accepted, denied or expired.")).toBeVisible();
+    cleanup();
+    api.listHostRegistrations.mockRejectedValue(new Error("Registrations are unreachable."));
+    renderAt(settingsPath("environments", { mode: "pending", resourceId: "reg-gone" }), api);
+    expect(await screen.findByText("Registration unavailable")).toBeVisible();
+    expect(screen.getByText("Host registrations could not be loaded. Refresh to try again.")).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent("Registrations are unreachable.");
   });
 
   it("guards dirty edits when selecting another route and discards them on request", async () => {
