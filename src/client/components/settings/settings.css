@@ -708,6 +708,20 @@
   min-height: 16rem;
 }
 
+/* Nothing to list yet: the detail pane's empty state (with its call to
+   action) takes the list's place, split or stacked. */
+[data-slot="settings-split"][data-empty] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+[data-slot="settings-split"][data-empty] > [data-slot="settings-split-list"] {
+  display: none;
+}
+
+[data-slot="settings-page"] [data-slot="settings-split"][data-empty] > [data-slot="settings-split-detail"] {
+  display: grid;
+}
+
 @container settings-content (width < 960px) {
   [data-slot="settings-page"][data-selection="none"] [data-slot="settings-split-detail"] {
     display: none;

@@ -35,7 +35,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     const settingsNavigation = page.getByTestId("desktop-sidebar").getByRole("navigation", { name: "Settings pages", exact: true });
     await expect(settingsNavigation.getByRole("link", { name: "Agents", exact: true })).toHaveAttribute("aria-current", "page");
     await expect(page.getByRole("heading", { name: "Agents", level: 1 })).toBeVisible();
-    await expect(page.getByText("No Agents yet.")).toBeVisible();
+    await expect(page.getByText("No Agents yet", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Create Agent" }).click();
     await expect(page).toHaveURL("/settings/agents/~new");
 
@@ -398,7 +398,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     await expect(page).toHaveURL("/settings/agents");
     await agentsListed;
     browserDiagnostics.allowNetworkFailures = false;
-    await expect(page.getByText("No Agents yet.")).toBeVisible();
+    await expect(page.getByText("No Agents yet", { exact: true })).toBeVisible();
 
     const retainedResponse = await page.request.get(
       `/api${threadPath}?activityDetail=full`,

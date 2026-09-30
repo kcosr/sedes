@@ -194,7 +194,10 @@ describe("SettingsView", () => {
     };
     renderSettings({ configuration: configuration, page: "backends" });
     expect(screen.getByRole("heading", { name: "Backends" })).toBeVisible();
-    expect(await screen.findByText(/Add an execution environment first/)).toBeVisible();
+    // With nothing to list, one empty state holds the action that comes first.
+    expect(await screen.findByText(/A backend runs in an execution environment/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Add environment" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Add backend" })).toBeNull();
     fireEvent.click(navLink("Environments"));
     expect(await screen.findByRole("heading", { name: "Environments", level: 1 })).toBeVisible();
     expect(screen.queryByLabelText(/principal/i)).toBeNull();

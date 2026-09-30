@@ -205,8 +205,7 @@ export function EnvironmentList({ snapshot, filters, onFilters, hosts, stale, se
     {pending.length ? <InventoryGroup label="Awaiting approval" title="Awaiting approval" count={countLabel(pending.length, "host")}>
       <EntityList>{pending.map(registration => <PendingHostRow key={registration.id} registration={registration} selected={registration.id === selectedRegistrationId} />)}</EntityList>
     </InventoryGroup> : null}
-    {!configuration.executionEnvironments.length ? <EmptyState icon={<Server />} title="No execution environments"
-      description="Add this machine, an SSH host, or pair a host to choose where agents run." />
+    {!configuration.executionEnvironments.length ? <EmptyState variant="inline" title="No environments added yet." />
       : pending.length ? <InventoryGroup label="Environments" title="Environments" count={filtered ? undefined : countLabel(entries.length, "environment")}>
         {filtered ? <ResultCount shown={entries.length} total={configuration.executionEnvironments.length} noun="environment" onClear={clear} /> : null}
         {rows}
@@ -277,10 +276,7 @@ export function BackendList({ snapshot, filters, onFilters, selectedId, actions 
       && text.includes(term) && matchesStatus(runtimeFor(snapshot, "backend", backend.id), filters.status, backend.enabled);
   });
   const clear = () => { onFilters(emptyFilters); search.current?.focus(); };
-  if (!configuration.backends.length) {
-    return <EmptyState icon={<Server />} title="No backends"
-      description={configuration.executionEnvironments.length === 0 ? "Add an execution environment first, then add a backend to make a provider available." : "Add a backend to make a provider available to new threads."} />;
-  }
+  if (!configuration.backends.length) return <EmptyState variant="inline" title="No backends added yet." />;
   return <>
     <div className="execution-toolbar" data-filters={filtersOpen ? "open" : "closed"}>
       <SettingsSearch ref={search} label="Search backends" value={filters.search} onValueChange={value => onFilters({ ...filters, search: value })} />

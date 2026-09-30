@@ -402,6 +402,11 @@ export function ExecutionSettings({ controls }: {
   const exitPath = () => settingsPath(page, settingsResourceParent(location));
 
   const selection = !mode ? "none" : mode === "view" ? "detail" : "editor";
+  // Nothing to list yet: one empty state, with the action that fills the page.
+  const inventoryEmpty = Boolean(configuration && !mode && (page === "environments"
+    ? !configuration.executionEnvironments.length && !registrations.some(entry => entry.state === "pending")
+    : !configuration.backends.length));
+  const addEnvironment = () => navigate(settingsPath("environments", { mode: "new" }));
   // Hidden, a detail shows nothing, so its menus and dialogs close with the page.
   const selectedEnvironment = visible && page === "environments" && mode === "view" ? configuration?.executionEnvironments.find(entry => entry.id === resourceId) : undefined;
   const selectedBackend = visible && page === "backends" && mode === "view" ? configuration?.backends.find(entry => entry.id === resourceId) : undefined;
@@ -415,6 +420,13 @@ export function ExecutionSettings({ controls }: {
     onRuntime: state.updateRuntime, onRefresh: state.refreshRuntime } : undefined;
   const detailPane = (): ReactNode => {
     if (!configuration || !snapshot || !visible) return null;
+    if (inventoryEmpty) return page === "environments" || !configuration.executionEnvironments.length
+      ? <EmptyState icon={<Server />} title={page === "environments" ? "No environments yet" : "No backends yet"}
+        description={page === "environments" ? "Add this machine, an SSH host, or pair a host to choose where agents run."
+          : "A backend runs in an execution environment. Add one first, then add a backend to make a provider available."}
+        action={<Button type="button" disabled={pending} onClick={addEnvironment}><Plus />Add environment</Button>} />
+      : <EmptyState icon={<Server />} title="No backends yet" description="Add a backend to make a provider available to new threads."
+        action={<Button type="button" disabled={pending || !canAddBackend} onClick={() => addBackend()}><Plus />Add backend</Button>} />;
     if (!mode) return <EmptyState icon={<Server />} title={page === "environments" ? "Select an environment" : "Select a backend"}
       description={page === "environments" ? "Its status, backends and activity appear here." : "Its status, connections and activity appear here."} />;
     if (selectionMissing) return <div className="execution-detail"><SettingsDetailHeader back={listBack}
@@ -470,11 +482,14 @@ export function ExecutionSettings({ controls }: {
       description={page === "environments" ? "Where agents run and which folders they can reach." : "Model providers available in each environment."}
       actions={<>
         <Button type="button" variant="ghost" size="icon" aria-label="Refresh" title="Refresh" disabled={state.loading || state.saving || pairing.busy} onClick={refresh}><RefreshCw /></Button>
-        {page === "environments"
+        {/* An empty inventory's empty state carries the one Add. */}
+        {inventoryEmpty ? null : page === "environments"
           ? <Button type="button" variant="outline" aria-label="Add environment" disabled={!configuration || pending || configuration.executionEnvironments.length >= 16}
-            onClick={() => navigate(settingsPath("environments", { mode: "new" }))}><Plus />Add environment</Button>
+            title={configuration && configuration.executionEnvironments.length >= 16 ? "An account holds at most 16 environments." : undefined}
+            onClick={addEnvironment}><Plus />Add environment</Button>
           : <Button type="button" variant="outline" aria-label="Add backend" disabled={!configuration || pending || !canAddBackend}
-            title={configuration && !configuration.executionEnvironments.length ? "Add an execution environment first" : undefined}
+            title={configuration && !configuration.executionEnvironments.length ? "Add an execution environment first."
+              : configuration && configuration.backends.length >= 32 ? "An account holds at most 32 backends." : undefined}
             onClick={() => addBackend(currentFilters.environment || undefined)}><Plus />Add backend</Button>}
       </>}>
       {state.loading && !snapshot ? <div className="execution-loading" role="status" aria-label="Loading execution configuration">
@@ -489,7 +504,7 @@ export function ExecutionSettings({ controls }: {
         dirty={dirtyKeys.has("defaults")} saving={state.saving && saveOwner === "defaults"} savedAt={savedAtFor("defaults")}
         errors={mappedFailure("defaults", { kind: "document" }, defaultsFields)} error={failureFor("defaults")?.message} disabled={pending}
         onSave={() => void saveDefaults()} onCancel={() => { setDefaultsDraft(undefined); state.clearFeedback(); }} /> : null}
-      {snapshot && configuration ? <SettingsSplit wide={page === "backends" && selection === "editor"}
+      {snapshot && configuration ? <SettingsSplit wide={page === "backends" && selection === "editor"} empty={inventoryEmpty}
         listLabel={page === "environments" ? "Configured environments" : "Configured backends"}
         list={!visible ? null : page === "environments"
           ? <EnvironmentList snapshot={snapshot} filters={currentFilters} onFilters={setCurrentFilters} hosts={pairing.hosts} stale={pairing.stale}
