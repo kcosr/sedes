@@ -1000,6 +1000,7 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   min-height: 0;
   display: grid;
   gap: 2px;
+  padding: var(--menu-panel-padding);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -6129,143 +6130,89 @@ body:has(.thread-settings-sheet[data-state="open"])
   flex-shrink: 0;
 }
 
+/* The searchable picker (ui/searchable-select.tsx): a plain search row over
+   a divider, then the options in the menu row anatomy. At least as wide as
+   its trigger. The New-thread agent picker reuses the popover and search
+   row classes. */
 .searchable-select-popover {
-  width: min(360px, calc(100vw - 16px));
-  max-height: min(var(--radix-popover-content-available-height, 70dvh), 440px, 70dvh);
-  gap: 6px;
-  padding: 5px;
+  width: min(
+    max(var(--radix-popover-trigger-width), 320px),
+    calc(100vw - 16px)
+  );
+  max-height: min(var(--radix-popover-content-available-height), 440px, 70dvh);
+  gap: 0;
+  padding: 0;
   overflow: hidden;
 }
 
 .searchable-select-search {
   display: flex;
+  min-height: 40px;
   flex: 0 0 auto;
   align-items: center;
-  gap: 7px;
-  padding: 2px 4px 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  color: var(--muted-foreground);
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--muted-foreground-2);
 }
 
-.searchable-select-dialog-overlay {
-  z-index: var(--z-blocking);
-}
-
-.searchable-select-dialog {
-  z-index: calc(var(--z-blocking) + 1);
-  left: 50%;
-  bottom: calc(var(--select-keyboard-inset, 0px) + 16px);
-  transform: translateX(-50%);
-  width: min(560px, calc(100vw - 32px));
-  height: min(600px, calc(100dvh - var(--select-keyboard-inset, 0px) - 32px));
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  overflow: hidden;
-  padding: 12px;
-  border-radius: var(--radius-lg);
-  background: var(--popover);
-  color: var(--popover-foreground);
-  box-shadow: var(--shadow);
-  border: 1px solid var(--border);
-}
-
-.searchable-select-dialog-title {
-  flex: 0 0 auto;
-  margin: 0;
-  padding-right: 32px;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.searchable-select-dialog .searchable-select-options {
-  flex: 1 1 auto;
-}
-
-.searchable-select-search:focus-within {
-  border-color: var(--ring);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+.searchable-select-search > svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+  flex: none;
 }
 
 .searchable-select-search [data-slot="input"] {
-  height: 32px;
+  height: 38px;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 0;
   border: 0;
+  border-radius: 0;
   background: transparent;
-  padding-inline: 2px 8px;
   box-shadow: none;
+  color: var(--foreground);
+  font-size: var(--text-input);
 }
 
 .searchable-select-search [data-slot="input"]:focus-visible {
   box-shadow: none;
 }
 
+.searchable-select-search [data-slot="input"]::placeholder {
+  color: var(--muted-foreground-2);
+}
+
 .searchable-select-options {
+  display: flex;
   min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  padding: var(--menu-panel-padding);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 2px;
 }
 
-.searchable-select-options [role="option"] {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 8px;
-  border-radius: var(--radius-ctl);
-  color: var(--foreground);
-  font-size: 13px;
-  line-height: 1.3;
-  text-align: left;
+/* As a sheet the picker keeps one height while the list filters, and its
+   search row runs edge to edge. */
+.searchable-select-sheet {
+  height: min(600px, calc(100dvh - var(--keyboard-inset) - 16px));
+  gap: var(--space-2);
 }
 
-.searchable-select-option-copy {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-  gap: 2px;
-  overflow-wrap: anywhere;
-}
-
-.searchable-select-option-copy small {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-}
-
-.searchable-select-options [role="option"][data-active] {
-  background: var(--accent);
-  color: var(--accent-foreground);
-}
-
-.searchable-select-options [role="option"][aria-disabled="true"] {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.searchable-select-options [role="option"] > svg {
-  flex: 0 0 auto;
-}
-
-.searchable-select-empty {
-  margin: 0;
-  padding: 18px 12px;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  text-align: center;
+.searchable-select-sheet .searchable-select-search {
+  margin-inline: calc(-1 * var(--dialog-padding));
+  padding-inline: var(--dialog-padding);
 }
 
 @media (max-width: 819px), (pointer: coarse) {
   .searchable-select-trigger,
-  .new-thread-agent-option,
-  .searchable-select-options [role="option"] {
+  .new-thread-agent-option {
     min-height: 44px;
   }
 
-  .searchable-select-search [data-slot="input"] {
-    min-height: 40px;
-    font-size: 16px;
+  .searchable-select-search {
+    min-height: var(--control-touch);
   }
 }
 
