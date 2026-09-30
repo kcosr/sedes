@@ -185,6 +185,7 @@ The current driver supports:
 - choice, confirmation, text-input, editor, and Sedes-managed decision
   interactions;
 - context, token, cost, and counter usage;
+- completed-turn response throughput while the session remains loaded;
 - shared staged file attachments and model-conditional native image input;
 - images the model viewed with the built-in `read` tool, shown as a row with
   the file name that expands to the exact image Pi sent; and
@@ -236,6 +237,13 @@ as they finish.
 
 ## Operational boundaries
 
+- Pi turn footers can show **tok/s** without `SEDES_EXPERIMENTAL_USAGE=1`.
+  This uses output tokens, including reasoning, over measured model-request
+  time; tools, approval waits, and compaction are excluded. Measurements are
+  in memory only, bounded to the latest 100 measured turns per loaded thread,
+  and disappear after runtime Stop, idle eviction, or server restart. Failed,
+  interrupted, and incompletely measured turns have no rate; no timing is
+  backfilled from native history. See [Turn speed](../../user/conversations.md#turn-speed).
 - The Pi provider runtime remains host-local. SSH support covers the managed
   workspace-tool/context topology and, when explicitly enabled, bounded skill
   discovery and exact selected-body reads. Sedes constructs Pi's native skill

@@ -4,6 +4,9 @@
 
 ### Breaking Changes
 
+- Browser and packaged clients must use client protocol 129, which adds
+  optional, runtime-only throughput measurements to completed turns. (#20)
+
 - Browser and packaged clients must use client protocol 128, which adds
   reviewed Task snapshots to settle/archive previews and completion requests. (#19)
 
@@ -16,7 +19,7 @@
   browser protocol change is required for this fix. (#15)
 
 - Codex viewed images use a new `viewed_image` transcript item, introduced
-  in client protocol 123. This build requires client protocol 128; see the
+  in client protocol 123. This build requires client protocol 129; see the
   client protocol entries below. (#11, #13, #14)
 
 - Claude backends require Claude Code 2.1.281 or newer and are tested through
@@ -61,6 +64,11 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Completed Pi turns show tokens per second at the left of the turn footer
+  when every main-agent response was measured. The rate excludes tool time
+  and works without experimental usage accounting. Measurements remain only
+  while the Pi runtime is loaded; older history has no reconstructed rate. (#20)
 
 - Settle, archive, and bulk stack confirmations list their affected open Tasks
   and offer **Complete all**, keeping completed Tasks attached to their threads.

@@ -863,6 +863,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       // against the externally authenticated subscription plan.
       usageSections: ["counters"],
       usageAccounting: "supported",
+      turnThroughput: "unsupported",
       effectiveSettings: {
         ...(this.#effectiveModel
           ? {

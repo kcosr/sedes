@@ -1244,6 +1244,44 @@ reclassifying the same stable result receipt would otherwise conflict with saved
 evidence. This is a deferred classification correction, not an SDK claim of
 missing main-loop tokens.
 
+Completed turns may separately carry optional volatile `throughput` metadata:
+`{ outputTokens, requestDurationMs }`. This is a thread-runtime performance
+measurement, independent of the experimental accounting gate, and never token,
+cost, or request-count authority for accounting reports. `UsageSnapshot` and
+`usage_changed` remain unchanged. Do not persist the measurement, reconstruct it
+from native history, or use browser arrival times. Match the numerator and
+denominator to exactly the same observed main-agent model requests; output
+already includes reasoning. Request duration includes provider startup, network
+latency, and retries within a stream, but excludes tools, approval waits,
+compaction, auxiliary work, and gaps between requests. Missing, invalid, failed,
+or interrupted request evidence suppresses the whole turn's rate. An emitted
+error response still invalidates the turn when SDK retry or context-overflow
+recovery later succeeds.
+
+The required backend capability `turnThroughput` has these dispositions:
+
+| Backend | Turn throughput |
+| --- | --- |
+| Pi | Supported through native request-lifecycle observation on main in every supported workspace topology. |
+| Codex | Unsupported; current turn wall time is not model-request duration. |
+| Claude | Unsupported until request timing and matching output scope are established. |
+| Grok | Unsupported; no admitted main-agent token/timing pair. |
+
+The actor rejects measurement-bearing snapshots and history/seek results when
+the backend capability is unsupported. An unsupported live measurement or a
+capability withdrawal with retained measurements requires authoritative
+projection recovery before publication; failed recovery leaves the last valid
+projection explicitly stale.
+
+Keep the optional metadata on completed normalized turns only. Retain at most
+100 completed measurements per resident Pi handle, preserve them through live
+updates, projection replacements, bounded history/seek, activity summary views,
+and reconnect checkpoints, and clear them on runtime disposal. A replacement
+that lacks a measurement must clear it rather than merging an obsolete value.
+Forked or newly opened runtimes do not inherit measurements. Test truthful
+unsupported capabilities, accounting-disabled operation, missing evidence,
+duplicate terminal events, and lifetime boundaries alongside successful capture.
+
 A cumulative counter that resumes above zero, for example from provider totals
 saved by an earlier process, is not new work. Pass its starting value to
 `open()` as `reportedBaseline` when the series is created, so the service

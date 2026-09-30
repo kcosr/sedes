@@ -246,7 +246,7 @@ describe("blocking interaction protocol", () => {
         reason: { text: "Unavailable" },
       },
       interactionKinds: ["decision" as const],
-      usageAccounting: "supported" as const, usageSections: [],
+      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
       effectiveSettings: {},
     };
     expect(

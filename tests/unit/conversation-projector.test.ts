@@ -36,6 +36,27 @@ function snapshot(): BackendConversationSnapshot {
 }
 
 describe("ConversationProjector", () => {
+  it("preserves volatile throughput in snapshots and pages, publishes metric-only enrichment, and clears it on replacement", () => {
+    const projector = new ConversationProjector({ backendInstanceId: "backend", bindingIdentity: "binding" });
+    const source = snapshot();
+    const initial = projector.replace(source, -1);
+    const id = initial.orderedTurnIds[0]!;
+    const throughput = { outputTokens: 200, requestDurationMs: 4000 };
+    const turn = { ...source.turnsById["user-1"]!, throughput };
+    expect(projector.apply({ handleSequence: 0, event: { type: "turn_completed", turn } })).toMatchObject({
+      kind: "events", events: [{ type: "turn_upsert", turn: { id, revision: 1, throughput } }],
+    });
+    expect(projector.apply({ handleSequence: 1, event: { type: "turn_completed", turn } })).toEqual({ kind: "events", events: [] });
+    const measured = { ...source, turnsById: { "user-1": turn } };
+    const { runState: _runState, ...backendPage } = measured;
+    const page = projector.projectHistoryPage(backendPage, {
+      branching: { availability: "unavailable", reason: { text: "Unavailable" } }, sourceRunState: "idle",
+    });
+    expect(page.turnsById[id]?.throughput).toEqual(throughput);
+    expect(projector.replace(measured, 1).turnsById[id]?.throughput).toEqual(throughput);
+    expect(projector.replace(source, -1).turnsById[id]).not.toHaveProperty("throughput");
+  });
+
   it("projects failure metadata without adding items, and publishes one-way diagnostic enrichment", () => {
     const projector = new ConversationProjector({ backendInstanceId: "backend", bindingIdentity: "binding" });
     const source = snapshot();

@@ -803,6 +803,13 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
       );
       expect(finalAssistantIndex).toBeGreaterThanOrEqual(0);
       expect(finalAssistantIndex).toBeLessThan(completedTurnIndex);
+      const measuredTurn = eventOfType(events.slice(turnEventStart), "turn_completed")
+        .find(({ turn }) => turn.status === "completed")!.turn;
+      expect(measuredTurn.throughput?.outputTokens).toBeGreaterThan(0);
+      expect(measuredTurn.throughput?.requestDurationMs).toBeGreaterThan(0);
+      const measuredHistory = await conversation.handle.history({ limit: 100 });
+      expect(measuredHistory.turnsById[measuredTurn.backendTurnId]?.throughput)
+        .toEqual(measuredTurn.throughput);
       expect(
         assistantEvents.some(
           ({ event }) =>
@@ -989,6 +996,8 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
           ),
         "Timed out waiting for the interrupted real Pi turn to settle.",
       );
+      expect(eventOfType(events.slice(stopEventStart), "turn_completed")
+        .every(({ turn }) => turn.throughput === undefined)).toBe(true);
       const childAfterSourceActivity = await driver.read({
         scope,
         workspace: fixture.workspace,
@@ -1014,6 +1023,8 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
       throw new Error("REAL_PI_BLOCKER: no validated read path was observed.");
     }
     expect(reopened.snapshot.runState).toBe("idle");
+    expect(Object.values(reopened.snapshot.turnsById)
+      .every((turn) => turn.throughput === undefined)).toBe(true);
     expect(
       Object.values(reopened.snapshot.itemsById).some(
         (item) =>

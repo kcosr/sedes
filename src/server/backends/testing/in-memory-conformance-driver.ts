@@ -387,6 +387,7 @@ function capabilities(
       },
       interactionKinds: [],
       usageAccounting: "supported",
+      turnThroughput: "supported",
       usageSections: ["context", "counters"],
       effectiveSettings: {},
     };
@@ -421,6 +422,7 @@ function capabilities(
     },
     interactionKinds: [],
     usageAccounting: "supported",
+    turnThroughput: "supported",
       usageSections: ["context", "counters"],
     effectiveSettings: {},
   };
@@ -970,6 +972,56 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
   ): void {
     const delay = this.#scriptedResponseStepDelayMilliseconds;
     if (delay === undefined) return;
+
+    if (inputText === "Measure turn throughput") {
+      const assistantBase = {
+        backendItemId: `memory-item-${++record.itemCounter}`,
+        backendTurnId: turn.backendTurnId,
+        semanticKind: "assistant_message" as const,
+        sourceOrder: 1,
+        startedAt: this.now(),
+      };
+      this.#schedule(delay, () => {
+        if (!this.#isActive(record, turn.backendTurnId)) return;
+        const item = {
+          ...assistantBase,
+          status: "streaming" as const,
+          markdown: boundText("Preparing the measured response."),
+        } satisfies BackendItem;
+        this.#appendItem(record, turn.backendTurnId, item);
+        this.emit(record, { type: "item_started", item });
+      });
+      this.#schedule(delay * 2, () => this.deliverScriptedAssistantStage(inputText, "settled", () => {
+        if (!this.#isActive(record, turn.backendTurnId)) return;
+        const completedAt = this.now();
+        const item = {
+          ...assistantBase,
+          status: "completed" as const,
+          completedAt,
+          markdown: boundText("The measured response is complete."),
+        } satisfies BackendItem;
+        record.snapshot.itemsById[item.backendItemId] = item;
+        this.emit(record, { type: "item_completed", item });
+        const completedTurn: BackendTurn = {
+          ...record.snapshot.turnsById[turn.backendTurnId]!,
+          status: "completed",
+          endedBy: "agent_settled",
+          completedAt,
+          // Explicit provider observation fixture, independent of the script's
+          // delivery delay and the separate recorded-usage test fixture.
+          throughput: { outputTokens: 423, requestDurationMs: 10_000 },
+        };
+        record.snapshot.turnsById[turn.backendTurnId] = completedTurn;
+        record.snapshot.runState = "idle";
+        delete record.snapshot.activeBackendTurnId;
+        record.updatedAt = completedAt;
+        record.historyRevision += 1;
+        this.updateTerminalReconciliation(record, completedTurn);
+        this.emit(record, { type: "turn_completed", turn: completedTurn });
+        this.emit(record, { type: "run_state_changed", state: "idle" });
+      }));
+      return;
+    }
 
     if (inputText === "Stream a TypeScript code fence progressively") {
       const assistantBase = {

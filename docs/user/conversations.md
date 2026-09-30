@@ -9,6 +9,25 @@ the containing history page must also fit its limit.
 This guide covers the full conversation workflow, from an empty draft through
 running, queued, completed, and forked work.
 
+## Turn speed
+
+Completed Pi turns can show a small **tok/s** value at the left of the turn
+footer. It is the main agent's output tokens, including reasoning, divided by
+the combined time spent on its model requests. Request startup and network
+latency count; tool execution, approval waits, compaction, and gaps between
+requests do not. This measures response throughput across the turn, so a long
+tool call does not make the model appear slower.
+
+The value appears only when every response was measured successfully. Failed,
+stopped, and older unmeasured turns have no value. A response error also hides
+the value when Pi retries or recovers from a context overflow successfully.
+
+It works without enabling experimental usage accounting. Sedes keeps the most
+recent 100 measured turns in memory while that Pi session remains loaded;
+stopping or unloading the runtime, or restarting the server, discards them.
+Refreshing the browser can retain them while the same session is loaded.
+Codex, Claude, and Grok do not currently provide this measurement.
+
 ## View recorded usage
 
 Recorded usage is **Experimental**. The views below require the server

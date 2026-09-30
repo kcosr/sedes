@@ -271,6 +271,7 @@ function fakeSessionFactory(
         thinkingLevel: "low",
         sessionManager: manager,
         ready: async () => undefined,
+        takeRequestThroughput: () => undefined,
         async skillPrompt(selectedSkillId, text) {
           return {
             text: `resolved:${selectedSkillId}${text ? ` ${text}` : ""}`,
@@ -1815,6 +1816,153 @@ describe("Pi interaction bridge", () => {
 });
 
 describe("Pi conversation backend driver", () => {
+  it("keeps throughput only in the resident handle with accounting disabled, across refresh, history and targeted lookup", async () => {
+    const fixture = await workspace();
+    const base = fakeSessionFactory(1, true);
+    const managers: PiSdkSession["sessionManager"][] = [];
+    const openUsage = vi.fn(() => { throw new Error("Accounting must remain disabled"); });
+    const driver = new PiConversationBackendDriver({
+      instance, connection, usage: { ...NO_USAGE_SINK, open: openUsage },
+      nativeDiscoveryNamespaceKey: "pi-test-native-namespace", toolProvenanceKey,
+      agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy, sessionDirectory: fixture.sessions,
+      sessionFactory: { async create(input) {
+        managers.push(input.manager);
+        const session = await base.create(input);
+        session.takeRequestThroughput = (message) => message.stopReason === "toolUse"
+          ? { outputTokens: 10, requestDurationMs: 1000 }
+          : { outputTokens: 100, requestDurationMs: 3000 };
+        return session;
+      } },
+    });
+    const created = await driver.create({ scope, workspace: fixture.workspace, applicationThreadId: "throughput",
+      applicationOperationId: "throughput-create", source: { kind: "user" } });
+    const attach = () => driver.attach({ scope, workspace: fixture.workspace, binding: binding(created.backendConversationId),
+      opaqueBindingDetail: created.opaqueBindingDetail });
+    const handle = await attach();
+    const completed: BackendTurn[] = [];
+    const unsubscribe = handle.subscribe(event => { if (event.type === "turn_completed") completed.push(event.turn); });
+    const throughput = { outputTokens: 110, requestDurationMs: 4000 };
+    try {
+      expect((await handle.backendCapabilities()).turnThroughput).toBe("supported");
+      for (let index = 0; index < 11; index++) {
+        await handle.submit({ applicationOperationId: `throughput-${index}`, mutationId: `throughput-${index}`,
+          reconciliationToken: `throughput-${index}`, source: { kind: "user" }, contextExcerpts: [], attachments: [], taskContexts: [], text: "Measured tool loop" });
+        await vi.waitFor(() => expect(completed).toHaveLength(index + 1));
+        expect(completed[index]?.throughput).toEqual(throughput);
+      }
+      const first = completed[0]!.backendTurnId;
+      const current = await handle.establishProjection({ signal: new AbortController().signal });
+      expect(current.snapshot.turnsById[completed.at(-1)!.backendTurnId]?.throughput).toEqual(throughput);
+      expect(current.snapshot.turnsById[first]).toBeUndefined(); // The initial window has rotated.
+      const page = await handle.history({ limit: 100 });
+      expect(page.turnsById[first]?.throughput).toEqual(throughput);
+      const located = await handle.locateTurn({ maximumTurnCandidates: 100, matchesBackendTurnId: id => id === first });
+      expect(located).toMatchObject({ status: "found", page: { turnsById: { [first]: { throughput } } } });
+      expect(openUsage).not.toHaveBeenCalled();
+      expect(JSON.stringify(managers.at(-1)!.getEntries())).not.toContain("requestDurationMs");
+      unsubscribe();
+      await handle.close();
+      const reopened = await attach();
+      try {
+        const historical = await reopened.history({ limit: 100 });
+        expect(Object.values(historical.turnsById).every(turn => turn.throughput === undefined)).toBe(true);
+      } finally { await reopened.close(); }
+    } finally { unsubscribe(); await handle.close(); }
+  });
+
+  it.each(["duplicate response", "follow-up"] as const)("attributes throughput across %s events in one agent run", async (scenario) => {
+    const fixture = await workspace();
+    const base = fakeSessionFactory(1, true, undefined, 0, undefined, 0, undefined, undefined,
+      undefined, undefined, undefined, false, false, async (manager, emit) => {
+        if (scenario !== "follow-up") return;
+        const user = { role: "user" as const, content: "Follow up in the same run", timestamp: Date.now() };
+        // Match the SDK: notify first, persist before the driver's correlation microtask.
+        emit({ type: "message_end", message: user } as never);
+        manager.appendMessage(user);
+        await Promise.resolve();
+      });
+    const taken = new WeakSet<object>();
+    const takeRequestThroughput = vi.fn<PiSdkSession["takeRequestThroughput"]>((message) => {
+      if (taken.has(message)) return undefined;
+      taken.add(message);
+      return message.stopReason === "toolUse"
+        ? { outputTokens: 10, requestDurationMs: 1000 }
+        : { outputTokens: 100, requestDurationMs: 3000 };
+    });
+    const driver = new PiConversationBackendDriver({
+      instance, connection, usage: NO_USAGE_SINK, nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
+      toolProvenanceKey, agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy, sessionDirectory: fixture.sessions,
+      sessionFactory: { async create(input) {
+        const session = await base.create(input);
+        const subscribe = session.subscribe.bind(session);
+        session.subscribe = listener => subscribe(event => {
+          listener(event);
+          if (scenario === "duplicate response" && event.type === "message_end" && event.message.role === "assistant") {
+            listener(event);
+          }
+        });
+        session.takeRequestThroughput = takeRequestThroughput;
+        return session;
+      } },
+    });
+    const created = await driver.create({ scope, workspace: fixture.workspace, applicationThreadId: "throughput-boundary",
+      applicationOperationId: "throughput-boundary-create", source: { kind: "user" } });
+    const handle = await driver.attach({ scope, workspace: fixture.workspace, binding: binding(created.backendConversationId),
+      opaqueBindingDetail: created.opaqueBindingDetail });
+    const completed: BackendTurn[] = [];
+    const events: BackendConversationEvent[] = [];
+    handle.subscribe(event => {
+      events.push(event);
+      if (event.type === "turn_completed") completed.push(event.turn);
+    });
+    try {
+      await handle.submit({ applicationOperationId: "throughput-boundary", mutationId: "throughput-boundary", reconciliationToken: "throughput-boundary",
+        source: { kind: "user" }, contextExcerpts: [], attachments: [], taskContexts: [], text: "Measured tool loop" });
+      await vi.waitFor(() => expect(completed).toHaveLength(scenario === "follow-up" ? 2 : 1));
+      expect(takeRequestThroughput).toHaveBeenCalledTimes(2);
+      expect(events.some(event => event.type === "resnapshot_required")).toBe(false);
+      if (scenario === "follow-up") {
+        expect(completed[0]).toMatchObject({ status: "completed", endedBy: "steer", throughput: { outputTokens: 10, requestDurationMs: 1000 } });
+        expect(completed[1]).toMatchObject({ status: "completed", throughput: { outputTokens: 100, requestDurationMs: 3000 } });
+        expect(completed[0]!.backendTurnId).not.toBe(completed[1]!.backendTurnId);
+      } else {
+        expect(completed[0]?.throughput).toEqual({ outputTokens: 110, requestDurationMs: 4000 });
+      }
+      const history = await handle.history({ limit: 10 });
+      for (const turn of completed) {
+        expect(history.turnsById[turn.backendTurnId]?.throughput).toEqual(turn.throughput);
+      }
+    } finally { await handle.close(); }
+  });
+
+  it.each(["missing", "failed"] as const)("omits turn throughput when a response is %s", async (scenario) => {
+    const fixture = await workspace();
+    const base = fakeSessionFactory(1, true, undefined, 0, undefined, 0, scenario === "failed" ? ["error"] : undefined);
+    const driver = new PiConversationBackendDriver({
+      instance, connection, usage: NO_USAGE_SINK, nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
+      toolProvenanceKey, agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy, sessionDirectory: fixture.sessions,
+      sessionFactory: { async create(input) {
+        const session = await base.create(input);
+        session.takeRequestThroughput = message => message.stopReason === "toolUse"
+          ? { outputTokens: 10, requestDurationMs: 1000 } : undefined;
+        return session;
+      } },
+    });
+    const created = await driver.create({ scope, workspace: fixture.workspace, applicationThreadId: "throughput-missing",
+      applicationOperationId: "throughput-missing-create", source: { kind: "user" } });
+    const handle = await driver.attach({ scope, workspace: fixture.workspace, binding: binding(created.backendConversationId),
+      opaqueBindingDetail: created.opaqueBindingDetail });
+    let turn: BackendTurn | undefined;
+    handle.subscribe(event => { if (event.type === "turn_completed") turn = event.turn; });
+    try {
+      await handle.submit({ applicationOperationId: "throughput-missing", mutationId: "throughput-missing", reconciliationToken: "throughput-missing",
+        source: { kind: "user" }, contextExcerpts: [], attachments: [], taskContexts: [], text: "Unmeasured response" });
+      await vi.waitFor(() => expect(turn).toBeDefined());
+      expect(turn).not.toHaveProperty("throughput");
+      expect(turn?.status).toBe(scenario === "failed" ? "failed" : "completed");
+    } finally { await handle.close(); }
+  });
+
   it("records live assistant and tool usage after the pinned SDK persists message_end without entry_appended", async () => {
     const fixture = await workspace();
     const agentDir=path.join(fixture.root,"agent");await mkdir(agentDir);

@@ -6,6 +6,10 @@ import type {
 } from "../../src/shared/protocol/conversation.js";
 import { MAXIMUM_NORMALIZED_TIMELINE_TURNS } from "../../src/shared/protocol/conversation.js";
 import { ThreadEventHub } from "../../src/server/events/thread-event-hub.js";
+import {
+  projectThreadEventEnvelopeActivity,
+  projectThreadSnapshotActivity,
+} from "../../src/server/conversations/thread-activity-projection.js";
 
 function snapshot(): NormalizedThreadSnapshot {
   return {
@@ -164,6 +168,54 @@ function applicationState(
 }
 
 describe("ThreadEventHub", () => {
+  it("retains throughput in replay, checkpoints, and summary views until an authoritative replacement clears it", () => {
+    const hub = new ThreadEventHub();
+    const initial = hub.publish(replacement("generation-1"));
+    const throughput = { outputTokens: 240, requestDurationMs: 4_000 };
+    const turn = {
+      id: "turn-1",
+      revision: 1,
+      status: "completed" as const,
+      endedBy: "agent_settled" as const,
+      orderedItemIds: [],
+      throughput,
+    };
+    const event = hub.publish({
+      type: "turn_upsert",
+      generation: "generation-1",
+      turn,
+      fork: {
+        sourceTurnId: turn.id,
+        expectedTurnRevision: turn.revision,
+        available: false,
+        unavailableReason: { text: "Unavailable." },
+      },
+    });
+    const resumed = hub.subscribe(vi.fn(), initial.eventId);
+    const current = hub.subscribeFromCurrentSnapshot(vi.fn());
+    expect(resumed.replay).toEqual([event]);
+    expect(current.checkpoint?.snapshot.turnsById[turn.id]?.throughput).toEqual(throughput);
+    expect(projectThreadEventEnvelopeActivity(event, "summary")).toEqual(event);
+    expect(projectThreadSnapshotActivity(hub.snapshot!, "summary").turnsById[turn.id]?.throughput).toEqual(throughput);
+
+    const { throughput: _throughput, ...unmeasured } = turn;
+    hub.publish({
+      ...replacement("generation-2"),
+      snapshot: {
+        ...snapshot(),
+        orderedTurnIds: [turn.id],
+        turnsById: { [turn.id]: unmeasured },
+        forksByTurnId: hub.snapshot!.forksByTurnId,
+      },
+    });
+    expect(hub.snapshot?.turnsById[turn.id]).not.toHaveProperty("throughput");
+    expect(hub.currentCheckpoint()?.snapshot.turnsById[turn.id]).not.toHaveProperty("throughput");
+    // Existing checkpoints are immutable captures, not references to current state.
+    expect(current.checkpoint?.snapshot.turnsById[turn.id]?.throughput).toEqual(throughput);
+    resumed.close();
+    current.close();
+  });
+
   it("publishes accounting invalidations as generation-fenced transcript no-ops", () => {
     const hub = new ThreadEventHub();
     expect(() => hub.publish({type:"usage_revision_changed",generation:"one",revision:"1"})).toThrow("thread_projection_snapshot_required");

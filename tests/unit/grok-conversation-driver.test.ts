@@ -250,6 +250,7 @@ describe("normalized Grok conversation driver", () => {
         opaqueBindingDetail: created.opaqueBindingDetail,
       });
       expect(await handle.backendCapabilities()).toMatchObject({
+        turnThroughput: "unsupported",
         actions: ["rename"],
         deliveryModes: ["submit"],
         steerTarget: null,

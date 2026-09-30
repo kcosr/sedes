@@ -1174,6 +1174,7 @@ export class CodexConversationHandle implements ConversationHandle {
         "form",
       ],
       usageAccounting: "supported",
+      turnThroughput: "unsupported",
       usageSections: ["context"],
       effectiveSettings,
     };

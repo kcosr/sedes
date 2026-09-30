@@ -246,6 +246,7 @@ const emptyBackendCapabilities: BackendCapabilityDocument = {
   },
   interactionKinds: [],
   usageAccounting: "unsupported",
+  turnThroughput: "unsupported",
       usageSections: [],
   effectiveSettings: {},
 };

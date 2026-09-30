@@ -94,6 +94,7 @@ test.describe.serial("normalized Codex thread state", () => {
     ).toContainText(
       "Codex is streaming a browser-neutral normalized response.",
     );
+    await expect(page.locator(".turn-throughput")).toHaveCount(0);
     const primaryAfter = await readFixtureState("codex-import-e2e");
     const udsAfterPrimary = await readFixtureState("codex-uds-e2e");
     expect(threadStartCount(primaryAfter)).toBe(

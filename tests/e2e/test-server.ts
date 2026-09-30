@@ -3647,6 +3647,7 @@ async function main(): Promise<void> {
   let codeStages: Map<"closed" | "settled", { released: boolean; deliver?: () => void }> | undefined;
   let mermaidStages: Map<"closed" | "settled", { released: boolean; deliver?: () => void }> | undefined;
   let bookmarkStages: Map<"closed" | "settled", { released: boolean; deliver?: () => void }> | undefined;
+  let throughputSettlement: { released: boolean; deliver?: () => void } | undefined;
   let piTurnResponseArmed = false;
   let piTurnResponseRelease: (() => void) | undefined;
   let piBackgroundBurst: {
@@ -3675,7 +3676,9 @@ async function main(): Promise<void> {
           ? codeStages?.get(stage)
           : input === "Bookmark the durable identity design"
             ? bookmarkStages?.get(stage)
-            : undefined;
+            : input === "Measure turn throughput" && stage === "settled"
+              ? throughputSettlement
+              : undefined;
       if (!gate || gate.released) return deliverAssistantStage(input, stage, deliver);
       gate.deliver = () => deliverAssistantStage(input, stage, deliver);
     };
@@ -5398,6 +5401,17 @@ async function main(): Promise<void> {
     for (const connectionProfile of piConnections) {
       piTargetAvailability.set(connectionProfile.id, true);
     }
+    response.status(204).end();
+  });
+  app.post("/__e2e/pi/throughput/arm", (_request, response) => {
+    throughputSettlement = { released: false };
+    response.status(204).end();
+  });
+  app.post("/__e2e/pi/throughput/release", (_request, response) => {
+    if (!throughputSettlement) { response.status(409).end(); return; }
+    throughputSettlement.released = true;
+    throughputSettlement.deliver?.();
+    throughputSettlement.deliver = undefined;
     response.status(204).end();
   });
   app.post("/__e2e/pi/bookmark/arm", (_request, response) => {
