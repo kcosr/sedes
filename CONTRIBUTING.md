@@ -47,7 +47,7 @@ from the source, not an invitation to contribute code.
 
 | Change | Required starting point |
 | --- | --- |
-| Client-only presentation | [Developer overview](docs/developer/overview.md) and relevant user guide |
+| Client-only presentation | [UI design system](docs/developer/ui-design-system.md), [Developer overview](docs/developer/overview.md), and relevant user guide |
 | Shared API or browser protocol | [Architecture](docs/internals/architecture.md) and shared protocol guidance in the developer overview |
 | Database or durable state | [Architecture: Persistence](docs/internals/architecture.md#persistence) and [Developer overview: Persistence and migrations](docs/developer/overview.md#persistence-and-migrations) |
 | Provider transcript ownership or load performance | [Provider-owned conversation state](docs/internals/provider-owned-conversation-state.md) |

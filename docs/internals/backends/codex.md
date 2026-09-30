@@ -587,11 +587,11 @@ bounded objective and projects provider-observed lifecycle status. Create,
 pause, resume, and clear are capability- and revision-checked. Neither feature
 is inferred from model names or provider text.
 
-The thread menu's **New** action snapshots all seven desired axes—model,
-reasoning effort, service tier, sandbox, network, approval policy, and
-reviewer—plus the exact Sedes tool policy. It revision-fences and revalidates
-that snapshot before creating an independent empty draft. Provider history,
-Goal, TUI state, and runtime generation do not transfer.
+The thread menu's **New with same settings** action snapshots all seven
+desired axes—model, reasoning effort, service tier, sandbox, network, approval
+policy, and reviewer—plus the exact Sedes tool policy. It revision-fences and
+revalidates that snapshot before creating an independent empty draft. Provider
+history, Goal, TUI state, and runtime generation do not transfer.
 
 ## Forks and recovery
 

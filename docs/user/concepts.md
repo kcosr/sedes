@@ -48,8 +48,9 @@ chosen project and target and copies the resulting settings into the thread.
 The thread is independent after creation: editing or deleting the Agent does
 not rewrite existing threads.
 
-Use **More > Agents** to manage Agents. Select **Custom** during thread creation
-when you do not want to start from a saved Agent. See
+Manage Agents in **Settings → Agents**, also opened from **More → Agents** in
+the sidebar footer. Select **Custom** during thread creation when you do not
+want to start from a saved Agent. See
 [Manage saved Agents](organize-work.md#manage-saved-agents) for the full
 workflow.
 
@@ -111,9 +112,10 @@ completed turn.
 A **fork** creates a separate provider conversation with copied native history
 through a supported boundary. The child keeps lineage back to its source.
 
-The thread menu's **New** action is different: it creates an empty, unbound
-draft in the same project and target with copied next-turn settings. It copies
-no transcript, draft, Task, attachment, queue, automation, or lineage.
+The thread menu's **New with same settings** action is different: it creates
+an empty, unbound draft in the same project and target with copied next-turn
+settings. It copies no transcript, draft, Task, attachment, queue, automation,
+or lineage.
 
 ## Task and automation
 

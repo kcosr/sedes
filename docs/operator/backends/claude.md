@@ -83,15 +83,15 @@ Claude credentials into its database.
 
 ## Quick configuration
 
-Add a local or **Sidecar SSH** environment, or accept an outbound Linux/macOS
-host, in **Settings → Environments**, then
-add **Claude** for that environment in **Settings → Backends**. Make these
-choices explicitly. The [legacy fixture](../../../config/legacy-import/server.claude.example.json)
+Add a **Local machine** or **SSH host** environment, or accept an outbound
+Linux/macOS host, in **Settings → Environments**, then add **Claude** for that
+environment in **Settings → Backends**. Make these choices explicitly. The [legacy fixture](../../../config/legacy-import/server.claude.example.json)
 is only for offline conversion:
 
-1. Leave the executable and configuration directory fields blank for the
-   target account's normal installation. Sedes finds `claude` on its `PATH` and
-   selects `CLAUDE_CONFIG_DIR`, otherwise `$HOME/.claude`, for provider state.
+1. Leave the executable and configuration directory fields, under
+   **Advanced** in the backend editor, blank for the target account's normal
+   installation. Sedes finds `claude` on its `PATH` and selects
+   `CLAUDE_CONFIG_DIR`, otherwise `$HOME/.claude`, for provider state.
    Set `executablePath` or `configDirectory` only when overriding those defaults.
 2. Define the required top-level `modelPolicy`.
 3. Set `allowedModes` as the backend permission-mode ceiling.

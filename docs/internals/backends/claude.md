@@ -895,8 +895,9 @@ Sedes tool-policy overrides. Thread creation resolves them against the current
 target catalog and operator ceiling and copies the complete result. No live
 link to the Saved Agent remains.
 
-The thread menu's **New** action likewise captures the complete desired model,
-effort, permission mode, and exact Sedes tool policy from an available source.
+The thread menu's **New with same settings** action likewise captures the
+complete desired model, effort, permission mode, and exact Sedes tool policy
+from an available source.
 It revision-fences and revalidates those values before creating an independent
 empty draft with no Claude session or history.
 
