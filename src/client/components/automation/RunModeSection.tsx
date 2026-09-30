@@ -1,4 +1,5 @@
 import type { AutomationRunMode } from "../../../shared/protocol/domain";
+import { DialogSection } from "@client/components/ui/dialog";
 import { RadioGroup, RadioGroupItem } from "@client/components/ui/radio-group";
 
 /** "Run mode" section: anchor-thread note plus the same-thread / clone
@@ -15,8 +16,7 @@ export function AutomationRunModeSection({
   canCloneOnRun: boolean;
 }): React.JSX.Element {
   return (
-    <section className="automation-section">
-      <h2 className="automation-section-label">Run mode</h2>
+    <DialogSection title="Run mode">
       <div className="automation-section-card">
         <p className="automation-fixed-thread">
           This automation belongs to <strong>{threadTitle}</strong>.
@@ -55,6 +55,6 @@ export function AutomationRunModeSection({
           )}
         </RadioGroup>
       </div>
-    </section>
+    </DialogSection>
   );
 }

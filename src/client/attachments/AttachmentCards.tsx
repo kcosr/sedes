@@ -60,7 +60,7 @@ function PreviewableImage({
           </AttachmentMedia>
         </AttachmentTrigger>
       </DialogTrigger>
-      <DialogContent className="attachment-image-dialog sm:max-w-4xl">
+      <DialogContent size="viewer" aria-describedby={undefined}>
         <DialogTitle className="sr-only">Image preview: {fileName}</DialogTitle>
         <WorkspaceImagePreview
           interactionMode="popup"

@@ -1,5 +1,4 @@
-import * as Dialog from "@radix-ui/react-dialog";
-import { Archive, ArrowDownToDot, ArrowUpFromDot, X } from "lucide-react";
+import { Archive, ArrowDownToDot, ArrowUpFromDot } from "lucide-react";
 import { useEffect, useState } from "react";
 import { MAXIMUM_BULK_INVENTORY_OPEN_TASKS } from "../../../shared/index.js";
 import type {
@@ -7,7 +6,17 @@ import type {
   BulkInventoryImpact,
   OpenTaskDisposition,
 } from "../../../shared/index.js";
-import { Button } from "../ui/button.js";
+import { Button } from "@client/components/ui/button";
+import {
+  Dialog,
+  DialogAlert,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@client/components/ui/dialog";
 import { ThreadTaskDisposition } from "./ThreadTaskDisposition.js";
 
 export function ThreadStackActionDialog({
@@ -54,63 +63,50 @@ export function ThreadStackActionDialog({
   const actionPresent = action ? presentParticiple(action) : "Updating";
   const unavailable =
     !impact || !impact.available || affectedCount === 0 || blockerCount > 0;
-  const descriptionId = "thread-stack-action-description";
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="dialog-overlay over-drawer" />
-        <Dialog.Content
-          className="dialog-card over-drawer"
-          aria-describedby={descriptionId}
-          onCloseAutoFocus={(event) => {
-            const target = returnFocusRef?.current;
-            if (!target?.isConnected) return;
-            event.preventDefault();
-            target.focus();
-          }}
-        >
-          <Dialog.Title>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!pending) onOpenChange(next);
+      }}
+    >
+      <DialogContent
+        size="md"
+        layer="over-dialog"
+        dismissible={!pending}
+        returnFocusRef={returnFocusRef}
+      >
+        <DialogHeader>
+          <DialogTitle>
             {actionLabel} threads in {label}
-          </Dialog.Title>
-          <Dialog.Description id={descriptionId}>
+          </DialogTitle>
+          <DialogDescription>
             {loading || !impact
               ? "Checking the current stack impact…"
               : `${actionLabel} ${affectedCount} ${affectedCount === 1 ? "thread" : "threads"}.`}
-          </Dialog.Description>
-          <Dialog.Close asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="dialog-close"
-              aria-label="Close"
-              disabled={pending}
-            >
-              <X size={18} strokeWidth={1.8} />
-            </Button>
-          </Dialog.Close>
-
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody>
           {impact && action === "archive" && impact.pendingQuestionCount > 0 ? (
-            <div className="archive-stashed-prompt-warning" role="note">
-              <strong>
-                {impact.pendingQuestionCount} unanswered{" "}
-                {impact.pendingQuestionCount === 1 ? "question" : "questions"}
-              </strong>
-              <span>
-                Questions remain attached to archived threads and will be
-                available when you unarchive them.
-              </span>
-            </div>
+            <DialogAlert
+              tone="warning"
+              role="note"
+              title={`${impact.pendingQuestionCount} unanswered ${impact.pendingQuestionCount === 1 ? "question" : "questions"}`}
+            >
+              Questions remain attached to archived threads and will be
+              available when you unarchive them.
+            </DialogAlert>
           ) : null}
 
           {impact && impact.stashedPromptCount > 0 ? (
-            <div className="archive-stashed-prompt-warning" role="note">
-              <strong>
-                {impact.stashedPromptCount} stashed{" "}
-                {impact.stashedPromptCount === 1 ? "prompt" : "prompts"}
-              </strong>
-              <span>They remain attached to their threads.</span>
-            </div>
+            <DialogAlert
+              tone="warning"
+              role="note"
+              title={`${impact.stashedPromptCount} stashed ${impact.stashedPromptCount === 1 ? "prompt" : "prompts"}`}
+            >
+              They remain attached to their threads.
+            </DialogAlert>
           ) : null}
 
           {impact && action && action !== "unsettle" ? (
@@ -133,20 +129,20 @@ export function ThreadStackActionDialog({
 
           {impact &&
           impact.openTasks.total > MAXIMUM_BULK_INVENTORY_OPEN_TASKS ? (
-            <p className="menu-error" role="alert">
+            <DialogAlert tone="danger">
               This stack has too many open tasks for one bulk action. Reduce it
               to {MAXIMUM_BULK_INVENTORY_OPEN_TASKS.toLocaleString()} or fewer
               and refresh the impact.
-            </p>
+            </DialogAlert>
           ) : null}
 
           {impact && blockerCount > 0 ? (
-            <div className="thread-stack-blockers" role="status">
-              <strong>
-                {blockerCount} blocked{" "}
-                {blockerCount === 1 ? "thread" : "threads"}
-              </strong>
-              <ul>
+            <DialogAlert
+              tone="warning"
+              role="status"
+              title={`${blockerCount} blocked ${blockerCount === 1 ? "thread" : "threads"}`}
+            >
+              <ul className="thread-stack-blockers">
                 {impact.blockers.items.map((blocker) => (
                   <li key={blocker.threadId}>
                     {threadTitleFor(blocker.threadId) ?? blocker.threadId}:{" "}
@@ -155,57 +151,65 @@ export function ThreadStackActionDialog({
                 ))}
               </ul>
               {impact.blockers.omitted > 0 ? (
-                <span>And {impact.blockers.omitted} more.</span>
+                <p className="m-0">And {impact.blockers.omitted} more.</p>
               ) : null}
-            </div>
+            </DialogAlert>
           ) : null}
 
           {error ? (
-            <p className="menu-error" role="alert">
-              {error}{" "}
-              {!pending ? (
-                <button
-                  type="button"
-                  className="archive-menu-retry"
-                  onClick={onReload}
-                >
-                  Refresh impact
-                </button>
-              ) : null}
-            </p>
-          ) : null}
-
-          <div className="dialog-actions">
-            <Dialog.Close asChild>
-              <Button variant="ghost" disabled={pending}>
-                Cancel
-              </Button>
-            </Dialog.Close>
-            <Button
-              disabled={loading || pending || unavailable}
-              onClick={() =>
-                onConfirm({
-                  ...(impact &&
-                  action !== "unsettle" &&
-                  impact.openTasks.total > 0
-                    ? { openTaskDisposition: disposition }
-                    : {}),
-                })
+            <DialogAlert
+              tone="danger"
+              action={
+                pending ? undefined : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={onReload}
+                  >
+                    Refresh impact
+                  </Button>
+                )
               }
             >
-              {action === "settle" ? (
-                <ArrowDownToDot size={18} strokeWidth={1.8} />
-              ) : action === "unsettle" ? (
-                <ArrowUpFromDot size={18} strokeWidth={1.8} />
-              ) : (
-                <Archive size={18} strokeWidth={1.8} />
-              )}
-              {pending ? `${actionPresent}…` : actionLabel}
-            </Button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+              {error}
+            </DialogAlert>
+          ) : null}
+        </DialogBody>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={loading || pending || unavailable}
+            onClick={() =>
+              onConfirm({
+                ...(impact &&
+                action !== "unsettle" &&
+                impact.openTasks.total > 0
+                  ? { openTaskDisposition: disposition }
+                  : {}),
+              })
+            }
+          >
+            {action === "settle" ? (
+              <ArrowDownToDot />
+            ) : action === "unsettle" ? (
+              <ArrowUpFromDot />
+            ) : (
+              <Archive />
+            )}
+            {pending ? `${actionPresent}…` : actionLabel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

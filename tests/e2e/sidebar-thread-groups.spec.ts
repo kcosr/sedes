@@ -305,10 +305,10 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
       ".thread-group-roster-popover",
     );
     const dialogElement = document.querySelector<HTMLElement>(
-      ".dialog-card.over-drawer",
+      '[data-slot="dialog-content"][data-layer="over-dialog"]',
     );
     const overlayElement = document.querySelector<HTMLElement>(
-      '[data-testid="dialog-overlay"]',
+      '[data-testid="dialog-overlay"][data-layer="over-dialog"]',
     );
     if (!rosterSurface || !dialogElement || !overlayElement) {
       throw new Error("stack_dialog_layer_missing");

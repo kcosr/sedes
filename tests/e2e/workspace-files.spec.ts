@@ -552,7 +552,7 @@ test.describe.serial("workspace file browser and editor", () => {
     await createLiveAlphaFile('export const live = "created";\n');
     await page.getByRole("button", { name: "Refresh workspace files" }).click();
     let reload = page.getByRole("dialog", { name: "Reload file from disk?" });
-    await reload.getByRole("button", { name: "Cancel" }).click();
+    await reload.getByRole("button", { name: "Keep editing" }).click();
     await ensureTreeOpen(page);
     await expect(fileItem(panel, "live-created.ts")).toBeVisible({
       timeout: 15_000,
@@ -563,7 +563,7 @@ test.describe.serial("workspace file browser and editor", () => {
     await deleteLiveAlphaFile();
     await page.getByRole("button", { name: "Refresh workspace files" }).click();
     reload = page.getByRole("dialog", { name: "Reload file from disk?" });
-    await reload.getByRole("button", { name: "Cancel" }).click();
+    await reload.getByRole("button", { name: "Keep editing" }).click();
     await ensureTreeOpen(page);
     await expect(fileItem(panel, "live-created.ts")).toHaveCount(0, {
       timeout: 15_000,
@@ -583,7 +583,7 @@ test.describe.serial("workspace file browser and editor", () => {
     await expect(closeGuard).toContainText(
       "Closing Files will discard its unsaved changes.",
     );
-    await closeGuard.getByRole("button", { name: "Cancel" }).click();
+    await closeGuard.getByRole("button", { name: "Keep editing" }).click();
     await expect(editable).toContainText("45");
 
     await page.getByRole("button", { name: "Collapse Files panel" }).click();

@@ -1836,9 +1836,8 @@ describe("TasksPanel", () => {
     renderPanel(makeStore([]));
 
     const sheet = screen.getByRole("dialog", { name: "Tasks" });
-    expect(sheet.style.getPropertyValue("--tasks-keyboard-inset")).toBe(
-      "280px",
-    );
+    expect(sheet).toHaveAttribute("data-layout", "sheet");
+    expect(sheet.style.getPropertyValue("--keyboard-inset")).toBe("280px");
   });
 
   it("closes an editor when search hides its task", () => {

@@ -1,6 +1,7 @@
 import { automationTimeLabel } from "../../lib/time";
 import type { ThreadAutomationRun } from "../../types";
 import { Button } from "@client/components/ui/button";
+import { DialogSection } from "@client/components/ui/dialog";
 import {
   openThreadRoute,
   pointerPanelPresentation,
@@ -18,9 +19,12 @@ export function AutomationRunHistory({
   onResolveRun: (runId: string) => void;
 }): React.JSX.Element {
   return (
-    <aside className="automation-history" aria-live="polite">
-      <h2 className="automation-section-label">Run history</h2>
-      <div className="automation-section-card automation-history-card">
+    <DialogSection
+      title="Run history"
+      className="automation-history"
+      aria-live="polite"
+    >
+      <div className="automation-section-card">
         {history.length === 0 ? (
           <p className="automation-history-empty">No runs yet.</p>
         ) : (
@@ -85,6 +89,6 @@ export function AutomationRunHistory({
           ))
         )}
       </div>
-    </aside>
+    </DialogSection>
   );
 }

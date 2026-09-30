@@ -33,4 +33,19 @@ describe("ThreadEnvironmentVariables", () => {
     expect(screen.getByRole("button", { name: "Fork with changes…" })).toBeDisabled();
     expect(screen.getByText("No completed turn to fork.")).toBeVisible();
   });
+
+  it("loads and retries inside the editor's frame", async () => {
+    const snapshot = { editable: false, snapshot: { version: 1, layers: { environment: {}, backend: {}, agent: {}, thread: {} } } };
+    const getThreadEnvironmentVariables = vi.fn()
+      .mockRejectedValueOnce(new Error("Variables unavailable."))
+      .mockResolvedValueOnce(snapshot);
+    render(<ThreadEnvironmentVariables api={{ getThreadEnvironmentVariables } as unknown as ApiClient} threadId="thread-a" title="Build" onClose={vi.fn()} onFork={vi.fn()} restoreFocus={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Environment variables" });
+    expect(dialog).toHaveAttribute("data-size", "lg");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Variables unavailable.");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("No user-supplied variables.")).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "Environment variables" })).toHaveAttribute("data-size", "lg");
+  });
 });

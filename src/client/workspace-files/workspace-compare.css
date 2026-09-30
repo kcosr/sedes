@@ -54,14 +54,6 @@
   container-type: inline-size;
   container-name: workspace-compare;
 }
-.workspace-files-compare-comment-field {
-  display: grid;
-  gap: 6px;
-  font-size: 12px;
-}
-.workspace-files-compare-comment-field textarea {
-  min-height: 112px;
-}
 .workspace-files-compare-dirty-note {
   position: absolute;
   z-index: calc(var(--z-sticky) + 6);
@@ -84,41 +76,15 @@
   align-items: center;
   gap: 8px;
 }
-.workspace-files-compare-review-picker {
-  min-width: 0;
-}
-.workspace-files-compare-review-picker select,
-.workspace-files-compare-comment-field select {
-  min-width: min(240px, 40vw);
-  max-width: min(320px, 48vw);
-  height: 32px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  padding: 0 28px 0 9px;
-  background: var(--background);
-}
-.workspace-files-compare-comment-field {
-  display: grid;
-  gap: 6px;
-  font-size: 12px;
-}
-.workspace-files-compare-details-dialog {
-  max-width: min(760px, calc(100vw - 24px));
-}
-.workspace-files-compare-details-body,
-.workspace-files-compare-details-list {
-  display: grid;
-  gap: 12px;
-}
 .workspace-files-compare-details-meta {
   flex-wrap: wrap;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-meta);
 }
 .workspace-files-compare-comment-card {
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-card);
-  padding: 10px;
+  padding: var(--space-2-5);
   background: var(--card);
 }
 .workspace-files-compare-comment-card header {
@@ -132,16 +98,16 @@
   gap: 4px;
 }
 .workspace-files-compare-comment-card p {
-  margin: 8px 0 0;
+  margin: var(--space-2) 0 0;
   white-space: pre-wrap;
-  font-size: 12px;
+  font-size: var(--text-meta);
 }
 .workspace-files-compare-reviewed-row {
   justify-content: space-between;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-ctl);
-  padding: 7px 9px;
-  font-size: 12px;
+  padding: var(--space-1-5) var(--space-2);
+  font-size: var(--text-meta);
 }
 .workspace-compare button,
 .workspace-compare select,

@@ -127,14 +127,18 @@ import { SidebarViewControls } from "./SidebarViewControls.js";
 import { ThreadContextMenu } from "./ThreadContextMenu.js";
 import { Button } from "@client/components/ui/button";
 import { Input } from "@client/components/ui/input";
+import { ConfirmDialog } from "@client/components/ui/confirm-dialog";
 import {
   Dialog,
+  DialogAlert,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@client/components/ui/dialog";
+import { Field } from "@client/components/ui/field";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -2210,28 +2214,27 @@ function GroupManagementControl({
   useEffect(() => {
     onInteractionOpenChange?.(menuOpen || dialog !== undefined);
   }, [dialog, menuOpen, onInteractionOpenChange]);
-  const submit = () => {
-    if (pending) return;
+  const rename = () => {
     const nextName = name.trim();
-    if (dialog === "rename" && !nextName) return;
+    if (pending || !nextName) return;
     setPending(true);
     setError("");
-    const operation =
-      dialog === "rename"
-        ? store.renameThreadGroup(group, nextName)
-        : store.deleteThreadGroup(group);
-    void operation
-      .then(() => {
-        if (dialog === "delete") {
-          setSidebarInventoryScope({
-            groupFilterId: null,
-            ungroupedFilter: false,
-          });
-        }
-        setDialog(undefined);
-      })
+    void store
+      .renameThreadGroup(group, nextName)
+      .then(() => setDialog(undefined))
       .catch((cause: unknown) => setError(messageFrom(cause)))
       .finally(() => setPending(false));
+  };
+  const remove = async () => {
+    try {
+      await store.deleteThreadGroup(group);
+    } catch (cause) {
+      throw new Error(messageFrom(cause));
+    }
+    setSidebarInventoryScope({
+      groupFilterId: null,
+      ungroupedFilter: false,
+    });
   };
   return (
     <>
@@ -2270,65 +2273,70 @@ function GroupManagementControl({
         </DropdownMenuContent>
       </DropdownMenu>
       <Dialog
-        open={dialog !== undefined}
+        open={dialog === "rename"}
         onOpenChange={(value) => !value && close()}
       >
         <DialogContent
-          className={elevated ? "z-[calc(var(--z-over-dialog)+1)]" : undefined}
-          overlayClassName={elevated ? "z-(--z-over-dialog)" : undefined}
+          layer={elevated ? "over-dialog" : "dialog"}
+          dismissible={!pending}
         >
           <DialogHeader>
-            <DialogTitle>
-              {dialog === "rename" ? "Rename group" : "Delete group"}
-            </DialogTitle>
+            <DialogTitle>Rename group</DialogTitle>
             <DialogDescription>
-              {dialog === "delete"
-                ? group.memberCount === 0
-                  ? `Delete “${group.name}”?`
-                  : `Delete “${group.name}” and ungroup ${group.memberCount} thread${group.memberCount === 1 ? "" : "s"}?`
-                : "Group names are shared across all projects in your account."}
+              Group names are shared across all projects in your account.
             </DialogDescription>
           </DialogHeader>
-          {dialog === "rename" && (
-            <Input
-              autoFocus
-              maxLength={120}
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") submit();
-              }}
-            />
-          )}
-          {error && (
-            <p className="thread-row-error" role="alert">
-              {error}
-            </p>
-          )}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={pending}
-              onClick={close}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant={dialog === "delete" ? "destructive" : "default"}
-              disabled={pending || (dialog === "rename" && !name.trim())}
-              onClick={submit}
-            >
-              {pending
-                ? "Saving…"
-                : dialog === "delete"
-                  ? "Delete group"
-                  : "Rename"}
-            </Button>
-          </DialogFooter>
+          <form
+            className="contents"
+            onSubmit={(event) => {
+              event.preventDefault();
+              rename();
+            }}
+          >
+            <DialogBody>
+              <Field label="Group name">
+                <Input
+                  maxLength={120}
+                  value={name}
+                  disabled={pending}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </Field>
+              {error && <DialogAlert tone="danger">{error}</DialogAlert>}
+            </DialogBody>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending}
+                onClick={close}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={pending || !name.trim()}>
+                {pending ? "Renaming…" : "Rename"}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
+      <ConfirmDialog
+        open={dialog === "delete"}
+        onOpenChange={(value) => {
+          if (!value) setDialog(undefined);
+        }}
+        layer={elevated ? "over-dialog" : "dialog"}
+        title={`Delete “${group.name}”?`}
+        description={
+          group.memberCount === 0
+            ? "The group is removed for all projects in your account."
+            : `Its ${group.memberCount} thread${group.memberCount === 1 ? " is" : "s are"} ungrouped, not deleted.`
+        }
+        confirmLabel="Delete group"
+        pendingLabel="Deleting…"
+        tone="danger"
+        onConfirm={remove}
+      />
     </>
   );
 }

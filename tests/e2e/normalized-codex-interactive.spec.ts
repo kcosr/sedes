@@ -271,9 +271,7 @@ test.describe.serial("normalized interactive Codex projection", () => {
     await expect(saveAutomation).toBeEnabled();
     await saveAutomation.click();
     await expect(automation.getByText("paused")).toBeVisible();
-    await automation
-      .getByRole("button", { name: "Close automation settings" })
-      .click();
+    await automation.getByRole("button", { name: "Close", exact: true }).click();
     const automationSettings = page.getByRole("button", {
       name: "Automation settings",
     });
@@ -283,8 +281,16 @@ test.describe.serial("normalized interactive Codex projection", () => {
     await expect(
       automation.getByRole("textbox", { name: "Canned prompt" }),
     ).toHaveValue("Review this thread on schedule");
-    page.once("dialog", (dialog) => void dialog.accept());
-    await automation.getByRole("button", { name: "Delete automation" }).click();
+    await automation
+      .getByRole("button", { name: "Delete automation…" })
+      .click();
+    const deleteAutomation = page.getByRole("dialog", {
+      name: "Delete this automation?",
+    });
+    await deleteAutomation
+      .getByRole("button", { name: "Delete automation", exact: true })
+      .click();
+    await expect(deleteAutomation).toBeHidden();
     await expect(automation).toBeHidden();
     await page.getByRole("button", { name: "Thread actions" }).click();
     await expect(page.getByRole("button", { name: "Automate…" })).toBeEnabled();

@@ -12,6 +12,7 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
+  DialogSection,
   DialogTitle,
 } from "./dialog.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover.js";
@@ -99,6 +100,33 @@ describe("DialogContent presentation", () => {
     renderDialog(null, { showClose: false });
     expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
     expect(screen.getByRole("dialog")).not.toHaveAttribute("data-close");
+  });
+
+  it("returns focus to the named target when it closes", async () => {
+    const target = { current: null as HTMLButtonElement | null };
+    const view = (open: boolean) => (
+      <>
+        <button ref={(node) => { target.current = node; }} type="button">Thread actions</button>
+        <Dialog open={open}>
+          <DialogContent aria-describedby={undefined} returnFocusRef={target}>
+            <DialogTitle>Snooze</DialogTitle>
+          </DialogContent>
+        </Dialog>
+      </>
+    );
+    const { rerender } = render(view(true));
+    rerender(view(false));
+    await waitFor(() => expect(target.current).toHaveFocus());
+  });
+
+  it("stamps its stacking band on the surface and the overlay", () => {
+    const { dialog } = renderDialog(null);
+    expect(dialog).toHaveAttribute("data-layer", "dialog");
+    expect(screen.getByTestId("dialog-overlay")).toHaveAttribute("data-layer", "dialog");
+    cleanup();
+    const raised = renderDialog(null, { layer: "over-dialog" });
+    expect(raised.dialog).toHaveAttribute("data-layer", "over-dialog");
+    expect(screen.getByTestId("dialog-overlay")).toHaveAttribute("data-layer", "over-dialog");
   });
 });
 
@@ -224,6 +252,25 @@ describe("Dialog slots", () => {
       "Cancel",
       "Snooze",
     ]);
+  });
+
+  it("names a section by its label", () => {
+    render(
+      <Dialog open>
+        <DialogContent aria-describedby={undefined}>
+          <DialogTitle>Session stats</DialogTitle>
+          <DialogBody>
+            <DialogSection title="Identifiers" description="Copy them for support.">
+              <p>sedes-thread-1</p>
+            </DialogSection>
+          </DialogBody>
+        </DialogContent>
+      </Dialog>,
+    );
+    const section = screen.getByRole("region", { name: "Identifiers" });
+    expect(section).toHaveAttribute("data-slot", "dialog-section");
+    expect(screen.getByRole("heading", { name: "Identifiers" })).toHaveAttribute("data-slot", "dialog-section-title");
+    expect(section).toHaveTextContent("Copy them for support.sedes-thread-1");
   });
 
   it("announces danger alerts and shows a titled notice", () => {

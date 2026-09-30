@@ -113,7 +113,7 @@ describe("SessionStatsDialog", () => {
     expect(screen.getByText("2,000 / 10,000")).toBeVisible();
     expect(screen.getByText("20.00%")).toBeVisible();
     expect(screen.queryByText("Cached input")).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Recorded session usage (Experimental)" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Recorded session usage Experimental" })).toBeVisible();
   });
 
   it("shows an explicit empty state instead of fabricated zeroes", () => {

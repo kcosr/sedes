@@ -23,6 +23,17 @@
   background: var(--scrim);
 }
 
+/* Stacking bands (the `layer` prop): dialogs opened from the mobile drawer
+   or a sheet clear the over-dialog band; blocking-operation dialogs clear
+   everything but toasts. */
+[data-slot="dialog-overlay"][data-layer="over-dialog"] {
+  z-index: var(--z-over-dialog);
+}
+
+[data-slot="dialog-overlay"][data-layer="blocking"] {
+  z-index: var(--z-blocking);
+}
+
 /* ── Dialog: surface ──
    A flex column capped at the viewport. DialogBody is the scroll region;
    content without a DialogBody scrolls as a whole, so no dialog can grow
@@ -47,6 +58,14 @@
   box-shadow: var(--elevation-3);
   font-size: var(--text-ui);
   outline: none;
+}
+
+[data-slot="dialog-content"][data-layer="over-dialog"] {
+  z-index: calc(var(--z-over-dialog) + 1);
+}
+
+[data-slot="dialog-content"][data-layer="blocking"] {
+  z-index: calc(var(--z-blocking) + 1);
 }
 
 [data-slot="dialog-content"][data-size="md"] {
@@ -202,6 +221,10 @@
   line-height: var(--leading-normal);
 }
 
+[data-slot="dialog-description"] code {
+  overflow-wrap: anywhere;
+}
+
 [data-slot="dialog-description"] a {
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -223,6 +246,38 @@
   padding: var(--space-1);
   overflow: hidden auto;
   overscroll-behavior: contain;
+}
+
+/* A titled group: the one uppercase label recipe above its content. */
+[data-slot="dialog-section"] {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-1-5);
+}
+
+[data-slot="dialog-section-title"] {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+[data-slot="dialog-section-title"] > * {
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+[data-slot="dialog-section-description"] {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
 }
 
 /* Pinned actions: the tertiary start slot, then Cancel, then the primary
@@ -255,16 +310,25 @@
     width: 100%;
   }
 
+  /* Tertiary actions share one row below the stacked Cancel and primary. */
   [data-slot="dialog-footer-start"] {
-    flex-direction: column;
     align-items: stretch;
     margin-inline-end: 0;
+  }
+
+  [data-slot="dialog-footer-start"] > * {
+    flex: 1 1 0;
   }
 }
 
 @media (max-width: 819px), (pointer: coarse) {
   [data-slot="dialog-content"] {
     --dialog-close-size: var(--control-touch);
+  }
+
+  /* Footer actions take the touch height, like the fields above them. */
+  [data-slot="dialog-footer"] {
+    --control-md: var(--control-touch);
   }
 }
 

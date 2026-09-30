@@ -290,7 +290,9 @@ test("templates prefill editable thread creation and survive Agent drift", async
   await page.getByRole("button", { name: "New thread" }).last().click();
   const mobileSheet = page.getByRole("dialog", { name: "New thread" });
   await expect(mobileSheet).toBeVisible();
-  await expect(page.locator(".new-thread-sheet-overlay")).toBeVisible();
+  await expect(
+    page.locator('[data-testid="dialog-overlay"][data-layer="over-dialog"]'),
+  ).toBeVisible();
   await expect
     .poll(async () => {
       const currentBox = await mobileSheet.boundingBox();

@@ -4118,7 +4118,7 @@ describe("WorkspaceFilesPanel", () => {
     expect(openFileTabs()).toHaveLength(1);
     view.rerender(content(true));
     expect(await screen.findByRole("dialog", { name: "Discard unsaved changes?" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(openFileTabs()).toHaveLength(1);
   });
 
@@ -4146,7 +4146,7 @@ describe("WorkspaceFilesPanel", () => {
     expect(
       await screen.findByText("Discard unsaved changes?"),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(openFileTabs()).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Close notes.ts" }));
@@ -5037,7 +5037,7 @@ describe("WorkspaceFilesPanel", () => {
     );
 
     fireEvent.click(
-      within(firstDialog).getByRole("button", { name: "Cancel" }),
+      within(firstDialog).getByRole("button", { name: "Keep editing" }),
     );
     expect(readWorkspaceFile).toHaveBeenCalledTimes(1);
     await waitFor(() =>

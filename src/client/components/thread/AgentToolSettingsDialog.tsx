@@ -12,6 +12,8 @@ import { Button } from "@client/components/ui/button";
 import { Checkbox } from "@client/components/ui/checkbox";
 import {
   Dialog,
+  DialogAlert,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -388,21 +390,17 @@ export function AgentToolSettingsDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        size="lg"
         className="agent-tool-dialog"
         aria-describedby={dialogDescriptionId}
+        returnFocusRef={returnFocusRef}
         onEscapeKeyDown={(event) => {
           if (!confirming) return;
           event.preventDefault();
           setConfirming(false);
         }}
-        onCloseAutoFocus={(event) => {
-          const target = returnFocusRef?.current;
-          if (!target?.isConnected) return;
-          event.preventDefault();
-          target.focus();
-        }}
       >
-        <DialogHeader className="agent-tool-dialog-header">
+        <DialogHeader>
           <DialogTitle>Agent tools</DialogTitle>
           <DialogDescription id={dialogDescriptionId}>
             Choose the Sedes tools this thread may use. CLI access changes apply
@@ -411,6 +409,7 @@ export function AgentToolSettingsDialog({
           </DialogDescription>
         </DialogHeader>
 
+        <DialogBody>
         <div className="agent-tool-dialog-global">
           <label className="agent-tool-dialog-setting">
             <span>
@@ -570,7 +569,7 @@ export function AgentToolSettingsDialog({
           </label>
         </div>
 
-        <div className="agent-tool-dialog-body">
+        <div className="agent-tool-dialog-panes">
           <nav className="agent-tool-group-nav" aria-label="Agent tool groups">
             {policy.groups.map((group) => (
               <div
@@ -657,31 +656,36 @@ export function AgentToolSettingsDialog({
           </section>
         </div>
 
+        </DialogBody>
+
         {(unavailableMessage || showStaleWarning || error || confirming) && (
           <div className="agent-tool-dialog-notices">
-            {unavailableMessage && <p role="status">{unavailableMessage}</p>}
+            {unavailableMessage && (
+              <DialogAlert role="status">{unavailableMessage}</DialogAlert>
+            )}
             {showStaleWarning && (
-              <p role="alert">
+              <DialogAlert tone="warning" role="alert">
                 Agent tool settings changed in another client. Save will not
                 overwrite the newer settings.
-              </p>
+              </DialogAlert>
             )}
-            {error && <p role="alert">{error}</p>}
+            {error && <DialogAlert tone="danger">{error}</DialogAlert>}
             {confirming && (
-              <p id={nativeToolCacheWarningId} role="alert">
+              <DialogAlert
+                id={nativeToolCacheWarningId}
+                tone="warning"
+                role="alert"
+              >
                 {NATIVE_TOOL_CACHE_WARNING}
-              </p>
+              </DialogAlert>
             )}
           </div>
         )}
 
-        <DialogFooter className="agent-tool-dialog-footer">
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
+        <DialogFooter>
           {confirming ? (
             <>
-              <Button variant="secondary" onClick={() => setConfirming(false)}>
+              <Button variant="outline" onClick={() => setConfirming(false)}>
                 Keep editing
               </Button>
               <Button
@@ -694,9 +698,14 @@ export function AgentToolSettingsDialog({
               </Button>
             </>
           ) : (
-            <Button disabled={!canSave} onClick={save}>
-              {pending ? "Saving…" : "Save"}
-            </Button>
+            <>
+              <Button variant="outline" onClick={() => onOpenChange(false)}>
+                Cancel
+              </Button>
+              <Button disabled={!canSave} onClick={save}>
+                {pending ? "Saving…" : "Save"}
+              </Button>
+            </>
           )}
         </DialogFooter>
       </DialogContent>

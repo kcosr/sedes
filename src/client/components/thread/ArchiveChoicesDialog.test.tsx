@@ -11,7 +11,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedApplicationThreadSummary } from "../../../shared/index.js";
 import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
-import { ArchiveChoicesDialog } from "./ArchiveChoicesDialog.js";
+import {
+  ArchiveChoicesDialog,
+  useArchiveThreadAction,
+} from "./ArchiveChoicesDialog.js";
 
 afterEach(cleanup);
 
@@ -233,11 +236,13 @@ describe("ArchiveChoicesDialog", () => {
     const archiveOnly = await screen.findByRole("button", {
       name: "Archive",
     });
-    const actions = archiveOnly.closest(".dialog-actions");
+    const actions = archiveOnly.closest('[data-slot="dialog-footer"]');
     expect(actions).not.toBeNull();
-    expect(actions).toContainElement(
-      screen.getByRole("button", { name: "Cancel" }),
-    );
+    expect(
+      [...actions!.querySelectorAll("button")].map((button) => button.textContent),
+    ).toEqual(["Cancel", "Archive"]);
+    // Archiving is reversible: a neutral primary, not the destructive style.
+    expect(archiveOnly).toHaveAttribute("data-variant", "default");
     expect(archiveOnly.querySelector("svg")).toBeNull();
     expect(
       screen.queryByRole("button", { name: /Archive thread and/ }),
@@ -728,5 +733,153 @@ describe("ArchiveChoicesDialog", () => {
       }),
     );
   });
+});
 
+describe("ArchiveChoicesDialog as a form dialog", () => {
+  const impact = {
+    descendantCount: 2,
+    pendingQuestions: { root: 0, descendants: 0 },
+    stashedPrompts: { root: 0, descendants: 0 },
+    openTasks: emptyOpenTasks(),
+    executionWorkspace: { kind: "direct" as const },
+    archiveOnly: { available: true as const },
+    archiveAll: { available: true as const },
+  };
+
+  it("opens as a medium card with focus on the first choice and the X last", async () => {
+    render(
+      <ArchiveChoicesDialog
+        open
+        initialImpact={impact}
+        onOpenChange={vi.fn()}
+        thread={makeThread()}
+        store={makeStore()}
+        descendantCount={2}
+      />,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Archive this thread" });
+    expect(dialog).toHaveAttribute("data-size", "md");
+    expect(dialog).toHaveAttribute("data-layout", "modal");
+    expect(dialog).not.toHaveAttribute("data-blocking-operation");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("checkbox", { name: "Archive child and descendant forks" }),
+      ).toHaveFocus(),
+    );
+    const footer = screen
+      .getByRole("button", { name: "Archive" })
+      .closest('[data-slot="dialog-footer"]')!;
+    expect([...footer.querySelectorAll("button")].map((button) => button.textContent)).toEqual([
+      "Cancel",
+      "Archive",
+    ]);
+  });
+
+  it("dismisses with Escape and outside clicks unless an archive is pending", async () => {
+    const onOpenChange = vi.fn();
+    const store = makeStore();
+    let finish!: () => void;
+    store.mutateInventory.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    render(
+      <ArchiveChoicesDialog
+        open
+        initialImpact={impact}
+        onOpenChange={onOpenChange}
+        thread={makeThread()}
+        store={store}
+        descendantCount={2}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Archive" }));
+    expect(screen.getByRole("button", { name: "Archiving…" })).toBeDisabled();
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(screen.getByTestId("dialog-overlay"));
+    expect(onOpenChange).not.toHaveBeenCalled();
+    finish();
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+
+    cleanup();
+    const dismiss = vi.fn();
+    render(
+      <ArchiveChoicesDialog
+        open
+        initialImpact={impact}
+        onOpenChange={dismiss}
+        thread={makeThread()}
+        store={makeStore()}
+        descendantCount={2}
+      />,
+    );
+    await userEvent.keyboard("{Escape}");
+    expect(dismiss).toHaveBeenCalledWith(false);
+    dismiss.mockClear();
+    await userEvent.click(screen.getByTestId("dialog-overlay"));
+    expect(dismiss).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("useArchiveThreadAction", () => {
+  function ArchiveAction({
+    store,
+    onArchived,
+  }: {
+    readonly store: ReturnType<typeof makeStore>;
+    readonly onArchived: (choice: "only" | "all", ids: readonly string[]) => void;
+  }) {
+    const archive = useArchiveThreadAction({
+      thread: makeThread(),
+      store,
+      descendantCount: 0,
+      onArchived,
+    });
+    return (
+      <>
+        <button type="button" onClick={archive.start}>
+          Archive…
+        </button>
+        {archive.dialog}
+      </>
+    );
+  }
+
+  it("archives at once when nothing needs choosing", async () => {
+    const store = makeStore();
+    store.getThreadArchiveImpact.mockResolvedValue({
+      descendantCount: 0,
+      pendingQuestions: { root: 0, descendants: 0 },
+      stashedPrompts: { root: 0, descendants: 0 },
+      openTasks: emptyOpenTasks(),
+      executionWorkspace: { kind: "direct" },
+      archiveOnly: { available: true },
+      archiveAll: { available: true },
+    });
+    const onArchived = vi.fn();
+    render(<ArchiveAction store={store} onArchived={onArchived} />);
+    await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
+    await waitFor(() => expect(onArchived).toHaveBeenCalledWith("only", ["thread-1"]));
+    expect(store.mutateInventory).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "thread-1" }),
+      "archive",
+      { expectedStashedPromptCount: 0 },
+    );
+    expect(screen.queryByRole("dialog", { name: "Archive this thread" })).toBeNull();
+  });
+
+  it("opens the choices with the checked impact when there is something to choose", async () => {
+    const store = makeStore();
+    const onArchived = vi.fn();
+    render(<ArchiveAction store={store} onArchived={onArchived} />);
+    await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Archive this thread" });
+    expect(within(dialog).getByRole("checkbox", { name: "Archive child and descendant forks" })).not.toBeChecked();
+    expect(store.getThreadArchiveImpact).toHaveBeenCalledTimes(1);
+    expect(store.mutateInventory).not.toHaveBeenCalled();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
+    await waitFor(() => expect(onArchived).toHaveBeenCalledWith("only", ["thread-1"]));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Archive this thread" })).toBeNull());
+  });
 });

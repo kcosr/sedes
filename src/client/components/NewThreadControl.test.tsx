@@ -17,6 +17,7 @@ import type {
   ThreadTemplate,
 } from "../../shared/index.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
+import { TOUCH_DENSITY_QUERY } from "../app/use-touch-density.js";
 import { NewThreadControl } from "./NewThreadControl.js";
 
 const workspace = {
@@ -682,7 +683,16 @@ describe("NewThreadControl", () => {
     expect(screen.getByRole("dialog", { name: "New thread" })).toHaveClass(
       "new-thread-target-picker",
     );
-    expect(document.querySelector(".new-thread-sheet-overlay")).toBeNull();
+    const surface = screen.getByRole("dialog", { name: "New thread" });
+    expect(surface).toHaveAttribute("data-layout", "side");
+    expect(screen.queryByTestId("dialog-overlay")).toBeNull();
+    const footer = within(surface)
+      .getByRole("button", { name: "Create thread" })
+      .closest('[data-slot="dialog-footer"]')!;
+    expect([...footer.querySelectorAll("button")].map((button) => button.textContent)).toEqual([
+      "Cancel",
+      "Create thread",
+    ]);
   });
 
   it("renames and deletes a template only through its explicit edit flow", async () => {
@@ -1473,7 +1483,7 @@ describe("NewThreadControl", () => {
     vi.stubGlobal(
       "matchMedia",
       vi.fn((query: string) => ({
-        matches: query === "(pointer: coarse), (max-width: 819px)",
+        matches: query === TOUCH_DENSITY_QUERY,
         addEventListener: vi.fn(),
         removeEventListener: vi.fn(),
       })),
@@ -1487,7 +1497,8 @@ describe("NewThreadControl", () => {
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "New thread" })).toHaveFocus(),
     );
-    expect(document.querySelector(".new-thread-sheet-overlay")).not.toBeNull();
+    expect(screen.getByRole("dialog", { name: "New thread" })).toHaveAttribute("data-layout", "sheet");
+    expect(screen.getByTestId("dialog-overlay")).toHaveAttribute("data-layer", "over-dialog");
     expect(document.body.style.pointerEvents).toBe("none");
   });
 
@@ -1527,12 +1538,12 @@ describe("NewThreadControl", () => {
       viewport.height = window.innerHeight - 300;
       viewport.dispatchEvent(new Event("resize"));
     });
-    expect(sheet.style.getPropertyValue("--new-thread-keyboard-inset")).toBe("300px");
+    expect(sheet.style.getPropertyValue("--keyboard-inset")).toBe("300px");
     act(() => {
       viewport.height = window.innerHeight;
       viewport.dispatchEvent(new Event("resize"));
     });
-    expect(sheet.style.getPropertyValue("--new-thread-keyboard-inset")).toBe("0px");
+    expect(sheet.style.getPropertyValue("--keyboard-inset")).toBe("0px");
   });
 
   it("retries a failed template list load when the surface reopens", async () => {

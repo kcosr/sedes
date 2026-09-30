@@ -325,6 +325,8 @@ function renderSidebar(
     mutateInventory: vi.fn().mockResolvedValue(undefined),
     setThreadPinned: vi.fn().mockResolvedValue(undefined),
     renameThread: vi.fn().mockResolvedValue(undefined),
+    renameThreadGroup: vi.fn().mockResolvedValue(undefined),
+    deleteThreadGroup: vi.fn().mockResolvedValue(undefined),
     archiveThreadFamily: vi.fn().mockResolvedValue([]),
     loadMoreDescendants: vi.fn().mockResolvedValue(undefined),
     getThreadArchiveImpact: vi.fn().mockResolvedValue({
@@ -391,6 +393,8 @@ function renderSidebar(
     refresh: ReturnType<typeof vi.fn>;
     getSnapshot: ReturnType<typeof vi.fn>;
     renameThread: ReturnType<typeof vi.fn>;
+    renameThreadGroup: ReturnType<typeof vi.fn>;
+    deleteThreadGroup: ReturnType<typeof vi.fn>;
     loadMoreDescendants: ReturnType<typeof vi.fn>;
     getBulkInventoryImpact: ReturnType<typeof vi.fn>;
     createBulkInventoryMutationRequest: ReturnType<typeof vi.fn>;
@@ -618,6 +622,46 @@ describe("InventorySidebar view modes", () => {
     await user.click(within(newerMember).getByTestId("thread-row-link"));
     expect(screen.queryByTestId("thread-peek")).toBeNull();
     expect(onSelectThread).toHaveBeenCalledWith(newer.id, "split");
+  });
+
+  it("renames a group in a form dialog and deletes it through a confirmation", async () => {
+    const user = userEvent.setup();
+    seedViewPreferences({ groupBy: "time", stackBy: "group" });
+    const { store } = renderSidebar(
+      [
+        makeThread("thread-older", "Older member", { groupId, lastActivityAt: isoAtNoon(-2) }),
+        makeThread("thread-newer", "Newer member", { groupId, lastActivityAt: isoAtNoon(0) }),
+      ],
+      { groups: [group] },
+    );
+    fireEvent.pointerEnter(screen.getByTestId("thread-group-stack"), { pointerType: "mouse" });
+    const roster = await screen.findByTestId("thread-group-roster");
+    const manage = within(roster).getByRole("button", { name: "Manage group Design review" });
+
+    await user.click(manage);
+    await user.click(await screen.findByRole("menuitem", { name: "Rename group…" }));
+    const rename = await screen.findByRole("dialog", { name: "Rename group" });
+    const name = within(rename).getByRole("textbox", { name: "Group name" });
+    await waitFor(() => expect(name).toHaveFocus());
+    await user.clear(name);
+    await user.type(name, "Design notes{Enter}");
+    expect(store.renameThreadGroup).toHaveBeenCalledWith(
+      expect.objectContaining({ id: groupId }),
+      "Design notes",
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Rename group" })).toBeNull());
+
+    store.deleteThreadGroup.mockRejectedValueOnce(new Error("Group changed elsewhere."));
+    await user.click(manage);
+    await user.click(await screen.findByRole("menuitem", { name: "Delete group…" }));
+    const remove = await screen.findByRole("dialog", { name: "Delete “Design review”?" });
+    expect(remove).toHaveAccessibleDescription("Its 2 threads are ungrouped, not deleted.");
+    expect(within(remove).queryByRole("button", { name: "Close" })).toBeNull();
+    await user.click(within(remove).getByRole("button", { name: "Delete group" }));
+    expect(await within(remove).findByRole("alert")).toHaveTextContent("Group changed elsewhere.");
+    await user.click(within(remove).getByRole("button", { name: "Delete group" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /^Delete/u })).toBeNull());
+    expect(store.deleteThreadGroup).toHaveBeenCalledTimes(2);
   });
 
   it("confirms every stack lifecycle action against the exact displayed members", async () => {
@@ -3019,7 +3063,7 @@ describe("InventorySidebar view modes", () => {
       screen.getByRole("combobox", { name: "Directory environment" }),
     );
     await user.click(
-      screen.getByRole("option", { name: "Build host — Unavailable" }),
+      screen.getByRole("option", { name: "Build host Unavailable" }),
     );
     expect(
       screen.getByRole("textbox", { name: "Absolute directory path" }),

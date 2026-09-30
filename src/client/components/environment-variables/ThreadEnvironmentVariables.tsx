@@ -3,7 +3,7 @@ import type { EnvironmentVariableOverrides, EnvironmentVariablesSnapshot } from 
 import type { ApiClient } from "../../api/ApiClient.js";
 import { messageFrom } from "../../stores/ApplicationClientStore.js";
 import { Button } from "../ui/button.js";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dialog.js";
+import { Dialog, DialogAlert, DialogBody, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog.js";
 import { EnvironmentVariablesDialog } from "./EnvironmentVariablesDialog.js";
 
 export function ThreadEnvironmentVariables({ api, threadId, title, onClose, onFork, forkUnavailableReason, restoreFocus }: {
@@ -27,9 +27,19 @@ export function ThreadEnvironmentVariables({ api, threadId, title, onClose, onFo
       .catch(cause => { if (!abort.signal.aborted) setError(messageFrom(cause)); });
     return () => abort.abort();
   }, [api, threadId, generation]);
+  // Loading and load failure use the editor's own frame, so the dialog does
+  // not jump from a small card to the full editor.
   if (!snapshot) return <Dialog open onOpenChange={next => { if (!next) onClose(); }}>
-    <DialogContent onCloseAutoFocus={event => { event.preventDefault(); restoreFocus(); }}><DialogTitle>Environment variables</DialogTitle><DialogDescription>Saved for “{title}”</DialogDescription>
-      {error ? <><p role="alert">{error}</p><Button onClick={() => setGeneration(current => current + 1)}>Retry</Button></> : <p role="status">Loading saved variables…</p>}
+    <DialogContent size="lg" layer="over-dialog" onCloseAutoFocus={event => { event.preventDefault(); restoreFocus(); }}>
+      <DialogHeader>
+        <DialogTitle>Environment variables</DialogTitle>
+        <DialogDescription>Saved for “{title}”</DialogDescription>
+      </DialogHeader>
+      <DialogBody>
+        {error
+          ? <DialogAlert tone="danger" action={<Button type="button" variant="outline" size="sm" onClick={() => setGeneration(current => current + 1)}>Retry</Button>}>{error}</DialogAlert>
+          : <p role="status" className="environment-variable-help">Loading saved variables…</p>}
+      </DialogBody>
     </DialogContent>
   </Dialog>;
   return <EnvironmentVariablesDialog key={editingFork ? "fork" : "inspect"} open onOpenChange={next => { if (!next) onClose(); }} snapshot={snapshot}
