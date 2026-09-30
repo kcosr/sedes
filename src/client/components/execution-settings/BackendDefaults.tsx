@@ -59,7 +59,7 @@ export function BackendDefaults({ configuration, value, onChange, dirty, saving,
   // Narrow, the defaults fold into one summary row so the list stays in view.
   const open = expanded || dirty || saving || Boolean(error) || errors.fields.size > 0 || errors.general.length > 0;
   const summary = `New threads use ${connectionLabel(configuration, value.defaultTargetId || null)} · Research ${value.webSearch ? "on" : "off"}`;
-  return <form className="execution-defaults" data-open={open} aria-label="Backend defaults" noValidate onSubmit={event => { event.preventDefault(); onSave(); }}>
+  return <form className="execution-defaults" data-stack="list" data-open={open} aria-label="Backend defaults" noValidate onSubmit={event => { event.preventDefault(); onSave(); }}>
     <SettingsSection title="Defaults" description="These apply across all environments for this account." card
       actions={dirty || saving ? <>
         <Button type="button" variant="outline" size="sm" disabled={saving} onClick={onCancel}>Cancel</Button>

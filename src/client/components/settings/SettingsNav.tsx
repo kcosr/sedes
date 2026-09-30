@@ -1,13 +1,9 @@
 import "./settings.css";
-import { ArrowLeft, ArrowUpRight } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { useId } from "react";
 import { navigate, settingsPath } from "../../app/router.js";
 import type { SettingsPage } from "../../app/settings-route.js";
-import {
-  groupSettingsEntries,
-  type SettingsEntry,
-  type SettingsPageEntry,
-} from "./settings-pages.js";
+import { groupSettingsEntries, type SettingsPageEntry } from "./settings-pages.js";
 import { requestSettingsPageReselect } from "./settings-navigation.js";
 
 /** A plain left click that the app should route itself. */
@@ -21,18 +17,24 @@ export function isPlainClick(event: React.MouseEvent<HTMLElement>): boolean {
   );
 }
 
-export function settingsEntryHref(entry: SettingsEntry): string {
-  return entry.kind === "page" ? settingsPath(entry.id) : entry.href;
+/**
+ * Follows an in-app link through the router, so guards run and history
+ * stays in one place. Modified clicks keep the browser's own behavior.
+ */
+export function followLink(event: React.MouseEvent<HTMLElement>, path: string): void {
+  if (event.defaultPrevented || !isPlainClick(event)) return;
+  event.preventDefault();
+  navigate(path);
 }
 
 /**
- * Opens a settings entry: another page pushes its route; the page already
+ * Opens a settings page: another page pushes its route; the page already
  * shown (at its root) asks the page to return to its start instead of
  * stacking a duplicate history entry.
  */
-export function openSettingsEntry(entry: SettingsEntry): void {
-  const href = settingsEntryHref(entry);
-  if (entry.kind === "page" && window.location.pathname === href) {
+export function openSettingsEntry(entry: SettingsPageEntry): void {
+  const href = settingsPath(entry.id);
+  if (window.location.pathname === href) {
     requestSettingsPageReselect(entry.id);
     return;
   }
@@ -92,14 +94,14 @@ export function SettingsNav({
             <ul data-slot="settings-nav-list">
               {group.entries.map((entry) => {
                 const Icon = entry.icon;
-                const current = entry.kind === "page" && entry.id === page;
+                const current = entry.id === page;
                 return (
                   <li key={entry.id}>
                     <a
                       data-slot="settings-nav-link"
-                      data-testid={entry.kind === "page" ? "settings-page" : "settings-link"}
+                      data-testid="settings-page"
                       data-page={entry.id}
-                      href={settingsEntryHref(entry)}
+                      href={settingsPath(entry.id)}
                       aria-current={current ? "page" : undefined}
                       onClick={(event) => {
                         if (!isPlainClick(event)) return;
@@ -109,12 +111,6 @@ export function SettingsNav({
                     >
                       <Icon aria-hidden="true" />
                       <span>{entry.label}</span>
-                      {entry.kind === "link" ? (
-                        <ArrowUpRight
-                          aria-hidden="true"
-                          data-slot="settings-nav-external"
-                        />
-                      ) : null}
                     </a>
                   </li>
                 );

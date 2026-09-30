@@ -8,7 +8,7 @@ import { DropdownMenuItem } from "../ui/dropdown-menu.js";
 import { KeyValueList, type KeyValueItem } from "../ui/key-value-list.js";
 import { StatusPill } from "../ui/status-pill.js";
 import type { Tone } from "../ui/tone.js";
-import { useFocusReturn } from "./detail-parts.js";
+import { useFocusReturn } from "../settings/use-focus-return.js";
 import { errorMessage } from "./fields.js";
 import { actionLabels, applyLabels, atLeast, preferenceLabels, presentRuntime, upgradeLabels, type RuntimeAction, type RuntimeActionPresentation, type RuntimePresentation } from "./runtime-presentation.js";
 import type { ConfigurationControls } from "./useConfiguration.js";

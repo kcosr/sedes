@@ -29,8 +29,10 @@ describe("AgentConfigurationEditor", () => {
   it("makes inheritance explicit and creates a sparse override", () => {
     const onChange = vi.fn();
     render(
-      <AgentConfigurationEditor descriptor={descriptor} onChange={onChange} />,
+      <AgentConfigurationEditor id="agent-configuration" descriptor={descriptor} onChange={onChange} />,
     );
+    // The section is the target of the Agent editor's "Configuration" anchor.
+    expect(screen.getByRole("region", { name: "Agent configuration" })).toHaveAttribute("id", "agent-configuration");
     expect(screen.getByText("Current target default: Default model")).toBeVisible();
     fireEvent.click(screen.getByRole("switch", { name: "Override Model" }));
     expect(onChange).toHaveBeenCalledWith([

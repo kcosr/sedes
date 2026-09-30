@@ -14,7 +14,8 @@ import { Field } from "../ui/field.js";
 import { KeyValueList } from "../ui/key-value-list.js";
 import { StatusPill } from "../ui/status-pill.js";
 import type { Tone } from "../ui/tone.js";
-import { CopyableValue, useFocusReturn } from "./detail-parts.js";
+import { useFocusReturn } from "../settings/use-focus-return.js";
+import { CopyableValue } from "./detail-parts.js";
 import { errorMessage } from "./fields.js";
 import type { ApiClient } from "../../api/ApiClient.js";
 

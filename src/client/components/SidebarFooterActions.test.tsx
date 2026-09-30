@@ -420,7 +420,8 @@ describe("SidebarFooterActions", () => {
 
     await user.click(screen.getByRole("button", { name: "More" }));
     await user.click(screen.getByRole("menuitem", { name: "Agents" }));
-    expect(callbacks.onOpenAgents).toHaveBeenCalledOnce();
+    // Agents open in Settings; focus comes back to the More button.
+    expect(callbacks.onOpenAgents).toHaveBeenCalledExactlyOnceWith(screen.getByRole("button", { name: "More" }));
     expect(screen.queryByRole("menu")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "More" }));

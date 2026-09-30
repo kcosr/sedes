@@ -30,10 +30,14 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       .getByRole("button", { name: "More" })
       .click();
     await page.getByRole("menuitem", { name: "Agents", exact: true }).click();
-    await expect(page).toHaveURL("/agents");
+    // Agents are a Settings page under Execution, beside the settings nav.
+    await expect(page).toHaveURL("/settings/agents");
+    const settingsNavigation = page.getByTestId("desktop-sidebar").getByRole("navigation", { name: "Settings pages", exact: true });
+    await expect(settingsNavigation.getByRole("link", { name: "Agents", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("heading", { name: "Agents", level: 1 })).toBeVisible();
     await expect(page.getByText("No Agents yet.")).toBeVisible();
     await page.getByRole("button", { name: "Create Agent" }).click();
-    await expect(page).toHaveURL("/agents/new");
+    await expect(page).toHaveURL("/settings/agents/new");
 
     await page.getByRole("textbox", { name: "Name" }).fill("Careful reviewer");
     await page
@@ -141,10 +145,16 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       agent: { id: string };
     };
     agentId = createdAgent.agent.id;
-    await expect(page).toHaveURL(`/agents/${agentId}`);
+    await expect(page).toHaveURL(`/settings/agents/${agentId}`);
     await expect(
       page.getByRole("heading", { name: "Careful reviewer" }),
     ).toBeVisible();
+    // At 1440 the saved Agents list sits beside the editor.
+    const savedAgents = page.getByRole("region", { name: "Saved Agents", exact: true });
+    const agentEditor = page.getByRole("region", { name: "Agent editor", exact: true });
+    const [listBounds, editorBounds] = [await savedAgents.boundingBox(), await agentEditor.boundingBox()];
+    expect(listBounds!.x + listBounds!.width).toBeLessThanOrEqual(editorBounds!.x);
+    await expect(savedAgents.getByRole("link", { name: "Careful reviewer", exact: true })).toHaveAttribute("aria-current", "page");
     await selectRadixOption(
       page,
       page.getByRole("combobox", { name: "Configure using" }),
@@ -176,6 +186,9 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expectNoPageOverflow(page);
+    // A phone stacks: the editor alone, with the way back to the list.
+    await expect(savedAgents).toBeHidden();
+    await expect(agentEditor.getByRole("link", { name: "Agents", exact: true })).toBeVisible();
     await capture(page, testInfo, "saved-agent-editor-mobile.png");
     await page.setViewportSize({ width: 390, height: 430 });
     await expectNoPageOverflow(page);
@@ -185,6 +198,18 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     await expect(cancel).toBeInViewport();
     await expect(save).toBeInViewport();
     await capture(page, testInfo, "saved-agent-editor-short-mobile.png");
+
+    // Escape walks up the stack: the Agent, Agents, Settings, the workspace.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press("Escape");
+    await expect(page).toHaveURL("/settings/agents");
+    await expect(savedAgents.getByRole("link", { name: "Careful reviewer updated", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page).toHaveURL("/settings");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("settings-view")).toHaveCount(0);
+    await expect(page).not.toHaveURL(/\/settings/u);
   });
 
   test("uses the selected target, copies exact settings and tools, then severs the Agent relationship", async ({
@@ -286,7 +311,16 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     await savedVariables.getByRole("button", { name: "Done", exact: true }).click();
 
 
-    await page.goto(`/agents/${agentId}`);
+    // A deep link opens the Agent inside the settings shell.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/settings/agents/${agentId}`);
+    await expect(
+      page.getByTestId("desktop-sidebar").getByRole("navigation", { name: "Settings pages", exact: true })
+        .getByRole("link", { name: "Agents", exact: true }),
+    ).toHaveAttribute("aria-current", "page");
+    await expect(
+      page.getByRole("region", { name: "Agent editor", exact: true }).getByRole("heading", { name: "Careful reviewer updated", level: 2 }),
+    ).toBeFocused();
     await selectRadixOption(
       page,
       page.getByRole("combobox", { name: "Configure using" }),
@@ -359,7 +393,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       .getByRole("button", { name: "Delete Agent", exact: true })
       .click();
     await deleted;
-    await expect(page).toHaveURL("/agents");
+    await expect(page).toHaveURL("/settings/agents");
     await agentsListed;
     browserDiagnostics.allowNetworkFailures = false;
     await expect(page.getByText("No Agents yet.")).toBeVisible();
@@ -560,7 +594,13 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     // Recreate a minimal Agent directly through the management UI after the
     // linkage test deleted the original preset.
     await openSedesWorkspace(page);
-    await page.goto("/agents/new");
+    // The retired Workbench route is gone, not aliased: it falls through
+    // to the workspace like any unknown path.
+    await page.goto("/agents");
+    await expect(page.getByRole("main").getByTestId("new-thread-trigger")).toBeVisible();
+    await expect(page.getByTestId("settings-view")).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Saved Agents" })).toHaveCount(0);
+    await page.goto("/settings/agents/new");
     await page.getByRole("textbox", { name: "Name" }).fill("Health probe");
     await selectProjectIfNeeded(page, repositoryLabel);
     await selectRadixOption(

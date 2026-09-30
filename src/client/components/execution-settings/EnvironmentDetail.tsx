@@ -14,7 +14,9 @@ import { KeyValueList, type KeyValueItem } from "../ui/key-value-list.js";
 import { StatusPill } from "../ui/status-pill.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.js";
 import { Tag } from "../ui/tag.js";
-import { BackLink, CopyableValue, DetailHeader } from "./detail-parts.js";
+import { SettingsBackLink } from "../settings/SettingsPage.js";
+import { SettingsDetailHeader } from "../settings/SettingsSplit.js";
+import { CopyableValue } from "./detail-parts.js";
 import { capabilityLabels, environmentKindNames } from "./EnvironmentEditor.js";
 import { environmentBackends, EnvironmentIcon, environmentKindLabels, hostPlatform, hostPresence, runtimeFor } from "./ExecutionInventory.js";
 import { RecoveredOperations } from "./RecoveredOperations.js";
@@ -136,7 +138,7 @@ export function EnvironmentDetail({ environment, selected, tab, onTab, hosts, st
   ];
   const revoked = binding?.state === "revoked";
   return <section aria-label={`${environment.label} details`} className="execution-detail">
-    <DetailHeader back={<BackLink stackOnly href={settingsPath("environments")} label="Environments" />}
+    <SettingsDetailHeader back={<SettingsBackLink stackOnly href={settingsPath("environments")} label="Environments" />}
       icon={<EnvironmentIcon kind={environment.kind} />} title={environment.label} headingRef={headingRef}
       tags={<Tag>{environmentKindLabels[environment.kind]}</Tag>} status={<StatusPill tone={status.tone}>{status.label}</StatusPill>}
       actions={<>

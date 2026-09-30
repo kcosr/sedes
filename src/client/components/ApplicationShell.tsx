@@ -320,12 +320,12 @@ export function ApplicationShell({
       onNavigate={(options) => {
         if (!options?.keepDrawerOpen) setDrawerOpen(false);
       }}
-      onOpenSettings={(trigger) => {
+      onOpenSettings={(trigger, page) => {
         // The drawer's Settings button disappears when the drawer closes.
         // Return to the persistent workspace trigger, even on a fast round trip.
         settingsReturnFocus.current = peekEnabled ? trigger : mobileNavigationTrigger.current;
         setDrawerOpen(false);
-        navigate(settingsPath());
+        navigate(settingsPath(page));
       }}
       showFooterConnectionStatus={peekEnabled && route.name !== "thread"}
       peekEnabled={peekEnabled}

@@ -58,6 +58,21 @@ describe("useDirtyNavigationGuard", () => {
     expect(window.history.length).toBe(length);
   });
 
+  it("proceeds up through history past its own guard, like a ‹ link", async () => {
+    function Proceeding(): React.JSX.Element {
+      const guard = useDirtyNavigationGuard(true);
+      return <button onClick={() => guard.proceed("/settings/agents", { up: true })}>Up</button>;
+    }
+    navigate("/settings/agents", { replace: true });
+    navigate("/settings/agents/agent-1");
+    render(<Proceeding />);
+    const length = window.history.length;
+    fireEvent.click(screen.getByRole("button", { name: "Up" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/settings/agents"));
+    // Back, not a new entry, and no discard prompt for the navigation it chose.
+    expect(window.history.length).toBe(length);
+  });
+
   it("cancels and resumes browser Back while keeping subsequent Back and Forward usable", async () => {
     navigate("/settings/general", { replace: true });
     navigate("/settings/appearance");

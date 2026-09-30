@@ -9,7 +9,9 @@ import { ConfirmDialog } from "../ui/confirm-dialog.js";
 import { KeyValueList } from "../ui/key-value-list.js";
 import { StatusPill } from "../ui/status-pill.js";
 import { Tag } from "../ui/tag.js";
-import { DetailHeader, GeneralErrors, useFocusReturn } from "./detail-parts.js";
+import { SettingsDetailHeader } from "../settings/SettingsSplit.js";
+import { useFocusReturn } from "../settings/use-focus-return.js";
+import { GeneralErrors } from "./detail-parts.js";
 import { RemoteOperationsFields } from "./EnvironmentEditor.js";
 import { hostPlatform, PendingHostList } from "./ExecutionInventory.js";
 import { ListField, TextField } from "./fields.js";
@@ -58,7 +60,7 @@ export function PendingHostDetail({ registration, draft, setDraft, errors, disab
   const metadata = registration.metadata;
   const fields = errors.fields;
   return <section aria-label={`Pending ${metadata.hostname}`} className="execution-detail">
-    <DetailHeader back={back} headingRef={headingRef} title={metadata.hostname}
+    <SettingsDetailHeader back={back} headingRef={headingRef} title={metadata.hostname}
       tags={<Tag>Pending</Tag>} status={registration.connected ? <StatusPill tone="success">Host online</StatusPill> : <StatusPill tone="warning">Host offline</StatusPill>}
       description="Compare the registration code with the one the connector printed. Accepting creates its environment with only the access below."
       actions={<Button type="button" variant="outline" disabled={disabled} aria-label={`Deny ${metadata.hostname}`} onClick={() => setDenying(true)}>Deny</Button>} />
@@ -73,7 +75,7 @@ export function PendingHostDetail({ registration, draft, setDraft, errors, disab
       ]} />
     </SettingsSection>
     <GeneralErrors errors={errors.general} />
-    <form className="execution-editor-form" noValidate onSubmit={(event) => { event.preventDefault(); onAccept(); }}>
+    <form data-slot="settings-editor-form" noValidate onSubmit={(event) => { event.preventDefault(); onAccept(); }}>
       <SettingsSection title="Access to grant" card>
         <TextField label="Environment name" required disabled={disabled} value={draft.label} error={fields.get("label")}
           onChange={(label) => setDraft({ ...draft, label })} />
@@ -115,7 +117,7 @@ export function PairHostSetup({ controls, registrations, back, headingRef }: {
 }): React.JSX.Element {
   const setup = controls.outboundConnectorSetup();
   return <section aria-label="Pair a host" className="execution-detail">
-    <DetailHeader back={back} headingRef={headingRef} title="Pair a host"
+    <SettingsDetailHeader back={back} headingRef={headingRef} title="Pair a host"
       description="Pair a connector with the Sedes API, compare its registration code here, then approve its access." />
     <SettingsSection title="1. Create a pairing code" description="On the Sedes server, create a single-use sidecar pairing code." card>
       <CommandBlock label="pairing command" command={`sedes auth pair --server ${JSON.stringify(setup.serverUrl)} --sidecar`} />

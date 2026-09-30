@@ -17,11 +17,14 @@ import { SettingsSection, SettingsSubgroup } from "../settings/SettingsSection.j
 import { ExactToolSelector } from "./ExactToolSelector.js";
 
 export function AgentToolPolicyEditor({
+  id,
   catalog,
   value,
   disabled = false,
   onChange,
 }: {
+  /** The section's id, a target for the editor's section anchors. */
+  readonly id?: string;
   readonly catalog: AgentToolBootstrapDescriptor;
   readonly value?: AgentToolBootstrapPolicy;
   readonly disabled?: boolean;
@@ -56,6 +59,7 @@ export function AgentToolPolicyEditor({
 
   return (
     <SettingsSection
+      id={id}
       title="Sedes tools"
       description="Choose whether new threads inherit the ordinary tool policy."
       card

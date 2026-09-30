@@ -628,6 +628,273 @@
   gap: var(--space-2);
 }
 
+/* ── Search above an inventory list ── */
+[data-slot="settings-search"] {
+  position: relative;
+  min-width: 0;
+}
+
+[data-slot="settings-search"] > svg {
+  position: absolute;
+  top: 50%;
+  left: var(--space-2-5);
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--muted-foreground);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+[data-slot="settings-search"] input {
+  padding-left: calc(var(--space-2-5) + var(--icon-sm) + var(--space-2));
+}
+
+[data-slot="settings-search"] input::-webkit-search-cancel-button {
+  display: none;
+}
+
+/* ── Split inventory (SettingsSplit) ──
+   A list pane beside the selection when the settings column (the shell's
+   settings-content container) is at least 960px wide; below that the page
+   stacks: the list, or the selection with a way back. The page's
+   data-selection says which; content marked data-stack="list" goes with
+   the list. */
+[data-slot="settings-split"] {
+  display: grid;
+  min-width: 0;
+  align-items: start;
+  gap: var(--space-6);
+}
+
+[data-slot="settings-split-list"],
+[data-slot="settings-split-detail"] {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: var(--space-3);
+}
+
+[data-slot="settings-split-list"] {
+  container: settings-list / inline-size;
+}
+
+[data-slot="settings-split-detail"] {
+  gap: var(--space-6);
+}
+
+[data-slot="settings-split-list"] [data-slot="empty-state"][data-variant="inline"] {
+  padding-inline: var(--space-3);
+}
+
+/* "Select …" in an empty detail pane. */
+[data-slot="settings-split-detail"] > [data-slot="empty-state"] {
+  min-height: 16rem;
+}
+
+@container settings-content (width < 960px) {
+  [data-slot="settings-page"][data-selection="none"] [data-slot="settings-split-detail"] {
+    display: none;
+  }
+
+  [data-slot="settings-page"][data-selection]:not([data-selection="none"])
+    :is([data-slot="settings-split-list"], [data-stack="list"]),
+  [data-slot="settings-page"][data-selection]:not([data-selection="none"])
+    > [data-slot="settings-page-header"] {
+    display: none;
+  }
+}
+
+@container settings-content (width >= 960px) {
+  [data-slot="settings-split"] {
+    grid-template-columns: minmax(300px, 340px) minmax(0, 1fr);
+  }
+
+  [data-slot="settings-split-list"] {
+    position: sticky;
+    top: 0;
+    max-height: calc(100dvh - 7rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: var(--space-2);
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-card);
+    background: var(--card);
+  }
+
+  /* Beside its list, the list is the way back. */
+  [data-slot="settings-page-back"][data-stack-only] {
+    display: none;
+  }
+
+  /* A long editor takes the width; its list gives way. */
+  [data-slot="settings-split"][data-wide] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  [data-slot="settings-split"][data-wide] > [data-slot="settings-split-list"] {
+    display: none;
+  }
+
+  /* The save bar bleeds into the gutter beside it, not across the list. */
+  [data-slot="settings-split-detail"] [data-slot="save-bar"] {
+    clip-path: inset(-1px -100vmax -100vmax calc(-1 * var(--space-3)));
+  }
+}
+
+/* ── Detail and editor panes ──
+   Their headers use the settings page header (SettingsDetailHeader); these
+   rules add the entity's icon, tags and status to its title. */
+[data-slot="settings-detail-title-row"] {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+[data-slot="settings-detail-title-row"] > [data-slot="settings-page-title"] {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+[data-slot="settings-detail-icon"] {
+  display: grid;
+  place-items: center;
+  color: var(--muted-foreground);
+}
+
+[data-slot="settings-detail-icon"] svg {
+  width: var(--icon-lg);
+  height: var(--icon-lg);
+}
+
+[data-slot="settings-detail-meta"] {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+[data-slot="settings-editor"],
+[data-slot="settings-editor-body"] {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: var(--space-5);
+}
+
+[data-slot="settings-editor-form"] {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-6);
+}
+
+[data-slot="settings-anchors"] {
+  position: sticky;
+  z-index: var(--z-sticky);
+  top: 0;
+  display: flex;
+  gap: var(--space-1);
+  margin-block: calc(-1 * var(--space-2));
+  padding-block: var(--space-2);
+  overflow-x: auto;
+  background: var(--background);
+  box-shadow: 0 1px 0 var(--border-soft);
+  scrollbar-width: none;
+}
+
+/* A tall mask over the scroller's top padding strip while the bar is stuck. */
+[data-slot="settings-anchors"][data-stuck] {
+  box-shadow:
+    0 1px 0 var(--border-soft),
+    0 -1.5rem 0 var(--background),
+    0 -3rem 0 var(--background);
+}
+
+/* A zero-height marker at the bar's resting place; it cancels its own row gap. */
+[data-slot="settings-anchors-sentinel"] {
+  display: block;
+  height: 0;
+  margin-bottom: calc(-1 * var(--space-5));
+}
+
+[data-slot="settings-anchors"] button {
+  flex: none;
+  min-height: var(--control-sm);
+  padding: 0 var(--space-2-5);
+  border: 0;
+  border-radius: var(--radius-ctl);
+  background: none;
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: var(--text-meta);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+[data-slot="settings-anchors"] button:hover {
+  background: var(--hover);
+  color: var(--foreground);
+}
+
+[data-slot="settings-anchors"] button[aria-current="true"] {
+  background: var(--selected);
+  color: var(--foreground);
+}
+
+[data-slot="settings-anchors"] button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+[data-slot="settings-editor"] [data-slot="settings-section"] {
+  scroll-margin-top: calc(var(--control-sm) + var(--space-5));
+}
+
+/* With room beside it, a wide editor keeps its section index on the right. */
+@container settings-content (width >= 960px) {
+  [data-slot="settings-split"][data-wide] [data-slot="settings-editor-body"] {
+    grid-template-columns: minmax(0, 50rem) 11rem;
+    align-items: start;
+    column-gap: var(--space-6);
+  }
+
+  [data-slot="settings-split"][data-wide] [data-slot="settings-anchors"] {
+    flex-direction: column;
+    grid-column: 2;
+    grid-row: 1;
+    margin-block: 0;
+    padding-block: 0;
+    overflow: visible;
+    background: none;
+    box-shadow: none;
+  }
+
+  [data-slot="settings-split"][data-wide] [data-slot="settings-anchors"] button {
+    justify-content: flex-start;
+    text-align: start;
+  }
+
+  [data-slot="settings-split"][data-wide] [data-slot="settings-anchors-sentinel"] {
+    display: none;
+  }
+
+  [data-slot="settings-split"][data-wide] [data-slot="settings-editor-form"] {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  [data-slot="settings-split"][data-wide] [data-slot="settings-editor"] [data-slot="settings-section"] {
+    scroll-margin-top: var(--space-4);
+  }
+}
+
+@media (max-width: 819px), (pointer: coarse) {
+  [data-slot="settings-anchors"] button {
+    min-height: var(--control-default);
+  }
+}
+
 /* ── Settings nav (the desktop sidebar slot) ──
    Overlays the retained, hidden inventory in the sidebar, so it takes the
    sidebar's width, background and resize handle. Rows reuse the sidebar
@@ -767,11 +1034,6 @@
 
 [data-slot="settings-nav-link"][data-variant="return"] > svg {
   color: inherit;
-}
-
-[data-slot="settings-nav-link"] > [data-slot="settings-nav-external"] {
-  width: var(--icon-sm);
-  height: var(--icon-sm);
 }
 
 /* ── Page parts ── */

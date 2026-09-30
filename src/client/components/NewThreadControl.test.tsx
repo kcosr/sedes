@@ -18,6 +18,7 @@ import type {
 } from "../../shared/index.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { TOUCH_DENSITY_QUERY } from "../app/use-touch-density.js";
+import { navigate } from "../app/router.js";
 import { NewThreadControl } from "./NewThreadControl.js";
 
 const workspace = {
@@ -1260,6 +1261,16 @@ describe("NewThreadControl", () => {
     expect(
       screen.getByRole("button", { name: "Create an Agent" }),
     ).toBeEnabled();
+  });
+
+  it("opens Settings › Agents to create one and closes the picker", async () => {
+    const user = userEvent.setup();
+    control({ agents: [] });
+    await openPicker(user);
+    await user.click(await screen.findByRole("button", { name: "Create an Agent" }));
+    expect(window.location.pathname).toBe("/settings/agents/new");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    navigate("/", { replace: true });
   });
 
   it("refetches and returns focus to Agent when the selected Agent is deleted", async () => {

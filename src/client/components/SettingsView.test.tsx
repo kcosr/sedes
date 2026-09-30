@@ -78,6 +78,29 @@ function navLink(name: string): HTMLElement {
   return within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("link", { name });
 }
 
+/** An application store with the principal's saved Agents (and no projects). */
+function agentsApplicationStore(api: Record<string, unknown> = {}) {
+  const agent = {
+    id: "11111111-1111-4111-8111-111111111111", name: "Careful reviewer", description: "Reviews carefully",
+    backendTypeId: "pi", backend: { typeId: "pi", label: { text: "Pi" }, brand: "pi" }, backendOverrides: [],
+    revision: 0, createdAt: "2026-08-08T00:00:00.000Z", updatedAt: "2026-08-08T00:00:00.000Z",
+  };
+  const { backendOverrides: _overrides, description: _description, ...rest } = agent;
+  const summary = { ...rest, overrideCount: 0, sedesTools: null };
+  const state = { snapshot: { environments: [], workspaces: [], threads: [] } } as unknown as ApplicationClientState;
+  const applicationStore = {
+    api: {
+      listProjects: vi.fn(async () => ({ projects: [] })),
+      listSavedAgents: vi.fn(async () => ({ items: [summary] })),
+      getSavedAgent: vi.fn(async () => agent),
+      getSavedAgentOptions: vi.fn(async () => ({ kind: "targets", targets: [] })),
+      ...api,
+    },
+    getSnapshot: () => state, subscribe: () => () => {},
+  } as unknown as ApplicationClientStore;
+  return { applicationStore, agent };
+}
+
 function executionControls() {
   const snapshot: ConfigurationSnapshot = {
     revision: 0, runtimes: [], configuration: {
@@ -408,7 +431,7 @@ describe("SettingsView", () => {
 
   it("lists every page by group with descriptions when the sidebar nav is hidden", async () => {
     navigate(settingsPath(), { replace: true });
-    render(<RoutedSettings compact onReturn={() => navigate("/")} />);
+    render(<RoutedSettings compact applicationStore={agentsApplicationStore().applicationStore} onReturn={() => navigate("/")} />);
     const view = screen.getByTestId("settings-view");
     expect(view).toHaveAttribute("data-page", "home");
     expect(view).toHaveAttribute("data-nav", "compact");
@@ -421,7 +444,10 @@ describe("SettingsView", () => {
     const general = screen.getByRole("link", { name: "General" });
     expect(general).toHaveAttribute("href", "/settings/general");
     expect(general).toHaveAccessibleDescription("Sidebar, panels, history and the composer.");
-    expect(screen.getByRole("link", { name: "Agents" })).toHaveAttribute("href", "/agents");
+    const agents = screen.getByRole("link", { name: "Agents" });
+    expect(agents).toHaveAttribute("href", "/settings/agents");
+    expect(agents).toHaveAccessibleDescription("Saved presets for new threads.");
+    expect(agents.closest("section")).toHaveAccessibleName("Execution");
     expect(screen.getByTestId("settings-return")).toHaveTextContent("Back to workspace");
 
     // A page opened from the list returns to it through history.
@@ -534,6 +560,31 @@ describe("SettingsView", () => {
     expect(screen.getByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
     await user.keyboard("{Escape}");
     await waitFor(() => expect(window.location.pathname).toBe("/threads/retained-thread"));
+  });
+
+  it("deep-links an Agent inside the settings shell, and walks up from it like the other inventories", async () => {
+    const { applicationStore, agent } = agentsApplicationStore();
+    const agentPath = settingsPath("agents", { mode: "view", resourceId: agent.id });
+    navigate("/threads/retained-thread", { replace: true });
+    navigate(agentPath);
+    render(<RoutedSettings applicationStore={applicationStore} onReturn={() => navigate("/threads/retained-thread")} />);
+    expect(screen.getByTestId("settings-view")).toHaveAttribute("data-page", "agents");
+    expect(navLink("Agents")).toHaveAttribute("aria-current", "page");
+    expect(navLink("Agents")).toHaveAttribute("href", "/settings/agents");
+    const editor = await screen.findByRole("region", { name: "Agent editor" });
+    await waitFor(() => expect(within(editor).getByRole("heading", { name: agent.name, level: 2 })).toHaveFocus());
+    expect(within(editor).getByRole("textbox", { name: "Name" })).toHaveValue(agent.name);
+    expect(screen.getByRole("region", { name: "Saved Agents" })).toBeVisible();
+    // Execution's environment controller is not the Agents page.
+    expect(screen.queryByRole("region", { name: "Configured environments" })).toBeNull();
+
+    const user = userEvent.setup();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(window.location.pathname).toBe("/settings/agents"));
+    expect(await screen.findByText("Select an Agent")).toBeVisible();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(window.location.pathname).toBe("/threads/retained-thread"));
+    expect(await screen.findByText("Workspace")).toBeVisible();
   });
 
   it("redirects /settings to the last page shown when the sidebar nav is visible", async () => {

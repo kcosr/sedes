@@ -5,7 +5,6 @@ import { settingsPageSlugs, type SettingsPage } from "../../app/settings-route.j
 import {
   availableSettingsPages,
   groupSettingsEntries,
-  SETTINGS_AGENTS_LINK,
   SETTINGS_GROUPS,
   SETTINGS_PAGES,
   type SettingsAvailability,
@@ -16,6 +15,7 @@ const everything: SettingsAvailability = {
   notifications: true,
   execution: true,
   projects: true,
+  agents: true,
   toolClients: true,
   pairedClients: true,
   electronConnection: false,
@@ -27,6 +27,7 @@ const none: SettingsAvailability = {
   notifications: false,
   execution: false,
   projects: false,
+  agents: false,
   toolClients: false,
   pairedClients: false,
   electronConnection: false,
@@ -46,7 +47,7 @@ describe("settings page registry", () => {
   });
 
   it("gives every entry its own icon, a known group and a one-line description", () => {
-    const entries = [...SETTINGS_PAGES, SETTINGS_AGENTS_LINK];
+    const entries = SETTINGS_PAGES;
     expect(new Set(entries.map(({ icon }) => icon)).size).toBe(entries.length);
     const groups = SETTINGS_GROUPS.map(({ id }) => id);
     for (const entry of entries) {
@@ -78,12 +79,21 @@ describe("settings page registry", () => {
       "environments",
       "backends",
       "projects",
+      "agents",
       "tool_clients",
       "paired_clients",
       "diagnostics",
     ]);
     expect(ids({ ...none, execution: true })).toContain("backends");
     expect(ids({ ...none, execution: true })).not.toContain("projects");
+    expect(ids({ ...none, execution: true })).not.toContain("agents");
+    expect(ids({ ...none, agents: true })).toContain("agents");
+  });
+
+  it("registers Agents as an Execution page with its own icon and description", () => {
+    const agents = SETTINGS_PAGES.find(({ id }) => id === "agents");
+    expect(agents).toMatchObject({ label: "Agents", group: "execution", description: "Saved presets for new threads." });
+    expect(SETTINGS_PAGES.filter(({ icon }) => icon === agents!.icon)).toHaveLength(1);
   });
 
   it("keeps Server to the packaged Android client and Connection to Electron", () => {
@@ -96,13 +106,11 @@ describe("settings page registry", () => {
 
   it("groups pages in the fixed group order and drops empty groups", () => {
     const grouped = groupSettingsEntries(availableSettingsPages(none));
+    // Without execution controls, Execution has no pages and is dropped.
     expect(grouped.map(({ id }) => id)).toEqual([
       "preferences",
-      "execution",
       "support",
     ]);
-    // Execution always offers the Agents workbench page.
-    expect(grouped[1]!.entries).toEqual([SETTINGS_AGENTS_LINK]);
 
     const full = groupSettingsEntries(availableSettingsPages(everything));
     expect(full.map(({ label }) => label)).toEqual([
@@ -118,6 +126,5 @@ describe("settings page registry", () => {
       "projects",
       "agents",
     ]);
-    expect(SETTINGS_AGENTS_LINK.href).toBe("/agents");
   });
 });

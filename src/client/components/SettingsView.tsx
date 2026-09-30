@@ -19,18 +19,18 @@ import {
   ElectronConnectionSettings,
   type ElectronConnectionSettingsControls,
 } from "./ElectronConnectionSettings.js";
-import { ExecutionSettings } from "./execution-settings/ExecutionSettings.js";
+import { ExecutionSettings, isExecutionPage } from "./execution-settings/ExecutionSettings.js";
+import { AgentsSettingsPage } from "./agents/AgentsView.js";
 import { ProjectsSettingsPage } from "./execution-settings/ProjectsSettingsPage.js";
 import type { HostPairingControls } from "./execution-settings/useHostPairings.js";
 import type { ConfigurationControls } from "./execution-settings/useConfiguration.js";
 import { EntityList, EntityRow } from "./settings/EntityList.js";
 import { SettingsPage as SettingsPageLayout } from "./settings/SettingsPage.js";
 import { SettingsSection } from "./settings/SettingsSection.js";
-import { isPlainClick, openSettingsEntry, settingsEntryHref } from "./settings/SettingsNav.js";
+import { isPlainClick, openSettingsEntry } from "./settings/SettingsNav.js";
 import {
   availableSettingsPages,
   groupSettingsEntries,
-  type SettingsEntry,
   type SettingsPageEntry,
 } from "./settings/settings-pages.js";
 import {
@@ -70,14 +70,15 @@ export function useSettingsPages(sources: SettingsSources): SettingsPageEntry[] 
   const notifications = Boolean(sources.notifications);
   const execution = Boolean(sources.configuration);
   const projects = Boolean(sources.applicationStore);
+  const agents = Boolean(sources.applicationStore);
   const toolClients = Boolean(sources.toolClients);
   const electronConnection = Boolean(sources.electronConnectionSettings);
   const serverProfiles = Boolean(sources.serverSettings);
   return useMemo(
     () => availableSettingsPages({
-      prompts, notifications, execution, projects, toolClients, pairedClients, electronConnection, serverProfiles,
+      prompts, notifications, execution, projects, agents, toolClients, pairedClients, electronConnection, serverProfiles,
     }),
-    [prompts, notifications, execution, projects, toolClients, pairedClients, electronConnection, serverProfiles],
+    [prompts, notifications, execution, projects, agents, toolClients, pairedClients, electronConnection, serverProfiles],
   );
 }
 
@@ -138,7 +139,7 @@ export function SettingsView({
     (heading ?? content.current)?.focus({ preventScroll: true });
   }, []);
   useEffect(() => {
-    // Environments and Backends route their own selection, scroll and focus.
+    // Inventory pages (Environments, Backends, Agents) route their own selection, scroll and focus.
     if (!available || isSettingsResourcePage(page)) return;
     if (page !== undefined || !navInSidebar) focusPageStart();
     // Only a page change moves focus; the nav moving in or out does not.
@@ -193,6 +194,8 @@ export function SettingsView({
           <TerminalSettingsPage />
         ) : page === "projects" && applicationStore ? (
           <ProjectsSettingsPage store={applicationStore} />
+        ) : page === "agents" && applicationStore ? (
+          <AgentsSettingsPage applicationStore={applicationStore} />
         ) : page === "tool_clients" && toolClients ? (
           <ToolClientsSettingsPage controls={toolClients} />
         ) : page === "paired_clients" ? (
@@ -205,7 +208,7 @@ export function SettingsView({
         ) : page === "server" && available && serverSettings ? (
           <ServerSettingsPage controls={serverSettings} />
         ) : null}
-        {configuration ? <div hidden={!isSettingsResourcePage(page)}>
+        {configuration ? <div hidden={!isExecutionPage(page)}>
           <ExecutionSettings controls={configuration} />
         </div> : null}
       </section>
@@ -219,7 +222,7 @@ function SettingsHome({
   onOpen,
 }: {
   readonly pages: readonly SettingsPageEntry[];
-  readonly onOpen: (entry: SettingsEntry) => void;
+  readonly onOpen: (entry: SettingsPageEntry) => void;
 }): React.JSX.Element {
   return (
     <SettingsPageLayout title="Settings" description="Preferences for this device, your account, where agents run, and access.">
@@ -231,12 +234,12 @@ function SettingsHome({
               return (
                 <EntityRow
                   key={entry.id}
-                  data-testid={entry.kind === "page" ? "settings-page" : "settings-link"}
+                  data-testid="settings-page"
                   data-page={entry.id}
                   icon={<Icon />}
                   title={entry.label}
                   subtitle={entry.description}
-                  href={settingsEntryHref(entry)}
+                  href={settingsPath(entry.id)}
                   chevron
                   onSelect={(event) => {
                     if (!isPlainClick(event)) return;
