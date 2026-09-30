@@ -2394,7 +2394,10 @@ textarea:disabled {
 .workspace-panel-open-trigger,
 .thread-find-trigger,
 .thread-tools-shell > button,
-.workspace-panel-actions > button {
+.workspace-panel-actions > button,
+.workspace-files-toolbar-actions > button,
+.terminal-tab-add,
+.terminal-panel-chrome-actions > button {
   width: var(--bar-control-width);
   height: var(--bar-control);
 }
@@ -2411,7 +2414,10 @@ textarea:disabled {
 .workspace-panel-open-icon svg,
 .thread-find-trigger svg,
 .thread-tools-shell > button svg,
-.workspace-panel-actions > button svg {
+.workspace-panel-actions > button svg,
+.workspace-files-toolbar-actions > button svg,
+.terminal-tab-add svg,
+.terminal-panel-chrome-actions > button svg {
   width: var(--bar-icon);
   height: var(--bar-icon);
 }
@@ -3219,7 +3225,12 @@ textarea:disabled {
   color: var(--foreground);
 }
 
+/* The compact header keeps its 38px row with 28px targets (and the bars'
+   glyphs), so a pressed button clears the row's edges. Touch sizes them
+   up below. */
 .workspace-panel-terminals .workspace-panel-chrome {
+  --bar-control: var(--control-sm);
+  --bar-control-width: var(--control-sm);
   min-height: 38px;
   gap: 4px;
   padding-block: 2px;
@@ -4698,6 +4709,23 @@ textarea:disabled {
 
 .thread-find-control input::placeholder {
   color: var(--muted-foreground-2);
+}
+
+/* The native clear control takes the bar's neutral icon colour instead of
+   the platform's accent blue. */
+.thread-find-control input::-webkit-search-cancel-button {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  margin: 0;
+  appearance: none;
+  background: var(--muted-foreground);
+  cursor: pointer;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M18 6 6 18M6 6l12 12'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
+.thread-find-control input::-webkit-search-cancel-button:hover {
+  background: var(--foreground);
 }
 
 .thread-find-count {
