@@ -422,12 +422,37 @@ describe("SettingsView", () => {
     act(() => window.history.forward());
     await waitFor(() => expect(window.location.pathname).toBe("/settings/terminal"));
 
-    // A deep-linked page replaces itself with the list instead of stacking one.
-    act(() => navigate(settingsPath("appearance"), { replace: true }));
+    // A page not opened from the list replaces itself with it instead of stacking one.
+    act(() => navigate("/threads/retained-thread"));
+    act(() => navigate(settingsPath("appearance")));
     fireEvent.click(screen.getByTestId("settings-list-link"));
     expect(window.location.pathname).toBe("/settings");
     act(() => window.history.back());
+    await waitFor(() => expect(window.location.pathname).toBe("/threads/retained-thread"));
+  });
+
+  it("returns from an environment to the list through history without the sidebar nav", async () => {
+    const { controls, snapshot } = executionControls();
+    const local = snapshot.configuration.executionEnvironments[0]!;
+    navigate("/threads/retained-thread", { replace: true });
+    navigate(settingsPath());
+    render(<RoutedSettings compact configuration={controls} onReturn={() => navigate("/threads/retained-thread")} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("link", { name: "Environments" }));
+    await user.click(await screen.findByRole("link", { name: "Local" }));
+    await user.click(screen.getByRole("button", { name: "Edit Local" }));
+    expect(window.location.pathname).toBe(settingsPath("environments", { mode: "edit", resourceId: local.id }));
+    const length = window.history.length;
+    // Each "‹" link goes up one level through the entries it came down.
+    await user.click(within(screen.getByRole("region", { name: "Environment editor" })).getByRole("link", { name: "Local" }));
+    await waitFor(() => expect(window.location.pathname).toBe(settingsPath("environments", { mode: "view", resourceId: local.id })));
+    await user.click(screen.getByTestId("settings-list-link"));
     await waitFor(() => expect(window.location.pathname).toBe("/settings"));
+    expect(await screen.findByRole("heading", { name: "Settings", level: 1 })).toBeVisible();
+    expect(window.history.length).toBe(length);
+    // Back from the list leaves Settings instead of reopening the entity.
+    act(() => window.history.back());
+    await waitFor(() => expect(window.location.pathname).toBe("/threads/retained-thread"));
   });
 
   it("redirects /settings to the last page shown when the sidebar nav is visible", () => {

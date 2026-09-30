@@ -6,6 +6,7 @@ import { createRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Button } from "@client/components/ui/button";
 import { Input } from "@client/components/ui/input";
+import { navigate } from "../../app/router.js";
 import { DangerZone, DangerZoneItem } from "./DangerZone.js";
 import { SettingsActionRow, SettingsField, SwitchField } from "./SettingsField.js";
 import { SettingsPage } from "./SettingsPage.js";
@@ -51,6 +52,18 @@ describe("SettingsPage", () => {
     rerender(<SettingsPage title="General" back={{ label: "Environments", onNavigate }} />);
     await user.click(screen.getByRole("button", { name: "Environments" }));
     expect(onNavigate).toHaveBeenCalledTimes(2);
+  });
+
+  it("goes up through history when the page was opened from the link's target", async () => {
+    const user = userEvent.setup();
+    navigate("/settings", { replace: true });
+    navigate("/settings/environments");
+    navigate("/settings/environments/local");
+    const length = window.history.length;
+    render(<SettingsPage title="Local" back={{ label: "Settings", href: "/settings" }} />);
+    await user.click(screen.getByRole("link", { name: "Settings" }));
+    await vi.waitFor(() => expect(window.location.pathname).toBe("/settings"));
+    expect(window.history.length).toBe(length);
   });
 });
 

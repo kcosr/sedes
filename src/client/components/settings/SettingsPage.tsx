@@ -1,9 +1,12 @@
 import "./settings.css";
 import { ChevronLeft } from "lucide-react";
+import { navigateUp } from "../../app/router.js";
+import { isPlainClick } from "./SettingsNav.js";
 
 export interface SettingsBack {
   readonly label: string;
-  /** Rendered as a link when set; `onNavigate` can still intercept the click. */
+  /** Rendered as a link that goes up to this path when set; `onNavigate`
+   * can still intercept the click by preventing its default. */
   readonly href?: string;
   readonly onNavigate?: (event: React.MouseEvent<HTMLElement>) => void;
 }
@@ -50,13 +53,26 @@ export function SettingsPage({
   );
 }
 
-function SettingsBackLink({ label, href, onNavigate }: SettingsBack): React.JSX.Element {
+export type SettingsBackLinkProps = SettingsBack &
+  Omit<React.HTMLAttributes<HTMLElement>, "children" | "onClick">;
+
+/**
+ * "‹ Settings" style link above a page or pane title. A link goes up
+ * through `navigateUp`, so it and browser or Android Back walk the same
+ * history; without `href` it is a button for `onNavigate`.
+ */
+export function SettingsBackLink({ label, href, onNavigate, ...props }: SettingsBackLinkProps): React.JSX.Element {
   const content = <><ChevronLeft aria-hidden="true" />{label}</>;
   return href === undefined ? (
-    <button type="button" data-slot="settings-page-back" onClick={onNavigate}>
+    <button type="button" data-slot="settings-page-back" {...props} onClick={onNavigate}>
       {content}
     </button>
   ) : (
-    <a data-slot="settings-page-back" href={href} onClick={onNavigate}>{content}</a>
+    <a data-slot="settings-page-back" href={href} {...props} onClick={(event) => {
+      onNavigate?.(event);
+      if (event.defaultPrevented || !isPlainClick(event)) return;
+      event.preventDefault();
+      navigateUp(href);
+    }}>{content}</a>
   );
 }

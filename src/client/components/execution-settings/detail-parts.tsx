@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
-import { Check, ChevronLeft, Copy } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 import { navigate } from "../../app/router.js";
+import { isPlainClick } from "../settings/SettingsNav.js";
+import { SettingsBackLink } from "../settings/SettingsPage.js";
 import { Button } from "../ui/button.js";
 import { Callout } from "../ui/callout.js";
 import { cn } from "../../lib/utils.js";
@@ -11,18 +13,18 @@ import type { GeneralError } from "./validation.js";
  * stays in one place. Modified clicks keep the browser's own behavior.
  */
 export function followLink(event: React.MouseEvent<HTMLElement>, path: string): void {
-  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  if (event.defaultPrevented || !isPlainClick(event)) return;
   event.preventDefault();
   navigate(path);
 }
 
 /**
- * "‹ Environments" above a detail or editor. `stackOnly` hides it while the
- * list is beside the detail, where the list itself is the way back.
+ * "‹ Environments" above a detail or editor: the kit's back link, which goes
+ * up through history. `stackOnly` hides it while the list is beside the
+ * detail, where the list itself is the way back.
  */
 export function BackLink({ href, label, stackOnly = false }: { readonly href: string; readonly label: string; readonly stackOnly?: boolean }): React.JSX.Element {
-  return <a data-slot="settings-page-back" className="execution-back" data-stack-only={stackOnly || undefined} href={href}
-    onClick={(event) => followLink(event, href)}><ChevronLeft aria-hidden="true" />{label}</a>;
+  return <SettingsBackLink label={label} href={href} className="execution-back" data-stack-only={stackOnly || undefined} />;
 }
 
 export function DetailHeader({ back, icon, title, headingRef, tags, status, description, actions }: {

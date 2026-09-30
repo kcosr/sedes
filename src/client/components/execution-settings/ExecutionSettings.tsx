@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Plus, RefreshCw, Server } from "lucide-react";
 import { acceptHostRegistrationRequestSchema } from "../../../shared/protocol/host-pairing.js";
-import { installNavigationBlocker, navigate, settingsPath, useRoute, type Route } from "../../app/router.js";
+import { historyStepsBackTo, installNavigationBlocker, navigate, settingsPath, useRoute, type Route } from "../../app/router.js";
 import { isSettingsResourcePage, type SettingsResourceMode, type SettingsResourcePage } from "../../app/settings-route.js";
 import { EntityList } from "../settings/EntityList.js";
 import { SettingsPage } from "../settings/SettingsPage.js";
@@ -193,10 +193,12 @@ export function ExecutionSettings({ controls }: {
     bypass.current = true;
     try { navigate(path, { replace }); } finally { bypass.current = false; }
   };
-  /** Leaves an editor without asking: Back when it was opened from `path`, otherwise a replace. */
+  /** Leaves an editor without asking: back through history when it came down from `path`, otherwise a replace. */
   const returnTo = (path: string) => {
-    if (previousPath.current === path) { traversalBypass.current = true; window.history.back(); }
-    else go(path, true);
+    const steps = historyStepsBackTo(path);
+    if (steps === undefined) { go(path, true); return; }
+    traversalBypass.current = true;
+    window.history.go(steps);
   };
 
   // Drafts belong to their route: create them on entry and drop them on exit.

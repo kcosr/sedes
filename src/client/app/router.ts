@@ -33,6 +33,9 @@ const blockers = new Set<NavigationBlocker>();
 const historyIndexKey = "__sedesHistoryIndex";
 let currentIndex = historyIndex(window.history.state) ?? 0;
 window.history.replaceState(indexedState(window.history.state, currentIndex), "", window.location.href);
+/** The location of each app history entry this document has seen, by
+ * position, so an in-app "up" link can tell where Back leads. */
+const entryLocations = new Map<number, string>([[currentIndex, currentLocation]]);
 
 interface NavigationIntent {
   readonly current: Route;
@@ -126,6 +129,9 @@ function locationPath(): string {
 export function pushHistoryEntry(state: unknown, path: string): void {
   const index = (historyIndex(window.history.state) ?? currentIndex) + 1;
   window.history.pushState(indexedState(state, index), "", path);
+  // A push discards the forward entries.
+  for (const position of entryLocations.keys()) if (position > index) entryLocations.delete(position);
+  entryLocations.set(index, locationPath());
   if (locationPath() === currentLocation) {
     currentIndex = index;
     pendingIntent = undefined;
@@ -133,13 +139,16 @@ export function pushHistoryEntry(state: unknown, path: string): void {
 }
 
 export function replaceHistoryEntry(state: unknown, path: string): void {
-  window.history.replaceState(indexedState(state, historyIndex(window.history.state) ?? currentIndex), "", path);
+  const index = historyIndex(window.history.state) ?? currentIndex;
+  window.history.replaceState(indexedState(state, index), "", path);
+  entryLocations.set(index, locationPath());
 }
 
 function publish(next: Route): void {
   currentRoute = next;
   currentLocation = locationPath();
   currentIndex = historyIndex(window.history.state) ?? currentIndex;
+  entryLocations.set(currentIndex, currentLocation);
   for (const listener of listeners) listener();
 }
 
@@ -241,6 +250,32 @@ window.addEventListener("popstate", (event: PopStateEvent) => {
 export function navigate(path: string, options?: { replace?: boolean }): void {
   pendingIntent = intentFor(path, options?.replace ? "replace" : "push");
   admit(pendingIntent);
+}
+
+/**
+ * The (negative) number of entries Back must go to reach `path`, when the
+ * history came down from it: every entry between it and this one lies below
+ * it (`path/…`). Undefined when Back does not lead there, including entries
+ * from before a reload.
+ */
+export function historyStepsBackTo(path: string): number | undefined {
+  for (let index = currentIndex - 1; index >= 0; index--) {
+    const location = entryLocations.get(index);
+    if (location === path) return index - currentIndex;
+    if (location === undefined || !location.startsWith(`${path}/`)) return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Goes up to `path` (a "‹ Settings" style link): back through the entries
+ * that came down from it, so the link and browser or Android Back walk the
+ * same stack; otherwise this entry is replaced. Guards run either way.
+ */
+export function navigateUp(path: string): void {
+  const steps = historyStepsBackTo(path);
+  if (steps === undefined) navigate(path, { replace: true });
+  else window.history.go(steps);
 }
 
 export function installNavigationBlocker(blocker: NavigationBlocker): () => void {

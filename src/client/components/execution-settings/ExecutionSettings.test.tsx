@@ -112,9 +112,10 @@ describe("execution configuration administration", () => {
     const editor = screen.getByRole("region", { name: "Environment editor" });
     expect(within(editor).getByLabelText("Environment name")).toHaveValue("Build host");
     expect(within(editor).getByRole("group", { name: "SSH host alias" })).toHaveTextContent("build-host");
+    // The editor's back link goes up through history to the detail it was opened from.
     fireEvent.click(within(editor).getByRole("link", { name: "Build host" }));
-    expect(window.location.pathname).toBe(environmentPath(remoteId));
-    expect(detailHeading("Build host")).toHaveFocus();
+    await waitFor(() => expect(window.location.pathname).toBe(environmentPath(remoteId)));
+    await waitFor(() => expect(detailHeading("Build host")).toHaveFocus());
   });
 
   it("identifies stale ownership without misrepresenting it as an unreachable host", async () => {
@@ -291,9 +292,9 @@ describe("execution configuration administration", () => {
     fireEvent.click(screen.getByRole("link", { name: "Build host" }));
     expect(detailHeading("Build host")).toHaveFocus();
     fireEvent.click(within(detail("Build host")).getByRole("link", { name: "Environments" }));
-    expect(window.location.pathname).toBe("/settings/environments");
+    await waitFor(() => expect(window.location.pathname).toBe("/settings/environments"));
     expect(screen.getByRole("searchbox", { name: "Search environments" })).toHaveValue("build-host");
-    expect(screen.getByRole("link", { name: "Build host" })).toHaveFocus();
+    await waitFor(() => expect(screen.getByRole("link", { name: "Build host" })).toHaveFocus());
     expect(screen.queryByRole("link", { name: "Local" })).toBeNull();
   });
 

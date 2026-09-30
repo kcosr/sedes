@@ -5,7 +5,7 @@ import type { NotificationSettingsStore } from "../stores/NotificationSettingsSt
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { ArrowLeft, ChevronLeft } from "lucide-react";
 import { Button } from "@client/components/ui/button";
-import { navigate, settingsPath } from "../app/router.js";
+import { navigate, navigateUp, settingsPath } from "../app/router.js";
 import { isSettingsResourcePage, type SettingsPage } from "../app/settings-route.js";
 import { SidebarNavTrigger } from "./SidebarNavTrigger.js";
 import type { ServerSettingsControls } from "./ServerSettingsForm.js";
@@ -109,9 +109,6 @@ export function SettingsView({
   const pages = useSettingsPages(sources);
   const navInSidebar = useSettingsNavInSidebar();
   const content = useRef<HTMLElement>(null);
-  // The page path last opened from the compact list: its back link returns
-  // through history instead of stacking another list entry.
-  const listOrigin = useRef<string | undefined>(undefined);
   const available = page === undefined || pages.some(entry => entry.id === page);
   const pageIds = pages.map(entry => entry.id).join(" ");
   useLayoutEffect(() => {
@@ -148,14 +145,6 @@ export function SettingsView({
   useEffect(() => installSettingsPageReselectListener(window, (selected) => {
     if (selected === page) focusPageStart();
   }), [page, focusPageStart]);
-  const openFromList = (entry: SettingsEntry) => {
-    if (entry.kind === "page") listOrigin.current = settingsEntryHref(entry);
-    openSettingsEntry(entry);
-  };
-  const returnToList = () => {
-    if (listOrigin.current === window.location.pathname) window.history.back();
-    else navigate(settingsPath(), { replace: true });
-  };
   const current = pages.find(entry => entry.id === page);
   const showList = (page === undefined || !available) && !navInSidebar;
   return (
@@ -169,7 +158,9 @@ export function SettingsView({
               onClick={(event) => {
                 if (!isPlainClick(event)) return;
                 event.preventDefault();
-                returnToList();
+                // Back through the page (and its entities) to the list when
+                // opened from it, so the link and Back walk the same history.
+                navigateUp(settingsPath());
               }}>
               <ChevronLeft aria-hidden="true" />Settings
             </a>
@@ -181,7 +172,7 @@ export function SettingsView({
         </header>
       )}
       <section ref={content} className="settings-content" tabIndex={-1} aria-label={current?.label ?? "Settings"}>
-        {showList ? <SettingsHome pages={pages} onOpen={openFromList} /> : null}
+        {showList ? <SettingsHome pages={pages} onOpen={openSettingsEntry} /> : null}
         {page === "general" ? (
           <GeneralSettingsPage applicationPreferences={applicationPreferences} />
         ) : page === "diagnostics" ? (
