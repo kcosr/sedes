@@ -14,7 +14,6 @@ import {
   respondToQuestionRequestSchema,
   dismissQuestionRequestSchema,
 } from "../shared/protocol/questions.js";
-import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { Request, RequestHandler, Response } from "express";
 import express from "express";
@@ -3643,9 +3642,13 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     throw notFound();
   });
   if (dependencies.clientDirectory) {
-    app.use(express.static(dependencies.clientDirectory));
+    const clientDirectory = dependencies.clientDirectory;
+    app.use(express.static(clientDirectory));
     routes.get("/{*path}", (_request, response) => {
-      response.sendFile(path.join(dependencies.clientDirectory!, "index.html"));
+      // Send relative to the client root. With an absolute path, `send`
+      // treats every segment as request-controlled and ignores dotfiles,
+      // so a checkout under a dot-directory failed every deep link.
+      response.sendFile("index.html", { root: clientDirectory });
     });
   }
   app.use(() => {
