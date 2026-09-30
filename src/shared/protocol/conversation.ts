@@ -5,6 +5,7 @@ import { backgroundActivitySchema } from "./background-activity.js";
 import { questionRequestsResultSchema } from "./questions.js";
 import { nonblockingQuestionsPayloadSchema } from "./questions.js";
 import { z } from "zod";
+import { turnThroughputSchema } from "./turn-throughput.js";
 import {
   allowedImageMimeSchema,
   agentToolInvocationCorrelationSchema,
@@ -139,6 +140,7 @@ export const conversationTurnSchema = z
       .optional(),
     startedAt: z.iso.datetime().optional(),
     completedAt: z.iso.datetime().optional(),
+    throughput: turnThroughputSchema.optional(),
     /** Why this completed turn cannot be an exact fork boundary. */
     forkUnavailableReason: boundedDisplayTextSchema.optional(),
     orderedItemIds: z
@@ -146,6 +148,9 @@ export const conversationTurnSchema = z
       .max(MAXIMUM_NORMALIZED_ITEMS_PER_TURN),
   })
   .superRefine((turn, context) => {
+    if (turn.throughput !== undefined && turn.status !== "completed") {
+      context.addIssue({ code: "custom", path: ["throughput"], message: "Throughput belongs to completed turns only." });
+    }
     if ((turn.status === "failed") !== (turn.failure !== undefined)) {
       context.addIssue({ code: "custom", path: ["failure"], message: "Failure details belong to failed turns and are required for them." });
     }

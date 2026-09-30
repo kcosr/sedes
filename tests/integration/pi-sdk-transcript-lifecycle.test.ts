@@ -149,6 +149,46 @@ function assertLoadout(
 }
 
 describe("Pi 0.86 transcript and lifecycle compatibility", () => {
+  it("correlates request timing with the exact SDK message, independently of history and later consumers", async () => {
+    const f = await fixture();
+    const source = await f.open(f.reserved.manager);
+    let now = 100;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    let finish!: () => void;
+    const started = new Promise<void>((resolve) => {
+      source.stream.mockImplementation(() => {
+        const stream = new AssistantMessageEventStream();
+        const response = source.reply("Measured response");
+        response.usage.output = 100;
+        response.usage.reasoning = 40;
+        finish = () => {
+          now = 1100;
+          stream.push({ type: "done", reason: "stop", message: response });
+          stream.end(response);
+        };
+        resolve();
+        return stream;
+      });
+    });
+    const measurements: unknown[] = [];
+    source.session.subscribe((event) => {
+      if (event.type !== "message_end" || event.message.role !== "assistant") return;
+      now = 90_000;
+      event.message.usage.output = 999; // An extension may mutate the same result object.
+      measurements.push(source.session.takeRequestThroughput(event.message));
+    });
+    const running = source.prompt("Measure the response");
+    await started;
+    finish();
+    await running;
+    expect(measurements).toEqual([{ outputTokens: 100, requestDurationMs: 1000 }]);
+    expect(JSON.stringify(source.session.sessionManager.getEntries())).not.toContain("requestDurationMs");
+    const reopened = await f.open(source.session.sessionManager);
+    const historical = source.session.sessionManager.getBranch().findLast(entry => entry.type === "message" && entry.message.role === "assistant");
+    if (historical?.type !== "message" || historical.message.role !== "assistant") throw new Error("Expected assistant history");
+    expect(reopened.session.takeRequestThroughput(historical.message)).toBeUndefined();
+  });
+
   it.each([true, false])("persists a setup error as aborted only when its request was cancelled (%s)", async (cancelled) => {
     const f = await fixture();
     const source = await f.open(f.reserved.manager);

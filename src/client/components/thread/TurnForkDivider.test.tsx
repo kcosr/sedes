@@ -42,6 +42,60 @@ const capability = {
 };
 
 describe("TurnForkDivider", () => {
+  it("shows only the rate outside the right-side controls, independently of recorded usage", () => {
+    const props = {
+      turn,
+      turnNumber: 1,
+      capability,
+      attempt: undefined,
+      connected: true,
+      authoritative: true,
+      store: { forkTurn: vi.fn() } as unknown as ThreadClientStore,
+    };
+    const view = render(
+      <TurnForkDivider
+        {...props}
+        turn={{ ...turn, throughput: { outputTokens: 423, requestDurationMs: 10_000 } }}
+      />,
+    );
+    const rate = screen.getByText("42.3 tok/s");
+    expect(rate).toHaveClass("turn-throughput");
+    expect(rate.closest(".turn-fork-controls")).toBeNull();
+    expect(rate.parentElement?.firstElementChild).toBe(rate);
+    expect(rate).toHaveAttribute("aria-label", "42.3 tokens per second");
+    expect(screen.queryByText(/elapsed/i)).not.toBeInTheDocument();
+    view.rerender(<TurnForkDivider {...props} />);
+    expect(screen.queryByText(/tok\/s/)).not.toBeInTheDocument();
+    view.rerender(<TurnForkDivider {...props} turn={{ ...turn, status: "in_progress" }} />);
+    expect(view.container.querySelector("footer")).toBeNull();
+  });
+
+  it("shows a measurement added to an already completed turn with the same completion time", () => {
+    const props = {
+      turn,
+      turnNumber: 1,
+      capability,
+      attempt: undefined,
+      connected: true,
+      authoritative: true,
+      store: { forkTurn: vi.fn() } as unknown as ThreadClientStore,
+    };
+    const view = render(<TurnForkDivider {...props} />);
+    const timestamp = view.container.querySelector("time");
+    expect(screen.queryByText(/tok\/s/)).not.toBeInTheDocument();
+
+    view.rerender(
+      <TurnForkDivider
+        {...props}
+        turn={{ ...turn, revision: 4, throughput: { outputTokens: 100, requestDurationMs: 3000 } }}
+      />,
+    );
+
+    expect(screen.getByText("33.3 tok/s")).toBeVisible();
+    expect(view.container.querySelector("time")).toBe(timestamp);
+    expect(timestamp).toHaveAttribute("datetime", turn.completedAt);
+  });
+
   it("skips completed-divider work when every prop is unchanged", () => {
     let completedAtReads = 0;
     const observedTurn = new Proxy(turn, {

@@ -1,6 +1,7 @@
 import { formFieldsSchema, formAnswersSchema } from "./interactions.js";
 import { nonblockingQuestionsPayloadSchema } from "./questions.js";
 import { backgroundActivitySchema } from "./background-activity.js";
+import { turnThroughputSchema } from "./turn-throughput.js";
 import { z } from "zod";
 import {
   allowedImageMimeSchema,
@@ -81,6 +82,7 @@ export const backendTurnSchema = z
       .optional(),
     startedAt: z.iso.datetime().optional(),
     completedAt: z.iso.datetime().optional(),
+    throughput: turnThroughputSchema.optional(),
     /**
      * Why this successfully completed turn cannot be an exact fork boundary
      * for this backend. Absent means the backend's branching capability
@@ -92,6 +94,9 @@ export const backendTurnSchema = z
       .max(MAXIMUM_BACKEND_ITEMS_PER_TURN),
   })
   .superRefine((turn, context) => {
+    if (turn.throughput !== undefined && turn.status !== "completed") {
+      context.addIssue({ code: "custom", path: ["throughput"], message: "Throughput belongs to completed turns only." });
+    }
     if (turn.failure !== undefined && turn.status !== "failed") {
       context.addIssue({ code: "custom", path: ["failure"], message: "Failure details belong to failed turns only." });
     }
@@ -529,6 +534,7 @@ export const backendCapabilityDocumentSchema = z.strictObject({
       "Backend interaction kinds must be unique.",
     ),
   usageAccounting: z.enum(["supported", "unsupported"]),
+  turnThroughput: z.enum(["supported", "unsupported"]),
   usageSections: z
     .array(z.enum(["context", "counters"]))
     .max(2),

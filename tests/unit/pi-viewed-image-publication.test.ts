@@ -232,6 +232,7 @@ function scriptedSessionFactory(
         thinkingLevel: "low",
         sessionManager: manager,
         ready: async () => undefined,
+        takeRequestThroughput: () => undefined,
         subscribe(listener: Parameters<PiSdkSession["subscribe"]>[0]) {
           listeners.add(listener);
           return () => listeners.delete(listener);

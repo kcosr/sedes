@@ -19,6 +19,8 @@ test("recorded turn usage appears on the Usage page with filters and thread link
   await expect(stop).toBeVisible();
   await expect(stop).toBeHidden({ timeout: 20_000 });
   await expect(page.getByRole("button", { name: "Turn usage and cost" }).last()).toBeVisible();
+  // Recorded tokens alone do not establish a live request-duration measurement.
+  await expect(page.locator(".turn-throughput")).toHaveCount(0);
 
   const firstRead = page.waitForResponse((response) =>
     response.request().method() === "POST" && response.url().endsWith("/api/usage/analytics") && response.ok());
@@ -68,4 +70,66 @@ test("recorded turn usage appears on the Usage page with filters and thread link
   await view.getByRole("tab", { name: "Threads" }).click();
   await threadRow.locator(".usage-thread-open").click();
   await expect(page).toHaveURL(new RegExp(`${threadPath}$`));
+});
+
+test("completed turn throughput stays left aligned and survives browser reload", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await openSedesWorkspace(page);
+  await createDraftThread(page);
+  await fillAndPersistDraft(page, "Measure turn throughput");
+  expect((await page.request.post("/__e2e/pi/throughput/arm")).status()).toBe(204);
+  try {
+    await sendCurrentDraft(page);
+    const turn = page.locator(".conversation-turn").last();
+    const assistant = turn.locator('[data-item-kind="assistant_message"]');
+    await expect(assistant).toContainText("Preparing the measured response.");
+    await expect(assistant).toHaveAttribute("data-item-status", "streaming");
+    await expect(turn).toHaveAttribute("data-turn-status", "in_progress");
+    await expect(turn.locator(".turn-throughput")).toHaveCount(0);
+    await expect(turn.locator("footer")).toHaveCount(0);
+    await capture(page, testInfo, "turn-throughput-streaming.png");
+
+    expect((await page.request.post("/__e2e/pi/throughput/release")).status()).toBe(204);
+    await expect(assistant).toContainText("The measured response is complete.");
+    await expect(turn).toHaveAttribute("data-turn-status", "completed");
+    const rate = turn.locator(".turn-throughput");
+    await expect(rate).toHaveText("42.3 tok/s");
+    await expect(rate).toHaveAttribute("aria-label", "42.3 tokens per second");
+    await expect(turn.locator("footer")).not.toContainText(/elapsed|10(?:\.0)?\s*(?:s\b|seconds)/i);
+
+    for (const viewport of [
+      { width: 1280, height: 720, name: "desktop" },
+      { width: 390, height: 844, name: "mobile" },
+    ]) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await rate.scrollIntoViewIfNeeded();
+      await expect(rate).toBeVisible();
+      await expect.poll(() => turn.locator("footer").evaluate((footer) => {
+        const rate = footer.querySelector<HTMLElement>(".turn-throughput")!;
+        const controls = footer.querySelector<HTMLElement>(".turn-fork-controls")!;
+        const bounds = footer.getBoundingClientRect();
+        const rateBounds = rate.getBoundingClientRect();
+        const controlsBounds = controls.getBoundingClientRect();
+        const textBounds = footer.closest(".conversation-turn")!
+          .querySelector('[data-item-kind="assistant_message"] .markdown')!
+          .getBoundingClientRect();
+        const style = getComputedStyle(footer);
+        return Math.abs(rateBounds.left - bounds.left - Number.parseFloat(style.paddingLeft)) <= 1 &&
+          Math.abs(rateBounds.left - textBounds.left) <= 1 &&
+          Math.abs(controlsBounds.right - bounds.right + Number.parseFloat(style.paddingRight)) <= 1 &&
+          rateBounds.right < controlsBounds.left &&
+          Math.abs(rateBounds.top + rateBounds.height / 2 - controlsBounds.top - controlsBounds.height / 2) <= 3;
+      })).toBe(true);
+      await expectNoPageOverflow(page);
+      await capture(page, testInfo, `turn-throughput-${viewport.name}.png`);
+    }
+
+    // Reload reconnects to the same resident runtime and must retain its
+    // observation without consulting the separate durable usage report.
+    await page.reload();
+    await expect(page.locator(".turn-throughput")).toHaveText("42.3 tok/s");
+    await expect(page.locator(".conversation-turn").last()).toHaveAttribute("data-turn-status", "completed");
+  } finally {
+    await page.request.post("/__e2e/pi/throughput/release");
+  }
 });

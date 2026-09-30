@@ -7072,7 +7072,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   justify-content: flex-end;
   gap: 6px 10px;
   margin: 2px 0 12px;
-  padding-inline: clamp(9px, 1.5vw, 18px);
+  padding-inline: 0 clamp(9px, 1.5vw, 18px);
   color: var(--muted-foreground-2);
   pointer-events: none;
 }
@@ -7088,6 +7088,13 @@ body:has(.thread-settings-sheet[data-state="open"])
     opacity var(--motion-fast),
     color var(--motion-fast),
     transform var(--motion-fast);
+}
+
+.turn-throughput {
+  margin-inline-end: auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: auto;
 }
 
 .conversation-turn:hover .turn-fork-controls,
@@ -15093,7 +15100,7 @@ tr.diff-hunk td {
 @media (max-width: 390px) {
   .turn-fork-footer {
     min-height: 44px;
-    padding-inline: 4px;
+    padding-inline: 0 4px;
   }
 
   .turn-fork-action {

@@ -292,7 +292,7 @@ describe("composer attachment protocol", () => {
         reason: { text: "Unavailable." },
       },
       interactionKinds: [],
-      usageAccounting: "supported" as const, usageSections: [],
+      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
       effectiveSettings: {},
     };
     expect(backendCapabilityDocumentSchema.parse(capabilities)).toEqual(
@@ -308,6 +308,6 @@ describe("composer attachment protocol", () => {
   });
 
   it("advances the strict client protocol", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(128);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(129);
   });
 });

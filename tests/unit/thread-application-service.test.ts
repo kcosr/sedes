@@ -304,7 +304,7 @@ function createService(input?: {
                 input?.interactionKinds === undefined
                   ? ["choice", "confirmation"]
                   : [...input.interactionKinds],
-              usageAccounting: "supported" as const, usageSections: ["context" as const],
+              usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: ["context" as const],
               effectiveSettings: {},
             },
             usage: {
@@ -1893,7 +1893,7 @@ describe("ActorBackedThreadApplicationConversationReader", () => {
           reason: { text: "Branching is unavailable in this fixture." },
         },
         interactionKinds: [],
-        usageAccounting: "supported" as const, usageSections: [],
+        usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
       },
       usage: {},
     };

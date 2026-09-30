@@ -179,6 +179,31 @@ cardinality; unproven extension overlap remains unallocated. Live usage events
 retain context occupancy and transcript counters, not accumulated token/cost
 authority. See [usage accounting](../usage-accounting.md).
 
+Completed-turn throughput is a separate, volatile performance measurement.
+Pi advertises `turnThroughput: "supported"` independently of usage accounting.
+The SDK facade wraps the cancellation-normalized `agent.streamFunction`, taking
+a monotonic start before invocation and an end when its terminal result arrives.
+It snapshots output tokens and duration against the exact result object before
+extension handlers can mutate that object. The driver consumes each measurement
+once at ordinary assistant `message_end` and attributes it to the active Sedes
+turn. Native message timestamps and presentation-item timing are not substitutes
+for request timing.
+
+The numerator is main-agent output, already inclusive of reasoning. The
+denominator sums those same requests' durations, including provider startup,
+network latency, and retries internal to the provider stream. Tools, approval
+waits, SDK retry backoff between requests, compaction, summaries, cache warming,
+and subagents are excluded. A failed, interrupted, missing, or invalid response
+measurement suppresses the entire turn's rate. Only completed turns with a
+positive valid aggregate carry normalized `{ outputTokens, requestDurationMs }`.
+
+The thread handle retains at most 100 completed measurements in memory and
+decorates live turns, replacement snapshots, history pages, and targeted turn
+reads while resident. Projection refreshes preserve the measurements; handle
+closure clears them. Nothing is appended to Pi history or stored in Sedes's
+database, and a new runtime never reconstructs timing from old messages. Browser
+full/summary views and reconnect checkpoints carry the same optional metadata.
+
 Pi 0.86.0 can compact automatically after a tool result and then resume the
 same provider run. Sedes therefore keeps the current live projection open
 until `agent_settled`, then requests exactly one replacement generation that
