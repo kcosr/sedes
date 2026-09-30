@@ -350,8 +350,9 @@ test("sidebar execution scope filters creation and persists responsively", async
   await targetFilter.click();
   await expect(targetSearch).toHaveValue("");
   await targetSearch.fill("alternate");
+  // The target's name leads; its backend reads as the second line.
   const alternateOption = page.getByRole("option", {
-    name: "Alternate scripted agent · Pi SDK",
+    name: "Alternate scripted agent Pi SDK",
     exact: true,
   });
   await expect(alternateOption).toBeVisible();

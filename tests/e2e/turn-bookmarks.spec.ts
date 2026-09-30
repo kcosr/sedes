@@ -33,8 +33,8 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
         await activeTurn.getByRole("button", { name: "Bookmark turn" }).click();
         await expect(activeTurn.getByRole("button", { name: "Remove turn bookmark" })).toBeEnabled();
         await page.getByRole("button", { name: "Bookmarks, 1" }).click();
-        await expect(page.locator(".turn-bookmark-assistant-preview")).toContainText("I found");
-        await expect(page.locator(".turn-bookmark-assistant-preview")).not.toContainText("deterministic normalized result");
+        await expect(page.locator('[data-slot="turn-bookmark-item-description"]')).toContainText("I found");
+        await expect(page.locator('[data-slot="turn-bookmark-item-description"]')).not.toContainText("deterministic normalized result");
         await capture(page, testInfo, "turn-bookmarks-streaming.png");
         await page.keyboard.press("Escape");
       } finally {
@@ -48,7 +48,7 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
     ).toHaveCount(index + 1, { timeout: 15_000 });
     if (index === 0) {
       await page.getByRole("button", { name: "Bookmarks, 1" }).click();
-      await expect(page.locator(".turn-bookmark-assistant-preview")).toContainText(
+      await expect(page.locator('[data-slot="turn-bookmark-item-description"]')).toContainText(
         `deterministic normalized result for ${prompt}`,
       );
       await page.keyboard.press("Escape");
@@ -117,17 +117,17 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
   ).toHaveAttribute("aria-pressed", "true");
 
   await page.getByRole("button", { name: "Bookmarks, 1" }).click();
-  const desktopBookmarks = page.locator(".turn-bookmarks-popover");
+  const desktopBookmarks = page.getByRole("dialog", { name: "Bookmarks" });
   await expect(desktopBookmarks).toBeVisible();
   await expect(
-    desktopBookmarks.locator(".turn-bookmark-user-preview"),
+    desktopBookmarks.locator('[data-slot="turn-bookmark-item-title"]'),
   ).toContainText(prompts[0]!);
   await expect(
-    desktopBookmarks.locator(".turn-bookmark-assistant-preview"),
+    desktopBookmarks.locator('[data-slot="turn-bookmark-item-description"]'),
   ).toContainText(`deterministic normalized result for ${prompts[0]}`);
   await capture(page, testInfo, "turn-bookmarks-desktop-populated.png");
 
-  await desktopBookmarks.locator(".turn-bookmark-link").click();
+  await desktopBookmarks.locator('[data-slot="turn-bookmark-link"]').click();
   await expect(page).toHaveURL(
     new RegExp(
       `${threadPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
@@ -152,7 +152,7 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
     page.getByRole("button", { name: "Bookmarks, 1" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Bookmarks, 1" }).click();
-  await expect(page.locator(".turn-bookmark-user-preview")).toContainText(
+  await expect(page.locator('[data-slot="turn-bookmark-item-title"]')).toContainText(
     prompts[0]!,
   );
   await page.keyboard.press("Escape");
@@ -191,15 +191,15 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
   const dialog = mobilePage.getByRole("dialog", { name: "Bookmarks" });
   await expect(dialog).toBeVisible();
   await overlaySettled(dialog);
-  await expect(dialog.locator(".turn-bookmark-user-preview")).toContainText(
+  await expect(dialog.locator('[data-slot="turn-bookmark-item-title"]')).toContainText(
     prompts[0]!,
   );
   await expect(
-    dialog.locator(".turn-bookmark-assistant-preview"),
+    dialog.locator('[data-slot="turn-bookmark-item-description"]'),
   ).toContainText("deterministic normalized result");
   const [dialogBox, linkBox, removeBox] = await Promise.all([
     dialog.boundingBox(),
-    dialog.locator(".turn-bookmark-link").boundingBox(),
+    dialog.locator('[data-slot="turn-bookmark-link"]').boundingBox(),
     dialog
       .getByRole("button", { name: `Remove bookmark: ${prompts[0]}` })
       .boundingBox(),
@@ -214,7 +214,7 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
   await expectNoPageOverflow(mobilePage);
   await capture(mobilePage, testInfo, "turn-bookmarks-mobile-sheet.png");
 
-  await dialog.locator(".turn-bookmark-link").click();
+  await dialog.locator('[data-slot="turn-bookmark-link"]').click();
   await expect(dialog).toBeHidden();
   await expect(mobilePage).toHaveURL(
     new RegExp(

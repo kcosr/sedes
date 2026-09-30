@@ -74,23 +74,33 @@ test("compiled Claude backend streams, settles, and reloads through normalized U
   expect(initialDeliveryModes).not.toContain("steer"); // Still an unbound draft.
 
   await page.getByRole("button", { name: "Thread actions" }).click();
-  const threadControls = page.getByRole("dialog", { name: "Thread actions" });
+  const threadControls = page.getByRole("menu", { name: "Thread actions" });
+  await expect(threadControls).toBeVisible();
   await expect(
-    threadControls.getByRole("button", { name: "Compact context" }),
+    threadControls.getByRole("menuitem", { name: "Compact context" }),
   ).toHaveCount(0);
   await expect(
     threadControls.getByText(/Claude execution settings/i),
   ).toHaveCount(0);
-  const permissionMode = threadControls.getByRole("combobox", {
+  const permissionMode = threadControls.getByRole("menuitem", {
     name: "Permission mode",
   });
   await expect(permissionMode).toContainText("Default");
-  await expect(threadControls.getByText("Claude permissions")).toBeVisible();
   await expect(
     threadControls.getByText(/Fast mode|provider feature|tool access/i),
   ).toHaveCount(0);
+  // The Claude permission modes are a submenu of radio rows.
+  await permissionMode.click();
+  const permissionModes = page.getByRole("menu", { name: "Permission mode" });
+  await expect(
+    permissionModes.getByRole("group", { name: "Permission mode" }),
+  ).toBeVisible();
+  await expect(
+    permissionModes.getByRole("menuitemradio", { name: "Default", exact: true }),
+  ).toHaveAttribute("aria-checked", "true");
 
   await page.keyboard.press("Escape");
+  await expect(threadControls).toHaveCount(0);
 
   const prompt = "Exercise the Claude browser integration";
   await page.getByRole("textbox", { name: /Message Claude/ }).fill(prompt);
@@ -275,8 +285,13 @@ test("compiled Claude backend streams, settles, and reloads through normalized U
       response.ok(),
   );
   await permissionMode.click();
-  await page.getByRole("option", { name: "Don't ask" }).click();
+  await permissionModes
+    .getByRole("menuitemradio", { name: "Don't ask", exact: true })
+    .click();
   await permissionChanged;
+  // Choosing a mode closes the menu; reopen it to read the new mode.
+  await expect(threadControls).toHaveCount(0);
+  await page.getByRole("button", { name: "Thread actions" }).click();
   await expect(permissionMode).toContainText("Don't ask");
   await page.keyboard.press("Escape");
 
@@ -292,15 +307,16 @@ test("compiled Claude backend streams, settles, and reloads through normalized U
     page.getByTestId("composer").getByRole("combobox", { name: "Model" }),
   ).toContainText("Claude Sonnet 5");
   await page.getByRole("button", { name: "Thread actions" }).click();
+  await expect(permissionMode).toContainText("Don't ask");
+  await permissionMode.click();
   await expect(
-    page
-      .getByRole("dialog", { name: "Thread actions" })
-      .getByRole("combobox", { name: "Permission mode" }),
-  ).toContainText("Don't ask");
-  await page.keyboard.press("Escape");
+    permissionModes.getByRole("menuitemradio", { name: "Don't ask", exact: true }),
+  ).toHaveAttribute("aria-checked", "true");
   await expect(
-    page.getByRole("button", { name: "Compact context" }),
+    threadControls.getByRole("menuitem", { name: "Compact context" }),
   ).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(threadControls).toHaveCount(0);
 
   const restoredSnapshotResponse = await page.request.get(
     `/api${threadPath}?activityDetail=full`,

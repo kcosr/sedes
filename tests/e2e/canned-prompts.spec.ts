@@ -241,7 +241,8 @@ test("saved prompts flow from principal settings through desktop and mobile deli
 
   await promptTab.click();
   const desktopPicker = page.getByRole("dialog", { name: "Saved prompts" });
-  await expect(desktopPicker).toHaveAttribute("data-layout", "desktop");
+  // Desktop: the shared list popover with the plain search row.
+  await expect(desktopPicker).toHaveAttribute("data-slot", "popover-content");
   const search = desktopPicker.getByRole("searchbox", {
     name: "Search saved prompts",
   });
@@ -268,6 +269,8 @@ test("saved prompts flow from principal settings through desktop and mobile deli
   });
   const composer = page.getByRole("textbox", { name: "Message Codex" });
   await expect(composer).toHaveValue("");
+  // Sending closes the picker; its row preview leaves with it.
+  await expect(desktopPicker).toBeHidden();
   await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
   await expect(
     page.getByText(
@@ -362,7 +365,9 @@ test("saved prompts flow from principal settings through desktop and mobile deli
     name: "Saved prompts",
   });
   await expect(mobileToolbarPicker).toBeVisible();
-  await expect(mobileToolbarPicker).toHaveAttribute("data-layout", "mobile");
+  // Touch: the shared bottom sheet.
+  await expect(mobileToolbarPicker).toHaveAttribute("data-slot", "dialog-content");
+  await expect(mobileToolbarPicker).toHaveAttribute("data-layout", "sheet");
   await page.keyboard.press("Escape");
   await expect(mobileToolbarPicker).toBeHidden();
   await capture(page, testInfo, "canned-prompts-toolbar-mobile.png");
@@ -420,7 +425,7 @@ test("saved prompts flow from principal settings through desktop and mobile deli
   });
   const mobilePicker = page.getByRole("dialog", { name: "Saved prompts" });
   await expect(mobilePicker).toBeVisible();
-  await expect(mobilePicker).toHaveAttribute("data-layout", "mobile");
+  await expect(mobilePicker).toHaveAttribute("data-layout", "sheet");
   const manageButton = mobilePicker.getByRole("button", { name: "Manage" });
   await expect(manageButton).toBeVisible();
   expect(
@@ -431,14 +436,9 @@ test("saved prompts flow from principal settings through desktop and mobile deli
   await expect(
     mobilePicker.getByRole("searchbox", { name: "Search saved prompts" }),
   ).toHaveCount(0);
-  await touch.send("Input.dispatchTouchEvent", {
-    type: "touchStart",
-    touchPoints: [{ x: 20, y: 400 }],
-  });
-  await touch.send("Input.dispatchTouchEvent", {
-    type: "touchEnd",
-    touchPoints: [],
-  });
+  // The shared sheet dismisses on the click a tap outside produces (a touch
+  // that scrolls does not); raw CDP touches synthesize no click, so click.
+  await page.mouse.click(20, 400);
   await expect(mobilePicker).toBeHidden();
   await promptTab.click();
   await expect(mobilePicker).toBeVisible();

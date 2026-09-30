@@ -250,7 +250,7 @@ test("templates prefill editable thread creation and survive Agent drift", async
   await expect(page.getByRole("textbox", { name: /^Message /u })).toBeFocused();
 
   await page.getByRole("button", { name: "Thread actions" }).click();
-  await page.getByRole("button", { name: "Session stats" }).click();
+  await page.getByRole("menuitem", { name: "Session stats" }).click();
   const stats = page.getByRole("dialog", { name: "Session stats" });
   await expect(stats).toContainText("Created with");
   await expect(stats).toContainText(`${fast.name} · revision 0`);

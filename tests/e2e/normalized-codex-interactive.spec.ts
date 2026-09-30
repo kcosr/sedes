@@ -225,33 +225,58 @@ test.describe.serial("normalized interactive Codex projection", () => {
     await page.getByRole("button", { name: "Thread actions" }).click();
     const desktopThreadControls = page.getByTestId("thread-controls");
     await expect(desktopThreadControls).toBeVisible();
-    const executionSettings = page.getByLabel("Codex execution settings");
+    const threadActions = page.getByRole("menu", { name: "Thread actions" });
+    await expect(threadActions).toBeVisible();
+    // The execution settings are a submenu of four radio groups.
+    const codexExecution = threadActions.getByRole("menuitem", {
+      name: "Codex execution",
+    });
+    const executionSettings = page.getByRole("menu", {
+      name: "Codex execution",
+    });
+    const executionChoice = (group: string, choice: string) =>
+      executionSettings
+        .getByRole("group", { name: group, exact: true })
+        .getByRole("menuitemradio", { name: choice, exact: true });
+    await codexExecution.click();
     await expect(executionSettings).toBeVisible();
-    await expect(executionSettings.getByRole("combobox")).toHaveCount(4);
-    await expect(
-      executionSettings.getByRole("combobox", { name: "Sandbox" }),
-    ).toContainText("Read only");
-    await expect(
-      executionSettings.getByRole("combobox", { name: "Network" }),
-    ).toContainText("Disabled");
-    await expect(
-      executionSettings.getByRole("combobox", { name: "Approval policy" }),
-    ).toContainText("Never");
-    await expect(
-      executionSettings.getByRole("combobox", { name: "Approval reviewer" }),
-    ).toBeDisabled();
+    await expect(executionSettings.getByRole("group")).toHaveCount(4);
+    await expect(executionChoice("Sandbox", "Read-only")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await expect(executionChoice("Network", "Disabled")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await expect(executionChoice("Approval policy", "Never")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    const approvalReviewer = executionSettings
+      .getByRole("group", { name: "Approval reviewer", exact: true })
+      .getByRole("menuitemradio");
+    await expect(approvalReviewer).toHaveCount(2);
+    for (const reviewer of await approvalReviewer.all()) {
+      await expect(reviewer).toBeDisabled();
+    }
     await expect(
       threadConfiguration.getByText(
         /Current:|applies (?:on )?(?:the )?next turn/i,
       ),
     ).toHaveCount(0);
-    const compact = page.getByRole("button", { name: "Compact context" });
+    const compact = threadActions.getByRole("menuitem", {
+      name: "Compact context",
+    });
     await expect(compact).toBeEnabled();
-    await expect(page.getByRole("button", { name: "Automate…" })).toBeEnabled();
+    await expect(
+      threadActions.getByRole("menuitem", { name: "Automate…" }),
+    ).toBeEnabled();
     await expect(page.getByText(/Approve/)).toHaveCount(0);
     await page.keyboard.press("Escape");
+    await expect(threadActions).toHaveCount(0);
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page.getByRole("button", { name: "Automate…" }).click();
+    await threadActions.getByRole("menuitem", { name: "Automate…" }).click();
     const automation = page.getByRole("dialog", {
       name: `Automation settings for ${renamedTitle}`,
     });
@@ -287,7 +312,9 @@ test.describe.serial("normalized interactive Codex projection", () => {
     await automation.getByRole("button", { name: "Delete automation" }).click();
     await expect(automation).toBeHidden();
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await expect(page.getByRole("button", { name: "Automate…" })).toBeEnabled();
+    await expect(
+      threadActions.getByRole("menuitem", { name: "Automate…" }),
+    ).toBeEnabled();
     await page.keyboard.press("Escape");
 
     await expect(composer).toBeVisible();
@@ -341,15 +368,7 @@ test.describe.serial("normalized interactive Codex projection", () => {
       "Normalized Codex tool output",
     );
     await page.getByRole("button", { name: "Thread actions" }).click();
-    const streamingExecutionSettings = page.getByLabel(
-      "Codex execution settings",
-    );
-    await expect(streamingExecutionSettings.getByRole("combobox")).toHaveCount(
-      4,
-    );
-    const approvalPolicy = streamingExecutionSettings.getByRole("combobox", {
-      name: "Approval policy",
-    });
+    await expect(threadActions).toBeVisible();
     const streamingSnapshotResponse = await page.request.get(
       `/api${importedThreadPath}?activityDetail=full`,
     );
@@ -368,8 +387,21 @@ test.describe.serial("normalized interactive Codex projection", () => {
         text: "This feature cannot change while the thread has active, queued, or uncertain work.",
       },
     });
-    await expect(approvalPolicy).toBeDisabled();
-    await expect(approvalPolicy).toContainText("Never");
+    // Read-only execution settings stay visible but unchangeable, with the
+    // capability's reason above them.
+    await codexExecution.click();
+    await expect(executionSettings.getByRole("status")).toHaveText(
+      "This feature cannot change while the thread has active, queued, or uncertain work.",
+    );
+    await expect(executionChoice("Sandbox", "Read-only")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    for (const choice of await executionSettings
+      .getByRole("menuitemradio")
+      .all()) {
+      await expect(choice).toBeDisabled();
+    }
     await expect(streamingCommand).toBeVisible();
     await capture(page, testInfo, "codex-normalized-streaming.png");
     await page.keyboard.press("Escape");
@@ -407,7 +439,13 @@ test.describe.serial("normalized interactive Codex projection", () => {
       page.getByRole("button", { name: "Automation settings" }),
     ).toHaveCount(0);
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await expect(approvalPolicy).toBeEnabled();
+    await expect(codexExecution).toBeEnabled();
+    await codexExecution.click();
+    await expect(executionChoice("Approval policy", "Never")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await expect(executionChoice("Approval policy", "On request")).toBeEnabled();
     const approvalChanged = page.waitForResponse(
       (response) =>
         response.request().method() === "POST" &&
@@ -416,9 +454,15 @@ test.describe.serial("normalized interactive Codex projection", () => {
         response.request().postDataJSON().operation?.actionId ===
           "set_approval_on_request",
     );
-    await selectRadixOption(page, approvalPolicy, "On request");
+    await executionChoice("Approval policy", "On request").click();
     await approvalChanged;
-    await expect(approvalPolicy).toContainText("On request");
+    // Choosing a radio row closes the menu; reopen it to read the choice.
+    await expect(threadActions).toHaveCount(0);
+    await page.getByRole("button", { name: "Thread actions" }).click();
+    await codexExecution.click();
+    await expect(
+      executionChoice("Approval policy", "On request"),
+    ).toHaveAttribute("aria-checked", "true");
     const approvalRestored = page.waitForResponse(
       (response) =>
         response.request().method() === "POST" &&
@@ -427,13 +471,21 @@ test.describe.serial("normalized interactive Codex projection", () => {
         response.request().postDataJSON().operation?.actionId ===
           "set_approval_never",
     );
-    await selectRadixOption(page, approvalPolicy, "Never");
+    await executionChoice("Approval policy", "Never").click();
     await approvalRestored;
-    await expect(approvalPolicy).toContainText("Never");
+    await expect(threadActions).toHaveCount(0);
+    await page.getByRole("button", { name: "Thread actions" }).click();
+    await codexExecution.click();
+    await expect(executionChoice("Approval policy", "Never")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
     await expect(
-      page.getByRole("button", { name: "Compact context" }),
+      threadActions.getByRole("menuitem", { name: "Compact context" }),
     ).toBeEnabled();
-    await expect(page.getByRole("button", { name: "Automate…" })).toBeEnabled();
+    await expect(
+      threadActions.getByRole("menuitem", { name: "Automate…" }),
+    ).toBeEnabled();
     await page.keyboard.press("Escape");
     await capture(page, testInfo, "mixed-backend-interactive-codex.png");
   });

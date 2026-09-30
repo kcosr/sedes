@@ -12,7 +12,6 @@ import {
   openSedesWorkspace,
   openWorkspaceDirectory,
   selectCustomNewThreadTarget,
-  selectRadixOption,
   sendCurrentDraft,
 } from "./helpers";
 import { loadE2ERunContext } from "./run-context.js";
@@ -109,12 +108,13 @@ test("mobile worktree removal closes its sheet before cancellation or confirmati
   const picker = page.getByRole("button", { name: /^Thread worktree:/ });
   await picker.click();
   const sheet = page.getByRole("dialog", { name: "Thread worktree", exact: true });
-  await expect(sheet).toHaveClass(/thread-worktree-sheet/);
+  await expect(sheet).toHaveAttribute("data-layout", "sheet");
   await sheet.getByRole("button", { name: "Remove mobile-removal", exact: true }).click();
   const confirmation = page.getByRole("dialog", { name: "Remove linked worktree?", exact: true });
   await expect(confirmation).toBeVisible();
   await expect(sheet).toHaveCount(0);
-  await expect(page.locator(".thread-settings-sheet-overlay")).toHaveCount(0);
+  // Only the confirmation's own backdrop remains once the sheet has closed.
+  await expect(page.locator('[data-slot="dialog-overlay"]')).toHaveCount(1);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "worktree-remove-confirmation-mobile.png");
   await confirmation.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -434,33 +434,46 @@ test.describe.serial("normalized target and mobile navigation", () => {
       "data-open",
       "false",
     );
-    await page.getByRole("button", { name: "Thread actions" }).click();
+    await settings.click();
+    // Under the touch density Thread actions is a sheet named by the thread;
+    // the thread settings are its first rows.
     const actionsSheet = page.getByTestId("thread-settings-sheet");
-    await expect(actionsSheet).toHaveAccessibleName("Thread settings");
-    const mobileModelPicker = actionsSheet.getByRole("combobox", {
+    await expect(actionsSheet).toHaveAccessibleName("New thread");
+    const mobileModelPicker = actionsSheet.getByRole("menuitem", {
       name: "Model",
     });
     await expect(mobileModelPicker).toBeVisible();
-    await expect(page.getByRole("combobox", { name: "Tools" })).toBeVisible();
+    await expect(mobileModelPicker).toHaveAttribute("aria-haspopup", "dialog");
+    await expect(
+      actionsSheet.getByRole("menuitem", { name: /^Tools/ }),
+    ).toBeVisible();
     await mobileModelPicker.click();
-    const mobileModelSearch = page.getByRole("searchbox", {
+    // The model picker sheet replaces the actions sheet.
+    const modelSheet = page.getByRole("dialog", {
+      name: "Choose model",
+      exact: true,
+    });
+    const mobileModelSearch = modelSheet.getByRole("combobox", {
       name: "Search models",
     });
+    await expect(modelSheet).toBeFocused();
     await expect(mobileModelSearch).not.toBeFocused();
-    await expect(page.getByRole("dialog", { name: "Choose model", exact: true })).toBeFocused();
+    await expect(actionsSheet).toHaveCount(0);
     await mobileModelSearch.click();
     await expect(mobileModelSearch).toBeFocused();
     await mobileModelSearch.fill("conformance");
     await expect(
       page.getByRole("option", { name: "Conformance model" }),
     ).toBeVisible();
-    await expect(actionsSheet).toBeVisible();
     await expectNoPageOverflow(page);
     await capture(page, testInfo, "normalized-model-picker-mobile.png");
     await page.keyboard.press("Escape");
-    await expect(mobileModelPicker).toBeFocused();
+    await expect(modelSheet).toHaveCount(0);
+    await expect(settings).toBeFocused();
+    await settings.click();
     await expect(actionsSheet).toBeVisible();
-    const thinking = page.getByRole("combobox", { name: "Thinking" });
+    // Thinking drills into its choices as radio rows.
+    const thinking = actionsSheet.getByRole("menuitem", { name: /^Thinking/ });
     await expect(thinking).toBeVisible();
     const settingResponse = page.waitForResponse(
       (response) =>
@@ -472,15 +485,19 @@ test.describe.serial("normalized target and mobile navigation", () => {
         response.request().postDataJSON().operation?.settingId ===
           "thinking_level",
     );
-    await selectRadixOption(page, thinking, "High");
+    await thinking.click();
+    await actionsSheet
+      .getByRole("menuitemradio", { name: "High", exact: true })
+      .click();
     await settingResponse;
+    // Choosing closes the sheet; reopen it to read the new value.
+    await expect(actionsSheet).toHaveCount(0);
+    await settings.click();
     await expect(thinking).toContainText("High");
     await page.keyboard.press("Escape");
     await page.reload();
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await expect(
-      page.getByRole("combobox", { name: "Thinking" }),
-    ).toContainText("High");
+    await expect(thinking).toContainText("High");
     await expectNoPageOverflow(page);
     await capture(page, testInfo, "normalized-thread-mobile.png");
     await page.keyboard.press("Escape");
@@ -510,10 +527,12 @@ test.describe.serial("normalized target and mobile navigation", () => {
     await page.waitForTimeout(600);
     const rowSheet = page.getByTestId("thread-actions-sheet");
     await expect(rowSheet).toBeVisible();
+    // The row sheet is named by the thread it acts on.
+    await expect(rowSheet).toHaveAccessibleName("New thread");
     await expect(rowSheet).toHaveCSS("user-select", "none");
-    await expect(rowSheet.getByRole("heading", { name: "Thread actions" })).toHaveCSS("user-select", "none");
+    await expect(rowSheet.getByRole("heading", { name: "New thread" })).toHaveCSS("user-select", "none");
     await expect(
-      rowSheet.getByRole("heading", { name: "Thread actions" }),
+      rowSheet.getByRole("heading", { name: "New thread" }),
     ).toBeVisible();
     await expect(page.getByTestId("thread-context-menu")).toHaveCount(0);
     await expectNoPageOverflow(page);
@@ -527,16 +546,17 @@ test.describe.serial("normalized target and mobile navigation", () => {
       await route.continue();
     });
     await rowSheet
-      .getByRole("button", { name: "Archive", exact: true })
+      .getByRole("menuitem", { name: "Archive", exact: true })
       .click();
     const checkingArchive = page.getByRole("dialog", {
-      name: "Checking thread activity",
+      name: "Checking thread activity…",
       exact: true,
     });
     await expect(checkingArchive).toBeVisible();
     await expect(page.locator(".operation-overlay-backdrop")).toHaveCSS("z-index", "110");
+    // The overlay's visible message (its title repeats it for assistive tech).
     await expect(
-      checkingArchive.getByText("Checking thread activity…", { exact: true }),
+      checkingArchive.locator("span", { hasText: /^Checking thread activity…$/ }),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Archive", exact: true }),
@@ -547,18 +567,14 @@ test.describe.serial("normalized target and mobile navigation", () => {
     await capture(page, testInfo, "archive-checking-mobile.png");
     releaseArchiveCheck();
     await expect(rowSheet).toBeHidden();
-    const archiveDialog = page.getByRole("dialog", {
-      name: "Archive this thread",
-    });
-    await expect(archiveDialog).toBeVisible();
-    const archiveThisThread = archiveDialog.getByRole("button", {
-      name: "Archive",
-      exact: true,
-    });
-    await expect(archiveThisThread).toBeEnabled();
-    await capture(page, testInfo, "archive-choice-mobile.png");
-    await archiveThisThread.click();
+    // Nothing needs a choice for this childless thread, so the check archives
+    // it directly instead of opening the archive choices dialog.
     await expect(page).toHaveURL("/");
+    await expect(checkingArchive).toBeHidden();
+    await expect(
+      page.getByRole("dialog", { name: "Archive this thread" }),
+    ).toHaveCount(0);
     await expect(drawer).toBeVisible();
+    await capture(page, testInfo, "archive-direct-mobile.png");
   });
 });

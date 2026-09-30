@@ -12,6 +12,8 @@ import {
   openTerminalMenu,
   revealTerminals,
   terminalContainer,
+  terminalMenuEntry,
+  terminalMenuRow,
   terminalPanel,
   transcriptText,
 } from "./terminal-helpers.js";
@@ -77,12 +79,11 @@ test("mobile empty terminal panel lists detached tabs and touch scrolling never 
   await expect(panel).toHaveCount(0);
   const socketsBeforeMenu = terminalSockets;
   const menu = await openTerminalMenu(mobile);
-  await expect(menu.locator(".thread-terminal-menu-row").filter({ hasText: "Mobile shell" })).toContainText("Running");
+  await expect(terminalMenuRow(menu, "Mobile shell")).toContainText("Running");
   await expectNoPageOverflow(mobile);
   expect(terminalSockets).toBe(socketsBeforeMenu);
   await capture(mobile, testInfo, "terminal-menu-mobile.png");
-  await menu.locator(".thread-terminal-menu-row").filter({ hasText: "Mobile shell" })
-    .locator(".thread-terminal-menu-entry").click();
+  await terminalMenuEntry(menu, "Mobile shell").click();
   await expect(panel.locator('.terminal-panel-emulator[data-restored="true"]')).toBeAttached({ timeout: 15_000 });
   await expect.poll(() => terminalSockets).toBe(socketsBeforeMenu + 1);
   const mobilePanelRoot = mobile.locator('[data-mobile-terminal-panel="true"]');
