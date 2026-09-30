@@ -46,7 +46,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       "Pi SDK",
     );
 
-    const overrideModel = page.getByRole("checkbox", {
+    const overrideModel = page.getByRole("switch", {
       name: "Override Model",
     });
     await expect(overrideModel).toBeEnabled();
@@ -55,7 +55,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       "Conformance model",
     );
 
-    const overrideThinking = page.getByRole("checkbox", {
+    const overrideThinking = page.getByRole("switch", {
       name: "Override Thinking",
     });
     await expect(overrideThinking).toBeEnabled();
@@ -66,7 +66,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       /^High$/,
     );
 
-    const overrideToolAccess = page.getByRole("checkbox", {
+    const overrideToolAccess = page.getByRole("switch", {
       name: "Override Tool access",
     });
     await expect(overrideToolAccess).toBeEnabled();
@@ -77,12 +77,12 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       "Ask before changes",
     );
 
-    const useDefaultTools = page.getByRole("checkbox", {
+    const useDefaultTools = page.getByRole("switch", {
       name: "Use default tool policy",
     });
     await expect(useDefaultTools).toBeEnabled();
     await useDefaultTools.click();
-    const enableTools = page.getByRole("checkbox", {
+    const enableTools = page.getByRole("switch", {
       name: "Enable Sedes tools",
     });
     await expect(enableTools).toBeEnabled();
@@ -97,11 +97,13 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       }),
       "Allow without asking",
     );
-    await expect(page.getByRole("status")).toContainText(
+    await expect(
+      page.getByRole("status").filter({ hasText: "Threads created from this Agent" }),
+    ).toContainText(
       "Threads created from this Agent may use enabled Sedes tools in other environments without asking",
     );
 
-    const variables = page.getByRole("region", { name: "Agent environment variables" });
+    const variables = page.getByRole("region", { name: "Environment variables" });
     await variables.getByRole("button", { name: "Add variable" }).click();
     await variables.getByLabel("New variable name", { exact: true }).fill("CI");
     await variables.getByLabel("Value for new variable", { exact: true }).fill("true");
@@ -114,7 +116,10 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
         response.url().endsWith("/api/agents") &&
         response.status() === 201,
     );
-    await page.getByRole("button", { name: "Create Agent" }).click();
+    await page
+      .getByRole("region", { name: "Agent editor" })
+      .getByRole("button", { name: "Create Agent" })
+      .click();
     const createResponse = await created;
     const createBody = createResponse.request().postDataJSON();
     expect(createBody).toMatchObject({
@@ -151,10 +156,8 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       }),
     ).toContainText("Allow without asking");
     await expect(
-      page.getByRole("button", {
-        name: /Careful reviewer.*1 enabled · Allow without asking/,
-      }),
-    ).toBeVisible();
+      page.getByRole("link", { name: "Careful reviewer", exact: true }),
+    ).toHaveAccessibleDescription(/1 enabled · Allow without asking/u);
     await capture(page, testInfo, "saved-agent-editor-desktop.png");
 
     const name = page.getByRole("textbox", { name: "Name" });
@@ -313,10 +316,8 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       },
     });
     await expect(
-      page.getByRole("button", {
-        name: /Careful reviewer updated.*1 enabled · Ask outside this environment/,
-      }),
-    ).toBeVisible();
+      page.getByRole("link", { name: "Careful reviewer updated", exact: true }),
+    ).toHaveAccessibleDescription(/1 enabled · Ask outside this environment/u);
 
     const retainedVariablesResponse = await page.request.get(`/api${threadPath}/environment-variables`);
     expect(retainedVariablesResponse.ok()).toBe(true);
@@ -333,7 +334,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     );
     expect(retainedAfterAgentEdit.agentTools.accessBoundary).toEqual("unrestricted");
 
-    await page.getByRole("button", { name: "Delete" }).click();
+    await page.getByRole("button", { name: "Delete…", exact: true }).click();
     const deleted = page.waitForResponse(
       (deleteResponse) =>
         deleteResponse.request().method() === "DELETE" &&
@@ -349,7 +350,10 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     // Deleting while the list route mounts intentionally cancels its first
     // stale query before issuing the post-delete list request.
     browserDiagnostics.allowNetworkFailures = true;
-    await page.getByRole("button", { name: "Delete Agent" }).click();
+    await page
+      .getByRole("dialog", { name: /^Delete .*\?$/u })
+      .getByRole("button", { name: "Delete Agent", exact: true })
+      .click();
     await deleted;
     await expect(page).toHaveURL("/agents");
     await agentsListed;
@@ -560,8 +564,10 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       page.getByRole("combobox", { name: "Configure using" }),
       "Pi SDK",
     );
-    await page.getByRole("checkbox", { name: "Override Model" }).click();
-    await page.getByRole("checkbox", { name: "Override Thinking" }).click();
+    await page.getByRole("switch", {
+      name: "Override Model" }).click();
+    await page.getByRole("switch", {
+      name: "Override Thinking" }).click();
     await selectRadixOption(
       page,
       page.getByRole("combobox", { name: "Thinking" }),

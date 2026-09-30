@@ -482,7 +482,9 @@ test("large backend inventories stay compact and filterable on mobile in dark ap
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/");
   const settings = await openSettings(page, "Backends");
-  const navigation = settings.getByRole("navigation", { name: "Settings pages" });
+  const navigation = page.getByTestId("desktop-sidebar").getByRole("navigation", { name: "Settings pages" });
+  // The way back: the sidebar nav's return row, or the compact header's Settings link.
+  const backControl = page.getByTestId("settings-return").or(settings.getByTestId("settings-list-link"));
   await selectSettingsCategory(page, "appearance");
   await settings.getByRole("radio", { name: "Dark", exact: true }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
@@ -552,13 +554,12 @@ test("large backend inventories stay compact and filterable on mobile in dark ap
     await expectNoPageOverflow(page);
     expect(await content.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
     const addBounds = (await settings.getByRole("button", { name: "Add backend", exact: true }).boundingBox())!;
-    const closeBounds = (await settings.getByTestId("settings-return").boundingBox())!;
+    const closeBounds = (await backControl.boundingBox())!;
     const controlsOverlap = Math.max(addBounds.x, closeBounds.x) < Math.min(addBounds.x + addBounds.width, closeBounds.x + closeBounds.width)
       && Math.max(addBounds.y, closeBounds.y) < Math.min(addBounds.y + addBounds.height, closeBounds.y + closeBounds.height);
     expect(controlsOverlap, "Add and return controls must remain separate at every viewport").toBe(false);
-    const categoryPicker = settings.getByRole("combobox", { name: "Settings category", exact: true });
-    await expect(await categoryPicker.isVisible() ? categoryPicker : navigation).toBeInViewport({ ratio: 1 });
-    await expect(settings.getByTestId("settings-return")).toBeInViewport({ ratio: 1 });
+    await expect(await navigation.isVisible() ? navigation : settings.getByTestId("settings-list-link")).toBeInViewport({ ratio: 1 });
+    await expect(backControl).toBeInViewport({ ratio: 1 });
     await capture(page, testInfo, viewport.screenshot);
   }
   await page.setViewportSize({ width: 320, height: 740 });
@@ -566,8 +567,7 @@ test("large backend inventories stay compact and filterable on mobile in dark ap
   const longEnvironment = inventory.getByRole("button", { name: environments[2]!.label, exact: true });
   await longEnvironment.evaluate(element => element.scrollIntoView({ block: "start" }));
   await expect(longEnvironment).toBeInViewport();
-  await expect(settings.getByRole("combobox", { name: "Settings category", exact: true })).toBeInViewport({ ratio: 1 });
-  await expect(settings.getByTestId("settings-return")).toBeInViewport({ ratio: 1 });
+  await expect(settings.getByTestId("settings-list-link")).toBeInViewport({ ratio: 1 });
   expect(await settings.evaluate(element => element.scrollTop)).toBe(0);
   await expectNoPageOverflow(page);
   expect(await content.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
@@ -576,8 +576,7 @@ test("large backend inventories stay compact and filterable on mobile in dark ap
   const disconnectedRow = inventory.getByRole("row").filter({ has: page.getByRole("button", { name: `${disconnectedBackend.label} details`, exact: true }) });
   await disconnectedRow.evaluate(element => element.scrollIntoView({ block: "center" }));
   await expect(disconnectedRow).toBeInViewport();
-  await expect(settings.getByRole("combobox", { name: "Settings category", exact: true })).toBeInViewport({ ratio: 1 });
-  await expect(settings.getByTestId("settings-return")).toBeInViewport({ ratio: 1 });
+  await expect(settings.getByTestId("settings-list-link")).toBeInViewport({ ratio: 1 });
   expect(await settings.evaluate(element => element.scrollTop)).toBe(0);
   await expect(disconnectedRow.getByRole("cell").nth(2)).toContainText("Intentionally disconnected");
   const tracks = await disconnectedRow.evaluate((element) => {

@@ -244,11 +244,14 @@ test("browser pairing hides private UI and unpairing returns to the connection g
 
   await openSettingsPage(page, "paired_clients");
   const settings = page.getByTestId("settings-view");
-  await expect(settings.getByText("Test browser (this connection)")).toBeVisible();
+  await expect(settings.getByText("Test browser", { exact: true })).toBeVisible();
+  await expect(settings.getByText("This connection", { exact: true })).toBeVisible();
   await capture(page, testInfo, "browser-paired-clients.png");
   await settings.getByRole("button", { name: "Unpair", exact: true }).click();
   expect(unpaired).toBe(false);
-  await settings.getByRole("button", { name: "Confirm unpair", exact: true }).click();
+  const unpair = page.getByRole("dialog", { name: "Unpair Test browser?", exact: true });
+  await expect(unpair.getByRole("button", { name: "Unpair this browser", exact: true })).toHaveAttribute("data-variant", "destructive");
+  await unpair.getByRole("button", { name: "Unpair this browser", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Pair with this server" })).toBeVisible();
   await expect(page.getByTestId("desktop-sidebar")).toHaveCount(0);
   expect(unpaired).toBe(true);

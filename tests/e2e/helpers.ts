@@ -13,21 +13,27 @@ import { loadE2ERunContext } from "./run-context.js";
 export async function selectSettingsCategory(page: Page, category: SettingsPage): Promise<void> {
   const settings = page.getByTestId("settings-view");
   const link = page.getByTestId("settings-page").and(page.locator(`[data-page="${category}"]`)).filter({ visible: true });
-  if (await link.count() === 0) {
-    await settings.getByTestId("settings-list-link").click();
+  const listLink = settings.getByTestId("settings-list-link");
+  await expect(link.or(listLink).first()).toBeVisible();
+  if (!await link.isVisible()) {
+    await listLink.click();
     await expect(settings).toHaveAttribute("data-page", "home");
   }
   await link.click();
 }
 
 export async function openSettingsPage(page: Page, category: SettingsPage): Promise<Locator> {
-  const trigger = page.getByTestId("settings-trigger").filter({ visible: true });
-  const mobileNavigation = page.getByRole("button", { name: "Open thread navigation", exact: true });
-  await expect(trigger.or(mobileNavigation).first()).toBeVisible();
-  if (await trigger.count() === 0) await mobileNavigation.click();
-  await trigger.click();
   const settings = page.getByTestId("settings-view");
-  await expect(settings).toBeVisible();
+  // Under Settings the sidebar keeps its (inert) inventory mounted; its gear
+  // is not a way in. From an open Settings, go straight to the category.
+  if (!await settings.isVisible()) {
+    const trigger = page.locator('[data-testid="settings-trigger"]:not([inert] *)').filter({ visible: true });
+    const mobileNavigation = page.getByRole("button", { name: "Open thread navigation", exact: true });
+    await expect(trigger.or(mobileNavigation).first()).toBeVisible();
+    if (await trigger.count() === 0) await mobileNavigation.click();
+    await trigger.click();
+    await expect(settings).toBeVisible();
+  }
   await selectSettingsCategory(page, category);
   return settings;
 }
@@ -36,7 +42,9 @@ export async function openSettingsPage(page: Page, category: SettingsPage): Prom
 export async function returnFromSettings(page: Page): Promise<void> {
   const settings = page.getByTestId("settings-view");
   const back = page.getByTestId("settings-return");
-  if (await back.count() === 0) await settings.getByTestId("settings-list-link").click();
+  const listLink = settings.getByTestId("settings-list-link");
+  await expect(back.or(listLink).first()).toBeVisible();
+  if (!await back.isVisible()) await listLink.click();
   await back.click();
   await expect(settings).toBeHidden();
 }

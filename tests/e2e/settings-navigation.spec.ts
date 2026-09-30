@@ -47,23 +47,39 @@ test("settings routes preserve the mounted composer through category history and
   });
   expect(scrollTop).toBeGreaterThan(0);
 
-  await page.getByTestId("desktop-sidebar").getByTestId("settings-trigger").click();
-  await expect(page).toHaveURL("/settings");
+  const sidebar = page.getByTestId("desktop-sidebar");
+  const inventory = sidebar.locator(".desktop-sidebar-inventory");
+  await sidebar.getByTestId("settings-trigger").click();
+  // With the nav in the sidebar slot, /settings opens a page instead of a list.
+  await expect(page).toHaveURL("/settings/general");
   const settings = page.getByTestId("settings-view");
   await expect(settings).toBeVisible();
-  await expect(settings.getByRole("region", { name: "All settings", exact: true }).getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
-  await expect(settings.getByTestId("settings-return")).toHaveText("Back to chat");
+  const navigation = sidebar.getByRole("navigation", { name: "Settings pages", exact: true });
+  await expect(navigation).toBeVisible();
+  await expect(navigation.getByRole("link", { name: "General", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(settings.getByRole("heading", { name: "General", level: 1 })).toBeVisible();
+  // Categories are listed once: no in-page nav, picker or list.
+  await expect(settings.getByRole("navigation")).toHaveCount(0);
+  await expect(settings.getByRole("combobox", { name: "Settings category" })).toHaveCount(0);
+  await expect(settings.getByTestId("settings-page")).toHaveCount(0);
+  // The inventory is retained under the nav, same width, and inert.
+  await expect(inventory).toHaveAttribute("inert", "");
+  await expect(inventory).toHaveAttribute("aria-hidden", "true");
+  await expect(inventory).toHaveCSS("opacity", "0");
+  const [sidebarBounds, navigationBounds] = await Promise.all([sidebar.boundingBox(), navigation.boundingBox()]);
+  expect(navigationBounds!.x).toBe(sidebarBounds!.x);
+  expect(Math.abs(navigationBounds!.width - (sidebarBounds!.width - 1))).toBeLessThanOrEqual(1);
+  await expect(page.getByTestId("settings-return")).toHaveText("Back to chat");
   expect(await originalComposer!.evaluate(element => element.isConnected)).toBe(true);
   await expect(page.getByTestId("composer")).toBeHidden();
   await capture(page, testInfo, "settings-home-desktop.png");
 
-  await selectSettingsCategory(page, "general");
-  await expect(page).toHaveURL("/settings/general");
   await expect(settings.getByTestId("seek-on-submit-toggle")).toBeVisible();
   await expect(settings.getByTestId("seek-diagnostics-toggle")).toHaveCount(0);
   await selectSettingsCategory(page, "diagnostics");
   await expect(page).toHaveURL("/settings/diagnostics");
   await expect(settings.getByRole("heading", { name: "Diagnostics", exact: true })).toBeVisible();
+  await expect(navigation.getByRole("link", { name: "Diagnostics", exact: true })).toHaveAttribute("aria-current", "page");
   await expect(settings.getByTestId("seek-on-submit-toggle")).toHaveCount(0);
   await capture(page, testInfo, "settings-diagnostics-desktop.png");
   await selectSettingsCategory(page, "general");
@@ -76,22 +92,25 @@ test("settings routes preserve the mounted composer through category history and
   await expect(page).toHaveURL("/settings/appearance");
   await returnFromSettings(page);
   await expect(page).toHaveURL(threadPath);
+  await expect(inventory).not.toHaveAttribute("inert");
+  await expect(navigation).toHaveCount(0);
   await expect(composer).toHaveValue(draft);
-  await expect(page.getByTestId("desktop-sidebar").getByTestId("settings-trigger")).toBeFocused();
+  await expect(sidebar.getByTestId("settings-trigger")).toBeFocused();
   expect(await composer.evaluate((element, previous) => element === previous, originalComposer)).toBe(true);
   expect(await composer.evaluate(element => element.scrollTop)).toBe(scrollTop);
 
-  await page.getByTestId("desktop-sidebar").getByTestId("settings-trigger").click();
-  await expect(page).toHaveURL("/settings");
+  // The landing reopens the last page shown and replaces its own entry.
+  await sidebar.getByTestId("settings-trigger").click();
+  await expect(page).toHaveURL("/settings/appearance");
   await page.goBack();
   await expect(page).toHaveURL(threadPath);
-  await expect(page.getByTestId("desktop-sidebar").getByTestId("settings-trigger")).toBeFocused();
+  await expect(sidebar.getByTestId("settings-trigger")).toBeFocused();
 
   // History navigation can capture any workspace control, not just the drawer trigger.
   const headerButton = page.getByRole("button", { name: "Find in thread", exact: true, includeHidden: true });
   await headerButton.focus();
   await page.goForward();
-  await expect(page).toHaveURL("/settings");
+  await expect(page).toHaveURL("/settings/appearance");
   const headerReturnFocus = await observeWorkspaceRevealFocus(headerButton);
   await page.goBack();
   await expect(page).toHaveURL(threadPath);
@@ -104,7 +123,7 @@ test("settings routes preserve the mounted composer through category history and
   await page.evaluate(() => (document.activeElement as HTMLElement).blur());
   await expect(page.locator("body")).toBeFocused();
   await page.goForward();
-  await expect(page).toHaveURL("/settings");
+  await expect(page).toHaveURL("/settings/appearance");
   await page.goBack();
   await expect(page).toHaveURL(threadPath);
   await expect.poll(() => page.locator(".application-workspace").evaluate(element =>
@@ -117,10 +136,13 @@ test("settings routes preserve the mounted composer through category history and
   const mobileComposer = await composer.elementHandle();
   await openSettingsPage(page, "general");
   await expect(page.getByRole("dialog", { name: "Thread navigation", exact: true })).toBeHidden();
-  await expect(settings.getByRole("combobox", { name: "Settings category", exact: true })).toHaveValue("general");
+  await expect(settings).toHaveAttribute("data-nav", "compact");
+  await expect(settings.getByRole("heading", { name: "General", level: 1 })).toBeVisible();
+  await expect(settings.getByTestId("settings-list-link")).toHaveText("Settings");
   const returnFocus = await observeWorkspaceRevealFocus(
     page.locator('.application-workspace .sidebar-nav-trigger'),
   );
+  // A page goes back to the list, and the list returns to the workspace.
   await returnFromSettings(page);
   expect(await returnFocus.evaluate(result => result.focused)).toBe(true);
   await returnFocus.dispose();
@@ -134,17 +156,22 @@ test("settings deep links reload and mobile categories remain reachable while co
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/settings/general");
   const settings = page.getByTestId("settings-view");
-  const picker = settings.getByRole("combobox", { name: "Settings category", exact: true });
+  const back = settings.getByTestId("settings-list-link");
   const content = settings.locator(".settings-content");
-  await expect(picker).toHaveValue("general");
-  await expect(settings.getByTestId("settings-return")).toHaveText("Back to workspace");
+  await expect(settings.getByRole("heading", { name: "General", level: 1 })).toBeVisible();
+  await expect(back).toHaveText("Settings");
   await page.reload();
   await expect(page).toHaveURL("/settings/general");
   await expect(settings.getByTestId("activity-detail-setting")).toBeVisible();
-  await picker.selectOption("");
+  await back.click();
   await expect(page).toHaveURL("/settings");
-  await expect(settings.getByRole("region", { name: "All settings", exact: true }).getByRole("button", { name: "Environments", exact: true })).toBeVisible();
-  await expect(settings.getByRole("region", { name: "All settings", exact: true }).getByRole("button", { name: "Projects", exact: true })).toBeVisible();
+  const list = settings.getByTestId("settings-page");
+  await expect(settings.getByRole("link", { name: "Environments", exact: true })).toBeVisible();
+  await expect(settings.getByRole("link", { name: "Projects", exact: true })).toBeVisible();
+  await expect(settings.getByRole("link", { name: "Environments", exact: true })).toHaveAccessibleDescription("Where agents run and what they can reach.");
+  await expect(settings.getByRole("heading", { name: "Execution", level: 2 })).toBeVisible();
+  await expect(settings.getByTestId("settings-return")).toHaveText("Back to workspace");
+  expect(await list.count()).toBeGreaterThanOrEqual(10);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "settings-home-mobile.png");
 
@@ -158,21 +185,20 @@ test("settings deep links reload and mobile categories remain reachable while co
     await expect(settings.getByTestId("seek-diagnostics-toggle")).toBeVisible();
     await content.evaluate(element => { element.scrollTop = element.scrollHeight; });
     expect(await content.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
-    await expect(picker).toBeInViewport({ ratio: 1 });
-    await expect(settings.getByTestId("settings-return")).toBeInViewport({ ratio: 1 });
-    const pickerBounds = (await picker.boundingBox())!;
-    expect(pickerBounds.height).toBeGreaterThanOrEqual(44);
+    await expect(back).toBeInViewport({ ratio: 1 });
+    const backBounds = (await back.boundingBox())!;
+    expect(backBounds.height).toBeGreaterThanOrEqual(44);
     await expectNoPageOverflow(page);
     expect(await content.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await capture(page, testInfo, `settings-diagnostics-scrolled-mobile-${width}.png`);
     await page.reload();
     await expect(page).toHaveURL("/settings/diagnostics");
-    await expect(picker).toHaveValue("diagnostics");
+    await expect(settings.getByRole("heading", { name: "Diagnostics", level: 1 })).toBeVisible();
     await expect(settings.getByTestId("seek-diagnostics-toggle")).toBeVisible();
-    await picker.selectOption("backends");
+    await selectSettingsCategory(page, "backends");
     await expect(page).toHaveURL("/settings/backends");
     await expect(settings.getByRole("region", { name: "Configured backends", exact: true })).toBeVisible();
-    await picker.selectOption("projects");
+    await selectSettingsCategory(page, "projects");
     await expect(page).toHaveURL("/settings/projects");
     await expect(settings.getByRole("region", { name: "Projects", exact: true })).toBeVisible();
     await expectNoPageOverflow(page);
@@ -180,23 +206,40 @@ test("settings deep links reload and mobile categories remain reachable while co
 
   await page.reload();
   await expect(page).toHaveURL("/settings/projects");
-  await expect(picker).toHaveValue("projects");
   await expect(settings.getByRole("region", { name: "Projects", exact: true })).toBeVisible();
 
   await page.goto("/settings/tool-clients");
   await expect(settings.getByRole("heading", { name: "Tool clients", exact: true })).toBeVisible();
-  await expect(picker).toHaveValue("tool_clients");
   await page.reload();
   await expect(page).toHaveURL("/settings/tool-clients");
-  await expect(picker).toHaveValue("tool_clients");
+  await expect(settings.getByRole("heading", { name: "Tool clients", exact: true })).toBeVisible();
   await page.setViewportSize({ width: 1440, height: 320 });
-  const navigation = settings.getByRole("navigation", { name: "Settings pages", exact: true });
+  const navigation = page.getByTestId("desktop-sidebar").getByRole("navigation", { name: "Settings pages", exact: true });
   await expect(navigation).toBeVisible();
-  await navigation.evaluate(element => { element.scrollTop = element.scrollHeight; });
-  expect(await navigation.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
-  await expect(navigation.getByRole("button").last()).toBeInViewport({ ratio: 1 });
-  await expect(settings.getByTestId("settings-return")).toBeInViewport({ ratio: 1 });
+  await expect(back).toHaveCount(0);
+  await expect(navigation.getByRole("link", { name: "Tool clients", exact: true })).toHaveAttribute("aria-current", "page");
+  const navigationScroll = navigation.locator('[data-slot="settings-nav-scroll"]');
+  await navigationScroll.evaluate(element => { element.scrollTop = element.scrollHeight; });
+  expect(await navigationScroll.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+  await expect(navigation.getByRole("link").last()).toBeInViewport({ ratio: 1 });
+  await expect(page.getByTestId("settings-return")).toBeInViewport({ ratio: 1 });
   await expectNoPageOverflow(page);
+
+  // A collapsed desktop sidebar has no slot for the nav: /settings is the
+  // list, and restoring the sidebar brings the nav back on the last page.
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.evaluate(() => localStorage.setItem("sedes-sidebar-collapsed", "true"));
+  await page.goto("/settings");
+  await expect(settings).toHaveAttribute("data-nav", "compact");
+  await expect(page.getByTestId("desktop-sidebar")).toBeHidden();
+  await expect(settings.getByRole("link", { name: "Tool clients", exact: true })).toBeVisible();
+  await capture(page, testInfo, "settings-home-collapsed-desktop.png");
+  await settings.getByRole("button", { name: "Show sidebar", exact: true }).click();
+  await expect(page).toHaveURL("/settings/tool-clients");
+  await expect(navigation).toBeVisible();
+  await expect(settings).toHaveAttribute("data-nav", "sidebar");
+  // The landing opened a page, so focus moves to its heading.
+  await expect(settings.getByRole("heading", { name: "Tool clients", level: 1 })).toBeFocused();
 });
 
 test("dirty settings guard browser Back and return without saving discarded environment edits", async ({ page }) => {
@@ -227,11 +270,16 @@ test("dirty settings guard browser Back and return without saving discarded envi
   await settings.getByRole("button", { name: "Add environment", exact: true }).click();
   await settings.getByRole("button", { name: /^SSH host/u }).click();
   await settings.getByLabel("Environment name", { exact: true }).fill("Another unsaved draft");
-  await settings.getByTestId("settings-return").click();
+  // The sidebar nav's links and return row go through the same guard.
+  await page.getByTestId("desktop-sidebar").getByRole("link", { name: "Backends", exact: true }).click();
+  await expect(discard).toBeVisible();
+  await discard.getByRole("button", { name: "Keep editing", exact: true }).click();
+  await expect(page).toHaveURL("/settings/environments");
+  await page.getByTestId("settings-return").click();
   await expect(discard).toBeVisible();
   await discard.getByRole("button", { name: "Keep editing", exact: true }).click();
   await expect(settings.getByLabel("Environment name", { exact: true })).toHaveValue("Another unsaved draft");
-  await settings.getByTestId("settings-return").click();
+  await page.getByTestId("settings-return").click();
   await discard.getByRole("button", { name: "Discard changes", exact: true }).click();
   await expect(page).toHaveURL("/");
   await expect(settings).toBeHidden();
@@ -319,7 +367,7 @@ test.describe("sidebar name filtering preference", () => {
     await expect(firstRow.getByRole("button", { name: "Filter threads by environment Local" })).toHaveCount(0);
 
     const settings = await openSettingsPage(page, "general");
-    const preference = settings.getByRole("checkbox", { name: "Click project and environment names to filter", exact: true });
+    const preference = settings.getByRole("switch", { name: "Click project and environment names to filter", exact: true });
     await expect(preference).not.toBeChecked();
     await preference.check();
     await capture(page, testInfo, "project-name-filter-setting.png");
