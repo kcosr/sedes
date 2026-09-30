@@ -4,6 +4,7 @@ import {
   OperationLoading,
   useOperationContentFocus,
 } from "../../operations/OperationOverlay.js";
+import { runThreadArchiveCheck } from "../../operations/thread-archive.js";
 import { Button } from "@client/components/ui/button";
 import { Checkbox } from "@client/components/ui/checkbox";
 import {
@@ -41,6 +42,55 @@ type ArchiveChoicesDialogProps = ArchiveChoiceProps & {
   readonly onOpenChange: (open: boolean) => void;
   readonly returnFocusRef?: React.RefObject<HTMLElement | null>;
 };
+
+/**
+ * "Archive…" for a menu item or button: `start()` checks the thread behind
+ * the blocking progress, archives at once when nothing needs choosing
+ * (`archiveNeedsChoices`), and otherwise opens ArchiveChoicesDialog with the
+ * checked impact. Render `dialog` once, outside the menu that calls `start`,
+ * so it survives the menu closing.
+ */
+export function useArchiveThreadAction({
+  returnFocusRef,
+  ...choiceProps
+}: ArchiveChoiceProps & {
+  readonly returnFocusRef?: React.RefObject<HTMLElement | null>;
+}): {
+  readonly start: () => void;
+  readonly dialog: React.ReactNode;
+} {
+  const [open, setOpen] = useState(false);
+  const [initialImpact, setInitialImpact] = useState<ThreadArchiveImpact>();
+  const { thread, store, disabled, onArchived, onPendingChange } = choiceProps;
+  const start = () => {
+    if (disabled) return;
+    onPendingChange?.(true);
+    void runThreadArchiveCheck({
+      thread,
+      store,
+      onChoices: (impact) => {
+        setInitialImpact(impact);
+        setOpen(true);
+      },
+      onArchived: () => onArchived?.("only", [thread.id]),
+    }).finally(() => onPendingChange?.(false));
+  };
+  return {
+    start,
+    dialog: (
+      <ArchiveChoicesDialog
+        {...choiceProps}
+        open={open}
+        initialImpact={initialImpact}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next) setInitialImpact(undefined);
+        }}
+        returnFocusRef={returnFocusRef}
+      />
+    ),
+  };
+}
 
 export function ArchiveChoicesDialog(
   props: ArchiveChoicesDialogProps,

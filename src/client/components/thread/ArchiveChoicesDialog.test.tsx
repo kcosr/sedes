@@ -11,7 +11,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedApplicationThreadSummary } from "../../../shared/index.js";
 import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
-import { ArchiveChoicesDialog } from "./ArchiveChoicesDialog.js";
+import {
+  ArchiveChoicesDialog,
+  useArchiveThreadAction,
+} from "./ArchiveChoicesDialog.js";
 
 afterEach(cleanup);
 
@@ -730,5 +733,66 @@ describe("ArchiveChoicesDialog", () => {
       }),
     );
   });
+});
 
+describe("useArchiveThreadAction", () => {
+  function ArchiveAction({
+    store,
+    onArchived,
+  }: {
+    readonly store: ReturnType<typeof makeStore>;
+    readonly onArchived: (choice: "only" | "all", ids: readonly string[]) => void;
+  }) {
+    const archive = useArchiveThreadAction({
+      thread: makeThread(),
+      store,
+      descendantCount: 0,
+      onArchived,
+    });
+    return (
+      <>
+        <button type="button" onClick={archive.start}>
+          Archive…
+        </button>
+        {archive.dialog}
+      </>
+    );
+  }
+
+  it("archives at once when nothing needs choosing", async () => {
+    const store = makeStore();
+    store.getThreadArchiveImpact.mockResolvedValue({
+      descendantCount: 0,
+      pendingQuestions: { root: 0, descendants: 0 },
+      stashedPrompts: { root: 0, descendants: 0 },
+      openTasks: emptyOpenTasks(),
+      executionWorkspace: { kind: "direct" },
+      archiveOnly: { available: true },
+      archiveAll: { available: true },
+    });
+    const onArchived = vi.fn();
+    render(<ArchiveAction store={store} onArchived={onArchived} />);
+    await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
+    await waitFor(() => expect(onArchived).toHaveBeenCalledWith("only", ["thread-1"]));
+    expect(store.mutateInventory).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "thread-1" }),
+      "archive",
+      { expectedStashedPromptCount: 0 },
+    );
+    expect(screen.queryByRole("dialog", { name: "Archive this thread" })).toBeNull();
+  });
+
+  it("opens the choices with the checked impact when there is something to choose", async () => {
+    const store = makeStore();
+    const onArchived = vi.fn();
+    render(<ArchiveAction store={store} onArchived={onArchived} />);
+    await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Archive this thread" });
+    expect(within(dialog).getByRole("checkbox", { name: "Archive child and descendant forks" })).not.toBeChecked();
+    expect(store.getThreadArchiveImpact).toHaveBeenCalledTimes(1);
+    expect(store.mutateInventory).not.toHaveBeenCalled();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
+    await waitFor(() => expect(onArchived).toHaveBeenCalledWith("only", ["thread-1"]));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Archive this thread" })).toBeNull());
+  });
 });

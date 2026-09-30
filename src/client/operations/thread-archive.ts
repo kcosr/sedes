@@ -5,7 +5,23 @@ import type {
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { runBlockingOperation } from "./blocking-operation.js";
 
-/** Direct sidebar archive waits visibly and hands a complete impact to choices. */
+/**
+ * Whether archiving needs the choices dialog: descendants, unfinished work
+ * (open tasks, stashed prompts, unanswered questions), an isolated workspace,
+ * or an unavailable plain archive. Otherwise "Archive" archives at once.
+ */
+export function archiveNeedsChoices(impact: ThreadArchiveImpact): boolean {
+  return (
+    impact.descendantCount > 0 ||
+    impact.openTasks.root.total > 0 ||
+    impact.pendingQuestions.root > 0 ||
+    impact.stashedPrompts.root > 0 ||
+    impact.executionWorkspace.kind === "isolated" ||
+    !impact.archiveOnly.available
+  );
+}
+
+/** Direct archive waits visibly and hands a complete impact to choices. */
 export function runThreadArchiveCheck(options: {
   thread: NormalizedApplicationThreadSummary;
   store: ApplicationClientStore;
@@ -19,14 +35,7 @@ export function runThreadArchiveCheck(options: {
     run: () => options.store.getThreadArchiveImpact(options.thread.id),
     retry: () => !archiveStarted,
     onSuccess: async (impact, context) => {
-      if (
-        impact.descendantCount > 0 ||
-        impact.openTasks.root.total > 0 ||
-        impact.pendingQuestions.root > 0 ||
-        impact.stashedPrompts.root > 0 ||
-        impact.executionWorkspace.kind === "isolated" ||
-        !impact.archiveOnly.available
-      ) {
+      if (archiveNeedsChoices(impact)) {
         options.onChoices(impact);
         return;
       }

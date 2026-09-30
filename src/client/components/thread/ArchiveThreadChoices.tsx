@@ -1,4 +1,5 @@
 import { runBlockingOperation } from "../../operations/blocking-operation.js";
+import { archiveNeedsChoices } from "../../operations/thread-archive.js";
 import { useEffect, useId, useRef, useState } from "react";
 import type {
   NormalizedApplicationThreadSummary,
@@ -539,15 +540,7 @@ export function ArchiveDropdown({
       retry: () => !archiveStarted,
       onSuccess: async (nextImpact, context) => {
         if (!nextImpact) return;
-        if (
-          !directWhenNoChoices ||
-          nextImpact.descendantCount > 0 ||
-          nextImpact.openTasks.root.total > 0 ||
-          nextImpact.stashedPrompts.root > 0 ||
-          nextImpact.pendingQuestions.root > 0 ||
-          nextImpact.executionWorkspace.kind === "isolated" ||
-          !nextImpact.archiveOnly.available
-        ) {
+        if (!directWhenNoChoices || archiveNeedsChoices(nextImpact)) {
           setOpen(true);
           return;
         }
