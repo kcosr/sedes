@@ -4,46 +4,74 @@ import * as Slot from "@radix-ui/react-slot"
 
 import { cn } from "@client/lib/utils"
 
+/**
+ * A short label with a tone. `soft` fills with the tone's wash; `outline`
+ * draws the tone's border on no fill. Sizes: `xs` is 16px tall with 10px
+ * text, `sm` 20px with 11px.
+ */
 const badgeVariants = cva(
-  "group/badge inline-flex h-5 w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-full border border-transparent px-2 py-0.5 text-xs font-medium whitespace-nowrap transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&>svg]:pointer-events-none [&>svg]:size-3!",
+  "group/badge inline-flex w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-full border border-transparent font-medium whitespace-nowrap transition-colors focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 [&>svg]:pointer-events-none",
   {
     variants: {
-      variant: {
-        default: "bg-primary text-primary-foreground [a]:hover:bg-primary/80",
-        secondary:
-          "bg-secondary text-secondary-foreground [a]:hover:bg-secondary/80",
-        destructive:
-          "bg-destructive/10 text-destructive focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:focus-visible:ring-destructive/40 [a]:hover:bg-destructive/20",
-        outline:
-          "border-border text-foreground [a]:hover:bg-muted [a]:hover:text-muted-foreground",
-        ghost:
-          "hover:bg-muted hover:text-muted-foreground dark:hover:bg-muted/50",
-        link: "text-primary underline-offset-4 hover:underline",
+      tone: {
+        neutral: "text-muted-foreground",
+        info: "text-info",
+        success: "text-success",
+        warning: "text-warning",
+        destructive: "text-destructive",
+      },
+      appearance: {
+        soft: "",
+        outline: "bg-transparent",
+      },
+      size: {
+        xs: "h-4 px-1.5 text-(length:--text-micro) [&>svg]:size-2.5",
+        sm: "h-5 px-2 text-(length:--text-label) [&>svg]:size-3",
       },
     },
+    compoundVariants: [
+      { appearance: "soft", tone: "neutral", className: "bg-muted-foreground/12" },
+      { appearance: "soft", tone: "info", className: "bg-info-soft" },
+      { appearance: "soft", tone: "success", className: "bg-success-soft" },
+      { appearance: "soft", tone: "warning", className: "bg-warning-soft" },
+      { appearance: "soft", tone: "destructive", className: "bg-destructive-soft" },
+      { appearance: "outline", tone: "neutral", className: "border-border" },
+      { appearance: "outline", tone: "info", className: "border-info-border" },
+      { appearance: "outline", tone: "success", className: "border-success-border" },
+      { appearance: "outline", tone: "warning", className: "border-warning-border" },
+      { appearance: "outline", tone: "destructive", className: "border-destructive-border" },
+    ],
     defaultVariants: {
-      variant: "default",
+      tone: "neutral",
+      appearance: "soft",
+      size: "sm",
     },
   }
 )
 
+type BadgeProps = React.ComponentProps<"span"> &
+  VariantProps<typeof badgeVariants> & { asChild?: boolean }
+
 function Badge({
   className,
-  variant = "default",
+  tone = "neutral",
+  appearance = "soft",
+  size = "sm",
   asChild = false,
   ...props
-}: React.ComponentProps<"span"> &
-  VariantProps<typeof badgeVariants> & { asChild?: boolean }) {
+}: BadgeProps) {
   const Comp = asChild ? Slot.Root : "span"
 
   return (
     <Comp
       data-slot="badge"
-      data-variant={variant}
-      className={cn(badgeVariants({ variant }), className)}
+      data-tone={tone}
+      data-appearance={appearance}
+      className={cn(badgeVariants({ tone, appearance, size }), className)}
       {...props}
     />
   )
 }
 
 export { Badge, badgeVariants }
+export type { BadgeProps }

@@ -100,8 +100,7 @@ function ClaudePermissionControls({
         >
           <SelectTrigger
             aria-label="Permission mode"
-            className="w-full min-w-0"
-            size="sm"
+            className="w-full min-w-0 h-(--control-md) text-(length:--text-ui)"
             disabled={unavailable}
           >
             <SelectValue placeholder="Choose…" />

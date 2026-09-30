@@ -186,6 +186,10 @@
   --hover: var(--accent); /* the one wash for rows, ghost buttons, menu items */
   --selected: color-mix(in oklch, var(--foreground) 9%, transparent);
   --disabled-opacity: 0.5;
+  /* Solid fill of Button variant="destructive" (irreversible actions only),
+     under white text. The hover step darkens it in both themes. */
+  --destructive-solid: var(--destructive);
+  --destructive-solid-hover: color-mix(in oklab, var(--destructive-solid), oklch(0 0 0) 14%);
   /* equals Button's `ring-3 ring-ring/50` */
   --focus-ring: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
 
@@ -252,6 +256,9 @@
   --accent: oklch(1 0 0 / 0.09);
   --accent-foreground: oklch(0.93 0.004 260);
   --destructive: oklch(0.66 0.17 25);
+  /* --destructive is tuned as text on dark surfaces; as a fill it would
+     leave white text under AA, so the solid fill steps darker. */
+  --destructive-solid: oklch(0.56 0.19 25);
   --border: oklch(1 0 0 / 0.09);
   --input: oklch(1 0 0 / 0.12);
   --ring: oklch(0.62 0.008 260);
@@ -343,12 +350,11 @@
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-xl: 16px;
-  /* Tailwind type scale pinned to the ramp. `--text-sm` stays at its
-     stock 14px, which is off the ramp: moving it to `--text-ui` (13px) is
-     the primitive alignment's visible change, not a token change.
-     `--text-base` stays 16px for mobile inputs (iOS does not zoom). */
+  /* Tailwind type scale pinned to the ramp. `--text-base` stays 16px for
+     mobile inputs (iOS does not zoom). */
   --text-xs: var(--text-meta);
-  --text-sm: 14px;
+  --text-sm: var(--text-ui);
+  --text-sm--line-height: var(--leading-normal);
   --text-base: 16px;
   /* Tailwind shadow scale pinned to the app elevations (dark-aware). */
   --shadow-xs: var(--elevation-1);

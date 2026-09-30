@@ -1316,7 +1316,6 @@ export function NewThreadControl({
                   <SelectTrigger
                     id={`${pickerId}-workspace-execution`}
                     className="w-full"
-                    size="sm"
                   >
                     <SelectValue placeholder="Choose workspace execution" />
                   </SelectTrigger>
@@ -1355,7 +1354,6 @@ export function NewThreadControl({
                       <SelectTrigger
                         id={`${pickerId}-workspace-network`}
                         className="w-full"
-                        size="sm"
                       >
                         <SelectValue />
                       </SelectTrigger>
