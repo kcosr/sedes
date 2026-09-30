@@ -584,8 +584,12 @@ textarea:disabled {
 
 [data-slot="button"]:focus-visible,
 [data-slot="select-trigger"]:focus-visible,
+[data-slot="native-select"]:focus-visible,
 [data-slot="checkbox"]:focus-visible,
 [data-slot="radio-group-item"]:focus-visible,
+[data-slot="switch"]:focus-visible,
+[data-slot="segmented-control-item"]:focus-visible,
+[data-slot="tabs-trigger"]:focus-visible,
 [data-slot="input"]:focus-visible,
 [data-slot="textarea"]:focus-visible {
   outline: none;

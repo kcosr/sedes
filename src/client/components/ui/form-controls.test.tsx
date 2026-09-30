@@ -7,6 +7,7 @@ import { Checkbox } from "./checkbox.js";
 import { controlVariants } from "./control.js";
 import { Input } from "./input.js";
 import { Label } from "./label.js";
+import { NativeSelect } from "./native-select.js";
 import { Select, SelectTrigger, SelectValue } from "./select.js";
 import { Textarea } from "./textarea.js";
 
@@ -27,6 +28,9 @@ describe("form controls", () => {
       <>
         <Input aria-label="Name" />
         <Textarea aria-label="Notes" />
+        <NativeSelect aria-label="Kind">
+          <option>Local</option>
+        </NativeSelect>
         <Select>
           <SelectTrigger aria-label="Environment">
             <SelectValue placeholder="Choose" />
@@ -36,11 +40,12 @@ describe("form controls", () => {
     );
     const input = screen.getByRole("textbox", { name: "Name" });
     const textarea = screen.getByRole("textbox", { name: "Notes" });
+    const native = screen.getByRole("combobox", { name: "Kind" });
     const trigger = screen.getByRole("combobox", { name: "Environment" });
-    for (const control of [input, textarea, trigger]) {
+    for (const control of [input, textarea, native, trigger]) {
       expect(control).toHaveClass(...CONTROL_BOX);
     }
-    for (const control of [input, trigger]) {
+    for (const control of [input, native, trigger]) {
       expect(control).toHaveClass("h-(--control-default)");
     }
     expect(textarea).not.toHaveClass("h-(--control-default)");
@@ -50,15 +55,13 @@ describe("form controls", () => {
   it("gives the compact size the fixed control step", () => {
     expect(controlVariants({ size: "sm" })).toContain("h-(--control-sm)");
     render(
-      <Select>
-        <SelectTrigger aria-label="Scope" size="sm">
-          <SelectValue placeholder="All" />
-        </SelectTrigger>
-      </Select>,
+      <NativeSelect aria-label="Scope" size="sm">
+        <option>All</option>
+      </NativeSelect>,
     );
-    const trigger = screen.getByRole("combobox", { name: "Scope" });
-    expect(trigger).toHaveClass("h-(--control-sm)");
-    expect(trigger).not.toHaveClass("h-(--control-default)");
+    const select = screen.getByRole("combobox", { name: "Scope" });
+    expect(select).toHaveClass("h-(--control-sm)");
+    expect(select).not.toHaveClass("h-(--control-default)");
   });
 
   it("lets call sites override the box", () => {
