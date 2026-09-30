@@ -27,6 +27,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "./dropdown-menu.js";
+import { Dialog, DialogContent, DialogTitle } from "./dialog.js";
 import type { MenuPresentation } from "./menu-sheet.js";
 
 beforeEach(() => {
@@ -259,5 +260,223 @@ describe("context menu presented as a sheet", () => {
     fireEvent.pointerDown(row, { pointerType: "touch", clientX: 10, clientY: 10 });
     act(() => vi.advanceTimersByTime(800));
     expect(screen.getByRole("dialog", { name: "MCP events" })).toBeVisible();
+  });
+});
+
+describe("sheet rows compose consumer click handlers", () => {
+  function SettingsMenu(props: {
+    readonly onPeekClick?: (event: React.MouseEvent) => void;
+    readonly onPeekChange?: (checked: boolean) => void;
+    readonly onSortClick?: (event: React.MouseEvent) => void;
+    readonly onSortChange?: (value: string) => void;
+    readonly onCopyClick?: (event: React.MouseEvent) => void;
+    readonly onRenameClick?: (event: React.MouseEvent) => void;
+    readonly onRename?: () => void;
+  }) {
+    const [peek, setPeek] = useState(false);
+    const [sort, setSort] = useState("recent");
+    return (
+      <DropdownMenu presentation="sheet">
+        <DropdownMenuTrigger>View</DropdownMenuTrigger>
+        <DropdownMenuContent sheetTitle="View options">
+          <DropdownMenuItem onClick={props.onRenameClick} onSelect={props.onRename}>Rename</DropdownMenuItem>
+          <DropdownMenuCheckboxItem
+            checked={peek}
+            onClick={props.onPeekClick}
+            onCheckedChange={(checked) => {
+              props.onPeekChange?.(checked);
+              setPeek(checked);
+            }}
+          >
+            Peek
+          </DropdownMenuCheckboxItem>
+          <DropdownMenuRadioGroup
+            value={sort}
+            onValueChange={(value) => {
+              props.onSortChange?.(value);
+              setSort(value);
+            }}
+          >
+            <DropdownMenuRadioItem value="recent">Recent</DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="name" onClick={props.onSortClick}>Name</DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger onClick={props.onCopyClick}>Copy ID</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuItem>Thread ID</DropdownMenuItem>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+  }
+
+  it("runs a checkbox row's click handler and still toggles and closes", async () => {
+    const user = userEvent.setup();
+    const onPeekClick = vi.fn();
+    const onPeekChange = vi.fn();
+    render(<SettingsMenu onPeekClick={onPeekClick} onPeekChange={onPeekChange} />);
+    await user.click(screen.getByRole("button", { name: "View" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Peek" }));
+    expect(onPeekClick).toHaveBeenCalledOnce();
+    expect(onPeekChange).toHaveBeenCalledExactlyOnceWith(true);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("runs a radio row's click handler and still changes the value", async () => {
+    const user = userEvent.setup();
+    const onSortClick = vi.fn();
+    const onSortChange = vi.fn();
+    render(<SettingsMenu onSortClick={onSortClick} onSortChange={onSortChange} />);
+    await user.click(screen.getByRole("button", { name: "View" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Name" }));
+    expect(onSortClick).toHaveBeenCalledOnce();
+    expect(onSortChange).toHaveBeenCalledExactlyOnceWith("name");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("runs a submenu trigger's click handler and still drills in", async () => {
+    const user = userEvent.setup();
+    const onCopyClick = vi.fn();
+    render(<SettingsMenu onCopyClick={onCopyClick} />);
+    await user.click(screen.getByRole("button", { name: "View" }));
+    await user.click(screen.getByRole("menuitem", { name: "Copy ID" }));
+    expect(onCopyClick).toHaveBeenCalledOnce();
+    expect(screen.getByRole("menuitem", { name: "Thread ID" })).toBeVisible();
+  });
+
+  it("skips the row's behavior when the click handler prevents the default", async () => {
+    const user = userEvent.setup();
+    const onRename = vi.fn();
+    const onPeekChange = vi.fn();
+    const onSortChange = vi.fn();
+    const prevent = (event: React.MouseEvent) => event.preventDefault();
+    render(
+      <SettingsMenu
+        onRenameClick={prevent}
+        onRename={onRename}
+        onPeekClick={prevent}
+        onPeekChange={onPeekChange}
+        onSortClick={prevent}
+        onSortChange={onSortChange}
+        onCopyClick={prevent}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "View" }));
+    await user.click(screen.getByRole("menuitem", { name: "Rename" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Peek" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Name" }));
+    await user.click(screen.getByRole("menuitem", { name: "Copy ID" }));
+    expect(onRename).not.toHaveBeenCalled();
+    expect(onPeekChange).not.toHaveBeenCalled();
+    expect(onSortChange).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menuitem", { name: "Thread ID" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "View options" })).toBeVisible();
+  });
+});
+
+describe("menu sheets return focus when they close", () => {
+  function RowWithRename({
+    presentation,
+    onCloseAutoFocus,
+  }: {
+    readonly presentation: "context" | "dropdown";
+    readonly onCloseAutoFocus?: (event: Event) => void;
+  }) {
+    const [renaming, setRenaming] = useState(false);
+    const items = (
+      <>
+        <DropdownMenuItem>Pin</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => setRenaming(true)}>Rename…</DropdownMenuItem>
+      </>
+    );
+    return (
+      <>
+        {presentation === "context" ? (
+          <ContextMenu presentation="sheet">
+            <ContextMenuTrigger asChild>
+              <button type="button">MCP events</button>
+            </ContextMenuTrigger>
+            <ContextMenuContent sheetTitle="MCP events" onCloseAutoFocus={onCloseAutoFocus}>
+              <ContextMenuItem>Pin</ContextMenuItem>
+              <ContextMenuItem onSelect={() => setRenaming(true)}>Rename…</ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
+        ) : (
+          <DropdownMenu presentation="sheet">
+            <DropdownMenuTrigger>MCP events</DropdownMenuTrigger>
+            <DropdownMenuContent sheetTitle="MCP events" onCloseAutoFocus={onCloseAutoFocus}>
+              {items}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+        <button type="button">Elsewhere</button>
+        <Dialog open={renaming} onOpenChange={setRenaming}>
+          <DialogContent aria-describedby={undefined}>
+            <DialogTitle>Rename thread</DialogTitle>
+            <input aria-label="Thread name" />
+          </DialogContent>
+        </Dialog>
+      </>
+    );
+  }
+
+  async function openFromFocusedTrigger(presentation: "context" | "dropdown") {
+    const user = userEvent.setup();
+    const trigger = screen.getByRole("button", { name: "MCP events" });
+    trigger.focus();
+    if (presentation === "context") fireEvent.contextMenu(trigger);
+    else await user.click(trigger);
+    expect(screen.getByRole("dialog", { name: "MCP events" })).toBeVisible();
+    return { user, trigger };
+  }
+
+  it.each(["context", "dropdown"] as const)("restores the %s trigger after Escape", async (presentation) => {
+    render(<RowWithRename presentation={presentation} />);
+    const { user, trigger } = await openFromFocusedTrigger(presentation);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it.each(["context", "dropdown"] as const)("restores the %s trigger after the close button", async (presentation) => {
+    render(<RowWithRename presentation={presentation} />);
+    const { user, trigger } = await openFromFocusedTrigger(presentation);
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it.each(["context", "dropdown"] as const)("restores the %s trigger after selecting an item", async (presentation) => {
+    render(<RowWithRename presentation={presentation} />);
+    const { user, trigger } = await openFromFocusedTrigger(presentation);
+    await user.click(screen.getByRole("menuitem", { name: "Pin" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it.each(["context", "dropdown"] as const)("leaves focus in a dialog that a %s item opened", async (presentation) => {
+    render(<RowWithRename presentation={presentation} />);
+    const { user, trigger } = await openFromFocusedTrigger(presentation);
+    await user.click(screen.getByRole("menuitem", { name: "Rename…" }));
+    const rename = await screen.findByRole("dialog", { name: "Rename thread" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "MCP events" })).toBeNull());
+    await waitFor(() => expect(screen.getByLabelText("Thread name")).toHaveFocus());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(rename).toContainElement(document.activeElement as HTMLElement);
+    expect(trigger).not.toHaveFocus();
+  });
+
+  it("lets onCloseAutoFocus take over", async () => {
+    const onCloseAutoFocus = vi.fn((event: Event) => {
+      event.preventDefault();
+      screen.getByRole("button", { name: "Elsewhere" }).focus();
+    });
+    render(<RowWithRename presentation="context" onCloseAutoFocus={onCloseAutoFocus} />);
+    const { user, trigger } = await openFromFocusedTrigger("context");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(onCloseAutoFocus).toHaveBeenCalledOnce());
+    expect(screen.getByRole("button", { name: "Elsewhere" })).toHaveFocus();
+    expect(trigger).not.toHaveFocus();
   });
 });
