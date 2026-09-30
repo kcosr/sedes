@@ -329,7 +329,7 @@ describe("Tool clients settings", () => {
     render(<ToolClientsSettingsPage controls={value} />);
 
     fireEvent.click(await screen.findByRole("button", { name: /External CLI/u }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "Enable tool client" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Enable tool client" }));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(replaceToolClient).toHaveBeenCalledWith(
@@ -337,8 +337,11 @@ describe("Tool clients settings", () => {
         expect.objectContaining({ expectedRevision: 1, enabled: false }),
       ),
     );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "External CLI" })).toHaveAccessibleDescription(/Disabled/u),
+    );
 
-    fireEvent.click(screen.getByRole("button", { name: "Rotate credential" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rotate credential…" }));
     const rotateDialog = screen.getByRole("dialog", { name: "Rotate credential?" });
     fireEvent.click(
       within(rotateDialog).getByRole("button", { name: "Rotate credential" }),
@@ -352,7 +355,7 @@ describe("Tool clients settings", () => {
       ).getByRole("button", { name: "I saved it — close" }),
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
+    fireEvent.click(screen.getByRole("button", { name: "Revoke…" }));
     const revokeDialog = screen.getByRole("dialog", { name: "Revoke tool client?" });
     fireEvent.click(
       within(revokeDialog).getByRole("button", { name: "Revoke permanently" }),
@@ -361,6 +364,23 @@ describe("Tool clients settings", () => {
       expect(revokeToolClient).toHaveBeenCalledWith(clientId, 3),
     );
     expect(await screen.findByText(/credentials can no longer be used/u)).toBeVisible();
+  });
+
+  it("reports each validation problem where it applies", async () => {
+    const createToolClient = vi.fn();
+    render(<ToolClientsSettingsPage controls={controls({ createToolClient })} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "New client" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create client" }));
+    const name = screen.getByLabelText("Tool client name");
+    expect(name).toHaveAttribute("aria-invalid", "true");
+    expect(name).toHaveAccessibleDescription("Enter a tool client name.");
+
+    fireEvent.change(name, { target: { value: "External CLI" } });
+    expect(name).not.toHaveAttribute("aria-invalid");
+    fireEvent.click(screen.getByRole("button", { name: "Create client" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Select at least one tool.");
+    expect(createToolClient).not.toHaveBeenCalled();
   });
 
   it("recovers an admitted create without inventing a missing secret", async () => {
@@ -392,6 +412,6 @@ describe("Tool clients settings", () => {
     expect(
       screen.queryByRole("dialog", { name: "Save this credential now" }),
     ).toBeNull();
-    expect(screen.getByRole("button", { name: "Rotate credential" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Rotate credential…" })).toBeVisible();
   });
 });

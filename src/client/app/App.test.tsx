@@ -540,7 +540,7 @@ describe("application endpoint startup", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-    fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("button", { name: "Connection" }));
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("link", { name: "Connection" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch connection" }));
     const localCard = (
       await screen.findByRole("heading", { name: "Local" })
@@ -624,7 +624,7 @@ describe("application endpoint startup", () => {
       name: "What should the agent work on?",
     });
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-    fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("button", { name: "Connection" }));
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("link", { name: "Connection" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch connection" }));
     const directCard = (
       await screen.findByRole("heading", { name: "Direct server" })
@@ -668,7 +668,7 @@ describe("application endpoint startup", () => {
     vi.mocked(getCredential).mockRejectedValue(new Error("Credential vault is locked"));
     try {
       fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-      fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("button", { name: "Connection" }));
+      fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("link", { name: "Connection" }));
       fireEvent.click(screen.getByRole("button", { name: "Switch connection" }));
       const card = (await screen.findByRole("heading", { name: "Direct server" })).closest("li")!;
       fireEvent.click(within(card).getByRole("button", { name: "Connect" }));
@@ -719,7 +719,7 @@ describe("application endpoint startup", () => {
       name: "What should the agent work on?",
     });
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-    fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("button", { name: "Connection" }));
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("link", { name: "Connection" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch connection" }));
     const sshCard = (
       await screen.findByRole("heading", { name: "Remote SSH" })
@@ -776,7 +776,7 @@ describe("application endpoint startup", () => {
       name: "What should the agent work on?",
     });
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-    fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("button", { name: "Connection" }));
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("link", { name: "Connection" }));
     fireEvent.click(screen.getByRole("button", { name: "Switch connection" }));
     const directCard = (
       await screen.findByRole("heading", { name: "Direct server" })
@@ -812,7 +812,7 @@ describe("application endpoint startup", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "What should the agent work on?" });
     fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-    fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("button", { name: "Connection" }));
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Settings pages" })).getByRole("link", { name: "Connection" }));
     expect(screen.getByText("Authentication disabled")).toBeInTheDocument();
   });
 
@@ -1499,9 +1499,9 @@ describe("application endpoint startup", () => {
     const settingsView = await screen.findByTestId("settings-view");
     expect(window.location.pathname).toBe("/settings");
     expect(screen.queryByRole("dialog", { name: "Thread navigation" })).toBeNull();
-    fireEvent.change(within(settingsView).getByLabelText("Settings category"), {
-      target: { value: "server" },
-    });
+    // Without the sidebar nav, /settings is the grouped list of pages.
+    expect(settingsView).toHaveAttribute("data-nav", "compact");
+    fireEvent.click(within(settingsView).getByRole("link", { name: "Server" }));
     expect(window.location.pathname).toBe("/settings/server");
 
     expect(
@@ -1544,6 +1544,68 @@ describe("application endpoint startup", () => {
     expect(document.querySelector(".application-shell")).not.toHaveAttribute(
       "data-sidebar-collapsed",
     );
+  });
+
+  it("shows the settings nav in the retained sidebar slot while Settings is open", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(applicationBootstrap)),
+    );
+    render(<App />);
+    await screen.findByRole("heading", { name: "What should the agent work on?" });
+    const sidebar = screen.getByTestId("desktop-sidebar");
+    const inventory = sidebar.querySelector<HTMLElement>(".desktop-sidebar-inventory")!;
+    const gear = within(inventory).getByTestId("settings-trigger");
+    expect(sidebar).toHaveAttribute("data-mode", "inventory");
+    expect(within(sidebar).queryByRole("navigation", { name: "Settings pages" })).toBeNull();
+
+    fireEvent.click(gear);
+    // /settings opens a page: the nav already lists every category.
+    await waitFor(() => expect(window.location.pathname).toBe("/settings/general"));
+    expect(sidebar).toHaveAttribute("data-mode", "settings");
+    expect(sidebar).toHaveAccessibleName("Settings");
+    const nav = within(sidebar).getByRole("navigation", { name: "Settings pages" });
+    expect(within(nav).getByRole("link", { name: "General" })).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getByTestId("settings-return")).toHaveTextContent("Back to workspace");
+    // The inventory stays mounted (same node) but is inert and hidden from assistive tech.
+    expect(inventory.isConnected).toBe(true);
+    expect(inventory).toHaveAttribute("inert");
+    expect(inventory).toHaveAttribute("aria-hidden", "true");
+    expect(within(inventory).getByTestId("settings-trigger")).toBe(gear);
+    // No second category list or picker in the page.
+    const view = screen.getByTestId("settings-view");
+    expect(view).toHaveAttribute("data-nav", "sidebar");
+    expect(within(view).queryByRole("navigation")).toBeNull();
+    expect(within(view).queryByRole("combobox", { name: "Settings category" })).toBeNull();
+
+    fireEvent.click(within(nav).getByRole("link", { name: "Terminal" }));
+    expect(window.location.pathname).toBe("/settings/terminal");
+    expect(await screen.findByRole("heading", { name: "Terminal", level: 1 })).toBeVisible();
+
+    fireEvent.click(within(nav).getByTestId("settings-return"));
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    expect(sidebar).toHaveAttribute("data-mode", "inventory");
+    expect(inventory).not.toHaveAttribute("inert");
+    expect(within(sidebar).queryByRole("navigation", { name: "Settings pages" })).toBeNull();
+
+    // Collapsing the sidebar moves the nav out: /settings becomes the list,
+    // and restoring the sidebar brings the nav back and opens the last page.
+    fireEvent.click(gear);
+    await waitFor(() => expect(window.location.pathname).toBe("/settings/terminal"));
+    act(() => navigate("/settings"));
+    await waitFor(() => expect(window.location.pathname).toBe("/settings/terminal"));
+    const settingsView = screen.getByTestId("settings-view");
+    fireEvent.click(within(sidebar).getByTestId("settings-return"));
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    fireEvent.click(screen.getByRole("button", { name: "Hide sidebar" }));
+    fireEvent.click(gear);
+    await waitFor(() => expect(screen.getByTestId("settings-view")).toHaveAttribute("data-nav", "compact"));
+    expect(window.location.pathname).toBe("/settings");
+    expect(settingsView.isConnected).toBe(false);
+    expect(screen.getByRole("link", { name: "Terminal" })).toBeVisible();
+    fireEvent.click(within(screen.getByTestId("settings-view")).getByRole("button", { name: "Show sidebar" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/settings/terminal"));
+    expect(within(sidebar).getByRole("navigation", { name: "Settings pages" })).toBeVisible();
   });
 
   it("keeps the application shell mounted while repairing stale sidebar scope", async () => {

@@ -5,11 +5,19 @@ import type { SettingsPage } from "../../src/client/app/settings-route.js";
 import { expect } from "./fixtures";
 import { loadE2ERunContext } from "./run-context.js";
 
+/**
+ * Opens a settings page the way a user would: from the settings nav in the
+ * desktop sidebar, or, without it, from the grouped list (going back to the
+ * list first when a page is open).
+ */
 export async function selectSettingsCategory(page: Page, category: SettingsPage): Promise<void> {
   const settings = page.getByTestId("settings-view");
-  const picker = settings.getByRole("combobox", { name: "Settings category", exact: true });
-  if (await picker.isVisible()) await picker.selectOption(category);
-  else await settings.getByTestId("settings-page").and(settings.locator(`[data-page="${category}"]`)).click();
+  const link = page.getByTestId("settings-page").and(page.locator(`[data-page="${category}"]`)).filter({ visible: true });
+  if (await link.count() === 0) {
+    await settings.getByTestId("settings-list-link").click();
+    await expect(settings).toHaveAttribute("data-page", "home");
+  }
+  await link.click();
 }
 
 export async function openSettingsPage(page: Page, category: SettingsPage): Promise<Locator> {
@@ -24,9 +32,13 @@ export async function openSettingsPage(page: Page, category: SettingsPage): Prom
   return settings;
 }
 
+/** Leaves Settings; without the sidebar nav, a page goes back through the list. */
 export async function returnFromSettings(page: Page): Promise<void> {
-  await page.getByTestId("settings-return").click();
-  await expect(page.getByTestId("settings-view")).toBeHidden();
+  const settings = page.getByTestId("settings-view");
+  const back = page.getByTestId("settings-return");
+  if (await back.count() === 0) await settings.getByTestId("settings-list-link").click();
+  await back.click();
+  await expect(settings).toBeHidden();
 }
 
 export async function selectRadixOption(
