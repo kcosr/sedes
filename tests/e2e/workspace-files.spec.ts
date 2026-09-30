@@ -618,7 +618,7 @@ test.describe.serial("workspace file browser and editor", () => {
       name: "Discard unsaved changes?",
     });
     await expect(workspaceGuard).toContainText("unsaved panel changes");
-    await workspaceGuard.getByRole("button", { name: "Cancel" }).click();
+    await workspaceGuard.getByRole("button", { name: "Keep editing" }).click();
     await expect(page).toHaveURL(alphaTwo);
     await expect(editable).toContainText("45");
 

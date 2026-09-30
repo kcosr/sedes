@@ -13,14 +13,7 @@ import {
   useRoute,
   type Route,
 } from "../app/router";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "./ui/dialog.js";
+import { DiscardChangesDialog } from "./ui/discard-changes-dialog.js";
 import {
   applySidebarWidth,
   clampSidebarWidth,
@@ -33,7 +26,6 @@ import {
 import { InventorySidebar } from "./InventorySidebar";
 import { installAndroidBackButton } from "../app/android-back.js";
 import { isAndroidClient } from "../app/client-platform.js";
-import { Button } from "@client/components/ui/button";
 import { FullPageError, FullPageLoading } from "./LoadingStates";
 import { PaneResizeHandle } from "./PaneResizeHandle";
 import { Workbench } from "./Workbench";
@@ -476,44 +468,22 @@ export function ApplicationShell({
             />
           ) : null}
         </div>
-        <Dialog
+        <DiscardChangesDialog
           open={Boolean(workspaceNavConfirm)}
           onOpenChange={(open) => {
             if (!open) setWorkspaceNavConfirm(undefined);
           }}
-        >
-          <DialogContent showClose={false}>
-            <DialogHeader>
-              <DialogTitle>Discard unsaved changes?</DialogTitle>
-              <DialogDescription>
-                This workspace has unsaved panel changes. Discard them and leave
-                this workspace?
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => setWorkspaceNavConfirm(undefined)}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                onClick={() => {
-                  const confirmation = workspaceNavConfirm;
-                  setWorkspaceNavConfirm(undefined);
-                  if (!confirmation) return;
-                  panelLayoutStore.discardWorkspacePanelChanges(
-                    confirmation.workspaceId,
-                  );
-                  confirmation.proceed();
-                }}
-              >
-                Discard and leave
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+          description="This workspace has unsaved panel changes. Discard them and leave this workspace?"
+          discardLabel="Discard and leave"
+          onDiscard={() => {
+            const confirmation = workspaceNavConfirm;
+            if (!confirmation) return;
+            panelLayoutStore.discardWorkspacePanelChanges(
+              confirmation.workspaceId,
+            );
+            confirmation.proceed();
+          }}
+        />
         </NavigationControlsContext.Provider>
       </div>
     </TaskDragProvider>

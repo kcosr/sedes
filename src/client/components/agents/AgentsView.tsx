@@ -29,6 +29,7 @@ import { Bot, ChevronLeft, Plus, Search, Trash2 } from "lucide-react";
 import { Button } from "@client/components/ui/button";
 import { Callout } from "@client/components/ui/callout";
 import { ConfirmDialog } from "@client/components/ui/confirm-dialog";
+import { DiscardChangesDialog } from "@client/components/ui/discard-changes-dialog";
 import { EmptyState } from "@client/components/ui/empty-state";
 import { Input } from "@client/components/ui/input";
 import { Textarea } from "@client/components/ui/textarea";
@@ -633,17 +634,15 @@ function AgentEditor({
         />
       </form>
 
-      <ConfirmDialog
+      <DiscardChangesDialog
         open={Boolean(guard.pendingRoute)}
         onOpenChange={(open) => {
           if (!open) guard.cancel();
         }}
-        tone="danger"
         title="Discard unsaved Agent changes?"
         description="Your local Agent edits have not been saved."
-        cancelLabel="Keep editing"
-        confirmLabel="Discard"
-        onConfirm={guard.discardAndContinue}
+        discardLabel="Discard"
+        onDiscard={guard.discardAndContinue}
       />
 
       {agent && (
