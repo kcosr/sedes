@@ -62,6 +62,9 @@ describe("Field", () => {
       (child) => child.getAttribute("data-slot") ?? child.tagName.toLowerCase(),
     );
     expect(order).toEqual(["field-label", "input", "field-description", "field-error"]);
+    // Stretched by a row of fields, the rows pack at the top rather than
+    // growing the control's row.
+    expect(container.querySelector("[data-slot=field]")).toHaveClass("content-start");
   });
 
   it("puts label and description beside the control when horizontal", () => {

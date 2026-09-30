@@ -2,7 +2,7 @@
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfirmDialog } from "./confirm-dialog.js";
 
@@ -131,5 +131,93 @@ describe("ConfirmDialog", () => {
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
     expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  describe("focus on close", () => {
+    // A list whose rows open the confirm from their Delete buttons (no
+    // DialogTrigger); confirming removes the row, and with it the opener.
+    function RowList({ keep = false }: { readonly keep?: boolean }) {
+      const [rows, setRows] = useState(["Alpha", "Beta", "Gamma"]);
+      const [deleting, setDeleting] = useState<string>();
+      const removedIndex = useRef(0);
+      const list = useRef<HTMLUListElement>(null);
+      return (
+        <>
+          <ul ref={list}>
+            {rows.map((row) => (
+              <li key={row}>
+                <button type="button" onClick={() => setDeleting(row)}>
+                  Delete {row}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <ConfirmDialog
+            open={deleting !== undefined}
+            onOpenChange={(open) => {
+              if (!open) setDeleting(undefined);
+            }}
+            tone="danger"
+            title={`Delete ${deleting ?? ""}?`}
+            confirmLabel="Delete"
+            fallbackFocus={() => {
+              const buttons = list.current?.querySelectorAll("button") ?? [];
+              return buttons[Math.min(removedIndex.current, buttons.length - 1)];
+            }}
+            onConfirm={() => {
+              if (keep) return;
+              removedIndex.current = rows.indexOf(deleting!);
+              setRows((current) => current.filter((row) => row !== deleting));
+            }}
+          />
+        </>
+      );
+    }
+
+    it.each([
+      ["Cancel", async (user: ReturnType<typeof userEvent.setup>) => {
+        await user.click(screen.getByRole("button", { name: "Cancel" }));
+      }],
+      ["Escape", async (user: ReturnType<typeof userEvent.setup>) => {
+        await user.keyboard("{Escape}");
+      }],
+    ])("returns focus to the invoking button after %s", async (_, dismiss) => {
+      const user = userEvent.setup();
+      render(<RowList />);
+      const invoker = screen.getByRole("button", { name: "Delete Beta" });
+      await user.click(invoker);
+      await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus());
+      await dismiss(user);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await waitFor(() => expect(invoker).toHaveFocus());
+    });
+
+    it("focuses the next row after the action removed the invoking one", async () => {
+      const user = userEvent.setup();
+      render(<RowList />);
+      await user.click(screen.getByRole("button", { name: "Delete Beta" }));
+      await user.click(screen.getByRole("button", { name: "Delete" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(screen.queryByRole("button", { name: "Delete Beta" })).toBeNull();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Delete Gamma" })).toHaveFocus());
+    });
+
+    it("focuses the new last row after the last one is removed", async () => {
+      const user = userEvent.setup();
+      render(<RowList />);
+      await user.click(screen.getByRole("button", { name: "Delete Gamma" }));
+      await user.click(screen.getByRole("button", { name: "Delete" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Delete Beta" })).toHaveFocus());
+    });
+
+    it("returns focus to the invoker when a confirmed action keeps it", async () => {
+      const user = userEvent.setup();
+      render(<RowList keep />);
+      const invoker = screen.getByRole("button", { name: "Delete Alpha" });
+      await user.click(invoker);
+      await user.click(screen.getByRole("button", { name: "Delete" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await waitFor(() => expect(invoker).toHaveFocus());
+    });
   });
 });

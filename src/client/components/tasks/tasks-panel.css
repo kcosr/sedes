@@ -54,8 +54,14 @@
   padding: 0;
 }
 
+/* As a sheet the body sits on the dialog sheets' inset, so its header lines
+   up with every other sheet's. */
 .tasks-sheet .tasks-panel-body {
-  padding-bottom: max(12px, env(safe-area-inset-bottom));
+  padding:
+    var(--dialog-padding)
+    max(var(--dialog-padding), env(safe-area-inset-right))
+    max(var(--dialog-padding), env(safe-area-inset-bottom))
+    max(var(--dialog-padding), env(safe-area-inset-left));
 }
 
 .tasks-panel-body {

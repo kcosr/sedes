@@ -203,6 +203,60 @@ describe("Canned prompts settings", () => {
     expect(screen.queryByLabelText(/icon/u)).toBeNull();
   });
 
+  it("returns focus to Delete on cancel and to the next row after deleting", async () => {
+    const user = userEvent.setup();
+    const first = prompt("prompt-1", "Review", "Review changes.", 0);
+    const second = prompt("prompt-2", "Test", "Run tests.", 1);
+    const third = prompt("prompt-3", "Ship", "Ship it.", 2);
+    const deleteCannedPrompt = vi
+      .fn()
+      .mockResolvedValueOnce(
+        result([first, { ...third, position: 1 }], 4),
+      )
+      .mockResolvedValueOnce(result([first], 5))
+      .mockResolvedValueOnce(result([], 6));
+    render(
+      <CannedPromptsSettingsPage
+        store={store({
+          listCannedPrompts: vi
+            .fn()
+            .mockResolvedValue(library([first, second, third], 3)),
+          deleteCannedPrompt,
+        })}
+      />,
+    );
+
+    const deleteTest = await screen.findByRole("button", { name: "Delete Test" });
+    await user.click(deleteTest);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(deleteTest).toHaveFocus());
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("dialog", { name: "Delete Test?" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(deleteTest).toHaveFocus());
+
+    // The deleted row's place goes to the next prompt.
+    await user.click(deleteTest);
+    await user.click(screen.getByRole("button", { name: "Delete prompt" }));
+    expect(await screen.findByText("Prompt deleted.")).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Ship" })).toHaveFocus(),
+    );
+    // With no next prompt, the new last one.
+    await user.click(screen.getByRole("button", { name: "Delete Ship" }));
+    await user.click(screen.getByRole("button", { name: "Delete prompt" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Review" })).toHaveFocus(),
+    );
+    // With none left, the page's Add prompt action.
+    await user.click(screen.getByRole("button", { name: "Delete Review" }));
+    await user.click(screen.getByRole("button", { name: "Delete prompt" }));
+    expect(await screen.findByText("No saved prompts yet")).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Add prompt" })).toHaveFocus(),
+    );
+  });
+
   it("reports conflict reconciliation and closes the stale editor", async () => {
     const initial = prompt("prompt-1", "Review", "Old text", 0);
     const current = { ...initial, text: "Changed elsewhere" };

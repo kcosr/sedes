@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useImperativeHandle, useRef, useState } from "react";
 import {
+  Check,
   Plus,
   Pencil,
   RotateCw,
@@ -442,11 +443,13 @@ export function ThreadTerminalMenu({
                   aria-label={terminal.displayName}
                   className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-0.5"
                 >
+                  {/* A terminal already open in this panel carries a check;
+                      choosing it brings its tab forward. */}
                   <DropdownMenuItem
-                    disabled={terminal.incarnationId === null || alreadyDisplayed}
+                    disabled={terminal.incarnationId === null}
                     title={
                       alreadyDisplayed
-                        ? "Already open in this terminal panel"
+                        ? "Open in this terminal panel"
                         : undefined
                     }
                     onSelect={() => {
@@ -467,11 +470,16 @@ export function ThreadTerminalMenu({
                     }}
                   >
                     <TerminalIcon aria-hidden="true" />
-                    <span className="min-w-0 flex-1 truncate">{terminal.displayName}</span>
+                    <span className="min-w-0 truncate">{terminal.displayName}</span>
                     <DropdownMenuValue>
                       {terminalStatusLabel(terminal)}
-                      {alreadyDisplayed ? " · Open" : ""}
                     </DropdownMenuValue>
+                    {alreadyDisplayed && (
+                      <>
+                        <Check aria-hidden="true" className="text-foreground" />
+                        <span className="sr-only">, open</span>
+                      </>
+                    )}
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     className={TERMINAL_ROW_ACTION_CLASS}

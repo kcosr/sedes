@@ -299,6 +299,25 @@
   margin-inline-end: auto;
 }
 
+/* While the body has more content below (DialogBody sets data-scroll-more),
+   a hairline across the dialog marks where it scrolls under the pinned
+   footer, on the body's clip edge: the gap above the footer, less the
+   body's focus-ring inset. */
+[data-slot="dialog-footer"] {
+  position: relative;
+}
+
+[data-slot="dialog-content"]:has([data-slot="dialog-body"][data-scroll-more])
+  [data-slot="dialog-footer"]::before {
+  position: absolute;
+  top: calc(var(--space-1) - var(--space-4));
+  inset-inline: calc(-1 * var(--dialog-padding));
+  height: 1px;
+  background: var(--border);
+  content: "";
+  pointer-events: none;
+}
+
 @media (max-width: 519px) {
   [data-slot="dialog-footer"] {
     flex-direction: column-reverse;
@@ -367,6 +386,31 @@
     var(--space-4) + (var(--dialog-title-line) - var(--dialog-close-size)) / 2
   );
   right: max(var(--space-2), env(safe-area-inset-right));
+}
+
+/* ── Floating menus and picker lists: scroll cue ──
+   A menu taller than the room it has scrolls; a soft shade at an edge
+   shows more rows lie beyond it. The shades stay with the panel (scroll)
+   while popover-coloured covers ride with the rows (local) and hide each
+   shade once its end is reached, so a menu that fits shows none. */
+[data-slot="dropdown-menu-content"],
+[data-slot="dropdown-menu-sub-content"],
+[data-slot="context-menu-content"],
+[data-slot="context-menu-sub-content"],
+.searchable-select-options {
+  background-image:
+    linear-gradient(var(--popover) 40%, transparent),
+    linear-gradient(transparent, var(--popover) 60%),
+    radial-gradient(farthest-side at 50% 0, var(--scroll-shade), transparent),
+    radial-gradient(farthest-side at 50% 100%, var(--scroll-shade), transparent);
+  background-position: top, bottom, top, bottom;
+  background-repeat: no-repeat;
+  background-size:
+    100% var(--space-8),
+    100% var(--space-8),
+    100% var(--space-4),
+    100% var(--space-4);
+  background-attachment: local, local, scroll, scroll;
 }
 
 /* ── Motion ──

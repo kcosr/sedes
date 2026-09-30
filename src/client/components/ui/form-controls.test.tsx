@@ -80,7 +80,7 @@ describe("form controls", () => {
     render(<Checkbox aria-label="Pin" />);
     expect(screen.getByRole("checkbox", { name: "Pin" })).toHaveClass(
       "size-(--icon-md)",
-      "rounded-(--radius-inline)",
+      "rounded-(--radius-check)",
       "focus-visible:ring-3",
       "disabled:opacity-(--disabled-opacity)",
     );
@@ -98,6 +98,18 @@ describe("Button", () => {
       "hover:bg-(--destructive-solid-hover)",
     );
     expect(button).not.toHaveClass("bg-destructive/10", "text-destructive");
+  });
+
+  it("draws the destructive outline in the destructive colour with a soft hover", () => {
+    render(<Button variant="destructive-outline">Delete…</Button>);
+    const button = screen.getByRole("button", { name: "Delete…" });
+    expect(button).toHaveAttribute("data-variant", "destructive-outline");
+    expect(button).toHaveClass(
+      "border-destructive-border",
+      "text-destructive",
+      "hover:bg-destructive-soft",
+    );
+    expect(button).not.toHaveClass("bg-(--destructive-solid)", "text-white");
   });
 
   it.each([

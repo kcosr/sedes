@@ -1,4 +1,3 @@
-import { usePickerFocus } from "../lib/use-picker-focus.js";
 import { runThreadCreation, runThreadFork } from "../operations/thread-creation.js";
 import { useEffect, useRef, useState } from "react";
 import type {
@@ -34,15 +33,12 @@ import {
   Hash,
   IndentDecrease,
   IndentIncrease,
-  Layers3,
   PencilLine,
   Pin,
   PinOff,
-  Plus,
   RotateCcw,
   Server,
   Split,
-  Ungroup,
 } from "lucide-react";
 import { SnoozeDialog } from "./thread/SnoozeDialog.js";
 import {
@@ -62,31 +58,17 @@ import {
   SettleImpactDialog,
   settleNeedsConfirmation,
 } from "./thread/SettleImpactDialog.js";
-import { Button } from "@client/components/ui/button";
-import { Field } from "@client/components/ui/field";
-import { Input } from "@client/components/ui/input";
-import { SearchableSelectList } from "@client/components/ui/searchable-select";
+import { MoveToGroupSubmenu, NewGroupDialog } from "./MoveToGroupMenu.js";
 import {
   configuredPanelPresentation,
   openThreadRoute,
 } from "../workspace-panels/thread-panel-navigation.js";
-import {
-  Dialog,
-  DialogAlert,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@client/components/ui/dialog";
+import { initialFocusTarget } from "@client/components/ui/dialog";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuLabel,
-  ContextMenuRadioGroup,
-  ContextMenuRadioItem,
   ContextMenuSeparator,
   ContextMenuValue,
   ContextMenuSub,
@@ -210,13 +192,12 @@ export function ThreadContextMenu({
     returnFocusRef,
   });
   const [pinPending, setPinPending] = useState(false);
-  const [groupDialogOpen, setGroupDialogOpen] = useState(false);
-  const groupSearchRef = useRef<HTMLInputElement>(null);
-  const groupDialogRef = useRef<HTMLDivElement>(null);
-  const groupPickerFocus = usePickerFocus(groupSearchRef);
+  // "New group…" opens the create dialog with this prefill; closed when undefined.
+  const [newGroupName, setNewGroupName] = useState<string>();
+  const newGroupDialogRef = useRef<HTMLDivElement>(null);
   const interactionOpen =
     menuOpen ||
-    groupDialogOpen ||
+    newGroupName !== undefined ||
     snoozeOpen ||
     archiveAction.open ||
     forceResetOpen ||
@@ -225,7 +206,6 @@ export function ThreadContextMenu({
   useEffect(() => {
     onInteractionOpenChange?.(interactionOpen);
   }, [interactionOpen, onInteractionOpenChange]);
-  const [groupName, setGroupName] = useState(thread.title.text);
   const [groupPending, setGroupPending] = useState(false);
   const [placementPending, setPlacementPending] = useState(false);
   const [localConfigurationCopyPending, setConfigurationCopyPending] =
@@ -431,9 +411,6 @@ export function ThreadContextMenu({
     setGroupPending(true);
     setActionError("");
     void operation()
-      .then(() => {
-        setGroupDialogOpen(false);
-      })
       .catch((error: unknown) =>
         setActionError(
           error instanceof Error
@@ -443,10 +420,10 @@ export function ThreadContextMenu({
       )
       .finally(() => setGroupPending(false));
   };
-  const openGroupDialog = () => {
-    setGroupName(thread.title.text || "Untitled thread");
+  /** The create dialog, prefilled with the search text or the thread's title. */
+  const openNewGroup = (name: string) => {
     setActionError("");
-    setGroupDialogOpen(true);
+    setNewGroupName(name || thread.title.text || "Untitled thread");
   };
   const copySessionId = (id: string) => {
     setActionError("");
@@ -521,47 +498,20 @@ export function ThreadContextMenu({
           {thread.pinned ? "Unpin" : "Pin"}
         </ContextMenuItem>
       )}
-      <ContextMenuSub>
-        <ContextMenuSubTrigger disabled={groupPending}>
-          <Layers3 aria-hidden="true" />
-          Move to group
-        </ContextMenuSubTrigger>
-        <ContextMenuSubContent>
-          {groupCatalog.length > 0 && (
-            <>
-              <ContextMenuRadioGroup
-                value={thread.groupId ?? ""}
-                onValueChange={(groupId) => {
-                  if (groupId === thread.groupId) return;
-                  mutateGroup(() => store.assignThreadGroup(thread, groupId));
-                }}
-              >
-                {groupCatalog.map((group) => (
-                  <ContextMenuRadioItem key={group.id} value={group.id}>
-                    <Layers3 aria-hidden="true" />
-                    <span className="thread-action-label">{group.name}</span>
-                  </ContextMenuRadioItem>
-                ))}
-              </ContextMenuRadioGroup>
-              <ContextMenuSeparator />
-            </>
-          )}
-          <ContextMenuItem onSelect={() => afterSheet(openGroupDialog)}>
-            <Plus aria-hidden="true" />
-            New group…
-          </ContextMenuItem>
-          {thread.groupId !== null && (
-            <ContextMenuItem
-              onSelect={() =>
-                mutateGroup(() => store.removeThreadGroup(thread))
-              }
-            >
-              <Ungroup aria-hidden="true" />
-              Remove from group
-            </ContextMenuItem>
-          )}
-        </ContextMenuSubContent>
-      </ContextMenuSub>
+      <MoveToGroupSubmenu
+        groups={groupCatalog}
+        currentGroupId={thread.groupId}
+        disabled={groupPending}
+        sheet={sheet}
+        onAssign={(groupId) =>
+          mutateGroup(() => store.assignThreadGroup(thread, groupId))
+        }
+        onCreate={(name) =>
+          mutateGroup(() => store.createThreadGroup(thread, name))
+        }
+        onNewGroup={(name) => afterSheet(() => openNewGroup(name))}
+        onRemove={() => mutateGroup(() => store.removeThreadGroup(thread))}
+      />
       {lineage && placement && (
         <ContextMenuItem
           disabled={placementPending || !lineage.sourceThreadId}
@@ -771,17 +721,11 @@ export function ThreadContextMenu({
           <span
             className="thread-context-trigger"
             aria-busy={configurationCopyPending || undefined}
-            onPointerDownCapture={(event) => {
-              if (!disabled) groupPickerFocus.onPointerDown(event);
-            }}
-            onKeyDownCapture={groupPickerFocus.onKeyDown}
           >
             {children}
           </span>
         </ContextMenuTrigger>
         <ContextMenuContent
-          onPointerDownCapture={groupPickerFocus.onPointerDown}
-          onKeyDownCapture={groupPickerFocus.onKeyDown}
           data-testid={sheet ? "thread-actions-sheet" : "thread-context-menu"}
           aria-label={`Actions for ${title}`}
           sheetTitle={title}
@@ -792,10 +736,12 @@ export function ThreadContextMenu({
               event.preventDefault();
               return;
             }
-            if (groupDialogOpen) {
+            if (newGroupName !== undefined) {
+              // The create dialog opened from the submenu owns focus.
               event.preventDefault();
-              if (!groupDialogRef.current?.contains(document.activeElement)) {
-                groupPickerFocus.focusPicker(groupDialogRef.current);
+              const dialog = newGroupDialogRef.current;
+              if (dialog && !dialog.contains(document.activeElement)) {
+                initialFocusTarget(dialog).focus({ preventScroll: true });
               }
               return;
             }
@@ -843,83 +789,17 @@ export function ThreadContextMenu({
           )}
         </ContextMenuContent>
       </ContextMenu>
-      <Dialog open={groupDialogOpen} onOpenChange={setGroupDialogOpen}>
-        <DialogContent
-          ref={groupDialogRef}
-          className="thread-group-dialog"
-          layer="over-dialog"
-          data-testid="thread-group-dialog"
-          onOpenAutoFocus={groupPickerFocus.onOpenAutoFocus}
-          returnFocusRef={returnFocusRef}
-        >
-          <DialogHeader>
-            <DialogTitle>Move to group</DialogTitle>
-            <DialogDescription>
-              Choose a persistent group, or create one from this thread.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="thread-group-search">
-            <SearchableSelectList
-              label="Group"
-              searchLabel="Search groups"
-              emptyLabel="No matching groups"
-              value={thread.groupId ?? ""}
-              disabled={groupPending}
-              searchInputRef={groupSearchRef}
-              options={groupCatalog.map((group) => ({
-                value: group.id,
-                label: group.name,
-                description: `${group.memberCount} ${group.memberCount === 1 ? "thread" : "threads"}`,
-                icon: <Layers3 size={14} aria-hidden="true" />,
-                disabled: group.id === thread.groupId,
-              }))}
-              onValueChange={(groupId) =>
-                mutateGroup(() => store.assignThreadGroup(thread, groupId))
-              }
-            />
-          </div>
-          <Field label="Create group">
-            <Input
-              maxLength={120}
-              value={groupName}
-              onChange={(event) => setGroupName(event.target.value)}
-            />
-          </Field>
-          {actionError && (
-            <DialogAlert tone="danger">{actionError}</DialogAlert>
-          )}
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button type="button" variant="outline" disabled={groupPending}>
-                Cancel
-              </Button>
-            </DialogClose>
-            {thread.groupId !== null && (
-              <Button
-                type="button"
-                variant="outline"
-                disabled={groupPending}
-                onClick={() =>
-                  mutateGroup(() => store.removeThreadGroup(thread))
-                }
-              >
-                Ungroup
-              </Button>
-            )}
-            <Button
-              type="button"
-              disabled={groupPending || !groupName.trim()}
-              onClick={() =>
-                mutateGroup(() =>
-                  store.createThreadGroup(thread, groupName.trim()),
-                )
-              }
-            >
-              {groupPending ? "Saving…" : "Create and move"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <NewGroupDialog
+        open={newGroupName !== undefined}
+        initialName={newGroupName ?? ""}
+        groups={groupCatalog}
+        contentRef={newGroupDialogRef}
+        returnFocusRef={returnFocusRef}
+        onOpenChange={(open) => {
+          if (!open) setNewGroupName(undefined);
+        }}
+        onCreate={(name) => store.createThreadGroup(thread, name)}
+      />
       {!thread.available && (
         <span
           id={`sidebar-settings-copy-unavailable-${thread.id}`}
@@ -993,7 +873,7 @@ export function ThreadContextMenu({
             .finally(() => setWorkspaceDeletePending(false));
         }}
       />
-      {actionError && !groupDialogOpen && (
+      {actionError && (
         <p className="thread-row-error" role="alert">
           {actionError}
         </p>

@@ -42,10 +42,11 @@ beforeEach(() => {
     setPointerCapture: vi.fn(),
     releasePointerCapture: vi.fn(),
   });
+  // A phone wide enough to keep the header's toolbar toggle (420px+).
   vi.stubGlobal(
     "matchMedia",
-    vi.fn(() => ({
-      matches: mobileMatches,
+    vi.fn((query: string) => ({
+      matches: mobileMatches && query !== "(max-width: 419px)",
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     })),

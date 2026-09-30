@@ -98,7 +98,9 @@ function Field({
         "group grid min-w-0",
         orientation === "horizontal"
           ? "grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 gap-y-1.5"
-          : "gap-1.5",
+          : // Rows pack at the top when a row of fields stretches this one:
+            // the control keeps its own height instead of taking the slack.
+            "content-start gap-1.5",
         className
       )}
       {...props}

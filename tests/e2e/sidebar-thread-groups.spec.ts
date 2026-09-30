@@ -757,10 +757,11 @@ test("move to group searches destinations on desktop and mobile", async ({
   const sidebar = page.getByTestId("desktop-sidebar");
   const row = sidebar.locator(`[data-thread-id="${targetId}"]`);
   const rowLink = row.getByTestId("thread-row-link");
-  const dialog = page.getByRole("dialog", { name: "Move to group", exact: true });
-  const search = dialog.getByRole("combobox", { name: "Search groups", exact: true });
-  // "Move to group" is a submenu of the groups; its "New group…" row opens
-  // the searchable destination dialog.
+  // "Move to group" is a searchable submenu: a search row over the groups,
+  // then "New group…" (and "Remove from group" while grouped).
+  const submenu = page.getByRole("menu", { name: "Move to group", exact: true });
+  const search = submenu.getByRole("searchbox", { name: "Search groups", exact: true });
+  const groupRows = submenu.getByRole("menuitemradio");
   const openDesktopMove = async () => {
     await rowLink.focus();
     await row.click({ button: "right" });
@@ -768,85 +769,136 @@ test("move to group searches destinations on desktop and mobile", async ({
       .getByTestId("thread-context-menu")
       .getByRole("menuitem", { name: "Move to group", exact: true })
       .click();
-    await page
-      .getByRole("menu", { name: "Move to group", exact: true })
-      .getByRole("menuitem", { name: "New group…", exact: true })
-      .click();
-    await expect(dialog).toBeVisible();
+    await expect(submenu).toBeVisible();
     await expect(search).toBeFocused();
+    await expect(search).toHaveValue("");
   };
   const groupAssignment = async () => {
     const snapshot = await currentSnapshot(page);
     return snapshot.threads.find(({ id }) => id === targetId)?.groupId;
   };
-
-  await openDesktopMove();
-  await expect(search).not.toHaveAttribute("aria-activedescendant");
-  await search.press("Enter");
-  await expect(dialog).toBeVisible();
-  expect(await groupAssignment()).toBe(alphaId);
-  await expect(dialog.getByRole("option", { name: /^Alpha planning\b/u })).toBeDisabled();
-  await expect(dialog.getByRole("textbox", { name: "Create group", exact: true })).toHaveValue("Move this thread");
-  await search.fill("no matching destination");
-  await expect(dialog.getByRole("option")).toHaveCount(0);
-  await expect(dialog.getByRole("button", { name: "Create and move", exact: true })).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Ungroup", exact: true })).toBeVisible();
-  await search.press("Enter");
-  await expect(dialog).toBeVisible();
-  expect(await groupAssignment()).toBe(alphaId);
-  await search.press("Escape");
-  await expect(dialog).toBeHidden();
-  await expect(rowLink).toBeFocused();
-  expect(await groupAssignment()).toBe(alphaId);
-
-  await openDesktopMove();
-  await expect(search).toHaveValue("");
-  await search.fill("DELIVERY");
-  await expect(dialog.getByRole("option")).toHaveCount(1);
-  await expect(dialog.getByRole("option", { name: /^Beta delivery\b/u })).toBeVisible();
-  expect(await groupAssignment()).toBe(alphaId);
-  await capture(page, testInfo, "thread-move-group-search-desktop.png");
-  await search.press("ArrowDown");
-  await search.press("Enter");
-  await expect(dialog).toBeHidden();
-  await expect.poll(groupAssignment).toBe(betaId);
-
-  await openDesktopMove();
-  await expect(dialog.getByRole("option", { name: /^Beta delivery\b/u })).toBeDisabled();
-  await search.fill("no existing group");
-  await dialog.getByRole("textbox", { name: "Create group", exact: true }).fill("New release planning");
-  await dialog.getByRole("button", { name: "Create and move", exact: true }).click();
-  await expect(dialog).toBeHidden();
-  await expect.poll(async () => {
+  const assignedGroupName = async () => {
     const snapshot = await currentSnapshot(page);
     const groupId = snapshot.threads.find(({ id }) => id === targetId)?.groupId;
     return snapshot.groups.find(({ id }) => id === groupId)?.name;
-  }).toBe("New release planning");
+  };
+  const newGroupDialog = page.getByRole("dialog", { name: "New group", exact: true });
+  const newGroupName = newGroupDialog.getByRole("textbox", { name: "Group name", exact: true });
+
+  await openDesktopMove();
+  // Every group is listed (this file's earlier groups too); the current one
+  // carries the check.
+  await expect(submenu.getByRole("menuitemradio", { name: "Alpha planning" })).toBeChecked();
+  await expect(submenu.getByRole("menuitemradio", { name: "Beta delivery" })).not.toBeChecked();
+  await expect(submenu.getByRole("menuitem", { name: "New group…", exact: true })).toBeVisible();
+  await expect(submenu.getByRole("menuitem", { name: "Remove from group", exact: true })).toBeVisible();
+  // Enter with nothing typed picks nothing.
+  await search.press("Enter");
+  await expect(submenu).toBeVisible();
+  expect(await groupAssignment()).toBe(alphaId);
+  await search.press("Escape");
+  await expect(submenu).toBeHidden();
+  expect(await groupAssignment()).toBe(alphaId);
+
+  // Typing filters; Enter takes the first result.
+  await openDesktopMove();
+  await page.keyboard.type("DELIVERY");
+  await expect(groupRows).toHaveText(["Beta delivery"]);
+  await expect(submenu.getByRole("menuitem", { name: "New group…", exact: true })).toBeVisible();
+  expect(await groupAssignment()).toBe(alphaId);
+  await capture(page, testInfo, "thread-move-group-search-desktop.png");
+  await search.press("Enter");
+  await expect(submenu).toBeHidden();
+  await expect.poll(groupAssignment).toBe(betaId);
+
+  // The arrow keys move into the results; the current group carries the check.
+  await openDesktopMove();
+  await search.press("ArrowDown");
+  await expect(submenu.getByRole("menuitemradio", { name: "Alpha planning" })).toBeFocused();
+  await expect(submenu.getByRole("menuitemradio", { name: "Beta delivery" })).toBeChecked();
+  await page.keyboard.press("ArrowUp");
+  await expect(search).toBeFocused();
+
+  // A search that matches no group offers to create it, in one step.
+  await page.keyboard.type("Ops rotation");
+  await expect(groupRows).toHaveCount(0);
+  await submenu.getByRole("menuitem", { name: "Create group “Ops rotation”", exact: true }).click();
+  await expect(submenu).toBeHidden();
+  await expect.poll(assignedGroupName).toBe("Ops rotation");
+
+  // New group… opens the create-only dialog, prefilled with the search.
+  await openDesktopMove();
+  await page.keyboard.type("Launch");
+  await submenu.getByRole("menuitem", { name: "New group…", exact: true }).click();
+  await expect(newGroupDialog).toBeVisible();
+  await expect(newGroupName).toHaveValue("Launch");
+  await expect(newGroupName).toBeFocused();
+  await expect(newGroupDialog.getByRole("searchbox")).toHaveCount(0);
+  await expect(newGroupDialog.getByRole("menuitemradio")).toHaveCount(0);
+  await expect(newGroupDialog.getByText("Alpha planning")).toHaveCount(0);
+  // A duplicate name stays on the field.
+  await newGroupName.fill("alpha PLANNING");
+  await newGroupDialog.getByRole("button", { name: "Create", exact: true }).click();
+  await expect(newGroupName).toHaveAttribute("aria-invalid", "true");
+  await expect(newGroupDialog.getByText("A group named “alpha PLANNING” already exists.")).toBeVisible();
+  await capture(page, testInfo, "thread-new-group-dialog-desktop.png");
+  await newGroupName.fill("New release planning");
+  await newGroupName.press("Enter");
+  await expect(newGroupDialog).toBeHidden();
+  await expect(rowLink).toBeFocused();
+  await expect.poll(assignedGroupName).toBe("New release planning");
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`/threads/${targetId}`);
   await page.getByRole("button", { name: "Open thread navigation" }).click();
   const drawer = page.getByRole("dialog", { name: "Thread navigation", exact: true });
   const mobileRow = drawer.locator(`[data-thread-id="${targetId}"]`);
-  await mobileRow.click({ button: "right" });
   const actions = page.getByTestId("thread-actions-sheet");
-  await expect(actions).toBeVisible();
-  await actions.getByRole("menuitem", { name: "Move to group", exact: true }).click();
-  await actions.getByRole("menuitem", { name: "New group…", exact: true }).click();
-  await expect(dialog).toBeVisible();
-  await expect(actions).toBeHidden();
-  await expect(dialog).toBeFocused();
-  await expect(search).not.toBeFocused();
-  await search.click();
-  await expect(search).toBeFocused();
-  await expect(search).toHaveValue("");
-  await search.fill("ALPHA");
-  await expect(dialog.getByRole("option")).toHaveCount(1);
-  await expect(dialog.getByRole("option", { name: /^Alpha planning\b/u })).toBeVisible();
+  const openMobileMove = async () => {
+    await mobileRow.click({ button: "right" });
+    await expect(actions).toBeVisible();
+    await actions.getByRole("menuitem", { name: "Move to group", exact: true }).click();
+  };
+  const mobileSearch = actions.getByRole("searchbox", { name: "Search groups", exact: true });
+  const mobileGroupRows = actions.getByRole("menuitemradio");
+
+  // The drill-in is the same searchable picker; it opens for browsing.
+  await openMobileMove();
+  await expect(mobileSearch).toBeVisible();
+  await expect(mobileSearch).not.toBeFocused();
+  await expect(actions.getByRole("menuitemradio", { name: "New release planning" })).toBeChecked();
+  await expect(actions.getByRole("menuitemradio", { name: "Ops rotation" })).not.toBeChecked();
+  await mobileSearch.click();
+  await expect(mobileSearch).toBeFocused();
+  await mobileSearch.fill("ALPHA");
+  await expect(mobileGroupRows).toHaveText(["Alpha planning"]);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "thread-move-group-search-mobile.png");
-  await dialog.getByRole("button", { name: "Ungroup", exact: true }).click();
-  await expect(dialog).toBeHidden();
+  await actions.getByRole("menuitemradio", { name: "Alpha planning" }).click();
+  await expect(actions).toBeHidden();
+  await expect.poll(groupAssignment).toBe(alphaId);
+
+  // Create from the search, then New group… hands off to its dialog.
+  await openMobileMove();
+  await mobileSearch.fill("Night shift");
+  await actions.getByRole("menuitem", { name: "Create group “Night shift”", exact: true }).click();
+  await expect(actions).toBeHidden();
+  await expect.poll(assignedGroupName).toBe("Night shift");
+  await openMobileMove();
+  await mobileSearch.fill("Weekend");
+  await actions.getByRole("menuitem", { name: "New group…", exact: true }).click();
+  await expect(actions).toBeHidden();
+  await expect(newGroupDialog).toBeVisible();
+  await expect(newGroupName).toHaveValue("Weekend");
+  await expect(newGroupDialog.getByRole("searchbox")).toHaveCount(0);
+  await capture(page, testInfo, "thread-new-group-dialog-mobile.png");
+  await newGroupDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(newGroupDialog).toBeHidden();
+  await expect.poll(assignedGroupName).toBe("Night shift");
+
+  await openMobileMove();
+  await actions.getByRole("menuitem", { name: "Remove from group", exact: true }).click();
+  await expect(actions).toBeHidden();
   await expect.poll(groupAssignment).toBeNull();
   await expect(drawer).toBeVisible();
 });

@@ -12,9 +12,11 @@ import {
   CheckIcon,
   ChevronDown,
   Files,
+  LayoutPanelTop,
   MessageSquare,
   NotepadText,
   PanelTop,
+  RotateCcw,
   Search,
   Terminal as TerminalIcon,
   X,
@@ -1658,6 +1660,7 @@ function PanelLayoutReady({
                         setAnnouncement("All panels restored.");
                       }}
                     >
+                      <LayoutPanelTop aria-hidden="true" />
                       Show all
                     </DropdownMenuItem>
                   </Fragment>
@@ -1683,6 +1686,7 @@ function PanelLayoutReady({
                     } else run();
                   }}
                 >
+                  <RotateCcw aria-hidden="true" />
                   Reset layout
                 </DropdownMenuItem>
               </DropdownMenuContent>

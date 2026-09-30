@@ -404,8 +404,7 @@ test.describe.serial("Tasks panel", () => {
     // On mobile, Tasks is available without expanding the thread toolbar.
     await panel.getByRole("button", { name: "Close Tasks panel" }).click();
     await page.setViewportSize({ width: 412, height: 915 });
-    const toolbarToggle = page.getByRole("button", { name: "Show thread toolbar" });
-    await expect(toolbarToggle).toBeVisible();
+    await expect(page.getByTestId("thread-controls")).toBeHidden();
     await expect(threadTasksToggle).toBeVisible();
     await threadTasksToggle.click();
     const sheet = page.getByRole("dialog", { name: "Tasks", exact: true });
@@ -433,7 +432,7 @@ test.describe.serial("Tasks panel", () => {
     await expect(sheet.getByRole("button", { name: 'View "Global errand"' })).toBeVisible();
     await capture(page, testInfo, "tasks-mobile-header.png");
     await sheet.getByRole("button", { name: "Close Tasks panel" }).click();
-    await expect(toolbarToggle).toBeVisible();
+    await expect(page.getByRole("button", { name: "Thread actions" })).toBeVisible();
     await page.setViewportSize({ width: 1440, height: 900 });
     await threadTasksToggle.click();
 

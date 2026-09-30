@@ -2,12 +2,14 @@
 
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useEffect, useRef, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Button } from "./button.js";
 import {
   Dialog,
   DialogAlert,
   DialogBody,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -224,6 +226,121 @@ describe("DialogContent initial focus", () => {
   });
 });
 
+/**
+ * A row's action that opens a controlled dialog with no DialogTrigger, like
+ * a settings list's Delete button. `removeOnClose` removes the row as the
+ * dialog closes; `focusOnClose` moves focus once the dialog has unmounted,
+ * as a surface opened meanwhile would.
+ */
+function OpenerHarness({
+  removeOnClose = false,
+  focusOnClose = false,
+  ...contentProps
+}: Partial<React.ComponentProps<typeof DialogContent>> & {
+  removeOnClose?: boolean;
+  focusOnClose?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [rowPresent, setRowPresent] = useState(true);
+  const other = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open && focusOnClose) other.current?.focus();
+  }, [open, focusOnClose]);
+  return (
+    <>
+      {rowPresent && (
+        <button type="button" onClick={() => setOpen(true)}>
+          Delete Test
+        </button>
+      )}
+      <button ref={other} type="button">Next row</button>
+      <Dialog
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next);
+          if (!next && removeOnClose) setRowPresent(false);
+        }}
+      >
+        <DialogContent aria-describedby={undefined} {...contentProps}>
+          <DialogTitle>Delete Test?</DialogTitle>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline">Cancel</Button>
+            </DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+describe("DialogContent return focus", () => {
+  it("returns focus to the element focused when it opened", async () => {
+    const user = userEvent.setup();
+    render(<OpenerHarness />);
+    const opener = screen.getByRole("button", { name: "Delete Test" });
+    await user.click(opener);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus());
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(opener).toHaveFocus());
+
+    await user.click(opener);
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
+
+  it("prefers the named return target over the opener", async () => {
+    const user = userEvent.setup();
+    const target = { current: null as HTMLElement | null };
+    render(<OpenerHarness returnFocusRef={target} />);
+    target.current = screen.getByRole("button", { name: "Next row" });
+    await user.click(screen.getByRole("button", { name: "Delete Test" }));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(target.current).toHaveFocus());
+  });
+
+  it("skips an opener the action removed and focuses the named survivor", async () => {
+    const user = userEvent.setup();
+    const survivor = vi.fn(() => screen.getByRole("button", { name: "Next row" }));
+    render(<OpenerHarness removeOnClose fallbackFocus={survivor} />);
+    await user.click(screen.getByRole("button", { name: "Delete Test" }));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Next row" })).toHaveFocus());
+    expect(screen.queryByRole("button", { name: "Delete Test" })).toBeNull();
+  });
+
+  it("uses the survivor only when the opener is gone", async () => {
+    const user = userEvent.setup();
+    const survivor = vi.fn(() => screen.getByRole("button", { name: "Next row" }));
+    render(<OpenerHarness fallbackFocus={survivor} />);
+    const opener = screen.getByRole("button", { name: "Delete Test" });
+    await user.click(opener);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(opener).toHaveFocus());
+    expect(survivor).not.toHaveBeenCalled();
+  });
+
+  it("leaves focus where it moved after the dialog closed", async () => {
+    const user = userEvent.setup();
+    render(<OpenerHarness focusOnClose />);
+    await user.click(screen.getByRole("button", { name: "Delete Test" }));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
+    expect(screen.getByRole("button", { name: "Next row" })).toHaveFocus();
+  });
+
+  it("lets a close handler that prevents the default own focus", async () => {
+    const user = userEvent.setup();
+    render(<OpenerHarness onCloseAutoFocus={(event) => event.preventDefault()} />);
+    await user.click(screen.getByRole("button", { name: "Delete Test" }));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
+    expect(document.body).toHaveFocus();
+  });
+});
+
 describe("Dialog slots", () => {
   it("renders the header, the one scroll body and a footer with the start slot first", () => {
     render(
@@ -252,6 +369,33 @@ describe("Dialog slots", () => {
       "Cancel",
       "Snooze",
     ]);
+  });
+
+  it("marks the body while it has content below, for the footer's hairline", async () => {
+    const bodyRef = { current: null as HTMLDivElement | null };
+    renderDialog(
+      <>
+        <DialogBody ref={bodyRef}>Long content</DialogBody>
+        <DialogFooter><Button>Save</Button></DialogFooter>
+      </>,
+    );
+    const body = screen.getByText("Long content");
+    expect(bodyRef.current).toBe(body);
+    expect(body).not.toHaveAttribute("data-scroll-more");
+    const scroll = (top: number) => {
+      Object.defineProperties(body, {
+        clientHeight: { configurable: true, value: 200 },
+        scrollHeight: { configurable: true, value: 500 },
+        scrollTop: { configurable: true, value: top },
+      });
+      act(() => body.dispatchEvent(new Event("scroll")));
+    };
+    scroll(0);
+    expect(body).toHaveAttribute("data-scroll-more");
+    scroll(150);
+    expect(body).toHaveAttribute("data-scroll-more");
+    scroll(300);
+    expect(body).not.toHaveAttribute("data-scroll-more");
   });
 
   it("names a section by its label", () => {

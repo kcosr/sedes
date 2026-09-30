@@ -196,7 +196,12 @@ export function SearchableSelect({
       {...comboboxProps}
       ref={triggerRef as Ref<HTMLButtonElement>}
       variant="outline"
-      className={cn("searchable-select-trigger", triggerProps?.className)}
+      // The form-control box (Input's border, fill and shadow), so a picker
+      // matches the fields beside it.
+      className={cn(
+        "searchable-select-trigger border-input bg-transparent shadow-xs dark:bg-input/30",
+        triggerProps?.className,
+      )}
     >
       <span className="searchable-select-copy">
         {fieldLabel && (
@@ -326,6 +331,19 @@ function groupRuns(visible: readonly VisibleOption[]): VisibleOption[][] {
 }
 
 /**
+ * The one search rule for pickers: every whitespace-separated term of the
+ * query occurs, case-insensitively, somewhere in the texts.
+ */
+export function matchesSearchQuery(
+  query: string,
+  texts: readonly string[],
+): boolean {
+  const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  const text = texts.join(" ").toLocaleLowerCase();
+  return terms.every((term) => text.includes(term));
+}
+
+/**
  * The picker's search row: a leading icon and a plain input over a divider,
  * not a bordered form control. Every searchable picker uses it.
  */
@@ -364,16 +382,12 @@ export function SearchableSelectList({
   const [query, setQuery] = useState("");
   const [activeValue, setActiveValue] = useState<string>();
   const [openingDirection, setOpeningDirection] = useState(initialDirection);
-  const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-  const matches = (option: SearchableSelectOption): boolean => {
-    const text = [
+  const matches = (option: SearchableSelectOption): boolean =>
+    matchesSearchQuery(query, [
       option.label,
       option.description ?? "",
       ...(option.searchTerms ?? []),
-    ].join(" ")
-      .toLocaleLowerCase();
-    return terms.every((term) => text.includes(term));
-  };
+    ]);
   const visible = options
     .map((option, index) => ({ option, index, matches: matches(option) }))
     .filter(({ option, matches }) => option.pinned || matches);
@@ -420,6 +434,9 @@ export function SearchableSelectList({
         type="button"
         role="option"
         id={`${listboxId}-${index}`}
+        // The label and description truncate to one line each; the full
+        // text stays one hover away.
+        title={option.description ? `${option.label}\n${option.description}` : option.label}
         aria-selected={selected}
         aria-disabled={disabled || option.disabled || undefined}
         data-active={active?.option.value === option.value || undefined}
@@ -445,14 +462,14 @@ export function SearchableSelectList({
             {option.icon}
           </span>
         )}
-        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-          {option.label}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate">{option.label}</span>
           {option.description && (
             <>
               {" "}
               <span
                 data-slot="searchable-select-item-description"
-                className={menuDescriptionClass}
+                className={cn(menuDescriptionClass, "truncate")}
               >
                 {option.description}
               </span>
@@ -462,7 +479,7 @@ export function SearchableSelectList({
         {unavailable && (
           <>
             {" "}
-            <span className={menuShortcutClass}>{unavailable}</span>
+            <span className={cn(menuShortcutClass, "whitespace-nowrap")}>{unavailable}</span>
           </>
         )}
         {selected && (

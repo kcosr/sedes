@@ -8,7 +8,8 @@ import { controlVariants, useFieldControl } from "@client/components/ui/control"
  * A native `<select>` in the shared control box, for plain option lists where
  * the platform picker is the right tool (it is the accessible choice on
  * touch). `className` sizes the box; it fills its container by default, like
- * Input.
+ * Input. The wrapper is exactly as tall as the select, even where a grid or
+ * flex parent stretches its items, so the chevron stays centred on it.
  */
 function NativeSelect({
   className,
@@ -21,7 +22,7 @@ function NativeSelect({
   return (
     <span
       data-slot="native-select-wrapper"
-      className={cn("relative flex w-full min-w-0", className)}
+      className={cn("relative flex h-fit w-full min-w-0", className)}
     >
       <select
         data-slot="native-select"

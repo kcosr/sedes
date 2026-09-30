@@ -100,13 +100,26 @@ test("terminal resources outlive panels and transfer control across three client
   await terminalContainer(page)
     .getByRole("button", { name: "Open terminal tab" })
     .click();
+  // Terminals open in this panel carry a check; choosing one brings its tab
+  // forward.
+  for (const name of ["E2E shell", "Build logs"]) {
+    const row = page.getByRole("menuitem", { name: new RegExp(`${name}.*Running.*open`, "u") });
+    await expect(row).not.toHaveAttribute("aria-disabled");
+    await expect(row.locator("svg.lucide-check")).toHaveCount(1);
+    // The status shows whole, not truncated beside the name.
+    expect(
+      await row
+        .locator('[data-slot="dropdown-menu-item-value"]')
+        .evaluate((value) => value.scrollWidth <= value.clientWidth),
+    ).toBe(true);
+  }
+  await page.getByRole("menuitem", { name: /Build logs.*Running.*open/u }).click();
   await expect(
-    page.getByRole("menuitem", { name: /E2E shell.*Running · Open/u }),
-  ).toHaveAttribute("aria-disabled", "true");
-  await expect(
-    page.getByRole("menuitem", { name: /Build logs.*Running · Open/u }),
-  ).toHaveAttribute("aria-disabled", "true");
-  await page.keyboard.press("Escape");
+    terminalTabs.getByRole("tab", { name: "Build logs" }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(terminalTabs.getByRole("tab")).toHaveCount(2);
+  await terminalTabs.getByRole("tab", { name: "E2E shell" }).click();
+  await expect(terminalPanel(page, "E2E shell")).toBeVisible();
 
   await page.setViewportSize({ width: 1024, height: 900 });
   const desktopMenu = await openTerminalMenu(page);

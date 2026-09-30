@@ -87,6 +87,8 @@
   --scrim: oklch(0.2 0.01 260 / 0.42);
   --shadow: 0 2px 6px oklch(0 0 0 / 0.08), 0 12px 36px oklch(0 0 0 / 0.14);
   --shadow-small: 0 1px 2px oklch(0 0 0 / 0.05), 0 8px 28px oklch(0 0 0 / 0.07);
+  /* The edge shade a scrolling menu shows where more rows lie beyond it. */
+  --scroll-shade: oklch(0 0 0 / 0.14);
 
   /* shape — one ramp. `--radius-inline` is the nested step (it mirrors the
      Tailwind `--radius-sm` pinned in @theme inline below): it is only ever
@@ -97,6 +99,9 @@
   --radius-ctl: 8px;
   --radius-card: 12px;
   --radius-lg: 16px;
+  /* A checkbox's corner: square enough on a 16px box that it never reads
+     as a radio. */
+  --radius-check: 4px;
 
   /* measure — the single reading column shared by the transcript, the
      composer/interaction footprint and the archived list. 768 minus the
@@ -111,8 +116,10 @@
      and panel headers take it as a minimum: they grow with their text
      (Android's WebView text zoom enlarges text, not px heights). */
   --workbench-bar-height: 52px;
-  /* Icon buttons in the bars and panel headers, and their glyphs. */
+  /* Icon buttons in the bars and panel headers, and their glyphs. On touch
+     they are narrower than tall, so a phone header keeps room for its title. */
   --bar-control: var(--control-md);
+  --bar-control-width: var(--bar-control);
   --bar-icon: 18px;
 
   /* motion */
@@ -184,8 +191,11 @@
   --success-border: color-mix(in oklab, var(--success) 35%, var(--border));
   --info-soft: color-mix(in oklab, var(--info) 12%, transparent);
   --info-border: color-mix(in oklab, var(--info) 35%, var(--border));
-  --warning-soft: color-mix(in oklab, var(--warning) 12%, transparent);
-  --warning-border: color-mix(in oklab, var(--warning) 35%, var(--border));
+  /* Light --warning is a deep amber-brown for text; a 12% mix of it reads
+     greige, so the light pair mixes a clear, calm amber instead (text on it
+     is --foreground, far past AA). The dark theme mixes --warning itself. */
+  --warning-soft: color-mix(in oklab, oklch(0.85 0.16 82) 22%, transparent);
+  --warning-border: color-mix(in oklab, oklch(0.78 0.14 78) 60%, var(--border));
   --destructive-soft: color-mix(in oklab, var(--destructive) 12%, transparent);
   --destructive-border: color-mix(in oklab, var(--destructive) 35%, var(--border));
 
@@ -279,6 +289,8 @@
   --success: oklch(0.74 0.15 150);
   --info: oklch(0.7 0.12 250);
   --warning: oklch(0.75 0.12 75);
+  --warning-soft: color-mix(in oklab, var(--warning) 12%, transparent);
+  --warning-border: color-mix(in oklab, var(--warning) 35%, var(--border));
   --thread-find-match: oklch(0.56 0.1 79 / 0.72);
   --thread-find-current: oklch(0.68 0.15 67 / 0.92);
   --sidebar: oklch(0.19 0.006 260);
@@ -286,6 +298,7 @@
   --scrim: oklch(0 0 0 / 0.6);
   --shadow: 0 2px 6px oklch(0 0 0 / 0.4), 0 16px 44px oklch(0 0 0 / 0.5);
   --shadow-small: 0 1px 2px oklch(0 0 0 / 0.3), 0 8px 28px oklch(0 0 0 / 0.35);
+  --scroll-shade: oklch(0 0 0 / 0.4);
   --elevation-1: 0 1px 2px oklch(0 0 0 / 0.3);
   --terminal-background: #111318;
   --terminal-panel: #171a20;
@@ -308,6 +321,7 @@
     --text-input: 16px;
     --workbench-bar-height: 54px;
     --bar-control: 40px;
+    --bar-control-width: var(--control-lg);
     --bar-icon: var(--icon-lg);
   }
 }
@@ -1206,16 +1220,20 @@ textarea:disabled {
   text-overflow: ellipsis;
 }
 
-.thread-group-dialog > :not(.thread-group-search) {
-  flex-shrink: 0;
+/* Move to group (MoveToGroupMenu.tsx): the search row runs edge to edge at
+   the top of the submenu and stays in view while the groups scroll; in the
+   touch sheet's drill-in it sits on the rows' inset. */
+.thread-group-picker-search {
+  position: sticky;
+  z-index: var(--z-sticky);
+  top: 0;
+  margin: 0 calc(-1 * var(--menu-panel-padding)) var(--space-1);
+  background: var(--popover);
 }
 
-.thread-group-search {
-  display: flex;
-  min-height: 100px;
-  max-height: 280px;
-  flex-direction: column;
-  gap: 6px;
+.thread-group-picker-search[data-sheet] {
+  position: static;
+  margin: 0 0 var(--space-1);
 }
 
 /* Inline rename (context menu → Rename): the row link swaps to a form so
@@ -2375,7 +2393,7 @@ textarea:disabled {
 }
 
 /* Icon buttons in the bars and panel headers: --bar-control targets with
-   --bar-icon glyphs (32/18px, and 40/20px under the density switch), so a
+   --bar-icon glyphs (32/18px, and 36x40/20px under the density switch), so a
    bar's controls match their neighbours. The Button base sizes child SVGs
    to 16px unless they carry a size-* class, so the glyphs are set here. */
 .sidebar-nav-trigger,
@@ -2385,8 +2403,11 @@ textarea:disabled {
 .workspace-panel-open-trigger,
 .thread-find-trigger,
 .thread-tools-shell > button,
-.workspace-panel-actions > button {
-  width: var(--bar-control);
+.workspace-panel-actions > button,
+.workspace-files-toolbar-actions > button,
+.terminal-tab-add,
+.terminal-panel-chrome-actions > button {
+  width: var(--bar-control-width);
   height: var(--bar-control);
 }
 
@@ -2402,7 +2423,10 @@ textarea:disabled {
 .workspace-panel-open-icon svg,
 .thread-find-trigger svg,
 .thread-tools-shell > button svg,
-.workspace-panel-actions > button svg {
+.workspace-panel-actions > button svg,
+.workspace-files-toolbar-actions > button svg,
+.terminal-tab-add svg,
+.terminal-panel-chrome-actions > button svg {
   width: var(--bar-icon);
   height: var(--bar-icon);
 }
@@ -3210,7 +3234,12 @@ textarea:disabled {
   color: var(--foreground);
 }
 
+/* The compact header keeps its 38px row with 28px targets (and the bars'
+   glyphs), so a pressed button clears the row's edges. Touch sizes them
+   up below. */
 .workspace-panel-terminals .workspace-panel-chrome {
+  --bar-control: var(--control-sm);
+  --bar-control-width: var(--control-sm);
   min-height: 38px;
   gap: 4px;
   padding-block: 2px;
@@ -4443,9 +4472,11 @@ textarea:disabled {
 
 /* Floor so the label never collapses to a bare ellipsis when the header is
    tight: below ~5 characters it carries no information and should shrink no
-   further (the title above keeps taking the pressure). */
+   further (the title above keeps taking the pressure). A pane narrower than
+   the floor still ends the label in an ellipsis, past the 14px folder icon
+   and its 6px gap. */
 .thread-project-name {
-  min-width: 5ch;
+  min-width: min(5ch, calc(100% - 20px));
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -4687,6 +4718,23 @@ textarea:disabled {
 
 .thread-find-control input::placeholder {
   color: var(--muted-foreground-2);
+}
+
+/* The native clear control takes the bar's neutral icon colour instead of
+   the platform's accent blue. */
+.thread-find-control input::-webkit-search-cancel-button {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  margin: 0;
+  appearance: none;
+  background: var(--muted-foreground);
+  cursor: pointer;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M18 6 6 18M6 6l12 12'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
+.thread-find-control input::-webkit-search-cancel-button:hover {
+  background: var(--foreground);
 }
 
 .thread-find-count {
@@ -4997,6 +5045,19 @@ textarea:disabled {
 
 .automation-thread-button[data-status="paused"] {
   color: var(--warning);
+}
+
+/* On touch the chip drops its ring and reads as a bare glyph like its
+   neighbours, keeping the phone header's room for the title. */
+@media (max-width: 819px), (pointer: coarse) {
+  .automation-thread-button,
+  .automation-thread-button:hover {
+    border-color: transparent;
+  }
+
+  .automation-thread-button {
+    border-radius: var(--radius-ctl);
+  }
 }
 
 /* ── Thread notices: quiet marker rows on semantic tones (Phase 4).

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   PackagedConnectionPreferences,
   PackagedConnectionProfile,
@@ -38,6 +38,14 @@ export function ServerSettingsForm({
   const [pending, setPending] = useState(false);
   const [removing, setRemoving] = useState<PackagedConnectionProfile>();
   useEffect(() => setStatus(controls.storageError ?? ""), [controls.storageError]);
+  // Where focus lands once a removal has taken the row that asked for it:
+  // the Remove button of the connection now at its place, else of the new
+  // last one, else the add form.
+  const removeButtons = useRef(new Map<string, HTMLButtonElement>());
+  const nameInput = useRef<HTMLInputElement>(null);
+  const latestProfiles = useRef(controls.connections.profiles);
+  latestProfiles.current = controls.connections.profiles;
+  const removedIndex = useRef(0);
 
   const perform = async (operation: () => Promise<void>) => {
     if (pending) return;
@@ -67,6 +75,10 @@ export function ServerSettingsForm({
       actions={
         <>
           <Button type="button" variant="ghost" disabled={pending}
+            ref={(button) => {
+              if (button) removeButtons.current.set(profile.id, button);
+              else removeButtons.current.delete(profile.id);
+            }}
             aria-label={`Remove ${profile.name}`}
             onClick={() => setRemoving(profile)}>
             Remove…
@@ -96,7 +108,7 @@ export function ServerSettingsForm({
       });
     }}>
       <Field id="setting-sedes-name" label="Connection name">
-        <Input value={name} maxLength={100}
+        <Input ref={nameInput} value={name} maxLength={100}
           placeholder="Home" disabled={pending}
           onChange={(event) => setName(event.target.value)} />
       </Field>
@@ -140,7 +152,14 @@ export function ServerSettingsForm({
       confirmLabel="Remove connection"
       pendingLabel="Removing…"
       onConfirm={async () => {
-        if (removing) await controls.remove(removing.id);
+        if (!removing) return;
+        removedIndex.current = controls.connections.profiles.findIndex(({ id }) => id === removing.id);
+        await controls.remove(removing.id);
+      }}
+      fallbackFocus={() => {
+        const profiles = latestProfiles.current;
+        const survivor = profiles[Math.min(removedIndex.current, profiles.length - 1)];
+        return (survivor && removeButtons.current.get(survivor.id)) ?? nameInput.current;
       }}
     />
   );

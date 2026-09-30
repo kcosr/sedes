@@ -1552,7 +1552,7 @@ describe("PanelLayout singleton surfaces", () => {
     );
   });
 
-  it("disables terminals already displayed in the terminal tab add menu", async () => {
+  it("checks terminals already displayed in the terminal tab add menu", async () => {
     const resource = terminalResource();
     const other = terminalResource(SECOND_TERMINAL_ID, "Other shell");
     Object.assign(applicationStore, {
@@ -1574,14 +1574,14 @@ describe("PanelLayout singleton surfaces", () => {
       { button: 0, ctrlKey: false },
     );
 
-    expect(
-      await screen.findByRole("menuitem", {
-        name: /Remote shell.*Running · Open/u,
-      }),
-    ).toHaveAttribute("aria-disabled", "true");
-    expect(
-      screen.getByRole("menuitem", { name: /Other shell.*Running/u }),
-    ).not.toHaveAttribute("aria-disabled", "true");
+    const displayed = await screen.findByRole("menuitem", {
+      name: /Remote shell.*Running.*open/u,
+    });
+    expect(displayed.querySelector("svg.lucide-check")).not.toBeNull();
+    expect(displayed).not.toHaveAttribute("aria-disabled");
+    const otherRow = screen.getByRole("menuitem", { name: /Other shell.*Running/u });
+    expect(otherRow.querySelector("svg.lucide-check")).toBeNull();
+    expect(otherRow).not.toHaveAttribute("aria-disabled");
   });
 
   it("mounts an isolated terminal renderer when the active terminal tab changes", async () => {
