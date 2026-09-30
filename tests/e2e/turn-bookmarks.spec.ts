@@ -5,6 +5,7 @@ import {
   expectNoPageOverflow,
   fillAndPersistDraft,
   openSedesWorkspace,
+  overlaySettled,
   sendCurrentDraft,
 } from "./helpers";
 
@@ -189,6 +190,7 @@ test("turn bookmarks persist, preview both sides, navigate, and synchronize", as
   await mobileTrigger.click();
   const dialog = mobilePage.getByRole("dialog", { name: "Bookmarks" });
   await expect(dialog).toBeVisible();
+  await overlaySettled(dialog);
   await expect(dialog.locator(".turn-bookmark-user-preview")).toContainText(
     prompts[0]!,
   );

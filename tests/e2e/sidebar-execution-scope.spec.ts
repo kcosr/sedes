@@ -6,6 +6,7 @@ import { expect, test } from "./fixtures";
 import {
   capture,
   expectNoPageOverflow,
+  overlaySettled,
   repositoryLabel,
   selectCustomNewThreadTarget,
   selectProjectIfNeeded,
@@ -163,6 +164,7 @@ async function searchDirectoryEnvironment(
 
 async function expectMobileProjectSheet(page: Page, dialog: Locator): Promise<void> {
   const viewport = page.viewportSize()!;
+  await overlaySettled(dialog);
   const bounds = await dialog.boundingBox();
   expect(bounds).not.toBeNull();
   expect(bounds!.x).toBeCloseTo(0, 0);

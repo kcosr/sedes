@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { capture, createDraftThread, expectNoPageOverflow, openSedesWorkspace, openSettingsPage } from "./helpers";
+import { capture, createDraftThread, expectNoPageOverflow, openSedesWorkspace, openSettingsPage, overlaySettled } from "./helpers";
 
 test("fresh production workbench starts with the Chat panel instance", async ({
   page,
@@ -78,6 +78,7 @@ test("mobile Accounts opens as a viewport-anchored bottom sheet", async ({
 
   const usage = page.getByRole("dialog", { name: "Accounts" });
   await expect(usage).toBeVisible();
+  await overlaySettled(usage);
   const resetDays = usage.locator(".sidebar-usage-reset-day");
   await expect(resetDays).toHaveText(["today", "tomorrow", "Sat"]);
   const resetDayLefts = await resetDays.evaluateAll((elements) =>

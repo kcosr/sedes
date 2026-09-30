@@ -6,6 +6,7 @@ import {
   expectNoPageOverflow,
   fillAndPersistDraft,
   openSedesWorkspace,
+  overlaySettled,
   selectCustomNewThreadTarget,
   selectDeliveryMode,
   selectRadixOption,
@@ -293,6 +294,7 @@ test.describe.serial("normalized composer state", () => {
     });
     const imageCanvas = imageDialog.locator(".zoomable-preview-canvas");
     const popupImage = imageDialog.locator(".zoomable-preview-content > img");
+    await overlaySettled(imageDialog);
     const [
       initialImageViewportBox,
       initialImageCanvasBox,
