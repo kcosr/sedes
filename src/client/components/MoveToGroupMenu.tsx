@@ -137,7 +137,9 @@ function GroupPicker({
   };
   return (
     <ContextMenuSubContent
-      className="w-64 pt-0"
+      // The desktop submenu is wide enough to search in, with the search row
+      // flush at its top; the sheet's drill-in keeps the sheet's width.
+      className={sheet ? undefined : "w-64 pt-0"}
       onKeyDown={(event) => {
         if (event.target === search.current) return;
         // Typing on a row (or the panel) goes to the search, not typeahead.
