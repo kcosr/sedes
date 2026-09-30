@@ -48,7 +48,7 @@ if (typeof window !== "undefined") {
   );
 }
 
-export function OperationLoading({
+function OperationLoading({
   message,
   onCancel,
   cancelLabel = "Cancel",
@@ -79,7 +79,7 @@ export function OperationLoading({
  * progress (its Cancel, else the surface), then into the settled dialog by
  * the dialog focus rule (first field, else the primary action).
  */
-export function useOperationContentFocus(
+function useOperationContentFocus(
   phase: unknown,
   settled: boolean,
 ): React.RefObject<HTMLDivElement | null> {
