@@ -26,9 +26,11 @@ export const SUBMENU_ALIGN_OFFSET = -5
 
 /**
  * A menu panel: the floating surface with the menu inset. Plain menus stay
- * within 320px; menus with description rows may grow to 420px.
+ * within 320px; menus with description rows may grow to 420px. Menus whose
+ * rows carry values or reasons are at least 240px wide, so a short value
+ * shows whole beside its label.
  */
-export const menuPanelClass = `${floatingSurfaceClass} min-w-[9rem] max-w-[min(320px,calc(100vw-16px))] overflow-x-hidden overflow-y-auto p-(--menu-panel-padding) has-[[data-slot$=item-description]]:max-w-[min(420px,calc(100vw-16px))]`
+export const menuPanelClass = `${floatingSurfaceClass} min-w-[9rem] max-w-[min(320px,calc(100vw-16px))] overflow-x-hidden overflow-y-auto p-(--menu-panel-padding) has-[[data-slot$=item-description]]:max-w-[min(420px,calc(100vw-16px))] has-[[data-slot$=item-value]]:min-w-60`
 
 /**
  * The menu row: `--menu-row-height` (44px under the density switch), 13/20
@@ -86,12 +88,14 @@ export const menuShortcutClass =
 /**
  * A row's current value or a disabled row's short reason ("High",
  * "Unavailable", "Running"): muted, at the row's own size and tracking, at
- * the row's end past a 16px inset. Its text truncates with an ellipsis
- * within 45% of the row, and before the label gives way. Values long by
- * nature (workspaces, paths) stay out of the row; the submenu shows them.
+ * the row's end past a 16px inset. It takes the room the label leaves (the
+ * menu grows to fit it, up to its maximum width) and only then truncates
+ * with an ellipsis; one-line labels never shrink below their text. Values
+ * long by nature (workspaces, paths) stay out of the row; the submenu
+ * shows them.
  */
 export const menuValueClass =
-  "ml-auto min-w-0 max-w-[calc(45%+1rem)] shrink truncate pl-4 text-right font-normal tracking-normal text-muted-foreground-2"
+  "ml-auto min-w-0 shrink truncate pl-4 text-right font-normal tracking-normal text-muted-foreground-2"
 
 /** The second line of a two-line row. */
 export const menuDescriptionClass =

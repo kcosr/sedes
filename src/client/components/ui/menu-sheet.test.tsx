@@ -593,10 +593,18 @@ describe("trailing values", () => {
       expect(value.className).not.toMatch(/tracking-wide/u);
       expect(value.className).toMatch(/\btracking-normal\b/u);
       expect(value.className).not.toMatch(/text-\(length:/u);
-      // Its text truncates within 45% of the row, before the label gives way.
-      expect(value).toHaveClass("truncate", "min-w-0", "pl-4", "max-w-[calc(45%+1rem)]");
+      // It takes the room the one-line label leaves, then truncates; no
+      // fixed share of the row caps it.
+      expect(value).toHaveClass("truncate", "min-w-0", "shrink", "pl-4");
+      expect(value.className).not.toMatch(/max-w-/u);
       const row = value.closest<HTMLElement>("[role=\"menuitem\"]")!;
       expect(row).toHaveClass("whitespace-nowrap");
+      // A menu with values is wide enough to show a short one whole.
+      if (presentation === "menu") {
+        expect(row.closest("[data-slot=\"dropdown-menu-content\"]")).toHaveClass(
+          "has-[[data-slot$=item-value]]:min-w-60",
+        );
+      }
       // The chevron stays beside the value.
       expect(value.nextElementSibling?.tagName.toLowerCase()).toBe("svg");
     },

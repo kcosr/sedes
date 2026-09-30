@@ -425,7 +425,7 @@ describe("ThreadTerminalMenu", () => {
     expect(onOpen).toHaveBeenCalledWith(terminal);
   });
 
-  it("disables terminals already open in the current terminal panel", async () => {
+  it("checks terminals already open in the panel and brings one forward when chosen", async () => {
     const otherTerminal: TerminalResource = {
       ...terminal,
       terminalId: "00000000-0000-4000-8000-000000000014",
@@ -448,25 +448,23 @@ describe("ThreadTerminalMenu", () => {
       { button: 0, ctrlKey: false },
     );
     const displayed = await screen.findByRole("menuitem", {
-      name: /Build shell.*Running · Open/u,
+      name: /Build shell.*Running.*open/u,
     });
-    expect(displayed).toHaveAttribute("aria-disabled", "true");
-    expect(displayed).toHaveAttribute(
-      "title",
-      "Already open in this terminal panel",
-    );
-    // The status, and the reason the row is disabled, sit in its value slot.
-    expect(within(displayed).getByText("Running · Open")).toHaveAttribute(
+    // Marked with a check, not dimmed like a disabled row.
+    expect(displayed).not.toHaveAttribute("aria-disabled");
+    expect(displayed).toHaveAttribute("title", "Open in this terminal panel");
+    expect(displayed.querySelector("svg.lucide-check")).not.toBeNull();
+    // The status sits whole in its value slot.
+    expect(within(displayed).getByText("Running")).toHaveAttribute(
       "data-slot",
       "dropdown-menu-item-value",
     );
-    fireEvent.click(displayed);
-    expect(onOpen).not.toHaveBeenCalled();
+    const other = screen.getByRole("menuitem", { name: /Test shell.*Running/u });
+    expect(other.querySelector("svg.lucide-check")).toBeNull();
+    expect(other).not.toHaveAccessibleName(/open/u);
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: /Test shell.*Running/u }),
-    );
-    expect(onOpen).toHaveBeenCalledWith(otherTerminal);
+    fireEvent.click(displayed);
+    expect(onOpen).toHaveBeenCalledWith(terminal);
   });
 
   it("shows loading and empty states as non-focusable rows", async () => {
