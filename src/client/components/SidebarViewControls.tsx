@@ -190,11 +190,8 @@ export function SidebarViewControls({
         </Tooltip.Portal>
       </Tooltip.Root>
 
-      {/* Non-modal like the popover it replaced: the sidebar stays usable
-          while the menu fades, and a click elsewhere keeps its focus. */}
       <DropdownMenu
         presentation={sheet ? "sheet" : "menu"}
-        modal={false}
         open={optionsOpen}
         onOpenChange={handleOptionsOpenChange}
       >
@@ -230,6 +227,12 @@ export function SidebarViewControls({
           aria-label="View options"
           sheetTitle="View options"
           align="end"
+          onCloseAutoFocus={(event) => {
+            // Focus returns to the trigger once the menu has faded out,
+            // unless a surface opened meanwhile (New thread) has taken it.
+            const active = document.activeElement;
+            if (active && active !== document.body) event.preventDefault();
+          }}
           // As a menu, the sidebar's width: long hints wrap instead of
           // spilling over the chat. The sheet keeps its own width.
           className={sheet ? undefined : "w-60"}
