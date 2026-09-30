@@ -260,11 +260,15 @@ export const taskRouteParametersSchema = z.strictObject({
 /**
  * Lifecycle handling of a thread's open tasks when settling or archiving.
  * Completed tasks always stay with the thread as its record; open tasks
- * either move up-scope or stay by explicit choice.
+ * can move up-scope, stay open, or complete in place by explicit choice.
  */
 export const openTaskDispositionSchema = z.enum([
   "move_to_workspace",
   "move_to_global",
+  "complete",
   "keep",
 ]);
 export type OpenTaskDisposition = z.infer<typeof openTaskDispositionSchema>;
+
+/** Fingerprint of the full principal-scoped open-task set reviewed by a caller. */
+export const openTaskSnapshotSchema = z.string().regex(/^[a-f0-9]{64}$/);

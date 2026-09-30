@@ -265,7 +265,7 @@ Bulk sidebar inventory changes are application-owned rather than provider
 side effects. The server derives tenant/principal scope, freezes revisioned
 targets during authoritative impact calculation, and rechecks runtime and
 durable blockers before commit. Settle, unsettle, or archive changes every
-eligible target, moves any explicitly disposed open Tasks, advances the
+eligible target, moves or completes any explicitly disposed open Tasks, advances the
 principal inventory generation, and records one replay receipt in one SQLite
 transaction. A stale revision, changed confirmation count, invalid target, or
 single blocker aborts the complete database mutation; publications occur only
@@ -278,6 +278,19 @@ actor-manager admission fences in stable order and holds them through commit.
 If a stream or direct actor borrower remains busy, or closure cannot be proven,
 the archive does not commit. Receipt replay retires only threads that are still
 archived before republishing the receipted state.
+
+Single-thread settle, single/family archive, and bulk inventory previews include
+bounded open-Task summaries and opaque snapshots of the full scoped Task set.
+Completion requires the reviewed snapshot, covering tenant/principal, affected
+thread membership, and every open Task's ID and revision, including rows omitted
+from the preview. The snapshot is rechecked inside the inventory transaction;
+changed membership or edits reject completion before any changes commit.
+Completion sets Task completion/update timestamps and advances revisions without
+moving ownership. The durable receipt's existing `movedTaskIds` field records
+all changed Tasks, including completions, for post-commit and replay publication.
+Pi, Codex, Claude, and Grok share this application-owned behavior without native
+provider calls. The agent archive tool intentionally offers only move/keep:
+it has no reviewed-impact token and must not synthesize completion consent.
 
 The browser's requested delivery intent and the server's admitted mode are
 separate facts. Idle or failed state resolves input to Submit. During an active

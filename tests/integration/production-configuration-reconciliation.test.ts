@@ -121,7 +121,9 @@ describe("production configuration reconciliation", () => {
     const reopened = await openApplication();
     expect((await reopened.service.get(reopened.scope)).runtimes.find(runtime => runtime.resourceId === backendId)?.applyState).toBe("applied");
     assertConnections();
-  });
+    // Two full production boots plus configuration saves and runtime stop/start
+    // need headroom when this integration test shares the suite's workers.
+  }, 15_000);
 
   it.each([false, true])("recovers retained startup settings after main restarts (transient inspection failure: %s)", async failFirstInspection => {
     const { service, scope, snapshot } = await fixture();

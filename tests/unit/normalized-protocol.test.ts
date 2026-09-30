@@ -710,7 +710,9 @@ describe("thread archive-impact protocol", () => {
     pendingQuestions: { root: 0, descendants: 0 },
     stashedPrompts: { root: 1, descendants: 2 },
     openTasks: {
+      familySnapshot: "a".repeat(64),
       root: {
+        snapshot: "a".repeat(64),
         items: [
           {
             id: "10000000-0000-4000-8000-000000000001",
@@ -721,7 +723,7 @@ describe("thread archive-impact protocol", () => {
         total: 2,
         omitted: 1,
       },
-      descendants: { items: [], total: 0, omitted: 0 },
+      descendants: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
     },
     executionWorkspace: { kind: "direct" as const },
     archiveOnly: { available: true as const },
@@ -745,6 +747,7 @@ describe("thread archive-impact protocol", () => {
         openTasks: {
           ...impact.openTasks,
           descendants: {
+            snapshot: "a".repeat(64),
             items: Array.from(
               { length: ARCHIVE_IMPACT_TASK_SUMMARY_LIMIT + 1 },
               (_, index) => ({
@@ -2356,7 +2359,7 @@ describe("application sidebar background-work wire contract", () => {
     advisories: [], defaultNewThreadTargetId: "target-1", counts, tasks: [],
   };
   it("carries the same counts through snapshot and thread-upsert events without changing run state", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(127);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(128);
     expect(normalizedApplicationEventSchema.parse({ type: "snapshot", generation: "generation-1", snapshot }))
       .toMatchObject({ snapshot: { threads: [{ runState: "idle", backgroundWork }] } });
     expect(normalizedApplicationEventSchema.parse({ type: "thread_upsert", generation: "generation-1", thread, counts }))

@@ -9,6 +9,7 @@ import type { ApplicationClientStore } from "../../stores/ApplicationClientStore
 import { messageFrom } from "../../stores/ApplicationClientStore.js";
 import { SegmentedControl } from "../tasks/SegmentedControl.js";
 import { Archive } from "lucide-react";
+import { ThreadTaskDisposition } from "./ThreadTaskDisposition.js";
 import { ExecutionWorkspaceGitWarnings } from "./ExecutionWorkspaceActions.js";
 import {
   ContextMenuItem,
@@ -53,9 +54,13 @@ export function useArchiveChoices(
   { thread, store, disabled, onArchived, onPendingChange }: ArchiveChoiceProps,
   initialImpact?: ThreadArchiveImpact,
 ) {
-  const [impact, setImpact] = useState<ThreadArchiveImpact | undefined>(initialImpact);
+  const [impact, setImpact] = useState<ThreadArchiveImpact | undefined>(
+    initialImpact,
+  );
   const [loading, setLoading] = useState(false);
-  const impactRequest = useRef<Promise<ThreadArchiveImpact> | undefined>(undefined);
+  const impactRequest = useRef<Promise<ThreadArchiveImpact> | undefined>(
+    undefined,
+  );
   const [pending, setPending] = useState<"only" | "all">();
   const [error, setError] = useState("");
   const [taskDisposition, setTaskDisposition] =
@@ -77,12 +82,15 @@ export function useArchiveChoices(
       : impact.stashedPrompts.root;
   };
 
-  const load = async (throwOnError = false): Promise<ThreadArchiveImpact | undefined> => {
+  const load = async (
+    throwOnError = false,
+  ): Promise<ThreadArchiveImpact | undefined> => {
     if (disabled || pending) return undefined;
     if (!impactRequest.current) {
       setLoading(true);
       setError("");
-      impactRequest.current = store.getThreadArchiveImpact(thread.id)
+      impactRequest.current = store
+        .getThreadArchiveImpact(thread.id)
         .then((nextImpact) => {
           setImpact(nextImpact);
           return nextImpact;
@@ -124,16 +132,27 @@ export function useArchiveChoices(
       const openTaskDisposition =
         openTaskTotal(choice) > 0 ? taskDisposition : undefined;
       const expectedStashedPromptCount = stashedPromptTotal(choice);
+      const taskConfirmation =
+        openTaskDisposition === "complete" && impact
+          ? {
+              expectedOpenTaskSnapshot:
+                choice === "all"
+                  ? impact.openTasks.familySnapshot
+                  : impact.openTasks.root.snapshot,
+            }
+          : {};
       const archivedThreadIds =
         choice === "all"
           ? await store.archiveThreadFamily(thread, {
               expectedStashedPromptCount,
+              ...taskConfirmation,
               executionWorkspaceDisposition: { kind: "keep" },
               ...(openTaskDisposition ? { openTaskDisposition } : {}),
             })
           : await store
               .mutateInventory(thread, "archive", {
                 expectedStashedPromptCount,
+                ...taskConfirmation,
                 ...(openTaskDisposition ? { openTaskDisposition } : {}),
                 executionWorkspaceDisposition:
                   impact?.executionWorkspace.kind === "isolated" &&
@@ -353,11 +372,6 @@ export function ArchiveStashedPromptWarning({
   );
 }
 
-/**
- * Archive-time disposition of the archive set's open thread tasks (design
- * §7): rendered only when the loaded impact reports any. "Keep" leaves them
- * on the archived thread; completed tasks always stay regardless.
- */
 export function ArchiveTaskDisposition({
   choices,
   includeDescendants,
@@ -370,109 +384,30 @@ export function ArchiveTaskDisposition({
   const total =
     impact.openTasks.root.total +
     (includeDescendants ? impact.openTasks.descendants.total : 0);
-  if (total === 0) return null;
-  const omitted =
-    impact.openTasks.root.omitted +
-    (includeDescendants ? impact.openTasks.descendants.omitted : 0);
   const descendantNote =
     includeDescendants && impact.openTasks.descendants.total > 0
       ? ` (${impact.openTasks.descendants.total} on descendants)`
       : "";
   return (
-    <div
-      className="archive-task-disposition"
-      data-testid="archive-task-disposition"
-    >
-      <span className="archive-task-disposition-label">
-        {total} open {total === 1 ? "task" : "tasks"}
-        {descendantNote}
-      </span>
-      <div
-        className="archive-task-summary-scroll"
-        role="region"
-        aria-label={`${total} open ${total === 1 ? "task" : "tasks"} affected by this archive`}
-        tabIndex={0}
-      >
-        {impact.openTasks.root.items.length > 0 && (
-          <ArchiveTaskSummaryGroup
-            label="This thread"
-            items={impact.openTasks.root.items}
-          />
-        )}
-        {includeDescendants &&
-          impact.openTasks.descendants.items.length > 0 && (
-            <ArchiveTaskSummaryGroup
-              label="Descendants"
-              items={impact.openTasks.descendants.items}
-              showOwningThread
-            />
-          )}
-        {omitted > 0 && (
-          <p className="archive-task-summary-omitted" role="status">
-            {omitted} more {omitted === 1 ? "task" : "tasks"} not shown
-          </p>
-        )}
-      </div>
-      <SegmentedControl
-        ariaLabel="Open task handling"
-        size="small"
-        value={choices.taskDisposition}
-        onChange={(value) =>
-          choices.setTaskDisposition(value as OpenTaskDisposition)
-        }
-        options={[
-          {
-            value: "move_to_workspace",
-            label: "To project",
-            title: "Move open tasks to each thread's project",
-            disabled: Boolean(choices.pending),
-          },
-          {
-            value: "move_to_global",
-            label: "To global",
-            title: "Move open tasks to the global list",
-            disabled: Boolean(choices.pending),
-          },
-          {
-            value: "keep",
-            label: "Keep",
-            title: "Leave open tasks with the archived thread",
-            disabled: Boolean(choices.pending),
-          },
-        ]}
-      />
-    </div>
-  );
-}
-
-function ArchiveTaskSummaryGroup({
-  label,
-  items,
-  showOwningThread = false,
-}: {
-  readonly label: string;
-  readonly items: ThreadArchiveImpact["openTasks"]["root"]["items"];
-  readonly showOwningThread?: boolean;
-}) {
-  return (
-    <section className="archive-task-summary-group" aria-label={label}>
-      <h4>{label}</h4>
-      <ul>
-        {items.map((task) => (
-          <li key={task.id} data-task-id={task.id}>
-            <span className="archive-task-summary-title">{task.title}</span>
-            {showOwningThread && (
-              <span
-                className="archive-task-summary-owner"
-                title={`Owned by thread ${task.threadId}`}
-              >
-                Thread {task.threadId}
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
-    </section>
+    <ThreadTaskDisposition
+      action="archive"
+      description={`${total} open ${total === 1 ? "task" : "tasks"}${descendantNote}`}
+      groups={[
+        { label: "This thread", tasks: impact.openTasks.root },
+        ...(includeDescendants
+          ? [
+              {
+                label: "Descendants",
+                tasks: impact.openTasks.descendants,
+                showOwningThread: true,
+              },
+            ]
+          : []),
+      ]}
+      value={choices.taskDisposition}
+      onChange={choices.setTaskDisposition}
+      disabled={Boolean(choices.pending) || choices.loading}
+    />
   );
 }
 
@@ -650,6 +585,7 @@ export function ArchiveDropdown({
         document.dispatchEvent(
           new CustomEvent(ARCHIVE_DROPDOWN_OPEN_EVENT, { detail: menuId }),
         );
+        choices.setTaskDisposition("move_to_workspace");
         choices.setExecutionWorkspaceDisposition("keep");
         if (directWhenNoChoices) {
           loadAndMaybeArchive(true);
@@ -766,6 +702,7 @@ export function ArchiveContextSubmenu(
     <ContextMenuSub
       onOpenChange={(open) => {
         if (!open) return;
+        choices.setTaskDisposition("move_to_workspace");
         choices.setExecutionWorkspaceDisposition("keep");
         void choices.load();
       }}

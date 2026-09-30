@@ -5,6 +5,10 @@ import { loadE2ERunContext } from "./run-context.js";
 import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { capture, createDraftThread } from "./helpers";
+import {
+  normalizedApplicationSnapshotSchema,
+  taskMutationResultSchema,
+} from "../../src/shared/index.js";
 
 const TASK_MUTATION_TIMEOUT_MS = 15_000;
 const taskWorkspace = path.resolve(
@@ -176,10 +180,14 @@ test.describe.serial("Tasks panel", () => {
     await expect(page.getByRole("textbox", { name: "Message Scripted agent", exact: true })).toBeFocused();
 
     // Pinning stays on the task row; file metadata and scope use the editor.
-    await panel
-      .getByPlaceholder("Search or add task")
-      .fill("Unpinned follow-up");
-    await panel.getByPlaceholder("Search or add task").press("Enter");
+    // Explicitly choosing the input cancels Chat's deferred focus request.
+    // fill() alone does not dispatch pointerdown and can race its next frame.
+    const taskInput = panel.getByPlaceholder("Search or add task");
+    await taskInput.click();
+    await expect(taskInput).toBeFocused();
+    await taskInput.fill("Unpinned follow-up");
+    await expect(taskInput).toHaveValue("Unpinned follow-up");
+    await taskInput.press("Enter");
     await expect(
       sidebarThread.getByRole("img", { name: "2 open tasks" }),
     ).toBeVisible();
@@ -487,6 +495,52 @@ test.describe.serial("Tasks panel", () => {
     await expect(page.getByText("No matching threads.", { exact: true })).toBeVisible();
   });
 });
+
+for (const action of ["Settle", "Archive"] as const) {
+  test(`${action.toLowerCase()} lists tasks and completes them without moving ownership`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openTaskWorkspace(page);
+    const threadPath = await createDraftThread(page);
+    const threadId = threadPath.split("/").at(-1)!;
+    const session = await (await page.request.get("/api/application/session")).json();
+    const headers = { "X-CSRF-Token": session.csrfToken };
+    const tasks = [];
+    for (const title of [`${action} reviewed endpoint`, `${action} reviewed docs`]) {
+      const response = await page.request.post("/api/tasks", {
+        headers,
+        data: { mutationId: randomUUID(), title, scope: { kind: "thread", threadId } },
+      });
+      expect(response.status()).toBe(201);
+      tasks.push(taskMutationResultSchema.parse(await response.json()).task);
+    }
+
+    await page.getByRole("button", { name: "Thread actions" }).click();
+    await page.getByTestId("thread-actions-menu").getByRole("button", { name: action, exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: `${action} this thread` });
+    for (const task of tasks) await expect(dialog.getByText(task.title, { exact: true })).toBeVisible();
+    await dialog.getByRole("radio", { name: "Complete all", exact: true }).click();
+    if (action === "Archive") await page.setViewportSize({ width: 412, height: 700 });
+    await expect(dialog.getByRole("radio", { name: "Complete all", exact: true })).toBeVisible();
+    await capture(page, testInfo, `tasks-${action.toLowerCase()}-complete-preview.png`);
+    await dialog.getByRole("button", { name: action, exact: true }).click();
+    await expect(dialog).toBeHidden();
+
+    const snapshot = normalizedApplicationSnapshotSchema.parse(
+      await (await page.request.get("/api/application/snapshot")).json(),
+    );
+    for (const task of tasks) {
+      const completed = snapshot.tasks.find(({ id }) => id === task.id);
+      expect(completed).toMatchObject({
+        scope: { kind: "thread", threadId },
+        revision: task.revision + 1,
+      });
+      expect(completed?.completedAt).toEqual(expect.any(String));
+    }
+    expect(snapshot.threads.find(({ id }) => id === threadId)?.inventoryState).toBe(
+      action === "Settle" ? "settled" : "archived",
+    );
+  });
+}
 
 
 test("mobile task destinations remain usable with long lists and short viewports", async ({ page }, testInfo) => {

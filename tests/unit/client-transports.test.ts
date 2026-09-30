@@ -1005,8 +1005,9 @@ describe("ApiClient normalized contract", () => {
           pendingQuestions: { root: 0, descendants: 0 },
           stashedPrompts: { root: 1, descendants: 2 },
           openTasks: {
-            root: { items: [], total: 0, omitted: 0 },
-            descendants: { items: [], total: 0, omitted: 0 },
+            familySnapshot: "f".repeat(64),
+            root: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
+            descendants: { snapshot: "b".repeat(64), items: [], total: 0, omitted: 0 },
           },
           executionWorkspace: { kind: "direct" },
           archiveOnly: { available: true },
@@ -1026,8 +1027,9 @@ describe("ApiClient normalized contract", () => {
       pendingQuestions: { root: 0, descendants: 0 },
       stashedPrompts: { root: 1, descendants: 2 },
       openTasks: {
-        root: { items: [], total: 0, omitted: 0 },
-        descendants: { items: [], total: 0, omitted: 0 },
+        familySnapshot: "f".repeat(64),
+        root: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
+        descendants: { snapshot: "b".repeat(64), items: [], total: 0, omitted: 0 },
       },
       executionWorkspace: { kind: "direct" },
       archiveOnly: { available: true },

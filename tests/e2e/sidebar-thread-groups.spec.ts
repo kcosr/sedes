@@ -3,6 +3,7 @@ import type { Locator, Page } from "@playwright/test";
 import {
   normalizedApplicationSessionSchema,
   normalizedApplicationSnapshotSchema,
+  taskMutationResultSchema,
   threadGroupMutationResultSchema,
 } from "../../src/shared/index.js";
 import { expect, test } from "./fixtures";
@@ -383,6 +384,20 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
   );
   await expect(groupStack.getByTitle("Pin")).toHaveCount(0);
   await expect(groupStack.getByTitle("Snooze")).toHaveCount(0);
+  const taskSession = await currentSession(page);
+  const stackTasks = [];
+  for (const [threadId, title] of [
+    [selectedId, "Finish selected thread"],
+    [siblingId, "Finish sibling thread"],
+    [filteredId, "Keep filtered thread task open"],
+  ] as const) {
+    const response = await page.request.post("/api/tasks", {
+      headers: { "X-CSRF-Token": taskSession.csrfToken },
+      data: { mutationId: randomUUID(), title, scope: { kind: "thread", threadId } },
+    });
+    expect(response.status()).toBe(201);
+    stackTasks.push(taskMutationResultSchema.parse(await response.json()).task);
+  }
   const settleRequest = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
@@ -396,6 +411,11 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
   await expect(stackActionDialog).toContainText(
     "Settle 2 threads.",
   );
+  await expect(stackActionDialog.getByText("Finish selected thread", { exact: true })).toBeVisible();
+  await expect(stackActionDialog.getByText("Finish sibling thread", { exact: true })).toBeVisible();
+  await expect(stackActionDialog.getByText("Keep filtered thread task open", { exact: true })).toHaveCount(0);
+  await stackActionDialog.getByRole("radio", { name: "Complete all", exact: true }).click();
+  await capture(page, testInfo, "sidebar-thread-stack-complete-tasks.png");
   await stackActionDialog.getByRole("button", { name: "Settle" }).click();
   await settleRequest;
   await expect(stackActionDialog).toBeHidden();
@@ -404,6 +424,16 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
     [siblingId]: "settled",
     [filteredId]: "snoozed",
   });
+  const afterCompletion = await currentSnapshot(page);
+  for (const task of stackTasks) {
+    const current = afterCompletion.tasks.find(({ id }) => id === task.id);
+    expect(current?.scope).toEqual(task.scope);
+    expect(current?.completedAt).toEqual(
+      task.scope.kind === "thread" && task.scope.threadId === filteredId
+        ? null
+        : expect.any(String),
+    );
+  }
 
   await groupStack.click({ button: "right" });
   const stackMenu = page.getByTestId("thread-stack-context-menu");

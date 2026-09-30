@@ -105,13 +105,26 @@ Chat for that prompt.
 
 ## Settle or archive threads with open Tasks
 
-Settling and archiving may affect a thread family containing open Tasks. Sedes
-shows a preview and asks for an explicit supported disposition instead of
-assuming that hiding a thread also completes its work.
+Settle and archive previews list the affected open Tasks and let you choose
+**To project**, **To global**, **Keep**, or **Complete all**. The choice applies
+to every open Task in the selected scope. **Complete all** marks those Tasks
+done and keeps them attached to their original threads. Tasks already completed
+remain unchanged.
 
-Review the counts for the current thread and descendants. Stashes and Task
-records remain separate: preserving a stash does not preserve or complete a
-Task, and completing a Task does not consume a stash.
+Settling one thread affects only its own Tasks. Archiving can also include
+descendant forks; the preview groups their Tasks separately. Bulk stack actions
+show Tasks from the affected stack members. Lists show up to 100 Tasks per group
+and state how many additional Tasks are not shown; **Complete all** includes
+those additional Tasks too.
+
+If the Tasks change after you open the preview, completion is rejected. Single-thread
+settle and archive previews refresh automatically; for bulk stack actions, select
+**Refresh impact** to review the updated Tasks before confirming again. Stashes
+remain separate: completing Tasks does not consume stashed prompts.
+
+Lifecycle completion is available in the browser and packaged clients. The
+agent archive tool retains its move/keep options; agents can use the ordinary
+Task update tool to complete individual Tasks explicitly.
 
 ## Schedule work with an automation
 

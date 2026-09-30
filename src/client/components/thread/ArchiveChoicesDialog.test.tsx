@@ -47,8 +47,9 @@ function makeThread(
 
 function emptyOpenTasks() {
   return {
-    root: { items: [], total: 0, omitted: 0 },
-    descendants: { items: [], total: 0, omitted: 0 },
+    familySnapshot: "b".repeat(64),
+    root: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
+    descendants: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
   };
 }
 
@@ -416,7 +417,9 @@ describe("ArchiveChoicesDialog", () => {
       pendingQuestions: { root: 0, descendants: 0 },
       stashedPrompts: { root: 0, descendants: 0 },
       openTasks: {
+        familySnapshot: "b".repeat(64),
         root: {
+          snapshot: "a".repeat(64),
           items: [
             {
               id: "task-root-1",
@@ -433,6 +436,7 @@ describe("ArchiveChoicesDialog", () => {
           omitted: 1,
         },
         descendants: {
+          snapshot: "a".repeat(64),
           items: [
             {
               id: "task-child-1",
@@ -614,4 +618,115 @@ describe("ArchiveChoicesDialog", () => {
       expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
     );
   });
+  it.each([false, true])(
+    "completes the selected archive scope (include descendants: %s)",
+    async (includeDescendants) => {
+      const store = makeStore();
+      const initial = await store.getThreadArchiveImpact("thread-1");
+      const root = {
+        snapshot: "c".repeat(64),
+        items: [{ id: "task-root", title: "Root task", threadId: "thread-1" }],
+        total: 1,
+        omitted: 0,
+      };
+      const descendants = {
+        snapshot: "d".repeat(64),
+        items: [{ id: "task-child", title: "Child task", threadId: "thread-2" }],
+        total: 1,
+        omitted: 0,
+      };
+      store.getThreadArchiveImpact.mockResolvedValue({
+        ...initial,
+        openTasks: { root, descendants, familySnapshot: "e".repeat(64) },
+      });
+      render(
+        <ArchiveChoicesDialog
+          open
+          onOpenChange={vi.fn()}
+          thread={makeThread()}
+          store={store}
+          descendantCount={2}
+        />,
+      );
+      await screen.findByText("Root task");
+      if (includeDescendants) {
+        await userEvent.click(
+          screen.getByRole("checkbox", {
+            name: "Archive child and descendant forks",
+          }),
+        );
+        expect(screen.getByText("Child task")).toBeVisible();
+      } else {
+        expect(screen.queryByText("Child task")).not.toBeInTheDocument();
+      }
+      await userEvent.click(screen.getByRole("radio", { name: "Complete all" }));
+      await userEvent.click(screen.getByRole("button", { name: "Archive" }));
+      const confirmation = {
+        expectedStashedPromptCount: 0,
+        openTaskDisposition: "complete",
+        expectedOpenTaskSnapshot: (includeDescendants ? "e" : "c").repeat(64),
+        executionWorkspaceDisposition: { kind: "keep" },
+      };
+      if (includeDescendants) {
+        expect(store.archiveThreadFamily).toHaveBeenCalledWith(
+          makeThread(),
+          confirmation,
+        );
+        expect(store.mutateInventory).not.toHaveBeenCalled();
+      } else {
+        expect(store.mutateInventory).toHaveBeenCalledWith(
+          makeThread(),
+          "archive",
+          confirmation,
+        );
+        expect(store.archiveThreadFamily).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("refreshes an archive completion conflict before the next confirmation", async () => {
+    const store = makeStore();
+    const initial = await store.getThreadArchiveImpact("thread-1");
+    const taskImpact = (snapshot: string, title: string) => ({
+      ...initial,
+      openTasks: {
+        ...emptyOpenTasks(),
+        root: {
+          snapshot,
+          items: [{ id: "task-root", title, threadId: "thread-1" }],
+          total: 1,
+          omitted: 0,
+        },
+      },
+    });
+    store.getThreadArchiveImpact
+      .mockResolvedValueOnce(taskImpact("c".repeat(64), "Old task title"))
+      .mockResolvedValueOnce(taskImpact("d".repeat(64), "New task title"));
+    store.mutateInventory.mockRejectedValueOnce(new Error("Open tasks changed."));
+    render(
+      <ArchiveChoicesDialog
+        open
+        onOpenChange={vi.fn()}
+        thread={makeThread()}
+        store={store}
+        descendantCount={2}
+      />,
+    );
+    await screen.findByText("Old task title");
+    await userEvent.click(screen.getByRole("radio", { name: "Complete all" }));
+    await userEvent.click(screen.getByRole("button", { name: "Archive" }));
+    expect(await screen.findByText("New task title")).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent("Open tasks changed.");
+    expect(store.mutateInventory).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: "Archive" }));
+    expect(store.mutateInventory).toHaveBeenLastCalledWith(
+      makeThread(),
+      "archive",
+      expect.objectContaining({
+        openTaskDisposition: "complete",
+        expectedOpenTaskSnapshot: "d".repeat(64),
+      }),
+    );
+  });
+
 });

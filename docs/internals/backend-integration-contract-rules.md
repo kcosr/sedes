@@ -321,6 +321,14 @@ provider-name branches, or a fabricated capability. Archived threads are not
 members of a visible working stack, so stack bulk restore is a separate product
 contract rather than an inferred inverse operation.
 
+When an inventory action also completes Tasks, bind confirmation to the full
+scoped open-Task set and its revisions, not only the displayed bounded list or
+its count. Recheck the reviewed snapshot inside the inventory transaction and
+reject changed Tasks before any writes. Completion keeps Task ownership and
+publishes every changed Task after commit and on receipt replay. A caller without
+a reviewed-impact contract must not synthesize a fresh snapshot to authorize
+completion. Pi, Codex, Claude, and Grok share this application-level rule.
+
 For a fresh archive, acquire the shared per-thread maintenance fences in a
 deterministic order and hold every affected fence through the all-or-nothing
 database mutation. Fence both coordinator acquisition and direct actor-manager

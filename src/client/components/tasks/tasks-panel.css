@@ -542,8 +542,7 @@ button.tasks-file-row:hover {
   align-items: center;
 }
 
-/* Archive-time open-task disposition (rendered inside the archive dropdown,
-   context submenu, and mobile archive dialog). */
+/* Open-task handling shared by settle, archive, and bulk lifecycle actions. */
 .archive-task-disposition {
   display: flex;
   flex-direction: column;
@@ -552,6 +551,16 @@ button.tasks-file-row:hover {
   margin: 2px 0;
   border: 1px solid var(--border-soft, var(--border));
   border-radius: var(--radius-ctl);
+}
+
+.archive-task-disposition .tasks-segments {
+  flex-wrap: wrap;
+}
+
+.archive-task-completion-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted-foreground);
 }
 
 .archive-task-disposition-label {

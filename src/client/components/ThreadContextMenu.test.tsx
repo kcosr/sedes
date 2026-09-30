@@ -108,8 +108,10 @@ function makeThread(
 
 function openTasks(rootTotal = 0, descendantTotal = 0) {
   return {
-    root: { items: [], total: rootTotal, omitted: rootTotal },
+    familySnapshot: "b".repeat(64),
+    root: { snapshot: "a".repeat(64), items: [], total: rootTotal, omitted: rootTotal },
     descendants: {
+      snapshot: "a".repeat(64),
       items: [],
       total: descendantTotal,
       omitted: descendantTotal,
@@ -1481,6 +1483,77 @@ describe("ThreadContextMenu actions", () => {
     );
   });
 
+  it.each(["dropdown", "submenu"] as const)(
+    "resets Complete all after cancelling and reopening the archive %s",
+    async (surface) => {
+      const thread = makeThread();
+      const store = makeStore();
+      store.getThreadArchiveImpact.mockResolvedValue({
+        descendantCount: 1,
+        pendingQuestions: { root: 0, descendants: 0 },
+        stashedPrompts: { root: 0, descendants: 0 },
+        openTasks: openTasks(1),
+        executionWorkspace: { kind: "direct" },
+        archiveOnly: { available: true },
+        archiveAll: { available: true },
+      });
+      let openArchive: () => Promise<void>;
+      if (surface === "dropdown") {
+        render(
+          <ArchiveDropdown thread={thread} store={store} descendantCount={1}>
+            <button type="button">Archive thread</button>
+          </ArchiveDropdown>,
+        );
+        openArchive = async () => {
+          await userEvent.click(
+            screen.getByRole("button", { name: "Archive thread" }),
+          );
+        };
+      } else {
+        const trigger = renderMenu(thread, store, { familyDescendantCount: 1 });
+        openArchive = async () => {
+          const menu =
+            screen.queryByTestId("thread-context-menu") ??
+            (await openMenu(trigger));
+          await userEvent.click(within(menu).getByText("Archive"));
+        };
+      }
+      await openArchive();
+      await userEvent.click(
+        await screen.findByRole("radio", { name: "Complete all" }),
+      );
+      expect(screen.getByRole("radio", { name: "Complete all" })).toBeChecked();
+      if (surface === "submenu") {
+        // Dismiss only the submenu; its owning context menu stays mounted.
+        await userEvent.keyboard("{ArrowLeft}");
+        expect(screen.getByTestId("thread-context-menu")).toBeVisible();
+        expect(
+          screen.queryByRole("radio", { name: "Complete all" }),
+        ).not.toBeInTheDocument();
+      } else {
+        await userEvent.click(screen.getByRole("menuitem", { name: "Cancel" }));
+      }
+      expect(store.mutateInventory).not.toHaveBeenCalled();
+      expect(store.archiveThreadFamily).not.toHaveBeenCalled();
+
+      await openArchive();
+      expect(
+        await screen.findByRole("radio", { name: "To project" }),
+      ).toBeChecked();
+      expect(
+        screen.getByRole("radio", { name: "Complete all" }),
+      ).not.toBeChecked();
+      await userEvent.click(
+        screen.getByRole("menuitem", { name: "Archive only this thread" }),
+      );
+      expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
+        expectedStashedPromptCount: 0,
+        openTaskDisposition: "move_to_workspace",
+        executionWorkspaceDisposition: { kind: "keep" },
+      });
+    },
+  );
+
   it("opens archive choices as a submenu for a thread with descendants", async () => {
     const store = makeStore();
     store.getThreadArchiveImpact.mockResolvedValue({
@@ -1488,7 +1561,9 @@ describe("ThreadContextMenu actions", () => {
       pendingQuestions: { root: 0, descendants: 0 },
       stashedPrompts: { root: 1, descendants: 2 },
       openTasks: {
+        familySnapshot: "b".repeat(64),
         root: {
+          snapshot: "a".repeat(64),
           items: [
             {
               id: "task-root",
@@ -1500,6 +1575,7 @@ describe("ThreadContextMenu actions", () => {
           omitted: 0,
         },
         descendants: {
+          snapshot: "a".repeat(64),
           items: [
             {
               id: "task-child",

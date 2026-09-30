@@ -8,7 +8,7 @@ import type {
   OpenTaskDisposition,
 } from "../../../shared/index.js";
 import { Button } from "../ui/button.js";
-import { SegmentedControl } from "../tasks/SegmentedControl.js";
+import { ThreadTaskDisposition } from "./ThreadTaskDisposition.js";
 
 export function ThreadStackActionDialog({
   open,
@@ -42,9 +42,8 @@ export function ThreadStackActionDialog({
   readonly threadTitleFor: (threadId: string) => string | undefined;
   readonly returnFocusRef?: React.RefObject<HTMLElement | null>;
 }): React.JSX.Element {
-  const [disposition, setDisposition] = useState<OpenTaskDisposition>(
-    "move_to_workspace",
-  );
+  const [disposition, setDisposition] =
+    useState<OpenTaskDisposition>("move_to_workspace");
   useEffect(() => {
     if (open) setDisposition("move_to_workspace");
   }, [open, action]);
@@ -114,42 +113,22 @@ export function ThreadStackActionDialog({
             </div>
           ) : null}
 
-          {impact && impact.openTasks.total > 0 && action !== "unsettle" ? (
-            <div className="archive-task-disposition">
-              <span className="archive-task-disposition-label">
-                The affected threads have {impact.openTasks.total} open{" "}
-                {impact.openTasks.total === 1 ? "task" : "tasks"}. Choose what
-                should happen before {actionPresent.toLocaleLowerCase()}.
-              </span>
-              <SegmentedControl
-                ariaLabel="Open task handling"
-                size="small"
-                value={disposition}
-                onChange={(value) =>
-                  setDisposition(value as OpenTaskDisposition)
-                }
-                options={[
-                  {
-                    value: "move_to_workspace",
-                    label: "To project",
-                    title: "Move each task to its thread's project",
-                    disabled: pending || requestLocked,
-                  },
-                  {
-                    value: "move_to_global",
-                    label: "To global",
-                    title: "Move open tasks to the global list",
-                    disabled: pending || requestLocked,
-                  },
-                  {
-                    value: "keep",
-                    label: "Keep",
-                    title: "Leave open tasks with their threads",
-                    disabled: pending || requestLocked,
-                  },
-                ]}
-              />
-            </div>
+          {impact && action && action !== "unsettle" ? (
+            <ThreadTaskDisposition
+              action={action}
+              description={`The affected threads have ${impact.openTasks.total} open ${impact.openTasks.total === 1 ? "task" : "tasks"}. Choose what should happen before ${actionPresent.toLocaleLowerCase()}.`}
+              groups={[
+                {
+                  label: "Affected threads",
+                  tasks: impact.openTasks,
+                  showOwningThread: true,
+                },
+              ]}
+              value={disposition}
+              onChange={setDisposition}
+              disabled={loading || pending || requestLocked}
+              threadTitleFor={threadTitleFor}
+            />
           ) : null}
 
           {impact &&
@@ -164,12 +143,13 @@ export function ThreadStackActionDialog({
           {impact && blockerCount > 0 ? (
             <div className="thread-stack-blockers" role="status">
               <strong>
-                {blockerCount} blocked {blockerCount === 1 ? "thread" : "threads"}
+                {blockerCount} blocked{" "}
+                {blockerCount === 1 ? "thread" : "threads"}
               </strong>
               <ul>
                 {impact.blockers.items.map((blocker) => (
                   <li key={blocker.threadId}>
-                    {threadTitleFor(blocker.threadId) ?? blocker.threadId}: {" "}
+                    {threadTitleFor(blocker.threadId) ?? blocker.threadId}:{" "}
                     {blocker.reason}
                   </li>
                 ))}

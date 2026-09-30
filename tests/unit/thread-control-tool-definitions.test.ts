@@ -229,6 +229,14 @@ describe("thread control tool definitions", () => {
         openTaskDisposition: "delete",
       }),
     ).toBe(false);
+    // This tool has no impact-review step; completion is deliberately unsupported.
+    for (const extra of [{}, { expectedOpenTaskSnapshot: "a".repeat(64) }]) {
+      expect(registry.validatesInput("thread.archive", 1, {
+        threadId: "thread-1",
+        openTaskDisposition: "complete",
+        ...extra,
+      })).toBe(false);
+    }
     expect(
       registry.validatesInput("thread.restore", 1, {
         threadId: "thread-1",
