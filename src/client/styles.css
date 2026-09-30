@@ -135,6 +135,7 @@
   --text-page: 20px; /* settings page titles */
   --text-display: 24px; /* auth and landing display */
   --text-transcript-meta: 12.5px; /* reference surface, preserved */
+  --text-sheet-title: 17px; /* menu sheet header: the subject's name on touch */
   --text-input: var(--text-ui); /* text inputs; 16px under the density switch */
   --weight-regular: 400;
   --weight-medium: 500;
@@ -465,15 +466,17 @@ textarea:disabled {
 }
 
 /* Overlay containers take focus as a starting point (a dialog with nothing
-   to focus, a picker opened by touch); the overlay is the indication, so
-   they draw no ring. */
+   to focus, a picker opened by touch, a menu sheet's list); the overlay is
+   the indication, so they draw no ring. */
 [data-slot="dialog-content"]:focus-visible,
-[data-slot="popover-content"]:focus-visible {
+[data-slot="popover-content"]:focus-visible,
+[data-slot="menu-sheet-list"]:focus-visible {
   outline: none;
 }
 
 /* Menu rows carry highlight as the neutral wash (focus follows Radix's
    roving highlight); the global ring would double-mark every row. */
+[data-slot="menu-sheet-back"]:focus-visible,
 [data-slot="select-item"]:focus-visible,
 [data-slot="dropdown-menu-item"]:focus-visible,
 [data-slot="dropdown-menu-checkbox-item"]:focus-visible,

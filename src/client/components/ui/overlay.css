@@ -268,6 +268,34 @@
   }
 }
 
+/* ── Menu presented as a sheet (ui/menu-sheet.tsx) ──
+   The header is the subject's name with a meta line; the rows sit 8px from
+   the sheet edge with their own 12px inset, so header text and row text
+   share one edge. */
+[data-slot="dialog-content"][data-menu-sheet] {
+  --dialog-title-line: calc(var(--text-sheet-title) * var(--leading-snug));
+  gap: var(--space-2);
+  padding-top: var(--space-4);
+  padding-right: max(var(--space-2), env(safe-area-inset-right));
+  padding-left: max(var(--space-2), env(safe-area-inset-left));
+}
+
+[data-slot="dialog-content"][data-menu-sheet] > [data-slot="dialog-header"] {
+  gap: var(--space-0-5);
+  padding-inline-start: var(--space-3);
+}
+
+[data-slot="dialog-content"][data-menu-sheet] [data-slot="dialog-title"] {
+  font-size: var(--text-sheet-title);
+}
+
+[data-slot="dialog-content"][data-menu-sheet] > [data-slot="dialog-close"] {
+  top: calc(
+    var(--space-4) + (var(--dialog-title-line) - var(--dialog-close-size)) / 2
+  );
+  right: max(var(--space-2), env(safe-area-inset-right));
+}
+
 /* ── Motion ──
    Hand-rolled on the motion tokens (no tw-animate); Radix emits data-state
    and data-side on these data-slot nodes. The global reduced-motion rule

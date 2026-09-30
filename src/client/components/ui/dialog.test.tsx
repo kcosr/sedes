@@ -14,6 +14,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "./dialog.js";
+import { Popover, PopoverContent, PopoverTrigger } from "./popover.js";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./dropdown-menu.js";
 
 afterEach(() => {
   cleanup();
@@ -235,5 +242,34 @@ describe("Dialog slots", () => {
     const notice = screen.getByText("Not a Git repository").closest('[data-slot="dialog-alert"]');
     expect(notice).toHaveAttribute("data-tone", "warning");
     expect(notice).toHaveTextContent("Worktrees are unavailable.");
+  });
+});
+
+describe("dialog-aware floating content", () => {
+  it("portals popovers and menus into the dialog so they layer above it", async () => {
+    const user = userEvent.setup();
+    render(
+      <Dialog open>
+        <DialogContent aria-describedby={undefined}>
+          <DialogTitle>Settings</DialogTitle>
+          <Popover>
+            <PopoverTrigger>Details</PopoverTrigger>
+            <PopoverContent>Popover body</PopoverContent>
+          </Popover>
+          <DropdownMenu>
+            <DropdownMenuTrigger>Actions</DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <DropdownMenuItem>Rename</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </DialogContent>
+      </Dialog>,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Settings" });
+    await user.click(screen.getByRole("button", { name: "Details" }));
+    expect(dialog).toContainElement(screen.getByText("Popover body"));
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Actions" }));
+    expect(dialog).toContainElement(await screen.findByRole("menuitem", { name: "Rename" }));
   });
 });
