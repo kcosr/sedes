@@ -45,7 +45,9 @@ appears depends on the page:
   closes it.
 
 On phones and other narrow screens, Tasks opens as a bottom sheet on every
-page.
+page. Resizing the window across that width closes the popover or sheet,
+unless you are editing a Task: then Tasks stays open in the new presentation,
+with your edit as you left it.
 
 The button's badge counts open Tasks: the current thread's Tasks in a thread,
 and Global Tasks on the other pages. The Tasks header counts what the list

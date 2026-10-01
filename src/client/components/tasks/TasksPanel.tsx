@@ -180,6 +180,8 @@ export interface TasksPanelContentProps {
    * own ⋯ items folded into the panel's actions menu.
    */
   readonly panelControls?: PanelChromeControls;
+  /** Whether a task is open in the editor, whose unsaved edits the host keeps. */
+  readonly onEditingChange?: (editing: boolean) => void;
 }
 
 type PendingActions = ReadonlyMap<string, ReadonlySet<TaskAction>>;
@@ -267,6 +269,7 @@ export function TasksPanelContent({
   active,
   onRequestClose,
   panelControls,
+  onEditingChange,
 }: TasksPanelContentProps): React.JSX.Element {
   const sheet = presentation === "sheet";
   const application = useApplicationStore(store);
@@ -458,6 +461,11 @@ export function TasksPanelContent({
   const sheetDetail = sheet && expandedTask !== undefined;
 
   // ── Effects ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    onEditingChange?.(editingId !== null);
+  }, [editingId, onEditingChange]);
+  useEffect(() => () => onEditingChange?.(false), [onEditingChange]);
+
   // Forget optimistic rows once their task has been published.
   useEffect(() => {
     if (
@@ -1846,6 +1854,7 @@ export function TasksPanel({
   const threadWorkspace = route.name === "thread";
   const routeKey = threadWorkspace ? `thread:${route.threadId}` : route.name;
   const [overlayOpen, setOverlayOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [announcement, setAnnouncement] = useState("");
   const [dock, publishDock] = useState<TasksDock>();
   const [bodyTarget] = useState(createBodyTarget);
@@ -1855,11 +1864,6 @@ export function TasksPanel({
   // must not pull focus back into the hidden workspace.
   const activeRef = useRef(active);
   activeRef.current = active;
-
-  // The popover and the sheet are transient: navigating or crossing the
-  // phone breakpoint closes them. The docked panel's open state is the
-  // panel layout's.
-  useEffect(() => setOverlayOpen(false), [routeKey, mobile]);
 
   const placement: TasksPresentation | undefined = mobile
     ? overlayOpen
@@ -1873,8 +1877,35 @@ export function TasksPanel({
         ? "popover"
         : undefined;
 
-  const latest = useRef({ mobile, threadWorkspace, dock, placement });
-  latest.current = { mobile, threadWorkspace, dock, placement };
+  const latest = useRef({ mobile, threadWorkspace, dock, placement, editing });
+  latest.current = { mobile, threadWorkspace, dock, placement, editing };
+  // The presentation the content keeps while retained without a surface.
+  const lastPlacement = useRef<TasksPresentation>("popover");
+  if (placement) lastPlacement.current = placement;
+
+  // The popover and the sheet are transient: navigating or crossing the
+  // phone breakpoint closes them. The docked panel's open state is the
+  // panel layout's. An open editor is the exception at the breakpoint: so
+  // its unsaved edits survive, Tasks shows in the new presentation instead
+  // (the sheet, the popover, or the dock opened for it). While no surface
+  // shows an open editor, the content stays mounted, hidden, until one does.
+  const crossed = useRef({ routeKey, mobile });
+  useEffect(() => {
+    const before = crossed.current;
+    crossed.current = { routeKey, mobile };
+    if (before.routeKey === routeKey && before.mobile === mobile) return;
+    const { editing, dock } = latest.current;
+    if (before.routeKey !== routeKey || !editing) {
+      setOverlayOpen(false);
+      return;
+    }
+    if (mobile) {
+      setOverlayOpen(true);
+    } else if (threadWorkspace) {
+      setOverlayOpen(false);
+      if (dock && !dock.visible) dock.open({ focus: false });
+    }
+  }, [routeKey, mobile, threadWorkspace]);
 
   const toggleOverlay = useCallback(
     () => setOverlayOpen((open) => !open),
@@ -2058,16 +2089,21 @@ export function TasksPanel({
       <div className="sr-only" role="status" aria-live="polite">
         {announcement}
       </div>
-      {placement
+      {placement || editing
         ? createPortal(
             <TasksPanelContent
               store={store}
               panelLayoutStore={panelLayoutStore}
               route={route}
-              active={active && (placement !== "panel" || dock?.visible === true)}
-              presentation={placement}
+              active={
+                active &&
+                placement !== undefined &&
+                (placement !== "panel" || dock?.visible === true)
+              }
+              presentation={placement ?? lastPlacement.current}
               onRequestClose={requestClose}
               panelControls={placement === "panel" ? dock?.controls : undefined}
+              onEditingChange={setEditing}
             />,
             bodyTarget,
           )

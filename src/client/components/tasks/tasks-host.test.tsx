@@ -312,6 +312,105 @@ describe("Tasks host in a thread workspace", () => {
   });
 });
 
+describe("Tasks host across the phone breakpoint", () => {
+  /** Lets the phone query change while mounted, as a window resize does. */
+  function stubBreakpoint(): (next: boolean) => void {
+    const listeners = new Set<(event: MediaQueryListEvent) => void>();
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        get matches() {
+          return query === "(max-width: 819px)" ? phone : false;
+        },
+        media: query,
+        addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+          if (query === "(max-width: 819px)") listeners.add(listener);
+        },
+        removeEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+          listeners.delete(listener);
+        },
+      })),
+    );
+    return (next) =>
+      act(() => {
+        phone = next;
+        for (const listener of listeners) listener({ matches: next } as MediaQueryListEvent);
+      });
+  }
+
+  const editor = () => screen.queryByRole("dialog", { name: "Edit task" });
+  // The surface behind the modal editor is hidden from the accessibility tree.
+  const surfaceElement = () => document.querySelector('[data-slot="tasks-panel"]');
+
+  async function editNotes(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+    fireEvent.keyDown(screen.getByRole("button", { name: "Audit error states" }), { key: "e" });
+    await user.type(within(editor()!).getByRole("textbox", { name: "Notes" }), "Unsaved notes");
+  }
+
+  it("closes an overlay with nothing unsaved in it", async () => {
+    const setPhone = stubBreakpoint();
+    const user = userEvent.setup();
+    renderHost();
+    await user.click(toggle());
+    expect(tasksSurface()).toHaveAttribute("data-presentation", "popover");
+    setPhone(true);
+    expect(tasksSurface()).toBeNull();
+  });
+
+  it("keeps an edit open from the phone sheet to the desktop popover", async () => {
+    phone = true;
+    const setPhone = stubBreakpoint();
+    const user = userEvent.setup();
+    renderHost();
+    await user.click(toggle());
+    // Home shows Global; the task belongs to a thread.
+    await user.click(screen.getByRole("radio", { name: "All" }));
+    await editNotes(user);
+
+    setPhone(false);
+
+    expect(surfaceElement()).toHaveAttribute("data-presentation", "popover");
+    expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved notes");
+  });
+
+  it("keeps an edit open from the docked panel to the phone sheet, and back", async () => {
+    const setPhone = stubBreakpoint();
+    const user = userEvent.setup();
+    act(() => navigate(threadPath("thread-1")));
+    const { spy } = renderHost({ thread: true });
+    await editNotes(user);
+
+    setPhone(true);
+    expect(screen.getByRole("dialog", { name: "Tasks" })).toBeInTheDocument();
+    expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved notes");
+
+    setPhone(false);
+    expect(surfaceElement()).toHaveAttribute("data-presentation", "panel");
+    expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved notes");
+    // The dock was still on stage, so nothing had to reopen it.
+    expect(spy.open).not.toHaveBeenCalled();
+  });
+
+  it("opens the dock for an edit from the phone sheet when Tasks is not docked", async () => {
+    const setPhone = stubBreakpoint();
+    const user = userEvent.setup();
+    act(() => navigate(threadPath("thread-1")));
+    const { spy, host } = renderHost({ thread: true });
+    // Tasks is not on the desktop stage: its panel was closed.
+    fireEvent.click(screen.getByRole("button", { name: "Close Tasks panel" }));
+    expect(tasksSurface()).toBeNull();
+    setPhone(true);
+    act(() => host()?.toggleOverlay());
+    await editNotes(user);
+
+    setPhone(false);
+
+    expect(spy.open).toHaveBeenCalledWith({ focus: false });
+    expect(surfaceElement()).toHaveAttribute("data-presentation", "panel");
+    expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved notes");
+  });
+});
+
 describe("revealTask", () => {
   it("opens the popover on pages without panels", () => {
     renderHost();
