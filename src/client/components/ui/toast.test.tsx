@@ -9,6 +9,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "./dropdown-menu.js";
+import { Dialog, DialogContent, DialogTitle } from "./dialog.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover.js";
 import { ToastProvider, useToast, type ToastOptions } from "./toast.js";
 
@@ -349,6 +350,94 @@ describe("Toast", () => {
   it("requires its provider", () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     expect(() => render(<Harness />)).toThrow("useToast must be used inside ToastProvider");
+  });
+});
+
+describe("Toast over a modal dialog", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  function SheetHarness({ open }: { readonly open: boolean }) {
+    return (
+      <Dialog open={open}>
+        <DialogContent layout="sheet" showClose={false} aria-describedby={undefined}>
+          <DialogTitle>Tasks</DialogTitle>
+          <button type="button">Complete</button>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  it("lives inside the open sheet, so its action stays reachable, and goes home when it closes", async () => {
+    const user = userEvent.setup();
+    const onAction = vi.fn();
+    const view = renderToasts(<SheetHarness open />);
+    const sheet = screen.getByRole("dialog", { name: "Tasks" });
+    act(() => screen.getByRole("button", { name: "Complete" }).focus());
+    act(() => show({ message: "Task completed", action: { label: "Undo", onAction } }));
+
+    // Outside the sheet, the modal would hide it and trap focus away from it.
+    expect(sheet).toContainElement(toast());
+    expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
+    await user.keyboard("{F8}");
+    expect(toast()).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Undo" })).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(onAction).toHaveBeenCalledOnce();
+
+    act(() => show({ message: "Task reopened" }));
+    expect(sheet).toContainElement(toast());
+    view.rerender(
+      <ToastProvider>
+        <Harness />
+        <SheetHarness open={false} />
+      </ToastProvider>,
+    );
+    await act(async () => undefined);
+
+    expect(screen.queryByRole("dialog", { name: "Tasks" })).not.toBeInTheDocument();
+    expect(toast()).toHaveTextContent("Task reopened");
+    expect(document.querySelector('[data-slot="toast-home"]')).toContainElement(toast());
+  });
+
+  it("clears the sheet's bar but not the composer the sheet covers", () => {
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(844);
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(390);
+    renderToasts(
+      <>
+        {/* A live region keeps the composer exposed beside a modal. */}
+        <div data-toast-avoid data-testid="composer">
+          <div aria-live="polite" />
+        </div>
+        <Dialog open>
+          <DialogContent layout="sheet" showClose={false} aria-describedby={undefined}>
+            <DialogTitle>Tasks</DialogTitle>
+            <section data-toast-region data-testid="surface">
+              <button type="button">Complete</button>
+              <div data-toast-avoid data-testid="add-bar" />
+            </section>
+          </DialogContent>
+        </Dialog>
+      </>,
+    );
+    screen.getByTestId("composer").getBoundingClientRect = box({ left: 0, top: 700, width: 390, height: 144 });
+    screen.getByTestId("surface").getBoundingClientRect = box({ left: 0, top: 126, width: 390, height: 718 });
+    screen.getByTestId("add-bar").getBoundingClientRect = box({ left: 0, top: 778, width: 390, height: 66 });
+
+    act(() =>
+      show({ message: "Task completed", anchor: screen.getByRole("button", { name: "Complete" }) }),
+    );
+
+    expect(screen.getByTestId("composer")).not.toHaveAttribute("aria-hidden");
+    expect(viewport().style.getPropertyValue("--toast-bottom")).toBe("66px");
+  });
+
+  it("stays at home while no dialog is open", () => {
+    renderToasts();
+    act(() => show({ message: "Task completed" }));
+    expect(document.querySelector('[data-slot="toast-home"]')).toContainElement(toast());
   });
 });
 

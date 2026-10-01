@@ -64,6 +64,11 @@ const DEFAULT_REGION_SELECTOR = '[data-toast-region="default"]'
  * is one and so takes Escape from an open menu, popover or sheet beneath
  * it). Its region is a dismissable-layer branch instead, so pressing or
  * focusing a toast never dismisses the layer underneath.
+ *
+ * While a modal dialog or sheet is open, the region lives inside the
+ * topmost one: a modal hides everything outside it from assistive
+ * technology and keeps focus inside, so a toast left outside could be seen
+ * but its action could not be reached by screen reader or keyboard.
  */
 function ToastProvider({ children }: { readonly children: React.ReactNode }) {
   const [toast, setToast] = React.useState<ToastEntry | null>(null)
@@ -104,6 +109,8 @@ function ToastRegion({
   readonly onClose: (id: number) => void
 }) {
   const open = toast?.open ?? false
+  const home = React.useRef<HTMLDivElement>(null)
+  const [host] = React.useState(createToastHost)
   const region = React.useRef<HTMLDivElement>(null)
   const viewport = React.useRef<HTMLOListElement>(null)
   // Where focus was before it entered the region, to return it on close.
@@ -111,6 +118,7 @@ function ToastRegion({
   const [hovered, setHovered] = React.useState(false)
   const [focused, setFocused] = React.useState(false)
   const [windowBlurred, setWindowBlurred] = React.useState(false)
+  useToastHost(host, home, toast !== null)
   const placement = useToastPlacement(open, toast?.region ?? null)
   const toastId = toast?.id
   const closeCurrent = React.useCallback(() => {
@@ -178,7 +186,7 @@ function ToastRegion({
     else viewport.current?.focus({ preventScroll: true })
   }, [open])
 
-  return (
+  const content = (
     <DismissableLayer.Branch
       ref={region}
       role="region"
@@ -227,6 +235,68 @@ function ToastRegion({
       </ol>
     </DismissableLayer.Branch>
   )
+
+  return (
+    <div ref={home} data-slot="toast-home">
+      {createPortal(content, host)}
+    </div>
+  )
+}
+
+/**
+ * The node the region renders into. It stays the same node while it moves
+ * between its home at the app root and an open modal dialog, so the toast
+ * keeps its timer, focus and state as it moves.
+ */
+function createToastHost(): HTMLDivElement {
+  const host = document.createElement("div")
+  host.setAttribute("data-slot", "toast-host")
+  return host
+}
+
+/** The open modal dialog or sheet on top: the last opened. */
+function topmostDialog(): HTMLElement | null {
+  const open = document.querySelectorAll<HTMLElement>(
+    '[data-slot="dialog-content"][data-state="open"]'
+  )
+  return open.item(open.length - 1)
+}
+
+/**
+ * Keeps the host in the topmost open modal dialog while a toast is up, and
+ * at home otherwise. A dialog still sliding in is joined once its motion
+ * ends: its transform would carry the fixed toast with it meanwhile.
+ */
+function useToastHost(
+  host: HTMLElement,
+  home: React.RefObject<HTMLElement | null>,
+  active: boolean
+): void {
+  React.useLayoutEffect(() => {
+    const place = () => {
+      const dialog = active ? topmostDialog() : null
+      const target = dialog ?? home.current
+      if (!target || host.parentNode === target) return
+      const motion =
+        dialog?.getAnimations?.().filter(({ playState }) => playState === "running") ?? []
+      if (motion.length > 0) {
+        void Promise.allSettled(motion.map(({ finished }) => finished)).then(place)
+        return
+      }
+      target.append(host)
+    }
+    place()
+    if (!active) return undefined
+    const observer = new MutationObserver(place)
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["data-state"],
+    })
+    return () => observer.disconnect()
+  }, [host, home, active])
+  React.useEffect(() => () => host.remove(), [host])
 }
 
 type Swipe = {
@@ -405,12 +475,16 @@ type ToastPlacement = {
 const TOAST_MIN_ROOM = 64
 
 function toastAvoidElements(): HTMLElement[] {
+  // Content behind a modal dialog or sheet is covered, so the toast need not
+  // clear it. (Not all of it is aria-hidden: a modal leaves live regions and
+  // their ancestors, such as the composer, exposed.)
+  const dialog = topmostDialog()
   return Array.from(
     document.querySelectorAll<HTMLElement>("[data-toast-avoid]")
   ).filter(
-    // Content behind a modal dialog or sheet is aria-hidden (or inert) and
-    // covered, so the toast need not clear it.
-    (element) => !element.closest('[aria-hidden="true"], [inert]')
+    (element) =>
+      (!dialog || dialog.contains(element)) &&
+      !element.closest('[aria-hidden="true"], [inert]')
   )
 }
 

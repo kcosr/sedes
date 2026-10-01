@@ -14,6 +14,14 @@
    --toast-swipe-end-y when it dismisses.
    ─────────────────────────────────────────────────────────────────────── */
 
+/* The host moves between the app root and the topmost open modal dialog.
+   Out of flow, it never adds a row to a dialog's layout; at the root it
+   keeps the toast in the toast band. */
+[data-slot="toast-host"] {
+  position: fixed;
+  z-index: var(--z-toast);
+}
+
 [data-slot="toast-viewport"] {
   position: fixed;
   z-index: var(--z-toast);
