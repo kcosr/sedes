@@ -46,8 +46,11 @@ pane its fraction but never less than its minimum; when it cannot hold both,
 the minimums shrink together in proportion. A panel that arrives on the desktop
 stage collapses the least recently used side panels when the visible minimums
 no longer fit; resizing the window or switching threads never collapses one.
-The rules are in `workspace-panels/layout-fit.ts`; declare a new tenant's
-minimum in its `size`.
+A tenant first opens at its `size.preferredWidth`; with `size.preferredShare`
+it takes that share of the stage instead, kept between its minimum and
+preferred width (Tasks takes 35%: 300px at 1024px, 380px at 1440px). The rules
+are in `workspace-panels/layout-fit.ts`; declare a new tenant's minimum in its
+`size`.
 
 ## Tokens
 

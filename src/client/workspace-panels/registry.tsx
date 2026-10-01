@@ -70,6 +70,12 @@ export interface WorkspacePanelTenant {
     readonly minHeight: number;
     readonly preferredWidth: number;
     readonly preferredHeight: number;
+    /**
+     * The share of the stage a first open takes along its edge's axis,
+     * between the minimum and the preferred size; without one, it takes
+     * the preferred size. A narrow stage then keeps room for Chat.
+     */
+    readonly preferredShare?: number;
   };
   readonly preferredPlacement: {
     readonly edge: "right" | "bottom";
