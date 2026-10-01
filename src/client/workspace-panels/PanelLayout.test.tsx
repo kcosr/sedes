@@ -463,10 +463,10 @@ describe("PanelLayout singleton surfaces", () => {
     ] } };
     setup();
     const toggle = within(screen.getByTestId("workspace-workbench-bar")).getByTestId("tasks-panel-toggle");
-    expect(toggle).toHaveAccessibleName("Open Tasks panel, 2 open tasks for this thread");
-    expect(toggle).toHaveAttribute("data-has-items", "true");
+    expect(toggle).toHaveAccessibleName("Open Tasks panel, 2 open tasks");
+    expect(toggle.querySelector('[data-slot="count-badge"]')).toHaveTextContent("2");
     fireEvent.click(toggle);
-    expect(toggle).toHaveAccessibleName("Close Tasks panel, 2 open tasks for this thread");
+    expect(toggle).toHaveAccessibleName("Close Tasks panel, 2 open tasks");
     expect(toggle).toHaveAttribute("aria-expanded", "true");
   });
 

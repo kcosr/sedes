@@ -1547,7 +1547,7 @@ function PanelLayoutReady({
       >
         <SidebarNavTrigger />
         <div className="workspace-workbench-actions">
-          <TasksPanelToggle openThreadTaskCount={openThreadTaskCount} />
+          <TasksPanelToggle count={openThreadTaskCount} />
           <div className="workspace-panel-open-menu">
             <div
               className="workspace-panel-open-icons"

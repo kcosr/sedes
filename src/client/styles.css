@@ -4663,9 +4663,16 @@ textarea:disabled {
   flex: 0 0 auto;
 }
 
-.thread-bookmarks-trigger[data-has-items="true"],
-.tasks-panel-toggle[data-has-items="true"] {
+.thread-bookmarks-trigger[data-has-items="true"] {
   color: var(--info);
+}
+
+/* With open tasks, the Tasks toggle widens to show their count beside the
+   icon (the badge carries the signal; the icon is not tinted). */
+.tasks-panel-toggle:has(> [data-slot="count-badge"]) {
+  width: auto;
+  gap: var(--space-1);
+  padding-inline: var(--space-1-5);
 }
 
 .thread-find-bar {

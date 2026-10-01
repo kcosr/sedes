@@ -164,9 +164,11 @@ test.describe.serial("Tasks panel", () => {
       sidebarThread.getByRole("img", { name: "1 open task" }),
     ).toBeVisible();
     await expect(threadTasksToggle).toHaveAccessibleName(
-      "Close Tasks panel, 1 open task for this thread",
+      "Close Tasks panel, 1 open task",
     );
-    await expect(threadTasksToggle).toHaveAttribute("data-has-items", "true");
+    await expect(
+      threadTasksToggle.locator('[data-slot="count-badge"]'),
+    ).toHaveText("1");
 
     // Tasks belongs to the application header and survives collapsing Chat.
     await page.getByRole("button", { name: "Collapse Chat panel" }).click();
@@ -196,9 +198,11 @@ test.describe.serial("Tasks panel", () => {
       sidebarThread.getByRole("img", { name: "2 open tasks" }),
     ).toBeVisible();
     await expect(threadTasksToggle).toHaveAccessibleName(
-      "Close Tasks panel, 2 open tasks for this thread",
+      "Close Tasks panel, 2 open tasks",
     );
-    await expect(threadTasksToggle).toHaveAttribute("data-has-items", "true");
+    await expect(
+      threadTasksToggle.locator('[data-slot="count-badge"]'),
+    ).toHaveText("2");
     await threadTask
       .getByRole("button", { name: 'Pin "Verify endpoint"' })
       .click();
@@ -339,8 +343,11 @@ test.describe.serial("Tasks panel", () => {
       sidebarThread.getByRole("img", { name: "1 open task" }),
     ).toBeVisible();
     await expect(threadTasksToggle).toHaveAccessibleName(
-      "Close Tasks panel, 1 open task for this thread",
+      "Close Tasks panel, 1 open task",
     );
+    await expect(
+      threadTasksToggle.locator('[data-slot="count-badge"]'),
+    ).toHaveText("1");
     const followUpTask = panel
       .locator(".tasks-row")
       .filter({ hasText: "Unpinned follow-up" });
@@ -357,10 +364,9 @@ test.describe.serial("Tasks panel", () => {
       { timeout: TASK_MUTATION_TIMEOUT_MS },
     );
     await expect(threadTasksToggle).toHaveAccessibleName("Close Tasks panel");
-    await expect(threadTasksToggle).not.toHaveAttribute(
-      "data-has-items",
-      "true",
-    );
+    await expect(
+      threadTasksToggle.locator('[data-slot="count-badge"]'),
+    ).toHaveCount(0);
     await panel.getByRole("radio", { name: "Project" }).click();
     const projectTask = panel
       .locator(".tasks-row")
