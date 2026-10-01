@@ -567,6 +567,9 @@ describe("ArchivedView paging and view options", () => {
       target: { value: "Thread" },
     });
     expect(screen.getAllByTestId("archive-row")).toHaveLength(100);
+    // Returning to the earlier listing starts from its first page too.
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "" } });
+    expect(screen.getAllByTestId("archive-row")).toHaveLength(100);
   });
 
   it("sorts and groups from View options and remembers the choice", async () => {

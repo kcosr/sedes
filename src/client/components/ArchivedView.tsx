@@ -238,6 +238,11 @@ export const ArchivedView = memo(function ArchivedView({
     key: pageKey,
     limit: ARCHIVE_PAGE_SIZE,
   });
+  // Forget the expanded page as soon as the listing changes, so returning to
+  // an earlier search starts from the first page again.
+  if (paging.key !== pageKey) {
+    setPaging({ key: pageKey, limit: ARCHIVE_PAGE_SIZE });
+  }
   const limit = paging.key === pageKey ? paging.limit : ARCHIVE_PAGE_SIZE;
   const page = useMemo(
     () => pageArchivedThreads(projection, limit),
