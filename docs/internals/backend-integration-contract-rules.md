@@ -1744,6 +1744,19 @@ interrupt target, or Stop availability from a generic idle notification while
 the backend's reviewed durable projection still has an in-progress turn. Keep
 them latched until the exact reviewed turn-terminal result or recovery evidence
 settles that turn; then publish the terminal turn and idle run state in order.
+If one refresh observes a whole new turn through completion, publish fresh idle
+evidence even when the previous projection was idle, so post-submit gates can
+settle without requiring an intermediate running state.
+Positive provider admission or execution evidence ahead of transcript
+materialization may use normalized `starting`, without inventing a turn ID.
+Normal startup is not connection loss or projection recovery; keep its
+transitional action gates instead of displaying a recovery state. Without
+positive current evidence, unfinished history remains uncertain.
+Pending provider input alone is not indefinite execution evidence: bound any
+promotion grace period, recheck it without depending on future events, and
+never let parked input mask orphaned work or survive terminal evidence as a
+new startup. When execution settles after a finite history read, a bounded
+terminal confirmation must share that acquisition's resource budget.
 
 Normalize provider titles, text, and errors at the backend boundary. Apply
 shared length and payload limits before persistence or broadcast. One malformed

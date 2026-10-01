@@ -24,7 +24,7 @@ export interface OpenCodeHistoryProjectionInput {
   /** Canonical server-derived tenant/principal/thread/backend/store/session identity. */
   readonly bindingScope: readonly string[];
   readonly generation: string;
-  readonly activity: "running" | "idle" | "unknown";
+  readonly activity: "starting" | "running" | "idle" | "unknown";
   readonly backgroundActivity?: BackgroundActivity;
   readonly observedParts?: ReadonlyMap<string, OpenCodeObservedPart>;
   /** Exact private dispatch/consumption proof; native-only messages have no entry. */
@@ -275,10 +275,10 @@ export class OpenCodeHistoryProjection {
     this.updateRuntimeState(input);
   }
 
-  updateRuntimeState(input: { readonly activity?: "running" | "idle" | "unknown"; readonly backgroundActivity?: BackgroundActivity }): void {
+  updateRuntimeState(input: { readonly activity?: OpenCodeHistoryProjectionInput["activity"]; readonly backgroundActivity?: BackgroundActivity }): void {
     if (input.backgroundActivity) this.#backgroundActivity = input.backgroundActivity;
     if (input.activity === undefined) return;
-    this.#runState = input.activity === "running" ? "running" : input.activity === "unknown" ? "disconnected"
+    this.#runState = input.activity === "starting" || input.activity === "running" ? input.activity : input.activity === "unknown" ? "disconnected"
       : this.turnsById[this.orderedBackendTurnIds.at(-1) ?? ""]?.status === "failed" ? "failed" : "idle";
     this.#activeBackendTurnId = input.activity === "running" && this.turnsById[this.orderedBackendTurnIds.at(-1) ?? ""]?.status === "in_progress"
       ? this.orderedBackendTurnIds.at(-1) : undefined;

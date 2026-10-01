@@ -404,6 +404,10 @@
   cleared or Chat is collapsed and restored. Before, it stayed at its tallest
   height, up to 220px of empty text area.
 
+- Sending an OpenCode message no longer flashes a disconnected warning while
+  its native queue and history catch up. Actual connection loss and uncertain
+  unfinished work still require recovery.
+
 - Opening the Task editor no longer collapses the Task list to nothing or
   scrolls the Tasks header away; the editor is a dialog with the list visible
   behind it.

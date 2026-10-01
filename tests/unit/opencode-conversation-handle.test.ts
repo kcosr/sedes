@@ -339,7 +339,7 @@ describe("OpenCode SSE and native history composition", () => {
     expect(current.wire.requests.filter(request => request.query.get("order") === "asc")).toHaveLength(1);
     expect(current.client.lifetime.aborted).toBe(false);
   });
-  it("keeps an older idle cut unknown until catch-up supplies the newer active turn coordinate", async () => {
+  it("keeps an older idle cut starting until catch-up supplies the newer active turn coordinate", async () => {
     const current = await attached([user(), idle()]);
     const getPage = OpenCodeNativeApi.prototype.getHistoryPage;
     let admitted = false;
@@ -355,13 +355,229 @@ describe("OpenCode SSE and native history composition", () => {
       return page;
     });
     const baseline = await current.handle.establishProjection({ signal: signal() });
-    expect(baseline.snapshot.runState).toBe("disconnected");
+    expect(baseline.snapshot.runState).toBe("starting");
     expect(baseline.snapshot.activeBackendTurnId).toBeUndefined();
     const events: SequencedBackendEvent[] = []; baseline.subscribeFromNext(value => events.push(value));
     await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ event: expect.objectContaining({
       type: "run_state_changed", state: "running", activeBackendTurnId: expect.any(String),
     }) })));
     expect(events.some(value => value.event.type === "resnapshot_required")).toBe(false);
+    expect(events.some(({ event }) => event.type === "run_state_changed" &&
+      (event.state === "disconnected" || event.state === "reconciling"))).toBe(false);
+  });
+  it.each([false, true])("expires an inactive pending input without SSE (repeated refresh: %s)", async repeatRefresh => {
+    const current = await attached([user(), idle()]);
+    const inbox = `/api/session/${current.wire.sessionID}/inbox`;
+    current.wire.setResponse(inbox, 200, { data: [{ type: "user", id: "msg_parked", sessionID: current.wire.sessionID,
+      time: { created: 4 }, payload: { text: "Parked input" }, delivery: "queue" }] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const baseline = await current.handle.establishProjection({ signal: signal() });
+      expect(baseline.snapshot.runState).toBe("starting");
+      const events: SequencedBackendEvent[] = []; baseline.subscribeFromNext(value => events.push(value));
+      await vi.advanceTimersByTimeAsync(1_000);
+      if (repeatRefresh) for (let index = 0; index < 3; index++) {
+        expect((await current.handle.establishProjection({ signal: signal() })).snapshot.runState).toBe("starting");
+      }
+      const reads = current.wire.requests.filter(request => request.pathname === inbox).length;
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(events).toContainEqual(expect.objectContaining({ event: { type: "run_state_changed", state: "disconnected" } }));
+      expect(current.wire.requests.filter(request => request.pathname === inbox)).toHaveLength(reads + 1);
+      expect((await current.handle.establishProjection({ signal: signal() })).snapshot.runState).toBe("disconnected");
+      expect(events.some(({ event }) => event.type === "resnapshot_required")).toBe(false);
+      expect(current.interrupts()).toHaveLength(0);
+    } finally { await current.handle.close(); vi.useRealTimers(); }
+  });
+  it("does not renew promotion grace as overlapping pending cohorts replace their first row", async () => {
+    const current = await attached([user(), idle()]);
+    const inbox = `/api/session/${current.wire.sessionID}/inbox`;
+    const pending = (ids: readonly string[]) => current.wire.setResponse(inbox, 200, { data: ids.map(id => ({
+      type: "user", id, sessionID: current.wire.sessionID, time: { created: 4 }, payload: { text: id }, delivery: "queue",
+    })) });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      pending(["msg_a"]);
+      expect((await current.handle.establishProjection({ signal: signal() })).snapshot.runState).toBe("starting");
+      await vi.advanceTimersByTimeAsync(700); pending(["msg_a", "msg_b"]);
+      expect((await current.handle.establishProjection({ signal: signal() })).snapshot.runState).toBe("starting");
+      await vi.advanceTimersByTimeAsync(700); pending(["msg_b"]);
+      const baseline = await current.handle.establishProjection({ signal: signal() });
+      expect(baseline.snapshot.runState).toBe("starting");
+      const events: SequencedBackendEvent[] = []; baseline.subscribeFromNext(value => events.push(value));
+      await vi.advanceTimersByTimeAsync(601);
+      expect(events).toContainEqual(expect.objectContaining({ event: { type: "run_state_changed", state: "disconnected" } }));
+      expect((await current.handle.establishProjection({ signal: signal() })).snapshot.runState).toBe("disconnected");
+    } finally { await current.handle.close(); vi.useRealTimers(); }
+  });
+  it.each(["retained idle", "newer session terminal"])("keeps an input surviving %s uncertain immediately", async evidence => {
+    const current = await attached([user(), { ...idle(), outcome: "interrupted" } as SessionMessageInfo]);
+    const created = evidence === "retained idle" ? 2 : 4;
+    if (evidence === "newer session terminal") {
+      current.wire.session.outcome = "interrupted";
+      current.wire.session.time.idle = 5;
+    }
+    current.wire.setResponse(`/api/session/${current.wire.sessionID}/inbox`, 200, { data: [{ type: "user", id: "msg_surviving_stop",
+      sessionID: current.wire.sessionID, time: { created }, payload: { text: "Still parked" }, delivery: "queue" }] });
+    const baseline = await current.handle.establishProjection({ signal: signal() });
+    expect(baseline.snapshot.runState).toBe("disconnected");
+    expect(baseline.snapshot.activeBackendTurnId).toBeUndefined();
+    expect(current.interrupts()).toHaveLength(0);
+  });
+  it("does not let fresh pending input hide inactive unfinished history", async () => {
+    const current = await attached([user(), assistant()]);
+    current.wire.setResponse(`/api/session/${current.wire.sessionID}/inbox`, 200, { data: [{ type: "user", id: "msg_new_pending",
+      sessionID: current.wire.sessionID, time: { created: 4 }, payload: { text: "New input" }, delivery: "queue" }] });
+    const baseline = await current.handle.establishProjection({ signal: signal() });
+    expect(baseline.snapshot.runState).toBe("disconnected");
+    expect(Object.values(baseline.snapshot.turnsById)[0]?.status).toBe("in_progress");
+    expect(baseline.snapshot.activeBackendTurnId).toBeUndefined();
+    expect(current.wire.requests.filter(request => request.query.get("order") === "desc")).toHaveLength(2);
+    expect(current.wire.requests.filter(request => request.query.get("order") === "asc")).toHaveLength(1);
+  });
+  it("does not classify a just-consumed inbox row against a newer session terminal", async () => {
+    const current = await attached([user(), idle()]);
+    const inbox = `/api/session/${current.wire.sessionID}/inbox`;
+    current.wire.session.time.idle = 3;
+    current.wire.setResponse(inbox, 200, { data: [{ type: "user", id: "msg_consumed_during_inventory", sessionID: current.wire.sessionID,
+      time: { created: 4 }, payload: { text: "Fast input" }, delivery: "queue" }] });
+    const getPending = OpenCodeNativeApi.prototype.getPending;
+    let finished = false;
+    vi.spyOn(OpenCodeNativeApi.prototype, "getPending").mockImplementation(async function (this: OpenCodeNativeApi, ...args) {
+      const result = await getPending.apply(this, args);
+      if (!finished) {
+        finished = true;
+        current.wire.clearResponse(inbox);
+        current.wire.messages.push({ ...user("msg_consumed_during_inventory"), time: { created: 4 } },
+          { ...idle("msg_terminal_after_inventory"), time: { created: 5 } });
+        current.wire.session.time.idle = 5;
+      }
+      return result;
+    });
+    const raw: BackendConversationEvent[] = []; current.handle.subscribe(value => raw.push(value));
+    const baseline = await current.handle.establishProjection({ signal: signal() });
+    expect(baseline.snapshot.runState).toBe("starting");
+    expect((await current.handle.establishProjection({ signal: signal() })).snapshot.runState).toBe("idle");
+    expect(raw.some(event => event.type === "resnapshot_required" || event.type === "run_state_changed" &&
+      (event.state === "disconnected" || event.state === "reconciling"))).toBe(false);
+  });
+  it("rechecks inbox after a confirmation cut adds a newer terminal", async () => {
+    const current = await attached([user(), assistant()]);
+    const inbox = `/api/session/${current.wire.sessionID}/inbox`;
+    current.wire.setResponse(inbox, 200, { data: [{ type: "user", id: "msg_consumed_at_terminal", sessionID: current.wire.sessionID,
+      time: { created: 2 }, payload: { text: "Consumed meanwhile" }, delivery: "queue" }] });
+    const getActivity = OpenCodeNativeApi.prototype.getActivity;
+    let finished = false;
+    vi.spyOn(OpenCodeNativeApi.prototype, "getActivity").mockImplementation(async function (this: OpenCodeNativeApi, ...args) {
+      if (!finished) {
+        finished = true;
+        current.wire.messages[1] = { ...assistant([{ type: "text", text: "Done" }]), time: { created: 2, completed: 3 } };
+        current.wire.messages.push(idle());
+        current.wire.clearResponse(inbox);
+      }
+      return getActivity.apply(this, args);
+    });
+    const baseline = await current.handle.establishProjection({ signal: signal() });
+    expect(baseline.snapshot.runState).toBe("idle");
+    expect(Object.values(baseline.snapshot.turnsById)[0]?.status).toBe("completed");
+    expect(current.wire.requests.filter(request => request.pathname === inbox)).toHaveLength(2);
+    expect(current.wire.requests.filter(request => request.query.get("order") === "desc")).toHaveLength(2);
+  });
+  it("rechecks positive activity after the final idle cut without waiting for another SSE event", async () => {
+    const current = await attached([user(), idle()]);
+    current.wire.setResponse("/api/session/active", 200, { data: { [current.wire.sessionID]: { type: "running" } } });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const baseline = await current.handle.establishProjection({ signal: signal() });
+      expect(baseline.snapshot.runState).toBe("starting");
+      const events: SequencedBackendEvent[] = []; baseline.subscribeFromNext(value => events.push(value));
+      const reads = () => current.wire.requests.filter(request => request.pathname === "/api/session/active").length;
+      const initialReads = reads();
+      await vi.advanceTimersByTimeAsync(2_001);
+      expect(reads()).toBe(initialReads + 1);
+      expect(events.some(({ event }) => event.type === "run_state_changed" && event.state === "disconnected")).toBe(false);
+      // Native process-local ownership disappears after publishing its terminal;
+      // no later durable event is required to announce this teardown.
+      current.wire.clearResponse("/api/session/active");
+      await vi.advanceTimersByTimeAsync(2_001);
+      expect(events).toContainEqual(expect.objectContaining({ event: { type: "run_state_changed", state: "idle" } }));
+      expect(events.some(({ event }) => event.type === "resnapshot_required")).toBe(false);
+      expect(current.interrupts()).toHaveLength(0);
+    } finally { await current.handle.close(); vi.useRealTimers(); }
+  });
+  it("confirms native settlement once when execution completes between history and activity reads", async () => {
+    const current = await attached([user(), assistant()]);
+    const getActivity = OpenCodeNativeApi.prototype.getActivity;
+    let completed = false;
+    vi.spyOn(OpenCodeNativeApi.prototype, "getActivity").mockImplementation(async function (this: OpenCodeNativeApi, ...args) {
+      if (!completed) {
+        completed = true;
+        current.wire.messages[1] = { ...assistant([{ type: "text", text: "Final answer" }]), time: { created: 2, completed: 3 } };
+        current.wire.messages.push(idle());
+      }
+      return getActivity.apply(this, args);
+    });
+    const raw: BackendConversationEvent[] = []; current.handle.subscribe(value => raw.push(value));
+    const baseline = await current.handle.establishProjection({ signal: signal() });
+    expect(baseline.snapshot.runState).toBe("idle");
+    expect(Object.values(baseline.snapshot.turnsById)[0]?.status).toBe("completed");
+    expect(baseline.snapshot.itemsById[openCodeHistoryItemId("msg_assistant", 0)])
+      .toMatchObject({ status: "completed", markdown: { text: "Final answer" } });
+    expect(current.wire.requests.filter(request => request.query.get("order") === "desc")).toHaveLength(2);
+    expect(current.wire.requests.filter(request => request.query.get("order") === "asc")).toHaveLength(1);
+    expect(raw.some(event => event.type === "resnapshot_required" || event.type === "run_state_changed" &&
+      (event.state === "disconnected" || event.state === "reconciling"))).toBe(false);
+    expect(current.interrupts()).toHaveLength(0);
+  });
+  it("moves each native queued input through startup and execution without a recovery state", async () => {
+    const current = await attached([user(), idle()]);
+    const baseline = await current.handle.establishProjection({ signal: signal() });
+    const events: SequencedBackendEvent[] = []; baseline.subscribeFromNext(value => events.push(value));
+    const states = () => events.flatMap(({ event }) => event.type === "run_state_changed" ? [event.state] : []);
+    const inbox = `/api/session/${current.wire.sessionID}/inbox`;
+    for (let index = 0; index < 2; index++) {
+      const id = `msg_queued_${index}`, created = 4 + index * 3;
+      current.wire.setResponse(inbox, 200, { data: [{ type: "user", id, sessionID: current.wire.sessionID,
+        payload: { text: "Next question" }, delivery: "queue", time: { created } }] });
+      current.wire.send(event("session.inbox.enqueued", { inboxID: id,
+        item: { type: "user", delivery: "queue", payload: { text: "Next question" } } }, true));
+      await vi.waitFor(() => expect(states().at(-1)).toBe("starting"));
+      const starting = events.findLast(({ event }) => event.type === "run_state_changed")!.event;
+      expect(starting).not.toHaveProperty("activeBackendTurnId");
+      expect(events.filter(({ event }) => event.type === "turn_started")).toHaveLength(index);
+
+      current.wire.clearResponse(inbox);
+      current.wire.messages.push({ ...user(id), time: { created } });
+      current.wire.setResponse("/api/session/active", 200, { data: { [current.wire.sessionID]: { type: "running" } } });
+      current.wire.send(event("session.execution.started", {}, true));
+      await vi.waitFor(() => expect(states().at(-1)).toBe("running"));
+      expect(events.filter(({ event }) => event.type === "turn_started")).toHaveLength(index + 1);
+
+      current.wire.messages.push({ ...idle(`msg_finished_${index}`), time: { created: created + 2 } });
+      current.wire.clearResponse("/api/session/active");
+      current.wire.send(event("session.execution.succeeded", {}, true));
+      await vi.waitFor(() => expect(states().at(-1)).toBe("idle"));
+    }
+    expect(states()).toEqual(["starting", "running", "idle", "starting", "running", "idle"]);
+    expect(events.some(({ event }) => event.type === "resnapshot_required")).toBe(false);
+    expect(current.wire.requests.filter(request => request.pathname === "/api/event")).toHaveLength(1);
+  });
+  it("reads activity after inbox promotion instead of publishing an old idle observation", async () => {
+    const current = await attached([user(), idle()]);
+    let promoted = false;
+    vi.spyOn(OpenCodeNativeApi.prototype, "getPending").mockImplementation(async () => {
+      // The inbox response arrives after native execution has begun. An activity
+      // request made concurrently would have captured the earlier inactive state.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      promoted = true;
+      return [];
+    });
+    vi.spyOn(OpenCodeNativeApi.prototype, "getActivity").mockImplementation(async () => ({
+      active: promoted, children: [], activeChildren: [], shells: [], observedAt: Date.now(),
+    }));
+    const baseline = await current.handle.establishProjection({ signal: signal() });
+    expect(baseline.snapshot.runState).toBe("starting");
+    expect(baseline.snapshot.activeBackendTurnId).toBeUndefined();
+    expect(baseline.snapshot.orderedBackendTurnIds).toHaveLength(1);
   });
   it("recovers a failed non-head assistant reopened by retry and observes its new text and settlement", async () => {
     const failed = { ...assistant(), time: { created: 2, completed: 3 }, error: { type: "ProviderError", message: "retry me" } } as SessionMessageInfo;
@@ -413,6 +629,8 @@ describe("OpenCode SSE and native history composition", () => {
     const tool = { type: "tool" as const, id: "tool_race", name: "read", state: { status: "running" as const, input: {}, metadata: {} }, time: { created: 2 } };
     const complete = { ...assistant([tool]), time: { created: 2, completed: 3 } };
     const current = await attached([user(), complete, { id: "msg_later", type: "system", text: "Later", time: { created: 4 } }]);
+    // This test exercises live dirty revisions, not inactive orphan recovery.
+    current.wire.setResponse("/api/session/active", 200, { data: { [current.wire.sessionID]: { type: "running" } } });
     const baseline = await current.handle.establishProjection({ signal: signal() }); const events: SequencedBackendEvent[] = [];
     baseline.subscribeFromNext(value => events.push(value));
     const readMessage = OpenCodeNativeApi.prototype.getMessage; let updated = false;

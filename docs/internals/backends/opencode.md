@@ -271,6 +271,22 @@ completion alone is not an immutability guarantee. A retry that changes the
 record's creation anchor triggers a fresh projection generation.
 Live durable changes reuse the retained native cut and unchanged
 closed-turn projections; text fragments update only affected normalized items.
+Active execution ahead of the retained history uses the existing normalized
+`starting` state until an active turn is observed. A newly observed inactive
+inbox gets at most two seconds for promotion, followed by a read-only refresh
+even without another event. Repeated reads or overlapping inbox rows cannot
+renew that deadline, and rows surviving a native idle terminal provide no
+startup evidence. Starting adds no recovery banner or synthetic turn and keeps
+transitional delivery gates closed. Inbox is read before activity to follow
+promotion into execution. If inactive activity follows an unfinished history
+cut, confirm the finite history head once within the same acquisition budget
+before projecting uncertainty. Terminal evidence precedes its inbox snapshot;
+a newly confirmed terminal gets one inbox/activity recheck so consumed rows
+cannot look parked. Active execution with a closed history cut also schedules
+read-only startup rechecks, since native active removal can follow its final
+durable event. Inactive unfinished history or unresolved
+interactions remain unknown even with pending input; connection loss still
+follows normal projection recovery.
 Child execution and attributed shell changes refresh the scoped activity inventory
 without reading parent history. Paging and lookup operate on the retained
 projection and cannot consume live events. It does not write a transcript mirror. Limits are 32 MiB per
