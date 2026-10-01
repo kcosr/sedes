@@ -317,3 +317,45 @@ describe("revealTask", () => {
     expect(screen.getByRole("dialog", { name: "Tasks" })).toBeInTheDocument();
   });
 });
+
+describe("toggle Tasks shortcut", () => {
+  const press = (target: Element = document.body, init: KeyboardEventInit = {}) =>
+    fireEvent.keyDown(target, { key: "L", ctrlKey: true, shiftKey: true, ...init });
+
+  it("toggles the popover on pages without panels", () => {
+    renderHost();
+    press();
+    expect(tasksSurface()).toHaveAttribute("data-presentation", "popover");
+    press(tasksSurface()!);
+    expect(tasksSurface()).toBeNull();
+    press(document.body, { metaKey: true, ctrlKey: false, key: "l" });
+    expect(tasksSurface()).not.toBeNull();
+  });
+
+  it("toggles the docked panel in a thread workspace", () => {
+    const { spy } = renderHost({ thread: true });
+    press();
+    expect(spy.toggle).toHaveBeenCalledTimes(1);
+    expect(tasksSurface()).toBeNull();
+    press();
+    expect(spy.toggle).toHaveBeenCalledTimes(2);
+    expect(tasksSurface()).not.toBeNull();
+  });
+
+  it("leaves other dialogs, repeats, plain keys and Settings alone", () => {
+    const view = renderHost();
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    const field = document.createElement("input");
+    dialog.append(field);
+    document.body.append(dialog);
+    press(field);
+    press(document.body, { repeat: true });
+    press(document.body, { shiftKey: false });
+    expect(tasksSurface()).toBeNull();
+    view.setActive(false);
+    press();
+    expect(tasksSurface()).toBeNull();
+    dialog.remove();
+  });
+});

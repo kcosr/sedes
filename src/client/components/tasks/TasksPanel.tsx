@@ -52,6 +52,10 @@ import {
   useTasksViewOptions,
   type TasksView as TasksPanelView,
 } from "../../app/tasks-panel-store.js";
+import {
+  TASKS_TOGGLE_COMMAND,
+  matchesKeyboardShortcut,
+} from "../../app/keyboard-shortcuts.js";
 import { useRoute, type Route } from "../../app/router.js";
 import { useComposerDraftStaging } from "../../context-excerpts/coordinator.js";
 import { useMediaQuery } from "../../app/use-media-query.js";
@@ -1426,6 +1430,11 @@ export function TasksPanel({
     if (latest.current.placement === "panel") latest.current.dock?.close();
     else setOverlayOpen(false);
   }, []);
+  const toggle = useCallback(() => {
+    const { mobile, threadWorkspace, dock } = latest.current;
+    if (!mobile && threadWorkspace) dock?.toggle();
+    else toggleOverlay();
+  }, [toggleOverlay]);
 
   useEffect(
     () =>
@@ -1437,6 +1446,25 @@ export function TasksPanel({
       }),
     [],
   );
+
+  useEffect(() => {
+    if (!active) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.repeat) return;
+      if (!matchesKeyboardShortcut(event, TASKS_TOGGLE_COMMAND.defaultBinding))
+        return;
+      // A dialog above the workbench keeps its keys, unless it is Tasks.
+      const dialog =
+        event.target instanceof Element
+          ? event.target.closest('[role="dialog"], [role="alertdialog"]')
+          : null;
+      if (dialog && !dialog.querySelector('[data-slot="tasks-panel"]')) return;
+      event.preventDefault();
+      toggle();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active, toggle]);
 
   const host = useMemo<TasksHost>(
     () => ({
