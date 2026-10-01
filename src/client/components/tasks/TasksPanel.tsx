@@ -1450,8 +1450,16 @@ export function TasksPanel({
           align="end"
           aria-label="Tasks"
           className="tasks-popover max-h-[min(var(--radix-popover-content-available-height),680px)] w-[min(400px,calc(100vw-16px))] gap-0 overflow-hidden p-0"
-          onOpenAutoFocus={() => {
+          onOpenAutoFocus={(event) => {
             dismissedOutside.current = false;
+            // The content marks its add row as the docked panel's focus
+            // target; the popover honours the same marker.
+            const preferred = (
+              event.currentTarget as HTMLElement
+            ).querySelector<HTMLElement>("[data-panel-autofocus]");
+            if (!preferred) return;
+            event.preventDefault();
+            preferred.focus();
           }}
           onInteractOutside={(event) => {
             const target = event.detail.originalEvent.target;
