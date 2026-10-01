@@ -36,8 +36,9 @@ for (const kind of ["local", "ssh", "outbound"] as const) test(`OpenCode v2 ${ki
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/");
   await expect(page.getByTestId("desktop-sidebar")).toBeVisible();
-  let settings = await openSettingsPage(page, "backends");
+  const settings = await openSettingsPage(page, "backends");
   await settings.getByRole("button", { name: "Add backend", exact: true }).click();
+  await expect(page).toHaveURL("/settings/backends/~new");
   await settings.getByLabel("Execution environment", { exact: true }).selectOption(environment.id);
   await settings.getByLabel("Backend type", { exact: true }).selectOption("opencode");
   await settings.getByLabel("Backend name", { exact: true }).fill(label);
@@ -65,11 +66,14 @@ for (const kind of ["local", "ssh", "outbound"] as const) test(`OpenCode v2 ${ki
   expect(owned.configuration.targets.find(value => value.backendInstanceId === backend!.id))
     .toMatchObject({ kind: "opencode_http", enabled: false, executionEnvironmentId: environment.id });
 
+  await expect(page).toHaveURL(`/settings/backends/${backend!.id}`);
   await page.reload();
-  settings = await openSettingsPage(page, "backends");
-  await settings.getByRole("button", { name: `Edit ${label}`, exact: true }).click();
-  await expect(settings.getByLabel("Execution environment", { exact: true })).toBeDisabled();
-  await expect(settings.getByLabel("Execution environment", { exact: true })).toHaveValue(environment.id);
+  const details = settings.getByRole("region", { name: `${label} details`, exact: true });
+  await expect(details.getByRole("heading", { name: label, exact: true })).toBeVisible();
+  await details.getByRole("button", { name: `Edit ${label}`, exact: true }).click();
+  await expect(page).toHaveURL(`/settings/backends/${backend!.id}/edit`);
+  await expect(settings.getByRole("combobox", { name: "Execution environment", exact: true })).toHaveCount(0);
+  await expect(settings.getByRole("group", { name: "Execution environment", exact: true })).toContainText(environment.label);
   await expect(settings.getByLabel("OpenCode v2 executable path", { exact: true })).toHaveValue("/fixture/bin/opencode2");
   await settings.getByLabel("Connection ownership", { exact: true }).selectOption("http");
   await expect(settings.getByLabel("OpenCode v2 executable path", { exact: true })).toHaveCount(0);
@@ -103,15 +107,19 @@ for (const kind of ["local", "ssh", "outbound"] as const) test(`OpenCode v2 ${ki
         secret },
     } },
   } });
+  expect(external.configuration.targets.find(value => value.backendInstanceId === backend!.id))
+    .toMatchObject({ kind: "opencode_http", enabled: false, executionEnvironmentId: environment.id });
   if (saved?.kind !== "opencode") throw new Error("Saved OpenCode backend missing");
   expect(saved.moduleConfiguration.connection.channel).not.toHaveProperty("executablePath");
+  await expect(settings.getByRole("button", { name: "Save backend", exact: true })).toBeDisabled();
+  await expect(page).toHaveURL(`/settings/backends/${backend!.id}/edit`);
   await page.reload();
-  settings = await openSettingsPage(page, "backends");
-  await settings.getByRole("button", { name: `Edit ${label}`, exact: true }).click();
+  await expect(settings.getByRole("region", { name: "Backend editor", exact: true })
+    .getByRole("heading", { name: `Edit ${label}`, exact: true })).toBeVisible();
   await expect(settings.getByLabel("Connection ownership", { exact: true })).toHaveValue("http");
   await expect(settings.getByLabel(kind === "local" ? "Password environment variable" : "Password file reference", { exact: true }))
     .toHaveValue(kind === "local" ? secret.variable! : secret.path!);
-  await expect(settings.getByLabel("Execution environment", { exact: true })).toBeDisabled();
-  await expect(settings.getByLabel("Execution environment", { exact: true })).toHaveValue(environment.id);
+  await expect(settings.getByRole("combobox", { name: "Execution environment", exact: true })).toHaveCount(0);
+  await expect(settings.getByRole("group", { name: "Execution environment", exact: true })).toContainText(environment.label);
   await expectNoPageOverflow(page);
 });
