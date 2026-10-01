@@ -1,7 +1,6 @@
 {
   "$comment": "Ratchet for src/client/styles.guardrails.test.ts: offender counts per rule and file may only go down. After removing offenders run UPDATE_STYLE_GUARDRAILS=1 npx vitest run src/client/styles.guardrails.test.ts",
   "colorLiterals": {
-    "components/tasks/tasks-panel.css": 1,
     "components/thread/flat-thread-row.css": 2,
     "styles.css": 3,
     "usage/usage.css": 41,
@@ -9,7 +8,6 @@
     "workspace-files/workspace-compare.css": 1
   },
   "fontSizeLiterals": {
-    "components/tasks/tasks-panel.css": 15,
     "components/thread/flat-thread-row.css": 12,
     "components/thread/question-inbox.css": 8,
     "components/thread/thread-group-roster.css": 1,
@@ -21,7 +19,6 @@
     "workspace-files/workspace-review-inspector.css": 1
   },
   "fontWeightLiterals": {
-    "components/tasks/tasks-panel.css": 3,
     "components/thread/flat-thread-row.css": 5,
     "components/thread/question-inbox.css": 2,
     "components/thread/thread-group-roster.css": 1,

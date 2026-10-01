@@ -12,12 +12,11 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useLayoutEffect } from "react";
-import {
-  TASK_DETAILS_MAX_CHARACTERS,
-  type AssociatedTask,
-  type NormalizedApplicationSnapshot,
-  type Task,
-  type WorkspaceFileLinkReference,
+import type {
+  AssociatedTask,
+  NormalizedApplicationSnapshot,
+  Task,
+  WorkspaceFileLinkReference,
 } from "../../../shared/index.js";
 import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
 import { navigate, threadPath } from "../../app/router.js";
@@ -25,30 +24,45 @@ import {
   ComposerDraftProvider,
   useComposerDraftCoordinator,
 } from "../../context-excerpts/coordinator.js";
-import {
-  setTasksPanelIncludeNestedScopes,
-  setTasksPanelOpen,
-  setTasksPanelPinned,
-} from "../../app/tasks-panel-store.js";
+import { setTasksPanelOpen, setTasksPanelPinned } from "../../app/tasks-panel-store.js";
 import { TasksPanel } from "./TasksPanel.js";
+import { revealTask } from "./task-reveal.js";
 import type { PanelLayoutStore } from "../../workspace-panels/panel-state.js";
 import { setPanelPresentation } from "../../app/settings.js";
 import { TASK_DRAG_MIME, TaskDragProvider } from "../../tasks/task-drag.js";
+import { CLOSE_TASK_DETAIL_EVENT } from "../../app/android-back.js";
 
-const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+const toast = vi.hoisted(() => ({ show: vi.fn() }));
+vi.mock("./task-toast.js", () => ({ useTaskToast: () => toast }));
 
-beforeEach(() => {
-  HTMLElement.prototype.scrollIntoView = vi.fn();
-  // Desktop shell: the panel renders as the floating card, not the sheet.
+const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+  HTMLElement.prototype,
+  "scrollIntoView",
+);
+
+function stubDensity(touch: boolean) {
   vi.stubGlobal(
     "matchMedia",
     vi.fn(() => ({
-      matches: false,
+      matches: touch,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     })),
   );
-  setTasksPanelIncludeNestedScopes(false);
+}
+
+function resetStorage() {
+  window.localStorage.clear();
+  // Module caches drop their snapshot on a storage event without a key.
+  window.dispatchEvent(new StorageEvent("storage", { key: null }));
+}
+
+beforeEach(() => {
+  HTMLElement.prototype.scrollIntoView = vi.fn();
+  // Desktop shell: the panel renders as the floating card, not the sheet.
+  stubDensity(false);
+  resetStorage();
+  toast.show.mockReset();
   setTasksPanelPinned(true);
   setTasksPanelOpen(true);
 });
@@ -62,7 +76,7 @@ afterEach(() => {
   }
   setTasksPanelOpen(false);
   vi.unstubAllGlobals();
-  window.localStorage.clear();
+  resetStorage();
   navigate("/", { replace: true });
 });
 
@@ -83,39 +97,59 @@ function makeTask(overrides: Partial<AssociatedTask> = {}): AssociatedTask {
   };
 }
 
+type StoreContext = {
+  readonly threads?: readonly unknown[];
+  readonly workspaces?: readonly unknown[];
+  readonly environments?: readonly unknown[];
+  readonly resolveFileLink?: (absolutePath: string) =>
+    | {
+        readonly status: "resolved";
+        readonly rootId: string;
+        readonly path: string;
+        readonly rootVisibility: "listed" | "link_only";
+      }
+    | { readonly status: "not_found" };
+};
+
+/** A store whose snapshot can be republished, so mutations can be reflected. */
 function makeStore(
-  tasks: readonly AssociatedTask[],
-  context: {
-    readonly threads?: readonly unknown[];
-    readonly workspaces?: readonly unknown[];
-    readonly environments?: readonly unknown[];
-    readonly resolveFileLink?: (absolutePath: string) =>
-      | {
-          readonly status: "resolved";
-          readonly rootId: string;
-          readonly path: string;
-          readonly rootVisibility: "listed" | "link_only";
-        }
-      | { readonly status: "not_found" };
-  } = {},
-): ApplicationClientStore {
-  const state = {
+  initialTasks: readonly AssociatedTask[],
+  context: StoreContext = {},
+): ApplicationClientStore & { publish(tasks: readonly AssociatedTask[]): void } {
+  let state = {
     snapshot: {
       threads: context.threads ?? [],
       workspaces: context.workspaces ?? [],
       environments: context.environments ?? [],
-      tasks,
+      tasks: initialTasks,
     },
   };
+  const listeners = new Set<() => void>();
+  const publish = (tasks: readonly AssociatedTask[]) => {
+    state = { snapshot: { ...state.snapshot, tasks } };
+    for (const listener of listeners) listener();
+  };
   return {
-    subscribe: () => () => undefined,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     getSnapshot: () => state,
     getTasks: () => state.snapshot.tasks,
-    createTask: vi.fn(async (title: string, scope: Task["scope"]) =>
-      makeTask({ id: "created-task", title, scope }),
+    publish,
+    createTask: vi.fn(async (title: string, scope: Task["scope"], details?: string) =>
+      makeTask({ id: `created-${title}`, title, scope, details: details ?? "" }),
     ),
-    updateTask: vi.fn(async () => undefined),
-    moveTask: vi.fn(async () => undefined),
+    updateTask: vi.fn(async (task: Task, changes: Partial<Task>) => ({
+      ...task,
+      ...changes,
+      revision: task.revision + 1,
+    })),
+    moveTask: vi.fn(async (task: Task, scope: Task["scope"]) => ({
+      ...task,
+      scope,
+      revision: task.revision + 1,
+    })),
     deleteTask: vi.fn(async () => undefined),
     api: {
       resolveWorkspaceFileLink: vi.fn(
@@ -128,74 +162,13 @@ function makeStore(
           },
       ),
     },
-  } as unknown as ApplicationClientStore;
-}
-
-function makePublishingStore(
-  initialTasks: readonly AssociatedTask[],
-  context: Parameters<typeof makeStore>[1] = {},
-): {
-  readonly store: ApplicationClientStore;
-  readonly publishTasks: (tasks: readonly AssociatedTask[]) => void;
-} {
-  let state = {
-    snapshot: {
-      threads: context.threads ?? [],
-      workspaces: context.workspaces ?? [],
-      tasks: initialTasks,
-    },
-  };
-  const listeners = new Set<() => void>();
-  const store = makeStore(initialTasks, context);
-  Object.assign(store, {
-    subscribe: (listener: () => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    getSnapshot: () => state,
-  });
-  return {
-    store,
-    publishTasks: (tasks) => {
-      state = { snapshot: { ...state.snapshot, tasks } };
-      for (const listener of listeners) listener();
-    },
+  } as unknown as ApplicationClientStore & {
+    publish(tasks: readonly AssociatedTask[]): void;
   };
 }
 
 function makePanelLayoutStore(): PanelLayoutStore {
-  return {
-    openPanel: vi.fn(() => true),
-  } as unknown as PanelLayoutStore;
-}
-
-function renderPanel(
-  store: ApplicationClientStore,
-  panelLayoutStore = makePanelLayoutStore(),
-  stageTaskReference?: (reference: unknown) => void,
-) {
-  return render(
-    <ComposerDraftProvider threadId="thread-9" workspaceId="workspace-1">
-      {stageTaskReference && (
-        <DraftConsumer stageTaskReference={stageTaskReference} />
-      )}
-      <TasksPanel store={store} panelLayoutStore={panelLayoutStore} />
-    </ComposerDraftProvider>,
-  );
-}
-
-function renderPanelWithTaskDrag(store: ApplicationClientStore) {
-  const snapshot = store.getSnapshot().snapshot!;
-  return render(
-    <TaskDragProvider
-      store={store}
-      snapshot={snapshot as NormalizedApplicationSnapshot}
-    >
-      <ComposerDraftProvider threadId="thread-9" workspaceId="workspace-1">
-        <TasksPanel store={store} panelLayoutStore={makePanelLayoutStore()} />
-      </ComposerDraftProvider>
-    </TaskDragProvider>,
-  );
+  return { openPanel: vi.fn(() => true) } as unknown as PanelLayoutStore;
 }
 
 function DraftConsumer({
@@ -220,1641 +193,1017 @@ function DraftConsumer({
   return null;
 }
 
-describe("TasksPanel", () => {
-  it.each([false, true])("retains an unsaved task editor while Settings suspends the %s mobile surface", (mobile) => {
-    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: mobile, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
-    const store = makeStore([makeTask({ scope: { kind: "thread", threadId: "thread-1" } })], {
-      threads: [{ id: "thread-1", workspaceId: "workspace-1", title: { text: "Retained thread" }, inventoryState: "active" }],
-      workspaces: [{ id: "workspace-1", label: { text: "Project" }, displayPath: { text: "/workspace" } }],
-    });
-    const panelLayoutStore = makePanelLayoutStore();
-    const route = { name: "thread", threadId: "thread-1", automationOpen: false } as const;
-    const content = (active: boolean) => <TasksPanel store={store} panelLayoutStore={panelLayoutStore} route={route} active={active} />;
-    const view = render(content(true));
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.click(screen.getByRole("button", { name: /Edit/ }));
-    const notes = screen.getByLabelText("Task notes");
-    fireEvent.change(notes, { target: { value: "Unsaved while configuring" } });
-    act(() => navigate("/settings/general"));
-    view.rerender(content(false));
-    expect(screen.queryByRole("dialog", { name: "Tasks" })).not.toBeInTheDocument();
-    expect(notes).not.toBeVisible();
-    fireEvent.keyDown(document, { key: "Escape" });
-    view.rerender(content(true));
-    expect(screen.getByLabelText("Task notes")).toBe(notes);
-    expect(notes).toHaveValue("Unsaved while configuring");
+function renderPanel(
+  store: ApplicationClientStore,
+  options: {
+    readonly panelLayoutStore?: PanelLayoutStore;
+    readonly stageTaskReference?: (reference: unknown) => void;
+    readonly drag?: boolean;
+  } = {},
+) {
+  const panel = (
+    <ComposerDraftProvider threadId="thread-9" workspaceId="workspace-1">
+      {options.stageTaskReference && (
+        <DraftConsumer stageTaskReference={options.stageTaskReference} />
+      )}
+      <TasksPanel
+        store={store}
+        panelLayoutStore={options.panelLayoutStore ?? makePanelLayoutStore()}
+      />
+    </ComposerDraftProvider>
+  );
+  return render(
+    options.drag ? (
+      <TaskDragProvider
+        store={store}
+        snapshot={store.getSnapshot().snapshot as NormalizedApplicationSnapshot}
+      >
+        {panel}
+      </TaskDragProvider>
+    ) : (
+      panel
+    ),
+  );
+}
+
+const THREADS = [
+  {
+    id: "thread-9",
+    workspaceId: "workspace-1",
+    title: { text: "Checkout flow refactor" },
+    inventoryState: "active",
+  },
+  {
+    id: "thread-2",
+    workspaceId: "workspace-1",
+    title: { text: "Sibling thread" },
+    inventoryState: "active",
+  },
+  {
+    id: "thread-other",
+    workspaceId: "workspace-2",
+    title: { text: "Invoice rounding bug" },
+    inventoryState: "active",
+  },
+  {
+    id: "thread-archived",
+    workspaceId: "workspace-1",
+    title: { text: "Archived thread" },
+    inventoryState: "archived",
+  },
+];
+
+const WORKSPACES = [
+  {
+    id: "workspace-1",
+    environmentId: "local",
+    label: { text: "acme-web" },
+    displayPath: { text: "/workspace" },
+    available: true,
+  },
+  {
+    id: "workspace-2",
+    environmentId: "local",
+    label: { text: "billing-service" },
+    displayPath: { text: "/billing" },
+    available: true,
+  },
+];
+
+const ENVIRONMENTS = [{ id: "local", kind: "local", label: { text: "Local" }, available: true }];
+
+const threadTask = (overrides: Partial<AssociatedTask> = {}) =>
+  makeTask({
+    scope: { kind: "thread", threadId: "thread-9" },
+    associatedWorkspaceId: "workspace-1",
+    ...overrides,
   });
 
-  it("treats pointer events inside the retained body as inside an unpinned Tasks surface", async () => {
-    setTasksPanelPinned(false);
-    const store = makeStore([makeTask()]);
+/** A thread route in acme-web with tasks in every scope. */
+function seededStore(extra: readonly AssociatedTask[] = []) {
+  act(() => navigate(threadPath("thread-9")));
+  return makeStore(
+    [
+      threadTask({ id: "t-audit", title: "Audit checkout error states", createdAt: "2026-08-03T10:00:00.000Z", details: "Walk every error branch.", files: ["/workspace/src/checkout.ts"], pinned: true }),
+      threadTask({ id: "t-retry", title: "Add retry to the payment call", createdAt: "2026-08-02T10:00:00.000Z" }),
+      threadTask({ id: "t-done", title: "Remove the legacy flag", completedAt: "2026-08-04T10:00:00.000Z" }),
+      makeTask({ id: "p-upgrade", title: "Upgrade the test runner", scope: { kind: "workspace", workspaceId: "workspace-1" }, associatedWorkspaceId: "workspace-1" }),
+      makeTask({ id: "s-sibling", title: "Sibling thread task", scope: { kind: "thread", threadId: "thread-2" }, associatedWorkspaceId: "workspace-1" }),
+      makeTask({ id: "o-other", title: "Round invoices half-even", scope: { kind: "thread", threadId: "thread-other" }, associatedWorkspaceId: "workspace-2" }),
+      makeTask({ id: "g-rotate", title: "Rotate staging credentials" }),
+      ...extra,
+    ],
+    { threads: THREADS, workspaces: WORKSPACES, environments: ENVIRONMENTS },
+  );
+}
+
+const panel = () => screen.getByRole("region", { name: "Tasks" });
+const scope = () => screen.getByRole("radiogroup", { name: "Task scope view" });
+const segment = (name: string) => within(scope()).getByRole("radio", { name });
+const rowTitle = (title: string) => screen.getByRole("button", { name: title });
+const rowOf = (title: string) => rowTitle(title).closest(".tasks-row") as HTMLElement;
+const titles = () =>
+  [...panel().querySelectorAll(".tasks-row-title")].map((node) => node.textContent);
+const addInput = () => screen.getByRole("textbox", { name: "Add a task" });
+
+/**
+ * Opens a desktop submenu by keyboard from its row (pointer moves between
+ * menus are not modelled by jsdom) and returns it.
+ */
+async function openSubmenu(
+  user: ReturnType<typeof userEvent.setup>,
+  menu: HTMLElement,
+  name: string,
+): Promise<HTMLElement> {
+  within(menu).getByRole("menuitem", { name }).focus();
+  await user.keyboard("{ArrowRight}");
+  return screen.findByRole("menu", { name });
+}
+
+describe("TasksPanel scope", () => {
+  it("follows the chat with one scope control showing open counts", () => {
+    renderPanel(seededStore());
+
+    expect(segment("Thread")).toHaveAttribute("aria-checked", "true");
+    expect(segment("Thread")).toHaveAccessibleDescription("2 open");
+    expect(segment("Project")).toHaveAccessibleDescription("1 open");
+    expect(segment("Global")).toHaveAccessibleDescription("1 open");
+    expect(segment("All")).toHaveAccessibleDescription("6 open");
+    expect(within(panel()).getByRole("heading", { name: /Tasks/ })).toHaveTextContent("Tasks2");
+    expect(titles()).toEqual(["Audit checkout error states", "Add retry to the payment call"]);
+    // One control: no destination pickers and no nested-scope checkbox.
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.queryByText("Include nested scopes")).not.toBeInTheDocument();
+    expect(addInput()).toHaveAttribute("placeholder", "Add a task to this thread…");
+  });
+
+  it("switches views, remembers the last one and adds to the scope in view", async () => {
+    const store = seededStore();
+    const view = renderPanel(store);
+
+    fireEvent.click(segment("Project"));
+    expect(titles()).toEqual(["Upgrade the test runner"]);
+    expect(addInput()).toHaveAttribute("placeholder", "Add a task to this project…");
+    fireEvent.click(segment("Global"));
+    expect(titles()).toEqual(["Rotate staging credentials"]);
+    fireEvent.click(segment("All"));
+    expect(addInput()).toHaveAttribute("placeholder", "Add a global task…");
+    fireEvent.change(addInput(), { target: { value: "From All" } });
+    fireEvent.keyDown(addInput(), { key: "Enter" });
+    await vi.waitFor(() =>
+      expect(store.createTask).toHaveBeenCalledWith("From All", { kind: "global" }, undefined),
+    );
+
+    view.unmount();
     renderPanel(store);
+    expect(segment("All")).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("disables views that do not apply and says why", () => {
+    const store = makeStore([makeTask()], { threads: THREADS, workspaces: WORKSPACES });
+    renderPanel(store);
+
+    expect(segment("Thread")).toBeDisabled();
+    expect(segment("Project")).toBeDisabled();
+    expect(segment("Global")).toHaveAttribute("aria-checked", "true");
+    expect(scope()).toHaveAccessibleDescription(
+      "Thread: Open a thread to see its tasks. Project: Open a thread in a project to see its project tasks.",
+    );
+    expect(segment("Thread").parentElement).toHaveAttribute(
+      "title",
+      "Open a thread to see its tasks.",
+    );
+  });
+
+  it("groups All by Global, then projects with their threads, collapsibly", () => {
+    renderPanel(seededStore());
+    fireEvent.click(segment("All"));
+
+    const headings = [...panel().querySelectorAll(".tasks-group-heading")].map(
+      (node) => node.textContent,
+    );
+    expect(headings).toEqual([
+      "Global1",
+      "acme-web4",
+      "Checkout flow refactor2",
+      "Sibling thread1",
+      "billing-service1",
+      "Invoice rounding bug1",
+    ]);
+    // Location shows in the headings, never inline on the rows.
+    expect(panel().querySelector(".tasks-row-location")).toBeNull();
+
+    const acme = screen.getByRole("button", { name: /^acme-web/ });
+    expect(acme).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(acme);
+    expect(acme).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Upgrade the test runner" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Sibling thread/ })).not.toBeInTheDocument();
+    expect(rowTitle("Round invoices half-even")).toBeInTheDocument();
+  });
+
+  it("includes a project's thread tasks only through the Project view option", async () => {
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    expect(screen.getByRole("region", { name: "Tasks" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /Edit/ }));
-    expect(screen.getByLabelText("Task notes")).toBeInTheDocument();
-  });
+    renderPanel(seededStore());
+    await user.click(segment("Project"));
+    expect(titles()).toEqual(["Upgrade the test runner"]);
 
-  it("orders tasks newest first without promoting recently edited older tasks", () => {
-    const store = makeStore([
-      makeTask({
-        id: "old",
-        title: "Older",
-        createdAt: "2026-08-01T09:00:00.000Z",
-        updatedAt: "2026-08-03T09:00:00.000Z",
-      }),
-      makeTask({
-        id: "new",
-        title: "Newer",
-        createdAt: "2026-08-02T09:00:00.000Z",
-      }),
+    await user.click(screen.getByRole("button", { name: "View options" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Include thread tasks" }));
+    await user.keyboard("{Escape}");
+    expect(titles()).toEqual([
+      "Audit checkout error states",
+      "Add retry to the payment call",
+      "Upgrade the test runner",
+      "Sibling thread task",
     ]);
-    renderPanel(store);
-    expect(
-      screen
-        .getAllByRole("button", { name: /^View / })
-        .map((button) => button.textContent),
-    ).toEqual(["Newer", "Older"]);
+    expect(segment("Project")).toHaveAccessibleDescription("4 open");
+    expect(titles()).not.toContain("Round invoices half-even");
   });
-  it("orders open tasks ahead of completed ones", () => {
-    const store = makeStore([
-      makeTask({
-        id: "task-done",
-        title: "Ship it",
-        createdAt: "2026-08-01T09:00:00.000Z",
-        completedAt: "2026-08-02T10:00:00.000Z",
-      }),
-      makeTask({
-        id: "task-open",
-        title: "Write docs",
-        createdAt: "2026-08-01T10:00:00.000Z",
-      }),
-    ]);
-    renderPanel(store);
+});
 
-    const titles = screen.getAllByRole("button", { name: /^View / });
-    expect(titles.map((button) => button.textContent)).toEqual([
-      "Write docs",
-      "Ship it",
-    ]);
-  });
-
-  it("orders pinned tasks first, then open tasks within each pin group", () => {
-    const store = makeStore([
-      makeTask({
-        id: "older",
-        title: "Older",
-        createdAt: "2026-08-01T09:00:00.000Z",
-      }),
-      makeTask({ id: "pinned", title: "Pinned", pinned: true }),
-      makeTask({
-        id: "done-pinned",
-        title: "Done pinned",
-        pinned: true,
-        completedAt: "2026-08-02T10:00:00.000Z",
-      }),
-    ]);
-    renderPanel(store);
-
-    expect(
-      screen
-        .getAllByRole("button", { name: /^View / })
-        .map((button) => button.textContent),
-    ).toEqual(["Pinned", "Done pinned", "Older"]);
-  });
-
-  it("persistently includes every principal task from the global view without changing creation scope", async () => {
-    const context = {
-      threads: [
-        {
-          id: "thread-1",
-          workspaceId: "workspace-1",
-          title: { text: "Task thread" },
-        },
-      ],
-      workspaces: [
-        {
-          id: "workspace-1",
-          label: { text: "Sedes" },
-          displayPath: { text: "/workspace" },
-          available: true,
-        },
-      ],
-    };
-    const store = makeStore(
-      [
-        makeTask({ id: "global", title: "Global task" }),
-        makeTask({
-          id: "project",
-          title: "Project task",
-          scope: { kind: "workspace", workspaceId: "workspace-1" },
-          associatedWorkspaceId: "workspace-1",
-        }),
-        makeTask({
-          id: "thread",
-          title: "Thread task",
-          scope: { kind: "thread", threadId: "thread-1" },
-          associatedWorkspaceId: "workspace-1",
-        }),
-      ],
-      context,
-    );
-    renderPanel(store);
-    fireEvent.click(screen.getByRole("radio", { name: "Global" }));
-
-    expect(screen.getAllByRole("button", { name: /^View / })).toHaveLength(1);
-    const includeNested = screen.getByRole("checkbox", {
-      name: "Include nested scopes",
-    });
-    fireEvent.click(includeNested);
-
-    expect(screen.getAllByRole("button", { name: /^View / })).toHaveLength(3);
-    expect(screen.queryByTitle("Global")).not.toBeInTheDocument();
-    expect(screen.getByTitle("Sedes")).toBeInTheDocument();
-    expect(screen.getByTitle("Sedes / Task thread")).toBeInTheDocument();
-    expect(
-      JSON.parse(window.localStorage.getItem("sedes.tasks.panel") ?? "null")
-        .includeNestedScopes,
-    ).toBe(true);
-
-    fireEvent.change(screen.getByRole("searchbox"), {
-      target: { value: "Create global" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
-    await vi.waitFor(() =>
-      expect(store.createTask).toHaveBeenCalledWith("Create global", {
-        kind: "global",
-      }),
-    );
-  });
-
-  it("includes only authoritative child threads from a project view and keeps thread view exact", async () => {
-    act(() => navigate(threadPath("thread-1")));
-    const store = makeStore(
-      [
-        makeTask({
-          id: "project",
-          title: "Project task",
-          scope: { kind: "workspace", workspaceId: "workspace-1" },
-          associatedWorkspaceId: "workspace-1",
-        }),
-        makeTask({
-          id: "child",
-          title: "Child task",
-          scope: { kind: "thread", threadId: "thread-1" },
-          associatedWorkspaceId: "workspace-1",
-        }),
-        makeTask({
-          id: "sibling",
-          title: "Sibling task",
-          scope: { kind: "thread", threadId: "thread-2" },
-          associatedWorkspaceId: "workspace-1",
-        }),
-        makeTask({
-          id: "other-project",
-          title: "Other project task",
-          scope: { kind: "thread", threadId: "thread-other" },
-          associatedWorkspaceId: "workspace-2",
-        }),
-        makeTask({
-          id: "missing-thread",
-          title: "Capped thread task",
-          scope: { kind: "thread", threadId: "missing" },
-          associatedWorkspaceId: "workspace-1",
-        }),
-      ],
-      {
-        threads: [
-          {
-            id: "thread-1",
-            workspaceId: "workspace-1",
-            title: { text: "Current" },
-          },
-          {
-            id: "thread-2",
-            workspaceId: "workspace-1",
-            title: { text: "Sibling" },
-          },
-          {
-            id: "thread-other",
-            workspaceId: "workspace-2",
-            title: { text: "Elsewhere" },
-          },
-        ],
-        workspaces: [
-          {
-            id: "workspace-1",
-            label: { text: "Sedes" },
-            displayPath: { text: "/workspace" },
-            available: true,
-          },
-          {
-            id: "workspace-2",
-            label: { text: "Other" },
-            displayPath: { text: "/other" },
-            available: true,
-          },
-        ],
-      },
-    );
-    renderPanel(store);
-    fireEvent.click(screen.getByRole("radio", { name: "Project" }));
-
-    expect(
-      screen.getByRole("button", { name: 'View "Project task"' }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: 'View "Child task"' }),
-    ).not.toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: "Include nested scopes" }),
-    );
-
-    expect(
-      screen.getByRole("button", { name: 'View "Child task"' }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: 'View "Sibling task"' }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: 'View "Other project task"' }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: 'View "Capped thread task"' }),
-    ).toBeInTheDocument();
-    expect(screen.getByTitle("Current")).toBeInTheDocument();
-    expect(screen.getByTitle("Sibling")).toBeInTheDocument();
-    expect(screen.getByTitle("Thread")).toBeInTheDocument();
-    expect(screen.queryByTitle("Sedes")).not.toBeInTheDocument();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: 'View "Sibling task"' }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    fireEvent.click(
-      within(screen.getByRole("radiogroup", { name: "Task scope" })).getByRole(
-        "radio",
-        { name: "Thread" },
-      ),
-    );
-    fireEvent.change(screen.getByLabelText("Task title"), {
-      target: { value: "Edited sibling task" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Save task" }));
-    await vi.waitFor(() =>
-      expect(store.updateTask).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "sibling" }),
-        expect.objectContaining({
-          title: "Edited sibling task",
-          scope: { kind: "thread", threadId: "thread-2" },
-        }),
-      ),
-    );
-
-    fireEvent.click(
-      within(
-        screen.getByRole("radiogroup", { name: "Task scope view" }),
-      ).getByRole("radio", { name: "Thread" }),
-    );
-    expect(
-      screen.queryByRole("checkbox", { name: "Include nested scopes" }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: 'View "Child task"' }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: 'View "Sibling task"' }),
-    ).not.toBeInTheDocument();
-    expect(document.querySelector(".tasks-row-location")).toBeNull();
-  });
-
-  it("pins directly from a task row", async () => {
-    const store = makeStore([makeTask()]);
-    renderPanel(store);
-
-    fireEvent.click(screen.getByRole("button", { name: 'Pin "Write docs"' }));
-
-    await vi.waitFor(() =>
-      expect(store.updateTask).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "task-1" }),
-        { pinned: true },
-      ),
-    );
-  });
-
-  it("keeps pinning on the task row and presents text-only detail editing", () => {
-    const store = makeStore([makeTask({ pinned: true })]);
-    renderPanel(store);
-
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-
-    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Edit" }).querySelector("svg"),
-    ).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: "Unpin task" }),
-    ).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    expect(screen.getByText("Edit task")).toBeInTheDocument();
-    expect(
-      screen.queryByRole("checkbox", { name: "Pin task" }),
-    ).not.toBeInTheDocument();
-    // The trigger only opens the confirmation, so it is a quiet red icon;
-    // the solid destructive fill is kept for the confirming "Delete".
-    expect(screen.getByRole("button", { name: "Delete task" })).toHaveClass(
-      "text-destructive",
-    );
-  });
-
-  it("shows the selected task in the detail preview and gates prompt insertion", () => {
-    const store = makeStore([
-      makeTask({ details: "Cover the tasks API end to end." }),
-    ]);
-    renderPanel(store);
-
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    expect(
-      screen.getByText("Cover the tasks API end to end."),
-    ).toBeInTheDocument();
-    // No thread open: insertion has no composer to target.
-    expect(
-      screen.getByRole("button", { name: /Add to prompt/ }),
-    ).toBeDisabled();
-  });
-
-  it("stages the task reference without closing an unpinned panel", () => {
-    act(() => navigate(threadPath("thread-9")));
-    const store = makeStore(
-      [
-        makeTask({
-          scope: { kind: "thread", threadId: "thread-9" },
-          details: "Cover the tasks API end to end.",
-        }),
-      ],
-      {
-        threads: [
-          {
-            id: "thread-9",
-            workspaceId: "workspace-1",
-            title: { text: "Current thread" },
-          },
-        ],
-        workspaces: [{ id: "workspace-1", label: { text: "Sedes" }, displayPath: { text: "/sedes" } }],
-      },
-    );
-    const stage = vi.fn();
-    renderPanel(store, makePanelLayoutStore(), stage);
-
-    fireEvent.click(screen.getByRole("button", { name: "Unpin Tasks panel" }));
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.click(screen.getByRole("button", { name: /Add to prompt/ }));
-
-    expect(stage).toHaveBeenCalledWith({
-      taskId: "task-1",
-      titleSnapshot: "Write docs",
-    });
-    expect(screen.getByRole("region", { name: "Tasks" })).toBeInTheDocument();
-  });
-
-  it("dismisses only an unpinned desktop panel on an outside pointer", async () => {
+describe("TasksPanel add row", () => {
+  it("adds with Enter, keeps focus and stays enabled while another task saves", async () => {
     const user = userEvent.setup();
-    const outside = document.createElement("button");
-    document.body.append(outside);
-    renderPanel(makeStore([]));
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
-
-    expect(
-      screen.getByRole("button", { name: "Unpin Tasks panel" }),
-    ).toHaveAttribute("aria-pressed", "true");
-    await user.click(outside);
-    expect(screen.getByRole("region", { name: "Tasks" })).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Unpin Tasks panel" }));
-    expect(
-      screen.getByRole("button", { name: "Pin Tasks panel" }),
-    ).toHaveAttribute("aria-pressed", "false");
-    expect(
-      JSON.parse(window.localStorage.getItem("sedes.tasks.panel") ?? "null")
-        .pinned,
-    ).toBe(false);
-    await user.click(outside);
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("region", { name: "Tasks" }),
-      ).not.toBeInTheDocument(),
-    );
-    outside.remove();
-  });
-
-  it("keeps the panel open and explains when no composer receives the task", () => {
-    act(() => navigate(threadPath("thread-9")));
-    const store = makeStore(
-      [makeTask({ scope: { kind: "thread", threadId: "thread-9" } })],
-      {
-        threads: [
-          {
-            id: "thread-9",
-            workspaceId: "workspace-1",
-            title: { text: "Current thread" },
-          },
-        ],
-        workspaces: [{ id: "workspace-1", label: { text: "Sedes" }, displayPath: { text: "/sedes" } }],
-      },
+    const store = seededStore();
+    let finishFirst: (task: AssociatedTask) => void = () => undefined;
+    vi.mocked(store.createTask).mockImplementationOnce(
+      () => new Promise<Task>((resolve) => { finishFirst = resolve; }),
     );
     renderPanel(store);
 
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.click(screen.getByRole("button", { name: /Add to prompt/ }));
+    await user.click(addInput());
+    await user.keyboard("First task{Enter}");
+    expect(addInput()).toHaveFocus();
+    expect(addInput()).toHaveValue("");
+    expect(addInput()).toBeEnabled();
+    const creating = panel().querySelector('.tasks-row[data-creating="true"]');
+    expect(creating).toHaveTextContent("First task");
 
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "The message composer is unavailable.",
+    await user.keyboard("Second task{Enter}");
+    expect(store.createTask).toHaveBeenCalledTimes(2);
+    expect(addInput()).toHaveFocus();
+    // Other rows stay usable while the first creation is in flight.
+    await user.click(screen.getByRole("checkbox", { name: 'Mark "Add retry to the payment call" as done' }));
+    expect(store.updateTask).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "t-retry" }),
+      { completed: true },
     );
-    expect(screen.getByRole("region", { name: "Tasks" })).toBeInTheDocument();
-  });
 
-  it("stages the same reference shape when the task has no details", () => {
-    act(() => navigate(threadPath("thread-9")));
-    const store = makeStore(
-      [makeTask({ scope: { kind: "thread", threadId: "thread-9" } })],
-      {
-        threads: [
-          {
-            id: "thread-9",
-            workspaceId: "workspace-1",
-            title: { text: "Current thread" },
-          },
-        ],
-        workspaces: [{ id: "workspace-1", label: { text: "Sedes" }, displayPath: { text: "/sedes" } }],
-      },
-    );
-    const stage = vi.fn();
-    renderPanel(store, makePanelLayoutStore(), stage);
-
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.click(screen.getByRole("button", { name: /Add to prompt/ }));
-
-    expect(stage).toHaveBeenCalledWith({
-      taskId: "task-1",
-      titleSnapshot: "Write docs",
+    const created = threadTask({ id: "created-first", title: "First task" });
+    await act(async () => {
+      finishFirst(created);
+      store.publish([...store.getTasks(), created]);
     });
+    expect(panel().querySelectorAll('.tasks-row[data-creating="true"]')).toHaveLength(1);
+    expect(rowTitle("First task")).toBeInTheDocument();
   });
 
-  it("exits edit mode and previews the newly selected task", () => {
-    const store = makeStore([
-      makeTask({ id: "task-a", title: "Task A", details: "Notes for A" }),
-      makeTask({
-        id: "task-b",
-        title: "Task B",
-        details: "Notes for B",
-        createdAt: "2026-08-01T11:00:00.000Z",
-      }),
-    ]);
+  it("opens notes with Shift+Enter and creates the task with them", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
     renderPanel(store);
 
-    fireEvent.click(screen.getByRole("button", { name: 'View "Task A"' }));
-    fireEvent.click(screen.getByRole("button", { name: /Edit/ }));
-    expect(screen.getByLabelText("Task notes")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: 'View "Task B"' }));
-    expect(screen.queryByLabelText("Task notes")).not.toBeInTheDocument();
-    expect(screen.getByText("Notes for B")).toBeInTheDocument();
-  });
-
-  it("uses the shared large-document limit in the task editor", () => {
-    const store = makeStore([makeTask()]);
-    renderPanel(store);
-
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.click(screen.getByRole("button", { name: /Edit/ }));
-
-    expect(screen.getByLabelText("Task notes")).toHaveAttribute(
-      "maxlength",
-      String(TASK_DETAILS_MAX_CHARACTERS),
-    );
-  });
-
-  it("keeps delete, save, and cancel above the notes field", () => {
-    const store = makeStore([makeTask()]);
-    renderPanel(store);
-
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.click(screen.getByRole("button", { name: /Edit/ }));
-
-    const notes = screen.getByLabelText("Task notes");
-    for (const name of ["Delete task", "Save task", "Cancel editing"]) {
-      const action = screen.getByRole("button", { name });
-      expect(
-        action.compareDocumentPosition(notes) &
-          Node.DOCUMENT_POSITION_FOLLOWING,
-      ).not.toBe(0);
-    }
-
-    fireEvent.click(screen.getByRole("button", { name: "Delete task" }));
-    expect(screen.getByText("Delete this task?")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Keep editing" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Save task" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("saves an edit with Command+Enter while preserving plain Enter", async () => {
-    const store = makeStore([makeTask({ revision: 3 })]);
-    renderPanel(store);
-
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.click(screen.getByRole("button", { name: /Edit/ }));
-    const notes = screen.getByLabelText("Task notes");
-    fireEvent.change(notes, { target: { value: "First line\nSecond line" } });
-    fireEvent.keyDown(notes, { key: "Enter" });
-    expect(store.updateTask).not.toHaveBeenCalled();
-
-    fireEvent.keyDown(notes, { key: "Enter", metaKey: true });
-
-    await vi.waitFor(() =>
-      expect(store.updateTask).toHaveBeenCalledWith(
-        expect.objectContaining({ revision: 3 }),
-        expect.objectContaining({ details: "First line\nSecond line" }),
-      ),
-    );
-  });
-
-  it("browses and creates in an explicitly selected project across chat navigation", async () => {
-    act(() => navigate(threadPath("thread-9")));
-    const store = makeStore([
-      makeTask({ title: "Website task", scope: { kind: "workspace", workspaceId: "workspace-2" } }),
-    ], {
-      threads: [
-        { id: "thread-9", workspaceId: "workspace-1", title: { text: "Current thread" } },
-        { id: "thread-10", workspaceId: "workspace-2", title: { text: "Release thread" } },
-      ],
-      workspaces: [
-        { id: "workspace-1", label: { text: "Sedes" }, displayPath: { text: "/sedes" } },
-        { id: "workspace-2", label: { text: "Website" }, displayPath: { text: "/website" } },
-      ],
-    });
-    renderPanel(store);
-    fireEvent.click(screen.getByRole("radio", { name: "Project" }));
-    expect(screen.queryByText("Website task")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("combobox", { name: "Task project" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "Search projects" }), { target: { value: "Website" } });
-    fireEvent.click(screen.getByRole("option", { name: "Website /website" }));
-    expect(screen.getByText("Website task")).toBeInTheDocument();
-    act(() => navigate(threadPath("thread-10")));
-    act(() => navigate(threadPath("thread-9")));
-    expect(screen.getByRole("combobox", { name: "Task project" })).toHaveTextContent("Website");
-    fireEvent.change(screen.getByLabelText("Search or add task"), { target: { value: "New website task" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
-    await waitFor(() => expect(store.createTask).toHaveBeenCalledWith("New website task", { kind: "workspace", workspaceId: "workspace-2" }));
-  });
-
-  it("can edit an existing archived-thread task without offering that thread as a destination", async () => {
-    const task = makeTask({ scope: { kind: "thread", threadId: "archived-thread" } });
-    const store = makeStore([task], {
-      threads: [{ id: "archived-thread", workspaceId: "workspace-1", inventoryState: "archived", title: { text: "Finished planning" } }],
-      workspaces: [{ id: "workspace-1", label: { text: "Sedes" }, displayPath: { text: "/sedes" } }],
-    });
-    setTasksPanelIncludeNestedScopes(true);
-    renderPanel(store);
-    fireEvent.click(screen.getByRole("radio", { name: "Global" }));
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.click(screen.getByRole("button", { name: /Edit/ }));
-    const destination = screen.getByRole("combobox", { name: "Assign task to thread" });
-    expect(destination).toHaveTextContent("Finished planning");
-    fireEvent.click(destination);
-    expect(screen.queryByRole("option", { name: /Finished planning/ })).not.toBeInTheDocument();
-    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search threads" }), { key: "Escape" });
-    const scope = screen.getByRole("radiogroup", { name: "Task scope" });
-    const threadScope = within(scope).getByRole("radio", { name: "Thread" });
-    expect(threadScope).toBeEnabled();
-    fireEvent.click(within(scope).getByRole("radio", { name: "Project" }));
-    expect(screen.getByRole("combobox", { name: "Assign task to project" })).toBeVisible();
-    fireEvent.click(threadScope);
-    expect(threadScope).toBeChecked();
-    expect(screen.getByRole("combobox", { name: "Assign task to thread" })).toHaveTextContent("Finished planning");
-    fireEvent.change(screen.getByRole("textbox", { name: "Task title" }), { target: { value: "Updated archived task" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save task" }));
-    await waitFor(() => expect(store.updateTask).toHaveBeenCalledWith(
-      expect.objectContaining({ id: task.id, revision: task.revision }),
-      expect.objectContaining({ title: "Updated archived task", scope: task.scope }),
-    ));
-  });
-
-  it("distinguishes the current thread from an explicit choice of that same thread", () => {
-    act(() => navigate(threadPath("thread-9")));
-    const store = makeStore([], {
-      threads: [{ id: "thread-9", workspaceId: "workspace-1", title: { text: "Planning" } }],
-      workspaces: [{ id: "workspace-1", label: { text: "Sedes" }, displayPath: { text: "/sedes" } }],
-    });
-    renderPanel(store);
-    fireEvent.click(screen.getByRole("radio", { name: "Thread" }));
-    const trigger = screen.getByRole("combobox", { name: "Task thread" });
-    expect(trigger).toHaveTextContent("Current thread · Planning");
-    expect(trigger).toHaveAttribute("title", "Current thread · Planning");
-    fireEvent.click(trigger);
-    fireEvent.click(screen.getByRole("option", { name: "Planning · Sedes" }));
-    expect(trigger).toHaveTextContent("Planning");
-    expect(trigger).not.toHaveTextContent("Current thread");
-    expect(trigger).toHaveAttribute("title", "Planning");
-  });
-
-  it("keeps remote environment collision labels while hiding the local environment label", () => {
-    const store = makeStore([], {
-      environments: [
-        { id: "environment-local", kind: "local", label: { text: "Workstation" }, available: true },
-        { id: "environment-remote", kind: "ssh", label: { text: "Workstation" }, available: true },
-      ],
-      workspaces: [
-        { id: "workspace-local", environmentId: "environment-local", label: { text: "Local project" }, displayPath: { text: "/local" }, available: true },
-        { id: "workspace-remote", environmentId: "environment-remote", label: { text: "Remote project" }, displayPath: { text: "/remote" }, available: true },
-      ],
-    });
-    renderPanel(store);
-    fireEvent.click(screen.getByRole("radio", { name: "Project" }));
-    fireEvent.click(screen.getByRole("combobox", { name: "Task project" }));
-    expect(screen.getByRole("option", { name: "Local project /local" })).toBeVisible();
-    expect(screen.getByRole("option", { name: "Remote project · Workstation · remote /remote" })).toBeVisible();
-  });
-
-  it("excludes archived threads from browsing and assignment choices", () => {
-    const store = makeStore([makeTask()], {
-      threads: [
-        { id: "active-thread", workspaceId: "workspace-1", inventoryState: "active", title: { text: "Active planning" } },
-        { id: "archived-thread", workspaceId: "workspace-1", inventoryState: "archived", title: { text: "Archived planning" } },
-      ],
-      workspaces: [{ id: "workspace-1", label: { text: "Sedes" }, displayPath: { text: "/sedes" } }],
-    });
-    renderPanel(store);
-    fireEvent.click(screen.getByRole("radio", { name: "Thread" }));
-    fireEvent.click(screen.getByRole("combobox", { name: "Task thread" }));
-    expect(screen.getByRole("option", { name: "Active planning · Sedes" })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /Archived planning/ })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("option", { name: "Active planning · Sedes" }));
-    fireEvent.click(screen.getByRole("radio", { name: "Global" }));
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.click(screen.getByRole("button", { name: /Edit/ }));
-    fireEvent.click(within(screen.getByRole("radiogroup", { name: "Task scope" })).getByRole("radio", { name: "Thread" }));
-    fireEvent.click(screen.getByRole("combobox", { name: "Assign task to thread" }));
-    expect(screen.getByRole("option", { name: "Active planning · Sedes" })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /Archived planning/ })).not.toBeInTheDocument();
-  });
-
-  it("requires a destination without a current chat and browses threads by title", async () => {
-    const store = makeStore([
-      makeTask({ title: "Release checklist", scope: { kind: "thread", threadId: "thread-10" } }),
-    ], {
-      threads: [{ id: "thread-10", workspaceId: "workspace-2", title: { text: "Release thread" } }],
-      workspaces: [{ id: "workspace-2", label: { text: "Website" }, displayPath: { text: "/website" } }],
-    });
-    renderPanel(store);
-    fireEvent.click(screen.getByRole("radio", { name: "Thread" }));
-    fireEvent.change(screen.getByLabelText("Search or add task"), { target: { value: "Release checklist" } });
-    expect(screen.getByRole("button", { name: "Add task" })).toBeDisabled();
-    fireEvent.keyDown(screen.getByLabelText("Search or add task"), { key: "Enter" });
+    await user.click(addInput());
+    await user.keyboard("Profile the bundle{Shift>}{Enter}{/Shift}");
+    const notes = screen.getByRole("textbox", { name: "New task notes" });
+    await waitFor(() => expect(notes).toHaveFocus());
+    await user.keyboard("Measure before and after.{Enter}Twice.");
     expect(store.createTask).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("combobox", { name: "Task thread" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "Search threads" }), { target: { value: "Release" } });
-    fireEvent.click(screen.getByRole("option", { name: "Release thread · Website" }));
-    expect(screen.getByRole("combobox", { name: "Task thread" })).toHaveTextContent("Release thread");
-    expect(screen.getByRole("button", { name: 'View "Release checklist"' })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Search or add task"), { target: { value: "New release task" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
-    await waitFor(() => expect(store.createTask).toHaveBeenCalledWith("New release task", { kind: "thread", threadId: "thread-10" }));
+    await user.keyboard("{Control>}{Enter}{/Control}");
+
+    expect(store.createTask).toHaveBeenCalledWith(
+      "Profile the bundle",
+      { kind: "thread", threadId: "thread-9" },
+      "Measure before and after.\nTwice.",
+    );
+    expect(screen.queryByRole("textbox", { name: "New task notes" })).not.toBeInTheDocument();
+    expect(addInput()).toHaveFocus();
   });
 
-  it.each(["project", "thread"] as const)("assigns a task to a searched %s using its identity", async (kind) => {
-    act(() => navigate(threadPath("thread-9")));
-    const task = makeTask({ revision: 7 });
-    const store = makeStore([task], {
-      threads: [
-        { id: "thread-9", workspaceId: "workspace-1", title: { text: "Planning" } },
-        { id: "thread-10", workspaceId: "workspace-2", title: { text: "Planning" } },
-      ],
-      workspaces: [
-        { id: "workspace-1", label: { text: "Sedes" }, displayPath: { text: "/sedes" } },
-        { id: "workspace-2", label: { text: "Website" }, displayPath: { text: "/website" } },
-      ],
-    });
+  it("asks before turning a multi-line paste into one task per line", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
     renderPanel(store);
-    fireEvent.click(screen.getByRole("radio", { name: "Global" }));
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.click(screen.getByRole("button", { name: /Edit/ }));
-    const scopes = screen.getByRole("radiogroup", { name: "Task scope" });
-    fireEvent.click(within(scopes).getByRole("radio", { name: kind === "project" ? "Project" : "Thread" }));
-    fireEvent.click(screen.getByRole("combobox", { name: `Assign task to ${kind}` }));
-    fireEvent.change(screen.getByRole("combobox", { name: kind === "project" ? "Search projects" : "Search threads" }), { target: { value: "Website" } });
-    fireEvent.click(screen.getByRole("option", { name: kind === "project" ? "Website /website" : "Planning · Website" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save task" }));
-    await waitFor(() => expect(store.updateTask).toHaveBeenCalledWith(
-      expect.objectContaining({ id: task.id, revision: 7 }),
-      expect.objectContaining({ scope: kind === "project" ? { kind: "workspace", workspaceId: "workspace-2" } : { kind: "thread", threadId: "thread-10" } }),
-    ));
+
+    await user.click(addInput());
+    await user.paste("- [ ] Write the migration\n\n2. Ship it\n* Tell support\n");
+    expect(screen.getByRole("textbox", { name: "Add a task", hidden: true })).toHaveValue("");
+    const dialog = screen.getByRole("dialog", { name: "Create 3 tasks?" });
+    expect(within(dialog).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Write the migration",
+      "Ship it",
+      "Tell support",
+    ]);
+    await user.click(within(dialog).getByRole("button", { name: "Create 3 tasks" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Create 3 tasks?" })).not.toBeInTheDocument());
+    // Created last line first, so newest-first reads in pasted order.
+    expect(vi.mocked(store.createTask).mock.calls.map(([title]) => title)).toEqual([
+      "Tell support",
+      "Ship it",
+      "Write the migration",
+    ]);
+    expect(store.createTask).toHaveBeenCalledWith("Ship it", { kind: "thread", threadId: "thread-9" });
   });
 
-  it("does not offer a thread picker from task details", () => {
-    const task = makeTask();
-    const store = makeStore([task], {
-      threads: [
-        {
-          id: "thread-9",
-          workspaceId: "workspace-1",
-          title: { text: "Current thread" },
-        },
-        {
-          id: "thread-10",
-          workspaceId: "workspace-2",
-          title: { text: "Release thread" },
-        },
-      ],
-      workspaces: [
-        { id: "workspace-1", label: { text: "Sedes" }, displayPath: { text: "/sedes" } },
-        { id: "workspace-2", label: { text: "Website" }, displayPath: { text: "/website" } },
-      ],
+  it("keeps a single-line paste in the field", async () => {
+    const user = userEvent.setup();
+    renderPanel(seededStore());
+    await user.click(addInput());
+    await user.paste("Just one line");
+    expect(addInput()).toHaveValue("Just one line");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("gives the title back and explains when creation fails", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    vi.mocked(store.createTask).mockRejectedValueOnce(new Error("Scope was archived."));
+    renderPanel(store);
+
+    await user.click(addInput());
+    await user.keyboard("Doomed task{Enter}");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Couldn't add “Doomed task”: Scope was archived.",
+    );
+    expect(addInput()).toHaveValue("Doomed task");
+    expect(panel().querySelector('[data-creating="true"]')).toBeNull();
+  });
+});
+
+describe("TasksPanel rows", () => {
+  it("collapses completed tasks into a muted Completed section with undo", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    renderPanel(store);
+
+    const completed = screen.getByRole("button", { name: /Completed/ });
+    expect(completed).toHaveTextContent("Completed1");
+    expect(completed).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Remove the legacy flag" })).not.toBeInTheDocument();
+    await user.click(completed);
+    expect(rowOf("Remove the legacy flag")).toHaveAttribute("data-completed", "true");
+    expect(
+      within(rowOf("Remove the legacy flag")).getByRole("checkbox", { name: 'Mark "Remove the legacy flag" as open' }),
+    ).toBeChecked();
+
+    await user.click(screen.getByRole("checkbox", { name: 'Mark "Add retry to the payment call" as done' }));
+    expect(toast.show).toHaveBeenCalledWith({
+      message: "Task completed",
+      action: { label: "Undo", onAction: expect.any(Function) },
     });
-    renderPanelWithTaskDrag(store);
-    fireEvent.click(screen.getByRole("radio", { name: "Global" }));
+    store.publish(
+      store.getTasks().map((task) =>
+        task.id === "t-retry" ? { ...task, completedAt: "2026-08-05T10:00:00.000Z", revision: 1 } : task,
+      ),
+    );
+    await waitFor(() => expect(completed).toHaveTextContent("Completed2"));
+    // Most recently completed first.
+    expect(titles()).toEqual([
+      "Audit checkout error states",
+      "Add retry to the payment call",
+      "Remove the legacy flag",
+    ]);
 
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    expect(
-      screen.queryByRole("button", { name: /Move to thread/ }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("searchbox", { name: "Search threads" }),
-    ).not.toBeInTheDocument();
+    await act(async () => toast.show.mock.calls[0]![0].action.onAction());
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-retry", revision: 1 }),
+      { completed: false },
+    );
   });
 
-  it("writes the versioned task identity to a drag operation", () => {
-    const task = makeTask({ revision: 8 });
-    const store = makeStore([task], { threads: [], workspaces: [] });
-    renderPanelWithTaskDrag(store);
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  it("expands one row at a time with notes, files, facts and actions", async () => {
+    const user = userEvent.setup();
+    renderPanel(seededStore());
+
+    await user.click(rowTitle("Audit checkout error states"));
+    const detail = screen.getByRole("group", { name: "Audit checkout error states details" });
+    expect(rowTitle("Audit checkout error states")).toHaveAttribute("aria-expanded", "true");
+    expect(within(detail).getByText("Walk every error branch.")).toBeInTheDocument();
+    const file = within(detail).getByRole("button", { name: "Open /workspace/src/checkout.ts in Files" });
+    expect(file).toHaveTextContent("src/checkout.ts");
+    expect(within(detail).getByText(/^Added .* in/)).toBeInTheDocument();
+    expect(within(detail).getByRole("button", { name: "Checkout flow refactor" })).toBeInTheDocument();
+    expect(within(detail).getByRole("button", { name: "Add to prompt" })).toBeEnabled();
+    expect(within(detail).getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    expect(within(detail).getByRole("button", { name: "Move to…" })).toBeInTheDocument();
+    expect(within(rowOf("Audit checkout error states")).getByText("has notes, 1 file, pinned")).toBeInTheDocument();
+
+    await user.click(rowTitle("Add retry to the payment call"));
+    expect(screen.queryByRole("group", { name: "Audit checkout error states details" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Add retry to the payment call details" })).toBeInTheDocument();
+    await user.click(rowTitle("Add retry to the payment call"));
+    expect(screen.queryByRole("group", { name: /details$/ })).not.toBeInTheDocument();
+  });
+
+  it("stages Add to prompt and keeps the docked surface open", async () => {
+    const user = userEvent.setup();
+    const stageTaskReference = vi.fn();
+    renderPanel(seededStore(), { stageTaskReference });
+
+    await user.click(rowTitle("Add retry to the payment call"));
+    await user.click(screen.getByRole("button", { name: "Add to prompt" }));
+
+    expect(stageTaskReference).toHaveBeenCalledWith({
+      taskId: "t-retry",
+      titleSnapshot: "Add retry to the payment call",
+    });
+    expect(panel()).toBeInTheDocument();
+    expect(toast.show).not.toHaveBeenCalled();
+  });
+
+  it("explains when no composer can receive the task", async () => {
+    const user = userEvent.setup();
+    renderPanel(seededStore());
+    await user.click(rowTitle("Add retry to the payment call"));
+    await user.click(screen.getByRole("button", { name: "Add to prompt" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("The message composer is unavailable.");
+  });
+
+  it("moves through the row menu with an undo toast", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    renderPanel(store);
+
+    await user.click(screen.getByRole("button", { name: 'Actions for "Add retry to the payment call"' }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Add to prompt",
+      "Edit…E",
+      "PinP",
+      "Move to",
+      "Delete…",
+    ]);
+    // The key hints are visual; the names stay plain and the keys are exposed.
+    expect(within(menu).getByRole("menuitem", { name: "Pin" })).toHaveAttribute("aria-keyshortcuts", "P");
+    const moveMenu = await openSubmenu(user, menu, "Move to");
+    expect(within(moveMenu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "This threadCurrent",
+      "This project",
+      "Global",
+      "Choose…",
+    ]);
+    expect(within(moveMenu).getByRole("menuitem", { name: /This thread/ })).toHaveAttribute("data-disabled");
+    // The first enabled row has focus; the current scope is skipped.
+    expect(within(moveMenu).getByRole("menuitem", { name: "This project" })).toHaveFocus();
+    await user.keyboard("{Enter}");
+
+    expect(store.moveTask).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "t-retry" }),
+      { kind: "workspace", workspaceId: "workspace-1" },
+    );
+    await waitFor(() =>
+      expect(toast.show).toHaveBeenCalledWith({
+        message: "Moved to acme-web",
+        action: { label: "Undo", onAction: expect.any(Function) },
+      }),
+    );
+    await act(async () => toast.show.mock.calls[0]![0].action.onAction());
+    expect(store.moveTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-retry" }),
+      { kind: "thread", threadId: "thread-9" },
+    );
+  });
+
+  it("pins from the row menu without expanding the row", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    renderPanel(store);
+
+    await user.click(screen.getByRole("button", { name: 'Actions for "Add retry to the payment call"' }));
+    await user.click(screen.getByRole("menuitem", { name: "Pin" }));
+    expect(store.updateTask).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "t-retry" }),
+      { pinned: true },
+    );
+    // Menu clicks bubble through React from the portal; they must not toggle the row.
+    expect(rowTitle("Add retry to the payment call")).toHaveAttribute("aria-expanded", "false");
+    await user.click(rowTitle("Add retry to the payment call"));
+    expect(rowTitle("Add retry to the payment call")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("chooses any destination once, without listing the current thread twice", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    renderPanel(store);
+
+    await user.click(screen.getByRole("button", { name: 'Actions for "Add retry to the payment call"' }));
+    const moveMenu = await openSubmenu(user, screen.getByRole("menu"), "Move to");
+    within(moveMenu).getByRole("menuitem", { name: "Choose…" }).focus();
+    await user.keyboard("{Enter}");
+    const dialog = screen.getByRole("dialog", { name: "Move task" });
+    const options = within(dialog).getAllByRole("option").map((option) => option.textContent);
+    expect(options.filter((label) => label?.includes("Checkout flow refactor"))).toEqual([
+      "This thread · Checkout flow refactor",
+    ]);
+    expect(options).not.toContain("Archived thread");
+    await user.click(within(dialog).getByRole("option", { name: /Invoice rounding bug/ }));
+
+    expect(store.moveTask).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "t-retry" }),
+      { kind: "thread", threadId: "thread-other" },
+    );
+  });
+
+  it("confirms a move that takes project files to another project", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    vi.mocked(store.moveTask).mockRejectedValueOnce(new Error("The server connection was lost."));
+    renderPanel(store);
+
+    await user.click(screen.getByRole("button", { name: 'Actions for "Audit checkout error states"' }));
+    const moveMenu = await openSubmenu(user, screen.getByRole("menu"), "Move to");
+    within(moveMenu).getByRole("menuitem", { name: "Global" }).focus();
+    await user.keyboard("{Enter}");
+    expect(store.moveTask).not.toHaveBeenCalled();
+    const confirm = screen.getByRole("dialog", { name: "Move task with project files?" });
+    await user.click(within(confirm).getByRole("button", { name: "Move task" }));
+    expect(await within(confirm).findByRole("alert")).toHaveTextContent("The server connection was lost.");
+    await user.click(within(confirm).getByRole("button", { name: "Move task" }));
+    await waitFor(() => expect(confirm).not.toBeInTheDocument());
+    expect(store.moveTask).toHaveBeenCalledTimes(2);
+  });
+
+  it("deletes through the row menu after confirmation", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    renderPanel(store);
+
+    await user.click(screen.getByRole("button", { name: 'Actions for "Add retry to the payment call"' }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete…" }));
+    const confirm = screen.getByRole("dialog", { name: "Delete task?" });
+    expect(within(confirm).getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await user.click(within(confirm).getByRole("button", { name: "Delete task" }));
+    expect(store.deleteTask).toHaveBeenCalledWith("t-retry");
+  });
+
+  it("writes the versioned task identity when a row is dragged", () => {
+    const store = seededStore();
+    renderPanel(store, { drag: true });
     const values = new Map<string, string>();
     const dataTransfer = {
       effectAllowed: "none",
-      types: [],
+      types: [] as string[],
       setData: vi.fn((type: string, value: string) => {
         values.set(type, value);
-        (dataTransfer.types as string[]).push(type);
+        dataTransfer.types.push(type);
       }),
       getData: vi.fn((type: string) => values.get(type) ?? ""),
-    } as unknown as DataTransfer;
+    };
+    const row = rowOf("Add retry to the payment call").querySelector(".tasks-row-main")!;
+    expect(row).toHaveAttribute("draggable", "true");
+    // No visible handle: the whole row is the drag source.
+    expect(screen.queryByRole("button", { name: /^Drag/ })).not.toBeInTheDocument();
 
-    fireEvent.dragStart(
-      screen.getByRole("button", {
-        name: "Drag “Write docs” to a thread or prompt",
-      }),
-      { dataTransfer },
-    );
-
-    expect(JSON.parse(values.get(TASK_DRAG_MIME)!)).toEqual({
-      version: 1,
-      taskId: "task-1",
-      revision: 8,
-    });
+    fireEvent.dragStart(row, { dataTransfer });
+    expect(JSON.parse(values.get(TASK_DRAG_MIME)!)).toEqual({ version: 1, taskId: "t-retry", revision: 0 });
     expect(dataTransfer.effectAllowed).toBe("copyMove");
   });
 
-  it("moves dragged tasks onto the Project and Thread scope headers", async () => {
-    act(() => navigate(threadPath("thread-9")));
-    const task = makeTask({ revision: 4 });
-    const store = makeStore([task], {
-      threads: [
-        {
-          id: "thread-9",
-          workspaceId: "workspace-1",
-          title: { text: "Current thread" },
-        },
-      ],
-      workspaces: [{ id: "workspace-1", label: { text: "Sedes" }, displayPath: { text: "/sedes" } }],
-    });
-    renderPanelWithTaskDrag(store);
-    fireEvent.click(screen.getByRole("radio", { name: "Global" }));
-
-    const startDrag = () => {
-      const values = new Map<string, string>();
-      const types: string[] = [];
-      const dataTransfer = {
-        effectAllowed: "none",
-        dropEffect: "none",
-        types,
-        setData: vi.fn((type: string, value: string) => {
-          values.set(type, value);
-          if (!types.includes(type)) types.push(type);
-        }),
-        getData: vi.fn((type: string) => values.get(type) ?? ""),
-      } as unknown as DataTransfer;
-      fireEvent.dragStart(
-        screen.getByRole("button", {
-          name: "Drag “Write docs” to a thread or prompt",
-        }),
-        { dataTransfer },
-      );
-      return dataTransfer;
+  it("moves a task dropped on a scope segment, outlining the targets", async () => {
+    const store = seededStore();
+    renderPanel(store, { drag: true });
+    const values = new Map<string, string>();
+    const types: string[] = [];
+    const dataTransfer = {
+      effectAllowed: "none",
+      dropEffect: "none",
+      types,
+      setData: (type: string, value: string) => {
+        values.set(type, value);
+        if (!types.includes(type)) types.push(type);
+      },
+      getData: (type: string) => values.get(type) ?? "",
     };
+    fireEvent.dragStart(rowOf("Add retry to the payment call").querySelector(".tasks-row-main")!, { dataTransfer });
 
-    const project = screen.getByRole("radio", { name: "Project" });
-    let dataTransfer = startDrag();
-    fireEvent.dragOver(project, { dataTransfer });
-    expect(project).toHaveAttribute("data-task-scope-drop-target", "true");
-    fireEvent.dragEnd(
-      screen.getByRole("button", {
-        name: "Drag “Write docs” to a thread or prompt",
-      }),
-      { dataTransfer },
-    );
-    await waitFor(() =>
-      expect(project).not.toHaveAttribute("data-task-scope-drop-target"),
-    );
+    expect(segment("Project")).toHaveAttribute("data-drop", "available");
+    expect(segment("Thread")).not.toHaveAttribute("data-drop");
+    fireEvent.dragOver(segment("Project"), { dataTransfer });
+    expect(segment("Project")).toHaveAttribute("data-drop", "over");
+    fireEvent.drop(segment("Project"), { dataTransfer });
 
-    dataTransfer = startDrag();
-    fireEvent.drop(project, { dataTransfer });
     await vi.waitFor(() =>
       expect(store.moveTask).toHaveBeenCalledWith(
-        task,
+        expect.objectContaining({ id: "t-retry" }),
         { kind: "workspace", workspaceId: "workspace-1" },
-        expect.any(String),
       ),
     );
-
-    const thread = screen.getByRole("radio", { name: "Thread" });
-    dataTransfer = startDrag();
-    fireEvent.dragOver(thread, { dataTransfer });
-    expect(thread).toHaveAttribute("data-task-scope-drop-target", "true");
-    fireEvent.drop(thread, { dataTransfer });
-    await vi.waitFor(() =>
-      expect(store.moveTask).toHaveBeenCalledWith(
-        task,
-        { kind: "thread", threadId: "thread-9" },
-        expect.any(String),
-      ),
-    );
+    await waitFor(() => expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ message: "Moved to acme-web" })));
   });
+});
 
-  it("disables the Thread scope when its project cannot be resolved", () => {
-    act(() => navigate(threadPath("missing-thread")));
-    const store = makeStore([makeTask()], { threads: [], workspaces: [] });
-    renderPanelWithTaskDrag(store);
-
-    expect(screen.getByRole("radio", { name: "Thread" })).toBeDisabled();
-  });
-
-  it("moves a nested task to the scope represented by the Tasks card", async () => {
-    setTasksPanelIncludeNestedScopes(true);
-    const task = makeTask({
-      scope: { kind: "workspace", workspaceId: "workspace-1" },
-      associatedWorkspaceId: "workspace-1",
-    });
-    const store = makeStore([task]);
-    renderPanelWithTaskDrag(store);
-    const values = new Map<string, string>();
-    const types: string[] = [];
-    const dataTransfer = {
-      effectAllowed: "none",
-      dropEffect: "none",
-      types,
-      setData: vi.fn((type: string, value: string) => {
-        values.set(type, value);
-        if (!types.includes(type)) types.push(type);
-      }),
-      getData: vi.fn((type: string) => values.get(type) ?? ""),
-    } as unknown as DataTransfer;
-
-    fireEvent.dragStart(
-      screen.getByRole("button", {
-        name: "Drag “Write docs” to a thread or prompt",
-      }),
-      { dataTransfer },
-    );
-    const card = document.querySelector<HTMLElement>(".tasks-panel-body")!;
-    fireEvent.dragOver(card, { dataTransfer });
-    expect(card).toHaveAttribute("data-task-scope-drop-target", "true");
-    fireEvent.drop(card, { dataTransfer });
-
-    await vi.waitFor(() =>
-      expect(store.moveTask).toHaveBeenCalledWith(
-        task,
-        { kind: "global" },
-        expect.any(String),
-      ),
-    );
-  });
-
-  it("shows a cross-project scope-drop failure inside its confirmation", async () => {
-    setTasksPanelIncludeNestedScopes(true);
-    act(() => navigate(threadPath("thread-9")));
-    const task = makeTask({
-      scope: { kind: "workspace", workspaceId: "workspace-2" },
-      associatedWorkspaceId: "workspace-2",
-      files: ["/workspace-2/notes.md"],
-    });
-    const store = makeStore([task], {
-      threads: [
-        {
-          id: "thread-9",
-          workspaceId: "workspace-1",
-          title: { text: "Current thread" },
-        },
-      ],
-      workspaces: [
-        { id: "workspace-1", label: { text: "Sedes" }, displayPath: { text: "/sedes" } },
-        { id: "workspace-2", label: { text: "Website" }, displayPath: { text: "/website" } },
-      ],
-    });
-    vi.mocked(store.moveTask).mockRejectedValueOnce(
-      new Error("The server connection was lost."),
-    );
-    renderPanelWithTaskDrag(store);
-    fireEvent.click(screen.getByRole("radio", { name: "Global" }));
-    const values = new Map<string, string>();
-    const types: string[] = [];
-    const dataTransfer = {
-      effectAllowed: "none",
-      dropEffect: "none",
-      types,
-      setData: vi.fn((type: string, value: string) => {
-        values.set(type, value);
-        if (!types.includes(type)) types.push(type);
-      }),
-      getData: vi.fn((type: string) => values.get(type) ?? ""),
-    } as unknown as DataTransfer;
-
-    fireEvent.dragStart(
-      screen.getByRole("button", {
-        name: "Drag “Write docs” to a thread or prompt",
-      }),
-      { dataTransfer },
-    );
-    fireEvent.drop(screen.getByRole("radio", { name: "Project" }), {
-      dataTransfer,
-    });
-    fireEvent.click(await screen.findByRole("button", { name: "Move task" }));
-
-    expect(
-      await within(screen.getByRole("dialog")).findByRole("alert"),
-    ).toHaveTextContent("The server connection was lost.");
-    expect(
-      screen.getByRole("heading", { name: "Move task with project files?" }),
-    ).toBeInTheDocument();
-  });
-
-  it("stages files and saves editable fields without changing row pinning", async () => {
-    const task = makeTask({
-      revision: 7,
-      pinned: true,
-      files: ["/workspace/README.md"],
-    });
-    const store = makeStore([task]);
+describe("TasksPanel edit dialog", () => {
+  it("saves labelled fields including where the task belongs and its pin", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
     renderPanel(store);
 
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.click(screen.getByRole("button", { name: /Edit/ }));
-    fireEvent.change(screen.getByLabelText("Task title"), {
-      target: { value: "Write all docs" },
-    });
-    fireEvent.change(screen.getByLabelText("Task notes"), {
-      target: { value: "Cover every workflow." },
-    });
-    fireEvent.change(screen.getByLabelText("Absolute file path"), {
-      target: { value: "docs/relative.md" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Add file" }));
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Enter an absolute file path beginning with /.",
-    );
-    fireEvent.change(screen.getByLabelText("Absolute file path"), {
-      target: { value: "/workspace/docs/tasks.md" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Add file" }));
-    fireEvent.click(screen.getByRole("button", { name: "Save task" }));
+    await user.click(rowTitle("Add retry to the payment call"));
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit task" });
+    const title = within(dialog).getByRole("textbox", { name: "Title" });
+    expect(title).toHaveFocus();
+    await user.clear(title);
+    await user.type(title, "Add retry with backoff");
+    await user.type(within(dialog).getByRole("textbox", { name: "Notes" }), "Three attempts.");
+    await user.click(within(dialog).getByRole("combobox", { name: "Belongs to" }));
+    await user.click(screen.getByRole("option", { name: /This project · acme-web/ }));
+    await user.click(within(dialog).getByRole("switch", { name: "Pinned" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
 
-    await vi.waitFor(() =>
-      expect(store.updateTask).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "task-1", revision: 7 }),
-        {
-          title: "Write all docs",
-          details: "Cover every workflow.",
-          scope: { kind: "global" },
-          files: ["/workspace/README.md", "/workspace/docs/tasks.md"],
-        },
-      ),
-    );
-    expect(store.moveTask).not.toHaveBeenCalled();
-  });
-
-  it("keeps the editor open and surfaces a stale revision conflict", async () => {
-    const store = makeStore([makeTask({ revision: 4 })]);
-    vi.mocked(store.updateTask).mockRejectedValueOnce(
-      new Error("Task changed in another client. Reopen it and try again."),
-    );
-    renderPanel(store);
-
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.click(screen.getByRole("button", { name: /Edit/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Save task" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Task changed in another client. Reopen it and try again.",
-    );
-    expect(screen.getByLabelText("Task notes")).toBeInTheDocument();
     expect(store.updateTask).toHaveBeenCalledWith(
-      expect.objectContaining({ revision: 4 }),
-      expect.anything(),
+      expect.objectContaining({ id: "t-retry", revision: 0 }),
+      {
+        title: "Add retry with backoff",
+        details: "Three attempts.",
+        scope: { kind: "workspace", workspaceId: "workspace-1" },
+        pinned: true,
+      },
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit task" })).not.toBeInTheDocument());
+  });
+
+  it("guards unsaved changes on every way out", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    renderPanel(store);
+
+    await user.click(rowTitle("Add retry to the payment call"));
+    await user.keyboard("e");
+    const dialog = screen.getByRole("dialog", { name: "Edit task" });
+    await user.type(within(dialog).getByRole("textbox", { name: "Notes" }), "Unsaved");
+    await user.keyboard("{Escape}");
+
+    const guard = screen.getByRole("dialog", { name: "Discard unsaved changes?" });
+    expect(within(guard).getByRole("button", { name: "Keep editing" })).toHaveFocus();
+    await user.click(within(guard).getByRole("button", { name: "Keep editing" }));
+    expect(within(dialog).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved");
+
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Discard and close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit task" })).not.toBeInTheDocument());
+    expect(store.updateTask).not.toHaveBeenCalled();
+
+    // Without changes Cancel simply closes.
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("shows field errors on their fields and keeps a server error in the dialog", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    vi.mocked(store.updateTask).mockRejectedValueOnce(new Error("Task changed in another client."));
+    renderPanel(store);
+
+    await user.click(rowTitle("Audit checkout error states"));
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit task" });
+    const files = within(dialog).getByRole("list", { name: "Linked files" });
+    expect(within(files).getByRole("listitem")).toHaveAttribute("title", "/workspace/src/checkout.ts");
+    expect(within(files).getByText("checkout.ts")).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Add file" }));
+    const path = within(dialog).getByRole("textbox", { name: "Absolute file path" });
+    await user.type(path, "docs/relative.md{Enter}");
+    expect(path).toHaveAccessibleDescription("Enter an absolute file path beginning with /.");
+    expect(path).toHaveAttribute("aria-invalid", "true");
+    await user.clear(path);
+    await user.type(path, "/workspace/docs/tasks.md{Enter}");
+    expect(within(files).getAllByRole("listitem")).toHaveLength(2);
+
+    const title = within(dialog).getByRole("textbox", { name: "Title" });
+    await user.clear(title);
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(title).toHaveAccessibleDescription("A task needs a title.");
+    expect(store.updateTask).not.toHaveBeenCalled();
+
+    await user.type(title, "Audit errors");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Task changed in another client.");
+    expect(store.updateTask).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "t-audit" }),
+      { title: "Audit errors", files: ["/workspace/src/checkout.ts", "/workspace/docs/tasks.md"] },
     );
   });
 
-  it("resolves and opens a linked current-workspace file in the existing Files panel", async () => {
+  it("deletes from the dialog through a confirmation", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    renderPanel(store);
+
+    await user.click(rowTitle("Add retry to the payment call"));
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.click(screen.getByRole("button", { name: "Delete…" }));
+    const confirm = screen.getByRole("dialog", { name: "Delete task?" });
+    await user.click(within(confirm).getByRole("button", { name: "Delete task" }));
+
+    expect(store.deleteTask).toHaveBeenCalledWith("t-retry");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("keeps an unsaved edit while the surface is suspended", () => {
+    const store = seededStore();
+    const panelLayoutStore = makePanelLayoutStore();
+    const route = { name: "thread", threadId: "thread-9", automationOpen: false } as const;
+    const content = (active: boolean) => (
+      <TasksPanel store={store} panelLayoutStore={panelLayoutStore} route={route} active={active} />
+    );
+    const view = render(content(true));
+    fireEvent.click(rowTitle("Add retry to the payment call"));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Notes" }), { target: { value: "Unsaved while configuring" } });
+
+    view.rerender(content(false));
+    expect(screen.queryByRole("dialog", { name: "Edit task" })).not.toBeInTheDocument();
+    view.rerender(content(true));
+    expect(screen.getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved while configuring");
+  });
+});
+
+describe("TasksPanel view options and search", () => {
+  it("sorts and filters per view and remembers the choice", async () => {
+    const user = userEvent.setup();
+    const store = seededStore([
+      threadTask({ id: "t-zeta", title: "Zeta cleanup", createdAt: "2026-08-01T09:00:00.000Z", updatedAt: "2026-08-06T09:00:00.000Z" }),
+    ]);
+    const view = renderPanel(store);
+    expect(titles()).toEqual(["Audit checkout error states", "Add retry to the payment call", "Zeta cleanup"]);
+
+    await user.click(screen.getByRole("button", { name: "View options" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Title" }));
+    // The menu stays open for several choices.
+    expect(screen.getByRole("menu", { name: "View options" })).toBeInTheDocument();
+    expect(titles()).toEqual(["Add retry to the payment call", "Audit checkout error states", "Zeta cleanup"]);
+    await user.click(screen.getByRole("menuitemradio", { name: "Recently updated" }));
+    expect(titles()[0]).toBe("Zeta cleanup");
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "With notes" }));
+    expect(titles()).toEqual(["Audit checkout error states"]);
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("button", { name: "View options" })).toHaveAttribute("data-filtering", "true");
+
+    // Options belong to the view.
+    await user.click(segment("Global"));
+    expect(titles()).toEqual(["Rotate staging credentials"]);
+    view.unmount();
+    renderPanel(store);
+    await user.click(segment("Thread"));
+    expect(titles()).toEqual(["Audit checkout error states"]);
+
+    await user.click(screen.getByRole("button", { name: "View options" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "With notes" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Completed" }));
+    expect(titles()).toEqual(["Remove the legacy flag"]);
+    expect(screen.queryByRole("button", { name: /^Completed/ })).not.toBeInTheDocument();
+  });
+
+  it("searches titles, and notes when asked, without blocking the add row", async () => {
+    const user = userEvent.setup();
+    renderPanel(seededStore());
+
+    await user.click(screen.getByRole("button", { name: "Search tasks" }));
+    const search = screen.getByRole("textbox", { name: "Search tasks" });
+    expect(search).toHaveFocus();
+    await user.type(search, "error branch");
+    expect(titles()).toEqual(["Audit checkout error states"]);
+    expect(addInput()).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "View options" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Search notes" }));
+    await user.keyboard("{Escape}");
+    expect(titles()).toEqual([]);
+    expect(screen.getByText("No tasks match “error branch”.")).toBeInTheDocument();
+
+    await user.click(search);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("textbox", { name: "Search tasks" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Search tasks" })).toHaveFocus();
+    expect(titles()).toHaveLength(2);
+  });
+});
+
+describe("TasksPanel keyboard", () => {
+  it("navigates rows and runs row shortcuts, ignoring them while typing", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    renderPanel(store);
+
+    // One tab stop for the list.
+    expect(rowTitle("Audit checkout error states")).toHaveAttribute("tabindex", "0");
+    expect(rowTitle("Add retry to the payment call")).toHaveAttribute("tabindex", "-1");
+    rowTitle("Audit checkout error states").focus();
+    await user.keyboard("{ArrowDown}");
+    expect(rowTitle("Add retry to the payment call")).toHaveFocus();
+    expect(rowTitle("Add retry to the payment call")).toHaveAttribute("tabindex", "0");
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("button", { name: /^Completed/ })).toHaveFocus();
+    await user.keyboard("{ArrowUp}");
+
+    await user.keyboard("p");
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-retry" }),
+      { pinned: true },
+    );
+    await user.keyboard("{Enter}");
+    expect(rowTitle("Add retry to the payment call")).toHaveAttribute("aria-expanded", "true");
+    await user.keyboard("{Escape}");
+    expect(rowTitle("Add retry to the payment call")).toHaveAttribute("aria-expanded", "false");
+    expect(panel()).toBeInTheDocument();
+
+    await user.keyboard("m");
+    expect(await screen.findByRole("menu")).toHaveTextContent("This project");
+    await user.keyboard("{Escape}");
+
+    await user.keyboard("{Delete}");
+    expect(screen.getByRole("dialog", { name: "Delete task?" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    await user.keyboard("{Control>}{Enter}{/Control}");
+    expect(screen.getByRole("alert")).toHaveTextContent("The message composer is unavailable.");
+
+    rowTitle("Add retry to the payment call").focus();
+    await user.keyboard(" ");
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-retry" }),
+      { completed: true },
+    );
+
+    await user.keyboard("n");
+    expect(addInput()).toHaveFocus();
+    await user.keyboard("pen/e");
+    expect(addInput()).toHaveValue("pen/e");
+    expect(screen.queryByRole("textbox", { name: "Search tasks" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+
+    rowTitle("Audit checkout error states").focus();
+    await user.keyboard("/");
+    expect(screen.getByRole("textbox", { name: "Search tasks" })).toHaveFocus();
+  });
+
+  it("keeps focus in the list when a completed row leaves it", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    renderPanel(store);
+
+    rowTitle("Audit checkout error states").focus();
+    await user.keyboard(" ");
+    act(() =>
+      store.publish(
+        store.getTasks().map((task) =>
+          task.id === "t-audit" ? { ...task, completedAt: "2026-08-05T10:00:00.000Z" } : task,
+        ),
+      ),
+    );
+    expect(rowTitle("Add retry to the payment call")).toHaveFocus();
+  });
+
+  it("collapses the expanded row before Escape closes the panel", () => {
+    renderPanel(seededStore());
+    fireEvent.click(rowTitle("Add retry to the payment call"));
+    fireEvent.keyDown(rowTitle("Add retry to the payment call"), { key: "Escape" });
+    expect(rowTitle("Add retry to the payment call")).toHaveAttribute("aria-expanded", "false");
+    expect(panel()).toBeInTheDocument();
+
+    fireEvent.keyDown(rowTitle("Add retry to the payment call"), { key: "Escape" });
+    expect(screen.queryByRole("region", { name: "Tasks" })).not.toBeInTheDocument();
+  });
+});
+
+describe("TasksPanel reveal", () => {
+  it("switches to a view holding the task, expands it and focuses it", async () => {
+    const store = seededStore();
+    renderPanel(store);
+
+    act(() => revealTask("o-other"));
+    await waitFor(() => expect(segment("All")).toHaveAttribute("aria-checked", "true"));
+    expect(rowTitle("Round invoices half-even")).toHaveAttribute("aria-expanded", "true");
+    expect(rowTitle("Round invoices half-even")).toHaveFocus();
+
+    act(() => revealTask("t-done"));
+    await waitFor(() => expect(segment("Thread")).toHaveAttribute("aria-checked", "true"));
+    expect(screen.getByRole("button", { name: /^Completed/ })).toHaveAttribute("aria-expanded", "true");
+    expect(rowTitle("Remove the legacy flag")).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("delivers a reveal requested before Tasks mounted and clears hiding filters", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    const view = renderPanel(store);
+    await user.click(screen.getByRole("button", { name: "View options" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Pinned" }));
+    view.unmount();
+
+    revealTask("t-retry");
+    renderPanel(store);
+    await waitFor(() => expect(rowTitle("Add retry to the payment call")).toHaveAttribute("aria-expanded", "true"));
+  });
+});
+
+describe("TasksPanel files", () => {
+  it("opens a linked file in the Files panel", async () => {
     setPanelPresentation("single");
-    act(() => navigate(threadPath("thread-9")));
-    const store = makeStore(
-      [
-        makeTask({
-          scope: { kind: "thread", threadId: "thread-9" },
-          files: ["/workspace/docs/tasks.md"],
-        }),
-      ],
-      {
-        threads: [
-          {
-            id: "thread-9",
-            workspaceId: "workspace-1",
-            title: { text: "Tasks" },
-          },
-        ],
-        workspaces: [
-          {
-            id: "workspace-1",
-            label: { text: "Sedes" },
-            displayPath: { text: "/workspace" },
-            available: true,
-          },
-        ],
-      },
-    );
     const panelLayoutStore = makePanelLayoutStore();
-    renderPanel(store, panelLayoutStore);
+    renderPanel(seededStore(), { panelLayoutStore });
 
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    expect(screen.getByText("tasks.md")).toBeInTheDocument();
-    expect(screen.getByText("/workspace/docs/tasks.md")).toBeInTheDocument();
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Open /workspace/docs/tasks.md in Files",
-      }),
-    );
-
+    fireEvent.click(rowTitle("Audit checkout error states"));
+    fireEvent.click(screen.getByRole("button", { name: "Open /workspace/src/checkout.ts in Files" }), { shiftKey: true });
     await vi.waitFor(() =>
-      expect(panelLayoutStore.openPanel).toHaveBeenCalledWith(
-        "workspace-files",
-        {
-          presentation: "single",
-          intent: expect.objectContaining({
-            kind: "open-workspace-file",
-            workspaceId: "workspace-1",
-            rootId: "primary",
-            path: "docs/tasks.md",
-            rootVisibility: "listed",
-            target: { kind: "file" },
-            sequence: expect.any(Number),
-          }),
-        },
-      ),
+      expect(panelLayoutStore.openPanel).toHaveBeenCalledWith("workspace-files", {
+        presentation: "split",
+        intent: expect.objectContaining({
+          kind: "open-workspace-file",
+          workspaceId: "workspace-1",
+          rootId: "primary",
+          path: "src/checkout.ts",
+          rootVisibility: "listed",
+          target: { kind: "file" },
+        }),
+      }),
     );
   });
 
-  it("closes the mobile Tasks sheet after handing a file to Files", async () => {
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn(() => ({
-        matches: true,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      })),
-    );
+  it("reports a file outside the allowed worktrees and a non-normalized path", async () => {
     act(() => navigate(threadPath("thread-9")));
     const store = makeStore(
       [
-        makeTask({
-          scope: { kind: "thread", threadId: "thread-9" },
-          files: ["/workspace/docs/tasks.md"],
-        }),
+        threadTask({ id: "a", title: "Outside", files: ["/other/private.txt"] }),
+        threadTask({ id: "b", title: "Dotted", files: ["/other/../private.txt"] }),
       ],
-      {
-        threads: [
-          {
-            id: "thread-9",
-            workspaceId: "workspace-1",
-            title: { text: "Tasks" },
-          },
-        ],
-        workspaces: [
-          {
-            id: "workspace-1",
-            label: { text: "Sedes" },
-            displayPath: { text: "/workspace" },
-            available: true,
-          },
-        ],
-      },
+      { threads: THREADS, workspaces: WORKSPACES, resolveFileLink: () => ({ status: "not_found" }) },
     );
     renderPanel(store);
 
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Open /workspace/docs/tasks.md in Files",
-      }),
-    );
+    fireEvent.click(rowTitle("Outside"));
+    fireEvent.click(screen.getByRole("button", { name: "Open /other/private.txt in Files" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("isn't available in Files");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
 
-    await vi.waitFor(() =>
-      expect(
-        screen.queryByRole("dialog", { name: "Tasks" }),
-      ).not.toBeInTheDocument(),
-    );
-  });
-
-  it("opens an allowed sibling-worktree task file through a link-only root", async () => {
-    act(() => navigate(threadPath("thread-9")));
-    const store = makeStore(
-      [
-        makeTask({
-          scope: { kind: "thread", threadId: "thread-9" },
-          files: ["/other/private.txt"],
-        }),
-      ],
-      {
-        threads: [
-          {
-            id: "thread-9",
-            workspaceId: "workspace-1",
-            title: { text: "Tasks" },
-          },
-        ],
-        workspaces: [
-          {
-            id: "workspace-1",
-            label: { text: "Sedes" },
-            displayPath: { text: "/workspace" },
-            available: true,
-          },
-        ],
-        resolveFileLink: () => ({
-          status: "resolved",
-          rootId: "link-sibling",
-          path: "private.txt",
-          rootVisibility: "link_only",
-        }),
-      },
-    );
-    const panelLayoutStore = makePanelLayoutStore();
-    renderPanel(store, panelLayoutStore);
-
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Open /other/private.txt in Files",
-      }),
-      { shiftKey: true },
-    );
-    await vi.waitFor(() =>
-      expect(panelLayoutStore.openPanel).toHaveBeenCalledWith(
-        "workspace-files",
-        {
-          presentation: "single",
-          intent: expect.objectContaining({
-            workspaceId: "workspace-1",
-            rootId: "link-sibling",
-            path: "private.txt",
-            rootVisibility: "link_only",
-          }),
-        },
-      ),
-    );
-    expect(store.api.resolveWorkspaceFileLink).toHaveBeenCalledWith(
-      "workspace-1",
-      { kind: "absolute", path: "/other/private.txt" },
-    );
-  });
-
-  it("reports an absolute task file that is outside allowed worktrees", async () => {
-    act(() => navigate(threadPath("thread-9")));
-    const store = makeStore(
-      [
-        makeTask({
-          scope: { kind: "thread", threadId: "thread-9" },
-          files: ["/other/private.txt"],
-        }),
-      ],
-      {
-        threads: [
-          {
-            id: "thread-9",
-            workspaceId: "workspace-1",
-            title: { text: "Tasks" },
-          },
-        ],
-        workspaces: [
-          {
-            id: "workspace-1",
-            label: { text: "Sedes" },
-            displayPath: { text: "/workspace" },
-            available: true,
-          },
-        ],
-        resolveFileLink: () => ({ status: "not_found" }),
-      },
-    );
-    renderPanel(store);
-
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Open /other/private.txt in Files",
-      }),
-    );
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "isn't available in Files",
-    );
-  });
-
-  it("rejects a non-normalized stored task path without calling Files", async () => {
-    act(() => navigate(threadPath("thread-9")));
-    const store = makeStore(
-      [
-        makeTask({
-          scope: { kind: "thread", threadId: "thread-9" },
-          files: ["/other/../private.txt"],
-        }),
-      ],
-      {
-        threads: [
-          {
-            id: "thread-9",
-            workspaceId: "workspace-1",
-            title: { text: "Tasks" },
-          },
-        ],
-        workspaces: [
-          {
-            id: "workspace-1",
-            label: { text: "Sedes" },
-            displayPath: { text: "/workspace" },
-            available: true,
-          },
-        ],
-      },
-    );
-    renderPanel(store);
-
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Open /other/../private.txt in Files",
-      }),
-    );
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "isn't available in Files",
-    );
+    vi.mocked(store.api.resolveWorkspaceFileLink).mockClear();
+    fireEvent.click(rowTitle("Dotted"));
+    fireEvent.click(screen.getByRole("button", { name: "Open /other/../private.txt in Files" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("isn't available in Files");
     expect(store.api.resolveWorkspaceFileLink).not.toHaveBeenCalled();
   });
+});
 
-  it("drops the detail preview when the selected task leaves the view", () => {
-    const store = makeStore([makeTask({ details: "Global task notes." })]);
-    renderPanel(store);
+describe("TasksPanel phone sheet", () => {
+  beforeEach(() => stubDensity(true));
 
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    expect(screen.getByText("Global task notes.")).toBeInTheDocument();
+  it("puts the add bar under the list and drills into a task's detail", async () => {
+    const user = userEvent.setup();
+    const stageTaskReference = vi.fn();
+    renderPanel(seededStore(), { stageTaskReference });
+    const sheet = screen.getByRole("dialog", { name: "Tasks" });
+    // Opening focuses the view rather than the add bar (no soft keyboard).
+    await waitFor(() => expect(within(sheet).getByRole("radio", { name: "Thread" })).toHaveFocus());
 
-    // The thread/project views are unavailable on the home route, so switch
-    // is exercised by toggling the same task off instead.
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    expect(screen.queryByText("Global task notes.")).not.toBeInTheDocument();
+    const content = sheet.querySelector(".tasks-content")!;
+    expect(content).toHaveAttribute("data-presentation", "sheet");
+    expect(content.lastElementChild?.previousElementSibling).toHaveClass("tasks-add");
+    expect(within(sheet).getByRole("button", { name: "Add task" })).toBeDisabled();
+    expect(within(sheet).queryByRole("button", { name: "View options" })).not.toBeInTheDocument();
+    // ⋯ is always shown on touch.
+    expect(within(sheet).getByRole("button", { name: 'Actions for "Add retry to the payment call"' })).toBeInTheDocument();
+
+    await user.click(rowTitle("Audit checkout error states"));
+    expect(content).toHaveAttribute("data-task-detail-open", "true");
+    expect(within(sheet).getByRole("heading", { name: "Audit checkout error states" })).toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: "Back to tasks" })).toHaveFocus();
+    expect(within(sheet).queryByRole("textbox", { name: "Add a task" })).not.toBeInTheDocument();
+
+    act(() => window.dispatchEvent(new Event(CLOSE_TASK_DETAIL_EVENT)));
+    expect(content).not.toHaveAttribute("data-task-detail-open");
+    expect(sheet).toBeInTheDocument();
+    await waitFor(() => expect(rowTitle("Audit checkout error states")).toHaveFocus());
+
+    await user.click(rowTitle("Add retry to the payment call"));
+    await user.click(within(sheet).getByRole("button", { name: "Add to prompt" }));
+    expect(stageTaskReference).toHaveBeenCalledWith({ taskId: "t-retry", titleSnapshot: "Add retry to the payment call" });
+    expect(toast.show).toHaveBeenCalledWith({ message: "Added to prompt" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Tasks" })).not.toBeInTheDocument());
   });
 
-  it("uses the add-task input to filter titles by default", () => {
-    const store = makeStore([
-      makeTask({ id: "task-docs", title: "Write docs", details: "API guide" }),
-      makeTask({
-        id: "task-release",
-        title: "Ship release",
-        details: "Verify Android package",
-        createdAt: "2026-08-01T11:00:00.000Z",
-      }),
-    ]);
-    renderPanel(store);
-
-    const input = screen.getByRole("searchbox", {
-      name: "Search or add task",
-    });
-    expect(input).toHaveAttribute("placeholder", "Search or add task");
-    fireEvent.change(input, { target: { value: "release" } });
-    expect(
-      screen.queryByRole("button", { name: 'View "Write docs"' }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: 'View "Ship release"' }),
-    ).toBeInTheDocument();
-
-    fireEvent.change(input, { target: { value: "" } });
-    expect(input).toHaveValue("");
-    expect(screen.getAllByRole("button", { name: /^View / })).toHaveLength(2);
-  });
-
-  it("can persistently include task content from the options menu", () => {
-    const store = makeStore([
-      makeTask({ id: "task-docs", title: "Write docs", details: "API guide" }),
-      makeTask({
-        id: "task-release",
-        title: "Ship release",
-        details: "Verify Android package",
-        createdAt: "2026-08-01T11:00:00.000Z",
-      }),
-    ]);
-    renderPanel(store);
-
-    const input = screen.getByRole("searchbox", {
-      name: "Search or add task",
-    });
-    fireEvent.change(input, { target: { value: "ANDROID" } });
-    expect(
-      screen.queryByRole("button", { name: /^View / }),
-    ).not.toBeInTheDocument();
-
-    const options = screen.getByRole("button", { name: "Tasks panel options" });
-    fireEvent.pointerDown(options, { button: 0, ctrlKey: false });
-    const searchContent = screen.getByRole("menuitemcheckbox", {
-      name: "Search task content",
-    });
-    expect(searchContent).not.toBeChecked();
-    fireEvent.click(searchContent);
-
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: 'View "Ship release"' }),
-    ).toBeInTheDocument();
-    expect(
-      JSON.parse(window.localStorage.getItem("sedes.tasks.panel") ?? "null")
-        .searchContent,
-    ).toBe(true);
-    fireEvent.pointerDown(options, { button: 0, ctrlKey: false });
-    expect(
-      screen.getByRole("menuitemcheckbox", { name: "Search task content" }),
-    ).toBeChecked();
-  });
-
-  it("persists the default view from the options menu", () => {
-    renderPanel(makeStore([makeTask({ id: "task-docs", title: "Write docs" })]));
-    const options = screen.getByRole("button", { name: "Tasks panel options" });
-    fireEvent.pointerDown(options, { button: 0, ctrlKey: false });
-
-    const defaultView = screen.getByRole("group", { name: "Default view" });
-    const views = within(defaultView).getAllByRole("menuitemradio");
-    expect(views.map((view) => view.textContent)).toEqual([
-      "Global",
-      "Project",
-      "Thread",
-    ]);
-    expect(
-      views.map((view) => view.getAttribute("aria-checked")),
-    ).toEqual(["false", "false", "true"]);
-    fireEvent.click(within(defaultView).getByRole("menuitemradio", { name: "Global" }));
-
-    expect(
-      JSON.parse(window.localStorage.getItem("sedes.tasks.panel") ?? "null")
-        .defaultView,
-    ).toBe("global");
-    fireEvent.pointerDown(options, { button: 0, ctrlKey: false });
-    expect(screen.getByRole("menuitemradio", { name: "Global" })).toBeChecked();
-    expect(screen.getByRole("menuitemradio", { name: "Thread" })).not.toBeChecked();
-  });
-
-  it("selects the exact Enter-created duplicate after publication lag and shows read-only detail", async () => {
-    const existing = makeTask({
-      id: "existing-task",
-      title: "Ship release",
-      details: "Existing task details.",
-    });
-    const created = makeTask({
-      id: "returned-created-task",
-      title: "Ship release",
-      details: "Newly created task details.",
-      createdAt: "2026-08-01T11:00:00.000Z",
-    });
-    const publishing = makePublishingStore([existing]);
-    vi.mocked(publishing.store.createTask).mockResolvedValueOnce(created);
-    const store = publishing.store;
-    renderPanel(store);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: 'View "Ship release"' }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    fireEvent.click(screen.getByRole("button", { name: "Delete task" }));
-    expect(screen.getByText("Delete this task?")).toBeInTheDocument();
-    const input = screen.getByRole("searchbox", {
-      name: "Search or add task",
-    });
-    fireEvent.change(input, { target: { value: "Ship release" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-
-    await vi.waitFor(() => {
-      expect(store.createTask).toHaveBeenCalledWith("Ship release", {
-        kind: "global",
-      });
-      expect(input).toHaveValue("");
-    });
-    expect(screen.queryByText("Delete this task?")).not.toBeInTheDocument();
-    expect(
-      screen.queryByText("Newly created task details."),
-    ).not.toBeInTheDocument();
-
-    act(() => publishing.publishTasks([existing, created]));
-
-    expect(screen.getByText("Newly created task details.")).toBeInTheDocument();
-    expect(
-      screen.queryByText("Existing task details."),
-    ).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Task notes")).not.toBeInTheDocument();
-    const duplicateRows = screen
-      .getAllByRole("button", { name: 'View "Ship release"' })
-      .map((button) => button.closest("li"));
-    expect(duplicateRows).toHaveLength(2);
-    expect(duplicateRows[0]).toHaveAttribute("data-selected", "true");
-  });
-
-  it.each([
-    { view: "global", expectedScope: { kind: "global" } },
-    {
-      view: "project",
-      expectedScope: { kind: "workspace", workspaceId: "workspace-1" },
-    },
-    {
-      view: "thread",
-      expectedScope: { kind: "thread", threadId: "thread-9" },
-    },
-  ] as const)(
-    "creates in the $view scope from the Add button",
-    async ({ view, expectedScope }) => {
-      if (view !== "global") act(() => navigate(threadPath("thread-9")));
-      const publishing = makePublishingStore([], {
-        threads: [
-          {
-            id: "thread-9",
-            workspaceId: "workspace-1",
-            title: { text: "Task thread" },
-          },
-        ],
-        workspaces: [
-          {
-            id: "workspace-1",
-            label: { text: "Sedes" },
-            displayPath: { text: "/workspace" },
-            available: true,
-          },
-        ],
-      });
-      const created = makeTask({
-        id: `created-${view}`,
-        scope: expectedScope,
-        title: `Create ${view}`,
-        details: `Created ${view} detail.`,
-      });
-      vi.mocked(publishing.store.createTask).mockResolvedValueOnce(created);
-      const store = publishing.store;
-      renderPanel(store);
-      fireEvent.click(screen.getByRole("radio", {
-        name: view === "global" ? "Global" : view === "project" ? "Project" : "Thread",
-      }));
-      const input = screen.getByRole("searchbox", {
-        name: "Search or add task",
-      });
-      fireEvent.change(input, { target: { value: `Create ${view}` } });
-      fireEvent.click(screen.getByRole("button", { name: "Add task" }));
-
-      await vi.waitFor(() => {
-        expect(store.createTask).toHaveBeenCalledWith(
-          `Create ${view}`,
-          expectedScope,
-        );
-        expect(input).toHaveValue("");
-      });
-      act(() => publishing.publishTasks([created]));
-      expect(screen.getByText(created.details)).toBeInTheDocument();
-    },
-  );
-
-  it("preserves the intended created selection across scope filtering", async () => {
-    act(() => navigate(threadPath("thread-9")));
-    const context = {
-      threads: [
-        {
-          id: "thread-9",
-          workspaceId: "workspace-1",
-          title: { text: "Task thread" },
-        },
-      ],
-      workspaces: [
-        {
-          id: "workspace-1",
-          label: { text: "Sedes" },
-          displayPath: { text: "/workspace" },
-          available: true,
-        },
-      ],
-    };
-    const created = makeTask({
-      id: "created-thread-task",
-      scope: { kind: "thread", threadId: "thread-9" },
-      title: "Thread follow-up",
-      details: "Created thread task detail.",
-    });
-    const publishing = makePublishingStore([], context);
-    vi.mocked(publishing.store.createTask).mockResolvedValueOnce(created);
-    renderPanel(publishing.store);
-    fireEvent.click(screen.getByRole("radio", { name: "Thread" }));
-    fireEvent.change(screen.getByRole("searchbox"), {
-      target: { value: created.title },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
-    await vi.waitFor(() =>
-      expect(publishing.store.createTask).toHaveBeenCalled(),
-    );
-
-    fireEvent.click(screen.getByRole("radio", { name: "Project" }));
-    act(() => publishing.publishTasks([created]));
-    expect(screen.queryByText(created.details)).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("radio", { name: "Thread" }));
-    expect(screen.getByText(created.details)).toBeInTheDocument();
-  });
-
-  it("preserves the input and current selection when creation fails", async () => {
-    const current = makeTask({ details: "Keep this selection." });
-    const store = makeStore([current]);
-    vi.mocked(store.createTask).mockRejectedValueOnce(
-      new Error("Could not create task."),
-    );
-    renderPanel(store);
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    const input = screen.getByRole("searchbox", {
-      name: "Search or add task",
-    });
-    fireEvent.change(input, { target: { value: "Rejected task" } });
-    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not create task.",
-    );
-    expect(input).toHaveValue("Rejected task");
-    fireEvent.change(input, { target: { value: "" } });
-    expect(screen.getByText("Keep this selection.")).toBeInTheDocument();
-  });
-
-  it("keeps mobile Back behavior for an auto-selected created task", async () => {
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn(() => ({
-        matches: true,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      })),
-    );
-    const created = makeTask({
-      id: "created-mobile-task",
-      title: "Mobile follow-up",
-      details: "Created on mobile.",
-    });
-    const publishing = makePublishingStore([]);
-    vi.mocked(publishing.store.createTask).mockResolvedValueOnce(created);
-    renderPanel(publishing.store);
-    fireEvent.change(screen.getByRole("searchbox"), {
-      target: { value: created.title },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Add task" }));
-    await vi.waitFor(() =>
-      expect(publishing.store.createTask).toHaveBeenCalled(),
-    );
-    act(() => publishing.publishTasks([created]));
-    expect(screen.getByText(created.details)).toBeInTheDocument();
-
+  it("closes the detail with Escape before the sheet", () => {
+    renderPanel(seededStore());
+    fireEvent.click(rowTitle("Add retry to the payment call"));
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByText(created.details)).not.toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "Tasks" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Add a task" })).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Tasks" })).not.toBeInTheDocument();
   });
 
-  it("anchors the mobile sheet to the bottom and lifts it above the keyboard", () => {
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn(() => ({
-        matches: true,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      })),
-    );
+  it("closes the sheet after handing a file to Files", async () => {
+    renderPanel(seededStore());
+    fireEvent.click(rowTitle("Audit checkout error states"));
+    fireEvent.click(screen.getByRole("button", { name: "Open /workspace/src/checkout.ts in Files" }));
+    await vi.waitFor(() => expect(screen.queryByRole("dialog", { name: "Tasks" })).not.toBeInTheDocument());
+  });
+
+  it("anchors the sheet to the bottom and lifts it above the keyboard", () => {
     vi.stubGlobal("innerHeight", 800);
     vi.stubGlobal("visualViewport", {
       height: 500,
@@ -1862,113 +1211,35 @@ describe("TasksPanel", () => {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     });
-
     renderPanel(makeStore([]));
-
     const sheet = screen.getByRole("dialog", { name: "Tasks" });
     expect(sheet).toHaveAttribute("data-layout", "sheet");
     expect(sheet.style.getPropertyValue("--keyboard-inset")).toBe("280px");
   });
+});
 
-  it("closes an editor when search hides its task", () => {
-    const store = makeStore([
-      makeTask({ details: "Cover the tasks API end to end." }),
-    ]);
-    renderPanel(store);
-
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.click(screen.getByRole("button", { name: /Edit/ }));
-    expect(screen.getByLabelText("Task title")).toBeInTheDocument();
-
-    const input = screen.getByRole("searchbox", {
-      name: "Search or add task",
-    });
-    fireEvent.change(input, { target: { value: "no match" } });
-    expect(screen.queryByLabelText("Task title")).not.toBeInTheDocument();
-
-    fireEvent.change(input, { target: { value: "" } });
-    expect(screen.queryByLabelText("Task title")).not.toBeInTheDocument();
+describe("TasksPanel host", () => {
+  it("dismisses only an unpinned desktop panel on an outside pointer", async () => {
+    const user = userEvent.setup();
+    renderPanel(seededStore());
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    await user.click(rowTitle("Add retry to the payment call"));
+    await user.click(outside);
+    expect(panel()).toBeInTheDocument();
+    act(() => setTasksPanelPinned(false));
+    await user.click(outside);
+    expect(screen.queryByRole("region", { name: "Tasks" })).not.toBeInTheDocument();
+    outside.remove();
   });
 
-  it("keeps the search query while task detail is open and resets it after panel close", () => {
-    const store = makeStore([
-      makeTask({ details: "Cover the tasks API end to end." }),
-    ]);
-    renderPanel(store);
-
-    const input = screen.getByRole("searchbox", {
-      name: "Search or add task",
-    });
-    fireEvent.change(input, { target: { value: "tasks api" } });
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    expect(input).toHaveValue("tasks api");
-    expect(
-      screen.getByText("Cover the tasks API end to end."),
-    ).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Close Tasks panel" }));
-    act(() => setTasksPanelOpen(true));
-    expect(
-      screen.getByRole("searchbox", { name: "Search or add task" }),
-    ).toHaveValue("");
-  });
-
-  it("closes an open detail when beginning a new task", () => {
-    const store = makeStore([
-      makeTask({ details: "Cover the tasks API end to end." }),
-    ]);
-    renderPanel(store);
-
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    expect(
-      screen.getByText("Cover the tasks API end to end."),
-    ).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "New task" }));
-    expect(
-      screen.queryByText("Cover the tasks API end to end."),
-    ).not.toBeInTheDocument();
-  });
-
-  it("uses mobile Back to close task detail before closing the sheet", () => {
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn(() => ({
-        matches: true,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-      })),
-    );
-    const store = makeStore([
-      makeTask({ details: "Cover the tasks API end to end." }),
-    ]);
-    renderPanel(store);
-
-    fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
-    fireEvent.keyDown(document, { key: "Escape" });
-
-    expect(
-      screen.queryByText("Cover the tasks API end to end."),
-    ).not.toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "Tasks" })).toBeInTheDocument();
-
-    fireEvent.keyDown(document, { key: "Escape" });
-    expect(
-      screen.queryByRole("dialog", { name: "Tasks" }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("closes an open desktop Tasks panel with Escape", () => {
+  it("closes an open desktop Tasks panel with Escape from elsewhere", () => {
     renderPanel(makeStore([]));
     const outside = document.createElement("button");
     document.body.append(outside);
     outside.focus();
-
     fireEvent.keyDown(document, { key: "Escape" });
-
-    expect(
-      screen.queryByRole("region", { name: "Tasks" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Tasks" })).not.toBeInTheDocument();
     outside.remove();
   });
 });
