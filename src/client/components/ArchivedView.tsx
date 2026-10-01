@@ -336,14 +336,9 @@ export const ArchivedView = memo(function ArchivedView({
     setFocusAfterRestore(undefined);
     const list = listRef.current;
     const active = document.activeElement;
-    // Never take focus from somewhere the user moved it meanwhile.
-    if (
-      active !== null &&
-      active !== document.body &&
-      !(list?.contains(active) ?? false)
-    ) {
-      return;
-    }
+    // Only recover focus the removed row dropped; never take it from where
+    // the user moved it meanwhile.
+    if (active !== null && active !== document.body) return;
     for (const id of focusAfterRestore.candidates) {
       const target = list?.querySelector<HTMLElement>(
         `.archive-row[data-thread-id="${CSS.escape(id)}"] > .archive-row-open`,
