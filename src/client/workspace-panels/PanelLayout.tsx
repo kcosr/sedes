@@ -7,14 +7,17 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { useChatAutofocus } from "../app/use-chat-autofocus.js";
 import { parseRoute, pushHistoryEntry, replaceHistoryEntry } from "../app/router.js";
 import {
-  Check,
+  CheckIcon,
   ChevronDown,
   Files,
+  LayoutPanelTop,
   MessageSquare,
   NotepadText,
   PanelTop,
+  RotateCcw,
   Search,
   Terminal as TerminalIcon,
   X,
@@ -33,14 +36,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog.js";
+import { DiscardChangesDialog } from "../components/ui/discard-changes-dialog.js";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuValue,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.js";
+import {
+  menuCheckIndicatorClass,
+  menuCheckRowClass,
+} from "../components/ui/floating.js";
+import { cn } from "../lib/utils.js";
 import { PaneResizeHandle } from "../components/PaneResizeHandle.js";
 import { useComposerDraftStaging } from "../context-excerpts/coordinator.js";
 import {
@@ -58,6 +68,7 @@ import {
   TerminalPanel,
   TerminalTabs,
   ThreadTerminalMenu,
+  terminalConnectionLabel,
   terminalTabId,
   terminalTabPanelId,
   type TerminalPanelHandle,
@@ -66,6 +77,7 @@ import {
   type ThreadTerminalMenuHandle,
 } from "../terminals/index.js";
 import {
+  panelDockEdge,
   panelInstances,
   type LayoutNode,
   type PanelInstance,
@@ -219,6 +231,7 @@ function PanelLayoutReady({
     | undefined
   >(undefined);
   const closeMobileTerminalRef = useRef<() => void>(() => undefined);
+  const chatAutofocus = useChatAutofocus();
   const [desktop, setDesktop] = useState(
     () => !window.matchMedia(MOBILE_QUERY).matches,
   );
@@ -698,11 +711,11 @@ function PanelLayoutReady({
       return;
     // A cold Chat route initially contains only ThreadLoading. Focusing the
     // portal target at that point would consume the request before the
-    // preferred composer mounts. Keep the desktop request pending instead;
+    // preferred composer mounts. Keep an eligible autofocus request pending;
     // the interaction listeners below still abandon it if the user chooses a
     // different target while the thread loads.
     if (
-      desktop &&
+      chatAutofocus &&
       focusRequest.panelInstanceId === "chat" &&
       threadState.status === "loading" &&
       preferredFocusTarget(chatTarget) === undefined
@@ -727,7 +740,12 @@ function PanelLayoutReady({
         filesTarget,
         workpadsTarget,
       );
-      if (!focusInside(target, desktop)) return;
+      if (
+        !focusInside(
+          target,
+          focusRequest.panelInstanceId === "chat" ? chatAutofocus : desktop,
+        )
+      ) return;
       const focused = document.activeElement;
       requestAnimationFrame(() => {
         if (cancelled) return;
@@ -755,6 +773,7 @@ function PanelLayoutReady({
   }, [
     active,
     chatTarget,
+    chatAutofocus,
     desktop,
     filesTarget,
     workpadsTarget,
@@ -1000,6 +1019,7 @@ function PanelLayoutReady({
     onClose: (invoker) => chatPanel && closePanel(chatPanel, invoker),
     onDock: (edge) =>
       chatPanel && store.dockPanel(chatPanel.panelInstanceId, edge),
+    dockEdge: chatPanel && panelDockEdge(tree, chatPanel.panelInstanceId),
   };
 
   const renderPanel = (
@@ -1039,6 +1059,7 @@ function PanelLayoutReady({
               onCollapse: () => collapsePanel(panel),
               onClose: (invoker) => closePanel(panel, invoker),
               onDock: (edge) => store.dockPanel(panel.panelInstanceId, edge),
+              dockEdge: panelDockEdge(tree, panel.panelInstanceId),
               renderMenuItems: renderTenantMenu(tenant, {
                 threadId,
                 workspaceId,
@@ -1083,6 +1104,15 @@ function PanelLayoutReady({
       terminalSessionState.role === "observer" &&
       !terminalSessionState.controlRequestPending &&
       terminal?.lifecycle === "running";
+    const discardInputBlocker = !terminalSessionState
+      ? undefined
+      : terminalSessionState.connection !== "ready"
+        ? terminalConnectionLabel(terminalSessionState)
+        : !terminalSessionState.caughtUp
+          ? "Catching up"
+          : terminalSessionState.role !== "controller"
+            ? "Read only"
+            : undefined;
     return (
       <>
         <PanelChrome
@@ -1158,6 +1188,7 @@ function PanelLayoutReady({
             onCollapse: () => collapsePanel(panel),
             onClose: (invoker) => closePanel(panel, invoker),
             onDock: (edge) => store.dockPanel(panel.panelInstanceId, edge),
+            dockEdge: panelDockEdge(tree, panel.panelInstanceId),
             renderMenuItems: (
               <>
                 {readOnly ? (
@@ -1175,12 +1206,14 @@ function PanelLayoutReady({
                   onSelect={() => terminalPanelRef.current?.openTranscript()}
                 >
                   Transcript
+                  {!terminal ? <DropdownMenuValue>No terminal</DropdownMenuValue> : null}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   disabled={!terminal}
                   onSelect={() => terminalPanelRef.current?.clearSelection()}
                 >
                   Clear selection
+                  {!terminal ? <DropdownMenuValue>No terminal</DropdownMenuValue> : null}
                 </DropdownMenuItem>
                 {terminalSessionState?.retryInputAvailable ? (
                   <DropdownMenuItem
@@ -1193,16 +1226,15 @@ function PanelLayoutReady({
                 ) : null}
                 {terminalSessionState?.uncertainInputSeq !== undefined ? (
                   <DropdownMenuItem
-                    disabled={
-                      terminalSessionState.connection !== "ready" ||
-                      !terminalSessionState.caughtUp ||
-                      terminalSessionState.role !== "controller"
-                    }
+                    disabled={discardInputBlocker !== undefined}
                     onSelect={() =>
                       terminalPanelRef.current?.discardUnconfirmedInput()
                     }
                   >
                     Discard unconfirmed input
+                    {discardInputBlocker !== undefined ? (
+                      <DropdownMenuValue>{discardInputBlocker}</DropdownMenuValue>
+                    ) : null}
                   </DropdownMenuItem>
                 ) : null}
                 {terminalSessionState?.connection === "reconnecting" ? (
@@ -1556,9 +1588,8 @@ function PanelLayoutReady({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent
-                className="workspace-panel-open-menu-content z-[82]"
+                className="min-w-[min(300px,calc(100vw-16px))]"
                 align="end"
-                sideOffset={6}
                 onCloseAutoFocus={(event) => {
                   const panelInstanceId = menuFocusTarget.current;
                   if (!panelInstanceId) return;
@@ -1575,10 +1606,13 @@ function PanelLayoutReady({
                 ]).filter(({ available, panel }) => available || panel).map(({ id, title, panel, icon }) => {
                   const status = panel ? statuses.get(panel.panelInstanceId) : undefined;
                   return (
+                    // Selecting a row opens or reveals its panel, so it stays a
+                    // plain item; an open panel takes the checked row's look.
                     <DropdownMenuItem
                       key={id}
-                      className="workspace-panel-open-item"
+                      className={cn(menuCheckRowClass, "data-[collapsed=true]:text-muted-foreground")}
                       data-panel-open={Boolean(panel)}
+                      data-state={panel ? "checked" : "unchecked"}
                       aria-description={panel ? "Open" : "Closed"}
                       data-collapsed={panel ? collapsed.has(panel.panelInstanceId) : false}
                       onSelect={() => {
@@ -1602,13 +1636,17 @@ function PanelLayoutReady({
                       }}
                     >
                       {panel ? panelGlyph(panel, snapshot?.capabilities.backend.brand, 16) : icon}
-                      <span className="workspace-panel-open-item-label">
+                      <span className="min-w-0 flex-1 truncate">
                         {panel ? panelMenuLabel(panel, terminalResources, snapshot?.thread.title.text, snapshot?.workspace.label.text) : title}
                       </span>
                       {status?.dirty ? <span className="workspace-panel-dirty" aria-label="Unsaved changes" /> : null}
                       {status?.busy ? <span className="comet-spinner workspace-panel-spinner" aria-label="Busy" /> : null}
                       {panel && collapsed.has(panel.panelInstanceId) ? <span className="sr-only">Collapsed</span> : null}
-                      {panel ? <Check size={16} aria-hidden="true" /> : null}
+                      {panel ? (
+                        <span className={menuCheckIndicatorClass}>
+                          <CheckIcon aria-hidden="true" className="size-4 text-foreground" />
+                        </span>
+                      ) : null}
                     </DropdownMenuItem>
                   );
                 })}
@@ -1630,6 +1668,7 @@ function PanelLayoutReady({
                         setAnnouncement("All panels restored.");
                       }}
                     >
+                      <LayoutPanelTop aria-hidden="true" />
                       Show all
                     </DropdownMenuItem>
                   </Fragment>
@@ -1655,6 +1694,7 @@ function PanelLayoutReady({
                     } else run();
                   }}
                 >
+                  <RotateCcw aria-hidden="true" />
                   Reset layout
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -1795,37 +1835,17 @@ function PanelLayoutReady({
         {announcement}
       </p>
 
-      <Dialog
+      <DiscardChangesDialog
         open={active && Boolean(dirtyConfirmation)}
         onOpenChange={(open) => !open && setDirtyConfirmation(undefined)}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Discard unsaved changes?</DialogTitle>
-            <DialogDescription>
-              {dirtyConfirmation?.description}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDirtyConfirmation(undefined)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                const confirmation = dirtyConfirmation;
-                setDirtyConfirmation(undefined);
-                confirmation?.run();
-              }}
-            >
-              {dirtyConfirmation?.actionLabel}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        description={dirtyConfirmation?.description}
+        discardLabel={dirtyConfirmation?.actionLabel}
+        onDiscard={() => {
+          const confirmation = dirtyConfirmation;
+          setDirtyConfirmation(undefined);
+          confirmation?.run();
+        }}
+      />
 
       <Dialog
         open={active && Boolean(terminalLifecycleConfirmation)}
@@ -1833,7 +1853,7 @@ function PanelLayoutReady({
           !open && setTerminalLifecycleConfirmation(undefined)
         }
       >
-        <DialogContent showCloseButton={false}>
+        <DialogContent showClose={false}>
           <DialogHeader>
             <DialogTitle>Close terminal?</DialogTitle>
             <DialogDescription>
@@ -1845,26 +1865,10 @@ function PanelLayoutReady({
                 : `Close ${terminalLifecycleConfirmation?.label ?? "Terminal"} tab without ending the terminal.`}
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setTerminalLifecycleConfirmation(undefined)}
-            >
-              Cancel
-            </Button>
-            <Button
-              autoFocus
-              onClick={() => {
-                const confirmation = terminalLifecycleConfirmation;
-                setTerminalLifecycleConfirmation(undefined);
-                if (confirmation)
-                  closeTerminalView(confirmation.terminalId, confirmation.label);
-              }}
-            >
-              Close tab
-            </Button>
-            {terminalLifecycleConfirmation?.terminal &&
-              terminalLifecycleConfirmation.terminal.lifecycle !== "stopping" && (
+          <DialogFooter
+            start={
+              terminalLifecycleConfirmation?.terminal &&
+              terminalLifecycleConfirmation.terminal.lifecycle !== "stopping" ? (
                 <Button
                   variant="destructive"
                   onClick={() => {
@@ -1878,7 +1882,25 @@ function PanelLayoutReady({
                 >
                   {terminalTerminationLabel(terminalLifecycleConfirmation.terminal)}
                 </Button>
-              )}
+              ) : undefined
+            }
+          >
+            <Button
+              variant="outline"
+              onClick={() => setTerminalLifecycleConfirmation(undefined)}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                const confirmation = terminalLifecycleConfirmation;
+                setTerminalLifecycleConfirmation(undefined);
+                if (confirmation)
+                  closeTerminalView(confirmation.terminalId, confirmation.label);
+              }}
+            >
+              Close tab
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

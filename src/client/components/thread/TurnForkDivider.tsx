@@ -104,6 +104,9 @@ export const TurnForkDivider = memo(function TurnForkDivider({
 
   if (!time) return null;
 
+  const throughput = turn.throughput
+    ? (turn.throughput.outputTokens / (turn.throughput.requestDurationMs / 1000)).toFixed(1)
+    : undefined;
   const copyResponse = async () => {
     if (!copyText) return;
     try {
@@ -157,6 +160,18 @@ export const TurnForkDivider = memo(function TurnForkDivider({
       data-active={usageOpen || pending || Boolean(attempt) ? "true" : undefined}
       data-testid={`turn-fork-${turn.id}`}
     >
+      {throughput !== undefined && (
+        <>
+          <span
+            className="turn-throughput"
+            title="Output tokens per second, including reasoning and request latency. Excludes tool waits. This measurement is not saved."
+            aria-hidden="true"
+          >
+            {throughput} tok/s
+          </span>
+          <span className="sr-only">{throughput} tokens per second</span>
+        </>
+      )}
       <div className="turn-fork-controls">
         <time
           className="turn-fork-time"

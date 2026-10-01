@@ -1,6 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { CalendarRange, ChevronDown, ListFilter, Search, X } from "lucide-react";
+import { useTouchDensity } from "@client/app/use-touch-density";
 import { Button } from "@client/components/ui/button";
+import {
+  Dialog, DialogBody, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from "@client/components/ui/dialog";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@client/components/ui/dropdown-menu";
+import { Field } from "@client/components/ui/field";
+import { Input } from "@client/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@client/components/ui/popover";
 import type { ApiClient } from "../api/ApiClient.js";
 import {
@@ -13,55 +23,88 @@ import {
   RANGE_PRESETS, activeFilterCount, localDateInput, resolveRange, toggleFilter,
   type RangePreset, type UsageFilterState, type UsageViewSettings,
 } from "./usage-settings.js";
-import { Check16, DimensionIcon, MenuSelect } from "./usage-ui.js";
+import { DimensionIcon, MenuSelect } from "./usage-ui.js";
 
+/** Presets as radio rows; "Custom range…" opens a dialog for the two dates. */
 export function RangePicker({ settings, onChange }: {
   readonly settings: UsageViewSettings;
   readonly onChange: (patch: Partial<UsageViewSettings>) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const touch = useTouchDensity();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const openingCustom = useRef(false);
+  const [customOpen, setCustomOpen] = useState(false);
   const range = resolveRange(settings);
   const today = localDateInput(new Date());
-  const [from, setFrom] = useState(settings.customFrom ?? localDateInput(range.from ?? new Date(Date.now() - 29 * 86_400_000)));
-  const [to, setTo] = useState(settings.customTo ?? today);
-  const choose = (preset: RangePreset) => { onChange({ preset }); setOpen(false); };
-  const valid = from <= to && to <= today;
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const formId = useId();
+  const openCustom = () => {
+    openingCustom.current = true;
+    setFrom(settings.customFrom ?? localDateInput(range.from ?? new Date(Date.now() - 29 * 86_400_000)));
+    setTo(settings.customTo ?? today);
+    setCustomOpen(true);
+  };
+  const orderError = from !== "" && to !== "" && from > to ? "The end date is before the start date." : undefined;
+  const futureError = to > today ? "The end date is in the future." : undefined;
+  const valid = Boolean(from && to) && !orderError && !futureError;
   return (
-    <Popover open={open} onOpenChange={(next) => {
-      setOpen(next);
-      if (next) { setFrom(settings.customFrom ?? localDateInput(range.from ?? new Date(Date.now() - 29 * 86_400_000))); setTo(settings.customTo ?? today); }
-    }}>
-      <PopoverTrigger asChild>
-        <Button variant="outline" size="sm" className="usage-select usage-range-trigger" aria-label={`Date range: ${range.label}`}>
-          <CalendarRange aria-hidden="true" />
-          <span>{range.label}</span>
-          <ChevronDown aria-hidden="true" />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="usage-range-popover">
-        <div role="listbox" aria-label="Date range presets" className="usage-range-presets">
-          {RANGE_PRESETS.map((preset) => (
-            <button key={preset.id} type="button" role="option" aria-selected={settings.preset === preset.id} onClick={() => choose(preset.id)}>
-              <span className="usage-range-check">{settings.preset === preset.id ? <Check16 /> : null}</span>
-              {preset.label}
-            </button>
-          ))}
-        </div>
-        <form className="usage-range-custom" onSubmit={(event) => {
-          event.preventDefault();
-          if (!valid) return;
-          onChange({ preset: "custom", customFrom: from, customTo: to });
-          setOpen(false);
-        }}>
-          <p className="usage-range-custom-title">Custom range</p>
-          <div className="usage-range-fields">
-            <label>From<input type="date" value={from} max={to || today} onChange={(event) => setFrom(event.target.value)} required /></label>
-            <label>To<input type="date" value={to} min={from} max={today} onChange={(event) => setTo(event.target.value)} required /></label>
-          </div>
-          <Button type="submit" size="sm" disabled={!valid}>Apply range</Button>
-        </form>
-      </PopoverContent>
-    </Popover>
+    <>
+      <DropdownMenu modal={false} presentation={touch ? "sheet" : "menu"}>
+        <DropdownMenuTrigger asChild>
+          <Button ref={triggerRef} variant="outline" size="sm" className="usage-select" aria-label={`Date range: ${range.label}`}>
+            <CalendarRange aria-hidden="true" />
+            <span>{range.label}</span>
+            <ChevronDown aria-hidden="true" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="usage-menu" sheetTitle="Date range"
+          onCloseAutoFocus={(event) => {
+            // The custom range dialog takes focus and returns it to the trigger.
+            if (openingCustom.current) event.preventDefault();
+            openingCustom.current = false;
+          }}>
+          {!touch && <DropdownMenuLabel>Date range</DropdownMenuLabel>}
+          <DropdownMenuRadioGroup value={settings.preset} onValueChange={(next) => {
+            if (next === "custom") openCustom();
+            else onChange({ preset: next as RangePreset });
+          }}>
+            {RANGE_PRESETS.map((preset) => (
+              <DropdownMenuRadioItem key={preset.id} value={preset.id}>{preset.label}</DropdownMenuRadioItem>
+            ))}
+            <DropdownMenuSeparator />
+            <DropdownMenuRadioItem value="custom">Custom range…</DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <Dialog open={customOpen} onOpenChange={setCustomOpen}>
+        <DialogContent size="sm" onCloseAutoFocus={(event) => { event.preventDefault(); triggerRef.current?.focus(); }}>
+          <DialogHeader>
+            <DialogTitle>Custom range</DialogTitle>
+            <DialogDescription>Show usage from the start of the first day through the end of the last.</DialogDescription>
+          </DialogHeader>
+          <DialogBody>
+            <form id={formId} className="grid grid-cols-2 gap-3" onSubmit={(event) => {
+              event.preventDefault();
+              if (!valid) return;
+              onChange({ preset: "custom", customFrom: from, customTo: to });
+              setCustomOpen(false);
+            }}>
+              <Field label="From">
+                <Input type="date" value={from} max={to || today} onChange={(event) => setFrom(event.target.value)} required />
+              </Field>
+              <Field label="To" error={orderError ?? futureError}>
+                <Input type="date" value={to} min={from} max={today} onChange={(event) => setTo(event.target.value)} required />
+              </Field>
+            </form>
+          </DialogBody>
+          <DialogFooter>
+            <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" form={formId} disabled={!valid}>Apply range</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

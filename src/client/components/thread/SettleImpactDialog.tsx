@@ -1,11 +1,20 @@
-import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useState } from "react";
-import { ArrowDownToDot, X } from "lucide-react";
+import { ArrowDownToDot } from "lucide-react";
 import type {
   OpenTaskDisposition,
   ThreadArchiveImpact,
 } from "../../../shared/index.js";
 import { Button } from "@client/components/ui/button";
+import {
+  Dialog,
+  DialogAlert,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@client/components/ui/dialog";
 import { ThreadTaskDisposition } from "./ThreadTaskDisposition.js";
 import { messageFrom } from "../../stores/ApplicationClientStore.js";
 
@@ -74,48 +83,35 @@ export function SettleImpactDialog({
   };
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="dialog-overlay over-drawer" />
-        <Dialog.Content
-          className="dialog-card over-drawer"
-          aria-describedby="settle-impact-description"
-          onCloseAutoFocus={(event) => {
-            const target = returnFocusRef?.current;
-            if (!target?.isConnected) return;
-            event.preventDefault();
-            target.focus();
-          }}
-        >
-          <Dialog.Title>Settle this thread</Dialog.Title>
-          <Dialog.Description id="settle-impact-description">
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!pending) onOpenChange(next);
+      }}
+    >
+      <DialogContent
+        size="md"
+        layer="over-dialog"
+        dismissible={!pending}
+        returnFocusRef={returnFocusRef}
+      >
+        <DialogHeader>
+          <DialogTitle>Settle this thread</DialogTitle>
+          <DialogDescription>
             Review unfinished work before settling this thread.
-          </Dialog.Description>
-          <Dialog.Close asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="dialog-close"
-              aria-label="Close"
-            >
-              <X size={18} strokeWidth={1.8} />
-            </Button>
-          </Dialog.Close>
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody>
           {stashedPromptCount > 0 && (
-            <div
-              className="archive-stashed-prompt-warning"
-              data-testid="settle-stashed-prompt-warning"
+            <DialogAlert
+              tone="warning"
               role="note"
+              data-testid="settle-stashed-prompt-warning"
+              title={`${stashedPromptCount} stashed ${stashedPromptCount === 1 ? "prompt" : "prompts"}`}
             >
-              <strong>
-                {stashedPromptCount} stashed{" "}
-                {stashedPromptCount === 1 ? "prompt" : "prompts"}
-              </strong>
-              <span>
-                {stashedPromptCount === 1 ? "It" : "They"} will remain attached
-                to the settled thread.
-              </span>
-            </div>
+              {stashedPromptCount === 1 ? "It" : "They"} will remain attached
+              to the settled thread.
+            </DialogAlert>
           )}
           {currentImpact && (
             <ThreadTaskDisposition
@@ -129,24 +125,27 @@ export function SettleImpactDialog({
               disabled={pending}
             />
           )}
-          {error && (
-            <p className="menu-error" role="alert">
-              {error}
-            </p>
-          )}
-          <div className="dialog-actions">
-            <Dialog.Close asChild>
-              <Button variant="ghost" disabled={pending}>
-                Cancel
-              </Button>
-            </Dialog.Close>
-            <Button onClick={settle} disabled={pending || !currentImpact}>
-              <ArrowDownToDot size={18} strokeWidth={1.8} />
-              {pending ? "Settling…" : "Settle"}
-            </Button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+          {error && <DialogAlert tone="danger">{error}</DialogAlert>}
+        </DialogBody>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            onClick={settle}
+            disabled={pending || !currentImpact}
+          >
+            <ArrowDownToDot />
+            {pending ? "Settling…" : "Settle"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

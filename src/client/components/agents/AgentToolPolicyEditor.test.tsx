@@ -69,23 +69,32 @@ describe("AgentToolPolicyEditor", () => {
     );
 
     expect(
-      screen.getByRole("checkbox", { name: "Use default tool policy" }),
+      screen.getByRole("switch", { name: "Use default tool policy" }),
     ).toHaveAccessibleDescription(
       "Use the selected target’s ordinary new-thread settings.",
     );
     expect(
-      screen.getByRole("checkbox", { name: "Enable Sedes tools" }),
+      screen.getByRole("switch", { name: "Enable Sedes tools" }),
     ).toHaveAccessibleDescription("Expose the selected tools on new threads.");
     expect(
       screen.getByRole("checkbox", { name: "Select all Threads tools" }),
     ).toHaveAccessibleDescription("Thread operations");
+    // Tool groups start collapsed behind a summary of their selection.
+    const threads = screen.getByRole("button", { name: "Threads" });
+    expect(threads).toHaveAttribute("aria-expanded", "false");
+    expect(threads).toHaveAccessibleDescription("0 of 1 tool Thread operations");
+    expect(
+      screen.queryByRole("checkbox", { name: "Thread status" }),
+    ).not.toBeInTheDocument();
   });
 
   it("switches between inherited and explicit complete policy", () => {
     const onChange = vi.fn();
-    render(<AgentToolPolicyEditor catalog={catalog} onChange={onChange} />);
+    render(<AgentToolPolicyEditor id="agent-tools" catalog={catalog} onChange={onChange} />);
+    // The section is the target of the Agent editor's "Sedes tools" anchor.
+    expect(screen.getByRole("region", { name: "Sedes tools" })).toHaveAttribute("id", "agent-tools");
     fireEvent.click(
-      screen.getByRole("checkbox", { name: "Use default tool policy" }),
+      screen.getByRole("switch", { name: "Use default tool policy" }),
     );
     expect(onChange).toHaveBeenCalledWith({
       enabled: false,
@@ -152,7 +161,7 @@ describe("AgentToolPolicyEditor", () => {
     expect(
       screen.getByRole("combobox", { name: "Access boundary" }),
     ).toHaveAccessibleDescription(
-      "For each thread created from this Agent, that thread’s execution environment is treated as its current environment.",
+      "For each thread created from this Agent, that thread’s execution environment is treated as its current environment. Thread access asks before accessing project, global, or other-thread resources.",
     );
 
     view.rerender(

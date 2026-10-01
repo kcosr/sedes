@@ -10,6 +10,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodeViewHandle } from "@pierre/diffs/react";
 import type {
@@ -96,6 +97,18 @@ async function configureComparison() {
   openSettings();
   return screen.findByRole("button", { name: "Compare" });
 }
+function openViewOptions() {
+  fireEvent.keyDown(screen.getByRole("button", { name: "Diff view options" }), {
+    key: "Enter",
+  });
+  return screen.getByRole("menu", { name: "Diff view options" });
+}
+/** Picks an option of a primitive Select (Strategy, Commit history). */
+async function choose(select: string, option: string) {
+  const user = userEvent.setup();
+  await user.click(screen.getByRole("combobox", { name: select }));
+  await user.click(await screen.findByRole("option", { name: option }));
+}
 function refreshComparison() {
   act(() => refreshControl?.refresh());
 }
@@ -146,6 +159,13 @@ describe("WorkspaceCompareView", () => {
     vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(
       () => measuredWidth,
     );
+    // Radix Select and the searchable picker use these browser APIs.
+    Object.assign(HTMLElement.prototype, {
+      scrollIntoView: vi.fn(),
+      hasPointerCapture: vi.fn(() => false),
+      setPointerCapture: vi.fn(),
+      releasePointerCapture: vi.fn(),
+    });
   });
 
   afterEach(() => {
@@ -231,63 +251,94 @@ describe("WorkspaceCompareView", () => {
         screen.queryByRole("dialog", { name: "Comparison settings" }),
       ).toBeNull(),
     );
-    expect(screen.queryByRole("button", { name: "Unified" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Diff view options" }));
-    const split = screen.getByRole("button", { name: "Split" });
-    const wrap = screen.getByRole("button", { name: "Wrap" });
-    expect(split).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("menuitemradio", { name: "Unified" })).toBeNull();
+    let menu = openViewOptions();
+    expect(within(menu).getByRole("menuitemradio", { name: "Split" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    const wrap = within(menu).getByRole("menuitemcheckbox", { name: "Wrap lines" });
+    expect(wrap).toHaveAttribute("aria-checked", "false");
     fireEvent.click(wrap);
+    await waitFor(() =>
+      expect(screen.queryByRole("menu", { name: "Diff view options" })).toBeNull(),
+    );
+    menu = openViewOptions();
+    const split = within(menu).getByRole("menuitemradio", { name: /^Split/ });
+    expect(
+      within(menu).getByRole("menuitemcheckbox", { name: "Wrap lines" }),
+    ).toHaveAttribute("aria-checked", "true");
     act(() => {
       measuredWidth = 600;
       notifyResize();
     });
-    await waitFor(() => expect(split).toBeDisabled());
-    expect(screen.getByRole("button", { name: "Unified" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    // Too narrow: Split is disabled with its reason and Unified shows as chosen.
+    await waitFor(() => expect(split).toHaveAttribute("aria-disabled", "true"));
+    expect(split).toHaveTextContent("Too narrow");
+    expect(split).toHaveAttribute("title", "Split view is unavailable at this width");
+    expect(
+      within(menu).getByRole("menuitemradio", { name: "Unified" }),
+    ).toHaveAttribute("aria-checked", "true");
     act(() => {
       measuredWidth = 900;
       notifyResize();
     });
-    await waitFor(() => expect(split).toBeEnabled());
-    expect(split).toHaveAttribute("aria-pressed", "true");
-    expect(wrap).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() => expect(split).not.toHaveAttribute("aria-disabled"));
+    expect(split).toHaveAttribute("aria-checked", "true");
+    expect(split).not.toHaveTextContent("Too narrow");
+    expect(
+      within(menu).getByRole("menuitemcheckbox", { name: "Wrap lines" }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(menu).getByRole("menuitemradio", { name: "Unified" }));
+    menu = openViewOptions();
+    expect(
+      within(menu).getByRole("menuitemradio", { name: "Unified" }),
+    ).toHaveAttribute("aria-checked", "true");
   });
 
   it("defaults to merge-base only when both endpoints are revisions", async () => {
     const dataSource = createDataSource(1);
     render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    const user = userEvent.setup();
     openSettings();
-    const strategy = (await screen.findByLabelText(
-      "Comparison strategy",
-    )) as HTMLSelectElement;
-    openSettings();
+    const strategy = await screen.findByRole("combobox", {
+      name: "Comparison strategy",
+    });
+    const mergeBaseOption = async () => {
+      await user.click(strategy);
+      return screen.findByRole("option", {
+        name: "Changes introduced by compare branch",
+      });
+    };
     await waitFor(() =>
       expect(screen.getByLabelText("Base revision")).toHaveTextContent("main"),
     );
     expect(screen.getByLabelText("Compare revision")).toHaveTextContent(
       "Working tree",
     );
-    expect(strategy).toHaveValue("direct");
+    expect(strategy).toHaveTextContent("Differences between sources");
+    // Primitive controls only: no native select inside the settings popover.
     expect(
-      screen.getByRole("option", {
-        name: "Changes introduced by compare branch",
-      }),
-    ).toBeDisabled();
+      screen.getByRole("dialog", { name: "Comparison settings" }).querySelector("select"),
+    ).toBeNull();
+    let option = await mergeBaseOption();
+    expect(option).toHaveAttribute("aria-disabled", "true");
+    expect(option).toHaveTextContent("Needs a revision on both sides");
+    await user.keyboard("{Escape}");
 
     fireEvent.click(screen.getByLabelText("Compare revision"));
     fireEvent.click(
       within(
-        screen.getByRole("listbox", { name: "Compare sources" }),
+        screen.getByRole("listbox", { name: "Compare revision options" }),
       ).getByRole("option", { name: /main/ }),
     );
-    await waitFor(() => expect(strategy).toHaveValue("merge_base"));
-    expect(
-      screen.getByRole("option", {
-        name: "Changes introduced by compare branch",
-      }),
-    ).toBeEnabled();
+    await waitFor(() =>
+      expect(strategy).toHaveTextContent("Changes introduced by compare branch"),
+    );
+    option = await mergeBaseOption();
+    expect(option).not.toHaveAttribute("aria-disabled");
+    expect(option).not.toHaveTextContent("Needs a revision on both sides");
+    await user.keyboard("{Escape}");
 
     openSettings();
     fireEvent.click(screen.getByLabelText("Base revision"));
@@ -296,12 +347,10 @@ describe("WorkspaceCompareView", () => {
         screen.getByRole("dialog", { name: "Choose base revision" }),
       ).getByRole("option", { name: /Staged changes/ }),
     );
-    await waitFor(() => expect(strategy).toHaveValue("direct"));
-    expect(
-      screen.getByRole("option", {
-        name: "Changes introduced by compare branch",
-      }),
-    ).toBeDisabled();
+    await waitFor(() =>
+      expect(strategy).toHaveTextContent("Differences between sources"),
+    );
+    expect(await mergeBaseOption()).toHaveAttribute("aria-disabled", "true");
   });
 
   it("captures exact displayed diff lines for the shared selection action", async () => {
@@ -546,10 +595,12 @@ describe("WorkspaceCompareView", () => {
       expect(screen.getByLabelText("Base revision")).toHaveTextContent("main"),
     );
     openSettings();
-    fireEvent.click(screen.getByLabelText("Base revision"));
-    fireEvent.change(screen.getByLabelText("Base commit history"), {
-      target: { value: "all" },
-    });
+    await choose("Commit history", "All branches");
+    expect(dataSource.listRevisions).toHaveBeenLastCalledWith(
+      "repository-1",
+      expect.any(AbortSignal),
+      { history: "all" },
+    );
     await screen.findByText("Commit history could not be loaded: Offline.");
     expect(screen.getByLabelText("Base revision")).toHaveTextContent("main");
   });
@@ -579,13 +630,8 @@ describe("WorkspaceCompareView", () => {
       expect(screen.getByLabelText("Base revision")).toHaveTextContent("main"),
     );
     openSettings();
-    fireEvent.click(screen.getByLabelText("Base revision"));
-    fireEvent.change(screen.getByLabelText("Base commit history"), {
-      target: { value: "all" },
-    });
-    fireEvent.change(screen.getByLabelText("Base commit history"), {
-      target: { value: "head" },
-    });
+    await choose("Commit history", "All branches");
+    await choose("Commit history", "Current branch (HEAD)");
     expect(oldSignal?.aborted).toBe(true);
     await act(async () =>
       finishOld?.({
@@ -603,8 +649,17 @@ describe("WorkspaceCompareView", () => {
         ],
       }),
     );
-    expect(screen.queryByText("Obsolete history response")).toBeNull();
-    expect(screen.getByLabelText("Base commit history")).toHaveValue("head");
+    expect(
+      screen.getByRole("combobox", { name: "Commit history" }),
+    ).toHaveTextContent("Current branch (HEAD)");
+    fireEvent.click(screen.getByLabelText("Base revision"));
+    const baseOptions = screen.getByRole("listbox", {
+      name: "Base revision options",
+    });
+    expect(
+      within(baseOptions).getAllByRole("option", { name: /main/ }).length,
+    ).toBeGreaterThan(0);
+    expect(within(baseOptions).queryByText("Obsolete history response")).toBeNull();
   });
 
   it("re-resolves a moving named branch before refreshing", async () => {
@@ -754,7 +809,7 @@ describe("WorkspaceCompareView", () => {
     openSettings();
     fireEvent.click(screen.getByLabelText("Base revision"));
     fireEvent.click(
-      within(screen.getByRole("listbox", { name: "Base sources" })).getByRole(
+      within(screen.getByRole("listbox", { name: "Base revision options" })).getByRole(
         "option",
         { name: /Pinned original commit/ },
       ),
@@ -762,7 +817,7 @@ describe("WorkspaceCompareView", () => {
     fireEvent.click(screen.getByLabelText("Compare revision"));
     fireEvent.click(
       within(
-        screen.getByRole("listbox", { name: "Compare sources" }),
+        screen.getByRole("listbox", { name: "Compare revision options" }),
       ).getByRole("option", { name: /main/ }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Compare" }));
@@ -791,7 +846,7 @@ describe("WorkspaceCompareView", () => {
     fireEvent.click(screen.getByLabelText("Base revision"));
     expect(
       within(
-        screen.getByRole("listbox", { name: "Base sources" }),
+        screen.getByRole("listbox", { name: "Base revision options" }),
       ).getAllByRole("option", { name: /main/ }),
     ).toHaveLength(1);
   });
@@ -989,7 +1044,7 @@ describe("WorkspaceCompareView", () => {
     await waitFor(() => expect(refreshControl?.disabled).toBe(false));
     openSettings();
     expect(
-      screen.getByRole("button", { name: "Compare revision" }),
+      screen.getByRole("combobox", { name: "Compare revision" }),
     ).toHaveTextContent("Working tree");
     fireEvent.click(screen.getByRole("button", { name: "Staged" }));
     fireEvent.click(screen.getByRole("button", { name: "Compare" }));
@@ -1065,9 +1120,12 @@ describe("WorkspaceCompareView", () => {
     );
   });
 
-  it.each(["Comparison settings", "Diff view options"] as const)(
+  it.each([
+    ["Comparison settings", "dialog"],
+    ["Diff view options", "menu"],
+  ] as const)(
     "closes the portaled %s when Changes is hidden and keeps it closed on return",
-    async (label) => {
+    async (label, role) => {
       const dataSource = createDataSource(1);
       const { rerender } = render(
         <WorkspaceCompareView
@@ -1076,8 +1134,9 @@ describe("WorkspaceCompareView", () => {
           visible
         />,
       );
-      fireEvent.click(screen.getByRole("button", { name: label }));
-      expect(await screen.findByRole("dialog", { name: label })).toBeVisible();
+      if (role === "menu") openViewOptions();
+      else fireEvent.click(screen.getByRole("button", { name: label }));
+      expect(await screen.findByRole(role, { name: label })).toBeVisible();
       if (label === "Comparison settings") {
         fireEvent.click(screen.getByLabelText("Base revision"));
         expect(
@@ -1092,7 +1151,7 @@ describe("WorkspaceCompareView", () => {
         />,
       );
       await waitFor(() =>
-        expect(screen.queryByRole("dialog", { name: label })).toBeNull(),
+        expect(screen.queryByRole(role, { name: label })).toBeNull(),
       );
       expect(
         screen.queryByRole("dialog", { name: "Choose base revision" }),
@@ -1104,7 +1163,7 @@ describe("WorkspaceCompareView", () => {
           visible
         />,
       );
-      expect(screen.queryByRole("dialog", { name: label })).toBeNull();
+      expect(screen.queryByRole(role, { name: label })).toBeNull();
       expect(screen.getByRole("button", { name: label })).toHaveAttribute(
         "aria-expanded",
         "false",

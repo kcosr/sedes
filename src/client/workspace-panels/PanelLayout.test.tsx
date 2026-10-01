@@ -126,6 +126,7 @@ function terminalResource(
 }
 
 let mobile = false;
+let coarsePointer = false;
 let mediaListeners = new Set<(event: MediaQueryListEvent) => void>();
 let toggleSidebar = vi.fn();
 let terminalPanelInstanceSequence = 0;
@@ -183,6 +184,7 @@ beforeEach(() => {
   threadListeners = new Set();
   applicationListeners = new Set();
   mobile = false;
+  coarsePointer = false;
   mediaListeners = new Set();
   toggleSidebar = vi.fn();
   terminalPanelInstanceSequence = 0;
@@ -200,6 +202,9 @@ beforeEach(() => {
   };
   vi.stubGlobal("matchMedia", (query: string) => ({
     get matches() {
+      if (query === "(min-width: 820px) and (pointer: fine)") {
+        return !mobile && !coarsePointer;
+      }
       return mobile;
     },
     media: query,
@@ -478,6 +483,9 @@ describe("PanelLayout singleton surfaces", () => {
     expect(entries.map(item => item.textContent?.split(" —")[0])).toEqual(["Chat", "Files", "WorkpadsCollapsed", "Terminals"]);
     expect(entries.map(item => item.getAttribute("aria-description"))).toEqual(["Open", "Open", "Open", "Closed"]);
     expect(entries.map(item => Boolean(item.querySelector(".lucide-check")))).toEqual([true, true, true, false]);
+    // An open panel takes the checked row's look: weight 500 and a trailing check.
+    expect(entries.map(item => item.getAttribute("data-state"))).toEqual(["checked", "checked", "checked", "unchecked"]);
+    expect(entries[0]).toHaveClass("data-[state=checked]:font-medium");
     expect(entries[3]).not.toHaveAttribute("data-disabled");
     fireEvent.click(entries[2]!);
     expect(store.isCollapsed("workpads")).toBe(false);
@@ -570,7 +578,8 @@ describe("PanelLayout singleton surfaces", () => {
     await openPanelsMenu();
     fireEvent.click(screen.getByRole("menuitem", { name: "Terminals" }));
     const dialog = await screen.findByRole("dialog", { name: "Could not open Terminals" });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(dialog).toHaveAccessibleDescription("Inventory unavailable");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Panels" })).toHaveFocus());
   });
 
@@ -650,7 +659,7 @@ describe("PanelLayout singleton surfaces", () => {
     expect(unmounted).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Close Workpads panel" }));
     expect(await screen.findByRole("dialog", { name: "Discard unsaved changes?" })).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(draft).toHaveValue("Keep this draft");
     expect(store.hasPanel("workpads")).toBe(true);
   });
@@ -671,13 +680,13 @@ describe("PanelLayout singleton surfaces", () => {
     expect(screen.getByRole("textbox", { name: "Workpad draft" })).toBe(draft);
     fireEvent.click(screen.getByRole("button", { name: "Close Workpads panel" }));
     const closeDialog = await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
-    fireEvent.click(within(closeDialog).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(closeDialog).getByRole("button", { name: "Keep editing" }));
     expect(draft).toHaveValue("Retain this across workspaces");
     expect(store.hasPanel("workpads")).toBe(true);
     await openPanelsMenu();
     fireEvent.click(screen.getByRole("menuitem", { name: "Reset layout" }));
     const resetDialog = await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
-    fireEvent.click(within(resetDialog).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(within(resetDialog).getByRole("button", { name: "Keep editing" }));
     expect(draft).toHaveValue("Retain this across workspaces");
     expect(store.hasPanel("workpads")).toBe(true);
   });
@@ -903,7 +912,7 @@ describe("PanelLayout singleton surfaces", () => {
     expect(await screen.findByRole("dialog", { name: "Discard unsaved changes?" }))
       .toHaveTextContent("Resetting the layout will discard unsaved changes in Workpads.");
     expect(store.getSnapshot().tree).toBe(tree);
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(store.getSnapshot().tree).toBe(tree);
     expect(screen.getByRole("textbox", { name: "Workpad draft" })).toBe(draft);
     expect(draft).toHaveValue("Unsynced draft");
@@ -1351,6 +1360,48 @@ describe("PanelLayout singleton surfaces", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Old shell removal failed.");
   });
 
+  it("marks each panel's dock edge in its panel menu", async () => {
+    const store = setup();
+    act(() => {
+      store.openPanel("workspace-files");
+      store.dockPanel("workspace-files", "left");
+    });
+    const dockEdges = async (panel: string) => {
+      fireEvent.pointerDown(screen.getByRole("button", { name: `${panel} panel actions` }), { button: 0, ctrlKey: false });
+      const dock = await screen.findByRole("group", { name: "Dock" });
+      const checked = within(dock).getAllByRole("menuitemradio")
+        .filter(item => item.getAttribute("aria-checked") === "true")
+        .map(item => item.textContent);
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+      return checked;
+    };
+    expect(await dockEdges("Files")).toEqual(["Left"]);
+    expect(await dockEdges("Chat")).toEqual(["Right"]);
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Files panel actions" }), { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "Bottom" }));
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(await dockEdges("Files")).toEqual(["Bottom"]);
+    expect(await dockEdges("Chat")).toEqual(["Top"]);
+  });
+
+  it("gives the terminal panel menu's disabled rows a reason", async () => {
+    Object.assign(applicationStore, { api: {
+      readTerminal: vi.fn(() => new Promise<never>(() => undefined)),
+      createTerminalAdmission: vi.fn(), terminalWebSocketUrl: vi.fn(),
+    } });
+    const store = setup();
+    act(() => store.openTerminalTab(TERMINAL_ID, { focus: true }));
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Terminals panel actions" }), { button: 0, ctrlKey: false });
+    await screen.findByRole("menu");
+    for (const name of ["Transcript", "Clear selection"]) {
+      const item = screen.getByRole("menuitem", { name: new RegExp(`^${name}`) });
+      expect(item).toHaveAttribute("aria-disabled", "true");
+      expect(within(item).getByText("No terminal")).toHaveAttribute("data-slot", "dropdown-menu-item-value");
+    }
+  });
+
   it("omits terminal destruction from the panel header menu", async () => {
     Object.assign(applicationStore, { api: {
       readTerminal: vi.fn().mockResolvedValue(terminalResource()),
@@ -1506,7 +1557,7 @@ describe("PanelLayout singleton surfaces", () => {
     );
   });
 
-  it("disables terminals already displayed in the terminal tab add menu", async () => {
+  it("checks terminals already displayed in the terminal tab add menu", async () => {
     const resource = terminalResource();
     const other = terminalResource(SECOND_TERMINAL_ID, "Other shell");
     Object.assign(applicationStore, {
@@ -1528,14 +1579,14 @@ describe("PanelLayout singleton surfaces", () => {
       { button: 0, ctrlKey: false },
     );
 
-    expect(
-      await screen.findByRole("menuitem", {
-        name: /Remote shell.*Running · Open/u,
-      }),
-    ).toHaveAttribute("aria-disabled", "true");
-    expect(
-      screen.getByRole("menuitem", { name: /Other shell.*Running/u }),
-    ).not.toHaveAttribute("aria-disabled", "true");
+    const displayed = await screen.findByRole("menuitem", {
+      name: /Remote shell.*Running.*open/u,
+    });
+    expect(displayed.querySelector("svg.lucide-check")).not.toBeNull();
+    expect(displayed).not.toHaveAttribute("aria-disabled");
+    const otherRow = screen.getByRole("menuitem", { name: /Other shell.*Running/u });
+    expect(otherRow.querySelector("svg.lucide-check")).toBeNull();
+    expect(otherRow).not.toHaveAttribute("aria-disabled");
   });
 
   it("mounts an isolated terminal renderer when the active terminal tab changes", async () => {
@@ -2171,8 +2222,9 @@ describe("PanelLayout singleton surfaces", () => {
     expect(store.getSnapshot().focusRequest).toBeUndefined();
   });
 
-  it("does not carry cold-thread composer focus onto mobile", async () => {
-    mobile = true;
+  it.each(["phone", "touch tablet"])("does not carry cold-thread composer focus onto a %s", async (device) => {
+    mobile = device === "phone";
+    coarsePointer = true;
     const store = setup({ chatUnmountedUntilReady: true });
 
     act(() => {
@@ -2193,6 +2245,28 @@ describe("PanelLayout singleton surfaces", () => {
 
     const composer = await screen.findByRole("textbox", { name: "Chat draft" });
     expect(composer).not.toHaveFocus();
+  });
+
+  it.each(["touch", "pen"])("focuses the chat panel instead of its composer after %s selection on a hybrid desktop", async (pointerType) => {
+    const store = setup({ chatUnmountedUntilReady: true });
+    const pointer = new Event("pointerdown", { bubbles: true });
+    Object.defineProperty(pointer, "pointerType", { value: pointerType });
+    fireEvent(document.body, pointer);
+    act(() => store.openPanel("chat", { focus: true }));
+    await waitFor(() => expect(store.getSnapshot().focusRequest).toBeUndefined());
+    act(() => publishThreadState({
+      ...initialThreadState,
+      status: "ready",
+      connection: "connected",
+      authoritative: true,
+    }));
+    const composer = await screen.findByRole("textbox", { name: "Chat draft" });
+    expect(composer).not.toHaveFocus();
+    expect(screen.getByRole("region", { name: "Chat panel content" })).toHaveFocus();
+
+    fireEvent.keyDown(document.body, { key: "Enter" });
+    act(() => store.openPanel("chat", { focus: true }));
+    await waitFor(() => expect(composer).toHaveFocus());
   });
 
   it("keeps route-scoped Chat focus pending until the destination composer mounts", async () => {

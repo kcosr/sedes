@@ -5,7 +5,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConfigurationLifecycleImpact, ConfigurationLifecycleRequest, ConfigurationLifecycleResult, ConfigurationRuntimeState } from "../../../shared/protocol/configuration-admin.js";
 import { ApiError } from "../../api/ApiClient.js";
-import { RuntimeControls } from "./RuntimeControls.js";
+import { KeyValueList } from "../ui/key-value-list.js";
+import { StatusPill } from "../ui/status-pill.js";
+import { DetailMenu } from "./EnvironmentDetail.js";
+import { runtimeDiagnostics, RuntimeFeedback, RuntimeHealth, RuntimeImpactDialog, RuntimePrimaryAction, useRuntimeController, type RuntimeControllerOptions } from "./RuntimeControls.js";
 import { backendEditors, backendStopEffect } from "./backend-editors.js";
 import type { ConfigurationControls } from "./useConfiguration.js";
 
@@ -29,12 +32,43 @@ function controls() {
 }
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
+/** One resource's runtime as a detail composes it: header actions, feedback, health, technical details and the interruption confirm. */
+function RuntimeControls(props: RuntimeControllerOptions) {
+  const controller = useRuntimeController(props);
+  return <section aria-label={`${props.label} runtime`}>
+    <p aria-label="Header status"><StatusPill tone={controller.presentation.pill.tone}>{controller.presentation.pill.label}</StatusPill></p>
+    <div role="group" aria-label="Header actions"><RuntimePrimaryAction controller={controller} /><DetailMenu label={props.label} controller={controller} /></div>
+    <RuntimeFeedback controller={controller} />
+    <RuntimeHealth controller={controller} status={controller.presentation.pill} />
+    <KeyValueList aria-label="Technical details" items={runtimeDiagnostics(controller)} />
+    <RuntimeImpactDialog controller={controller} />
+  </section>;
+}
+const headerActions = () => screen.getByRole("group", { name: "Header actions" });
+
 async function chooseDisconnect() {
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Runtime actions for Build host" }));
   await user.click(await screen.findByRole("menuitem", { name: "Disconnect" }));
 }
 const moreActions = () => screen.getByRole("button", { name: "Runtime actions for Build host" });
+
+/** Stop is in the actions menu; while an earlier outcome is unknown it is the one command left. */
+async function chooseStop() {
+  const user = userEvent.setup();
+  await user.click(moreActions());
+  await user.click(await screen.findByRole("menuitem", { name: "Stop" }));
+}
+
+/** The actions menu's commands available now; the menu closes again. */
+async function availableMenuItems(): Promise<string[]> {
+  const user = userEvent.setup();
+  await user.click(moreActions());
+  const items = (await screen.findAllByRole("menuitem")).filter(item => item.getAttribute("aria-disabled") !== "true").map(item => item.textContent ?? "");
+  await user.keyboard("{Escape}");
+  await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+  return items;
+}
 
 describe("runtime administration controls", () => {
   it("connects an external server after its Sedes attachment was retired", async () => {
@@ -84,7 +118,7 @@ describe("runtime administration controls", () => {
         runtime={state} stopEffect={backendStopEffect(backend, state)} disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn(async () => true)} />);
       await user.click(moreActions());
       await user.click(await screen.findByRole("menuitem", { name: "Stop" }));
-      const dialog = within(await screen.findByRole("group", { name: "Confirm runtime interruption" }));
+      const dialog = within(await screen.findByRole("dialog", { name: "Stop Build host?" }));
       expect(dialog.queryByText(/Running work will be interrupted|Stop ends|The service stops/)).toBeNull();
       if (connectionState === "unreachable") {
         expect(dialog.getByText(/Stop records that Sedes should not start this runtime automatically/)).toBeVisible();
@@ -105,8 +139,8 @@ describe("runtime administration controls", () => {
     render(<RuntimeControls controls={api} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
       runtime={{ ...runtime, lifecycleOperation: { mutationId, action: "upgrade", state } }} disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn(async () => true)} />);
     expect(screen.getByRole("button", { name: "Refresh status" })).toBeEnabled();
-    expect(moreActions()).toBeDisabled();
-    expect(Boolean(screen.queryByRole("button", { name: "Stop" }))).toBe(state === "unknown");
+    if (state === "unknown") expect(await availableMenuItems()).toEqual(["Stop"]);
+    else expect(moreActions()).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Refresh status" }));
     await waitFor(() => expect(api.getLifecycleReceipt).toHaveBeenCalledWith(mutationId));
     await waitFor(() => expect(moreActions()).toBeEnabled());
@@ -147,7 +181,7 @@ describe("runtime administration controls", () => {
     api.configurationLifecycle.mockRejectedValueOnce(new ApiError(409, "conflict", "The earlier command is still running.", false));
     render(<RuntimeControls controls={api} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
       runtime={{ ...runtime, lifecycleOperation: { mutationId, action: "upgrade", state: "unknown" } }} disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn(async () => true)} />);
-    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    await chooseStop();
     expect(await screen.findByText(/2 affected resources/)).toBeVisible();
     expect(screen.getByText(/Unrecovered output or results may be lost/)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Confirm stop" }));
@@ -170,12 +204,11 @@ describe("runtime administration controls", () => {
     });
     const props = { controls: api, resourceKind: "environment" as const, resourceId: runtime.resourceId, label: "Build host", disabled: false, onRuntime: vi.fn(), onRefresh: refresh };
     const view = render(<RuntimeControls {...props} runtime={unresolved} revision={7} />);
-    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    await chooseStop();
     fireEvent.click(await screen.findByRole("button", { name: "Confirm stop" }));
     await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
     await waitFor(() => expect(screen.getByRole("button", { name: "Refresh status" })).toBeEnabled());
-    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
-    expect(moreActions()).toBeDisabled();
+    expect(await availableMenuItems()).toEqual(["Stop"]);
     fireEvent.click(screen.getByRole("button", { name: "Refresh status" }));
     await waitFor(() => expect(api.getLifecycleReceipt).toHaveBeenCalledWith(originalId));
     expect(api.configurationLifecycle).toHaveBeenCalledOnce();
@@ -189,18 +222,17 @@ describe("runtime administration controls", () => {
     api.getLifecycleReceipt.mockRejectedValueOnce(new ApiError(404, "not_found", "No receipt", false));
     render(<RuntimeControls controls={api} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
       runtime={{ ...runtime, lifecycleOperation: { mutationId: originalId, action: "upgrade", state: "unknown" } }} disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn(async () => true)} />);
-    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    await chooseStop();
     fireEvent.click(await screen.findByRole("button", { name: "Confirm stop" }));
     await waitFor(() => expect(api.configurationLifecycle).toHaveBeenCalledOnce());
     await waitFor(() => expect(screen.getByRole("button", { name: "Refresh status" })).toBeEnabled());
-    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    expect(moreActions()).toBeDisabled();
     const stopMutationId = api.configurationLifecycle.mock.calls[0]![0].mutationId;
     expect(stopMutationId).not.toBe(originalId);
     fireEvent.click(screen.getByRole("button", { name: "Refresh status" }));
     await waitFor(() => expect(api.getLifecycleReceipt).toHaveBeenCalledWith(stopMutationId));
     await expect(screen.findByText("No new operation was admitted. The earlier operation still has an unconfirmed outcome.")).resolves.toBeVisible();
-    expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
-    expect(moreActions()).toBeDisabled();
+    expect(await availableMenuItems()).toEqual(["Stop"]);
     fireEvent.click(screen.getByRole("button", { name: "Refresh status" }));
     await waitFor(() => expect(api.getLifecycleReceipt).toHaveBeenLastCalledWith(originalId));
     expect(api.configurationLifecycle).toHaveBeenCalledOnce();
@@ -211,59 +243,70 @@ describe("runtime administration controls", () => {
     const api = controls();
     const view = render(<RuntimeControls controls={api} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
       runtime={runtime} disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn()} />);
-    expect(screen.getAllByRole("button").map((button) => button.getAttribute("aria-label") ?? button.textContent)).toEqual(["Build host runtime details", "Upgrade and restart", "Runtime actions for Build host"]);
+    expect(within(headerActions()).getAllByRole("button").map((button) => button.getAttribute("aria-label") ?? button.textContent)).toEqual(["Upgrade and restart", "Runtime actions for Build host"]);
     expect(screen.getByText(/incompatible with this server/)).toBeVisible();
     view.rerender(<RuntimeControls controls={api} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
       runtime={{ ...runtime, connectionState: "stopped", preference: "stopped", upgradeState: "current", applyState: "applied", supportedActions: ["connect", "disconnect", "start", "stop", "restart", "upgrade"] }}
       disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn()} />);
-    expect(screen.getByRole("button", { name: "Start" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Runtime actions for Build host" })).toBeEnabled();
+    expect(within(headerActions()).getByRole("button", { name: "Start" })).toBeEnabled();
+    // Nothing else applies to an intentionally stopped runtime, so there is no menu.
+    expect(screen.queryByRole("button", { name: "Runtime actions for Build host" })).toBeNull();
     expect(screen.getByText("Intentionally stopped")).toBeVisible();
     view.rerender(<RuntimeControls controls={api} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
       runtime={{ ...runtime, connectionState: "unreachable", upgradeState: "current", applyState: "unavailable" }} disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn()} />);
-    expect(screen.getByRole("button", { name: "Retry connection" })).toBeEnabled();
+    expect(within(headerActions()).getByRole("button", { name: "Retry connection" })).toBeEnabled();
     expect(screen.getByText(/Stop only records that the sidecar should not start automatically/)).toBeVisible();
     await user.click(moreActions());
-    expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(["Retry connection", "Disconnect", "Stop"]);
+    expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(["Disconnect", "Stop"]);
+    // The destructive command comes last, after a separator.
+    expect(Array.from(screen.getByRole("menu").querySelectorAll('[role="menuitem"], [role="separator"]'))
+      .map((row) => row.getAttribute("role") === "separator" ? "—" : row.textContent)).toEqual(["Disconnect", "—", "Stop"]);
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
     view.rerender(<RuntimeControls controls={api} revision={7} resourceKind="backend" resourceId={runtime.resourceId} label="Build host"
       runtime={{ ...runtime, resourceKind: "backend", connectionState: "unreachable", upgradeState: "current", applyState: "unavailable", supportedActions: ["connect", "start", "stop", "restart"] }}
       disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn()} />);
-    expect(screen.getByRole("button", { name: "Retry connection" })).toBeEnabled();
+    expect(within(headerActions()).getByRole("button", { name: "Retry connection" })).toBeEnabled();
     await user.click(moreActions());
-    expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(["Retry connection", "Stop"]);
+    expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(["Stop"]);
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
     view.rerender(<RuntimeControls controls={api} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
       runtime={{ ...runtime, connectionState: "recovery_required", upgradeState: "current", applyState: "applied", supportedActions: ["connect", "disconnect", "start", "stop", "restart", "upgrade"] }}
       disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn()} />);
-    expect(screen.getByRole("button", { name: "Retry connection" })).toBeEnabled();
+    expect(within(headerActions()).getByRole("button", { name: "Retry connection" })).toBeEnabled();
     await user.click(moreActions());
-    expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(["Retry connection", "Disconnect", "Stop"]);
+    expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(["Disconnect", "Stop"]);
   });
 
-  it("explains paused controls and keeps diagnostics behind a details disclosure", async () => {
-    const user = userEvent.setup();
+  it("explains paused controls and lists technical details as facts", async () => {
     render(<RuntimeControls controls={controls()} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
       runtime={runtime} disabled disabledReason="Refresh the configuration before issuing runtime commands." onRuntime={vi.fn()} onRefresh={vi.fn()} />);
-    const primary = screen.getByRole("button", { name: "Upgrade and restart" });
+    const primary = within(headerActions()).getByRole("button", { name: "Upgrade and restart" });
     expect(primary).toBeDisabled();
     expect(primary).toHaveAccessibleDescription("Refresh the configuration before issuing runtime commands.");
+    expect(moreActions()).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent("Refresh the configuration");
-    expect(screen.queryByText("Saved revision")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Build host runtime details" }));
-    expect(screen.getByText("Saved revision")).toBeVisible();
-    expect(screen.getByText("Pending application")).toBeVisible();
+    const technical = screen.getByLabelText("Technical details");
+    expect(technical).toHaveTextContent("Saved revision7");
+    expect(technical).toHaveTextContent("Applied revision6");
+    expect(technical).toHaveTextContent("ConfigurationPending application");
+    expect(technical).not.toHaveTextContent("sidecar-incarnation-one");
   });
   it("shows incompatible status and confirms the exact impact before upgrade", async () => {
     const api = controls();
     const onRuntime = vi.fn();
     render(<RuntimeControls controls={api} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
       runtime={runtime} disabled={false} onRuntime={onRuntime} onRefresh={vi.fn()} />);
-    expect(screen.getByText("Upgrade required")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Upgrade and restart" }));
-    expect(await screen.findByText("Terminal shell will end")).toBeVisible();
+    // The header pill names the state that needs attention; the health summary adds the runtime's own state.
+    expect(screen.getByLabelText("Header status")).toHaveTextContent("Upgrade required");
+    const health = screen.getByRole("region", { name: "Build host status" });
+    expect(health).toHaveTextContent("RuntimeConnected");
+    expect(health).not.toHaveTextContent("Upgrade required");
+    fireEvent.click(within(headerActions()).getByRole("button", { name: "Upgrade and restart" }));
+    const confirmation = await screen.findByRole("dialog", { name: "Upgrade and restart Build host?" });
+    expect(confirmation).toHaveTextContent("Terminal shell will end");
+    expect(confirmation).toHaveTextContent("2 affected resources");
     expect(api.configurationLifecycle).not.toHaveBeenCalled();
     expect(api.configurationLifecycleImpact).toHaveBeenCalledWith({ resourceKind: "environment", resourceId: runtime.resourceId, action: "upgrade", expectedRevision: 7 });
     fireEvent.click(screen.getByRole("button", { name: "Confirm upgrade and restart" }));
@@ -281,9 +324,9 @@ describe("runtime administration controls", () => {
     api.configurationLifecycleImpact.mockResolvedValue({ ...impact, expiresAt: new Date(Date.now() + 120_000).toISOString(), activeResources: 0, interruptions: [] });
     render(<RuntimeControls controls={api} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
       runtime={{ ...runtime, activeResources: 0 }} disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Upgrade and restart" }));
+    fireEvent.click(within(headerActions()).getByRole("button", { name: "Upgrade and restart" }));
     await waitFor(() => expect(api.configurationLifecycle).toHaveBeenCalledOnce());
-    expect(screen.queryByRole("group", { name: "Confirm runtime interruption" })).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(api.configurationLifecycle.mock.calls[0]![0].impactToken).toBe(impact.token);
   });
 
@@ -294,8 +337,9 @@ describe("runtime administration controls", () => {
     render(<RuntimeControls controls={api} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
       runtime={{ ...runtime, lastError: "Confirm the previous sidecar and its children have stopped." }} disabled={false} onRuntime={vi.fn()} onRefresh={refresh} />);
     await chooseDisconnect();
-    expect(await screen.findByRole("alert")).toHaveTextContent("Connection lost");
-    expect(screen.getByRole("alert")).toHaveTextContent("Confirm the previous sidecar and its children have stopped.");
+    // One Callout: the command's error over the runtime's own last error.
+    await waitFor(() => expect(screen.getAllByRole("alert").map(alert => alert.textContent)).toEqual([
+      expect.stringMatching(/Connection lost.*Confirm the previous sidecar and its children have stopped\.$/)]));
     expect(moreActions()).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Refresh status" }));
     await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
@@ -322,7 +366,7 @@ describe("runtime administration controls", () => {
     fireEvent.click(screen.getByRole("button", { name: "Refresh status" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("outcome is unknown");
     await waitFor(() => expect(screen.getByRole("button", { name: "Refresh status" })).toBeEnabled());
-    expect(moreActions()).toBeDisabled();
+    expect(await availableMenuItems()).toEqual(["Stop"]);
     fireEvent.click(screen.getByRole("button", { name: "Refresh status" }));
     await waitFor(() => expect(moreActions()).toBeEnabled());
     expect(api.configurationLifecycle).toHaveBeenCalledOnce();
@@ -367,7 +411,7 @@ describe("runtime administration controls", () => {
     const api = controls();
     render(<RuntimeControls controls={api} revision={7} resourceKind="environment" resourceId={runtime.resourceId} label="Build host"
       runtime={runtime} disabled={false} onRuntime={vi.fn()} onRefresh={vi.fn(async () => true)} />);
-    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Upgrade and restart" })); });
+    await act(async () => { fireEvent.click(within(headerActions()).getByRole("button", { name: "Upgrade and restart" })); });
     expect(screen.getByRole("button", { name: "Confirm upgrade and restart" })).toBeEnabled();
     if (pausedTimer) {
       vi.setSystemTime(Date.now() + 120_000);
@@ -375,9 +419,9 @@ describe("runtime administration controls", () => {
     } else {
       await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
     }
-    expect(screen.queryByRole("group", { name: "Confirm runtime interruption" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("preview expired");
-    expect(screen.getByRole("button", { name: "Upgrade and restart" })).toBeEnabled();
+    expect(within(headerActions()).getByRole("button", { name: "Upgrade and restart" })).toBeEnabled();
     expect(api.configurationLifecycle).not.toHaveBeenCalled();
   });
 
@@ -389,14 +433,14 @@ describe("runtime administration controls", () => {
     const disconnected: ConfigurationRuntimeState = { ...runtime, connectionState: "disconnected", preference: "disconnected", upgradeState: "current", applyState: "applied" };
     const props = { controls: api, resourceKind: "environment" as const, resourceId: runtime.resourceId, label: "Build host", runtime: disconnected, disabled: false, onRuntime: vi.fn(), onRefresh: refresh };
     const view = render(<RuntimeControls {...props} revision={7} />);
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    fireEvent.click(within(headerActions()).getByRole("button", { name: "Connect" }));
     await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
     expect(screen.queryByRole("button", { name: "Connect" })).toBeNull();
     expect(screen.getByRole("button", { name: "Refresh status" })).toBeVisible();
     view.rerender(<RuntimeControls {...props} revision={8} />);
     finishRefresh(true);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Connect" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    await waitFor(() => expect(within(headerActions()).getByRole("button", { name: "Connect" })).toBeEnabled());
+    fireEvent.click(within(headerActions()).getByRole("button", { name: "Connect" }));
     await waitFor(() => expect(api.configurationLifecycle).toHaveBeenCalledTimes(2));
     expect(api.configurationLifecycle.mock.calls[1]![0].expectedRevision).toBe(8);
   });

@@ -4,7 +4,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
-import { capture, selectCustomNewThreadTarget } from "./helpers";
+import { capture, overlaySettled, selectCustomNewThreadTarget } from "./helpers";
 import {
   alphaWorkspace,
   resetWorkspaceFileFixtures,
@@ -194,24 +194,23 @@ test.describe.serial("workspace files compare", () => {
       name: "Compare",
       exact: true,
     });
-    // Portal controls keep the compact Files typography despite the shared popover defaults.
+    // A form popover of primitive controls: Field labels over 13px pickers
+    // and selects, and no native select anywhere in it.
     for (const control of [
       runCompare,
-      settings.getByRole("button", { name: "Uncommitted", exact: true }),
-      settings.getByRole("button", { name: "Base revision", exact: true }),
-      settings.getByRole("button", { name: "Compare revision", exact: true }),
+      settings.getByRole("combobox", { name: "Base revision", exact: true }),
+      settings.getByRole("combobox", { name: "Compare revision", exact: true }),
       settings.getByRole("combobox", { name: "Comparison strategy", exact: true }),
+      settings.getByRole("combobox", { name: "Commit history", exact: true }),
     ]) {
-      await expect(control).toHaveCSS("font-size", "12px");
-      await expect(control).toHaveCSS("font-weight", "400");
-      await expect(control).toHaveCSS("letter-spacing", "normal");
+      await expect(control).toHaveCSS("font-size", "13px");
     }
-    for (const label of [
-      settings.locator(".workspace-revision-label").first(),
-      settings.locator(".workspace-compare-strategy > span"),
-    ]) {
-      await expect(label).toHaveCSS("font-size", "11px");
-      await expect(label).toHaveCSS("font-weight", "600");
+    await expect(settings.getByRole("button", { name: "Uncommitted", exact: true })).toHaveCSS("font-size", "12px");
+    await expect(settings.locator("select")).toHaveCount(0);
+    for (const label of ["Base", "Compare", "Strategy", "Commit history"]) {
+      const fieldLabel = settings.locator('[data-slot="field-label"]', { hasText: new RegExp(`^${label}$`, "u") });
+      await expect(fieldLabel).toHaveCSS("font-size", "13px");
+      await expect(fieldLabel).toHaveCSS("font-weight", "500");
     }
     await expect(runCompare).toBeEnabled();
     await runCompare.click();
@@ -251,10 +250,12 @@ test.describe.serial("workspace files compare", () => {
     const navigator = compareSurface.getByRole("complementary", { name: "Changed files" });
     await expect(navigator).toBeVisible();
     const viewToggle = compareSurface.getByRole("button", { name: "Diff view options", exact: true });
-    const viewOptions = page.getByRole("dialog", { name: "Diff view options", exact: true });
+    const viewOptions = page.getByRole("menu", { name: "Diff view options", exact: true });
     await viewToggle.click();
-    await viewOptions.getByRole("button", { name: "Split", exact: true }).click();
-    await page.keyboard.press("Escape");
+    // The view options show their state: a radio pair and a checkbox row.
+    await expect(viewOptions.getByRole("menuitemcheckbox", { name: "Wrap lines", exact: true })).toHaveAttribute("aria-checked", "false");
+    await viewOptions.getByRole("menuitemradio", { name: "Split", exact: true }).click();
+    await expect(viewOptions).toBeHidden();
     await navigator.getByRole("textbox", { name: "Filter changed files" }).fill("status");
     await navigator.getByRole("treeitem").filter({ hasText: "status.ts" }).click();
     const changedFileFilter = navigator.getByRole("textbox", { name: "Filter changed files" });
@@ -279,9 +280,13 @@ test.describe.serial("workspace files compare", () => {
     await assertCompactToolbar();
     await capture(page, testInfo, "workspace-files-compare-desktop.png");
     await compareSurface.getByRole("button", { name: "Review controls", exact: true }).click();
-    await page.getByRole("dialog", { name: "Review options", exact: true }).getByRole("button", { name: "Comments (0)", exact: true }).click();
+    const reviewMenu = page.getByRole("menu", { name: "Review controls", exact: true });
+    // The review status heads the menu instead of a paragraph over buttons.
+    await expect(reviewMenu.getByText(/^\d+ of \d+ files reviewed$/u)).toBeVisible();
+    await reviewMenu.getByRole("menuitem", { name: /^Comments/ }).click();
     const review = page.getByRole("dialog", { name: "Review", exact: true });
-    await expect(review.getByRole("button", { name: "Current review", exact: true })).toBeVisible();
+    await expect(review.getByRole("radio", { name: "Current review", exact: true })).toBeChecked();
+    await overlaySettled(review);
     const reviewBounds = await review.boundingBox();
     expect(reviewBounds!.y).toBeGreaterThanOrEqual(0);
     expect(reviewBounds!.x + reviewBounds!.width).toBeLessThanOrEqual(1440);
@@ -295,18 +300,21 @@ test.describe.serial("workspace files compare", () => {
     await settingsToggle.click();
     expect(await compareSurface.locator(".workspace-compare-workspace").boundingBox()).toEqual(workspaceBeforeSettings);
     await capture(page, testInfo, "workspace-files-comparison-settings.png");
-    await settings.getByRole("button", { name: "Base revision", exact: true }).click();
+    await settings.getByRole("combobox", { name: "Base revision", exact: true }).click();
     const revisionDialog = page.getByRole("dialog", { name: "Choose base revision" });
-    await expect(revisionDialog.getByText("Seed workspace file fixture", { exact: true })).toBeVisible();
-    for (const control of [
-      revisionDialog.getByRole("textbox", { name: "Search base revisions" }),
-      revisionDialog.getByRole("combobox", { name: "Base commit history" }),
-      revisionDialog.locator(".workspace-revision-option-copy strong").first(),
-    ]) {
-      await expect(control).toHaveCSS("font-size", "12px");
-    }
+    const commitRow = revisionDialog.getByRole("option", { name: /^Seed workspace file fixture [A-Z][a-z]{2} \d{1,2}, \d{4}, [^·]+ · [0-9a-f]{12}$/u });
+    await expect(commitRow).toBeVisible();
+    await expect(revisionDialog.locator("select")).toHaveCount(0);
+    const revisionSearch = revisionDialog.getByRole("combobox", { name: "Search base revisions" });
+    await expect(revisionSearch).toHaveCSS("font-size", "13px");
+    // Menu row anatomy: 13px rows, and hover draws the wash without a focus ring.
+    await expect(commitRow).toHaveCSS("font-size", "13px");
+    await commitRow.hover();
+    await expect(commitRow).toHaveAttribute("data-active", "true");
+    await expect(commitRow).toHaveCSS("outline-style", "none");
+    await expect(commitRow).toHaveCSS("box-shadow", "none");
     await capture(page, testInfo, "workspace-files-revision-picker.png");
-    await revisionDialog.getByRole("textbox", { name: "Search base revisions" }).fill("main");
+    await revisionSearch.fill("main");
     await expect(revisionDialog.getByRole("listbox").getByRole("option").filter({ hasText: "main" })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(revisionDialog).toBeHidden();
@@ -314,8 +322,12 @@ test.describe.serial("workspace files compare", () => {
     await expect(settings).toBeHidden();
     await page.setViewportSize({ width: 390, height: 844 });
     await viewToggle.click();
-    await expect(viewOptions.getByRole("button", { name: "Split", exact: true })).toBeDisabled();
+    const narrowSplit = viewOptions.getByRole("menuitemradio", { name: /^Split/ });
+    await expect(narrowSplit).toBeDisabled();
+    await expect(narrowSplit).toContainText("Too narrow");
+    await expect(viewOptions.getByRole("menuitemradio", { name: "Unified", exact: true })).toHaveAttribute("aria-checked", "true");
     await page.keyboard.press("Escape");
+    await expect(viewOptions).toBeHidden();
     await expect(settingsToggle).toHaveAttribute("aria-expanded", "false");
     await assertCompactToolbar();
     await compareSurface.getByRole("button", { name: "Changed files", exact: true }).click();
@@ -338,12 +350,13 @@ test.describe.serial("workspace files compare", () => {
     await expect(editor(panel)).toContainText("export const answer = 99;");
     await page.getByRole("tab", { name: "Changes", exact: true }).click();
     await viewToggle.click();
-    await expect(viewOptions.getByRole("button", { name: "Split", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(viewOptions.getByRole("menuitemradio", { name: "Split", exact: true })).toHaveAttribute("aria-checked", "true");
     await page.keyboard.press("Escape");
+    await expect(viewOptions).toBeHidden();
     // Review the feature branch from its common ancestor with main.
     if (await settingsToggle.getAttribute("aria-expanded") !== "true") await settingsToggle.click();
     await settings.getByRole("button", { name: "Branches", exact: true }).click();
-    await settings.getByRole("button", { name: "Compare revision", exact: true }).click();
+    await settings.getByRole("combobox", { name: "Compare revision", exact: true }).click();
     await page.getByRole("dialog", { name: "Choose compare revision" }).getByRole("listbox").getByRole("option").filter({ hasText: "feature/navigation" }).click();
     await runCompare.click();
     await expect(compareSurface.getByLabel("1 changed file", { exact: true })).toBeVisible();

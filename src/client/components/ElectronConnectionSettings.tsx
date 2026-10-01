@@ -1,6 +1,11 @@
 import { useState } from "react";
 import type { ElectronConnectionProfile } from "../app/electron-connections.js";
 import { Button } from "./ui/button.js";
+import { Callout } from "./ui/callout.js";
+import { Tag } from "./ui/tag.js";
+import { SettingsActionRow } from "./settings/SettingsField.js";
+import { SettingsPage } from "./settings/SettingsPage.js";
+import { SettingsSection } from "./settings/SettingsSection.js";
 
 export interface ElectronConnectionSettingsControls {
   readonly activeProfile: ElectronConnectionProfile;
@@ -50,36 +55,40 @@ export function ElectronConnectionSettings({
         : "SSH";
 
   return (
-    <>
-      <h3 className="settings-page-title">Connection</h3>
-      <div className="settings-row">
-        <div className="settings-row-text">
-          <span className="settings-row-label">{profile.name}</span>
-          <p className="settings-row-description">
-            {kind} · {detail}
-          </p>
-          {profile.kind === "local" && controls.authenticationRequired === false ? <p className="settings-row-description">Authentication disabled</p> : null}
-          <p className="settings-row-description">
-            Switch to another saved connection or manage connection
-            profiles.
-          </p>
-          {error ? (
-            <p className="settings-row-description" role="alert">
-              {error}
-            </p>
-          ) : null}
-        </div>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={pending}
-          aria-busy={pending || undefined}
-          onClick={() => void switchConnection()}
-        >
-          {pending ? "Opening…" : "Switch connection"}
-        </Button>
-      </div>
-    </>
+    <SettingsPage
+      title="Connection"
+      description="The Sedes server this desktop app uses. Switch to another saved connection or manage connection profiles."
+    >
+      <SettingsSection title="Current connection" card>
+        <SettingsActionRow
+          title={
+            <>
+              <span>{profile.name}</span>
+              {profile.kind === "local" && controls.authenticationRequired === false ? (
+                <Tag>Authentication disabled</Tag>
+              ) : null}
+            </>
+          }
+          description={`${kind} · ${detail}`}
+          actions={
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending}
+              aria-busy={pending || undefined}
+              onClick={() => void switchConnection()}
+            >
+              {pending ? "Opening…" : "Switch connection"}
+            </Button>
+          }
+        />
+        {error ? (
+          <Callout tone="danger" role="alert">
+            {error}
+          </Callout>
+        ) : null}
+      </SettingsSection>
+    </SettingsPage>
   );
 }
 

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionMessageInfo } from "@opencode/client";
 import type { BackendConversationEvent, SequencedBackendEvent } from "../../src/shared/protocol/backend.js";
+import { backendCapabilityDocumentSchema } from "../../src/shared/protocol/backend.js";
 import { OpenCodeHistoryProjection, openCodeHistoryItemId } from "../../src/server/backends/opencode/opencode-history-projection.js";
 import { OPENCODE_HISTORY_LIMITS } from "../../src/server/backends/opencode/opencode-history-reader.js";
 import { OpenCodeNativeApi } from "../../src/server/backends/opencode/opencode-native-api.js";
@@ -40,6 +41,17 @@ function textOf(events: SequencedBackendEvent[], kind: "assistant_message" | "re
 }
 
 describe("OpenCode conversation authority and finite discovery", () => {
+  it("declares throughput unsupported and does not infer request timing from completed history", async () => {
+    const current = await attached([user(), { ...assistant([{ type: "text", text: "Done" }]),
+      time: { created: 2, completed: 3 } }, idle()]);
+    const capabilities = backendCapabilityDocumentSchema.parse(await current.handle.backendCapabilities());
+    expect(capabilities.turnThroughput).toBe("unsupported");
+    const { snapshot } = await current.handle.establishProjection({ signal: signal() });
+    const turns = Object.values(snapshot.turnsById);
+    expect(turns).toHaveLength(1);
+    expect(turns[0]).toMatchObject({ status: "completed" });
+    expect(turns[0]?.throughput).toBeUndefined();
+  });
   it.each(["replay", "reconcile"] as const)("retries a lost terminal Stop ACK on %s without interrupting again", async mode => {
     const current = setup(); const acquire = vi.mocked(current.runtime.acquire).getMockImplementation()!;
     let lose = true;

@@ -203,6 +203,8 @@ describe("ReasoningSummaryStatus", () => {
     fireEvent.click(trigger);
     const dialog = screen.getByRole("dialog", { name: "Reasoning summary" });
     expect(dialog).toBe(screen.getByTestId("reasoning-summary-popover"));
+    expect(dialog).toHaveAttribute("data-slot", "popover-content");
+    expect(dialog).toHaveAttribute("data-side", "top");
     expect(dialog).toHaveTextContent("the final phrase");
     expect(dialog.querySelector("strong")).toHaveTextContent("A long");
     expect(dialog.querySelector("code")).toHaveTextContent("code");

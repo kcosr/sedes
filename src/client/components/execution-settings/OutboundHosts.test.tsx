@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import type { ConfigurationSnapshot } from "../../../shared/protocol/configuration-admin.js";
 import type { HostPairingList, HostRegistration } from "../../../shared/protocol/host-pairing.js";
 import { ApiError } from "../../api/ApiClient.js";
+import { navigate } from "../../app/router.js";
 import { ExecutionSettings } from "./ExecutionSettings.js";
 import { allowedEnvironments, backendEditors } from "./backend-editors.js";
 import type { ConfigurationControls } from "./useConfiguration.js";
@@ -47,98 +48,123 @@ function fixture(paired = false) {
   } satisfies ConfigurationControls & HostPairingControls;
   return api;
 }
-afterEach(cleanup);
+function renderAt(path: string, api: ReturnType<typeof fixture>) {
+  act(() => navigate(path, { replace: true }));
+  render(<ExecutionSettings controls={api} />);
+  return api;
+}
+const pendingPath = `/settings/environments/~pending/${registration.id}`;
+
+beforeEach(() => { vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} }); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("outbound host settings", () => {
-  it("keeps pending hosts compact and shows connector instructions only during host setup", async () => {
-    render(<ExecutionSettings controls={fixture()} />);
-    expect(await screen.findByText("1 host awaiting approval")).toBeVisible();
-    expect(screen.queryByRole("article", { name: "Pending Mac Studio" })).toBeNull();
+  it("lists pending hosts at the top of the environments and shows connector instructions only while pairing", async () => {
+    renderAt("/settings/environments", fixture());
+    const awaiting = await screen.findByRole("region", { name: "Awaiting approval" });
+    expect(awaiting).toHaveTextContent("1 host");
+    const row = within(awaiting).getByRole("link", { name: "Mac Studio" });
+    expect(row.closest("li")).toHaveTextContent("Code ABCD-1234 · macOS arm64");
+    expect(row.closest("li")).toHaveTextContent("Host offline");
     expect(screen.queryByRole("link", { name: "Download connector" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Review hosts" }));
-    expect(screen.getByRole("article", { name: "Pending Mac Studio" })).toBeVisible();
+    fireEvent.click(row);
+    expect(window.location.pathname).toBe(pendingPath);
+    expect(screen.getByRole("region", { name: "Pending Mac Studio" })).toBeVisible();
     expect(screen.queryByRole("link", { name: "Download connector" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Back" }));
     fireEvent.click(screen.getByRole("button", { name: "Add environment" }));
-    fireEvent.click(screen.getByRole("button", { name: /^Pair a host/ }));
-    expect(screen.getByRole("link", { name: "Download connector" })).toHaveAttribute("href", "http://sedes.test:4784/api/outbound/connector/sedes-sidecar.mjs");
-    expect(screen.getByRole("article", { name: "Pending Mac Studio" })).toBeVisible();
+    fireEvent.click(screen.getByRole("link", { name: "Pair a host" }));
+    expect(window.location.pathname).toBe("/settings/environments/~new/pair");
+    const setup = screen.getByRole("region", { name: "Pair a host" });
+    expect(within(setup).getByRole("link", { name: "Download connector" })).toHaveAttribute("href", "http://sedes.test:4784/api/outbound/connector/sedes-sidecar.mjs");
+    expect(within(setup).getByRole("button", { name: "Copy pairing command" })).toBeVisible();
+    expect(within(setup).getByRole("link", { name: "Mac Studio" })).toHaveAttribute("href", pendingPath);
   });
 
   it("accepts an offline Mac with explicit roots and paired tool grants, retaining its identity", async () => {
-    const api = fixture(); render(<ExecutionSettings controls={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Review hosts" }));
-    const pending = await screen.findByRole("article", { name: "Pending Mac Studio" });
-    expect(pending).toHaveTextContent("Host offline"); expect(pending).toHaveTextContent("macOS · arm64");
-    fireEvent.click(within(pending).getByRole("button", { name: "Accept Mac Studio" }));
+    const api = renderAt(pendingPath, fixture());
+    const pending = await screen.findByRole("region", { name: "Pending Mac Studio" });
+    expect(pending).toHaveTextContent("Host offline"); expect(pending).toHaveTextContent("macOS · arm64 · operator");
+    expect(pending).toHaveTextContent("ABCD-1234");
     fireEvent.click(screen.getByRole("button", { name: "Accept host" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("workspaceRoots"); expect(api.acceptHostRegistration).not.toHaveBeenCalled();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Fix the highlighted fields to accept this host.");
+    expect(screen.getByRole("group", { name: "Workspace roots" })).toHaveAccessibleDescription(/Add at least one workspace root\./u);
+    expect(api.acceptHostRegistration).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText("Environment name"), { target: { value: "My Mac" } });
-    fireEvent.change(screen.getByLabelText("Workspace roots"), { target: { value: "/Users/operator/Projects" } });
+    fireEvent.change(screen.getByLabelText("Workspace root 1"), { target: { value: "/Users/operator/Projects" } });
     fireEvent.click(screen.getByLabelText("Workspace tools and context"));
     fireEvent.click(screen.getByRole("button", { name: "Accept host" }));
     await waitFor(() => expect(api.acceptHostRegistration).toHaveBeenCalledOnce());
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Accept host" })).toBeNull());
-    fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    const summary = await screen.findByRole("button", { name: "My Mac details" }); expect(summary.closest("tr")).toHaveTextContent("Host offline");
+    await waitFor(() => expect(window.location.pathname).toBe(`/settings/environments/${environment.id}`));
     expect(api.acceptHostRegistration).toHaveBeenCalledWith(expect.objectContaining({ registrationId: registration.id, expectedRegistrationRevision: 1,
       expectedConfigurationRevision: 3, workspaceRoots: ["/Users/operator/Projects"], operations: { kind: "sidecar", enabledCapabilities: ["directory_browser", "workspace_files", "workspace_tools", "workspace_context"] } }));
-    fireEvent.click(summary);
-    fireEvent.click(screen.getByRole("button", { name: "Activity & diagnostics" }));
-    expect(screen.getByRole("button", { name: "Remove My Mac" })).toBeDisabled();
+    expect(await screen.findByRole("heading", { name: "My Mac", level: 2 })).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("link", { name: "My Mac" }).closest("li")).toHaveTextContent("Host offline"));
+    expect(screen.queryByRole("region", { name: "Awaiting approval" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Remove My Mac" }));
+    const removal = screen.getByRole("dialog", { name: "Remove My Mac?" });
+    expect(removal).toHaveTextContent("Revoke the pairing first.");
+    expect(within(removal).getByRole("button", { name: "Remove environment" })).toBeDisabled();
+    fireEvent.click(within(removal).getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "Edit My Mac" }));
-    expect(screen.getByLabelText("Environment type")).toHaveValue("outbound"); expect(screen.getByLabelText("Environment type")).toBeDisabled();
-    expect(screen.queryByLabelText("SSH host alias")).toBeNull();
+    expect(screen.getByRole("group", { name: "Environment type" })).toHaveTextContent("Paired host");
+    expect(screen.getByRole("group", { name: "Platform" })).toHaveTextContent("macOS");
+    expect(screen.queryByRole("textbox", { name: "SSH host alias" })).toBeNull();
   });
 
-  it("denies the exact registration without saving an environment", async () => {
-    const api = fixture(); render(<ExecutionSettings controls={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Review hosts" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Deny Mac Studio" }));
-    await waitFor(() => expect(screen.queryByRole("article", { name: "Pending Mac Studio" })).toBeNull());
+  it("denies the exact registration after confirmation without saving an environment", async () => {
+    const api = renderAt(pendingPath, fixture());
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Deny Mac Studio" }));
+    const confirmation = screen.getByRole("dialog", { name: "Deny Mac Studio?" });
+    expect(api.denyHostRegistration).not.toHaveBeenCalled();
+    await user.click(within(confirmation).getByRole("button", { name: "Deny host" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/settings/environments"));
+    await waitFor(() => expect(screen.queryByRole("link", { name: "Mac Studio" })).toBeNull());
     expect(api.denyHostRegistration).toHaveBeenCalledWith(expect.objectContaining({ registrationId: registration.id, expectedRegistrationRevision: 1 }));
     expect(api.saveConfiguration).not.toHaveBeenCalled(); expect(api.acceptHostRegistration).not.toHaveBeenCalled();
   });
 
   it("confirms revocation and same-binding reapproval and restores focus to the relabeled action", async () => {
-    const api = fixture(true); render(<ExecutionSettings controls={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "My Mac details" }));
-    fireEvent.click(screen.getByRole("button", { name: "Activity & diagnostics" }));
+    const api = renderAt(`/settings/environments/${environment.id}`, fixture(true));
     const user = userEvent.setup();
-    const trigger = screen.getByRole("button", { name: "Revoke My Mac" });
+    const trigger = await screen.findByRole("button", { name: "Revoke My Mac" });
     await user.click(trigger);
     expect(api.revokeHostPairing).not.toHaveBeenCalled();
-    expect(screen.getByRole("group", { name: "Confirm configuration change" })).toHaveFocus();
-    expect(screen.getByText(/does not stop host-owned processes/)).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Confirm revocation" }));
+    const revoke = screen.getByRole("dialog", { name: "Revoke My Mac?" });
+    expect(within(revoke).getByRole("button", { name: "Cancel" })).toHaveFocus();
+    expect(revoke).toHaveTextContent(/does not stop host-owned processes/u);
+    await user.click(within(revoke).getByRole("button", { name: "Revoke pairing" }));
     const reapprove = await screen.findByRole("button", { name: "Reapprove My Mac" });
     expect(reapprove).toBeEnabled();
     expect(reapprove).toBe(trigger);
-    expect(reapprove).toHaveFocus();
-    expect(screen.getByRole("button", { name: "Remove My Mac" })).toBeEnabled();
+    await waitFor(() => expect(reapprove).toHaveFocus());
     expect(api.revokeHostPairing).toHaveBeenCalledWith(expect.objectContaining({ pairingId: environment.pairingId, expectedPairingRevision: 1, expectedConfigurationRevision: 3 }));
+    await user.click(screen.getByRole("button", { name: "Remove My Mac" }));
+    expect(within(screen.getByRole("dialog", { name: "Remove My Mac?" })).getByRole("button", { name: "Remove environment" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
     await user.click(reapprove);
     expect(api.reapproveHostPairing).not.toHaveBeenCalled();
-    expect(screen.getByRole("group", { name: "Confirm configuration change" })).toHaveFocus();
-    await user.click(screen.getByRole("button", { name: "Confirm reapproval" }));
-    const revoke = await screen.findByRole("button", { name: "Revoke My Mac" });
-    expect(revoke).toBeEnabled();
-    expect(revoke).toBe(trigger);
-    expect(revoke).toHaveFocus();
-    expect(screen.getByRole("button", { name: "Remove My Mac" })).toBeDisabled();
+    const confirmation = screen.getByRole("dialog", { name: "Reapprove My Mac?" });
+    expect(within(confirmation).getByRole("button", { name: "Reapprove pairing" })).toHaveFocus();
+    await user.click(within(confirmation).getByRole("button", { name: "Reapprove pairing" }));
+    const revokeAgain = await screen.findByRole("button", { name: "Revoke My Mac" });
+    expect(revokeAgain).toBeEnabled();
+    expect(revokeAgain).toBe(trigger);
+    await waitFor(() => expect(revokeAgain).toHaveFocus());
+    await user.click(screen.getByRole("button", { name: "Remove My Mac" }));
+    expect(within(screen.getByRole("dialog", { name: "Remove My Mac?" })).getByRole("button", { name: "Remove environment" })).toBeDisabled();
     expect(api.reapproveHostPairing).toHaveBeenCalledWith(expect.objectContaining({ pairingId: environment.pairingId, expectedPairingRevision: 2, expectedConfigurationRevision: 3 }));
   });
 
   it("preserves the acceptance editor and requires refresh after a conflicting decision", async () => {
     const api = fixture(); api.acceptHostRegistration.mockRejectedValueOnce(new ApiError(409, "conflict", "Registration changed.", false));
-    render(<ExecutionSettings controls={api} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Review hosts" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Accept Mac Studio" }));
-    fireEvent.change(screen.getByLabelText("Workspace roots"), { target: { value: "/Users/operator/Projects" } });
+    renderAt(pendingPath, api);
+    fireEvent.change(await screen.findByLabelText("Workspace root 1"), { target: { value: "/Users/operator/Projects" } });
     fireEvent.click(screen.getByRole("button", { name: "Accept host" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Refresh before trying again");
-    expect(screen.getByLabelText("Workspace roots")).toHaveValue("/Users/operator/Projects");
+    expect(screen.getByLabelText("Workspace root 1")).toHaveValue("/Users/operator/Projects");
     expect(screen.getByRole("button", { name: "Accept host" })).toBeDisabled();
+    expect(window.location.pathname).toBe(pendingPath);
   });
 
   it("keeps Windows Files and supported backends eligible while rejecting native Windows Claude", () => {

@@ -1,15 +1,11 @@
-import { useKeyboardInset } from "../../app/use-keyboard-inset.js";
 import { ThreadEnvironmentVariables } from "../environment-variables/ThreadEnvironmentVariables.js";
-import { runThreadArchiveCheck } from "../../operations/thread-archive.js";
 import { runThreadCreation, runThreadFork } from "../../operations/thread-creation.js";
-import * as Popover from "@radix-ui/react-popover";
 import {
   memo,
   useContext,
   useEffect,
   useRef,
   useState,
-  type CSSProperties,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -32,57 +28,75 @@ import type {
 } from "../../stores/ThreadClientStore.js";
 import { ProviderFeatureThreadDetails } from "../../provider-features/registry.js";
 import {
+  AlarmClock,
+  AlarmClockOff,
   Archive,
+  ArchiveRestore,
   ArrowDownToDot,
   ArrowUpFromDot,
+  Braces,
+  CalendarClock,
+  ChartColumn,
   ChevronDown,
   Clock,
   CopyPlus,
+  FolderInput,
+  PanelTop,
   RotateCcw,
   Search,
   Settings2,
-  SlidersHorizontal,
+  Shrink,
   Split,
   Wrench,
 } from "lucide-react";
 import { Button } from "@client/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-  DialogTrigger,
-} from "@client/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@client/components/ui/select";
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuItemDescription,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuValue,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@client/components/ui/dropdown-menu";
+import { menuDescriptionClass } from "@client/components/ui/floating";
+import { cn } from "@client/lib/utils";
+import { useTouchDensity } from "../../app/use-touch-density.js";
 import { SessionStatsDialog } from "./SessionStatsDialog.js";
 import { SnoozeDialog } from "./SnoozeDialog.js";
-import { ThreadSettingsControls } from "./ThreadSettingsControls.js";
+import {
+  ThreadModelPickerDialog,
+  ThreadSettingsMenuItems,
+} from "./ThreadSettingsControls.js";
 import {
   AgentToolSettingsDialog,
   agentToolPolicySummary,
 } from "./AgentToolSettingsDialog.js";
 import { latestTurnForkDecision } from "../../lineage/latest-turn-fork.js";
-import { ArchiveDropdown } from "./ArchiveThreadChoices.js";
-import { ArchiveChoicesDialog } from "./ArchiveChoicesDialog.js";
+import { useArchiveThreadAction } from "./ArchiveChoicesDialog.js";
 import {
-  ExecutionWorkspaceActions,
   ExecutionWorkspaceDeleteDialog,
   type IsolatedWorkspace,
 } from "./ExecutionWorkspaceActions.js";
+import { ExecutionWorkspaceMenu } from "./ExecutionWorkspaceMenu.js";
+import { dropdownMenuParts } from "./menu-parts.js";
 import { useMediaQuery } from "../../app/use-media-query.js";
-import {
-  openThreadRoute,
-  pointerPanelPresentation,
-} from "../../workspace-panels/thread-panel-navigation.js";
+import { pointerPanelPresentation } from "../../workspace-panels/thread-panel-navigation.js";
 import type { PanelPresentation } from "../../workspace-panels/panel-presentation.js";
 import { NavigationControlsContext } from "../../app/navigation-controls.js";
 import { SIDEBAR_NAV_MEDIA_QUERY } from "../SidebarNavTrigger.js";
+
+/**
+ * Below this width a phone header gives its toolbar toggle to Thread
+ * actions, so the title keeps its room beside the touch-sized buttons.
+ */
+const NARROW_HEADER_MEDIA_QUERY = "(max-width: 419px)";
 import {
   SettleImpactDialog,
   settleNeedsConfirmation,
@@ -96,7 +110,6 @@ import {
 } from "../../workspace-panels/PanelChrome.js";
 import { ThreadHeading, useThreadHeaderTint } from "./ThreadHeading.js";
 import {
-  THREAD_CONFIGURATION_COPY_ACCESSIBLE_LABEL,
   THREAD_CONFIGURATION_COPY_LABEL,
   THREAD_CONFIGURATION_COPY_PENDING_ACCESSIBLE_LABEL,
   THREAD_CONFIGURATION_COPY_TITLE,
@@ -106,101 +119,22 @@ import { useDelayedUnavailableConnection } from "../../app/use-delayed-connectio
 
 const SHEET_DIALOG_HANDOFF_DELAY_MS = 260;
 
-function ThreadActionsSurface({
-  mobile,
-  open,
-  onOpenChange,
-  triggerRef,
-  handoffPending,
-  threadId,
-  threadTitle,
-  children,
-}: {
-  readonly mobile: boolean;
-  readonly open: boolean;
-  readonly onOpenChange: (open: boolean) => void;
-  readonly triggerRef: RefObject<HTMLButtonElement | null>;
-  readonly handoffPending: boolean;
-  readonly threadId: string;
-  readonly threadTitle: string;
-  readonly children: ReactNode;
-}): React.JSX.Element {
-  const keyboardInset = useKeyboardInset(mobile && open);
-  const trigger = (
-    <Button
-      ref={triggerRef}
-      variant="ghost"
-      size="icon-sm"
-      className="thread-settings-button"
-      aria-label="Thread actions"
-      title="Thread settings and actions"
-    >
-      <Settings2 size={16} strokeWidth={1.8} />
-    </Button>
-  );
-
-  if (mobile) {
-    const descriptionId = `thread-settings-sheet-title-${threadId}`;
-    return (
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogTrigger asChild>{trigger}</DialogTrigger>
-        <DialogContent
-          className="thread-settings-sheet"
-          style={{ "--thread-settings-keyboard-inset": `${keyboardInset}px` } as CSSProperties}
-          overlayClassName="thread-settings-sheet-overlay"
-          data-testid="thread-settings-sheet"
-          aria-describedby={descriptionId}
-          onCloseAutoFocus={(event) => {
-            if (handoffPending) {
-              event.preventDefault();
-              return;
-            }
-            if (!triggerRef.current?.isConnected) return;
-            event.preventDefault();
-            triggerRef.current.focus();
-          }}
-        >
-          <DialogTitle>Thread settings</DialogTitle>
-          <DialogDescription
-            id={descriptionId}
-            className="thread-settings-sheet-thread-title"
-            title={threadTitle}
-          >
-            {threadTitle}
-          </DialogDescription>
-          <div className="thread-settings-sheet-body">{children}</div>
-        </DialogContent>
-      </Dialog>
-    );
-  }
-
+/** A disabled row's short reason; the row's title carries the full one. */
+function ReasonShortcut({ reason }: { readonly reason: string }) {
   return (
-    <Popover.Root open={open} onOpenChange={onOpenChange}>
-      <Popover.Trigger asChild>{trigger}</Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          className="menu-popover thread-actions-popover"
-          data-testid="thread-actions-menu"
-          align="end"
-          sideOffset={8}
-          aria-label="Thread actions"
-          onFocusOutside={(event) => {
-            const target = event.detail.originalEvent.target;
-            if (
-              target instanceof Element &&
-              target.closest(
-                '[data-slot="select-content"], [data-model-picker-content]',
-              )
-            ) {
-              event.preventDefault();
-            }
-          }}
-        >
-          {children}
-          <Popover.Arrow className="popover-arrow" />
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+    <DropdownMenuValue aria-hidden="true">{reason}</DropdownMenuValue>
+  );
+}
+
+/** A non-focusable status line inside the menu, e.g. a failed action. */
+function MenuNote({ children }: { readonly children: ReactNode }) {
+  return (
+    <p
+      role="alert"
+      className={cn(menuDescriptionClass, "m-0 px-2 py-1.5 text-destructive")}
+    >
+      {children}
+    </p>
   );
 }
 
@@ -247,11 +181,11 @@ export const ThreadHeader = memo(function ThreadHeader({
   onSelectBookmarkTurn: (turnId: string) => boolean;
 }): React.JSX.Element {
   const application = useApplicationStore(applicationStore);
-  // Touch devices at any viewport width and any narrow viewport take the
-  // modal archive choices; desktop/fine-pointer wide viewports keep the
-  // dropdown (or direct archive when there are no descendants).
-  const mobileShell = useMediaQuery("(pointer: coarse), (max-width: 819px)");
+  // Under the density switch Thread actions is a bottom sheet with 44px
+  // rows, and it also carries the thread settings the composer hides.
+  const sheet = useTouchDensity();
   const mobileLayout = useMediaQuery(SIDEBAR_NAV_MEDIA_QUERY);
+  const narrowHeader = useMediaQuery(NARROW_HEADER_MEDIA_QUERY);
   const navigationControls = useContext(NavigationControlsContext);
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState(snapshot.thread.title.text);
@@ -259,11 +193,15 @@ export const ThreadHeader = memo(function ThreadHeader({
   useEffect(() => {
     if (findOpen) setMobileToolsOpen(true);
   }, [findOpen]);
+  const setToolbarOpen = (open: boolean) => {
+    if (!open) onFindOpenChange(false);
+    setMobileToolsOpen(open);
+  };
   const [actionsOpen, setActionsOpen] = useState(false);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [modelSearchFirst, setModelSearchFirst] = useState(false);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [forceResetOpen, setForceResetOpen] = useState(false);
-  const [archiveChoicesOpen, setArchiveChoicesOpen] = useState(false);
-  const [archiveInitialImpact, setArchiveInitialImpact] = useState<ThreadArchiveImpact>();
   const [settleImpact, setSettleImpact] = useState<ThreadArchiveImpact>();
   const [settleChoicesOpen, setSettleChoicesOpen] = useState(false);
   const [sessionStatsOpen, setSessionStatsOpen] = useState(false);
@@ -291,6 +229,15 @@ export const ThreadHeader = memo(function ThreadHeader({
   const titleTrigger = useRef<HTMLButtonElement>(null);
   const restoreTitleFocus = useRef(false);
   const afterActionsClose = useRef<(() => void) | undefined>(undefined);
+  // Shift-selecting a creating row opens its thread in the other presentation.
+  const shiftSelect = useRef(false);
+  const selectedPresentation = (): PanelPresentation => {
+    const presentation = pointerPanelPresentation({
+      shiftKey: shiftSelect.current,
+    });
+    shiftSelect.current = false;
+    return presentation;
+  };
   const disabled =
     connection !== "connected" ||
     !snapshot.thread.available ||
@@ -303,6 +250,16 @@ export const ThreadHeader = memo(function ThreadHeader({
     !snapshot.thread.available ||
     inventoryPending ||
     actionPending;
+  // The short reason a row is disabled by the thread's state, not by its
+  // own capability.
+  const busyReason =
+    connection !== "connected" || snapshot.runState === "disconnected"
+      ? "Offline"
+      : !snapshot.thread.available
+        ? "Unavailable"
+        : snapshot.runState === "reconciling"
+          ? "Syncing"
+          : "Busy";
   const rename = snapshot.capabilities.operations.find(
     ({ id }) => id === "rename",
   );
@@ -329,6 +286,16 @@ export const ThreadHeader = memo(function ThreadHeader({
   );
   const environments = application.snapshot?.environments ?? [];
   const showEnvironmentLabel = environments.length > 1;
+  const draftWorkspaceLabel = (workspaceId: string): string => {
+    const workspace = workspaces.find(({ id }) => id === workspaceId);
+    if (!workspace) return snapshot.workspace.label.text;
+    const environment = environments.find(
+      ({ id }) => id === workspace.environmentId,
+    );
+    return showEnvironmentLabel && environment?.kind !== "local"
+      ? `${workspace.label.text} · ${environment?.label.text ?? "Unknown environment"}`
+      : workspace.label.text;
+  };
   const headerEnvironmentTintStyle = useThreadHeaderTint(
     environments,
     snapshot.environment.id,
@@ -387,6 +354,21 @@ export const ThreadHeader = memo(function ThreadHeader({
       queueFailure: Boolean(snapshot.attention.queueFailure),
     },
   };
+  // Archive directly when the authoritative impact leaves nothing to decide;
+  // otherwise the choices dialog opens with that impact.
+  const archiveAction = useArchiveThreadAction({
+    thread: applicationThreadSummary,
+    store: applicationStore,
+    descendantCount: familyDescendantCount,
+    disabled: disabled || archive?.available !== true,
+    onPendingChange: setInventoryPending,
+    onArchived: () => {
+      setActionsOpen(false);
+      navigate("/");
+      if (mobileLayout) navigationControls?.openDrawer();
+    },
+    returnFocusRef: actionsTrigger,
+  });
   const latestFork = latestTurnForkDecision({
     status: "ready",
     connection,
@@ -472,8 +454,15 @@ export const ThreadHeader = memo(function ThreadHeader({
     }
   };
 
+  // Rows whose action reports back (inventory changes, compact) keep the menu
+  // open until it succeeds, so a failure stays readable beside them.
+  const keepOpen = (action: () => void) => (event: Event) => {
+    event.preventDefault();
+    action();
+  };
+
   const closeActionsBefore = (action: () => void) => {
-    if (!mobileShell) {
+    if (!sheet) {
       setActionsOpen(false);
       action();
       return;
@@ -535,6 +524,9 @@ export const ThreadHeader = memo(function ThreadHeader({
         onCollapse: panelControls.onCollapse,
         onClose: panelControls.onClose,
         onDock: panelControls.onDock,
+        ...(panelControls.dockEdge !== undefined
+          ? { dockEdge: panelControls.dockEdge }
+          : {}),
         ...(panelControls.renderMenuItems !== undefined
           ? { renderMenuItems: panelControls.renderMenuItems }
           : {}),
@@ -661,7 +653,7 @@ export const ThreadHeader = memo(function ThreadHeader({
                 error={bookmarkError}
                 pendingTurnIds={pendingBookmarkTurnIds}
                 store={store}
-                mobile={mobileShell}
+                mobile={sheet}
                 onSelectTurn={onSelectBookmarkTurn}
               />
               {snapshot.thread.automation &&
@@ -682,159 +674,329 @@ export const ThreadHeader = memo(function ThreadHeader({
                     <Clock size={18} strokeWidth={1.8} />
                   </button>
                 )}
-              <ThreadActionsSurface
-                mobile={mobileShell}
+              <DropdownMenu
+                presentation={sheet ? "sheet" : "menu"}
                 open={active && actionsOpen}
                 onOpenChange={setActionsOpen}
-                triggerRef={actionsTrigger}
-                handoffPending={afterActionsClose.current !== undefined}
-                threadId={snapshot.thread.id}
-                threadTitle={snapshot.thread.title.text || "Untitled thread"}
               >
-                <p className="menu-label">Thread actions</p>
-                {mobileLayout && (
-                  <p className="text-xs text-muted-foreground">
-                    Execution target: <span className="text-foreground">{executionTargetLabel}{executionTarget?.available === false ? " · Unavailable" : ""}</span>
-                  </p>
-                )}
-                <ThreadSettingsControls
-                  store={store}
-                  snapshot={snapshot}
-                  disabled={disabled}
-                  mobile
-                />
-                <Button
-                  variant="ghost"
-                  className="agent-tool-menu-item"
-                  aria-label={`Agent tools… ${agentToolPolicySummary(snapshot.agentTools)}`}
-                  onClick={() => {
-                    closeActionsBefore(() => setAgentToolsOpen(true));
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    ref={actionsTrigger}
+                    variant="ghost"
+                    size="icon-sm"
+                    className="thread-settings-button"
+                    aria-label="Thread actions"
+                    title="Thread settings and actions"
+                  >
+                    <Settings2 size={16} strokeWidth={1.8} />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="end"
+                  data-testid={sheet ? "thread-settings-sheet" : "thread-actions-menu"}
+                  aria-label="Thread actions"
+                  sheetTitle={snapshot.thread.title.text || "Untitled thread"}
+                  sheetDescription={[
+                    projectContextLabel,
+                    `${executionTargetLabel}${executionTarget?.available === false ? " (unavailable)" : ""}`,
+                  ].join(" · ")}
+                  onCloseAutoFocus={(event) => {
+                    // A dialog opened from the sheet takes focus once it opens.
+                    if (afterActionsClose.current) event.preventDefault();
                   }}
                 >
-                  <span className="agent-tool-menu-label">
-                    <Wrench size={18} strokeWidth={1.8} /> Agent tools…
-                  </span>
-                  <span className="agent-tool-menu-summary">
-                    {agentToolPolicySummary(snapshot.agentTools)}
-                  </span>
-                </Button>
-                <Button variant="ghost" className="agent-tool-menu-item" onClick={() => closeActionsBefore(() => setEnvironmentVariablesOpen(true))}>
-                  <span className="agent-tool-menu-label"><SlidersHorizontal size={18} strokeWidth={1.8} /> Environment variables…</span>
-                  <span className="agent-tool-menu-summary">Saved tools and commands snapshot</span>
-                </Button>
-                <ProviderFeatureThreadDetails
-                  store={store}
-                  snapshot={snapshot}
-                  disabled={disabled}
-                  mobile
-                />
-                {snapshot.thread.backingState === "unbound" &&
-                  workspaces.length > 1 && (
-                    <label className="draft-location">
-                      <span>Draft workspace</span>
-                      <Select
-                        value={snapshot.workspace.id}
-                        disabled={disabled || moveDraft?.available !== true}
-                        onValueChange={(workspaceId) =>
-                          void store
-                            .moveDraft(workspaceId)
-                            .then(() => setActionsOpen(false))
-                            .catch(() => undefined)
+                  {snapshot.capabilities.settings.length > 0 && (
+                    <>
+                      <ThreadSettingsMenuItems
+                        store={store}
+                        snapshot={snapshot}
+                        disabled={disabled}
+                        onChooseModel={(viaKeyboard) =>
+                          closeActionsBefore(() => {
+                            setModelSearchFirst(viaKeyboard);
+                            setModelPickerOpen(true);
+                          })
                         }
-                      >
-                        <SelectTrigger size="sm" aria-label="Draft workspace">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent position="popper">
-                          {workspaces.map((workspace) => (
-                            <SelectItem
-                              key={workspace.id}
-                              value={workspace.id}
-                              disabled={!workspace.available}
-                            >
-                              {workspace.label.text}
-                              {showEnvironmentLabel &&
-                              environments.find(
-                                ({ id }) => id === workspace.environmentId,
-                              )?.kind !== "local"
-                                ? ` · ${
-                                    environments.find(
-                                      ({ id }) =>
-                                        id === workspace.environmentId,
-                                    )?.label.text ?? "Unknown environment"
-                                  }`
-                                : ""}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </label>
+                      />
+                      <DropdownMenuSeparator />
+                    </>
                   )}
-                {snapshot.capabilities.automation.available && (
-                  <Button
-                    variant="ghost"
+                  {/* On narrow phones the header's toolbar toggle lives here. */}
+                  {narrowHeader && (
+                    <>
+                      <DropdownMenuCheckboxItem
+                        checked={mobileToolsOpen}
+                        aria-controls={`thread-toolbar-${snapshot.thread.id}`}
+                        onCheckedChange={setToolbarOpen}
+                      >
+                        <PanelTop aria-hidden="true" />
+                        Show thread toolbar
+                      </DropdownMenuCheckboxItem>
+                      <DropdownMenuSeparator />
+                    </>
+                  )}
+                  <DropdownMenuItem
+                    aria-label={`Agent tools… ${agentToolPolicySummary(snapshot.agentTools)}`}
+                    onSelect={() =>
+                      closeActionsBefore(() => setAgentToolsOpen(true))
+                    }
+                  >
+                    <Wrench aria-hidden="true" />
+                    <span className="min-w-0 flex-1">
+                      Agent tools…{" "}
+                      <DropdownMenuItemDescription>
+                        {agentToolPolicySummary(snapshot.agentTools)}
+                      </DropdownMenuItemDescription>
+                    </span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    aria-label="Environment variables…"
+                    onSelect={() =>
+                      closeActionsBefore(() => setEnvironmentVariablesOpen(true))
+                    }
+                  >
+                    <Braces aria-hidden="true" />
+                    <span className="min-w-0 flex-1">
+                      Environment variables…{" "}
+                      <DropdownMenuItemDescription>
+                        Saved tools and commands snapshot
+                      </DropdownMenuItemDescription>
+                    </span>
+                  </DropdownMenuItem>
+                  <ProviderFeatureThreadDetails
+                    store={store}
+                    snapshot={snapshot}
+                    disabled={disabled}
+                    mobile={sheet}
+                  />
+                  {snapshot.thread.backingState === "unbound" &&
+                    workspaces.length > 1 && (
+                      <DropdownMenuSub>
+                        {/* A workspace label is long by nature: the
+                            current one is the checked row inside. */}
+                        <DropdownMenuSubTrigger
+                          disabled={disabled || moveDraft?.available !== true}
+                        >
+                          <FolderInput aria-hidden="true" />
+                          Draft workspace
+                        </DropdownMenuSubTrigger>
+                        <DropdownMenuSubContent>
+                          <DropdownMenuRadioGroup
+                            value={snapshot.workspace.id}
+                            onValueChange={(workspaceId) => {
+                              if (workspaceId === snapshot.workspace.id) return;
+                              void store
+                                .moveDraft(workspaceId)
+                                .then(() => setActionsOpen(false))
+                                .catch(() => undefined);
+                            }}
+                          >
+                            {workspaces.map((workspace) => (
+                              <DropdownMenuRadioItem
+                                key={workspace.id}
+                                value={workspace.id}
+                                disabled={!workspace.available}
+                              >
+                                <span className="min-w-0 truncate">
+                                  {draftWorkspaceLabel(workspace.id)}
+                                </span>
+                                {!workspace.available && (
+                                  <DropdownMenuValue aria-hidden="true">
+                                    Unavailable
+                                  </DropdownMenuValue>
+                                )}
+                              </DropdownMenuRadioItem>
+                            ))}
+                          </DropdownMenuRadioGroup>
+                        </DropdownMenuSubContent>
+                      </DropdownMenuSub>
+                    )}
+                  <DropdownMenuSeparator />
+                  {snapshot.thread.inventoryState === "archived" && (
+                    <DropdownMenuItem
+                      disabled={disabled}
+                      onSelect={keepOpen(() =>
+                        void mutateInventory("restore").catch(() => undefined),
+                      )}
+                    >
+                      <ArchiveRestore aria-hidden="true" />
+                      Restore to Active
+                      {disabled && <ReasonShortcut reason={busyReason} />}
+                    </DropdownMenuItem>
+                  )}
+                  {snapshot.thread.inventoryState === "settled" ? (
+                    <DropdownMenuItem
+                      disabled={disabled}
+                      onSelect={keepOpen(() =>
+                        void mutateInventory("unsettle").catch(() => undefined),
+                      )}
+                    >
+                      <ArrowUpFromDot aria-hidden="true" />
+                      Unsettle
+                      {disabled && <ReasonShortcut reason={busyReason} />}
+                    </DropdownMenuItem>
+                  ) : (
+                    <DropdownMenuItem
+                      disabled={disabled || settle?.available !== true}
+                      title={settle?.unavailableReason?.text}
+                      onSelect={keepOpen(() => void requestSettle())}
+                    >
+                      <ArrowDownToDot aria-hidden="true" />
+                      Settle
+                      {(disabled || settle?.available !== true) && (
+                        <ReasonShortcut reason={disabled ? busyReason : "Unavailable"} />
+                      )}
+                    </DropdownMenuItem>
+                  )}
+                  {snapshot.thread.inventoryState === "snoozed" ? (
+                    <DropdownMenuItem
+                      disabled={disabled}
+                      onSelect={keepOpen(() =>
+                        void mutateInventory("wake").catch(() => undefined),
+                      )}
+                    >
+                      <AlarmClockOff aria-hidden="true" />
+                      Wake now
+                      {disabled && <ReasonShortcut reason={busyReason} />}
+                    </DropdownMenuItem>
+                  ) : (
+                    <DropdownMenuItem
+                      disabled={disabled || snooze?.available !== true}
+                      title={snooze?.unavailableReason?.text}
+                      onSelect={() =>
+                        closeActionsBefore(() => setSnoozeOpen(true))
+                      }
+                    >
+                      <AlarmClock aria-hidden="true" />
+                      Snooze…
+                      {(disabled || snooze?.available !== true) && (
+                        <ReasonShortcut reason={disabled ? busyReason : "Unavailable"} />
+                      )}
+                    </DropdownMenuItem>
+                  )}
+                  {snapshot.capabilities.automation.available && (
+                    <DropdownMenuItem
+                      disabled={
+                        disabled ||
+                        (!snapshot.thread.automation &&
+                          attachAutomation?.available !== true)
+                      }
+                      title={
+                        snapshot.thread.automation
+                          ? undefined
+                          : attachAutomation?.unavailableReason?.text
+                      }
+                      onSelect={() => {
+                        setActionsOpen(false);
+                        navigate(threadAutomationPath(snapshot.thread.id));
+                      }}
+                    >
+                      <CalendarClock aria-hidden="true" />
+                      {snapshot.thread.automation
+                        ? "Automation settings…"
+                        : "Automate…"}
+                      {disabled && <ReasonShortcut reason={busyReason} />}
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
                     disabled={
-                      disabled ||
-                      (!snapshot.thread.automation &&
-                        attachAutomation?.available !== true)
+                      configurationCopyPending || !snapshot.thread.available
                     }
-                    onClick={() => {
-                      setActionsOpen(false);
-                      navigate(threadAutomationPath(snapshot.thread.id));
+                    aria-busy={configurationCopyPending || undefined}
+                    aria-describedby={
+                      !snapshot.thread.available
+                        ? `header-settings-copy-unavailable-${snapshot.thread.id}`
+                        : undefined
+                    }
+                    aria-label={
+                      configurationCopyPending
+                        ? THREAD_CONFIGURATION_COPY_PENDING_ACCESSIBLE_LABEL
+                        : undefined
+                    }
+                    title={THREAD_CONFIGURATION_COPY_TITLE}
+                    onClick={(event) => {
+                      shiftSelect.current = event.shiftKey;
+                    }}
+                    onSelect={() => createFromSettings(selectedPresentation())}
+                  >
+                    <CopyPlus aria-hidden="true" />
+                    {configurationCopyPending
+                      ? "Creating thread…"
+                      : THREAD_CONFIGURATION_COPY_LABEL}
+                    {!snapshot.thread.available && (
+                      <ReasonShortcut reason="Unavailable" />
+                    )}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    disabled={disabled || !latestFork.available}
+                    aria-describedby={
+                      latestForkUnavailableReason
+                        ? latestForkUnavailableDescriptionId
+                        : undefined
+                    }
+                    title={latestForkUnavailableReason}
+                    onClick={(event) => {
+                      shiftSelect.current = event.shiftKey;
+                    }}
+                    onSelect={() => {
+                      if (!latestFork.selection || !latestFork.available) return;
+                      const presentation = selectedPresentation();
+                      const selection = latestFork.selection;
+                      closeActionsBefore(() => {
+                        void runThreadFork({
+                          fork: (restart) => selection.boundary === "latest_provider_snapshot"
+                            ? store.forkLatestProviderSnapshot({ restart })
+                            : store.forkTurn(selection.capability, { restart }),
+                          restart: latestFork.restart,
+                          presentation,
+                        });
+                      });
                     }}
                   >
-                    <Clock size={18} strokeWidth={1.8} />{" "}
-                    {snapshot.thread.automation
-                      ? "Automation settings…"
-                      : "Automate…"}
-                  </Button>
-                )}
-                {snapshot.thread.inventoryState === "settled" ? (
-                  <Button
-                    variant="ghost"
-                    disabled={disabled}
-                    onClick={() =>
-                      void mutateInventory("unsettle").catch(() => undefined)
+                    <Split className="fork-split-icon" aria-hidden="true" />
+                    {latestFork.label}
+                    {(disabled || !latestFork.available) && (
+                      <ReasonShortcut
+                        reason={
+                          disabled && latestFork.available
+                            ? busyReason
+                            : latestFork.attempt?.phase === "pending"
+                              ? "Forking…"
+                              : "Unavailable"
+                        }
+                      />
+                    )}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() =>
+                      closeActionsBefore(() => setSessionStatsOpen(true))
                     }
                   >
-                    <ArrowUpFromDot size={18} strokeWidth={1.8} /> Unsettle
-                  </Button>
-                ) : (
-                  <Button
-                    variant="ghost"
-                    disabled={disabled || settle?.available !== true}
-                    title={settle?.unavailableReason?.text}
-                    onClick={() => void requestSettle()}
-                  >
-                    <ArrowDownToDot size={18} strokeWidth={1.8} /> Settle
-                  </Button>
-                )}
-                {snapshot.thread.inventoryState === "snoozed" ? (
-                  <Button
-                    variant="ghost"
-                    disabled={disabled}
-                    onClick={() =>
-                      void mutateInventory("wake").catch(() => undefined)
-                    }
-                  >
-                    <Clock size={18} strokeWidth={1.8} /> Wake now
-                  </Button>
-                ) : (
-                  <Button
-                    variant="ghost"
-                    disabled={disabled || snooze?.available !== true}
-                    title={snooze?.unavailableReason?.text}
-                    onClick={() => {
-                      closeActionsBefore(() => setSnoozeOpen(true));
-                    }}
-                  >
-                    <Clock size={18} strokeWidth={1.8} /> Snooze…
-                  </Button>
-                )}
-                <div className="thread-actions-separator" role="separator" />
-                {snapshot.executionWorkspace.kind === "isolated" && (
-                  <>
-                    <ExecutionWorkspaceActions
+                    <ChartColumn aria-hidden="true" />
+                    Session stats
+                  </DropdownMenuItem>
+                  {compact && (
+                    <DropdownMenuItem
+                      disabled={disabled || !compact.available}
+                      title={compact.unavailableReason?.text}
+                      onSelect={keepOpen(() =>
+                        void store
+                          .perform({ action: "compact" })
+                          .then(() => setActionsOpen(false))
+                          .catch(() => undefined),
+                      )}
+                    >
+                      <Shrink aria-hidden="true" />
+                      Compact context
+                      {(disabled || !compact.available) && (
+                        <ReasonShortcut reason={disabled ? busyReason : "Unavailable"} />
+                      )}
+                    </DropdownMenuItem>
+                  )}
+                  {snapshot.executionWorkspace.kind === "isolated" && (
+                    <ExecutionWorkspaceMenu
+                      parts={dropdownMenuParts}
                       threadId={snapshot.thread.id}
                       store={applicationStore}
                       active={actionsOpen}
@@ -846,216 +1008,68 @@ export const ThreadHeader = memo(function ThreadHeader({
                         });
                       }}
                     />
-                    <div
-                      className="thread-actions-separator"
-                      role="separator"
-                    />
-                  </>
-                )}
-                <Button
-                  variant="ghost"
-                  disabled={
-                    configurationCopyPending || !snapshot.thread.available
-                  }
-                  aria-busy={configurationCopyPending || undefined}
-                  aria-describedby={
-                    !snapshot.thread.available
-                      ? `header-settings-copy-unavailable-${snapshot.thread.id}`
-                      : undefined
-                  }
-                  aria-label={
-                    configurationCopyPending
-                      ? THREAD_CONFIGURATION_COPY_PENDING_ACCESSIBLE_LABEL
-                      : THREAD_CONFIGURATION_COPY_ACCESSIBLE_LABEL
-                  }
-                  title={THREAD_CONFIGURATION_COPY_TITLE}
-                  onClick={(event) =>
-                    createFromSettings(pointerPanelPresentation(event))
-                  }
-                >
-                  <CopyPlus size={18} strokeWidth={1.8} />
-                  {configurationCopyPending
-                    ? "Creating thread…"
-                    : THREAD_CONFIGURATION_COPY_LABEL}
-                </Button>
-                {!snapshot.thread.available && (
-                  <span
-                    id={`header-settings-copy-unavailable-${snapshot.thread.id}`}
-                    className="sr-only"
-                  >
-                    The source thread target is unavailable.
-                  </span>
-                )}
-                <Button
-                  variant="ghost"
-                  disabled={disabled || !latestFork.available}
-                  aria-describedby={
-                    latestForkUnavailableReason
-                      ? latestForkUnavailableDescriptionId
-                      : undefined
-                  }
-                  onClick={(event) => {
-                    if (!latestFork.selection || !latestFork.available) return;
-                    const presentation = pointerPanelPresentation(event);
-                    const selection = latestFork.selection;
-                    closeActionsBefore(() => {
-                      void runThreadFork({
-                        fork: (restart) => selection.boundary === "latest_provider_snapshot"
-                          ? store.forkLatestProviderSnapshot({ restart })
-                          : store.forkTurn(selection.capability, { restart }),
-                        restart: latestFork.restart,
-                        presentation,
-                      });
-                    });
-                  }}
-                >
-                  <Split
-                    className="fork-split-icon"
-                    size={18}
-                    strokeWidth={1.8}
-                  />
-                  Fork
-                </Button>
-                {latestForkUnavailableReason && (
-                  <span
-                    className="sr-only"
-                    id={latestForkUnavailableDescriptionId}
-                  >
-                    {latestForkUnavailableReason}
-                  </span>
-                )}
-                <Button
-                  variant="ghost"
-                  onClick={() => {
-                    closeActionsBefore(() => setSessionStatsOpen(true));
-                  }}
-                >
-                  Session stats
-                </Button>
-                {compact && (
-                  <Button
-                    variant="ghost"
-                    disabled={disabled || !compact.available}
-                    title={compact.unavailableReason?.text}
-                    onClick={() =>
-                      void store
-                        .perform({ action: "compact" })
-                        .then(() => setActionsOpen(false))
-                        .catch(() => undefined)
-                    }
-                  >
-                    Compact context
-                  </Button>
-                )}
-                <div className="thread-actions-separator" role="separator" />
-                <Button
-                  variant="destructive"
-                  className="danger"
-                  disabled={forceResetDisabled}
-                  onClick={() => {
-                    closeActionsBefore(() => setForceResetOpen(true));
-                  }}
-                >
-                  <RotateCcw size={18} strokeWidth={1.8} /> Force reset…
-                </Button>
-                {snapshot.thread.inventoryState === "archived" ? (
-                  <Button
-                    variant="ghost"
-                    disabled={disabled}
-                    onClick={() =>
-                      void mutateInventory("restore").catch(() => undefined)
-                    }
-                  >
-                    Restore to Active
-                  </Button>
-                ) : mobileShell ? (
-                  // Small screens / coarse pointers cannot place the choice
-                  // flyout reliably, so archiving always confirms through a
-                  // modal — even when there are no descendants.
-                  <Button
-                    variant="destructive"
-                    className="danger"
-                    disabled={disabled || archive?.available !== true}
-                    title={archive?.unavailableReason?.text}
-                    onClick={() => {
-                      closeActionsBefore(() => setArchiveChoicesOpen(true));
-                    }}
-                  >
-                    <Archive size={18} strokeWidth={1.8} /> Archive
-                  </Button>
-                ) : familyDescendantCount === 0 ? (
-                  // Desktop with no fork descendants archives immediately —
-                  // unless the thread still has open tasks, which must be
-                  // dispositioned through the archive choices modal first.
-                  <Button
-                    variant="destructive"
-                    className="danger"
-                    disabled={disabled || archive?.available !== true}
-                    title={archive?.unavailableReason?.text}
-                    onClick={() => {
-                      setActionsOpen(false);
-                      void runThreadArchiveCheck({
-                        thread: applicationThreadSummary,
-                        store: applicationStore,
-                        onChoices: (impact) => {
-                          setArchiveInitialImpact(impact);
-                          setArchiveChoicesOpen(true);
-                        },
-                        onArchived: () => navigate("/"),
-                      });
-                    }}
-                  >
-                    <Archive size={18} strokeWidth={1.8} /> Archive
-                  </Button>
-                ) : (
-                  <ArchiveDropdown
-                    thread={applicationThreadSummary}
-                    store={applicationStore}
-                    descendantCount={familyDescendantCount}
-                    disabled={disabled || archive?.available !== true}
-                    onPendingChange={setInventoryPending}
-                    onArchived={() => {
-                      setActionsOpen(false);
-                      navigate("/");
-                    }}
-                  >
-                    <Button
-                      variant="destructive"
-                      className="danger"
+                  )}
+                  <DropdownMenuSeparator />
+                  {snapshot.thread.inventoryState !== "archived" && (
+                    <DropdownMenuItem
+                      disabled={disabled || archive?.available !== true}
                       title={archive?.unavailableReason?.text}
+                      onSelect={() => closeActionsBefore(archiveAction.start)}
                     >
-                      <Archive size={18} strokeWidth={1.8} /> Archive
-                    </Button>
-                  </ArchiveDropdown>
-                )}
-                {inventoryError && (
-                  <p className="menu-error" role="alert">
-                    {inventoryError}
-                  </p>
-                )}
-
-              </ThreadActionsSurface>
-            <Button
-              variant={mobileToolsOpen ? "secondary" : "ghost"}
-              size="icon-sm"
-              className="thread-tools-toggle"
-              aria-label={
-                mobileToolsOpen ? "Hide thread toolbar" : "Show thread toolbar"
-              }
-              aria-expanded={mobileToolsOpen}
-              aria-controls={`thread-toolbar-${snapshot.thread.id}`}
-              onClick={() => {
-                if (mobileToolsOpen) onFindOpenChange(false);
-                setMobileToolsOpen((open) => !open);
-              }}
-            >
-              <ChevronDown size={16} strokeWidth={1.8} />
-            </Button>
+                      <Archive aria-hidden="true" />
+                      Archive
+                      {(disabled || archive?.available !== true) && (
+                        <ReasonShortcut reason={disabled ? busyReason : "Unavailable"} />
+                      )}
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem
+                    variant="destructive"
+                    disabled={forceResetDisabled}
+                    onSelect={() =>
+                      closeActionsBefore(() => setForceResetOpen(true))
+                    }
+                  >
+                    <RotateCcw aria-hidden="true" />
+                    Force reset…
+                    {forceResetDisabled && <ReasonShortcut reason={busyReason} />}
+                  </DropdownMenuItem>
+                  {inventoryError && <MenuNote>{inventoryError}</MenuNote>}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              {!snapshot.thread.available && (
+                <span
+                  id={`header-settings-copy-unavailable-${snapshot.thread.id}`}
+                  className="sr-only"
+                >
+                  The source thread target is unavailable.
+                </span>
+              )}
+              {latestForkUnavailableReason && (
+                <span className="sr-only" id={latestForkUnavailableDescriptionId}>
+                  {latestForkUnavailableReason}
+                </span>
+              )}
+            {!narrowHeader && (
+              <Button
+                variant={mobileToolsOpen ? "secondary" : "ghost"}
+                size="icon-sm"
+                className="thread-tools-toggle"
+                aria-label={
+                  mobileToolsOpen ? "Hide thread toolbar" : "Show thread toolbar"
+                }
+                aria-expanded={mobileToolsOpen}
+                aria-controls={`thread-toolbar-${snapshot.thread.id}`}
+                onClick={() => setToolbarOpen(!mobileToolsOpen)}
+              >
+                <ChevronDown size={16} strokeWidth={1.8} />
+              </Button>
+            )}
           </div>
         }
       />
       {active && environmentVariablesOpen && <ThreadEnvironmentVariables key={snapshot.thread.id} api={applicationStore.api} threadId={snapshot.thread.id}
-        title={snapshot.thread.title.text || "Untitled thread"} onClose={() => setEnvironmentVariablesOpen(false)} restoreFocus={() => actionsTrigger.current?.focus()}
+        title={snapshot.thread.title.text || "Untitled thread"} onClose={() => setEnvironmentVariablesOpen(false)} returnFocusRef={actionsTrigger}
         forkUnavailableReason={variableForkNeedsRecovery ? "Resolve the existing fork attempt before forking with changed variables." : disabled ? "The thread must be connected and available to fork." : !latestFork.available ? latestForkUnavailableReason ?? "This thread cannot be forked right now." : undefined}
         onFork={environmentVariables => {
           if (disabled || variableForkNeedsRecovery || !latestFork.available || !latestFork.selection) return;
@@ -1107,23 +1121,14 @@ export const ThreadHeader = memo(function ThreadHeader({
             .finally(() => setWorkspaceDeletePending(false));
         }}
       />
-      <ArchiveChoicesDialog
-        open={active && archiveChoicesOpen}
-        initialImpact={archiveInitialImpact}
-        onOpenChange={(next) => {
-          setArchiveChoicesOpen(next);
-          if (!next) setArchiveInitialImpact(undefined);
-        }}
-        thread={applicationThreadSummary}
-        store={applicationStore}
-        descendantCount={familyDescendantCount}
-        disabled={disabled || archive?.available !== true}
-        onPendingChange={setInventoryPending}
-        onArchived={() => {
-          setActionsOpen(false);
-          navigate("/");
-          if (mobileLayout) navigationControls?.openDrawer();
-        }}
+      {active && archiveAction.dialog}
+      <ThreadModelPickerDialog
+        store={store}
+        snapshot={snapshot}
+        disabled={disabled}
+        open={active && modelPickerOpen}
+        searchFirst={modelSearchFirst}
+        onOpenChange={setModelPickerOpen}
         returnFocusRef={actionsTrigger}
       />
       <ForceResetDialog

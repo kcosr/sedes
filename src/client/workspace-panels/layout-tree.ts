@@ -621,6 +621,26 @@ export function dockPanel(
   });
 }
 
+/**
+ * The edge a panel is docked at: its own stack is one side of the root split,
+ * which is where `dockPanel` places it. A panel nested deeper, or sharing its
+ * stack with other panels, is not docked at an edge.
+ */
+export function panelDockEdge(
+  tree: PanelLayoutTree,
+  panelInstanceId: PanelInstanceId,
+): PanelPlacementEdge | undefined {
+  if (tree?.kind !== "split") return undefined;
+  const alone = (node: LayoutNode) =>
+    node.kind === "tabs" &&
+    node.tabs.length === 1 &&
+    node.tabs[0]!.panelInstanceId === panelInstanceId;
+  const row = tree.orientation === "row";
+  if (alone(tree.children[0])) return row ? "left" : "top";
+  if (alone(tree.children[1])) return row ? "right" : "bottom";
+  return undefined;
+}
+
 export function resizeSplit(
   tree: PanelLayoutTree,
   splitId: string,

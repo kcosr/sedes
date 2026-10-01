@@ -30,10 +30,14 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       .getByRole("button", { name: "More" })
       .click();
     await page.getByRole("menuitem", { name: "Agents", exact: true }).click();
-    await expect(page).toHaveURL("/agents");
-    await expect(page.getByText("No Agents yet.")).toBeVisible();
+    // Agents are a Settings page under Execution, beside the settings nav.
+    await expect(page).toHaveURL("/settings/agents");
+    const settingsNavigation = page.getByTestId("desktop-sidebar").getByRole("navigation", { name: "Settings pages", exact: true });
+    await expect(settingsNavigation.getByRole("link", { name: "Agents", exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("heading", { name: "Agents", level: 1 })).toBeVisible();
+    await expect(page.getByText("No Agents yet", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Create Agent" }).click();
-    await expect(page).toHaveURL("/agents/new");
+    await expect(page).toHaveURL("/settings/agents/~new");
 
     await page.getByRole("textbox", { name: "Name" }).fill("Careful reviewer");
     await page
@@ -46,7 +50,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       "Pi SDK",
     );
 
-    const overrideModel = page.getByRole("checkbox", {
+    const overrideModel = page.getByRole("switch", {
       name: "Override Model",
     });
     await expect(overrideModel).toBeEnabled();
@@ -55,7 +59,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       "Conformance model",
     );
 
-    const overrideThinking = page.getByRole("checkbox", {
+    const overrideThinking = page.getByRole("switch", {
       name: "Override Thinking",
     });
     await expect(overrideThinking).toBeEnabled();
@@ -66,7 +70,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       /^High$/,
     );
 
-    const overrideToolAccess = page.getByRole("checkbox", {
+    const overrideToolAccess = page.getByRole("switch", {
       name: "Override Tool access",
     });
     await expect(overrideToolAccess).toBeEnabled();
@@ -77,16 +81,18 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       "Ask before changes",
     );
 
-    const useDefaultTools = page.getByRole("checkbox", {
+    const useDefaultTools = page.getByRole("switch", {
       name: "Use default tool policy",
     });
     await expect(useDefaultTools).toBeEnabled();
     await useDefaultTools.click();
-    const enableTools = page.getByRole("checkbox", {
+    const enableTools = page.getByRole("switch", {
       name: "Enable Sedes tools",
     });
     await expect(enableTools).toBeEnabled();
     await enableTools.click();
+    // Tool groups are collapsed: open Context to reach its tools.
+    await page.getByRole("button", { name: "Context", exact: true }).click();
     const agentContext = page.getByRole("checkbox", { name: "Agent context" });
     await expect(agentContext).toBeEnabled();
     await agentContext.click();
@@ -97,11 +103,13 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       }),
       "Allow without asking",
     );
-    await expect(page.getByRole("status")).toContainText(
+    await expect(
+      page.getByRole("status").filter({ hasText: "Threads created from this Agent" }),
+    ).toContainText(
       "Threads created from this Agent may use enabled Sedes tools in other environments without asking",
     );
 
-    const variables = page.getByRole("region", { name: "Agent environment variables" });
+    const variables = page.getByRole("region", { name: "Environment variables" });
     await variables.getByRole("button", { name: "Add variable" }).click();
     await variables.getByLabel("New variable name", { exact: true }).fill("CI");
     await variables.getByLabel("Value for new variable", { exact: true }).fill("true");
@@ -114,7 +122,10 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
         response.url().endsWith("/api/agents") &&
         response.status() === 201,
     );
-    await page.getByRole("button", { name: "Create Agent" }).click();
+    await page
+      .getByRole("region", { name: "Agent editor" })
+      .getByRole("button", { name: "Create Agent" })
+      .click();
     const createResponse = await created;
     const createBody = createResponse.request().postDataJSON();
     expect(createBody).toMatchObject({
@@ -136,10 +147,16 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       agent: { id: string };
     };
     agentId = createdAgent.agent.id;
-    await expect(page).toHaveURL(`/agents/${agentId}`);
+    await expect(page).toHaveURL(`/settings/agents/${agentId}`);
     await expect(
       page.getByRole("heading", { name: "Careful reviewer" }),
     ).toBeVisible();
+    // At 1440 the saved Agents list sits beside the editor.
+    const savedAgents = page.getByRole("region", { name: "Saved Agents", exact: true });
+    const agentEditor = page.getByRole("region", { name: "Agent editor", exact: true });
+    const [listBounds, editorBounds] = [await savedAgents.boundingBox(), await agentEditor.boundingBox()];
+    expect(listBounds!.x + listBounds!.width).toBeLessThanOrEqual(editorBounds!.x);
+    await expect(savedAgents.getByRole("link", { name: "Careful reviewer", exact: true })).toHaveAttribute("aria-current", "page");
     await selectRadixOption(
       page,
       page.getByRole("combobox", { name: "Configure using" }),
@@ -151,10 +168,8 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       }),
     ).toContainText("Allow without asking");
     await expect(
-      page.getByRole("button", {
-        name: /Careful reviewer.*1 enabled · Allow without asking/,
-      }),
-    ).toBeVisible();
+      page.getByRole("link", { name: "Careful reviewer", exact: true }),
+    ).toHaveAccessibleDescription(/1 enabled · Allow without asking/u);
     await capture(page, testInfo, "saved-agent-editor-desktop.png");
 
     const name = page.getByRole("textbox", { name: "Name" });
@@ -173,6 +188,9 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expectNoPageOverflow(page);
+    // A phone stacks: the editor alone, with the way back to the list.
+    await expect(savedAgents).toBeHidden();
+    await expect(page.getByTestId("settings-view").locator(".settings-view-header").getByRole("link")).toHaveText(["Agents"]);
     await capture(page, testInfo, "saved-agent-editor-mobile.png");
     await page.setViewportSize({ width: 390, height: 430 });
     await expectNoPageOverflow(page);
@@ -182,6 +200,18 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     await expect(cancel).toBeInViewport();
     await expect(save).toBeInViewport();
     await capture(page, testInfo, "saved-agent-editor-short-mobile.png");
+
+    // Escape walks up the stack: the Agent, Agents, Settings, the workspace.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press("Escape");
+    await expect(page).toHaveURL("/settings/agents");
+    await expect(savedAgents.getByRole("link", { name: "Careful reviewer updated", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page).toHaveURL("/settings");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("settings-view")).toHaveCount(0);
+    await expect(page).not.toHaveURL(/\/settings/u);
   });
 
   test("uses the selected target, copies exact settings and tools, then severs the Agent relationship", async ({
@@ -265,12 +295,16 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       tools.filter(({ enabled }) => enabled).map(({ id }) => id),
     );
     expect(enabledToolIds).toEqual(["agent.context"]);
-    await page.getByRole("button", { name: "Thread actions" }).click();
+    // The open (modal) actions menu hides the composer from role queries.
     await expect(
       page.getByRole("combobox", { name: "Thinking" }),
     ).toContainText("High");
+    await page.getByRole("button", { name: "Thread actions" }).click();
+    await expect(
+      page.getByRole("menu", { name: "Thread actions" }),
+    ).toBeVisible();
     await capture(page, testInfo, "saved-agent-bootstrapped-thread.png");
-    await page.getByRole("button", { name: /Environment variables…/ }).click();
+    await page.getByRole("menuitem", { name: /Environment variables…/ }).click();
     const savedVariables = page.getByRole("dialog", { name: "Environment variables", exact: true });
     await expect(savedVariables.getByText("false", { exact: true })).toBeVisible();
     await expect(savedVariables.getByLabel("Value for CI", { exact: true })).toHaveCount(0);
@@ -279,7 +313,16 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     await savedVariables.getByRole("button", { name: "Done", exact: true }).click();
 
 
-    await page.goto(`/agents/${agentId}`);
+    // A deep link opens the Agent inside the settings shell.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`/settings/agents/${agentId}`);
+    await expect(
+      page.getByTestId("desktop-sidebar").getByRole("navigation", { name: "Settings pages", exact: true })
+        .getByRole("link", { name: "Agents", exact: true }),
+    ).toHaveAttribute("aria-current", "page");
+    await expect(
+      page.getByRole("region", { name: "Agent editor", exact: true }).getByRole("heading", { name: "Careful reviewer updated", level: 2 }),
+    ).toBeFocused();
     await selectRadixOption(
       page,
       page.getByRole("combobox", { name: "Configure using" }),
@@ -313,10 +356,8 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       },
     });
     await expect(
-      page.getByRole("button", {
-        name: /Careful reviewer updated.*1 enabled · Ask outside this environment/,
-      }),
-    ).toBeVisible();
+      page.getByRole("link", { name: "Careful reviewer updated", exact: true }),
+    ).toHaveAccessibleDescription(/1 enabled · Ask outside this environment/u);
 
     const retainedVariablesResponse = await page.request.get(`/api${threadPath}/environment-variables`);
     expect(retainedVariablesResponse.ok()).toBe(true);
@@ -333,7 +374,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     );
     expect(retainedAfterAgentEdit.agentTools.accessBoundary).toEqual("unrestricted");
 
-    await page.getByRole("button", { name: "Delete" }).click();
+    await page.getByRole("button", { name: "Delete…", exact: true }).click();
     const deleted = page.waitForResponse(
       (deleteResponse) =>
         deleteResponse.request().method() === "DELETE" &&
@@ -349,12 +390,15 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     // Deleting while the list route mounts intentionally cancels its first
     // stale query before issuing the post-delete list request.
     browserDiagnostics.allowNetworkFailures = true;
-    await page.getByRole("button", { name: "Delete Agent" }).click();
+    await page
+      .getByRole("dialog", { name: /^Delete .*\?$/u })
+      .getByRole("button", { name: "Delete Agent", exact: true })
+      .click();
     await deleted;
-    await expect(page).toHaveURL("/agents");
+    await expect(page).toHaveURL("/settings/agents");
     await agentsListed;
     browserDiagnostics.allowNetworkFailures = false;
-    await expect(page.getByText("No Agents yet.")).toBeVisible();
+    await expect(page.getByText("No Agents yet", { exact: true })).toBeVisible();
 
     const retainedResponse = await page.request.get(
       `/api${threadPath}?activityDetail=full`,
@@ -406,7 +450,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
         response.status() === 201,
     );
     await page
-      .getByRole("menuitem", { name: "New thread with same settings" })
+      .getByRole("menuitem", { name: "New with same settings" })
       .click();
     await expect(page.getByRole("dialog", { name: "Creating thread…" })).toBeVisible();
     await expect(sourceRow.locator(".thread-row-status")).toHaveCount(0);
@@ -530,7 +574,7 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     );
     await page
       .getByTestId("thread-actions-menu")
-      .getByRole("button", { name: "New thread with same settings" })
+      .getByRole("menuitem", { name: "New with same settings" })
       .click();
     const headerResult = (await (await headerCopied).json()) as {
       threadId: string;
@@ -552,7 +596,13 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
     // Recreate a minimal Agent directly through the management UI after the
     // linkage test deleted the original preset.
     await openSedesWorkspace(page);
-    await page.goto("/agents/new");
+    // The retired Workbench route is gone, not aliased: it falls through
+    // to the workspace like any unknown path.
+    await page.goto("/agents");
+    await expect(page.getByRole("main").getByTestId("new-thread-trigger")).toBeVisible();
+    await expect(page.getByTestId("settings-view")).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Saved Agents" })).toHaveCount(0);
+    await page.goto("/settings/agents/~new");
     await page.getByRole("textbox", { name: "Name" }).fill("Health probe");
     await selectProjectIfNeeded(page, repositoryLabel);
     await selectRadixOption(
@@ -560,8 +610,10 @@ test.describe.serial("Saved Agents and thread bootstrap", () => {
       page.getByRole("combobox", { name: "Configure using" }),
       "Pi SDK",
     );
-    await page.getByRole("checkbox", { name: "Override Model" }).click();
-    await page.getByRole("checkbox", { name: "Override Thinking" }).click();
+    await page.getByRole("switch", {
+      name: "Override Model" }).click();
+    await page.getByRole("switch", {
+      name: "Override Thinking" }).click();
     await selectRadixOption(
       page,
       page.getByRole("combobox", { name: "Thinking" }),

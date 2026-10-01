@@ -514,15 +514,24 @@ describe("normalized application components", () => {
     ).toBeInTheDocument();
 
     // Fork grouping now lives in the view-options popover.
-    fireEvent.click(screen.getByTestId("view-options-trigger"));
-    fireEvent.click(
-      await screen.findByRole("checkbox", { name: "Group fork families" }),
-    );
+    // The View options menu opens from the keyboard (Radix menus open on
+    // pointer down, not click).
+    fireEvent.keyDown(screen.getByTestId("view-options-trigger"), { key: "Enter" });
+    const groupForks = await screen.findByRole("menuitemcheckbox", {
+      name: "Group fork families",
+    });
+    fireEvent.click(groupForks);
     await waitFor(() => {
       expect(
         document.querySelector('[data-thread-id="child"]'),
       ).toHaveAttribute("data-lineage-depth", "0");
     });
+    // The checkbox row keeps the menu open; close it to use the rows again.
+    expect(groupForks).toHaveAttribute("aria-checked", "false");
+    fireEvent.keyDown(groupForks, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByRole("menu", { name: "View options" })).toBeNull(),
+    );
     expect(
       screen.getAllByRole("button", { name: /Forked from “Duplicate title”/ }),
     ).toHaveLength(4);

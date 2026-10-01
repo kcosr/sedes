@@ -562,9 +562,10 @@ describe("TasksPanel", () => {
     expect(
       screen.queryByRole("checkbox", { name: "Pin task" }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete task" })).toHaveAttribute(
-      "data-variant",
-      "destructive",
+    // The trigger only opens the confirmation, so it is a quiet red icon;
+    // the solid destructive fill is kept for the confirming "Delete".
+    expect(screen.getByRole("button", { name: "Delete task" })).toHaveClass(
+      "text-destructive",
     );
   });
 
@@ -1583,15 +1584,15 @@ describe("TasksPanel", () => {
       screen.queryByRole("button", { name: /^View / }),
     ).not.toBeInTheDocument();
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Tasks panel options" }),
-    );
-    const searchContent = screen.getByRole("checkbox", {
+    const options = screen.getByRole("button", { name: "Tasks panel options" });
+    fireEvent.pointerDown(options, { button: 0, ctrlKey: false });
+    const searchContent = screen.getByRole("menuitemcheckbox", {
       name: "Search task content",
     });
     expect(searchContent).not.toBeChecked();
     fireEvent.click(searchContent);
 
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: 'View "Ship release"' }),
     ).toBeInTheDocument();
@@ -1599,6 +1600,36 @@ describe("TasksPanel", () => {
       JSON.parse(window.localStorage.getItem("sedes.tasks.panel") ?? "null")
         .searchContent,
     ).toBe(true);
+    fireEvent.pointerDown(options, { button: 0, ctrlKey: false });
+    expect(
+      screen.getByRole("menuitemcheckbox", { name: "Search task content" }),
+    ).toBeChecked();
+  });
+
+  it("persists the default view from the options menu", () => {
+    renderPanel(makeStore([makeTask({ id: "task-docs", title: "Write docs" })]));
+    const options = screen.getByRole("button", { name: "Tasks panel options" });
+    fireEvent.pointerDown(options, { button: 0, ctrlKey: false });
+
+    const defaultView = screen.getByRole("group", { name: "Default view" });
+    const views = within(defaultView).getAllByRole("menuitemradio");
+    expect(views.map((view) => view.textContent)).toEqual([
+      "Global",
+      "Project",
+      "Thread",
+    ]);
+    expect(
+      views.map((view) => view.getAttribute("aria-checked")),
+    ).toEqual(["false", "false", "true"]);
+    fireEvent.click(within(defaultView).getByRole("menuitemradio", { name: "Global" }));
+
+    expect(
+      JSON.parse(window.localStorage.getItem("sedes.tasks.panel") ?? "null")
+        .defaultView,
+    ).toBe("global");
+    fireEvent.pointerDown(options, { button: 0, ctrlKey: false });
+    expect(screen.getByRole("menuitemradio", { name: "Global" })).toBeChecked();
+    expect(screen.getByRole("menuitemradio", { name: "Thread" })).not.toBeChecked();
   });
 
   it("selects the exact Enter-created duplicate after publication lag and shows read-only detail", async () => {
@@ -1835,9 +1866,8 @@ describe("TasksPanel", () => {
     renderPanel(makeStore([]));
 
     const sheet = screen.getByRole("dialog", { name: "Tasks" });
-    expect(sheet.style.getPropertyValue("--tasks-keyboard-inset")).toBe(
-      "280px",
-    );
+    expect(sheet).toHaveAttribute("data-layout", "sheet");
+    expect(sheet.style.getPropertyValue("--keyboard-inset")).toBe("280px");
   });
 
   it("closes an editor when search hides its task", () => {

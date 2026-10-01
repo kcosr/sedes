@@ -6,8 +6,8 @@ import {
   expectNoPageOverflow,
   fillAndPersistDraft,
   openSedesWorkspace,
+  overlaySettled,
   selectCustomNewThreadTarget,
-  selectRadixOption,
   sendCurrentDraft,
 } from "./helpers";
 
@@ -94,6 +94,7 @@ test.describe.serial("normalized Codex thread state", () => {
     ).toContainText(
       "Codex is streaming a browser-neutral normalized response.",
     );
+    await expect(page.locator(".turn-throughput")).toHaveCount(0);
     const primaryAfter = await readFixtureState("codex-import-e2e");
     const udsAfterPrimary = await readFixtureState("codex-uds-e2e");
     expect(threadStartCount(primaryAfter)).toBe(
@@ -290,27 +291,50 @@ test.describe.serial("normalized Codex thread state", () => {
     await expect(
       desktopThreadConfiguration.getByRole("combobox", { name: "Reasoning" }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Thread actions" }).click();
-    const executionSettings = page.getByLabel("Codex execution settings");
-    await expect(executionSettings).toBeVisible();
-    await expect(executionSettings.getByRole("combobox")).toHaveCount(4);
-    const sandbox = executionSettings.getByRole("combobox", {
-      name: "Sandbox",
+    const threadActions = page.getByRole("menu", { name: "Thread actions" });
+    // The execution settings are a submenu of four radio groups; choosing a
+    // radio row closes the menu, so each check reopens it.
+    const executionSettings = page.getByRole("menu", {
+      name: "Codex execution",
     });
-    const network = executionSettings.getByRole("combobox", {
-      name: "Network",
-    });
-    const approvalPolicy = executionSettings.getByRole("combobox", {
-      name: "Approval policy",
-    });
-    const approvalReviewer = executionSettings.getByRole("combobox", {
-      name: "Approval reviewer",
-    });
-    await expect(sandbox).toContainText("Read only");
-    await expect(network).toContainText("Disabled");
-    await expect(approvalPolicy).toContainText("Never");
-    await expect(approvalReviewer).toContainText("User");
-    await expect(approvalReviewer).toBeDisabled();
+    const openExecutionSettings = async () => {
+      await page.getByRole("button", { name: "Thread actions" }).click();
+      await threadActions
+        .getByRole("menuitem", { name: "Codex execution" })
+        .click();
+      await expect(executionSettings).toBeVisible();
+    };
+    const executionGroup = (name: string) =>
+      executionSettings.getByRole("group", { name, exact: true });
+    const executionChoice = (group: string, choice: string) =>
+      executionGroup(group).getByRole("menuitemradio", {
+        name: choice,
+        exact: true,
+      });
+    const expectChosen = (group: string, choice: string) =>
+      expect(executionChoice(group, choice)).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+    const expectGroupEnabled = async (group: string, enabled: boolean) => {
+      const choices = executionGroup(group).getByRole("menuitemradio");
+      await expect(choices).toHaveCount(2);
+      for (const choice of await choices.all()) {
+        if (enabled) await expect(choice).toBeEnabled();
+        else await expect(choice).toBeDisabled();
+      }
+    };
+    const choose = async (group: string, choice: string) => {
+      await executionChoice(group, choice).click();
+      await expect(threadActions).toHaveCount(0);
+    };
+    await openExecutionSettings();
+    await expect(executionSettings.getByRole("group")).toHaveCount(4);
+    await expectChosen("Sandbox", "Read-only");
+    await expectChosen("Network", "Disabled");
+    await expectChosen("Approval policy", "Never");
+    await expectChosen("Approval reviewer", "User");
+    await expectGroupEnabled("Approval reviewer", false);
     const approvalOnRequestApplied = page.waitForResponse(
       (response) =>
         response.request().method() === "POST" &&
@@ -319,9 +343,10 @@ test.describe.serial("normalized Codex thread state", () => {
         response.request().postDataJSON().operation?.actionId ===
           "set_approval_on_request",
     );
-    await selectRadixOption(page, approvalPolicy, "On request");
+    await choose("Approval policy", "On request");
     await approvalOnRequestApplied;
-    await expect(approvalReviewer).toBeEnabled();
+    await openExecutionSettings();
+    await expectGroupEnabled("Approval reviewer", true);
     const workspaceApplied = page.waitForResponse(
       (response) =>
         response.request().method() === "POST" &&
@@ -330,9 +355,10 @@ test.describe.serial("normalized Codex thread state", () => {
         response.request().postDataJSON().operation?.actionId ===
           "set_sandbox_workspace",
     );
-    await selectRadixOption(page, sandbox, "Workspace");
+    await choose("Sandbox", "Workspace");
     await workspaceApplied;
-    await expect(sandbox).toContainText("Workspace");
+    await openExecutionSettings();
+    await expectChosen("Sandbox", "Workspace");
 
     const unrestrictedApplied = page.waitForResponse(
       (response) =>
@@ -342,11 +368,12 @@ test.describe.serial("normalized Codex thread state", () => {
         response.request().postDataJSON().operation?.actionId ===
           "set_sandbox_unrestricted",
     );
-    await selectRadixOption(page, sandbox, "Unrestricted");
+    await choose("Sandbox", "Unrestricted");
     await unrestrictedApplied;
-    await expect(sandbox).toContainText("Unrestricted");
-    await expect(network).toContainText("Enabled");
-    await expect(network).toBeDisabled();
+    await openExecutionSettings();
+    await expectChosen("Sandbox", "Unrestricted");
+    await expectChosen("Network", "Enabled");
+    await expectGroupEnabled("Network", false);
     const approvalNeverApplied = page.waitForResponse(
       (response) =>
         response.request().method() === "POST" &&
@@ -355,9 +382,10 @@ test.describe.serial("normalized Codex thread state", () => {
         response.request().postDataJSON().operation?.actionId ===
           "set_approval_never",
     );
-    await selectRadixOption(page, approvalPolicy, "Never");
+    await choose("Approval policy", "Never");
     await approvalNeverApplied;
-    await expect(approvalReviewer).toBeDisabled();
+    await openExecutionSettings();
+    await expectGroupEnabled("Approval reviewer", false);
     await expect(page.getByTestId("dialog-overlay")).toHaveCount(0);
     await expect(page.getByText(/no sandbox or approval prompts/i)).toHaveCount(
       0,
@@ -453,28 +481,62 @@ test.describe.serial("normalized Codex thread state", () => {
     await page.goto(codexThreadPath);
 
     await page.getByRole("button", { name: "Thread actions" }).click();
+    // Under the touch density Thread actions is a bottom sheet named by the
+    // thread, with the thread settings as its first rows.
     const sheet = page.getByTestId("thread-settings-sheet");
-    await expect(sheet).toHaveAccessibleName("Thread settings");
-    await expect
-      .poll(async () => (await sheet.boundingBox())?.height ?? 0)
-      .toBeGreaterThan(800);
-    await expect(sheet.getByRole("combobox")).toHaveCount(6);
-    await expect(sheet.getByRole("combobox", { name: "Model" })).toBeVisible();
+    await expect(sheet).toHaveAccessibleName("Named Codex browser thread");
+    await overlaySettled(sheet);
+    const sheetBounds = await sheet.boundingBox();
+    expect(sheetBounds).not.toBeNull();
+    expect(sheetBounds!.width).toBeCloseTo(390, 0);
+    expect(sheetBounds!.y).toBeGreaterThanOrEqual(16);
+    expect(sheetBounds!.y + sheetBounds!.height).toBeCloseTo(844, 0);
+    const actions = sheet.getByRole("menu", { name: "Thread actions" });
+    // Model opens its picker; Reasoning and Codex execution drill in.
+    await expect(actions.locator("[aria-haspopup]")).toHaveCount(3);
+    await expect(actions.getByRole("menuitem", { name: "Model" })).toHaveAttribute(
+      "aria-haspopup",
+      "dialog",
+    );
     await expect(
-      sheet.getByRole("combobox", { name: "Reasoning" }),
+      actions.getByRole("menuitem", { name: "Reasoning" }),
+    ).toHaveAttribute("aria-haspopup", "menu");
+    await actions.getByRole("menuitem", { name: "Codex execution" }).click();
+    const execution = actions.getByRole("group", {
+      name: "Codex execution",
+      exact: true,
+    });
+    await expect(
+      execution.getByRole("menuitem", { name: "Codex execution", exact: true }),
     ).toBeVisible();
     await expect(
-      sheet.getByRole("combobox", { name: "Sandbox" }),
-    ).toContainText("Unrestricted");
-    await expect(
-      sheet.getByRole("combobox", { name: "Network" }),
-    ).toContainText("Enabled");
-    await expect(
-      sheet.getByRole("combobox", { name: "Approval policy" }),
-    ).toContainText("Never");
-    await expect(
-      sheet.getByRole("combobox", { name: "Approval reviewer" }),
-    ).toBeDisabled();
+      execution.getByRole("group", {
+        name: /^(?:Sandbox|Network|Approval policy|Approval reviewer)$/,
+      }),
+    ).toHaveCount(4);
+    const executionChoice = (group: string, choice: string) =>
+      execution
+        .getByRole("group", { name: group, exact: true })
+        .getByRole("menuitemradio", { name: choice, exact: true });
+    await expect(executionChoice("Sandbox", "Unrestricted")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await expect(executionChoice("Network", "Enabled")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await expect(executionChoice("Approval policy", "Never")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    const approvalReviewer = execution
+      .getByRole("group", { name: "Approval reviewer", exact: true })
+      .getByRole("menuitemradio");
+    await expect(approvalReviewer).toHaveCount(2);
+    for (const reviewer of await approvalReviewer.all()) {
+      await expect(reviewer).toBeDisabled();
+    }
     await expectNoPageOverflow(page);
     await capture(page, testInfo, "codex-thread-mobile.png");
   });

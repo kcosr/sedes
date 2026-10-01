@@ -7,9 +7,10 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { TOUCH_DENSITY_QUERY } from "../../app/use-touch-density.js";
 import {
-  COMPOSER_PROMPT_PICKER_MOBILE_QUERY,
   ComposerPromptPicker,
   type ComposerPromptPickerItem,
 } from "./ComposerPromptPicker.js";
@@ -23,7 +24,7 @@ function setMobile(mobile: boolean) {
   vi.stubGlobal(
     "matchMedia",
     vi.fn((query: string) => ({
-      matches: query === COMPOSER_PROMPT_PICKER_MOBILE_QUERY && mobile,
+      matches: query === TOUCH_DENSITY_QUERY && mobile,
       media: query,
       onchange: null,
       addEventListener: vi.fn(),
@@ -102,6 +103,7 @@ describe("ComposerPromptPicker", () => {
     fireEvent.pointerDown(trigger, { pointerType: "touch", button: 0 });
     fireEvent.click(trigger);
     const dialog = await screen.findByRole("dialog", { name: "Saved prompts" });
+    expect(dialog).toHaveAttribute("data-slot", "popover-content");
     expect(dialog).toHaveFocus();
     const search = screen.getByRole("searchbox", { name: "Search saved prompts" });
     search.focus();
@@ -116,11 +118,25 @@ describe("ComposerPromptPicker", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Open saved prompts" }));
     expect(onOpen).toHaveBeenCalledOnce();
+    const dialog = await screen.findByRole("dialog", { name: "Saved prompts" });
+    expect(dialog).toHaveAccessibleDescription(
+      "Tap a prompt to send, or add it to the composer",
+    );
     const rows = await screen.findAllByRole("listitem");
     expect(rows.map((row) => row.textContent)).toEqual([
       "Review changesReview the current diff.",
       "Run testsRun the focused test suite.",
     ]);
+    // The shared custom-list anatomy: a two-line main button (500 title over
+    // a one-line muted description) and a muted trailing action.
+    const send = screen.getByRole("button", { name: "Send prompt: Review changes" });
+    expect(rows[0]).toHaveClass("hover:bg-(--hover)", "has-[:focus-visible]:bg-(--hover)");
+    expect(send).toHaveClass("min-h-(--menu-row-height)", "outline-hidden");
+    expect(send.querySelector('[data-slot$="item-description"]')).toHaveClass("truncate");
+    expect(
+      screen.getByRole("button", { name: "Add prompt to composer: Review changes" }),
+    ).toHaveClass("text-muted-foreground-2", "group-hover/row:text-muted-foreground");
+    expect(screen.getByRole("searchbox").closest(".searchable-select-search")).not.toBeNull();
     await waitFor(() =>
       expect(
         screen.getByRole("searchbox", { name: "Search saved prompts" }),
@@ -141,7 +157,9 @@ describe("ComposerPromptPicker", () => {
     const refresh = await screen.findByRole("button", {
       name: "Refresh saved prompts",
     });
-    expect(refresh.closest(".composer-prompt-header-action")).not.toBeNull();
+    expect(
+      refresh.closest('[data-slot="composer-prompt-header-action"]'),
+    ).not.toBeNull();
     expect(screen.queryByRole("button", { name: "Manage" })).toBeNull();
 
     fireEvent.click(refresh);
@@ -183,10 +201,9 @@ describe("ComposerPromptPicker", () => {
     );
     const { onSend } = renderPicker({ onAppend });
     fireEvent.click(screen.getByRole("button", { name: "Open saved prompts" }));
-    const row = (await screen.findByText("Review changes")).closest(
-      ".composer-prompt-row",
-    );
-    expect(row?.querySelectorAll(".composer-prompt-action")).toHaveLength(1);
+    const row = (await screen.findByText("Review changes")).closest("li");
+    expect(row?.querySelectorAll("button")).toHaveLength(2);
+    expect(row?.querySelectorAll("button svg")).toHaveLength(1);
 
     const append = screen.getByRole("button", {
       name: "Add prompt to composer: Review changes",
@@ -253,7 +270,7 @@ describe("ComposerPromptPicker", () => {
     expect(onManage).toHaveBeenCalledOnce();
   });
 
-  it("opens on mobile swipe up and closes on the first outside pointer", async () => {
+  it("opens the touch sheet on a swipe up and closes it on the first outside pointer", async () => {
     setMobile(true);
     renderPicker({ triggerVariant: "tab" });
     const trigger = screen.getByRole("button", { name: "Open saved prompts" });
@@ -263,17 +280,26 @@ describe("ComposerPromptPicker", () => {
     fireEvent.pointerUp(trigger, { pointerId: 4, clientY: 100 });
 
     const dialog = await screen.findByRole("dialog", { name: "Saved prompts" });
-    expect(dialog).toHaveAttribute("data-layout", "mobile");
+    expect(dialog).toHaveAttribute("data-slot", "dialog-content");
+    expect(dialog).toHaveAttribute("data-layout", "sheet");
+    expect(dialog).toHaveAccessibleDescription(
+      "Tap a prompt to send, or add it to the composer",
+    );
     expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+    // Manage sits in the sheet's footer, clear of the close button.
+    expect(
+      screen.getByRole("button", { name: "Manage" }).closest('[data-slot="dialog-footer"]'),
+    ).not.toBeNull();
     await waitFor(() => expect(
       screen.getByRole("button", { name: "Send prompt: Review changes" }),
     ).toHaveFocus());
+    // Synthetic pointer events after the swipe do not toggle it closed.
+    fireEvent.click(trigger);
+    expect(dialog).toBeInTheDocument();
 
-    fireEvent.pointerDown(document.body, {
-      pointerId: 5,
-      button: 0,
-      pointerType: "touch",
-    });
+    const overlay = document.querySelector<HTMLElement>('[data-slot="dialog-overlay"]');
+    expect(overlay).not.toBeNull();
+    await userEvent.click(overlay!);
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
   });
 
@@ -315,37 +341,58 @@ describe("ComposerPromptPicker", () => {
 
     fireEvent.click(trigger);
     const dialog = await screen.findByRole("dialog", { name: "Saved prompts" });
-    const handle = dialog.querySelector<HTMLElement>(
-      ".composer-prompt-swipe-handle",
-    );
-    expect(handle).not.toBeNull();
-    fireEvent.pointerDown(handle!, { pointerId: 9, button: 0, clientY: 100 });
-    expect(handle!.setPointerCapture).toHaveBeenCalledWith(9);
+    expect(dialog).toHaveAttribute("data-layout", "sheet");
   });
 
-  it("closes the mobile sheet on swipe down", async () => {
+  it("closes the touch sheet with its close button and returns focus to the trigger", async () => {
     setMobile(true);
-    renderPicker({ triggerVariant: "tab" });
-    fireEvent.click(screen.getByRole("button", { name: "Open saved prompts" }));
+    const { onSend } = renderPicker({ triggerVariant: "tab" });
+    const trigger = screen.getByRole("button", { name: "Open saved prompts" });
+    fireEvent.click(trigger);
     const dialog = await screen.findByRole("dialog", { name: "Saved prompts" });
-    const handle = dialog.querySelector<HTMLElement>(
-      ".composer-prompt-swipe-handle",
-    );
-    expect(handle).not.toBeNull();
-
-    fireEvent.pointerDown(handle!, { pointerId: 7, button: 0, clientY: 100 });
-    fireEvent.pointerMove(handle!, { pointerId: 7, clientY: 150 });
-    fireEvent.pointerUp(handle!, { pointerId: 7, clientY: 150 });
-
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(onSend).not.toHaveBeenCalled();
+
+    // Sending from the sheet closes it without pulling focus back to the tab.
+    fireEvent.click(trigger);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Send prompt: Run tests" }),
+    );
+    expect(onSend).toHaveBeenCalledWith(catalog[1]);
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "Saved prompts" }),
+      ).not.toBeInTheDocument(),
+    );
+    expect(trigger).not.toHaveFocus();
   });
 
-  it("renders loading and recoverable error states", async () => {
+  it("renders loading, empty, no-match and recoverable error states", async () => {
     renderPicker({ catalog: [], loading: true });
     fireEvent.click(screen.getByRole("button", { name: "Open saved prompts" }));
-    expect(await screen.findByRole("status")).toHaveTextContent(
-      "Loading prompts",
-    );
+    const loadingRow = await screen.findByRole("status");
+    expect(loadingRow).toHaveTextContent("Loading prompts");
+    expect(loadingRow).toHaveClass("min-h-(--menu-row-height)");
+    expect(loadingRow.querySelector("svg")).not.toBeNull();
+    expect(screen.queryByRole("list")).toBeNull();
+
+    cleanup();
+    renderPicker({ catalog: [] });
+    fireEvent.click(screen.getByRole("button", { name: "Open saved prompts" }));
+    expect(
+      await screen.findByText("No saved prompts yet. Use Manage to create one."),
+    ).not.toHaveAttribute("tabindex");
+
+    cleanup();
+    renderPicker();
+    fireEvent.click(screen.getByRole("button", { name: "Open saved prompts" }));
+    fireEvent.change(await screen.findByRole("searchbox"), {
+      target: { value: "nothing like this" },
+    });
+    expect(screen.getByText("No matching prompts.")).toBeVisible();
+    expect(screen.queryByRole("listitem")).toBeNull();
 
     cleanup();
     const { onRetry } = renderPicker({
@@ -354,10 +401,22 @@ describe("ComposerPromptPicker", () => {
       error: "Could not load prompts.",
     });
     fireEvent.click(screen.getByRole("button", { name: "Open saved prompts" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not load prompts.",
-    );
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveAttribute("data-slot", "callout");
+    expect(alert).toHaveAttribute("data-tone", "danger");
+    expect(alert).toHaveTextContent("Could not load prompts.");
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(onRetry).toHaveBeenCalledOnce();
+
+    // With prompts loaded, a refresh error stays beside the list.
+    cleanup();
+    const retry = renderPicker({ error: "Could not refresh prompts." });
+    fireEvent.click(screen.getByRole("button", { name: "Open saved prompts" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not refresh prompts.",
+    );
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(retry.onRetry).toHaveBeenCalledOnce();
   });
 });

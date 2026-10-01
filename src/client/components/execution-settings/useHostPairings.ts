@@ -5,6 +5,9 @@ import { errorMessage } from "./fields.js";
 
 export type HostPairingControls = Pick<ApiClient, "outboundConnectorSetup" | "listHostRegistrations" | "acceptHostRegistration" | "denyHostRegistration" | "revokeHostPairing" | "reapproveHostPairing">;
 
+/** A pairing change's outcome; a failure carries the message also shown for the page. */
+export type PairingMutation<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: string };
+
 export function useHostPairings(controls: HostPairingControls, onConfigurationChanged: () => Promise<boolean>, visible = true) {
   const [hosts, setHosts] = useState<HostPairingList>();
   const [error, setError] = useState("");
@@ -40,24 +43,25 @@ export function useHostPairings(controls: HostPairingControls, onConfigurationCh
     const timer = window.setInterval(() => { if (document.visibilityState !== "hidden") void refresh(true); }, 5_000);
     return () => { window.clearInterval(timer); reader.current?.abort(); reader.current = undefined; };
   }, [refresh, visible]);
-  const mutate = async (action: () => Promise<unknown>, changesConfiguration: boolean): Promise<boolean> => {
-    if (mutating.current || stale) return false;
+  const mutate = async <T,>(action: () => Promise<T>, changesConfiguration: boolean): Promise<PairingMutation<T>> => {
+    if (mutating.current || stale) return { ok: false, error: "Refresh host registrations before trying again." };
     mutating.current = true; setBusy(true); setError("");
     setLastMutationSucceeded(undefined);
     reader.current?.abort(); reader.current = undefined;
-    let succeeded = false;
+    let result: PairingMutation<T> = { ok: false, error: "The host change could not be confirmed. Refresh before trying again." };
     try {
-      await action();
+      const value = await action();
       if (changesConfiguration && mounted.current) await onConfigurationChanged();
-      succeeded = true;
+      result = { ok: true, value };
     } catch (cause) {
-      if (mounted.current) { setError(`${errorMessage(cause, "The host change could not be confirmed.")} Refresh before trying again.`); setStale(true); }
+      result = { ok: false, error: `${errorMessage(cause, "The host change could not be confirmed.")} Refresh before trying again.` };
+      if (mounted.current) { setError(result.error); setStale(true); }
     } finally {
       mutating.current = false;
-      if (mounted.current && succeeded) await refresh();
-      if (mounted.current) { setLastMutationSucceeded(succeeded); setBusy(false); }
+      if (mounted.current && result.ok) await refresh();
+      if (mounted.current) { setLastMutationSucceeded(result.ok); setBusy(false); }
     }
-    return succeeded;
+    return result;
   };
   return { hosts, error, busy, lastMutationSucceeded, stale, refresh, mutate };
 }

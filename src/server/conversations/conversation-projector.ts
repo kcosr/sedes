@@ -930,6 +930,7 @@ export class ConversationProjector {
       ...(backendTurn.completedAt
         ? { completedAt: backendTurn.completedAt }
         : {}),
+      ...(backendTurn.throughput ? { throughput: backendTurn.throughput } : {}),
       // Only a completed turn can explain why it is not a fork boundary.
       ...(backendTurn.status === "completed" && backendTurn.forkUnavailableReason
         ? { forkUnavailableReason: backendTurn.forkUnavailableReason }
@@ -1073,6 +1074,7 @@ function equalBackendTurn(left: BackendTurn, right: BackendTurn): boolean {
     left.status === right.status &&
     left.endedBy === right.endedBy &&
     JSON.stringify(left.failure) === JSON.stringify(right.failure) &&
+    JSON.stringify(left.throughput) === JSON.stringify(right.throughput) &&
     JSON.stringify(left.forkUnavailableReason) === JSON.stringify(right.forkUnavailableReason) &&
     left.startedAt === right.startedAt &&
     left.completedAt === right.completedAt &&
@@ -1092,6 +1094,7 @@ function equalConversationTurn(
     left.status === right.status &&
     left.endedBy === right.endedBy &&
     JSON.stringify(left.failure) === JSON.stringify(right.failure) &&
+    JSON.stringify(left.throughput) === JSON.stringify(right.throughput) &&
     JSON.stringify(left.forkUnavailableReason) === JSON.stringify(right.forkUnavailableReason) &&
     left.startedAt === right.startedAt &&
     left.completedAt === right.completedAt &&

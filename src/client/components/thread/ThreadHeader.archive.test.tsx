@@ -42,10 +42,11 @@ beforeEach(() => {
     setPointerCapture: vi.fn(),
     releasePointerCapture: vi.fn(),
   });
+  // A phone wide enough to keep the header's toolbar toggle (420px+).
   vi.stubGlobal(
     "matchMedia",
-    vi.fn(() => ({
-      matches: mobileMatches,
+    vi.fn((query: string) => ({
+      matches: mobileMatches && query !== "(max-width: 419px)",
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     })),
@@ -258,32 +259,55 @@ function renderHeader(
   return { applicationStore, openDrawer };
 }
 
-describe("ThreadHeader archive action", () => {
-  it("keeps New and Fork grouped above restore for an archived thread", () => {
-    renderHeader(0, vi.fn(), "archived");
-    fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
-    const menu = screen.getByTestId("thread-actions-menu");
-    const labels = within(menu)
-      .getAllByRole("button")
-      .map((button) => button.textContent?.trim());
+/** Opens the desktop Thread actions menu (Radix opens on pointer down). */
+async function openThreadActions(): Promise<HTMLElement> {
+  await userEvent.click(screen.getByRole("button", { name: "Thread actions" }));
+  return await screen.findByRole("menu", { name: "Thread actions" });
+}
 
-    expect(labels.indexOf("New")).toBeLessThan(labels.indexOf("Fork"));
-    expect(labels.indexOf("Fork")).toBeLessThan(
-      labels.indexOf("Restore to Active"),
+const emptyImpact = (overrides: Record<string, unknown> = {}) => ({
+  descendantCount: 0,
+  pendingQuestions: { root: 0, descendants: 0 },
+  stashedPrompts: { root: 0, descendants: 0 },
+  openTasks: {
+    familySnapshot: "b".repeat(64),
+    root: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
+    descendants: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
+  },
+  executionWorkspace: { kind: "direct" },
+  archiveOnly: { available: true },
+  archiveAll: { available: true },
+  ...overrides,
+});
+
+describe("ThreadHeader archive action", () => {
+  it("keeps New and Fork grouped after restore for an archived thread", async () => {
+    renderHeader(0, vi.fn(), "archived");
+    const menu = await openThreadActions();
+    const labels = within(menu)
+      .getAllByRole("menuitem")
+      .map((row) => row.textContent?.trim());
+
+    expect(labels.indexOf("Restore to Active")).toBeLessThan(
+      labels.indexOf("New with same settings"),
     );
+    expect(labels.indexOf("New with same settings")).toBeLessThan(
+      labels.findIndex((label) => label?.startsWith("Fork")),
+    );
+    expect(labels).not.toContain("Archive");
     expect(
-      within(menu).getByRole("button", {
-        name: "New thread with same settings",
-      }),
-    ).toBeEnabled();
+      within(menu).getByRole("menuitem", { name: "New with same settings" }),
+    ).not.toHaveAttribute("data-disabled");
   });
 
   it("archives immediately on desktop when the thread has no descendants", async () => {
     const { applicationStore } = renderHeader(0);
-    fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
-    const archive = await screen.findByRole("button", { name: "Archive" });
+    const menu = await openThreadActions();
+    const archive = within(menu).getByRole("menuitem", { name: "Archive" });
+    expect(archive).toHaveAttribute("data-variant", "default");
+    expect(archive.querySelector("svg")).not.toBeNull();
 
-    fireEvent.click(archive);
+    await userEvent.click(archive);
 
     await waitFor(() =>
       expect(applicationStore.mutateInventory).toHaveBeenCalledWith(
@@ -302,16 +326,26 @@ describe("ThreadHeader archive action", () => {
     await waitFor(() => expect(window.location.pathname).toBe("/"));
   });
 
-  it("keeps the choice dropdown on desktop when descendants exist", async () => {
+  it("opens the archive choices dialog on desktop when descendants exist", async () => {
     const { applicationStore } = renderHeader(2);
-    fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
-    const archive = await screen.findByRole("button", { name: "Archive" });
+    applicationStore.getThreadArchiveImpact.mockResolvedValue(
+      emptyImpact({ descendantCount: 2 }),
+    );
+    const menu = await openThreadActions();
 
-    await userEvent.click(archive);
+    await userEvent.click(
+      within(menu).getByRole("menuitem", { name: "Archive" }),
+    );
 
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive this thread",
+    });
     expect(
-      await screen.findByRole("menuitem", { name: "Archive only this thread" }),
+      within(dialog).getByRole("checkbox", {
+        name: "Archive child and descendant forks",
+      }),
     ).toBeVisible();
+    expect(screen.queryByRole("menuitem", { name: /Archive only/ })).toBeNull();
     expect(applicationStore.mutateInventory).not.toHaveBeenCalled();
     expect(applicationStore.getThreadArchiveImpact).toHaveBeenCalledWith(
       "thread-1",
@@ -320,22 +354,12 @@ describe("ThreadHeader archive action", () => {
 
   it("requires confirmation before archiving a childless thread with unanswered questions", async () => {
     const { applicationStore } = renderHeader(0);
-    applicationStore.getThreadArchiveImpact.mockResolvedValue({
-      descendantCount: 0,
-      pendingQuestions: { root: 2, descendants: 0 },
-      stashedPrompts: { root: 0, descendants: 0 },
-      openTasks: {
-        familySnapshot: "b".repeat(64),
-        root: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
-        descendants: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
-      },
-      executionWorkspace: { kind: "direct" },
-      archiveOnly: { available: true },
-      archiveAll: { available: true },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
+    applicationStore.getThreadArchiveImpact.mockResolvedValue(
+      emptyImpact({ pendingQuestions: { root: 2, descendants: 0 } }),
+    );
+    const menu = await openThreadActions();
     await userEvent.click(
-      await screen.findByRole("button", { name: "Archive" }),
+      within(menu).getByRole("menuitem", { name: "Archive" }),
     );
 
     const dialog = await screen.findByRole("dialog", {
@@ -359,22 +383,12 @@ describe("ThreadHeader archive action", () => {
 
   it("requires confirmation before archiving a childless thread with stashed prompts", async () => {
     const { applicationStore } = renderHeader(0);
-    applicationStore.getThreadArchiveImpact.mockResolvedValue({
-      descendantCount: 0,
-      pendingQuestions: { root: 0, descendants: 0 },
-      stashedPrompts: { root: 1, descendants: 0 },
-      openTasks: {
-        familySnapshot: "b".repeat(64),
-        root: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
-        descendants: { snapshot: "a".repeat(64), items: [], total: 0, omitted: 0 },
-      },
-      executionWorkspace: { kind: "direct" },
-      archiveOnly: { available: true },
-      archiveAll: { available: true },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
+    applicationStore.getThreadArchiveImpact.mockResolvedValue(
+      emptyImpact({ stashedPrompts: { root: 1, descendants: 0 } }),
+    );
+    const menu = await openThreadActions();
     await userEvent.click(
-      await screen.findByRole("button", { name: "Archive" }),
+      within(menu).getByRole("menuitem", { name: "Archive" }),
     );
 
     const dialog = await screen.findByRole("dialog", {
@@ -396,37 +410,54 @@ describe("ThreadHeader archive action", () => {
     );
   });
 
-  it("opens the archive choices modal on mobile, even without descendants", async () => {
+  it("archives from the mobile sheet directly when nothing needs a choice", async () => {
     mobileMatches = true;
     const { applicationStore, openDrawer } = renderHeader(0);
     fireEvent.click(
       screen.getByRole("button", { name: "Show thread toolbar" }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
-    const archive = await screen.findByRole("button", { name: "Archive" });
-
-    await userEvent.click(archive);
-
-    const dialog = await screen.findByRole("dialog");
-    expect(dialog).toBeVisible();
-    const archiveOnly = await screen.findByRole("button", { name: "Archive" });
-    expect(
-      screen.queryByRole("menuitem", { name: /Archive/ }),
-    ).not.toBeInTheDocument();
-    await waitFor(() => expect(archiveOnly).not.toBeDisabled());
-    await userEvent.click(archiveOnly);
+    const sheet = screen.getByRole("dialog", { name: "Header thread" });
+    fireEvent.click(within(sheet).getByRole("menuitem", { name: "Archive" }));
 
     await waitFor(() =>
       expect(applicationStore.mutateInventory).toHaveBeenCalledWith(
         expect.objectContaining({ id: "thread-1" }),
         "archive",
-        {
-          expectedStashedPromptCount: 0,
-          executionWorkspaceDisposition: { kind: "keep" },
-        },
+        { expectedStashedPromptCount: 0 },
       ),
     );
+    expect(
+      screen.queryByRole("dialog", { name: "Archive this thread" }),
+    ).not.toBeInTheDocument();
     await waitFor(() => expect(window.location.pathname).toBe("/"));
     expect(openDrawer).toHaveBeenCalledOnce();
+  });
+
+  it("hands the mobile sheet to the choices dialog when descendants exist", async () => {
+    mobileMatches = true;
+    const { applicationStore } = renderHeader(2);
+    applicationStore.getThreadArchiveImpact.mockResolvedValue(
+      emptyImpact({ descendantCount: 2 }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Thread actions" }));
+    fireEvent.click(
+      within(
+        screen.getByRole("dialog", { name: "Header thread" }),
+      ).getByRole("menuitem", { name: "Archive" }),
+    );
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Archive this thread",
+    });
+    expect(
+      screen.queryByRole("dialog", { name: "Header thread" }),
+    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole("button", { name: "Archive" }),
+      ).toBeEnabled(),
+    );
+    expect(applicationStore.mutateInventory).not.toHaveBeenCalled();
   });
 });

@@ -44,7 +44,8 @@ namespace, so Sedes does not claim cross-account continuity.
 ## Configuration
 
 1. Add **Grok** with a local environment in **Settings → Backends**. Configure
-   an executable override only when normal `PATH` lookup is inappropriate.
+   an executable override, under **Advanced** in the backend editor, only when
+   normal `PATH` lookup is inappropriate.
    The [schema-10 fixture](../../../config/legacy-import/server.grok.example.json)
    is only for explicit legacy import.
 2. Keep the exact reviewed `security.profile: "unrestricted_v1"` shape.

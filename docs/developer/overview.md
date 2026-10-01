@@ -121,7 +121,9 @@ provider-feature registration.
 
 Keep network calls in the API/transport layer and state transitions in stores
 or focused feature modules. Components should consume normalized data rather
-than parse provider wording or inspect native payloads.
+than parse provider wording or inspect native payloads. Build presentation from
+the shared tokens, primitives, and settings kit described in
+[UI design system](ui-design-system.md).
 
 ### Server application and domain
 

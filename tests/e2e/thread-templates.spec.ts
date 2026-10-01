@@ -27,7 +27,7 @@ async function applicationSnapshot(page: Page) {
 }
 
 async function createAgent(page: Page, name: string) {
-  await page.goto("/agents/new");
+  await page.goto("/settings/agents/~new");
   await page.getByRole("textbox", { name: "Name" }).fill(name);
   await selectProjectIfNeeded(page, repositoryLabel);
   await selectRadixOption(
@@ -35,14 +35,14 @@ async function createAgent(page: Page, name: string) {
     page.getByRole("combobox", { name: "Configure using" }),
     "Pi SDK",
   );
-  await page.getByRole("checkbox", { name: "Override Model" }).click();
-  await page.getByRole("checkbox", { name: "Override Thinking" }).click();
+  await page.getByRole("switch", { name: "Override Model" }).click();
+  await page.getByRole("switch", { name: "Override Thinking" }).click();
   await selectRadixOption(
     page,
     page.getByRole("combobox", { name: "Thinking" }),
     /^High$/u,
   );
-  await page.getByRole("checkbox", { name: "Override Tool access" }).click();
+  await page.getByRole("switch", { name: "Override Tool access" }).click();
   await selectRadixOption(
     page,
     page.getByRole("combobox", { name: "Tool access" }),
@@ -250,7 +250,7 @@ test("templates prefill editable thread creation and survive Agent drift", async
   await expect(page.getByRole("textbox", { name: /^Message /u })).toBeFocused();
 
   await page.getByRole("button", { name: "Thread actions" }).click();
-  await page.getByRole("button", { name: "Session stats" }).click();
+  await page.getByRole("menuitem", { name: "Session stats" }).click();
   const stats = page.getByRole("dialog", { name: "Session stats" });
   await expect(stats).toContainText("Created with");
   await expect(stats).toContainText(`${fast.name} · revision 0`);
@@ -290,7 +290,9 @@ test("templates prefill editable thread creation and survive Agent drift", async
   await page.getByRole("button", { name: "New thread" }).last().click();
   const mobileSheet = page.getByRole("dialog", { name: "New thread" });
   await expect(mobileSheet).toBeVisible();
-  await expect(page.locator(".new-thread-sheet-overlay")).toBeVisible();
+  await expect(
+    page.locator('[data-testid="dialog-overlay"][data-layer="over-dialog"]'),
+  ).toBeVisible();
   await expect
     .poll(async () => {
       const currentBox = await mobileSheet.boundingBox();

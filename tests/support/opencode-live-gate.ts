@@ -28,9 +28,11 @@ export function parseLiveInput(env: Readonly<Record<string, string | undefined>>
   if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) throw new Error("Invalid provider HTTPS base URL");
   const tokenField = env["SEDES_LIVE_OPENCODE_TOKEN_FIELD"] ?? "max_tokens";
   if (tokenField !== "max_tokens" && tokenField !== "max_completion_tokens") throw new Error("Unsupported completion limit field");
+  const reasoningFormat = env["SEDES_LIVE_OPENCODE_REASONING_FORMAT"];
+  if (reasoningFormat !== undefined && reasoningFormat !== "chat-template") throw new Error("Unsupported reasoning format");
   const keyName = required("SEDES_LIVE_OPENCODE_API_KEY_ENV");
   if (!/^[A-Z_][A-Z0-9_]{0,127}$/u.test(keyName)) throw new Error("Invalid provider credential environment reference");
-  return { executable, model, baseURL: url.href.replace(/\/$/u, ""), tokenField, keyName };
+  return { executable, model, baseURL: url.href.replace(/\/$/u, ""), tokenField, keyName, ...(reasoningFormat === "chat-template" ? { reasoningFormat } : {}) };
 }
 export function readLiveCredential(input: ReturnType<typeof parseLiveInput>, read: (name: string) => string | undefined): string {
   const value = read(input.keyName);
@@ -49,7 +51,8 @@ export function liveConfiguration(input: ReturnType<typeof parseLiveInput>, cana
       package: "aisdk:@ai-sdk/openai-compatible",
       settings: { apiKey: "{env:OPENCODE_LIVE_GATE_API_KEY}", baseURL: input.baseURL, timeout: 20_000, chunkTimeout: 10_000 },
       models: { [input.model]: { capabilities: { tools: true, input: ["text"], output: ["text"] },
-        limit: { context: 32_768, output: LIVE_GATE_LIMITS.outputTokens }, body: { [input.tokenField]: LIVE_GATE_LIMITS.outputTokens } } },
+        limit: { context: 32_768, output: LIVE_GATE_LIMITS.outputTokens }, body: { [input.tokenField]: LIVE_GATE_LIMITS.outputTokens,
+          ...(input.reasoningFormat === "chat-template" ? { chat_template_kwargs: { enable_thinking: true, preserve_thinking: true, reasoning_effort: "low" } } : {}) } } },
     } },
   };
 }

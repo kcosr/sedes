@@ -1,10 +1,16 @@
 import { useSyncExternalStore } from "react";
 import { beginThreadLoadAttempt } from "./thread-load-diagnostics.js";
-import { settingsPageSlugs, type SettingsPage } from "./settings-route.js";
+import {
+  isSettingsResourcePage,
+  parseSettingsResource,
+  settingsPageSlugs,
+  settingsResourceSuffix,
+  type SettingsPage,
+  type SettingsResourceRoute,
+} from "./settings-route.js";
 
 export type Route =
   | { name: "home" }
-  | { name: "agents"; agentId?: string; create: boolean }
   | {
       name: "thread";
       threadId: string;
@@ -13,7 +19,7 @@ export type Route =
     }
   | { name: "archived" }
   | { name: "usage" }
-  | { name: "settings"; page?: SettingsPage };
+  | ({ name: "settings"; page?: SettingsPage } & SettingsResourceRoute);
 
 let currentRoute = parseRoute(window.location.pathname, window.location.hash);
 if (currentRoute.name === "thread") {
@@ -26,6 +32,9 @@ const blockers = new Set<NavigationBlocker>();
 const historyIndexKey = "__sedesHistoryIndex";
 let currentIndex = historyIndex(window.history.state) ?? 0;
 window.history.replaceState(indexedState(window.history.state, currentIndex), "", window.location.href);
+/** The location of each app history entry this document has seen, by
+ * position, so an in-app "up" link can tell where Back leads. */
+const entryLocations = new Map<number, string>([[currentIndex, currentLocation]]);
 
 interface NavigationIntent {
   readonly current: Route;
@@ -47,22 +56,16 @@ export function parseRoute(pathname: string, hash = ""): Route {
   const settingsPage = (Object.keys(settingsPageSlugs) as SettingsPage[])
     .find(page => pathname === `/settings/${settingsPageSlugs[page]}`);
   if (settingsPage) return { name: "settings", page: settingsPage };
+  const resourcePage = (Object.keys(settingsPageSlugs) as SettingsPage[])
+    .filter(isSettingsResourcePage)
+    .find(page => pathname.startsWith(`/settings/${settingsPageSlugs[page]}/`));
+  if (resourcePage) {
+    const segments = pathname.slice(`/settings/${settingsPageSlugs[resourcePage]}/`.length).split("/");
+    const resource = parseSettingsResource(resourcePage, segments);
+    if (resource) return { name: "settings", page: resourcePage, ...resource };
+  }
   if (pathname === "/archived") return { name: "archived" };
   if (pathname === "/usage") return { name: "usage" };
-  if (pathname === "/agents") return { name: "agents", create: false };
-  if (pathname === "/agents/new") return { name: "agents", create: true };
-  const agentMatch = /^\/agents\/([^/]+)$/.exec(pathname);
-  if (agentMatch?.[1]) {
-    try {
-      return {
-        name: "agents",
-        agentId: decodeURIComponent(agentMatch[1]),
-        create: false,
-      };
-    } catch {
-      return { name: "home" };
-    }
-  }
   const automationMatch = /^\/threads\/([^/]+)\/automation$/.exec(pathname);
   if (automationMatch?.[1]) {
     try {
@@ -111,6 +114,9 @@ function locationPath(): string {
 export function pushHistoryEntry(state: unknown, path: string): void {
   const index = (historyIndex(window.history.state) ?? currentIndex) + 1;
   window.history.pushState(indexedState(state, index), "", path);
+  // A push discards the forward entries.
+  for (const position of entryLocations.keys()) if (position > index) entryLocations.delete(position);
+  entryLocations.set(index, locationPath());
   if (locationPath() === currentLocation) {
     currentIndex = index;
     pendingIntent = undefined;
@@ -118,13 +124,16 @@ export function pushHistoryEntry(state: unknown, path: string): void {
 }
 
 export function replaceHistoryEntry(state: unknown, path: string): void {
-  window.history.replaceState(indexedState(state, historyIndex(window.history.state) ?? currentIndex), "", path);
+  const index = historyIndex(window.history.state) ?? currentIndex;
+  window.history.replaceState(indexedState(state, index), "", path);
+  entryLocations.set(index, locationPath());
 }
 
 function publish(next: Route): void {
   currentRoute = next;
   currentLocation = locationPath();
   currentIndex = historyIndex(window.history.state) ?? currentIndex;
+  entryLocations.set(currentIndex, currentLocation);
   for (const listener of listeners) listener();
 }
 
@@ -228,6 +237,32 @@ export function navigate(path: string, options?: { replace?: boolean }): void {
   admit(pendingIntent);
 }
 
+/**
+ * The (negative) number of entries Back must go to reach `path`, when the
+ * history came down from it: every entry between it and this one lies below
+ * it (`path/…`). Undefined when Back does not lead there, including entries
+ * from before a reload.
+ */
+export function historyStepsBackTo(path: string): number | undefined {
+  for (let index = currentIndex - 1; index >= 0; index--) {
+    const location = entryLocations.get(index);
+    if (location === path) return index - currentIndex;
+    if (location === undefined || !location.startsWith(`${path}/`)) return undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Goes up to `path` (a "‹ Settings" style link): back through the entries
+ * that came down from it, so the link and browser or Android Back walk the
+ * same stack; otherwise this entry is replaced. Guards run either way.
+ */
+export function navigateUp(path: string): void {
+  const steps = historyStepsBackTo(path);
+  if (steps === undefined) navigate(path, { replace: true });
+  else window.history.go(steps);
+}
+
 export function installNavigationBlocker(blocker: NavigationBlocker): () => void {
   blockers.add(blocker);
   return () => blockers.delete(blocker);
@@ -237,20 +272,10 @@ export function threadPath(threadId: string): string {
   return `/threads/${encodeURIComponent(threadId)}`;
 }
 
-export function settingsPath(page?: SettingsPage): string {
-  return page ? `/settings/${settingsPageSlugs[page]}` : "/settings";
-}
-
-export function agentsPath(): string {
-  return "/agents";
-}
-
-export function newAgentPath(): string {
-  return "/agents/new";
-}
-
-export function agentPath(agentId: string): string {
-  return `/agents/${encodeURIComponent(agentId)}`;
+export function settingsPath(page?: SettingsPage, resource: SettingsResourceRoute = {}): string {
+  if (!page) return "/settings";
+  const base = `/settings/${settingsPageSlugs[page]}`;
+  return isSettingsResourcePage(page) ? `${base}${settingsResourceSuffix(resource)}` : base;
 }
 
 export function usagePath(): string {
@@ -270,11 +295,7 @@ export function routePath(route: Route): string {
   if (route.name === "home") return "/";
   if (route.name === "archived") return "/archived";
   if (route.name === "usage") return usagePath();
-  if (route.name === "settings") return settingsPath(route.page);
-  if (route.name === "agents") {
-    if (route.create) return newAgentPath();
-    return route.agentId ? agentPath(route.agentId) : agentsPath();
-  }
+  if (route.name === "settings") return settingsPath(route.page, route);
   if (route.automationOpen) return threadAutomationPath(route.threadId);
   if (route.focusTurnId) return threadTurnPath(route.threadId, route.focusTurnId);
   return threadPath(route.threadId);

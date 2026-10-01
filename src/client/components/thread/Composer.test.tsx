@@ -8,6 +8,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
@@ -272,6 +273,7 @@ class FakeComposerStore {
     taskReferences: [],
     revision: 2,
   }));
+  deleteStash = vi.fn(async (_stashId: string): Promise<void> => undefined);
   restoreStash = vi.fn(async (): Promise<NormalizedDraft> => ({
     text: "restored",
     contextExcerpts: [],
@@ -916,14 +918,14 @@ describe("task references", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Open 2 stashed prompts" }),
     );
-    const stash = await screen.findByRole("menuitem", {
+    const stash = await screen.findByRole("button", {
       name: /Task title at stash time/u,
     });
     expect(stash).toHaveTextContent("Task title at stash time");
     expect(stash).toHaveTextContent("2 tasks");
     expect(stash).not.toHaveTextContent("Empty prompt");
     expect(
-      screen.getByRole("menuitem", { name: /^1 task/u }),
+      screen.getByRole("button", { name: /^1 task/u }),
     ).not.toHaveTextContent("Empty prompt");
   });
 
@@ -1131,7 +1133,7 @@ describe("Composer delivery guards", () => {
       fireEvent.keyDown(screen.getByRole("button", { name: "Delivery mode" }), {
         key: "ArrowDown",
       });
-      fireEvent.click(await screen.findByRole("menuitem", { name: "Queue" }));
+      fireEvent.click(await screen.findByRole("menuitemradio", { name: "Queue" }));
       expect(localStorage.getItem("sedes-composer-delivery-mode")).toBe(
         "queue",
       );
@@ -1151,6 +1153,44 @@ describe("Composer delivery guards", () => {
     },
   );
 
+  it("offers delivery modes as radio items and explains an unavailable one", async () => {
+    const active = { ...snapshot("running"), runState: "starting" as const };
+    active.capabilities.deliveryModes = [
+      {
+        id: "steer",
+        steerTarget: "turn" as const,
+        label: { text: "Steer" },
+        available: false,
+        unavailableReason: { text: "The turn is still starting." },
+      },
+      { id: "queue", steerTarget: null, label: { text: "Queue" }, available: true },
+    ];
+    const store = new FakeComposerStore(active, "draft");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    const trigger = screen.getByRole("button", { name: "Delivery mode" });
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+
+    const group = await screen.findByRole("group", { name: "Delivery mode" });
+    const [steer, queue] = within(group).getAllByRole("menuitemradio");
+    expect(steer).toHaveAttribute("aria-checked", "true");
+    expect(steer).toHaveAttribute("aria-disabled", "true");
+    expect(steer).toHaveAttribute("title", "The turn is still starting.");
+    expect(within(steer!).getByText("Unavailable")).toHaveAttribute(
+      "data-slot",
+      "dropdown-menu-item-value",
+    );
+    expect(steer!.querySelector(".lucide-merge")).not.toBeNull();
+    expect(queue).toHaveAttribute("aria-checked", "false");
+    expect(queue!.querySelector(".lucide-layers")).not.toBeNull();
+
+    fireEvent.click(queue!);
+    expect(localStorage.getItem("sedes-composer-delivery-mode")).toBe("queue");
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    expect(
+      await screen.findByRole("menuitemradio", { name: "Queue" }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
   it("preserves Steer through temporary unavailability and keeps Queue selectable", async () => {
     const active = { ...snapshot("running"), runState: "starting" as const };
     active.capabilities.deliveryModes = [
@@ -1164,9 +1204,9 @@ describe("Composer delivery guards", () => {
       key: "ArrowDown",
     });
     expect(
-      await screen.findByRole("menuitem", { name: "Queue" }),
+      await screen.findByRole("menuitemradio", { name: "Queue" }),
     ).not.toHaveAttribute("aria-disabled", "true");
-    fireEvent.keyDown(screen.getByRole("menuitem", { name: "Queue" }), {
+    fireEvent.keyDown(screen.getByRole("menuitemradio", { name: "Queue" }), {
       key: "Escape",
     });
     const running = {
@@ -1250,9 +1290,9 @@ describe("Composer delivery guards", () => {
       key: "ArrowDown",
     });
     expect(
-      await screen.findByRole("menuitem", { name: "Queue" }),
+      await screen.findByRole("menuitemradio", { name: "Queue" }),
     ).not.toHaveAttribute("aria-disabled", "true");
-    fireEvent.keyDown(screen.getByRole("menuitem", { name: "Queue" }), {
+    fireEvent.keyDown(screen.getByRole("menuitemradio", { name: "Queue" }), {
       key: "Escape",
     });
 
@@ -1320,10 +1360,10 @@ describe("Composer delivery guards", () => {
       key: "ArrowDown",
     });
     expect(
-      await screen.findByRole("menuitem", { name: "Queue" }),
+      await screen.findByRole("menuitemradio", { name: "Queue" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("menuitem", { name: "Steer" }),
+      screen.queryByRole("menuitemradio", { name: "Steer" }),
     ).not.toBeInTheDocument();
     expect(localStorage.getItem("sedes-composer-delivery-mode")).toBe("steer");
     view.unmount();
@@ -1825,7 +1865,7 @@ describe("Composer delivery guards", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Open 1 stashed prompts" }),
     );
-    const restoreButton = await screen.findByRole("menuitem", {
+    const restoreButton = await screen.findByRole("button", {
       name: /restore later/u,
     });
     expect(restoreButton).toBeEnabled();
@@ -1857,7 +1897,7 @@ describe("Composer delivery guards", () => {
       screen.getByRole("button", { name: "Open 1 stashed prompts" }),
     ).toBeEnabled();
     expect(
-      screen.getByRole("menuitem", { name: /restore later/u }),
+      screen.getByRole("button", { name: /restore later/u }),
     ).toBeEnabled();
   });
 
@@ -3235,6 +3275,201 @@ describe("Composer delivery guards", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("lists skills as menu rows, checks the selected one and moves between rows by arrow keys", async () => {
+    const store = new FakeComposerStore(snapshot(), "");
+    store.state = {
+      ...store.state,
+      snapshot: {
+        ...store.state.snapshot!,
+        draft: {
+          ...store.state.snapshot!.draft,
+          selectedSkillId: "skill-review",
+        },
+      },
+    };
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose skill" }));
+    const dialog = await screen.findByRole("dialog", { name: "Choose a skill" });
+    const review = await within(dialog).findByRole("button", {
+      name: /Review Changes/u,
+    });
+    const tests = within(dialog).getByRole("button", { name: /^tests/u });
+    // The selection is a trailing check (and weight 500), not a wash.
+    expect(review).toHaveAttribute("aria-pressed", "true");
+    expect(review.querySelector(".lucide-check")).not.toBeNull();
+    expect(tests).toHaveAttribute("aria-pressed", "false");
+    expect(tests.querySelector(".lucide-check")).toBeNull();
+    expect(
+      within(review).getByText("Review the current changes"),
+    ).toHaveAttribute("data-slot", "skill-item-description");
+    expect(dialog.querySelector('[data-slot="popover-arrow"], svg.popover-arrow')).toBeNull();
+
+    const search = within(dialog).getByRole("searchbox", {
+      name: "Search skills",
+    });
+    expect(search).toHaveAttribute("data-slot", "searchable-select-input");
+    search.focus();
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(review).toHaveFocus();
+    fireEvent.keyDown(review, { key: "ArrowDown" });
+    expect(tests).toHaveFocus();
+    fireEvent.keyDown(tests, { key: "ArrowDown" });
+    expect(review).toHaveFocus();
+    fireEvent.keyDown(review, { key: "End" });
+    expect(tests).toHaveFocus();
+  });
+
+  it("shows skill loading, failure and no-match states as rows, with a retry", async () => {
+    const store = new FakeComposerStore(snapshot(), "");
+    let rejectSkills!: (error: Error) => void;
+    store.listSkills.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectSkills = reject;
+        }),
+    );
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Choose skill" }));
+    const dialog = await screen.findByRole("dialog", { name: "Choose a skill" });
+    expect(await within(dialog).findByRole("status")).toHaveTextContent(
+      "Loading skills…",
+    );
+
+    await act(async () => rejectSkills(new Error("Skills are offline.")));
+    const alert = within(dialog).getByRole("alert");
+    expect(alert).toHaveAttribute("data-slot", "callout");
+    expect(alert).toHaveTextContent("Skills are offline.");
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    expect(
+      await within(dialog).findByRole("button", { name: /Review Changes/u }),
+    ).toBeInTheDocument();
+    expect(store.listSkills).toHaveBeenCalledTimes(2);
+
+    fireEvent.change(within(dialog).getByRole("searchbox", { name: "Search skills" }), {
+      target: { value: "nothing like this" },
+    });
+    expect(within(dialog).getByRole("status")).toHaveTextContent(
+      "No matching skills",
+    );
+  });
+
+  it("lists stashes as rows with a quiet delete and moves between them by arrow keys", async () => {
+    const store = new FakeComposerStore(snapshot(), "");
+    store.replace({
+      stashes: [
+        {
+          id: "stash-1",
+          text: "first idea",
+          contextExcerpts: [],
+          taskReferences: [],
+          attachments: [],
+          createdAt: "2026-07-30T14:00:00.000Z",
+        },
+        {
+          id: "stash-2",
+          text: "second idea",
+          contextExcerpts: [],
+          taskReferences: [],
+          attachments: [],
+          createdAt: "2026-07-30T13:00:00.000Z",
+        },
+      ],
+    });
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open 2 stashed prompts" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Stashed prompts",
+    });
+    expect(dialog).toHaveAccessibleDescription("Saved only for this thread");
+    const list = within(dialog).getByRole("list", { name: "Stashed prompts" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+    const first = within(list).getByRole("button", { name: /^first idea/u });
+    const second = within(list).getByRole("button", { name: /^second idea/u });
+    expect(
+      within(first).getByText(/· Restore$/u),
+    ).toHaveAttribute("data-slot", "stash-item-description");
+    const deletes = within(list).getAllByRole("button", {
+      name: "Delete stashed prompt",
+    });
+    expect(deletes).toHaveLength(2);
+    expect(deletes[0]).toHaveAttribute("data-variant", "destructive");
+
+    await waitFor(() => expect(first).toHaveFocus());
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(second).toHaveFocus();
+    fireEvent.keyDown(second, { key: "ArrowDown" });
+    expect(first).toHaveFocus();
+    fireEvent.keyDown(first, { key: "End" });
+    expect(second).toHaveFocus();
+
+    fireEvent.click(deletes[1]!);
+    expect(store.deleteStash).toHaveBeenCalledWith("stash-2");
+  });
+
+  it("shows an inline empty state with the stash shortcut when nothing is stashed", async () => {
+    const store = new FakeComposerStore(snapshot(), "");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stash prompt" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Stashed prompts",
+    });
+    const empty = within(dialog)
+      .getByText("No stashed prompts")
+      .closest('[data-slot="empty-state"]');
+    expect(empty).toHaveAttribute("data-variant", "inline");
+    expect(empty).toHaveTextContent(
+      "Write an idea and press Ctrl/⌘+S to put it aside.",
+    );
+    expect(within(dialog).queryByRole("list")).toBeNull();
+    expect(
+      within(dialog).queryByRole("button", { name: "Stash current" }),
+    ).toBeNull();
+  });
+
+  it("lists slash commands as menu rows with one active wash", () => {
+    const withCommands = snapshot();
+    withCommands.composerCommands = [
+      {
+        invocation: "/review",
+        source: "prompt",
+        description: { text: "Review the diff" },
+        argumentHint: { text: "[path]" },
+      },
+      { invocation: "/release", source: "extension" },
+    ];
+    const store = new FakeComposerStore(withCommands, "");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+
+    type("/re");
+    const listbox = screen.getByRole("listbox", { name: "Commands" });
+    const [review, release] = within(listbox).getAllByRole("option");
+    expect(review).toHaveAttribute("aria-selected", "true");
+    expect(review).toHaveAttribute("data-active", "true");
+    expect(release).not.toHaveAttribute("data-active");
+    expect(within(review!).getByText("/review")).toHaveClass("font-mono");
+    expect(within(review!).getByText("[path]")).toBeInTheDocument();
+    expect(within(review!).getByText("Review the diff")).toHaveAttribute(
+      "data-slot",
+      "command-menu-item-description",
+    );
+    expect(within(release!).getByText("extension")).toHaveClass("uppercase");
+
+    // The pointer moves the active row rather than adding a second wash.
+    fireEvent.pointerMove(release!, { pointerType: "mouse" });
+    expect(release).toHaveAttribute("data-active", "true");
+    expect(review).not.toHaveAttribute("data-active");
+    expect(screen.getByRole("textbox")).toHaveAttribute(
+      "aria-activedescendant",
+      release!.id,
+    );
+  });
+
   it("shares the fail-closed predicate across Enter and the send path", async () => {
     const onImmediateSend = vi.fn();
     const store = new FakeComposerStore(snapshot(), "");
@@ -3355,7 +3590,7 @@ describe("Composer delivery guards", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Open 1 stashed prompts" }),
     );
-    const restoreButton = await screen.findByRole("menuitem", {
+    const restoreButton = await screen.findByRole("button", {
       name: /restored/u,
     });
     type("existing");
@@ -3424,7 +3659,7 @@ describe("Composer delivery guards", () => {
       screen.getByRole("button", { name: "Open 1 stashed prompts" }),
     );
     fireEvent.click(
-      await screen.findByRole("menuitem", { name: /restore selection/u }),
+      await screen.findByRole("button", { name: /restore selection/u }),
     );
     await waitFor(() => expect(store.restoreStash).toHaveBeenCalledOnce());
 
@@ -4300,8 +4535,9 @@ describe("Composer delivery guards", () => {
     // Composer passes its canonical narrow/coarse layout result to provider
     // features instead of forcing their desktop presentation.
     fireEvent.click(indicator);
-    expect(screen.getByRole("dialog", { name: "Goal" })).toHaveClass(
-      "codex-goal-mobile-card",
+    expect(screen.getByRole("dialog", { name: "Goal" })).toHaveAttribute(
+      "data-slot",
+      "dialog-content",
     );
   });
 

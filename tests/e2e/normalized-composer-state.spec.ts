@@ -6,6 +6,7 @@ import {
   expectNoPageOverflow,
   fillAndPersistDraft,
   openSedesWorkspace,
+  overlaySettled,
   selectCustomNewThreadTarget,
   selectDeliveryMode,
   selectRadixOption,
@@ -13,6 +14,58 @@ import {
 } from "./helpers";
 
 const repositoryDisplayName = path.basename(process.cwd());
+
+test("composer reasoning yields to active-turn controls and returns when space is available", async ({ page }, testInfo) => {
+  await openSedesWorkspace(page);
+  await page.getByTestId("desktop-sidebar").getByTestId("new-thread-trigger").click();
+  await selectCustomNewThreadTarget(page, "Codex TCP external · Codex TCP");
+  const created = page.waitForResponse((response) =>
+    response.request().method() === "POST" &&
+    response.url().endsWith("/api/threads") && response.status() === 201,
+  );
+  await page.getByRole("button", { name: "Create thread" }).click();
+  await created;
+  await page.setViewportSize({ width: 360, height: 844 });
+  const footer = page.getByTestId("composer").locator(".composer-footer");
+  const reasoning = footer.locator('[data-setting-id="thinking_level"] [role="combobox"]');
+  await expect(reasoning).toBeVisible();
+  const value = await reasoning.innerText();
+  expect((await page.request.post("/__e2e/codex/turn-completion/arm")).status()).toBe(204);
+  try {
+    await fillAndPersistDraft(page, "Keep running while I check the composer controls.", "Message Codex");
+    await sendCurrentDraft(page);
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
+    await expect(reasoning).toBeHidden();
+    await expect(footer).toHaveAttribute("data-reasoning-collapsed", "");
+    await expectNoPageOverflow(page);
+    await capture(page, testInfo, "reasoning-hidden-active-turn.png");
+
+    await page.setViewportSize({ width: 760, height: 844 });
+    await expect(reasoning).toBeVisible();
+    await expect(reasoning).toHaveText(value);
+    await page.setViewportSize({ width: 360, height: 844 });
+    await expect(reasoning).toBeHidden();
+  } finally {
+    expect((await page.request.post("/__e2e/codex/turn-completion/release")).status()).toBe(204);
+  }
+  await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeHidden();
+  await expect(reasoning).toBeVisible();
+  await expect(reasoning).toHaveText(value);
+  await expect(footer).not.toHaveAttribute("data-reasoning-collapsed");
+  await capture(page, testInfo, "reasoning-restored-idle.png");
+
+  // Resizing must not remove an open picker's anchor or keyboard focus.
+  await reasoning.click();
+  await expect(page.getByRole("listbox")).toBeVisible();
+  await page.setViewportSize({ width: 300, height: 844 });
+  await expect(reasoning).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(reasoning).toBeFocused();
+  await page.getByRole("textbox", { name: "Message Codex" }).click();
+  await expect(reasoning).toBeHidden();
+  await page.setViewportSize({ width: 360, height: 844 });
+  await expect(reasoning).toBeVisible();
+});
 
 test("active chat notes deliver the combined composer draft with Steer and Queue", async ({ page }, testInfo) => {
   await openSedesWorkspace(page);
@@ -271,7 +324,7 @@ test.describe.serial("normalized composer state", () => {
     browserDiagnostics.allowNetworkFailures = false;
 
     await page.setViewportSize({ width: 390, height: 844 });
-    const composerSettings = page.locator('.desktop-config[data-variant="pill"]');
+    const composerSettings = page.getByTestId("thread-configuration");
     const reasoning = composerSettings.locator('[data-setting-id="thinking_level"] [role="combobox"]');
     await expect(reasoning).toBeVisible();
     await expect(composerSettings.locator('[data-setting-id="model"]')).toBeHidden();
@@ -293,6 +346,7 @@ test.describe.serial("normalized composer state", () => {
     });
     const imageCanvas = imageDialog.locator(".zoomable-preview-canvas");
     const popupImage = imageDialog.locator(".zoomable-preview-content > img");
+    await overlaySettled(imageDialog);
     const [
       initialImageViewportBox,
       initialImageCanvasBox,
@@ -378,9 +432,10 @@ test.describe.serial("normalized composer state", () => {
     await expect(reloadedImageCard).toHaveCount(0);
 
     await page.getByRole("button", { name: "Open 1 stashed prompts" }).click();
-    const restore = page.getByRole("menuitem").filter({
-      hasText: "1 attachment",
-    });
+    const restore = page
+      .getByRole("dialog", { name: "Stashed prompts" })
+      .getByRole("button")
+      .filter({ hasText: "1 attachment" });
     await expect(restore).toBeVisible();
     const restored = page.waitForResponse(
       (response) =>
@@ -728,11 +783,25 @@ test.describe.serial("normalized composer state", () => {
         response.ok() &&
         response.request().postDataJSON().kind === "move_draft",
     );
-    await selectRadixOption(
-      page,
-      page.getByRole("combobox", { name: "Draft workspace" }),
-      "src",
-    );
+    // Draft workspace is a submenu of workspace radio rows. The row shows
+    // no inline value; the current workspace is the checked row inside.
+    const threadActions = page.getByRole("menu", { name: "Thread actions" });
+    const draftWorkspace = threadActions.getByRole("menuitem", {
+      name: "Draft workspace",
+      exact: true,
+    });
+    await expect(draftWorkspace).toHaveText("Draft workspace");
+    await draftWorkspace.click();
+    const workspaces = page.getByRole("menu", { name: "Draft workspace" });
+    await expect(
+      workspaces.getByRole("menuitemradio", {
+        name: repositoryDisplayName,
+        exact: true,
+      }),
+    ).toHaveAttribute("aria-checked", "true");
+    await workspaces
+      .getByRole("menuitemradio", { name: "src", exact: true })
+      .click();
     await moved;
     await expect(page).toHaveURL(threadPath);
     await expect(
@@ -780,13 +849,13 @@ test.describe.serial("normalized composer state", () => {
     await capture(page, testInfo, "thread-pinning-sidebar-desktop.png");
 
     await desktopSidebar.getByRole("button", { name: "View options" }).click();
-    await page.getByRole("checkbox", { name: "Pinned only" }).click();
+    await page.getByRole("menuitemcheckbox", { name: "Pinned only" }).click();
     await page.keyboard.press("Escape");
     await page.reload();
     await expect(pinnedGroup).toContainText("New thread");
     await desktopSidebar.getByRole("button", { name: "View options" }).click();
     await expect(
-      page.getByRole("checkbox", { name: "Pinned only" }),
+      page.getByRole("menuitemcheckbox", { name: "Pinned only" }),
     ).toHaveAttribute("aria-checked", "true");
     await page.keyboard.press("Escape");
 
@@ -805,7 +874,7 @@ test.describe.serial("normalized composer state", () => {
     await expect(pinnedGroup).toHaveCount(0);
 
     await desktopSidebar.getByRole("button", { name: "View options" }).click();
-    await page.getByRole("checkbox", { name: "Pinned only" }).click();
+    await page.getByRole("menuitemcheckbox", { name: "Pinned only" }).click();
     await page.keyboard.press("Escape");
     await expect(
       desktopSidebar.locator(`[data-thread-id="${movedThreadId}"]`),
@@ -813,9 +882,8 @@ test.describe.serial("normalized composer state", () => {
     await desktopSidebar.getByTestId("view-quick-toggle").click();
 
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page
-      .getByRole("dialog", { name: "Thread actions" })
-      .getByRole("button", { name: "Settle", exact: true })
+    await threadActions
+      .getByRole("menuitem", { name: "Settle", exact: true })
       .click();
     await expect(
       page
@@ -824,9 +892,8 @@ test.describe.serial("normalized composer state", () => {
     ).toContainText("New thread");
 
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page
-      .getByRole("dialog", { name: "Thread actions" })
-      .getByRole("button", { name: "Unsettle", exact: true })
+    await threadActions
+      .getByRole("menuitem", { name: "Unsettle", exact: true })
       .click();
     await expect(
       page
@@ -835,7 +902,7 @@ test.describe.serial("normalized composer state", () => {
     ).not.toContainText("New thread");
 
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page.getByRole("button", { name: "Snooze…" }).click();
+    await threadActions.getByRole("menuitem", { name: "Snooze…" }).click();
     const snooze = page.getByRole("dialog", { name: "Snooze this thread" });
     await snooze
       .getByLabel(/Reminder/)
@@ -849,7 +916,7 @@ test.describe.serial("normalized composer state", () => {
     ).toContainText("New thread");
 
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page.getByRole("button", { name: "Wake now" }).click();
+    await threadActions.getByRole("menuitem", { name: "Wake now" }).click();
     const reminder = page.getByTestId("wake-attention");
     await expect(reminder).toContainText("Return to this preserved draft");
     await page.reload();
@@ -879,8 +946,10 @@ test.describe.serial("normalized composer state", () => {
     await repinned;
 
     await page.getByRole("button", { name: "Thread actions" }).click();
-    // Childless threads archive immediately on desktop — no choices menu.
-    await page.getByRole("button", { name: "Archive", exact: true }).click();
+    // Childless threads archive immediately — no choices dialog.
+    await threadActions
+      .getByRole("menuitem", { name: "Archive", exact: true })
+      .click();
     await expect(page).toHaveURL("/");
     await page
       .getByTestId("desktop-sidebar")

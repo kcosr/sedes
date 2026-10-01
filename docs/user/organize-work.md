@@ -98,7 +98,8 @@ unavailable projects' historical threads. Environment and Target narrow those
 results. A selected name stays selected when you change environments; a
 combination with no matching projects shows an empty result.
 
-With **Click project and environment names to filter** enabled in Settings,
+With **Click project and environment names to filter** enabled in
+**Settings → General**,
 project-name links on sidebar cards apply the same combined name filter.
 Environment links narrow by the specific environment. Project stacks and the
 Projects view still keep each registered directory separate, and Tasks, files,
@@ -171,11 +172,14 @@ you can:
 - move the thread into an existing Group; or
 - remove it from its current Group.
 
-**Move to group** opens a searchable picker on desktop and mobile. Type to
-filter Group names, then select a destination with the pointer or arrow keys
-and Enter. Your current Group is disabled. Escape closes the picker without
-moving the thread. **Create group** and **Ungroup** remain available while
-searching; typing a search never changes membership.
+**Move to group** opens a searchable list of your Groups with the current one
+checked; on a phone it opens as a sheet. Type in **Search groups** to filter,
+then select a Group with the pointer or the arrow keys and Enter to move the
+thread there. When nothing matches, **Create group “name”** creates that Group
+and moves the thread into it in one step. **Remove from group** takes the
+thread out of its current Group, and **New group…** opens a small dialog that
+asks only for the **Group name** (prefilled with your search) and creates the
+Group with this thread in it. Typing a search never changes membership.
 
 Select a Group in Scope to filter to it. From that Scope menu you can rename or
 delete the selected Group. Deleting a populated Group requires confirmation
@@ -271,8 +275,12 @@ whether to move them to the project or global list, keep them open, or
 ## Archive finished work
 
 Archive removes a thread from the normal sidebar and blocks new delivery until
-the thread is restored. Open **Archived** to search archived threads, inspect
-them read-only, or choose **Restore to Active**.
+the thread is restored. Choose **Archive** from the thread's menu or row. Sedes
+first checks the thread; when nothing needs a decision, it archives at once.
+When the thread has forks, open Tasks, stashed prompts, pending questions, or an
+isolated workspace, **Archive this thread** opens so you can choose first. Open
+**Archived** to search archived threads, inspect them read-only, or choose
+**Restore to Active**.
 
 Archiving preserves the transcript, title, pin, Group membership, stashes, and
 other durable thread state. A restored pinned thread returns pinned. Archive is
@@ -299,9 +307,13 @@ stashes, bookmarks, pins, and open Tasks. Counts are deliberately local:
 
 ## Manage saved Agents
 
-Use **More > Agents** to create a reusable backend configuration and Sedes
-agent-tool policy, including reusable environment-variable overrides. The project and **Configure using** target in the Agent
-editor are validation context, not fields stored in the Agent.
+Open **Settings → Agents** (`/settings/agents`), or **More → Agents** in the
+sidebar footer, to create a reusable backend configuration and Sedes agent-tool
+policy, including reusable environment-variable overrides. Choose **Create
+Agent** for a new one, or select an Agent to edit it; **Delete Agent** is in
+its **Danger zone**. **Create an Agent** in **New thread** opens the same form.
+The **Project** and **Configure using** target under **Validate against** are
+validation context, not fields stored in the Agent.
 
 At thread creation, Sedes combines the chosen project, Agent, and compatible
 target. It then copies the resolved settings into the new thread. Existing

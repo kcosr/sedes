@@ -1,11 +1,20 @@
-import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, X } from "lucide-react";
 import type {
   ThreadForceResetBlockerSummary,
   ThreadForceResetImpact,
 } from "../../../shared/index.js";
 import { Button } from "@client/components/ui/button";
+import {
+  Dialog,
+  DialogAlert,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogSection,
+  DialogTitle,
+} from "@client/components/ui/dialog";
 
 const blockerLabels: Record<
   ThreadForceResetBlockerSummary["kind"],
@@ -75,7 +84,7 @@ function backgroundSummary(
   ].filter((label): label is string => label !== undefined);
   if (counts.length === 0 && total.unknownThreads === 0) return null;
   return (
-    <p data-testid="force-reset-background">
+    <p className="force-reset-status" data-testid="force-reset-background">
       {counts.length > 0
         ? `Running in the affected conversations: ${counts.join(", ")}. Replacing their runtimes may stop this work.`
         : null}
@@ -190,56 +199,41 @@ export function ForceResetDialog({
   const impact = preview?.impact;
 
   return (
-    <Dialog.Root
+    <Dialog
       open={open}
       onOpenChange={(next) => {
         if (pending) return;
         onOpenChange(next);
       }}
     >
-      <Dialog.Portal>
-        <Dialog.Overlay
-          className="dialog-overlay over-drawer"
-          data-testid="dialog-overlay"
-        />
-        <Dialog.Content
-          className="dialog-card force-reset-dialog over-drawer"
-          aria-describedby="force-reset-description"
-          onCloseAutoFocus={(event) => {
-            const target = returnFocusRef?.current;
-            if (!target?.isConnected) return;
-            event.preventDefault();
-            target.focus();
-          }}
-        >
-          <Dialog.Title>Force reset Sedes state?</Dialog.Title>
-          <Dialog.Description id="force-reset-description">
-            Sedes will abandon the unresolved state listed here and replace the
-            exact loaded conversation runtime without waiting for provider
-            reconciliation. This does not undo provider operations: provider
-            work may already have happened, may continue or reappear, and a
-            native fork orphan may remain.
-          </Dialog.Description>
-          <Dialog.Close asChild disabled={pending}>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="dialog-close"
-              aria-label="Close"
-              disabled={pending}
-            >
-              <X size={18} strokeWidth={1.8} />
-            </Button>
-          </Dialog.Close>
+      <DialogContent
+        size="md"
+        mobile="card"
+        layer="over-dialog"
+        showClose={false}
+        dismissible={!pending}
+        aria-busy={pending || undefined}
+        returnFocusRef={returnFocusRef}
+      >
+        <DialogHeader>
+          <DialogTitle>Force reset Sedes state?</DialogTitle>
+          <DialogDescription>
+            Sedes abandons the unresolved state below and replaces the loaded
+            conversation runtime without waiting for provider reconciliation.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody>
+          {loading && (
+            <p role="status" className="force-reset-status">
+              Checking unresolved Sedes work…
+            </p>
+          )}
 
-          {loading && <p role="status">Checking unresolved Sedes work…</p>}
-
-          {impact && (
-            <div className="force-reset-impact">
-              {impact.blockers.length > 0 ? (
-                <>
-                  <h3>Sedes will reset</h3>
-                  <ul>
+          {impact &&
+            (impact.blockers.length > 0 ? (
+              <>
+                <DialogSection title="Sedes will reset">
+                  <ul className="force-reset-list">
                     {impact.blockers.map((blocker) => {
                       const label = blockerLabels[blocker.kind];
                       return (
@@ -251,12 +245,15 @@ export function ForceResetDialog({
                       );
                     })}
                   </ul>
-                  <h3>
-                    {impact.affectedThreads.length === 1
+                </DialogSection>
+                <DialogSection
+                  title={
+                    impact.affectedThreads.length === 1
                       ? "Affected thread"
-                      : `Affected threads (${impact.affectedThreads.length.toLocaleString()})`}
-                  </h3>
-                  <ul className="force-reset-threads">
+                      : `Affected threads (${impact.affectedThreads.length.toLocaleString()})`
+                  }
+                >
+                  <ul className="force-reset-list force-reset-threads">
                     {impact.affectedThreads.map((thread) => (
                       <li key={thread.threadId}>
                         <span>{thread.title}</span>
@@ -267,70 +264,86 @@ export function ForceResetDialog({
                     ))}
                   </ul>
                   {backgroundSummary(impact.affectedThreads)}
-                </>
-              ) : (
-                <p role="status">No unresolved Sedes work was found.</p>
-              )}
+                </DialogSection>
+              </>
+            ) : (
+              <p role="status" className="force-reset-status">
+                No unresolved Sedes work was found.
+              </p>
+            ))}
+
+          {impact && (
+            <DialogAlert
+              tone="warning"
+              title="Provider operations are not undone"
+            >
+              <p className="m-0">
+                Provider work may already have happened, may continue or
+                reappear, and a native fork orphan may remain.
+              </p>
               {impact.warnings.length > 0 && (
-                <div className="force-reset-warnings">
-                  <AlertTriangle size={18} aria-hidden="true" />
-                  <ul>
-                    {impact.warnings.map((warning) => (
-                      <li key={warning.code}>{warning.message}</li>
-                    ))}
-                  </ul>
-                </div>
+                <ul className="force-reset-list force-reset-warnings">
+                  {impact.warnings.map((warning) => (
+                    <li key={warning.code}>{warning.message}</li>
+                  ))}
+                </ul>
               )}
-            </div>
+            </DialogAlert>
           )}
 
           {error && (
-            <p className="notice error" role="alert">
-              {error.message}{" "}
-              {!pending && (
-                <>
-                  <button
-                    type="button"
-                    className="archive-menu-retry"
-                    onClick={error.operation === "load" ? load : reset}
-                    disabled={loading}
-                  >
-                    {error.operation === "load" ? "Retry" : "Retry reset"}
-                  </button>
-                  {error.operation === "reset" && (
-                    <>
-                      {" · "}
-                      <button
+            <DialogAlert
+              tone="danger"
+              action={
+                pending ? undefined : (
+                  <>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={error.operation === "load" ? load : reset}
+                      disabled={loading}
+                    >
+                      {error.operation === "load" ? "Retry" : "Retry reset"}
+                    </Button>
+                    {error.operation === "reset" && (
+                      <Button
                         type="button"
-                        className="archive-menu-retry"
+                        variant="outline"
+                        size="sm"
                         onClick={load}
                         disabled={loading}
                       >
                         Refresh preview
-                      </button>
-                    </>
-                  )}
-                </>
-              )}
-            </p>
-          )}
-
-          <div className="dialog-actions">
-            <Dialog.Close asChild disabled={pending}>
-              <Button variant="secondary" disabled={pending}>
-                Cancel
-              </Button>
-            </Dialog.Close>
-            <Button
-              variant="destructive"
-              disabled={loading || pending || !impact?.resettable}
-              onClick={() => void reset()}
+                      </Button>
+                    )}
+                  </>
+                )
+              }
             >
-              {pending ? "Force resetting…" : "Force reset"}
-            </Button>
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+              {error.message}
+            </DialogAlert>
+          )}
+        </DialogBody>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            disabled={loading || pending || !impact?.resettable}
+            onClick={() => void reset()}
+          >
+            {pending ? "Force resetting…" : "Force reset"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

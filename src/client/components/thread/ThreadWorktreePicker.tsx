@@ -1,22 +1,19 @@
-import { useKeyboardInset } from "../../app/use-keyboard-inset.js";
 import { usePickerFocus } from "../../lib/use-picker-focus.js";
-import * as Popover from "@radix-ui/react-popover";
 import {
+  Check,
   ChevronDown,
   GitBranch,
   LoaderCircle,
-  Search,
   Trash2,
 } from "lucide-react";
 import {
-  type CSSProperties,
-  useContext,
   useCallback,
   useEffect,
   useId,
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent,
 } from "react";
 import {
   workspaceFileLinkedWorktreeRootIdSchema,
@@ -24,19 +21,36 @@ import {
   type WorkspaceFileRootDescriptor,
 } from "../../../shared/index.js";
 import type { ApiClient } from "../../api/ApiClient.js";
-import { Button } from "../ui/button.js";
+import { useTouchDensity } from "@client/app/use-touch-density";
+import { Button } from "@client/components/ui/button";
+import { Callout } from "@client/components/ui/callout";
+import { ConfirmDialog } from "@client/components/ui/confirm-dialog";
 import {
   Dialog,
-  DialogPortalContainerContext,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from "../ui/dialog.js";
-import { Input } from "../ui/input.js";
-import { useMediaQuery } from "../../app/use-media-query.js";
+} from "@client/components/ui/dialog";
+import {
+  menuDescriptionClass,
+  menuEmptyClass,
+  menuListRowClass,
+  menuRowActionClass,
+  menuRowClass,
+  menuShortcutClass,
+} from "@client/components/ui/floating";
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@client/components/ui/popover";
+import { SearchableSelectSearch } from "@client/components/ui/searchable-select";
+import { moveListFocus } from "@client/lib/list-focus";
+import { cn } from "@client/lib/utils";
 
 type LinkedWorktree = WorkspaceFileRootDescriptor & {
   readonly kind: "linked_worktree";
@@ -49,6 +63,15 @@ interface PendingPreference {
   readonly revision: number;
 }
 
+const DESCRIPTION = "Used by Files, Compare, and relative file links.";
+
+/**
+ * The thread worktree picker: a header, the plain search row and worktree
+ * rows in the menu row anatomy, the current one marked with a trailing
+ * check. A popover from the header, or the shared bottom sheet under the
+ * density switch. Removable rows carry a muted trailing remove action that
+ * asks for confirmation.
+ */
 export function ThreadWorktreePicker({
   api,
   thread,
@@ -65,10 +88,8 @@ export function ThreadWorktreePicker({
   readonly workspaceId: string;
   readonly disabled?: boolean;
 }): React.JSX.Element {
-  const mobile = useMediaQuery("(pointer: coarse), (max-width: 819px)");
+  const mobile = useTouchDensity();
   const [open, setOpen] = useState(false);
-  const keyboardInset = useKeyboardInset(mobile && open);
-  const dialogContainer = useContext(DialogPortalContainerContext);
   const [roots, setRoots] = useState<readonly WorkspaceFileRootDescriptor[]>(
     [],
   );
@@ -79,12 +100,12 @@ export function ThreadWorktreePicker({
   const [pendingPreference, setPendingPreference] =
     useState<PendingPreference>();
   const [deleteTarget, setDeleteTarget] = useState<LinkedWorktree>();
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState("");
   const requestSequence = useRef(0);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const pickerFocus = usePickerFocus(searchRef);
+  const titleId = useId();
 
   const preferredRootId =
     pendingPreference !== undefined
@@ -169,6 +190,10 @@ export function ThreadWorktreePicker({
           ),
     [linked, normalizedQuery],
   );
+  // Rows keep one column for status and check when any row can be removed.
+  const removable = (root: LinkedWorktree) =>
+    root.removal.status === "allowed" || root.removal.status === "forget";
+  const actionColumn = visibleLinked.some(removable);
 
   const selectRoot = async (root: WorkspaceFileRootDescriptor) => {
     if (saving || root.availability !== "available") return;
@@ -198,17 +223,12 @@ export function ThreadWorktreePicker({
     }
   };
 
+  // ConfirmDialog owns the pending state and shows a rejection inline.
   const deleteWorktree = async () => {
-    if (
-      !deleteTarget ||
-      deleteTarget.removal.status === "unavailable" ||
-      deleting
-    )
-      return;
-    setDeleting(true);
-    setDeleteError("");
+    if (!deleteTarget || !removable(deleteTarget)) return;
+    let result: Awaited<ReturnType<typeof api.deleteLinkedWorktree>>;
     try {
-      const result = await api.deleteLinkedWorktree(
+      result = await api.deleteLinkedWorktree(
         workspaceId,
         workspaceFileLinkedWorktreeRootIdSchema.parse(deleteTarget.rootId),
         {
@@ -217,19 +237,16 @@ export function ThreadWorktreePicker({
           confirmation: true,
         },
       );
-      if (result.clearedThreadIds.includes(thread.id)) {
-        setPendingPreference({
-          rootId: null,
-          revision: preferredRevision + 1,
-        });
-      }
-      setDeleteTarget(undefined);
-      await loadRoots(true);
     } catch (cause) {
-      setDeleteError(messageFor(cause));
-    } finally {
-      setDeleting(false);
+      throw new Error(messageFor(cause));
     }
+    if (result.clearedThreadIds.includes(thread.id)) {
+      setPendingPreference({
+        rootId: null,
+        revision: preferredRevision + 1,
+      });
+    }
+    void loadRoots(true);
   };
 
   const handleOpenChange = (next: boolean) => {
@@ -239,6 +256,12 @@ export function ThreadWorktreePicker({
       void loadRoots(roots.length > 0);
     }
   };
+  const rowButtons = () =>
+    Array.from(
+      listRef.current?.querySelectorAll<HTMLElement>(
+        '[data-slot="worktree-option"]',
+      ) ?? [],
+    );
   const trigger = (
     <button
       ref={triggerRef}
@@ -260,32 +283,44 @@ export function ThreadWorktreePicker({
       />
     </button>
   );
-  const pickerContent = (
+  const nothingVisible = !primaryVisible && visibleLinked.length === 0;
+  const choices = (
     <>
-      <div className="thread-worktree-popover-heading">
-        <div>
-          <strong>Thread worktree</strong>
-          <span>Used by Files, Compare, and relative file links.</span>
-        </div>
-        {loading && <LoaderCircle className="animate-spin" size={15} />}
-      </div>
-      <label className="thread-worktree-search">
-        <Search size={14} strokeWidth={1.8} aria-hidden="true" />
-        <Input
-          type="search"
-          value={query}
-          aria-label="Search worktrees"
-          placeholder="Search worktrees"
-          ref={searchRef}
-          onChange={(event) => setQuery(event.target.value)}
-        />
-      </label>
-      <div className="thread-worktree-list" role="list" aria-label="Worktrees">
+      <SearchableSelectSearch
+        ref={searchRef}
+        role="searchbox"
+        enterKeyHint="search"
+        value={query}
+        aria-label="Search worktrees"
+        placeholder="Search worktrees"
+        onChange={(event) => setQuery(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+          if (moveListFocus(rowButtons(), event.key, null)) {
+            event.preventDefault();
+          }
+        }}
+      />
+      <div
+        ref={listRef}
+        role="list"
+        aria-label="Worktrees"
+        className={cn(
+          "flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain",
+          // In the sheet the rows reach into its inset so their icons line
+          // up with the title and the search icon.
+          mobile ? "-mx-2" : "p-(--menu-panel-padding)",
+        )}
+        onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+          if (moveListFocus(rowButtons(), event.key)) event.preventDefault();
+        }}
+      >
         {primaryVisible && (
           <WorktreeRow
             root={primary}
             current={preferredRootId === null}
             disabled={saving}
+            actionColumn={actionColumn}
             onSelect={() => void selectRoot(primary)}
           />
         )}
@@ -295,12 +330,11 @@ export function ThreadWorktreePicker({
             root={root}
             current={root.rootId === preferredRootId}
             disabled={saving}
+            actionColumn={actionColumn}
             onSelect={() => void selectRoot(root)}
             onDelete={
-              root.removal.status === "allowed" ||
-              root.removal.status === "forget"
+              removable(root)
                 ? () => {
-                    setDeleteError("");
                     setOpen(false);
                     setDeleteTarget(root);
                   }
@@ -308,29 +342,35 @@ export function ThreadWorktreePicker({
             }
           />
         ))}
-        {!loading &&
-          !error &&
-          !primaryVisible &&
-          visibleLinked.length === 0 && (
-            <p className="thread-worktree-empty">
-              {normalizedQuery
-                ? "No matching worktrees."
-                : "No linked worktrees."}
-            </p>
-          )}
+        {nothingVisible && loading && (
+          <p role="status" className={cn(menuEmptyClass, "m-0")}>
+            <LoaderCircle aria-hidden="true" /> Loading worktrees…
+          </p>
+        )}
+        {nothingVisible && !loading && !error && (
+          <p className={cn(menuEmptyClass, "m-0")}>
+            {normalizedQuery ? "No matching worktrees." : "No linked worktrees."}
+          </p>
+        )}
       </div>
       {error && (
-        <div className="thread-worktree-error" role="alert">
-          <span>{error}</span>
-          <Button
-            variant="outline"
-            size="xs"
-            disabled={loading}
-            onClick={() => void loadRoots(false)}
-          >
-            Retry
-          </Button>
-        </div>
+        <Callout
+          tone="danger"
+          role="alert"
+          className={cn("shrink-0", !mobile && "mx-1 mb-1")}
+          action={
+            <Button
+              variant="outline"
+              size="xs"
+              disabled={loading}
+              onClick={() => void loadRoots(false)}
+            >
+              Retry
+            </Button>
+          }
+        >
+          {error}
+        </Callout>
       )}
     </>
   );
@@ -341,175 +381,169 @@ export function ThreadWorktreePicker({
         <Dialog open={open} onOpenChange={handleOpenChange}>
           <DialogTrigger asChild>{trigger}</DialogTrigger>
           <DialogContent
+            layout="sheet"
+            size="md"
+            className="searchable-select-sheet"
             onOpenAutoFocus={pickerFocus.onOpenAutoFocus}
-            className="thread-settings-sheet thread-worktree-sheet"
-            style={{ "--thread-settings-keyboard-inset": `${keyboardInset}px` } as CSSProperties}
-            overlayClassName="thread-settings-sheet-overlay"
           >
-            <DialogTitle className="sr-only">Thread worktree</DialogTitle>
-            <DialogDescription className="sr-only">
-              Choose the worktree used by Files, Compare, and relative file
-              links.
-            </DialogDescription>
-            {pickerContent}
+            <DialogHeader>
+              <DialogTitle>Thread worktree</DialogTitle>
+              <DialogDescription>{DESCRIPTION}</DialogDescription>
+            </DialogHeader>
+            {choices}
           </DialogContent>
         </Dialog>
       ) : (
-        <Popover.Root open={open} onOpenChange={handleOpenChange}>
-          <Popover.Trigger asChild>{trigger}</Popover.Trigger>
-          <Popover.Portal container={dialogContainer}>
-            <Popover.Content
-              onOpenAutoFocus={pickerFocus.onOpenAutoFocus}
-              className="thread-worktree-popover"
-              align="start"
-              sideOffset={7}
-              collisionPadding={8}
-              collisionBoundary={dialogContainer ?? undefined}
-              aria-label="Choose thread worktree"
-            >
-              {pickerContent}
-              <Popover.Arrow className="popover-arrow" />
-            </Popover.Content>
-          </Popover.Portal>
-        </Popover.Root>
+        <Popover open={open} onOpenChange={handleOpenChange}>
+          <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+          <PopoverContent
+            align="start"
+            aria-labelledby={titleId}
+            className="max-h-[min(var(--radix-popover-content-available-height),520px)] w-[min(390px,calc(100vw-16px))] gap-0 overflow-hidden p-0"
+            onOpenAutoFocus={pickerFocus.onOpenAutoFocus}
+          >
+            <div className="flex shrink-0 flex-col gap-0.5 px-3 pt-2.5 pb-2">
+              <PopoverTitle id={titleId} className="m-0 leading-5">
+                Thread worktree
+              </PopoverTitle>
+              <PopoverDescription className={cn(menuDescriptionClass, "m-0")}>
+                {DESCRIPTION}
+              </PopoverDescription>
+            </div>
+            {choices}
+          </PopoverContent>
+        </Popover>
       )}
 
-      <Dialog
+      <ConfirmDialog
         open={deleteTarget !== undefined}
         onOpenChange={(next) => {
-          if (!next && !deleting) setDeleteTarget(undefined);
+          if (!next) setDeleteTarget(undefined);
         }}
-      >
-        <DialogContent
-          onCloseAutoFocus={(event) => {
-            event.preventDefault();
-            triggerRef.current?.focus({ preventScroll: true });
-          }}
-        >
-          <DialogHeader>
-            <DialogTitle>
-              {deleteTarget?.removal.status === "allowed"
-                ? "Remove linked worktree?"
-                : "Forget missing worktree?"}
-            </DialogTitle>
-            <DialogDescription>
-              {deleteTarget?.removal.status === "allowed" ? (
-                <>
-                  Remove{" "}
-                  <strong>{deleteTarget && worktreeName(deleteTarget)}</strong>{" "}
-                  at <code>{removalDisplayPath(deleteTarget)}</code> from disk
-                  and from this project’s worktree list? This worktree is{" "}
-                  {deleteTarget &&
-                    worktreeStatus(deleteTarget, false).toLocaleLowerCase()}
-                  {deleteTarget ? ` (${worktreeCounts(deleteTarget)})` : ""}.
-                  The Git branch and commits are kept. Only a clean worktree can
-                  be removed. Ignored files and build output inside the checkout
-                  may still be deleted.
-                </>
-              ) : (
-                <>
-                  Forget{" "}
-                  <strong>{deleteTarget && worktreeName(deleteTarget)}</strong>{" "}
-                  at <code>{deleteTarget?.displayPath.text}</code> from this
-                  project’s worktree list? Its directory is already missing.
-                </>
-              )}
-            </DialogDescription>
-          </DialogHeader>
-          {deleteError && (
-            <p className="thread-worktree-error" role="alert">
-              {deleteError}
-            </p>
-          )}
-          <DialogFooter>
-            <Button
-              variant="outline"
-              disabled={deleting}
-              onClick={() => setDeleteTarget(undefined)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={deleting}
-              onClick={() => void deleteWorktree()}
-            >
-              {deleting
-                ? "Working…"
-                : deleteTarget?.removal.status === "allowed"
-                  ? "Remove worktree"
-                  : "Forget worktree"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        tone="danger"
+        title={
+          deleteTarget?.removal.status === "allowed"
+            ? "Remove linked worktree?"
+            : "Forget missing worktree?"
+        }
+        description={
+          deleteTarget?.removal.status === "allowed" ? (
+            <>
+              Remove <strong>{worktreeName(deleteTarget)}</strong> at{" "}
+              <code>{deleteTarget.removal.displayPath.text}</code> from disk
+              and from this project’s worktree list? This worktree is{" "}
+              {linkedStatus(deleteTarget).toLocaleLowerCase()} (
+              {worktreeCounts(deleteTarget)}). The Git branch and commits are
+              kept. Only a clean worktree can be removed. Ignored files and
+              build output inside the checkout may still be deleted.
+            </>
+          ) : (
+            <>
+              Forget <strong>{deleteTarget && worktreeName(deleteTarget)}</strong>{" "}
+              at <code>{deleteTarget?.displayPath.text}</code> from this
+              project’s worktree list? Its directory is already missing.
+            </>
+          )
+        }
+        confirmLabel={
+          deleteTarget?.removal.status === "allowed"
+            ? "Remove worktree"
+            : "Forget worktree"
+        }
+        pendingLabel={
+          deleteTarget?.removal.status === "allowed"
+            ? "Removing…"
+            : "Forgetting…"
+        }
+        onConfirm={deleteWorktree}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          triggerRef.current?.focus({ preventScroll: true });
+        }}
+      />
     </>
   );
-}
-
-function removalDisplayPath(root: LinkedWorktree | undefined): string {
-  if (!root) return "";
-  return root.removal.status === "allowed"
-    ? root.removal.displayPath.text
-    : root.displayPath.text;
 }
 
 function WorktreeRow({
   root,
   current,
   disabled,
+  actionColumn,
   onSelect,
   onDelete,
 }: {
   readonly root: WorkspaceFileRootDescriptor;
   readonly current: boolean;
   readonly disabled: boolean;
+  /** Reserve the trailing action column so status and check line up. */
+  readonly actionColumn: boolean;
   readonly onSelect: () => void;
   readonly onDelete?: () => void;
 }): React.JSX.Element {
-  const status = worktreeStatus(root, current);
-  const title = worktreeDetails(root);
+  const name = root.kind === "primary" ? "Primary" : worktreeName(root);
+  const status = worktreeStatus(root);
+  const unavailable = root.availability !== "available";
   const pathDescriptionId = useId();
   const statusDescriptionId = useId();
+  const removal =
+    root.kind === "linked_worktree" && root.removal.status === "allowed"
+      ? "Remove"
+      : "Forget";
   return (
-    <div
-      className="thread-worktree-row"
-      role="listitem"
-      data-current={current || undefined}
-    >
+    <div role="listitem" className={menuListRowClass}>
       <button
         type="button"
-        className="thread-worktree-select"
-        disabled={disabled || root.availability !== "available"}
+        data-slot="worktree-option"
+        className={cn(menuRowClass, "w-auto min-w-0 flex-1")}
+        disabled={disabled || unavailable}
+        data-disabled={unavailable || undefined}
         aria-current={current ? "true" : undefined}
-        aria-label={`Select ${root.kind === "primary" ? "Primary" : worktreeName(root)}`}
-        aria-describedby={`${pathDescriptionId} ${statusDescriptionId}`}
-        title={title}
+        aria-label={`Select ${name}`}
+        aria-describedby={
+          status === undefined
+            ? pathDescriptionId
+            : `${pathDescriptionId} ${statusDescriptionId}`
+        }
+        title={worktreeDetails(root)}
         onClick={onSelect}
       >
-        <GitBranch size={15} strokeWidth={1.8} aria-hidden="true" />
-        <span className="thread-worktree-row-copy">
-          <strong>
-            {root.kind === "primary" ? "Primary" : worktreeName(root)}
-          </strong>
-          <small id={pathDescriptionId}>{root.displayPath.text}</small>
+        <GitBranch aria-hidden="true" />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate">{name}</span>
+          <span
+            id={pathDescriptionId}
+            data-slot="worktree-item-description"
+            className={cn(menuDescriptionClass, "truncate")}
+          >
+            {root.displayPath.text}
+          </span>
         </span>
-        <span id={statusDescriptionId} className="thread-worktree-status">
-          {status}
+        {status !== undefined && (
+          <span id={statusDescriptionId} className={cn(menuShortcutClass, "mt-0.5")}>
+            {status}
+          </span>
+        )}
+        <span className="mt-0.5 flex size-4 shrink-0 items-center justify-center">
+          {current && <Check className="text-foreground" aria-hidden="true" />}
         </span>
       </button>
-      {onDelete && (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="thread-worktree-delete"
-          aria-label={`${root.kind === "linked_worktree" && root.removal.status === "allowed" ? "Remove" : "Forget"} ${worktreeName(root)}`}
-          title={`${root.kind === "linked_worktree" && root.removal.status === "allowed" ? "Remove" : "Forget"} worktree`}
+      {onDelete ? (
+        <button
+          type="button"
+          data-variant="destructive"
+          className={menuRowActionClass}
+          aria-label={`${removal} ${name}`}
+          title={`${removal} worktree`}
           disabled={disabled}
           onClick={onDelete}
         >
-          <Trash2 size={14} strokeWidth={1.8} />
-        </Button>
+          <Trash2 aria-hidden="true" />
+        </button>
+      ) : (
+        actionColumn && (
+          <span aria-hidden="true" className="size-(--menu-row-height) shrink-0" />
+        )
       )}
     </div>
   );
@@ -521,16 +555,15 @@ function worktreeName(root: WorkspaceFileRootDescriptor): string {
     : root.displayLabel;
 }
 
-function worktreeStatus(
-  root: WorkspaceFileRootDescriptor,
-  current: boolean,
-): string {
-  if (root.kind === "linked_worktree" && root.availability === "unavailable") {
+/** A linked worktree's state next to its name; the check marks the current one. */
+function worktreeStatus(root: WorkspaceFileRootDescriptor): string | undefined {
+  return root.kind === "linked_worktree" ? linkedStatus(root) : undefined;
+}
+
+function linkedStatus(root: LinkedWorktree): string {
+  if (root.availability === "unavailable") {
     return root.removal.status === "forget" ? "Missing" : "Unavailable";
   }
-  if (current) return "Current";
-  if (root.kind === "primary") return "Primary";
-  if (root.kind !== "linked_worktree") return "Unknown";
   switch (root.provenance.kind) {
     case "same":
     case "contained":

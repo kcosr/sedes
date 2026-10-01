@@ -280,6 +280,20 @@ test.describe("panel-instance workbench", () => {
     await page.setViewportSize({ width: 412, height: 915 });
 
     await page.getByRole("button", { name: "Panels", exact: true }).click();
+    // The shared floating layer already stacks menus above the mobile drawer.
+    expect(
+      await page
+        .getByRole("menu", { name: "Panels" })
+        .evaluate(
+          (menu) =>
+            Number(getComputedStyle(menu).zIndex) >
+            Number(
+              getComputedStyle(document.documentElement).getPropertyValue(
+                "--z-drawer",
+              ),
+            ),
+        ),
+    ).toBe(true);
     await page.getByRole("menuitem", { name: /^Files(?: —|$)/ }).click();
     const filesPanel = page.getByRole("region", {
       name: "Files panel",

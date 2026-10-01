@@ -1,4 +1,11 @@
 import { installGhosttyRenderScheduling } from "./ghostty-render-scheduling.js";
+import {
+  GHOSTTY_SENTINEL_COLORS,
+  GHOSTTY_WASM_THEME,
+  installGhosttyLiveTheme,
+  type GhosttyLiveTheme,
+} from "./ghostty-live-theme.js";
+import { GhosttyTruecolorGuard } from "./ghostty-truecolor-guard.js";
 import { isWindowsClient } from "./client-platform.js";
 import type { ITheme, Terminal } from "ghostty-web";
 import type { TerminalEmulatorSink } from "./terminal-session.js";
@@ -112,7 +119,10 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
   #terminal?: Terminal;
   #fitAddon?: import("ghostty-web").FitAddon;
   #renderScheduling: ReturnType<typeof installGhosttyRenderScheduling> | undefined;
+  #liveTheme: GhosttyLiveTheme | undefined;
+  readonly #truecolorGuard = new GhosttyTruecolorGuard(GHOSTTY_SENTINEL_COLORS);
   #cursorBlink: boolean;
+  #colorScheme: TerminalColorScheme;
   #container?: HTMLElement;
   #inputCallback?: (data: string) => void;
   #inputDisposable?: { dispose(): void };
@@ -127,6 +137,7 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
   constructor(options: GhosttyEmulatorOptions) {
     this.#options = options;
     this.#cursorBlink = options.cursorBlink;
+    this.#colorScheme = options.colorScheme;
   }
 
   async mount(
@@ -186,12 +197,16 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
       fontSize: this.#options.fontSize,
       scrollback: this.#options.scrollback,
       smoothScrollDuration: 0,
-      theme: GHOSTTY_THEMES[this.#options.colorScheme],
+      // The WASM terminal always holds the sentinel palette; the live theme
+      // paints it in the current theme (see ghostty-live-theme.ts).
+      theme: GHOSTTY_WASM_THEME,
     });
     const fitAddon = new ghostty.FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.open(container);
     this.#renderScheduling = installGhosttyRenderScheduling(terminal, isWindowsClient());
+    this.#liveTheme = installGhosttyLiveTheme(terminal, GHOSTTY_THEMES[this.#colorScheme]);
+    this.#truecolorGuard.reset();
     blankGhosttyBootstrap(terminal);
     terminal.attachCustomKeyEventHandler((event) => {
       if (isImeComposingKeyEvent(event)) return false;
@@ -226,9 +241,7 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
       },
       (data) => terminal.input(data, true),
     );
-    const background = GHOSTTY_THEMES[this.#options.colorScheme].background;
-    const canvas = terminal.renderer?.getCanvas();
-    if (canvas) canvas.style.backgroundColor = background ?? "transparent";
+    this.#paintCanvasBackground(terminal);
     const size = this.fit();
     return { columns: size.columns, rows: size.rows };
   }
@@ -243,7 +256,7 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
     // responder, so output-originated onData must never return to the PTY.
     this.#applyingOutput = true;
     try {
-      terminal.write(bytes);
+      terminal.write(this.#truecolorGuard.transform(bytes));
       // ghostty-web 0.4.0 unconditionally scrolls to the bottom on write.
       // Restore a reader's viewport synchronously, before its next paint.
       // viewportY is measured backwards from the live screen, so account for
@@ -258,6 +271,19 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
       this.#applyingOutput = false;
       this.#renderScheduling?.request();
     }
+  }
+
+  /**
+   * Follows a theme change in place. The session, screen and scrollback stay
+   * attached; only the colors change.
+   */
+  setColorScheme(colorScheme: TerminalColorScheme): void {
+    if (colorScheme === this.#colorScheme) return;
+    this.#colorScheme = colorScheme;
+    const terminal = this.#terminal;
+    if (!terminal) return;
+    this.#liveTheme?.setTheme(GHOSTTY_THEMES[colorScheme]);
+    this.#paintCanvasBackground(terminal);
   }
 
   setCursorBlink(enabled: boolean): void {
@@ -441,6 +467,8 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
   #disposeTerminal(): void {
     this.#renderScheduling?.dispose();
     this.#renderScheduling = undefined;
+    this.#liveTheme?.dispose();
+    this.#liveTheme = undefined;
     this.#cancelDelayedFocus();
     this.#touchCleanup?.();
     this.#imeCleanup?.();
@@ -466,6 +494,13 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
     this.#inputDisposable = terminal.onData((data) => {
       if (!this.#applyingOutput) callback(data);
     });
+  }
+
+  #paintCanvasBackground(terminal: Terminal): void {
+    const canvas = terminal.renderer?.getCanvas();
+    if (canvas)
+      canvas.style.backgroundColor =
+        GHOSTTY_THEMES[this.#colorScheme].background ?? "transparent";
   }
 
   #requireTerminal(): Terminal {
@@ -566,14 +601,14 @@ export function installGhosttyImeBridge(input: {
   overlay.hidden = true;
   Object.assign(overlay.style, {
     position: "fixed",
-    zIndex: "6",
+    zIndex: "calc(var(--z-sticky) + 5)",
     pointerEvents: "none",
     whiteSpace: "pre",
     padding: "0 2px",
     borderRadius: "2px",
     textDecoration: "underline",
-    background: "rgba(17, 19, 24, .9)",
-    color: "#f3f4f6",
+    background: "color-mix(in oklch, var(--terminal-background) 90%, transparent)",
+    color: "var(--terminal-foreground)",
   });
   input.container.append(overlay);
   let processedValue = "";
@@ -788,7 +823,7 @@ function positionGhosttyTextarea(
     fontFamily: FONT_FAMILY,
     fontSize: `${terminal.options.fontSize}px`,
     lineHeight: `${height}px`,
-    zIndex: "5",
+    zIndex: "calc(var(--z-sticky) + 4)",
   });
 }
 

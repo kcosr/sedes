@@ -3,6 +3,9 @@ import type { BackendInteraction } from "../../../shared/index.js";
 import { validateFormAnswers } from "../../../shared/protocol/interactions.js";
 import type { ThreadClientStore } from "../../stores/ThreadClientStore.js";
 import { Button } from "@client/components/ui/button";
+import { Checkbox } from "@client/components/ui/checkbox";
+import { Input } from "@client/components/ui/input";
+import { NativeSelect } from "@client/components/ui/native-select";
 
 type FormInteraction = Extract<BackendInteraction, { kind: "form" }>;
 type FormField = FormInteraction["fields"][number];
@@ -158,15 +161,14 @@ export function InteractionForm({
                   <span className="interaction-field-required">Required</span>
                 ) : (
                   <label className="interaction-field-inclusion">
-                    <input
-                      type="checkbox"
+                    <Checkbox
                       checked={enabled}
                       disabled={pending}
                       aria-label={`Include optional field ${field.label.text}`}
-                      onChange={(event) => {
+                      onCheckedChange={(checked) => {
                         setIncluded((current) => {
                           const next = new Set(current);
-                          if (event.target.checked) next.add(field.id);
+                          if (checked === true) next.add(field.id);
                           else next.delete(field.id);
                           return next;
                         });
@@ -186,7 +188,7 @@ export function InteractionForm({
               )}
               {hint && <p id={hintId}>{hint}</p>}
               {input.kind === "text" ? (
-                <input
+                <Input
                   {...common}
                   type="text"
                   value={typeof draft === "string" ? draft : ""}
@@ -207,7 +209,7 @@ export function InteractionForm({
                   onChange={(event) => update(field.id, event.target.value)}
                 />
               ) : input.kind === "number" ? (
-                <input
+                <Input
                   {...common}
                   type="number"
                   value={typeof draft === "string" ? draft : ""}
@@ -217,7 +219,7 @@ export function InteractionForm({
                   onChange={(event) => update(field.id, event.target.value)}
                 />
               ) : input.kind === "boolean" ? (
-                <select
+                <NativeSelect
                   {...common}
                   value={typeof draft === "string" ? draft : ""}
                   onChange={(event) => update(field.id, event.target.value)}
@@ -225,9 +227,9 @@ export function InteractionForm({
                   <option value="">Select…</option>
                   <option value="true">Yes</option>
                   <option value="false">No</option>
-                </select>
+                </NativeSelect>
               ) : input.kind === "single_choice" ? (
-                <select
+                <NativeSelect
                   {...common}
                   value={typeof draft === "string" ? draft : ""}
                   onChange={(event) => update(field.id, event.target.value)}
@@ -238,7 +240,7 @@ export function InteractionForm({
                       {option.label.text}
                     </option>
                   ))}
-                </select>
+                </NativeSelect>
               ) : (
                 <fieldset
                   id={common.id}
@@ -258,17 +260,16 @@ export function InteractionForm({
                   </legend>
                   {input.options.map((option) => (
                     <label key={option.id}>
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         disabled={disabled}
                         checked={
                           Array.isArray(draft) && draft.includes(option.id)
                         }
-                        onChange={(event) => {
+                        onCheckedChange={(checked) => {
                           const current = Array.isArray(draft) ? draft : [];
                           update(
                             field.id,
-                            event.target.checked
+                            checked === true
                               ? [...current, option.id]
                               : current.filter((value) => value !== option.id),
                           );

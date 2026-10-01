@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/ApiClient.js";
 import type {
   ApplicationClientState,
@@ -40,7 +40,21 @@ const state: ApplicationClientState = {
   pendingThreadConfigurationCopySourceIds: [],
 };
 
-afterEach(() => cleanup());
+/** Matches the given media queries; the others do not match. */
+function viewport(...matching: string[]): void {
+  vi.stubGlobal("matchMedia", vi.fn((query: string) => ({
+    matches: matching.includes(query),
+    media: query,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  })));
+}
+
+beforeEach(() => viewport());
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 function renderDialog(
   api: Record<string, unknown>,
@@ -122,6 +136,50 @@ describe("ThreadAutomationDialog", () => {
     );
     expect(screen.getByRole("button", { name: "Enable" })).toBeInTheDocument();
     expect(createThreadAutomation).not.toHaveBeenCalled();
+  });
+
+  it("opens a new automation with focus on the prompt, never the close button", async () => {
+    renderDialog({});
+    const prompt = await screen.findByRole("textbox", { name: "Canned prompt" });
+    await waitFor(() => expect(prompt).toHaveFocus());
+    expect(
+      screen.getByRole("dialog", { name: "Automation settings for Current work" }),
+    ).toHaveAttribute("data-layout", "side");
+  });
+
+  it("deletes through the confirmation dialog, not a native prompt", async () => {
+    const user = userEvent.setup();
+    const nativeConfirm = vi.spyOn(window, "confirm");
+    const deleteThreadAutomation = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Automation is busy"))
+      .mockResolvedValueOnce(undefined);
+    const onClose = vi.fn();
+    renderDialog(
+      { getThreadAutomation: vi.fn().mockResolvedValue(paused), deleteThreadAutomation },
+      onClose,
+      paused,
+    );
+    await user.click(
+      await screen.findByRole("button", { name: "Delete automation…" }),
+    );
+    const confirm = screen.getByRole("dialog", { name: "Delete this automation?" });
+    const remove = screen.getByRole("button", { name: "Delete automation" });
+    expect(remove).toHaveAttribute("data-variant", "destructive");
+    await user.click(remove);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Automation is busy");
+    expect(confirm).toBeVisible();
+    expect(onClose).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Delete automation" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(deleteThreadAutomation).toHaveBeenCalledTimes(2);
+    expect(deleteThreadAutomation).toHaveBeenLastCalledWith(
+      threadId,
+      paused.revision,
+      expect.any(String),
+    );
+    expect(nativeConfirm).not.toHaveBeenCalled();
+    nativeConfirm.mockRestore();
   });
 
   it("loads an existing automation through StrictMode effect replay", async () => {
@@ -278,5 +336,38 @@ describe("ThreadAutomationDialog", () => {
     );
     expect(screen.getByRole("button", { name: "Enable" })).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("moves Run now and Enable into a header menu where the footer stacks", async () => {
+    viewport("(max-width: 519px)");
+    const user = userEvent.setup();
+    const setThreadAutomationState = vi
+      .fn()
+      .mockResolvedValue({ ...paused, status: "enabled", revision: 2 });
+    renderDialog(
+      { getThreadAutomation: vi.fn().mockResolvedValue(paused), setThreadAutomationState },
+      vi.fn(),
+      paused,
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByText("paused")).toBeInTheDocument();
+    const footer = dialog.querySelector<HTMLElement>('[data-slot="dialog-footer"]')!;
+    expect(within(footer).getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "Cancel",
+      "Save",
+    ]);
+    expect(screen.queryByRole("button", { name: "Run now" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Enable" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "More automation actions" }));
+    expect(screen.getByRole("menuitem", { name: "Run now" })).toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: "Enable" }));
+    await waitFor(() =>
+      expect(setThreadAutomationState).toHaveBeenCalledWith(threadId, "enable", 1, expect.any(String)),
+    );
+    expect(await within(dialog).findByText("enabled")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "More automation actions" }));
+    expect(screen.getByRole("menuitem", { name: "Pause" })).toBeInTheDocument();
   });
 });

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -10,10 +11,17 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedApplicationThreadSummary } from "../../../shared/index.js";
+import { getBlockingOperation } from "../../operations/blocking-operation.js";
 import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
-import { ArchiveChoicesDialog } from "./ArchiveChoicesDialog.js";
+import {
+  ArchiveChoicesDialog,
+  useArchiveThreadAction,
+} from "./ArchiveChoicesDialog.js";
 
-afterEach(cleanup);
+afterEach(() => {
+  getBlockingOperation()?.cancel();
+  cleanup();
+});
 
 function makeThread(
   overrides: Partial<NormalizedApplicationThreadSummary> = {},
@@ -79,6 +87,26 @@ function makeStore(): ApplicationClientStore & {
   };
 }
 
+/** The dialog as the archive action opens it: with the impact its check found. */
+async function renderChoices(
+  store: ReturnType<typeof makeStore>,
+  props: Omit<
+    Partial<React.ComponentProps<typeof ArchiveChoicesDialog>>,
+    "initialImpact"
+  > & { readonly descendantCount: number },
+) {
+  const initialImpact = await store.getThreadArchiveImpact("thread-1");
+  return render(
+    <ArchiveChoicesDialog
+      onOpenChange={vi.fn()}
+      thread={makeThread()}
+      store={store}
+      initialImpact={initialImpact}
+      {...props}
+    />,
+  );
+}
+
 describe("ArchiveChoicesDialog", () => {
   it("allows deleting failed provisioning but not active provisioning", async () => {
     const workspace = {
@@ -100,15 +128,7 @@ describe("ArchiveChoicesDialog", () => {
       archiveOnly: { available: true },
       archiveAll: { available: true },
     });
-    const first = render(
-      <ArchiveChoicesDialog
-        open
-        onOpenChange={() => undefined}
-        thread={makeThread()}
-        store={store}
-        descendantCount={0}
-      />,
-    );
+    const first = await renderChoices(store, { descendantCount: 0 });
 
     expect(await screen.findByRole("radio", { name: "Delete" })).toBeDisabled();
     first.unmount();
@@ -128,15 +148,7 @@ describe("ArchiveChoicesDialog", () => {
       archiveOnly: { available: true },
       archiveAll: { available: true },
     });
-    render(
-      <ArchiveChoicesDialog
-        open
-        onOpenChange={() => undefined}
-        thread={makeThread()}
-        store={store}
-        descendantCount={0}
-      />,
-    );
+    await renderChoices(store, { descendantCount: 0 });
 
     expect(await screen.findByRole("radio", { name: "Delete" })).toBeEnabled();
     expect(screen.getByRole("alert")).toHaveTextContent("Provisioning failed");
@@ -168,15 +180,7 @@ describe("ArchiveChoicesDialog", () => {
       archiveOnly: { available: true },
       archiveAll: { available: true },
     });
-    render(
-      <ArchiveChoicesDialog
-        open
-        onOpenChange={() => undefined}
-        thread={makeThread()}
-        store={store}
-        descendantCount={0}
-      />,
-    );
+    await renderChoices(store, { descendantCount: 0 });
 
     const handling = await screen.findByRole("radiogroup", {
       name: "Isolated workspace handling",
@@ -219,25 +223,18 @@ describe("ArchiveChoicesDialog", () => {
     });
     const onArchived = vi.fn();
     const onOpenChange = vi.fn();
-    render(
-      <ArchiveChoicesDialog
-        open
-        onOpenChange={onOpenChange}
-        thread={makeThread()}
-        store={store}
-        descendantCount={0}
-        onArchived={onArchived}
-      />,
-    );
+    await renderChoices(store, { onOpenChange, descendantCount: 0, onArchived });
 
     const archiveOnly = await screen.findByRole("button", {
       name: "Archive",
     });
-    const actions = archiveOnly.closest(".dialog-actions");
+    const actions = archiveOnly.closest('[data-slot="dialog-footer"]');
     expect(actions).not.toBeNull();
-    expect(actions).toContainElement(
-      screen.getByRole("button", { name: "Cancel" }),
-    );
+    expect(
+      [...actions!.querySelectorAll("button")].map((button) => button.textContent),
+    ).toEqual(["Cancel", "Archive"]);
+    // Archiving is reversible: a neutral primary, not the destructive style.
+    expect(archiveOnly).toHaveAttribute("data-variant", "default");
     expect(archiveOnly.querySelector("svg")).toBeNull();
     expect(
       screen.queryByRole("button", { name: /Archive thread and/ }),
@@ -269,15 +266,7 @@ describe("ArchiveChoicesDialog", () => {
       archiveOnly: { available: true },
       archiveAll: { available: true },
     });
-    render(
-      <ArchiveChoicesDialog
-        open
-        onOpenChange={vi.fn()}
-        thread={makeThread()}
-        store={store}
-        descendantCount={2}
-      />,
-    );
+    await renderChoices(store, { descendantCount: 2 });
 
     await screen.findByRole("button", { name: "Archive" });
     await waitFor(() =>
@@ -292,16 +281,7 @@ describe("ArchiveChoicesDialog", () => {
   it("archives the whole family when descendant archiving is selected", async () => {
     const store = makeStore();
     const onArchived = vi.fn();
-    render(
-      <ArchiveChoicesDialog
-        open
-        onOpenChange={vi.fn()}
-        thread={makeThread()}
-        store={store}
-        descendantCount={2}
-        onArchived={onArchived}
-      />,
-    );
+    await renderChoices(store, { descendantCount: 2, onArchived });
 
     const archiveAll = await screen.findByRole("button", { name: "Archive" });
     const checkbox = screen.getByRole("checkbox", {
@@ -331,15 +311,7 @@ describe("ArchiveChoicesDialog", () => {
 
   it("archives only the thread by default when descendants exist", async () => {
     const store = makeStore();
-    render(
-      <ArchiveChoicesDialog
-        open
-        onOpenChange={vi.fn()}
-        thread={makeThread()}
-        store={store}
-        descendantCount={2}
-      />,
-    );
+    await renderChoices(store, { descendantCount: 2 });
 
     const checkbox = await screen.findByRole("checkbox", {
       name: "Archive child and descendant forks",
@@ -372,15 +344,7 @@ describe("ArchiveChoicesDialog", () => {
       archiveOnly: { available: true },
       archiveAll: { available: true },
     });
-    render(
-      <ArchiveChoicesDialog
-        open
-        onOpenChange={vi.fn()}
-        thread={makeThread()}
-        store={store}
-        descendantCount={2}
-      />,
-    );
+    await renderChoices(store, { descendantCount: 2 });
 
     expect(await screen.findByText("2 stashed prompts")).toBeVisible();
     expect(
@@ -451,15 +415,7 @@ describe("ArchiveChoicesDialog", () => {
       archiveOnly: { available: true },
       archiveAll: { available: true },
     });
-    render(
-      <ArchiveChoicesDialog
-        open
-        onOpenChange={vi.fn()}
-        thread={makeThread()}
-        store={store}
-        descendantCount={2}
-      />,
-    );
+    await renderChoices(store, { descendantCount: 2 });
 
     const rootTasks = await screen.findByRole("region", {
       name: "3 open tasks affected by this archive",
@@ -483,75 +439,6 @@ describe("ArchiveChoicesDialog", () => {
     expect(
       within(familyTasks).getByText("2 more tasks not shown"),
     ).toBeVisible();
-  });
-
-  it("shows only progress until the impact check completes and ignores passive dismissal", async () => {
-    const store = makeStore();
-    const impact = await store.getThreadArchiveImpact("thread-1");
-    let resolve!: (value: typeof impact) => void;
-    store.getThreadArchiveImpact.mockReturnValue(
-      new Promise((done) => {
-        resolve = done;
-      }),
-    );
-    const onOpenChange = vi.fn();
-    render(
-      <ArchiveChoicesDialog
-        open
-        onOpenChange={onOpenChange}
-        thread={makeThread()}
-        store={store}
-        descendantCount={2}
-      />,
-    );
-    expect(screen.getByText("Checking thread activity…")).toBeVisible();
-    expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
-    expect(screen.queryByRole("checkbox")).toBeNull();
-    await userEvent.keyboard("{Escape}");
-    await userEvent.click(screen.getByTestId("dialog-overlay"));
-    expect(onOpenChange).not.toHaveBeenCalled();
-    resolve(impact);
-    expect(
-      await screen.findByRole("button", { name: "Archive" }),
-    ).toBeEnabled();
-    expect(screen.queryByText("Checking thread activity…")).toBeNull();
-    expect(screen.getByRole("checkbox")).toBeVisible();
-  });
-
-  it("starts a fresh check after cancel and ignores the previous opening's response", async () => {
-    const store = makeStore();
-    const impact = await store.getThreadArchiveImpact("thread-1");
-    let resolveOld!: (value: typeof impact) => void;
-    let resolveNew!: (value: typeof impact) => void;
-    store.getThreadArchiveImpact
-      .mockReturnValueOnce(
-        new Promise((done) => {
-          resolveOld = done;
-        }),
-      )
-      .mockReturnValueOnce(
-        new Promise((done) => {
-          resolveNew = done;
-        }),
-      );
-    const props = {
-      onOpenChange: vi.fn(),
-      thread: makeThread(),
-      store,
-      descendantCount: 0,
-    };
-    const view = render(<ArchiveChoicesDialog {...props} open />);
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(props.onOpenChange).toHaveBeenCalledWith(false);
-    view.rerender(<ArchiveChoicesDialog {...props} open={false} />);
-    view.rerender(<ArchiveChoicesDialog {...props} open />);
-    resolveOld(impact);
-    expect(screen.queryByRole("button", { name: "Archive" })).toBeNull();
-    resolveNew({ ...impact, descendantCount: 0 });
-    expect(
-      await screen.findByRole("button", { name: "Archive" }),
-    ).toBeEnabled();
-    expect(screen.queryByRole("checkbox")).toBeNull();
   });
 
   it("surfaces a mutation error and retries the activity check", async () => {
@@ -585,15 +472,7 @@ describe("ArchiveChoicesDialog", () => {
         archiveAll: { available: true },
       });
     store.mutateInventory.mockRejectedValueOnce(new Error("Revision conflict"));
-    render(
-      <ArchiveChoicesDialog
-        open
-        onOpenChange={vi.fn()}
-        thread={makeThread()}
-        store={store}
-        descendantCount={0}
-      />,
-    );
+    await renderChoices(store, { descendantCount: 0 });
 
     const archiveOnly = await screen.findByRole("button", { name: "Archive" });
     await waitFor(() => expect(archiveOnly).not.toBeDisabled());
@@ -639,15 +518,7 @@ describe("ArchiveChoicesDialog", () => {
         ...initial,
         openTasks: { root, descendants, familySnapshot: "e".repeat(64) },
       });
-      render(
-        <ArchiveChoicesDialog
-          open
-          onOpenChange={vi.fn()}
-          thread={makeThread()}
-          store={store}
-          descendantCount={2}
-        />,
-      );
+      await renderChoices(store, { descendantCount: 2 });
       await screen.findByText("Root task");
       if (includeDescendants) {
         await userEvent.click(
@@ -703,15 +574,7 @@ describe("ArchiveChoicesDialog", () => {
       .mockResolvedValueOnce(taskImpact("c".repeat(64), "Old task title"))
       .mockResolvedValueOnce(taskImpact("d".repeat(64), "New task title"));
     store.mutateInventory.mockRejectedValueOnce(new Error("Open tasks changed."));
-    render(
-      <ArchiveChoicesDialog
-        open
-        onOpenChange={vi.fn()}
-        thread={makeThread()}
-        store={store}
-        descendantCount={2}
-      />,
-    );
+    await renderChoices(store, { descendantCount: 2 });
     await screen.findByText("Old task title");
     await userEvent.click(screen.getByRole("radio", { name: "Complete all" }));
     await userEvent.click(screen.getByRole("button", { name: "Archive" }));
@@ -728,5 +591,214 @@ describe("ArchiveChoicesDialog", () => {
       }),
     );
   });
+});
 
+describe("ArchiveChoicesDialog as a form dialog", () => {
+  const impact = {
+    descendantCount: 2,
+    pendingQuestions: { root: 0, descendants: 0 },
+    stashedPrompts: { root: 0, descendants: 0 },
+    openTasks: emptyOpenTasks(),
+    executionWorkspace: { kind: "direct" as const },
+    archiveOnly: { available: true as const },
+    archiveAll: { available: true as const },
+  };
+
+  it("opens as a medium card with focus on the first choice and the X last", async () => {
+    render(
+      <ArchiveChoicesDialog
+        initialImpact={impact}
+        onOpenChange={vi.fn()}
+        thread={makeThread()}
+        store={makeStore()}
+        descendantCount={2}
+      />,
+    );
+    const dialog = screen.getByRole("dialog", { name: "Archive this thread" });
+    expect(dialog).toHaveAttribute("data-size", "md");
+    expect(dialog).toHaveAttribute("data-layout", "modal");
+    expect(dialog).not.toHaveAttribute("data-blocking-operation");
+    await waitFor(() =>
+      expect(
+        screen.getByRole("checkbox", { name: "Archive child and descendant forks" }),
+      ).toHaveFocus(),
+    );
+    const footer = screen
+      .getByRole("button", { name: "Archive" })
+      .closest('[data-slot="dialog-footer"]')!;
+    expect([...footer.querySelectorAll("button")].map((button) => button.textContent)).toEqual([
+      "Cancel",
+      "Archive",
+    ]);
+  });
+
+  it("dismisses with Escape and outside clicks unless an archive is pending", async () => {
+    const onOpenChange = vi.fn();
+    const store = makeStore();
+    let finish!: () => void;
+    store.mutateInventory.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    render(
+      <ArchiveChoicesDialog
+        initialImpact={impact}
+        onOpenChange={onOpenChange}
+        thread={makeThread()}
+        store={store}
+        descendantCount={2}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Archive" }));
+    expect(screen.getByRole("button", { name: "Archiving…" })).toBeDisabled();
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(screen.getByTestId("dialog-overlay"));
+    expect(onOpenChange).not.toHaveBeenCalled();
+    finish();
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+
+    cleanup();
+    const dismiss = vi.fn();
+    render(
+      <ArchiveChoicesDialog
+        initialImpact={impact}
+        onOpenChange={dismiss}
+        thread={makeThread()}
+        store={makeStore()}
+        descendantCount={2}
+      />,
+    );
+    await userEvent.keyboard("{Escape}");
+    expect(dismiss).toHaveBeenCalledWith(false);
+    dismiss.mockClear();
+    await userEvent.click(screen.getByTestId("dialog-overlay"));
+    expect(dismiss).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("useArchiveThreadAction", () => {
+  function ArchiveAction({
+    store,
+    onArchived,
+    onPendingChange,
+  }: {
+    readonly store: ReturnType<typeof makeStore>;
+    readonly onArchived: (choice: "only" | "all", ids: readonly string[]) => void;
+    readonly onPendingChange?: (pending: boolean) => void;
+  }) {
+    const archive = useArchiveThreadAction({
+      thread: makeThread(),
+      store,
+      descendantCount: 0,
+      onArchived,
+      onPendingChange,
+    });
+    return (
+      <>
+        <button type="button" onClick={archive.start}>
+          Archive…
+        </button>
+        <output aria-label="Choices open">{String(archive.open)}</output>
+        {archive.dialog}
+      </>
+    );
+  }
+
+  it("archives at once when nothing needs choosing", async () => {
+    const store = makeStore();
+    store.getThreadArchiveImpact.mockResolvedValue({
+      descendantCount: 0,
+      pendingQuestions: { root: 0, descendants: 0 },
+      stashedPrompts: { root: 0, descendants: 0 },
+      openTasks: emptyOpenTasks(),
+      executionWorkspace: { kind: "direct" },
+      archiveOnly: { available: true },
+      archiveAll: { available: true },
+    });
+    const onArchived = vi.fn();
+    render(<ArchiveAction store={store} onArchived={onArchived} />);
+    await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
+    await waitFor(() => expect(onArchived).toHaveBeenCalledWith("only", ["thread-1"]));
+    expect(store.mutateInventory).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "thread-1" }),
+      "archive",
+      { expectedStashedPromptCount: 0 },
+    );
+    expect(screen.queryByRole("dialog", { name: "Archive this thread" })).toBeNull();
+  });
+
+  it("opens the choices with the checked impact when there is something to choose", async () => {
+    const store = makeStore();
+    const onArchived = vi.fn();
+    render(<ArchiveAction store={store} onArchived={onArchived} />);
+    await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Archive this thread" });
+    expect(within(dialog).getByRole("checkbox", { name: "Archive child and descendant forks" })).not.toBeChecked();
+    expect(store.getThreadArchiveImpact).toHaveBeenCalledTimes(1);
+    expect(store.mutateInventory).not.toHaveBeenCalled();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
+    await waitFor(() => expect(onArchived).toHaveBeenCalledWith("only", ["thread-1"]));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Archive this thread" })).toBeNull());
+  });
+
+  it("starts a fresh check with default choices after Cancel", async () => {
+    const store = makeStore();
+    render(<ArchiveAction store={store} onArchived={vi.fn()} />);
+    const open = screen.getByRole("status", { name: "Choices open" });
+    expect(open).toHaveTextContent("false");
+    await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
+    let dialog = await screen.findByRole("dialog", { name: "Archive this thread" });
+    expect(open).toHaveTextContent("true");
+    await userEvent.click(
+      within(dialog).getByRole("checkbox", { name: "Archive child and descendant forks" }),
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(open).toHaveTextContent("false");
+
+    store.getThreadArchiveImpact.mockResolvedValueOnce({
+      descendantCount: 1,
+      pendingQuestions: { root: 0, descendants: 0 },
+      stashedPrompts: { root: 0, descendants: 0 },
+      openTasks: emptyOpenTasks(),
+      executionWorkspace: { kind: "direct" },
+      archiveOnly: { available: true },
+      archiveAll: { available: true },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
+    dialog = await screen.findByRole("dialog", { name: "Archive this thread" });
+    expect(store.getThreadArchiveImpact).toHaveBeenCalledTimes(2);
+    expect(
+      within(dialog).getByRole("checkbox", { name: "Archive child and descendant forks" }),
+    ).not.toBeChecked();
+  });
+
+  it("opens nothing when the check is canceled before it answers", async () => {
+    const store = makeStore();
+    const impact = await store.getThreadArchiveImpact("thread-1");
+    let answer!: (value: typeof impact) => void;
+    store.getThreadArchiveImpact.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const onPendingChange = vi.fn();
+    render(
+      <ArchiveAction
+        store={store}
+        onArchived={vi.fn()}
+        onPendingChange={onPendingChange}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
+    expect(onPendingChange).toHaveBeenLastCalledWith(true);
+    expect(getBlockingOperation()?.message).toBe("Checking thread activity…");
+    act(() => getBlockingOperation()!.cancel());
+    await waitFor(() => expect(onPendingChange).toHaveBeenLastCalledWith(false));
+    answer(impact);
+    await act(async () => {});
+    expect(screen.queryByRole("dialog", { name: "Archive this thread" })).toBeNull();
+    expect(screen.getByRole("status", { name: "Choices open" })).toHaveTextContent("false");
+  });
 });

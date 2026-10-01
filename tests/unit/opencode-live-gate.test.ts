@@ -31,6 +31,8 @@ describe("live OpenCode preflight", () => {
     ["SEDES_LIVE_OPENCODE_BASE_URL", "https://provider.example/v1?key=value"],
     ["SEDES_LIVE_OPENCODE_BASE_URL", "https://provider.example/v1#other"],
     ["SEDES_LIVE_OPENCODE_TOKEN_FIELD", "max_output_tokens"],
+    ["SEDES_LIVE_OPENCODE_REASONING_FORMAT", "automatic"],
+    ["SEDES_LIVE_OPENCODE_REASONING_FORMAT", ""],
     ["SEDES_LIVE_OPENCODE_API_KEY_ENV", "not-a-variable"],
   ])("rejects unqualified %s input before any credential lookup", (key, value) => {
     expect(() => parseLiveInput({ ...settings(), [key]: value })).toThrow();
@@ -58,6 +60,15 @@ describe("live OpenCode preflight", () => {
     expect(config.compaction.auto).toBe(false);
     expect(config.providers[LIVE_GATE_PROVIDER_ID].settings).toMatchObject({ apiKey: "{env:OPENCODE_LIVE_GATE_API_KEY}", timeout: 20_000, chunkTimeout: 10_000 });
     expect(config.providers[LIVE_GATE_PROVIDER_ID].models[input.model]!.body).toEqual({ [tokenField]: LIVE_GATE_LIMITS.outputTokens });
+  });
+
+  it("sends explicit low chat-template reasoning without changing the token budget", () => {
+    const input = parseLiveInput({ ...settings(), SEDES_LIVE_OPENCODE_REASONING_FORMAT: "chat-template" });
+    const config = liveConfiguration(input, "/isolated/canary.txt");
+    expect(config.providers[LIVE_GATE_PROVIDER_ID].models[input.model]!.body).toEqual({
+      max_tokens: 256,
+      chat_template_kwargs: { enable_thinking: true, preserve_thinking: true, reasoning_effort: "low" },
+    });
   });
 
   it.each(["openai", "xai", "opencode", "openrouter"])("does not let an ambient %s provider ID select native plugins", provider => {

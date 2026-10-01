@@ -73,6 +73,36 @@ describe("SnoozeDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("labels only the pending action and locks dismissal while it runs", async () => {
+    let finish!: () => void;
+    const onRemindNow = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const onOpenChange = vi.fn();
+    render(
+      <SnoozeDialog
+        open
+        onOpenChange={onOpenChange}
+        onSnooze={vi.fn().mockResolvedValue(undefined)}
+        onRemindNow={onRemindNow}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText(/Reminder/), {
+      target: { value: "Check the deploy" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Remind now" }));
+    expect(screen.getByRole("button", { name: "Adding reminder…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Snooze$/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+    expect(onOpenChange).not.toHaveBeenCalled();
+    finish();
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+  });
+
   it("keeps the dialog open and reports a failed mutation", async () => {
     const onSnooze = vi.fn().mockRejectedValue(new Error("Revision conflict"));
     render(

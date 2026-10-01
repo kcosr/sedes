@@ -771,8 +771,9 @@ reattaches to the same service and resources after identity/version checks.
 It does not submit a prompt again, recreate a terminal, or turn an unknown file
 mutation into a new write.
 
-**Settings → Environments** reports desired/applied revisions, connection
-state, service version, upgrade state, and active-resource observations.
+An environment's **Activity** tab in **Settings → Environments** reports
+desired/applied revisions, connection state, service version, upgrade state,
+and active-resource observations.
 **Disconnect** preserves remote work and intentional disconnection across main
 restarts. **Stop** requests service shutdown and persists stop preference even
 if the host is unreachable; only confirmed cleanup is displayed as stopped.
@@ -1135,8 +1136,9 @@ does.
 - Confirm that the remote project path is canonical and beneath a configured
   remote root.
 - Check the saved/applied environment revisions, intentional connection
-  preference, service version, and last error in Settings. **Disconnect** and
-  **Stop** intentionally suppress background reconnect even after main restart.
+  preference, service version, and last error on the environment's **Overview**
+  and **Activity** tabs in Settings. **Disconnect** and **Stop** intentionally
+  suppress background reconnect even after main restart.
 - Provider runtime and optional operations have independent admission. A healthy
   sidecar does not grant every Files, attachment, agent-tool, or terminal action.
 - Verify the selected host's supported runtime/artifact and owner-only service

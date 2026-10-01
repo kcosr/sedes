@@ -97,7 +97,7 @@ test("nonblocking questions navigate oldest first, send individual answers, and 
     await expect(regionRequest).toHaveAttribute("data-question-status", "pending");
     await expect(noteRequest.locator(".question-disclosure-count")).toHaveCount(0);
     await page.getByTestId("desktop-sidebar").getByTestId("view-options-trigger").click();
-    await page.getByRole("radiogroup", { name: "Group by" }).getByRole("radio", { name: "State", exact: true }).click();
+    await page.getByRole("group", { name: "Group by" }).getByRole("menuitemradio", { name: "State", exact: true }).click();
     await expect(page.getByTestId("desktop-sidebar").getByRole("button", { name: /^Needs attention/ })).toBeVisible();
     const cards = panel.locator("[data-question-request-id]");
     await expect(cards).toHaveCount(1);
@@ -146,7 +146,7 @@ test("nonblocking questions navigate oldest first, send individual answers, and 
     await expect(panel).toHaveCount(0);
     await page.getByRole("button", { name: "Thread actions" }).click();
     await page.getByTestId("thread-actions-menu")
-      .getByRole("button", { name: "Archive", exact: true }).click();
+      .getByRole("menuitem", { name: "Archive", exact: true }).click();
     const archiveDialog = page.getByRole("dialog", { name: "Archive this thread" });
     await expect(archiveDialog).toContainText("3 unanswered questions");
     await capture(page, testInfo, "question-archive-confirmation.png");

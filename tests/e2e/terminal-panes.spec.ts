@@ -10,6 +10,7 @@ import {
   openTerminalMenu,
   revealTerminals,
   terminalContainer,
+  terminalMenuRow,
   terminalPanel,
   transcriptText,
   writeTerminal,
@@ -99,13 +100,26 @@ test("terminal resources outlive panels and transfer control across three client
   await terminalContainer(page)
     .getByRole("button", { name: "Open terminal tab" })
     .click();
+  // Terminals open in this panel carry a check; choosing one brings its tab
+  // forward.
+  for (const name of ["E2E shell", "Build logs"]) {
+    const row = page.getByRole("menuitem", { name: new RegExp(`${name}.*Running.*open`, "u") });
+    await expect(row).not.toHaveAttribute("aria-disabled");
+    await expect(row.locator("svg.lucide-check")).toHaveCount(1);
+    // The status shows whole, not truncated beside the name.
+    expect(
+      await row
+        .locator('[data-slot="dropdown-menu-item-value"]')
+        .evaluate((value) => value.scrollWidth <= value.clientWidth),
+    ).toBe(true);
+  }
+  await page.getByRole("menuitem", { name: /Build logs.*Running.*open/u }).click();
   await expect(
-    page.getByRole("menuitem", { name: /E2E shell.*Running · Open/u }),
-  ).toHaveAttribute("aria-disabled", "true");
-  await expect(
-    page.getByRole("menuitem", { name: /Build logs.*Running · Open/u }),
-  ).toHaveAttribute("aria-disabled", "true");
-  await page.keyboard.press("Escape");
+    terminalTabs.getByRole("tab", { name: "Build logs" }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(terminalTabs.getByRole("tab")).toHaveCount(2);
+  await terminalTabs.getByRole("tab", { name: "E2E shell" }).click();
+  await expect(terminalPanel(page, "E2E shell")).toBeVisible();
 
   await page.setViewportSize({ width: 1024, height: 900 });
   const desktopMenu = await openTerminalMenu(page);
@@ -220,7 +234,7 @@ test("terminal resources outlive panels and transfer control across three client
   await expect(terminalContainer(second)).toBeVisible();
   await expect(terminalContainer(second).getByRole("button", { name: "New terminal", exact: true })).toBeVisible();
   const remainingMenu = await openTerminalMenu(second);
-  await expect(remainingMenu.locator(".thread-terminal-menu-row").filter({ hasText: "E2E shell" })).toHaveCount(0);
+  await expect(terminalMenuRow(remainingMenu, "E2E shell")).toHaveCount(0);
   await second.keyboard.press("Escape");
 
   await second.reload();
@@ -273,5 +287,39 @@ test("Windows terminals stop idle painting and toggle blink without reconnecting
   await expect(canvas).toBeVisible();
   expect(await canvas.evaluate((node, previous) => node === previous, canvasHandle)).toBe(true);
   await expectIdleTerminalCanvas(canvas);
+  expect(sockets).toBe(connections);
+});
+
+test("a live theme switch recolors terminal output without reconnecting", async ({ page }) => {
+  await openSedesWorkspace(page);
+  await createDraftThread(page);
+  let sockets = 0;
+  page.on("websocket", (socket) => { if (new URL(socket.url()).pathname === "/api/terminal") sockets++; });
+  const id = await createTerminal(page, "Themed terminal");
+  await emitTerminalOutput(page, id, "themed terminal output\r\n$ ");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  const emulator = terminalPanel(page, "Themed terminal").locator(".terminal-panel-emulator");
+  const canvas = emulator.locator("canvas");
+  // Ghostty paints solid glyph cores in the theme foreground (#24272d light,
+  // #e5e7eb dark) on the theme background (#f7f7f8 light, #111318 dark).
+  const paintedColors = () => canvas.evaluate((node) => {
+    const element = node as HTMLCanvasElement;
+    const pixels = element.getContext("2d")!.getImageData(0, 0, element.width, element.height).data;
+    const colors = new Set<string>();
+    for (let index = 0; index < pixels.length; index += 4) colors.add(`${pixels[index]},${pixels[index + 1]},${pixels[index + 2]}`);
+    return ["36,39,45", "247,247,248", "229,231,235", "17,19,24"].filter((color) => colors.has(color));
+  });
+  await expect.poll(paintedColors).toEqual(["36,39,45", "247,247,248"]);
+  const connections = sockets;
+  const canvasHandle = await canvas.elementHandle();
+
+  const settings = await openSettingsPage(page, "appearance");
+  await settings.getByRole("radio", { name: "Dark", exact: true }).click();
+  await returnFromSettings(page);
+
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(emulator).toHaveAttribute("data-restored", "true");
+  expect(await canvas.evaluate((node, previous) => node === previous, canvasHandle)).toBe(true);
+  await expect.poll(paintedColors).toEqual(["229,231,235", "17,19,24"]);
   expect(sockets).toBe(connections);
 });

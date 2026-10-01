@@ -21,6 +21,7 @@ export async function startOpencodeModelFixture(options: { readonly vision?: boo
     toolChoice?: string;
     maxTokens?: number;
     maxCompletionTokens?: number;
+    chatTemplateKwargs?: unknown;
     images: { mime: string; sha256: string }[];
   }> = [];
   let nextHold: StreamHold | undefined;
@@ -114,6 +115,7 @@ export async function startOpencodeModelFixture(options: { readonly vision?: boo
       toolChoice: "tool_choice" in input && typeof input.tool_choice === "string" ? input.tool_choice : undefined,
       toolResults: messages.flatMap(message => typeof message === "object" && message !== null && message.role === "tool"
         && typeof message.content === "string" ? [message.content.slice(0, 1024)] : []),
+      chatTemplateKwargs: "chat_template_kwargs" in input ? input.chat_template_kwargs : undefined,
       maxTokens: "max_tokens" in input && typeof input.max_tokens === "number" ? input.max_tokens : undefined,
       maxCompletionTokens: "max_completion_tokens" in input && typeof input.max_completion_tokens === "number" ? input.max_completion_tokens : undefined,
     });

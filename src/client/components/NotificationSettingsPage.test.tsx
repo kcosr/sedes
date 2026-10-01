@@ -60,6 +60,12 @@ function fixture() {
   };
 }
 afterEach(cleanup);
+/** The save bar announces a successful save briefly, in place of its state. */
+async function expectSaved(): Promise<void> {
+  await waitFor(() =>
+    expect(document.querySelector('[data-slot="save-bar-status"]')).toHaveTextContent("Saved"),
+  );
+}
 describe("notification settings", () => {
   it("saves literal arguments and selected events, and tests unsaved values while silenced", async () => {
     const { api, store } = fixture();
@@ -80,7 +86,7 @@ describe("notification settings", () => {
     });
     expect(api.updateNotificationSettings).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText("Save notifications"));
-    await screen.findByText("Notification settings saved.");
+    await expectSaved();
     expect(api.updateNotificationSettings).toHaveBeenCalledWith(
       expect.objectContaining({
         expectedRevision: 0,
@@ -99,8 +105,11 @@ describe("notification settings", () => {
       screen.getByRole("checkbox", { name: label }) as HTMLButtonElement);
     expect(phases.every(phase => phase.getAttribute("aria-checked") === "false")).toBe(true);
     expect(phases.every(phase => !phase.disabled)).toBe(true);
+    // Nothing to save until something changes.
+    expect(screen.getByRole("button", { name: "Save notifications" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("switch", { name: "Enable notifications" }));
     fireEvent.click(screen.getByText("Save notifications"));
-    await screen.findByText("Notification settings saved.");
+    await expectSaved();
     expect(api.updateNotificationSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({ assistantResultPhases: [] }),
     );
@@ -111,7 +120,7 @@ describe("notification settings", () => {
     expect(phases.every(phase => phase.disabled)).toBe(true);
     expect(phases.every(phase => phase.getAttribute("aria-checked") === "true")).toBe(true);
     fireEvent.click(screen.getByText("Save notifications"));
-    await screen.findByText("Notification settings saved.");
+    await expectSaved();
     expect(api.updateNotificationSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({ events: [],
         assistantResultPhases: ["provisional", "unclassified", "final"] }),
@@ -119,8 +128,10 @@ describe("notification settings", () => {
     fireEvent.click(screen.getByLabelText("Turn completed"));
     expect(phases.every(phase => !phase.disabled)).toBe(true);
     fireEvent.click(phases[0]!);
-    fireEvent.click(screen.getByText("Reload saved settings"));
+    // Cancel discards the local edits and restores the saved choices.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(phases.every(phase => phase.getAttribute("aria-checked") === "true")).toBe(true));
+    expect(screen.getByLabelText("Turn completed")).toHaveAttribute("aria-checked", "false");
   });
   it("saves selected response phases and disables them while saving", async () => {
     const { api, store } = fixture();
@@ -136,7 +147,7 @@ describe("notification settings", () => {
     expect(final.disabled).toBe(true);
     expect(provisional.disabled).toBe(true);
     finishSave({ ...initial, assistantResultPhases: ["provisional"], revision: 1 });
-    await screen.findByText("Notification settings saved.");
+    await expectSaved();
     expect(provisional.disabled).toBe(false);
     expect(provisional.getAttribute("aria-checked")).toBe("true");
     expect(final.getAttribute("aria-checked")).toBe("false");
@@ -151,8 +162,9 @@ describe("notification settings", () => {
     expect(approval.getAttribute("aria-checked")).toBe("false");
     expect(input.getAttribute("aria-checked")).toBe("false");
     expect(questions.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(screen.getByRole("switch", { name: "Enable notifications" }));
     fireEvent.click(screen.getByText("Save notifications"));
-    await screen.findByText("Notification settings saved.");
+    await expectSaved();
     expect(api.updateNotificationSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({ events: ["turn.completed"] }),
     );
@@ -182,8 +194,9 @@ describe("notification settings", () => {
     changeElsewhere();
     await store.refresh();
     await screen.findByText(
-      "Saved settings changed. Reload them before saving to avoid overwriting another change.",
+      "Reload them before saving to avoid overwriting another change.",
     );
+    expect(screen.getByText("Saved settings changed")).toBeVisible();
     expect(
       (screen.getByLabelText("Server script path") as HTMLInputElement).value,
     ).toBe("/my/draft");
@@ -198,6 +211,26 @@ describe("notification settings", () => {
       ).toBe("/server/new"),
     );
   });
+  it("marks an invalid timeout on its field instead of saving or testing", async () => {
+    const { api, store } = fixture();
+    render(<NotificationSettingsPage store={store} />);
+    fireEvent.change(await screen.findByLabelText("Server script path"), {
+      target: { value: "/usr/local/bin/notify" },
+    });
+    const timeout = screen.getByLabelText("Timeout (seconds)");
+    fireEvent.change(timeout, { target: { value: "0" } });
+    fireEvent.click(screen.getByText("Save notifications"));
+    await waitFor(() => expect(timeout).toHaveAttribute("aria-invalid", "true"));
+    expect(timeout).toHaveAccessibleDescription(
+      /Timeout must be a whole number between 1 and 300 seconds\./,
+    );
+    expect(timeout).toHaveFocus();
+    fireEvent.click(screen.getByText("Send test notification"));
+    expect(api.updateNotificationSettings).not.toHaveBeenCalled();
+    expect(api.testNotification).not.toHaveBeenCalled();
+    fireEvent.change(timeout, { target: { value: "20" } });
+    expect(timeout).not.toHaveAttribute("aria-invalid");
+  });
   it("shares the persisted silence state between the bell and settings", async () => {
     const { api, store } = fixture();
     render(
@@ -207,6 +240,7 @@ describe("notification settings", () => {
       </>,
     );
     await screen.findByLabelText("Server script path");
+    expect(screen.getByText("Notifications silenced")).toBeVisible();
     fireEvent.click(
       screen.getByRole("button", { name: "Resume external notifications" }),
     );
@@ -216,6 +250,6 @@ describe("notification settings", () => {
     await screen.findByRole("button", {
       name: "Silence external notifications",
     });
-    expect(screen.queryByText(/Notifications silenced\./)).toBeNull();
+    expect(screen.queryByText("Notifications silenced")).toBeNull();
   });
 });

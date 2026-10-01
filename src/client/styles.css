@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "@fontsource-variable/inter";
+@import "./components/ui/overlay.css" layer(components);
 
 /* The app stamps data-theme on <html> explicitly, even in system mode
    (src/client/app/appearance.ts), so component-level dark styling keys off
@@ -86,6 +87,8 @@
   --scrim: oklch(0.2 0.01 260 / 0.42);
   --shadow: 0 2px 6px oklch(0 0 0 / 0.08), 0 12px 36px oklch(0 0 0 / 0.14);
   --shadow-small: 0 1px 2px oklch(0 0 0 / 0.05), 0 8px 28px oklch(0 0 0 / 0.07);
+  /* The edge shade a scrolling menu shows where more rows lie beyond it. */
+  --scroll-shade: oklch(0 0 0 / 0.14);
 
   /* shape — one ramp. `--radius-inline` is the nested step (it mirrors the
      Tailwind `--radius-sm` pinned in @theme inline below): it is only ever
@@ -96,6 +99,9 @@
   --radius-ctl: 8px;
   --radius-card: 12px;
   --radius-lg: 16px;
+  /* A checkbox's corner: square enough on a 16px box that it never reads
+     as a radio. */
+  --radius-check: 4px;
 
   /* measure — the single reading column shared by the transcript, the
      composer/interaction footprint and the archived list. 768 minus the
@@ -106,8 +112,15 @@
 
   /* The workbench bar is the one chrome row above every panel surface. It
      lives here, not on .workspace-panel-layout, because the mobile Files
-     sheet is portalled to the body and still has to subtract it. */
-  --workbench-bar-height: 48px;
+     sheet is portalled to the body and still has to subtract it. The bars
+     and panel headers take it as a minimum: they grow with their text
+     (Android's WebView text zoom enlarges text, not px heights). */
+  --workbench-bar-height: 52px;
+  /* Icon buttons in the bars and panel headers, and their glyphs. On touch
+     they are narrower than tall, so a phone header keeps room for its title. */
+  --bar-control: var(--control-md);
+  --bar-control-width: var(--bar-control);
+  --bar-icon: 18px;
 
   /* motion */
   --duration-fast: 120ms;
@@ -123,6 +136,119 @@
     "Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system,
     BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  /* type ramp — role names; values are today's dominant steps */
+  --text-micro: 10px; /* counts, tiny tags */
+  --text-label: 11px; /* eyebrows, uppercase labels, table heads */
+  --text-meta: 12px; /* help, descriptions, secondary rows */
+  --text-ui: 13px; /* rows, controls, menus, dialog body */
+  --text-body: 14.5px; /* chat, markdown, composer (reference surfaces) */
+  --text-title: 15px; /* dialog, sheet and panel titles */
+  --text-page: 20px; /* settings page titles */
+  --text-display: 24px; /* auth and landing display */
+  --text-transcript-meta: 12.5px; /* reference surface, preserved */
+  --text-sheet-title: 17px; /* menu sheet header: the subject's name on touch */
+  --text-input: var(--text-ui); /* text inputs; 16px under the density switch */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --leading-tight: 1.2;
+  --leading-snug: 1.35;
+  --leading-normal: 1.45;
+  --leading-relaxed: 1.6;
+  --tracking-label: 0.06em; /* the one uppercase-label recipe: 11px/600/0.06em */
+
+  /* spacing — 4px grid, 2px half steps for dense chrome */
+  --space-0-5: 2px;
+  --space-1: 4px;
+  --space-1-5: 6px;
+  --space-2: 8px;
+  --space-2-5: 10px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* controls and icons */
+  --control-xs: 24px;
+  --control-sm: 28px;
+  --control-md: 32px;
+  --control-lg: 36px;
+  --control-touch: 44px;
+  --control-default: var(--control-md); /* swapped by the density switch */
+  --icon-xs: 12px;
+  --icon-sm: 14px;
+  --icon-md: 16px;
+  --icon-lg: 20px;
+
+  /* status pairs — mixes of the status colors, so the dark theme follows
+     automatically. Mix in oklab, not oklch: --border is a tinted gray, and
+     oklch interpolates the hue along the way (warning turns purple, success
+     blue or orange) while oklab keeps the status hue. */
+  --success-soft: color-mix(in oklab, var(--success) 12%, transparent);
+  --success-border: color-mix(in oklab, var(--success) 35%, var(--border));
+  --info-soft: color-mix(in oklab, var(--info) 12%, transparent);
+  --info-border: color-mix(in oklab, var(--info) 35%, var(--border));
+  /* Light --warning is a deep amber-brown for text; a 12% mix of it reads
+     greige, so the light pair mixes a clear, calm amber instead (text on it
+     is --foreground, far past AA). The dark theme mixes --warning itself. */
+  --warning-soft: color-mix(in oklab, oklch(0.85 0.16 82) 22%, transparent);
+  --warning-border: color-mix(in oklab, oklch(0.78 0.14 78) 60%, var(--border));
+  --destructive-soft: color-mix(in oklab, var(--destructive) 12%, transparent);
+  --destructive-border: color-mix(in oklab, var(--destructive) 35%, var(--border));
+
+  /* interaction */
+  --hover: var(--accent); /* the one wash for rows, ghost buttons, menu items */
+  --selected: color-mix(in oklch, var(--foreground) 9%, transparent);
+  --disabled-opacity: 0.5;
+  /* Solid fill of Button variant="destructive" (irreversible actions only),
+     under white text. The hover step darkens it in both themes. */
+  --destructive-solid: var(--destructive);
+  --destructive-solid-hover: color-mix(in oklab, var(--destructive-solid), oklch(0 0 0) 14%);
+  /* equals Button's `ring-3 ring-ring/50` */
+  --focus-ring: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+
+  /* elevation */
+  --elevation-1: 0 1px 2px oklch(0 0 0 / 0.05); /* raised pill or card */
+  --elevation-2: var(--shadow-small); /* menus, popovers, pickers */
+  --elevation-3: var(--shadow); /* dialogs, sheets */
+
+  /* z-index layers. Every positive z-index in client CSS and app TSX names
+     one of these; 0 and negative values stay local to their stacking
+     context. The values are today's stacking bands, kept exactly, so a
+     declaration that must stay above another in its band adds
+     `calc(var(--z-x) + n)`. Today's order is sticky < floating < dialog
+     < drawer < over-dialog < blocking < toast: in-page popovers and the
+     DropdownMenu primitive (z-50) sit below the Dialog primitive
+     (z-[80]/z-[81]), and the Popover, Select and ContextMenu primitives
+     (z-[90]) clear it from inside the dialog band. The overlay primitives
+     keep those literals until they become dialog-aware. */
+  --z-sticky: 1; /* in-page raised and sticky chrome (+0…+20) */
+  --z-floating: 50; /* in-page popovers, tasks panel and sheet, legacy dialog cards (+0…+12) */
+  --z-dialog: 80; /* Dialog primitive band; floating content above dialogs (+8…+11) */
+  --z-drawer: 81; /* mobile drawer; menus opened over it +1 */
+  --z-over-dialog: 100; /* sheets and dialogs over the drawer and dialog band, tooltips */
+  --z-blocking: 110; /* operation overlay; confirmations and pickers over sheets */
+  --z-toast: 120;
+
+  /* floating surfaces and dialogs */
+  --menu-row-height: 32px;
+  --menu-row-radius: var(--radius-ctl);
+  --menu-panel-padding: 4px;
+  --menu-panel-radius: var(--radius-card);
+  --dialog-width-sm: 400px;
+  --dialog-width-md: 560px;
+  --dialog-width-lg: 760px;
+  --dialog-width-xl: 1000px;
+  --dialog-padding: 20px;
+  --dialog-radius: var(--radius-lg);
+  --dialog-viewport-margin: 16px;
+
+  /* layout */
+  --settings-page-width: 880px;
+  --settings-page-width-wide: 1120px;
 
   /* Managed terminal presentation follows the resolved app theme. */
   --terminal-background: #f7f7f8;
@@ -147,6 +273,9 @@
   --accent: oklch(1 0 0 / 0.09);
   --accent-foreground: oklch(0.93 0.004 260);
   --destructive: oklch(0.66 0.17 25);
+  /* --destructive is tuned as text on dark surfaces; as a fill it would
+     leave white text under AA, so the solid fill steps darker. */
+  --destructive-solid: oklch(0.56 0.19 25);
   --border: oklch(1 0 0 / 0.09);
   --input: oklch(1 0 0 / 0.12);
   --ring: oklch(0.62 0.008 260);
@@ -160,6 +289,8 @@
   --success: oklch(0.74 0.15 150);
   --info: oklch(0.7 0.12 250);
   --warning: oklch(0.75 0.12 75);
+  --warning-soft: color-mix(in oklab, var(--warning) 12%, transparent);
+  --warning-border: color-mix(in oklab, var(--warning) 35%, var(--border));
   --thread-find-match: oklch(0.56 0.1 79 / 0.72);
   --thread-find-current: oklch(0.68 0.15 67 / 0.92);
   --sidebar: oklch(0.19 0.006 260);
@@ -167,6 +298,8 @@
   --scrim: oklch(0 0 0 / 0.6);
   --shadow: 0 2px 6px oklch(0 0 0 / 0.4), 0 16px 44px oklch(0 0 0 / 0.5);
   --shadow-small: 0 1px 2px oklch(0 0 0 / 0.3), 0 8px 28px oklch(0 0 0 / 0.35);
+  --scroll-shade: oklch(0 0 0 / 0.4);
+  --elevation-1: 0 1px 2px oklch(0 0 0 / 0.3);
   --terminal-background: #111318;
   --terminal-panel: #171a20;
   --terminal-foreground: #e5e7eb;
@@ -174,6 +307,23 @@
   --terminal-border: #3b4049;
   --terminal-action-background: #242831;
   --terminal-action-hover: #303641;
+}
+
+/* The one density switch. 819/820px is the app breakpoint; coarse pointers
+   get the same touch density at any width. Components read these tokens
+   instead of repeating the query. Text inputs go to 16px so iOS does not
+   zoom on focus. */
+@media (max-width: 819px), (pointer: coarse) {
+  :root {
+    --control-default: var(--control-touch);
+    --menu-row-height: 44px;
+    --dialog-padding: 16px;
+    --text-input: 16px;
+    --workbench-bar-height: 54px;
+    --bar-control: 40px;
+    --bar-control-width: var(--control-lg);
+    --bar-icon: var(--icon-lg);
+  }
 }
 
 @theme inline {
@@ -201,6 +351,14 @@
   --color-success: var(--success);
   --color-info: var(--info);
   --color-warning: var(--warning);
+  --color-success-soft: var(--success-soft);
+  --color-success-border: var(--success-border);
+  --color-info-soft: var(--info-soft);
+  --color-info-border: var(--info-border);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-border: var(--warning-border);
+  --color-destructive-soft: var(--destructive-soft);
+  --color-destructive-border: var(--destructive-border);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
@@ -216,138 +374,27 @@
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-xl: 16px;
+  /* Tailwind type scale pinned to the ramp. `--text-base` stays 16px for
+     mobile inputs (iOS does not zoom). */
+  --text-xs: var(--text-meta);
+  --text-sm: var(--text-ui);
+  --text-sm--line-height: var(--leading-normal);
+  --text-base: 16px;
+  /* Tailwind shadow scale pinned to the app elevations (dark-aware). */
+  --shadow-xs: var(--elevation-1);
+  --shadow-sm: var(--elevation-1);
+  --shadow-md: var(--elevation-2);
+  --shadow-lg: var(--elevation-3);
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
 }
 
 /* ───────────────────────────────────────────────────────────────────────
    § BASE AND RESET
-   Document reset, focus policy, and the hand-rolled motion for the owned
-   ui/ primitives (Radix emits data-state/data-side on those data-slot
-   nodes). Buttons live entirely in `ui/button.tsx`.
+   Document reset and focus policy. Overlay primitive anatomy and motion
+   live in `components/ui/overlay.css`; buttons live entirely in
+   `ui/button.tsx`.
    ─────────────────────────────────────────────────────────────────────── */
-
-/* Motion for the owned ui/ primitives (Radix emits data-state on these
-   nodes; keyframes are hand-rolled on the motion tokens — no tw-animate). */
-[data-slot="popover-content"] {
-  --ui-pop-x: 0px;
-  --ui-pop-y: -4px;
-}
-
-[data-slot="popover-content"][data-side="top"] {
-  --ui-pop-x: 0px;
-  --ui-pop-y: 4px;
-}
-
-[data-slot="popover-content"][data-side="left"] {
-  --ui-pop-x: 4px;
-  --ui-pop-y: 0px;
-}
-
-[data-slot="popover-content"][data-side="right"] {
-  --ui-pop-x: -4px;
-  --ui-pop-y: 0px;
-}
-
-[data-slot="dialog-overlay"][data-state="open"],
-[data-slot="dialog-content"][data-state="open"] {
-  animation: ui-fade-in var(--motion-pop);
-}
-
-[data-slot="dialog-overlay"][data-state="closed"],
-[data-slot="dialog-content"][data-state="closed"] {
-  animation: ui-fade-out var(--motion-pop) forwards;
-}
-
-[data-slot="popover-content"][data-state="open"] {
-  animation: ui-pop-in var(--motion-pop);
-}
-
-[data-slot="popover-content"][data-state="closed"] {
-  animation: ui-pop-out var(--motion-pop) forwards;
-}
-
-@keyframes ui-fade-in {
-  from {
-    opacity: 0;
-  }
-}
-
-@keyframes ui-fade-out {
-  to {
-    opacity: 0;
-  }
-}
-
-@keyframes ui-pop-in {
-  from {
-    opacity: 0;
-    transform: translate(var(--ui-pop-x, 0px), var(--ui-pop-y, -4px));
-  }
-}
-
-@keyframes ui-pop-out {
-  to {
-    opacity: 0;
-    transform: translate(var(--ui-pop-x, 0px), var(--ui-pop-y, -4px));
-  }
-}
-
-/* ── Select + DropdownMenu + ContextMenu motion (ui/select.tsx,
-   ui/dropdown-menu.tsx, ui/context-menu.tsx) ──
-   Same hand-rolled pattern as popover-content above: Radix emits
-   data-state/data-side on these data-slot nodes; no tw-animate utilities. */
-[data-slot="select-content"],
-[data-slot="dropdown-menu-content"],
-[data-slot="dropdown-menu-sub-content"],
-[data-slot="context-menu-content"],
-[data-slot="context-menu-sub-content"] {
-  --ui-pop-x: 0px;
-  --ui-pop-y: -4px;
-}
-
-[data-slot="select-content"][data-side="top"],
-[data-slot="dropdown-menu-content"][data-side="top"],
-[data-slot="dropdown-menu-sub-content"][data-side="top"],
-[data-slot="context-menu-content"][data-side="top"],
-[data-slot="context-menu-sub-content"][data-side="top"] {
-  --ui-pop-x: 0px;
-  --ui-pop-y: 4px;
-}
-
-[data-slot="select-content"][data-side="left"],
-[data-slot="dropdown-menu-content"][data-side="left"],
-[data-slot="dropdown-menu-sub-content"][data-side="left"],
-[data-slot="context-menu-content"][data-side="left"],
-[data-slot="context-menu-sub-content"][data-side="left"] {
-  --ui-pop-x: 4px;
-  --ui-pop-y: 0px;
-}
-
-[data-slot="select-content"][data-side="right"],
-[data-slot="dropdown-menu-content"][data-side="right"],
-[data-slot="dropdown-menu-sub-content"][data-side="right"],
-[data-slot="context-menu-content"][data-side="right"],
-[data-slot="context-menu-sub-content"][data-side="right"] {
-  --ui-pop-x: -4px;
-  --ui-pop-y: 0px;
-}
-
-[data-slot="select-content"][data-state="open"],
-[data-slot="dropdown-menu-content"][data-state="open"],
-[data-slot="dropdown-menu-sub-content"][data-state="open"],
-[data-slot="context-menu-content"][data-state="open"],
-[data-slot="context-menu-sub-content"][data-state="open"] {
-  animation: ui-pop-in var(--motion-pop);
-}
-
-[data-slot="select-content"][data-state="closed"],
-[data-slot="dropdown-menu-content"][data-state="closed"],
-[data-slot="dropdown-menu-sub-content"][data-state="closed"],
-[data-slot="context-menu-content"][data-state="closed"],
-[data-slot="context-menu-sub-content"][data-state="closed"] {
-  animation: ui-pop-out var(--motion-pop) forwards;
-}
 
 * {
   box-sizing: border-box;
@@ -401,9 +448,7 @@ body {
   [data-slot="dropdown-menu-content"],
   [data-slot="dropdown-menu-sub-content"],
   .thread-context-trigger,
-  .thread-actions-sheet,
-  .settings-nav,
-  .settings-category-list
+  [data-menu-sheet]
 ) {
   -webkit-user-select: none;
   user-select: none;
@@ -432,32 +477,19 @@ textarea:disabled {
   opacity: 0.52;
 }
 
-:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
-[data-slot="button"]:focus-visible,
-[data-slot="select-trigger"]:focus-visible,
-[data-slot="checkbox"]:focus-visible,
-[data-slot="radio-group-item"]:focus-visible,
-[data-slot="input"]:focus-visible,
-[data-slot="textarea"]:focus-visible {
-  outline: none;
-}
-
-/* Menu rows carry highlight as the neutral wash (focus follows Radix's
-   roving highlight); the global ring would double-mark every row. */
-[data-slot="select-item"]:focus-visible,
-[data-slot="dropdown-menu-item"]:focus-visible,
-[data-slot="dropdown-menu-checkbox-item"]:focus-visible,
-[data-slot="dropdown-menu-radio-item"]:focus-visible,
-[data-slot="dropdown-menu-sub-trigger"]:focus-visible,
-[data-slot="context-menu-item"]:focus-visible,
-[data-slot="context-menu-checkbox-item"]:focus-visible,
-[data-slot="context-menu-radio-item"]:focus-visible,
-[data-slot="context-menu-sub-trigger"]:focus-visible {
-  outline: none;
+/* The one focus ring for anything that draws none of its own. It sits in
+   the base layer so the ui/ primitives' own `outline-none`/`outline-hidden`
+   utilities win without an exemption list: Button and the form controls
+   draw the 3px ring (--focus-ring), menu rows the --hover wash, and overlay
+   containers (a dialog, a popover, a menu sheet's list) are their own
+   indication. Keying on the utility also covers a primitive whose data-slot
+   a Radix `asChild` part restamps (a Button as a menu trigger or the dialog
+   X). Unlayered feature rules still style their own focus. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
 }
 
 ::selection {
@@ -476,8 +508,8 @@ textarea:disabled {
   border: 0;
 }
 
-/* One section-label voice, shared with `.menu-label` / `.op-body h4` /
-   `.automation-section-label`: 11px, 600, 0.07em, muted. Three of the four
+/* One section-label voice, shared with `.op-body h4` and the dialog
+   section title: 11px, 600, 0.07em, muted. Three of the four
    `.eyebrow` call sites already overrode the old branded 760/0.14em/primary
    treatment to exactly this; the fourth (`.thread-fatal`) was the only place
    the branded voice still shipped, and it was the odd one out. */
@@ -490,10 +522,10 @@ textarea:disabled {
   text-transform: uppercase;
 }
 
-/* The hand-rolled `.button` / `.icon-button` primitives are gone: their four
-   remaining call sites (composer Stash current / Queue / delete-stash,
-   transcript Load earlier) now render `ui/button.tsx`, so there is exactly
-   one button system and one type step for it. */
+/* The hand-rolled `.button` / `.icon-button` primitives are gone: their
+   remaining call sites (composer Stash current / Queue, transcript Load
+   earlier) now render `ui/button.tsx`, so there is exactly one button system
+   and one type step for it. */
 
 /* ───────────────────────────────────────────────────────────────────────
    § SHELL, SIDEBAR, AND PAGES
@@ -517,7 +549,7 @@ textarea:disabled {
    own border is the hairline; hover/focus/drag brighten a centered line. */
 .sidebar-resize-handle {
   position: absolute;
-  z-index: 10;
+  z-index: calc(var(--z-sticky) + 9);
   top: 0;
   bottom: 0;
   left: calc(var(--sidebar-width, 260px) - 2px);
@@ -545,10 +577,25 @@ textarea:disabled {
 }
 
 .desktop-sidebar {
+  position: relative;
   min-width: 0;
   min-height: 0;
   border-right: 1px solid var(--border-soft);
   background: var(--sidebar);
+}
+
+/* Settings overlays its nav on the sidebar slot; the inventory stays mounted
+   underneath (inert) so its scroll and virtualization state survive.
+   Opacity, not visibility: an inherited visibility change would start the
+   controls' transitions, and a control is not focusable until its
+   transition leaves "hidden", so focus could not return to the gear. */
+.desktop-sidebar-inventory {
+  height: 100%;
+  min-height: 0;
+}
+
+.desktop-sidebar[data-mode="settings"] > .desktop-sidebar-inventory {
+  opacity: 0;
 }
 
 .sidebar-inner {
@@ -584,7 +631,7 @@ textarea:disabled {
 
 .sidebar-header {
   position: relative;
-  z-index: 2;
+  z-index: calc(var(--z-sticky) + 1);
   display: grid;
   flex: 0 0 auto;
   gap: 8px;
@@ -671,29 +718,6 @@ textarea:disabled {
 
 .sidebar-create-action svg {
   color: var(--muted-foreground);
-}
-
-.sidebar-project-filter {
-  width: 100%;
-  min-width: 0;
-  justify-content: flex-start;
-  gap: 7px;
-  border-color: var(--border-soft);
-  background: transparent;
-}
-
-.sidebar-project-filter > span {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-project-filter svg {
-  flex: 0 0 auto;
-  color: var(--muted-foreground-2);
 }
 
 .sidebar-scope {
@@ -832,6 +856,12 @@ textarea:disabled {
   padding: 0;
 }
 
+/* The scope pickers stay over the sidebar: exactly their trigger's width,
+   where the shared picker would otherwise spill over the chat. */
+.searchable-select-popover.sidebar-scope-popover {
+  width: var(--radix-popover-trigger-width);
+}
+
 .sidebar-scope-select .searchable-select-field-label {
   color: var(--muted-foreground-2);
   font-size: 9px;
@@ -852,316 +882,11 @@ textarea:disabled {
   gap: 8px;
 }
 
-.new-thread-target-picker {
-  position: fixed;
-  z-index: 89;
-  top: 0;
-  bottom: 0;
-  left: var(--sidebar-width, 260px);
-  display: flex;
-  width: min(370px, calc(100vw - var(--sidebar-width, 260px)));
-  min-width: 320px;
-  min-height: 0;
-  flex-direction: column;
-  gap: 0;
-  padding: 0;
-  border: 0;
-  border-right: 1px solid var(--border);
-  border-left: 1px solid var(--border-soft);
-  border-radius: 0;
-  background: var(--popover);
-  box-shadow: var(--shadow);
-}
-
-html[data-sidebar-collapsed="true"] .new-thread-target-picker {
-  left: 0;
-  width: min(370px, 100vw);
-}
-
-.new-thread-surface-header {
-  display: grid;
-  flex: 0 0 auto;
-  gap: 5px;
-  padding: 18px 48px 14px 16px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.new-thread-surface-header [data-slot="dialog-description"] {
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-}
-
-.new-thread-surface-body {
-  display: grid;
-  min-height: 0;
-  flex: 1 1 auto;
-  align-content: start;
-  gap: 8px;
-  padding: 14px 16px 18px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.new-thread-target-picker label {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
-.new-thread-template-actions {
-  display: grid;
-  gap: 8px;
-  margin-top: 4px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-soft);
-}
-
-.new-thread-template-status,
-.new-thread-template-editor,
-.new-thread-template-delete-confirm,
-.new-thread-template-update-confirm {
-  display: grid;
-  gap: 6px;
-}
-
-.new-thread-template-status strong {
-  font-size: 12.5px;
-}
-
-.new-thread-template-status small,
-.new-thread-template-buttons > small,
-.new-thread-template-delete-confirm > span,
-.new-thread-template-update-confirm > span {
-  color: var(--muted-foreground-2);
-  font-size: 11.5px;
-  line-height: 1.45;
-}
-
-.new-thread-template-buttons {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-}
-
-.new-thread-template-delete-confirm {
-  padding: 9px;
-  border: 1px solid color-mix(in oklch, var(--destructive) 35%, var(--border));
-  border-radius: var(--radius-ctl);
-  background: color-mix(in oklch, var(--destructive) 7%, transparent);
-}
-
-.new-thread-template-update-confirm {
-  padding: 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  background: var(--muted);
-}
-
-.new-thread-target-picker > [data-slot="dialog-close"] {
-  top: 10px;
-  right: 10px;
-}
-
-.new-thread-agent-options {
-  min-height: 0;
-  display: grid;
-  gap: 2px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.new-thread-agent-option {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  align-items: center;
-  width: 100%;
-  gap: 7px;
-  padding: 7px 8px;
-  border: 0;
-  border-radius: var(--radius-inline);
-  background: transparent;
-  color: var(--foreground);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.new-thread-agent-option-icon {
-  display: grid;
-  place-items: center;
-}
-
-.new-thread-agent-option-copy {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.new-thread-agent-option:hover,
-.new-thread-agent-option:focus-visible,
-.new-thread-agent-option[data-active],
-.new-thread-agent-option[aria-selected="true"] {
-  outline: none;
-  background: var(--secondary);
-}
-
-.new-thread-agent-option strong {
-  overflow: hidden;
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.new-thread-agent-option small {
-  overflow: hidden;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.new-thread-agent-option-status,
-.new-thread-agent-status {
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.new-thread-agent-option-status {
-  padding: 8px;
-}
-
-.new-thread-agent-empty {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-}
-
-.new-thread-agent-empty > span {
-  flex: 1 1 100%;
-}
-
-.new-thread-target-actions {
-  display: flex;
-  flex: 0 0 auto;
-  flex-wrap: wrap;
-  gap: 7px;
-  padding: 12px 16px max(12px, env(safe-area-inset-bottom));
-  border-top: 1px solid var(--border-soft);
-  background: color-mix(in oklch, var(--popover) 94%, var(--muted));
-}
-
-.new-thread-target-unavailable,
-.new-thread-target-error {
+.new-thread-target-unavailable {
   max-width: 300px;
   color: var(--muted-foreground-2);
   font-size: 12px;
   line-height: 1.35;
-}
-
-.new-thread-target-error {
-  color: var(--destructive);
-}
-
-@media (max-width: 819px), (pointer: coarse) {
-  [data-slot="select-content"].new-thread-select-content,
-  [data-slot="popover-content"].new-thread-searchable-content {
-    z-index: 102;
-  }
-
-  [data-slot="dialog-overlay"].new-thread-sheet-overlay {
-    z-index: 100;
-  }
-
-  /* Root this selector so its specificity matches the persisted desktop
-     sidebar-collapse rule above. That state remains on `html` in the mobile
-     shell and must not restore the desktop drawer's 370px width cap. */
-  html [data-slot="dialog-content"].new-thread-target-picker {
-    z-index: 101;
-    top: auto;
-    right: 0;
-    bottom: var(--new-thread-keyboard-inset, 0px);
-    left: 0;
-    width: 100vw;
-    min-width: 0;
-    max-width: none;
-    height: auto;
-    max-height: calc(100dvh - var(--new-thread-keyboard-inset, 0px) - max(16px, env(safe-area-inset-top)));
-    translate: 0 0 !important;
-    transform: none;
-    border: 1px solid var(--border);
-    border-bottom: 0;
-    border-radius: 16px 16px 0 0;
-    animation: new-thread-sheet-in 170ms ease-out;
-  }
-
-  .new-thread-target-picker > [data-slot="dialog-close"] {
-    top: 5px;
-    right: max(5px, env(safe-area-inset-right));
-    width: 44px;
-    height: 44px;
-  }
-
-  .new-thread-surface-header {
-    padding: 15px 52px 12px max(14px, env(safe-area-inset-left));
-  }
-
-  .new-thread-surface-body {
-    padding-right: max(14px, env(safe-area-inset-right));
-    padding-left: max(14px, env(safe-area-inset-left));
-  }
-
-  .new-thread-target-actions {
-    padding-right: max(14px, env(safe-area-inset-right));
-    padding-left: max(14px, env(safe-area-inset-left));
-  }
-
-  .new-thread-target-picker .new-thread-add-project,
-  .directory-picker-dialog button,
-  .directory-picker-dialog input,
-  .new-thread-target-actions [data-slot="button"] {
-    min-height: 44px;
-  }
-
-  [data-slot="dialog-content"].directory-picker-dialog[data-mobile-sheet="true"] {
-    top: auto;
-    right: 0;
-    bottom: var(--directory-keyboard-inset, 0px);
-    left: 0;
-    width: 100vw;
-    max-width: none;
-    max-height: calc(100dvh - var(--directory-keyboard-inset, 0px) - max(16px, env(safe-area-inset-top)));
-    translate: 0 0 !important;
-    transform: none;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    border: 1px solid var(--border);
-    border-bottom: 0;
-    border-radius: 16px 16px 0 0;
-    padding: 16px max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
-  }
-}
-
-@keyframes new-thread-sheet-in {
-  from {
-    transform: translateY(24px);
-    opacity: 0;
-  }
-
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
 }
 
 .projects-header {
@@ -1180,26 +905,6 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
-}
-
-.projects-add {
-  display: grid;
-  width: 24px;
-  height: 24px;
-  flex: 0 0 auto;
-  place-items: center;
-  border-radius: var(--radius-ctl);
-  background: transparent;
-  color: var(--muted-foreground-2);
-  transition:
-    background var(--motion-fast),
-    color var(--motion-fast);
-}
-
-.projects-add:hover,
-.projects-add[data-state="open"] {
-  background: var(--secondary);
-  color: var(--foreground);
 }
 
 .project-row-shell {
@@ -1306,82 +1011,6 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   to {
     height: 0;
   }
-}
-
-/* Surface, motion, and dismissal come from the ui/popover primitive; the
-   z-index lifts the portalled content above the mobile drawer (z 81). */
-.workspace-popover {
-  z-index: 90;
-  width: min(280px, calc(100vw - 16px));
-}
-
-.workspace-open {
-  display: grid;
-  gap: 8px;
-}
-
-.remembered-workspaces {
-  display: grid;
-  max-height: 190px;
-  gap: 2px;
-  overflow-y: auto;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.remembered-workspaces button {
-  display: grid;
-  min-width: 0;
-  min-height: 40px;
-  gap: 1px;
-  padding: 5px 8px;
-  border-radius: var(--radius-ctl);
-  background: transparent;
-  text-align: left;
-  transition: background var(--motion-fast);
-}
-
-.remembered-workspaces button:hover {
-  background: color-mix(in oklch, var(--foreground) 6%, transparent);
-}
-
-.remembered-workspaces button.selected {
-  background: var(--accent-soft);
-}
-
-.remembered-workspaces span,
-.remembered-workspaces small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-error {
-  margin: 0;
-  padding: 7px 8px;
-  border-radius: var(--radius-ctl);
-  background: color-mix(in oklch, var(--destructive) 12%, transparent);
-  color: var(--destructive);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.remembered-workspaces span {
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.remembered-workspaces small {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-}
-
-.workspace-open label {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
 }
 
 .field input {
@@ -1576,11 +1205,6 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   display: contents;
 }
 
-.thread-context-menu {
-  width: max-content;
-  max-width: min(20rem, calc(100dvw - 24px));
-}
-
 .thread-action-label {
   display: flex;
   min-width: 0;
@@ -1596,32 +1220,20 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   text-overflow: ellipsis;
 }
 
-[data-slot="dialog-content"].thread-group-dialog {
-  top: calc((100dvh - var(--thread-group-keyboard-inset, 0px)) / 2);
-  display: flex;
-  max-height: calc(100dvh - var(--thread-group-keyboard-inset, 0px) - 2rem);
-  flex-direction: column;
-  overflow-y: auto;
+/* Move to group (MoveToGroupMenu.tsx): the search row runs edge to edge at
+   the top of the submenu and stays in view while the groups scroll; in the
+   touch sheet's drill-in it sits on the rows' inset. */
+.thread-group-picker-search {
+  position: sticky;
+  z-index: var(--z-sticky);
+  top: 0;
+  margin: 0 calc(-1 * var(--menu-panel-padding)) var(--space-1);
+  background: var(--popover);
 }
 
-.thread-group-dialog > :not(.thread-group-search) {
-  flex-shrink: 0;
-}
-
-.thread-group-search {
-  display: flex;
-  min-height: 100px;
-  max-height: 280px;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.thread-group-create-field {
-  display: grid;
-  gap: 6px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-weight: 600;
+.thread-group-picker-search[data-sheet] {
+  position: static;
+  margin: 0 0 var(--space-1);
 }
 
 /* Inline rename (context menu → Rename): the row link swaps to a form so
@@ -1700,7 +1312,7 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
 .thread-row-actions {
   position: absolute;
   right: 0;
-  z-index: 1;
+  z-index: var(--z-sticky);
   display: flex;
   align-items: center;
   justify-self: end;
@@ -2237,56 +1849,17 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   line-height: 1;
 }
 
-[data-slot="dialog-overlay"].advisory-center-sheet-overlay {
-  z-index: 100;
-}
-
-[data-slot="dialog-content"].advisory-center-sheet {
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: auto;
-  z-index: 101;
-  display: flex;
-  width: min(420px, calc(100vw - 24px));
-  min-width: 0;
-  max-width: none;
-  translate: 0 0 !important;
-  transform: none;
-  flex-direction: column;
-  gap: 0;
-  border-left: 1px solid var(--border);
-  background: var(--popover);
-  box-shadow: var(--shadow);
-}
-
-.advisory-center-sheet > [data-slot="dialog-close"] {
-  top: 8px;
-  right: max(8px, env(safe-area-inset-right));
-}
-
-.advisory-center-header {
-  flex: 0 0 auto;
-  padding: 18px 52px 16px 18px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.advisory-center-header [data-slot="dialog-description"] {
-  margin-top: 5px;
-}
-
-.advisory-center-list {
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
+/* Warnings: a side dialog (a sheet on touch) listing advisories as
+   hairline-separated rows. */
 .advisory-center-item {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr);
-  gap: 10px;
-  padding: 16px 18px;
-  border-bottom: 1px solid var(--border-soft);
+  gap: var(--space-2-5);
+  padding: var(--space-3) 0;
+}
+
+.advisory-center-item + .advisory-center-item {
+  border-top: 1px solid var(--border-soft);
 }
 
 .advisory-center-item-icon {
@@ -2366,23 +1939,8 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   height: 14px;
 }
 
-.sidebar-footer-menu {
-  /* DropdownMenu content is portalled; clear the full-screen mobile drawer
-     (z 81) so the menu remains visible and receives touch input. */
-  z-index: 90;
-  min-width: 190px;
-}
-
-.sidebar-footer-menu [data-slot="dropdown-menu-item"] svg,
-.sidebar-footer-menu [data-slot="dropdown-menu-sub-trigger"] svg {
-  width: 15px;
-  height: 15px;
-  color: var(--muted-foreground-2);
-}
-
 .sidebar-usage-menu,
 .sidebar-usage-detail {
-  z-index: 91;
   min-width: 232px;
 }
 
@@ -2454,26 +2012,6 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
   padding: 4px 4px 2px;
-}
-
-.sidebar-usage-actions button,
-.sidebar-usage-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 0;
-  height: 28px;
-  border-radius: var(--radius-ctl);
-  background: var(--accent-soft);
-  color: var(--foreground);
-  font-size: 12.5px;
-  font-weight: 500;
-  text-align: center;
-}
-
-.sidebar-usage-actions button:hover:not(:disabled),
-.sidebar-usage-action[data-highlighted] {
-  background: var(--accent);
 }
 
 .sidebar-usage-detail-body {
@@ -2591,266 +2129,10 @@ html[data-sidebar-collapsed="true"] .new-thread-target-picker {
   background: var(--border-soft);
 }
 
-[data-slot="dialog-overlay"].sidebar-usage-sheet-overlay {
-  z-index: 100;
-}
-
-[data-slot="dialog-content"].sidebar-usage-sheet {
-  top: auto;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: 101;
-  display: flex;
-  width: 100vw;
-  min-width: 0;
-  max-width: none;
-  max-height: min(88dvh, 720px);
-  /* DialogContent is centered with Tailwind's translate longhand. Reset both
-     the utility variables and the emitted longhand so this bottom sheet stays
-     anchored to the viewport instead of shifting half a viewport left/up. */
-  --tw-translate-x: 0 !important;
-  --tw-translate-y: 0 !important;
-  translate: 0 0 !important;
-  transform: none;
-  flex-direction: column;
-  gap: 10px;
-  padding: 16px 12px calc(12px + env(safe-area-inset-bottom));
-  border-radius: 16px 16px 0 0;
-}
-
-.sidebar-usage-sheet-body {
-  min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-}
-
 .sidebar-usage-sheet .sidebar-usage-summary {
   column-gap: 24px;
 }
 
-/* Touch/pen long-press uses a viewport-anchored action sheet instead of a
-   pointer-positioned menu. */
-[data-slot="dialog-overlay"].thread-actions-sheet-overlay {
-  z-index: 100;
-}
-
-[data-slot="dialog-content"].thread-actions-sheet {
-  top: auto;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: 101;
-  display: flex;
-  width: 100vw;
-  min-width: 0;
-  max-width: none;
-  max-height: min(88dvh, 720px);
-  --tw-translate-x: 0 !important;
-  --tw-translate-y: 0 !important;
-  translate: 0 0 !important;
-  transform: none;
-  flex-direction: column;
-  gap: 4px;
-  padding: 14px max(12px, env(safe-area-inset-right))
-    calc(12px + env(safe-area-inset-bottom))
-    max(12px, env(safe-area-inset-left));
-  border-radius: 16px 16px 0 0;
-}
-
-.thread-actions-sheet > [data-slot="dialog-title"] {
-  padding-right: 48px;
-  font-size: 15px;
-  font-weight: 650;
-}
-
-.thread-actions-sheet-thread-title {
-  min-width: 0;
-  padding-right: 48px;
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: 12.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thread-actions-sheet > [data-slot="dialog-close"] {
-  top: 4px;
-  right: max(4px, env(safe-area-inset-right));
-  width: 44px;
-  height: 44px;
-}
-
-.thread-actions-sheet-body {
-  min-height: 0;
-  margin-top: 8px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.thread-action-sheet-group {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-}
-
-.thread-action-sheet-group > [role="separator"] {
-  height: 1px;
-  margin: 7px 4px;
-  background: var(--border-soft);
-}
-
-.thread-action-sheet-group > [data-slot="button"],
-.thread-action-sheet-group .execution-workspace-actions > [data-slot="button"] {
-  width: 100%;
-  min-width: 0;
-  min-height: 44px;
-  flex: 0 0 auto;
-  justify-content: flex-start;
-  padding-inline: 10px;
-  font-weight: 450;
-}
-
-.thread-action-sheet-group > [data-slot="button"][data-variant="destructive"],
-.thread-action-sheet-group
-  .execution-workspace-actions
-  > [data-slot="button"][data-variant="destructive"] {
-  background: transparent;
-  color: var(--destructive);
-}
-
-/* The chat header's mixed configuration/action surface becomes a modal sheet
-   on coarse pointers and narrow layouts; desktop retains its anchored popover. */
-[data-slot="dialog-overlay"].thread-settings-sheet-overlay {
-  z-index: 100;
-}
-
-[data-slot="dialog-content"].thread-settings-sheet {
-  top: auto;
-  right: 0;
-  bottom: var(--thread-settings-keyboard-inset, 0px);
-  left: 0;
-  z-index: 101;
-  display: flex;
-  width: 100vw;
-  min-width: 0;
-  max-width: none;
-  max-height: calc(100dvh - var(--thread-settings-keyboard-inset, 0px) - max(16px, env(safe-area-inset-top)));
-  --tw-translate-x: 0 !important;
-  --tw-translate-y: 0 !important;
-  translate: 0 0 !important;
-  transform: none;
-  flex-direction: column;
-  gap: 4px;
-  padding: 14px max(12px, env(safe-area-inset-right))
-    calc(12px + env(safe-area-inset-bottom))
-    max(12px, env(safe-area-inset-left));
-  border-radius: 16px 16px 0 0;
-}
-
-.thread-settings-sheet > [data-slot="dialog-title"] {
-  padding-right: 48px;
-  font-size: 15px;
-  font-weight: 650;
-}
-
-.thread-settings-sheet-thread-title {
-  min-width: 0;
-  padding-right: 48px;
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: 12.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thread-settings-sheet > [data-slot="dialog-close"] {
-  top: 4px;
-  right: max(4px, env(safe-area-inset-right));
-  width: 44px;
-  height: 44px;
-}
-
-.thread-settings-sheet-body {
-  min-height: 0;
-  margin-top: 8px;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-.thread-settings-sheet-body > .menu-label {
-  display: none;
-}
-
-.thread-settings-sheet-body .mobile-config {
-  display: grid;
-  gap: 10px;
-  padding: 4px 5px 12px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.thread-settings-sheet-body .mobile-config [data-slot="thread-setting-row"] {
-  display: grid;
-  grid-template-columns: minmax(76px, 0.35fr) minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  padding-left: 5px;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-.thread-settings-sheet-body [data-slot="button"],
-.thread-settings-sheet-body
-  .execution-workspace-actions
-  > [data-slot="button"] {
-  min-width: 0;
-  min-height: 44px;
-}
-
-.thread-settings-sheet-body > [data-slot="button"],
-.thread-settings-sheet-body
-  .execution-workspace-actions
-  > [data-slot="button"] {
-  width: 100%;
-  justify-content: flex-start;
-  padding-inline: 10px;
-  font-weight: 450;
-  text-align: left;
-}
-
-.thread-settings-sheet-body > [data-slot="button"][data-variant="destructive"],
-.thread-settings-sheet-body
-  .execution-workspace-actions
-  > [data-slot="button"][data-variant="destructive"] {
-  background: transparent;
-  color: var(--destructive);
-}
-
-.thread-settings-sheet-body .thread-actions-separator {
-  margin-block: 7px;
-}
-
-/* Radix settings pickers portal to document.body. Lift those sibling layers
-   above the modal scrim while this sheet is open so options remain tappable. */
-body:has(.thread-settings-sheet[data-state="open"])
-  [data-slot="select-content"],
-body:has(.thread-settings-sheet[data-state="open"])
-  [data-model-picker-content] {
-  z-index: 110;
-}
-
-@media (max-width: 819px) {
-  .sidebar-usage-menu,
-  .sidebar-usage-detail {
-    width: min(320px, calc(100vw - 16px));
-    max-height: min(70vh, 560px);
-  }
-}
 
 .connection-dot.reconnecting {
   background: var(--warning);
@@ -2903,32 +2185,19 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .workspace-workbench-bar {
   position: relative;
-  z-index: 21;
+  z-index: calc(var(--z-sticky) + 20);
   display: flex;
-  height: var(--workbench-bar-height);
   min-width: 0;
-  flex: 0 0 var(--workbench-bar-height);
+  min-height: var(--workbench-bar-height);
+  flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   /* Matches .workspace-panel-chrome, minus its text-only left inset: this row
      leads with an icon button, so both ends carry the button inset. */
-  padding: 4px 5px;
+  padding: var(--space-1-5) 5px;
   border-bottom: 1px solid var(--border-soft);
   background: color-mix(in oklch, var(--sidebar) 72%, var(--background));
-}
-
-/* The bar's controls match the panel chrome's 28px/16px cluster. The trigger
-   is 20px elsewhere in the app, so the bar overrides it rather than letting
-   one control in this row outsize its neighbours. */
-.workspace-workbench-bar .sidebar-nav-trigger {
-  width: 28px;
-  height: 28px;
-}
-
-.workspace-workbench-bar .sidebar-nav-trigger svg {
-  width: 16px;
-  height: 16px;
 }
 
 .workspace-panel-stage {
@@ -2982,16 +2251,20 @@ body:has(.thread-settings-sheet[data-state="open"])
   box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--ring) 36%, transparent);
 }
 
-.workspace-panel-availability-notice,
 .workspace-panel-availability {
   position: absolute;
-  z-index: 3;
+  z-index: calc(var(--z-sticky) + 2);
   inset: 48px 0 auto;
   padding: 9px 12px;
   border-bottom: 1px solid var(--border-soft);
   background: var(--secondary);
   color: var(--secondary-foreground);
   font-size: 12px;
+}
+
+/* After a panel header, the notice starts where the header ends. */
+.workspace-panel-chrome ~ .workspace-panel-availability {
+  top: var(--workbench-bar-height);
 }
 
 .workspace-panel-portal-target,
@@ -3010,12 +2283,12 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .workspace-panel-chrome {
   display: flex;
-  height: 48px;
   min-width: 0;
-  flex: 0 0 48px;
+  min-height: var(--workbench-bar-height);
+  flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  padding: 4px 5px 4px 12px;
+  padding: var(--space-1-5) 5px var(--space-1-5) 12px;
   border-bottom: 1px solid var(--border-soft);
   background: var(--background);
 }
@@ -3119,6 +2392,51 @@ body:has(.thread-settings-sheet[data-state="open"])
   color: inherit;
 }
 
+/* Icon buttons in the bars and panel headers: --bar-control targets with
+   --bar-icon glyphs (32/18px, and 36x40/20px under the density switch), so a
+   bar's controls match their neighbours. The Button base sizes child SVGs
+   to 16px unless they carry a size-* class, so the glyphs are set here. */
+.sidebar-nav-trigger,
+.notification-silence-button,
+.tasks-panel-toggle,
+.workspace-panel-open-icon,
+.workspace-panel-open-trigger,
+.thread-find-trigger,
+.thread-tools-shell > button,
+.workspace-panel-actions > button,
+.workspace-files-toolbar-actions > button,
+.terminal-tab-add,
+.terminal-panel-chrome-actions > button {
+  width: var(--bar-control-width);
+  height: var(--bar-control);
+}
+
+/* Inside its border, the panels group is as tall as its neighbours. */
+.workspace-panel-open-icon,
+.workspace-panel-open-trigger {
+  height: calc(var(--bar-control) - 2px);
+}
+
+.sidebar-nav-trigger svg,
+.notification-silence-button svg,
+.tasks-panel-toggle svg,
+.workspace-panel-open-icon svg,
+.thread-find-trigger svg,
+.thread-tools-shell > button svg,
+.workspace-panel-actions > button svg,
+.workspace-files-toolbar-actions > button svg,
+.terminal-tab-add svg,
+.terminal-panel-chrome-actions > button svg {
+  width: var(--bar-icon);
+  height: var(--bar-icon);
+}
+
+/* The panels menu's chevron stays a step below its neighbours. */
+.workspace-panel-open-trigger svg {
+  width: calc(var(--bar-icon) - 2px);
+  height: calc(var(--bar-icon) - 2px);
+}
+
 .workspace-panel-chrome-actions-slot,
 .workspace-panel-chrome-actions-target,
 .workspace-files-toolbar-actions {
@@ -3179,24 +2497,13 @@ body:has(.thread-settings-sheet[data-state="open"])
   gap: 8px;
 }
 
-.workspace-workbench-actions .tasks-panel-toggle {
-  width: 28px;
-  height: 28px;
-  flex: 0 0 auto;
-}
-
-.workspace-workbench-actions .tasks-panel-toggle svg {
-  width: 16px;
-  height: 16px;
-}
-
 .workspace-panel-open-menu {
   display: flex;
   min-width: 0;
   align-items: center;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: calc(var(--radius) + 2px);
+  border-radius: var(--radius-ctl);
   background: color-mix(in oklch, var(--background) 88%, var(--sidebar));
 }
 
@@ -3223,12 +2530,6 @@ body:has(.thread-settings-sheet[data-state="open"])
   border-left: 1px solid var(--border-soft);
 }
 
-.workspace-panel-open-icon svg,
-.workspace-panel-open-trigger svg {
-  width: 16px;
-  height: 16px;
-}
-
 /* A collapsed surface is still open, so it keeps its place in the glyph row
    and reads as inactive instead of vanishing from the bar. */
 .workspace-panel-open-icon[data-collapsed="true"] {
@@ -3238,29 +2539,6 @@ body:has(.thread-settings-sheet[data-state="open"])
 .workspace-panel-open-icon[data-visible="true"] {
   color: var(--foreground);
   background: color-mix(in oklch, var(--accent) 72%, transparent);
-}
-
-.workspace-panel-open-menu-content {
-  min-width: min(300px, calc(100vw - 16px));
-}
-
-.workspace-panel-open-item {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-}
-
-.workspace-panel-open-item[data-collapsed="true"] {
-  color: var(--muted-foreground);
-}
-
-.workspace-panel-open-item-label {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .workspace-panel-empty {
@@ -3338,52 +2616,6 @@ body:has(.thread-settings-sheet[data-state="open"])
   color: var(--foreground);
 }
 
-/* The Files sheet is portalled to the body, so it anchors to the viewport and
-   subtracts the bar itself. It is deliberately non-modal: the bar stays
-   visible and usable while Files covers the rest of the stage. */
-.workspace-panel-mobile-sheet {
-  top: var(--workbench-bar-height);
-  left: 0;
-  display: flex;
-  width: 100vw;
-  height: calc(100dvh - var(--workbench-bar-height));
-  min-width: 0;
-  min-height: 0;
-  max-width: none;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--background);
-  color: var(--foreground);
-  /* DialogContent's centering utilities are emitted after product CSS. Reset
-     both their variables and the longhand so the sheet spans the viewport. */
-  --tw-translate-x: 0 !important;
-  --tw-translate-y: 0 !important;
-  translate: 0 0 !important;
-  transform: none;
-  gap: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  --tw-ring-shadow: 0 0 #0000;
-}
-
-.workspace-panel-mobile-sheet > [data-slot="dialog-close"] {
-  display: none;
-}
-
-.workspace-panel-mobile-sheet > header {
-  display: flex;
-  height: 48px;
-  flex: 0 0 48px;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 8px 6px 14px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.workspace-panel-mobile-sheet > .workspace-panel-content,
 .workspace-panel-mobile-base > .workspace-panel-content {
   position: relative;
   min-width: 0;
@@ -3531,7 +2763,7 @@ body:has(.thread-settings-sheet[data-state="open"])
    opening it never resizes or reflows the active file. */
 .workspace-files-tree {
   position: absolute;
-  z-index: 8;
+  z-index: calc(var(--z-sticky) + 7);
   top: 6px;
   left: clamp(
     8px,
@@ -3546,11 +2778,6 @@ body:has(.thread-settings-sheet[data-state="open"])
   border-radius: var(--radius-card);
   background: var(--sidebar);
   box-shadow: var(--shadow);
-}
-
-.new-thread-agent-list {
-  display: grid;
-  gap: 2px;
 }
 
 .workspace-files-tree-open {
@@ -3824,7 +3051,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .workspace-files-seek-notice {
   position: absolute;
-  z-index: 5;
+  z-index: calc(var(--z-sticky) + 4);
   top: 8px;
   right: 8px;
   max-width: min(320px, calc(100% - 16px));
@@ -3848,7 +3075,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   padding: 7px 12px;
   border: 0;
   border-bottom: 1px solid var(--border-soft);
-  background: color-mix(in srgb, var(--destructive) 10%, var(--card));
+  background: var(--destructive-soft);
   color: var(--destructive);
   font-size: 12px;
   text-align: left;
@@ -3876,7 +3103,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .workspace-files-boundary-note {
   position: absolute;
-  z-index: 2;
+  z-index: calc(var(--z-sticky) + 1);
   right: 8px;
   bottom: 8px;
   margin: 0;
@@ -3900,7 +3127,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .workspace-panel-resize-handle {
   position: relative;
-  z-index: 5;
+  z-index: calc(var(--z-sticky) + 4);
   align-self: stretch;
   justify-self: stretch;
   cursor: col-resize;
@@ -3930,18 +3157,6 @@ body:has(.thread-settings-sheet[data-state="open"])
 }
 
 /* ── Panel instances and remote terminals ───────────────────────────── */
-.workspace-terminal-count {
-  min-width: 1.25rem;
-  padding: 0 0.35rem;
-  border-radius: 999px;
-  background: var(--muted);
-  color: var(--muted-foreground);
-  font-size: 0.72rem;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.25rem;
-  text-align: center;
-}
-
 .workspace-panel-tablist {
   display: flex;
   min-height: 32px;
@@ -4009,12 +3224,6 @@ body:has(.thread-settings-sheet[data-state="open"])
   font-size: 1rem;
 }
 
-.terminal-operation-message {
-  margin: 3px 0 0;
-  color: var(--muted-foreground);
-  font-size: 0.78rem;
-}
-
 .terminal-panel-search input {
   min-width: 0;
   min-height: 32px;
@@ -4025,17 +3234,13 @@ body:has(.thread-settings-sheet[data-state="open"])
   color: var(--foreground);
 }
 
-[data-slot="dialog-overlay"].terminal-lifecycle-confirm-overlay {
-  z-index: 110;
-}
-
-[data-slot="dialog-content"].terminal-lifecycle-confirm-dialog {
-  z-index: 111;
-}
-
+/* The compact header keeps its 38px row with 28px targets (and the bars'
+   glyphs), so a pressed button clears the row's edges. Touch sizes them
+   up below. */
 .workspace-panel-terminals .workspace-panel-chrome {
-  height: 38px;
-  flex-basis: 38px;
+  --bar-control: var(--control-sm);
+  --bar-control-width: var(--control-sm);
+  min-height: 38px;
   gap: 4px;
   padding-block: 2px;
 }
@@ -4197,28 +3402,28 @@ body:has(.thread-settings-sheet[data-state="open"])
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  background: #111318;
+  background: var(--terminal-background);
 }
 
 .terminal-panel-search {
-  background: #171a20;
+  background: var(--terminal-panel);
 }
 
 .terminal-panel-search .thread-find-control {
-  background: #111318;
-  border-color: #343a46;
-  color: #f3f4f6;
+  background: var(--terminal-background);
+  border-color: var(--terminal-border);
+  color: var(--terminal-foreground);
 }
 
 .terminal-panel-search .thread-find-control input {
-  color: #f3f4f6;
+  color: var(--terminal-foreground);
 }
 
 .terminal-panel-notice {
   margin: 0;
   padding: 5px 8px;
-  background: #3b2d17;
-  color: #fde7b2;
+  background: var(--warning-soft);
+  color: var(--warning);
   font-size: 0.74rem;
 }
 
@@ -4249,8 +3454,8 @@ body:has(.thread-settings-sheet[data-state="open"])
 .terminal-panel-bottom-controls {
   display: none;
   flex: 0 0 auto;
-  border-top: 1px solid #292d35;
-  background: #171a20;
+  border-top: 1px solid var(--terminal-border);
+  background: var(--terminal-panel);
 }
 
 .terminal-mobile-controls {
@@ -4326,20 +3531,20 @@ body:has(.thread-settings-sheet[data-state="open"])
 .terminal-transcript {
   position: absolute;
   inset: 8px;
-  z-index: 3;
+  z-index: calc(var(--z-sticky) + 2);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid #404653;
+  border: 1px solid var(--terminal-border);
   border-radius: 7px;
-  background: #171a20;
-  color: #f3f4f6;
-  box-shadow: 0 14px 40px rgb(0 0 0 / 38%);
+  background: var(--terminal-panel);
+  color: var(--terminal-foreground);
+  box-shadow: var(--elevation-3);
 }
 
 .terminal-transcript > header {
   padding: 6px 8px;
-  border-bottom: 1px solid #343a46;
+  border-bottom: 1px solid var(--terminal-border);
 }
 
 .terminal-transcript pre {
@@ -4360,13 +3565,8 @@ body:has(.thread-settings-sheet[data-state="open"])
 }
 
 @media (max-width: 819px), (pointer: coarse) {
-  .terminal-operation-message {
-    flex: 0 0 auto;
-  }
-
   .workspace-panel-terminals .workspace-panel-chrome {
-    height: 52px;
-    flex-basis: 52px;
+    min-height: 52px;
   }
 
   .workspace-panel-terminals .workspace-panel-chrome button,
@@ -4466,7 +3666,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .chat-thread-panel > :not(.chat-atmosphere) {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-sticky);
 }
 
 .chat-atmosphere {
@@ -4517,7 +3717,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .thread-view-floating-controls {
   position: absolute;
-  z-index: 3;
+  z-index: calc(var(--z-sticky) + 2);
   top: 10px;
   right: 14px;
   display: inline-flex;
@@ -4527,7 +3727,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   border: 1px solid var(--border);
   border-radius: 999px;
   background: color-mix(in srgb, var(--background) 94%, transparent);
-  box-shadow: var(--shadow-xs);
+  box-shadow: var(--elevation-1);
   backdrop-filter: blur(8px);
   pointer-events: auto;
 }
@@ -4693,23 +3893,6 @@ body:has(.thread-settings-sheet[data-state="open"])
     height: 32px;
     flex-basis: 32px;
   }
-}
-
-.settings-native-select {
-  min-width: 132px;
-  height: 34px;
-  padding: 0 30px 0 10px;
-  border: 1px solid var(--input);
-  border-radius: var(--radius-ctl);
-  background: var(--secondary);
-  color: var(--foreground);
-  font: inherit;
-  font-size: 13px;
-}
-
-.settings-native-select:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
 }
 
 .welcome {
@@ -5149,27 +4332,13 @@ body:has(.thread-settings-sheet[data-state="open"])
   background: var(--destructive);
 }
 
-/* Header icon buttons: the shadcn Button base forces child SVGs to size-4
-   (16px) unless they carry a Tailwind size-* class. Lucide width/height props
-   lose to that rule, so pin the glyph size here for the header cluster.
-   Defaults are mobile/touch-friendly; desktop steps down after the base
-   hit-target rules below. */
-.sidebar-nav-trigger svg,
-.thread-find-trigger svg,
-.tasks-panel-toggle svg,
-.thread-settings-button svg,
-.automation-thread-button svg {
-  width: 20px;
-  height: 20px;
-}
 
 .pane-nav-header {
   display: none;
-  height: var(--workbench-bar-height);
   min-height: var(--workbench-bar-height);
-  flex: 0 0 var(--workbench-bar-height);
+  flex: 0 0 auto;
   align-items: center;
-  padding: 4px 10px;
+  padding: var(--space-1-5) 10px;
 }
 
 .pane-host-nav-header {
@@ -5202,7 +4371,21 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .thread-header {
   position: relative;
-  z-index: 4;
+  z-index: calc(var(--z-sticky) + 3);
+}
+
+/* Quieter chat-header actions; preserve the shared button hit areas. */
+.thread-header .thread-tools-shell > button svg,
+.thread-header > .workspace-panel-actions > button svg {
+  width: calc(var(--bar-icon) - 2px);
+  height: calc(var(--bar-icon) - 2px);
+}
+
+@media (min-width: 820px) {
+  .thread-header .thread-find-trigger svg {
+    width: calc(var(--bar-icon) - 2px);
+    height: calc(var(--bar-icon) - 2px);
+  }
 }
 
 .thread-heading {
@@ -5225,9 +4408,20 @@ body:has(.thread-settings-sheet[data-state="open"])
   gap: 6px;
 }
 
+/* Balance the title against the taller worktree control. Equal rows also
+   adapt to its touch height without shifting the text with an offset. */
+.thread-heading:has(.thread-worktree-trigger) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-auto-rows: 1fr;
+  align-items: stretch;
+  gap: 0;
+}
+
 .thread-panel-brand {
   display: inline-flex;
   flex: 0 0 auto;
+  margin-inline-end: 3px;
   align-items: center;
   align-self: stretch;
   justify-content: center;
@@ -5303,15 +4497,13 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 /* Floor so the label never collapses to a bare ellipsis when the header is
    tight: below ~5 characters it carries no information and should shrink no
-   further (the title above keeps taking the pressure). */
+   further (the title above keeps taking the pressure). A pane narrower than
+   the floor still ends the label in an ellipsis, past the 14px folder icon
+   and its 6px gap. */
 .thread-project-name {
-  min-width: 5ch;
+  min-width: min(5ch, calc(100% - 20px));
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.thread-project-env {
-  flex: 0 0 auto;
 }
 
 .thread-location-context {
@@ -5428,204 +4620,10 @@ body:has(.thread-settings-sheet[data-state="open"])
   }
 }
 
-.thread-worktree-popover {
-  z-index: 50;
-  width: min(390px, calc(100vw - 16px));
-  max-height: min(520px, var(--radix-popover-content-available-height), calc(100dvh - 24px));
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  color: var(--popover-foreground);
-  background: var(--popover);
-  box-shadow: var(--shadow);
-}
-
-.thread-worktree-sheet .thread-worktree-popover-heading {
-  padding-right: 42px;
-}
-
-.thread-worktree-sheet .thread-worktree-list {
-  max-height: min(55dvh, 480px);
-}
-
-.thread-worktree-popover-heading {
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 3px 4px 8px;
-}
-
-.thread-worktree-popover-heading > div {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.thread-worktree-popover-heading strong {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.thread-worktree-popover-heading span {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-}
-
-.thread-worktree-search {
-  flex-shrink: 0;
-  position: relative;
-  display: block;
-  margin-bottom: 6px;
-}
-
-.thread-worktree-search > svg {
-  position: absolute;
-  z-index: 1;
-  top: 50%;
-  left: 9px;
-  color: var(--muted-foreground-2);
-  pointer-events: none;
-  transform: translateY(-50%);
-}
-
-.thread-worktree-search input {
-  height: 32px;
-  padding-left: 30px;
-  font-size: 12px;
-}
-
-.thread-worktree-list {
-  overscroll-behavior: contain;
-  min-height: 0;
-  flex: 1 1 auto;
-  max-height: 340px;
-  overflow-y: auto;
-}
-
-.thread-worktree-row {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  border-radius: var(--radius-ctl);
-}
-
-.thread-worktree-row:hover,
-.thread-worktree-row[data-current="true"] {
-  background: color-mix(in oklch, var(--foreground) 6%, transparent);
-}
-
-.thread-worktree-select {
-  display: flex;
-  min-width: 0;
-  min-height: 48px;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  color: var(--foreground);
-  background: transparent;
-  text-align: left;
-}
-
-.thread-worktree-select:focus-visible,
-.thread-worktree-delete:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: -2px;
-}
-
-.thread-worktree-select:disabled {
-  cursor: default;
-}
-
-.thread-worktree-select > svg {
-  flex: 0 0 auto;
-  color: var(--muted-foreground-2);
-}
-
-.thread-worktree-row-copy {
-  display: grid;
-  min-width: 0;
-  flex: 1 1 auto;
-  gap: 2px;
-}
-
-.thread-worktree-row-copy strong,
-.thread-worktree-row-copy small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thread-worktree-row-copy strong {
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.thread-worktree-row-copy small {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-}
-
-.thread-worktree-status {
-  flex: 0 0 auto;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-}
-
-.thread-worktree-row[data-current="true"] .thread-worktree-status {
-  color: var(--foreground);
-  font-weight: 550;
-}
-
-.thread-worktree-delete {
-  flex: 0 0 auto;
-  margin-right: 4px;
-  color: var(--muted-foreground-2);
-  opacity: 0;
-}
-
-.thread-worktree-row:hover .thread-worktree-delete,
-.thread-worktree-row:focus-within .thread-worktree-delete {
-  opacity: 1;
-}
-
-.thread-worktree-delete:hover:not(:disabled) {
-  color: var(--destructive);
-}
-
 @media (pointer: coarse) {
   .thread-worktree-trigger {
     height: 28px;
   }
-
-  .thread-worktree-delete {
-    opacity: 1;
-  }
-}
-
-.thread-worktree-empty,
-.thread-worktree-error {
-  margin: 0;
-  padding: 16px 9px;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  text-align: center;
-}
-
-.thread-worktree-error {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-block: 7px 3px;
-  color: var(--destructive);
-  text-align: left;
 }
 
 .thread-controls {
@@ -5653,43 +4651,6 @@ body:has(.thread-settings-sheet[data-state="open"])
   align-items: center;
 }
 
-.thread-terminal-menu {
-  min-width: 230px;
-  max-width: min(360px, calc(100vw - 18px));
-}
-
-.thread-terminal-menu-row {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) 32px 32px;
-  gap: 2px;
-  align-items: stretch;
-}
-
-.thread-terminal-menu-entry {
-  min-width: 0;
-}
-
-.thread-terminal-menu-rename,
-.thread-terminal-menu-teardown {
-  justify-content: center;
-  padding-inline: 0;
-}
-
-.thread-terminal-menu-name {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.thread-terminal-menu-status {
-  flex: 0 0 auto;
-  color: var(--muted-foreground);
-  font-size: 11px;
-}
-
 /* ── In-thread find: an editor-style strip owned by the Chat panel. The
    transcript stays React-owned; Custom Highlight API ranges paint matches
    without inserting wrapper elements into streaming Markdown. ── */
@@ -5707,120 +4668,11 @@ body:has(.thread-settings-sheet[data-state="open"])
   color: var(--info);
 }
 
-.turn-bookmarks-popover,
-.turn-bookmarks-sheet {
-  z-index: 52;
-  width: min(390px, calc(100vw - 24px));
-  max-height: min(70vh, 620px);
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--popover);
-  box-shadow: var(--shadow-lg);
-}
-
-.turn-bookmarks-popover h2 {
-  margin: 2px 4px 10px;
-  font-size: 14px;
-}
-
-.turn-bookmarks-list {
-  display: grid;
-  max-height: min(58vh, 520px);
-  gap: 5px;
-  margin: 0;
-  padding: 0;
-  overflow-y: auto;
-  list-style: none;
-}
-
-.turn-bookmark-row {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) 32px;
-  align-items: center;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-ctl);
-  background: var(--card);
-}
-
-.turn-bookmark-link {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-  padding: 9px 10px;
-  text-align: left;
-}
-
-.turn-bookmark-user-preview,
-.turn-bookmark-assistant-preview {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.turn-bookmark-user-preview {
-  color: var(--foreground);
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.turn-bookmark-assistant-preview {
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-
-.turn-bookmark-assistant-preview[data-response-state="no_response"] {
-  color: var(--muted-foreground-2);
-  font-style: italic;
-}
-
-.turn-bookmark-link:hover,
-.turn-bookmark-link:focus-visible {
-  background: var(--muted);
-  outline: none;
-}
-
-.turn-bookmark-remove {
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-inline);
-  color: var(--muted-foreground-2);
-}
-
-.turn-bookmark-remove:hover,
-.turn-bookmark-remove:focus-visible {
-  background: var(--muted);
-  color: var(--destructive);
-  outline: 2px solid var(--ring);
-}
-
-.turn-bookmarks-empty {
-  display: flex;
-  min-height: 84px;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: 12.5px;
-  text-align: center;
-}
-
-.turn-bookmarks-error {
-  margin: 0 4px 8px;
-  color: var(--destructive);
-  font-size: 12px;
-}
-
 .thread-find-bar {
   container-name: thread-find;
   container-type: inline-size;
   position: relative;
-  z-index: 4;
+  z-index: calc(var(--z-sticky) + 3);
   display: flex;
   max-height: 0;
   min-width: 0;
@@ -5893,6 +4745,23 @@ body:has(.thread-settings-sheet[data-state="open"])
   color: var(--muted-foreground-2);
 }
 
+/* The native clear control takes the bar's neutral icon colour instead of
+   the platform's accent blue. */
+.thread-find-control input::-webkit-search-cancel-button {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  margin: 0;
+  appearance: none;
+  background: var(--muted-foreground);
+  cursor: pointer;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M18 6 6 18M6 6l12 12'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
+.thread-find-control input::-webkit-search-cancel-button:hover {
+  background: var(--foreground);
+}
+
 .thread-find-count {
   flex: 0 0 auto;
   min-width: 68px;
@@ -5949,7 +4818,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .thread-find-marker-rail {
   position: absolute;
-  z-index: 5;
+  z-index: calc(var(--z-sticky) + 4);
   top: 8px;
   right: 18px;
   bottom: 8px;
@@ -6037,15 +4906,6 @@ body:has(.thread-settings-sheet[data-state="open"])
   display: contents;
 }
 
-/* Setting triggers fill the control row like the native selects they
-   replaced (ThreadSettingsControls, draft workspace — Phase 1). */
-.mobile-config [data-slot="select-trigger"],
-.mobile-config [data-slot="model-picker-trigger"],
-.draft-location [data-slot="select-trigger"] {
-  width: 100%;
-  min-width: 0;
-}
-
 [data-slot="model-picker-value"] {
   min-width: 0;
   overflow: hidden;
@@ -6099,241 +4959,91 @@ body:has(.thread-settings-sheet[data-state="open"])
   flex-shrink: 0;
 }
 
+/* The searchable picker (ui/searchable-select.tsx): a plain search row over
+   a divider, then the options in the menu row anatomy. At least as wide as
+   its trigger. The New-thread agent picker reuses the popover and search
+   row classes. */
 .searchable-select-popover {
-  width: min(360px, calc(100vw - 16px));
-  max-height: min(var(--radix-popover-content-available-height, 70dvh), 440px, 70dvh);
-  gap: 6px;
-  padding: 5px;
+  width: min(
+    max(var(--radix-popover-trigger-width), 320px),
+    calc(100vw - 16px)
+  );
+  max-height: min(var(--radix-popover-content-available-height), 440px, 70dvh);
+  gap: 0;
+  padding: 0;
   overflow: hidden;
 }
 
 .searchable-select-search {
   display: flex;
+  min-height: 40px;
   flex: 0 0 auto;
   align-items: center;
-  gap: 7px;
-  padding: 2px 4px 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  color: var(--muted-foreground);
+  gap: var(--space-2);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--muted-foreground-2);
 }
 
-.searchable-select-dialog-overlay {
-  z-index: 110;
+.searchable-select-search > svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+  flex: none;
 }
 
-.searchable-select-dialog {
-  z-index: 111;
-  left: 50%;
-  bottom: calc(var(--select-keyboard-inset, 0px) + 16px);
-  transform: translateX(-50%);
-  width: min(560px, calc(100vw - 32px));
-  height: min(600px, calc(100dvh - var(--select-keyboard-inset, 0px) - 32px));
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  overflow: hidden;
-  padding: 12px;
-  border-radius: var(--radius-lg);
-  background: var(--popover);
-  color: var(--popover-foreground);
-  box-shadow: var(--shadow);
-  border: 1px solid var(--border);
-}
-
-.searchable-select-dialog-title {
-  flex: 0 0 auto;
-  margin: 0;
-  padding-right: 32px;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.searchable-select-dialog .searchable-select-options {
+/* A plain input (no control box); the open picker is its focus indication.
+   It stretches to the row so the whole row takes the pointer. */
+.searchable-select-search > input {
+  min-width: 0;
   flex: 1 1 auto;
+  align-self: stretch;
+  color: var(--foreground);
+  font-size: var(--text-input);
+  outline: none;
 }
 
-.searchable-select-search:focus-within {
-  border-color: var(--ring);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
+.searchable-select-search > input::placeholder {
+  color: var(--muted-foreground-2);
 }
 
-.searchable-select-search [data-slot="input"] {
-  height: 32px;
-  border: 0;
-  background: transparent;
-  padding-inline: 2px 8px;
-  box-shadow: none;
-}
-
-.searchable-select-search [data-slot="input"]:focus-visible {
-  box-shadow: none;
+.searchable-select-search > input:disabled {
+  cursor: not-allowed;
+  opacity: var(--disabled-opacity);
 }
 
 .searchable-select-options {
+  display: flex;
   min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  padding: var(--menu-panel-padding);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 2px;
 }
 
-.searchable-select-options [role="option"] {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 8px;
-  border-radius: var(--radius-ctl);
-  color: var(--foreground);
-  font-size: 13px;
-  line-height: 1.3;
-  text-align: left;
+/* As a sheet the picker keeps one height while the list filters, and its
+   search row runs edge to edge. The thread worktree picker's sheet shares it. */
+.searchable-select-sheet {
+  height: min(600px, calc(100dvh - var(--keyboard-inset) - 16px));
+  gap: var(--space-2);
 }
 
-.searchable-select-option-copy {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-  gap: 2px;
-  overflow-wrap: anywhere;
-}
-
-.searchable-select-option-copy small {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-}
-
-.searchable-select-options [role="option"][data-active] {
-  background: var(--accent);
-  color: var(--accent-foreground);
-}
-
-.searchable-select-options [role="option"][aria-disabled="true"] {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.searchable-select-options [role="option"] > svg {
-  flex: 0 0 auto;
-}
-
-.searchable-select-empty {
-  margin: 0;
-  padding: 18px 12px;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  text-align: center;
+.searchable-select-sheet .searchable-select-search {
+  margin-inline: calc(-1 * var(--dialog-padding));
+  padding-inline: var(--dialog-padding);
 }
 
 @media (max-width: 819px), (pointer: coarse) {
-  .searchable-select-trigger,
-  .new-thread-agent-option,
-  .searchable-select-options [role="option"] {
+  .searchable-select-trigger {
     min-height: 44px;
   }
 
-  .searchable-select-search [data-slot="input"] {
-    min-height: 40px;
-    font-size: 16px;
+  .searchable-select-search {
+    min-height: var(--control-touch);
   }
 }
 
-.model-picker-popover {
-  width: min(360px, calc(100vw - 16px));
-  max-height: min(
-    var(--radix-popover-content-available-height, 70dvh),
-    440px,
-    70dvh
-  );
-  gap: 6px;
-  padding: 5px;
-  overflow: hidden;
-}
-
-.model-picker-search {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 7px;
-  padding: 2px 4px 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  color: var(--muted-foreground);
-}
-
-.model-picker-search:focus-within {
-  border-color: var(--ring);
-  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 50%, transparent);
-}
-
-.model-picker-search [data-slot="input"] {
-  height: 32px;
-  border: 0;
-  background: transparent;
-  padding-inline: 2px 8px;
-  box-shadow: none;
-}
-
-.model-picker-search [data-slot="input"]:focus-visible {
-  box-shadow: none;
-}
-
-.model-picker-options {
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding: 2px;
-}
-
-.model-picker-options [role="option"] {
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 7px 8px;
-  border-radius: var(--radius-ctl);
-  color: var(--foreground);
-  font-size: 13px;
-  line-height: 1.3;
-  text-align: left;
-}
-
-.model-picker-options [role="option"] > span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.model-picker-options [role="option"][data-active] {
-  background: var(--accent);
-  color: var(--accent-foreground);
-}
-
-.model-picker-options [role="option"][aria-disabled="true"] {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.model-picker-options [role="option"] > svg {
-  flex: 0 0 auto;
-}
-
-.model-picker-empty {
-  display: flex;
-  min-height: 76px;
-  align-items: center;
-  justify-content: center;
-  padding: 12px;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  text-align: center;
-}
-
 .thread-settings-button {
-  width: 32px;
-  height: 32px;
   margin-left: 2px;
   color: inherit;
 }
@@ -6342,8 +5052,6 @@ body:has(.thread-settings-sheet[data-state="open"])
    word badge is gone. Paused reads as a warning tint. */
 .automation-thread-button {
   display: inline-flex;
-  width: 32px;
-  height: 32px;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--border);
@@ -6364,26 +5072,17 @@ body:has(.thread-settings-sheet[data-state="open"])
   color: var(--warning);
 }
 
-/* Desktop header chrome: slightly smaller glyphs/targets than mobile. */
-@media (min-width: 820px) {
-  .sidebar-nav-trigger svg,
-  .thread-find-trigger svg,
-  .tasks-panel-toggle svg,
-  .thread-settings-button svg,
-  .automation-thread-button svg {
-    width: 18px;
-    height: 18px;
+/* On touch the chip drops its ring and reads as a bare glyph like its
+   neighbours, keeping the phone header's room for the title. */
+@media (max-width: 819px), (pointer: coarse) {
+  .automation-thread-button,
+  .automation-thread-button:hover {
+    border-color: transparent;
   }
 
-  .sidebar-nav-trigger,
-  .thread-find-trigger,
-  .tasks-panel-toggle,
-  .thread-settings-button,
   .automation-thread-button {
-    width: 28px;
-    height: 28px;
+    border-radius: var(--radius-ctl);
   }
-
 }
 
 /* ── Thread notices: quiet marker rows on semantic tones (Phase 4).
@@ -6443,14 +5142,6 @@ body:has(.thread-settings-sheet[data-state="open"])
 .thread-attention [data-slot="button"] {
   flex: 0 0 auto;
   margin-left: auto;
-}
-
-.thread-attention.queue-failure::before {
-  background: var(--destructive);
-}
-
-.thread-attention.queue-failure p {
-  color: var(--destructive);
 }
 
 .materialization-recovery {
@@ -6586,7 +5277,7 @@ body:has(.thread-settings-sheet[data-state="open"])
    the viewport remains the primary mobile control. */
 .chat-history-rail {
   position: absolute;
-  z-index: 3;
+  z-index: calc(var(--z-sticky) + 2);
   top: 16px;
   bottom: 16px;
   left: max(12px, calc(50% - (var(--measure) / 2) - 36px));
@@ -6673,7 +5364,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .chat-history-preview {
   position: absolute;
-  z-index: 4;
+  z-index: calc(var(--z-sticky) + 3);
   top: 50%;
   left: 42px;
   width: min(360px, calc(100cqw - 72px));
@@ -6759,7 +5450,7 @@ body:has(.thread-settings-sheet[data-state="open"])
    still leaves the selection fixed until release. */
 .mobile-chat-history-thumbstick {
   position: absolute;
-  z-index: 6;
+  z-index: calc(var(--z-sticky) + 5);
   top: 16px;
   right: max(28px, env(safe-area-inset-right));
   bottom: 16px;
@@ -6813,7 +5504,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   overflow: hidden;
   box-shadow:
     inset 0 0 0 5px color-mix(in srgb, var(--background) 28%, transparent),
-    var(--shadow-xs);
+    var(--elevation-1);
   opacity: 0;
   scale: 1 0.04;
   translate: 0 -50%;
@@ -6853,7 +5544,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .mobile-chat-history-thumbstick-dot {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-sticky);
   width: 8px;
   height: 8px;
   border: 1px solid color-mix(in srgb, var(--foreground) 24%, transparent);
@@ -7024,7 +5715,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .source-turn-status {
   position: relative;
-  z-index: 3;
+  z-index: calc(var(--z-sticky) + 2);
   max-width: min(90%, 520px);
   flex: 0 0 auto;
   align-self: center;
@@ -7033,7 +5724,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   border: 1px solid var(--border);
   border-radius: var(--radius-ctl);
   background: var(--popover);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--elevation-1);
   color: var(--muted-foreground);
   font-size: 12px;
 }
@@ -7072,7 +5763,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   justify-content: flex-end;
   gap: 6px 10px;
   margin: 2px 0 12px;
-  padding-inline: clamp(9px, 1.5vw, 18px);
+  padding-inline: 0 clamp(9px, 1.5vw, 18px);
   color: var(--muted-foreground-2);
   pointer-events: none;
 }
@@ -7088,6 +5779,13 @@ body:has(.thread-settings-sheet[data-state="open"])
     opacity var(--motion-fast),
     color var(--motion-fast),
     transform var(--motion-fast);
+}
+
+.turn-throughput {
+  margin-inline-end: auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: auto;
 }
 
 .conversation-turn:hover .turn-fork-controls,
@@ -7187,13 +5885,13 @@ body:has(.thread-settings-sheet[data-state="open"])
 }
 
 .lineage-tooltip {
-  z-index: 100;
+  z-index: var(--z-over-dialog);
   max-width: 300px;
   padding: 6px 9px;
   border: 1px solid var(--border);
   border-radius: var(--radius-ctl);
   background: var(--popover);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--elevation-2);
   color: var(--popover-foreground);
   font-size: 12px;
   line-height: 1.35;
@@ -7238,7 +5936,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--background);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--elevation-1);
   color: var(--muted-foreground-2);
   opacity: 0;
   transition:
@@ -7278,15 +5976,6 @@ body:has(.thread-settings-sheet[data-state="open"])
     width: 44px;
     height: 44px;
     opacity: 1;
-  }
-
-  .turn-bookmark-remove {
-    width: 44px;
-    height: 44px;
-  }
-
-  .turn-bookmark-row {
-    grid-template-columns: minmax(0, 1fr) 48px;
   }
 }
 
@@ -7561,7 +6250,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   width: 24px;
   height: 24px;
   place-items: center;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-ctl);
   color: var(--muted-foreground);
 }
 
@@ -7589,7 +6278,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   margin: 0;
   padding: 8px;
   overflow: auto;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-ctl);
   background: var(--background);
   font: 11.5px/1.5 var(--font-mono);
   white-space: pre-wrap;
@@ -7619,7 +6308,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   resize: vertical;
   padding: 7px 8px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-ctl);
   background: var(--background);
   color: var(--foreground);
   font: inherit;
@@ -7636,7 +6325,7 @@ body:has(.thread-settings-sheet[data-state="open"])
   align-items: center;
   gap: 4px;
   padding: 4px 7px;
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-ctl);
   background: var(--secondary);
   font-size: 11px;
 }
@@ -7820,7 +6509,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .markdown-code-copy {
   position: absolute;
-  z-index: 1;
+  z-index: var(--z-sticky);
   top: 8px;
   right: 8px;
   display: inline-flex;
@@ -7930,7 +6619,7 @@ body:has(.thread-settings-sheet[data-state="open"])
 
 .markdown .mermaid-diagram-expand {
   position: absolute;
-  z-index: 1;
+  z-index: var(--z-sticky);
   top: 8px;
   right: 8px;
   display: inline-flex;
@@ -7968,24 +6657,16 @@ body:has(.thread-settings-sheet[data-state="open"])
   margin-bottom: 0;
 }
 
-.mermaid-diagram-dialog {
-  width: min(1200px, calc(100vw - 32px));
-  max-width: calc(100vw - 32px);
-  height: min(900px, calc(100dvh - 32px));
-  overflow: hidden;
-  padding: 0;
+/* Media viewers (the Dialog's viewer size): the dialog's X sits in the zoom
+   toolbar's row, which is tall enough for it and leaves it room. */
+[data-slot="dialog-content"][data-size="viewer"] .zoomable-preview-toolbar {
+  min-height: calc(var(--dialog-close-size) + 2 * var(--space-0-5) + 1px);
+  padding-right: calc(var(--dialog-close-size) + var(--space-2));
 }
 
-.mermaid-diagram-dialog .zoomable-preview-toolbar {
-  padding-right: 44px;
-}
-
-@media (max-width: 640px) {
-  .mermaid-diagram-dialog {
-    width: calc(100vw - 16px);
-    max-width: calc(100vw - 16px);
-    height: calc(100dvh - 16px);
-  }
+[data-slot="dialog-content"][data-size="viewer"] > [data-slot="dialog-close"] {
+  top: var(--space-0-5);
+  right: var(--space-0-5);
 }
 
 .markdown hr {
@@ -8361,7 +7042,7 @@ button.activity-group-summary:hover {
 
 .file-block-controls {
   position: relative;
-  z-index: 2;
+  z-index: calc(var(--z-sticky) + 1);
   display: inline-flex;
   justify-self: end;
   gap: 4px;
@@ -8404,7 +7085,7 @@ button.activity-group-summary:hover {
   position: absolute;
   top: calc(100% + 4px);
   right: 0;
-  z-index: 4;
+  z-index: calc(var(--z-sticky) + 3);
   width: max-content;
   max-width: min(280px, 75vw);
   padding: 5px 7px;
@@ -9002,7 +7683,7 @@ tr.diff-hunk td {
   --composer-inline-inset: clamp(14px, 4vw, 48px);
   --composer-prompt-tab-height: 30px;
   position: relative;
-  z-index: 3;
+  z-index: calc(var(--z-sticky) + 2);
   width: 100%;
   flex: 0 0 auto;
   padding: 0 var(--composer-inline-inset)
@@ -9020,7 +7701,7 @@ tr.diff-hunk td {
 
 .input-activity-bar {
   position: absolute;
-  z-index: 1;
+  z-index: var(--z-sticky);
   top: -1px;
   left: calc(var(--radius-lg) - 1px);
   width: calc(100% - var(--radius-lg) - var(--radius-lg) + 2px);
@@ -9235,7 +7916,12 @@ tr.diff-hunk td {
 }
 
 .reasoning-summary-status-popover {
-  width: min(32rem, calc(100vw - 24px));
+  width: min(32rem, calc(100vw - 16px));
+}
+
+/* The full summary reads at the popover's UI step, not the transcript's. */
+.reasoning-summary-status-popover .markdown {
+  font-size: var(--text-ui);
 }
 
 .reasoning-summary-status-popover p {
@@ -9451,365 +8137,6 @@ tr.diff-hunk td {
   opacity: 0.5;
 }
 
-.composer-prompt-popover {
-  z-index: 55;
-  display: grid;
-  width: min(500px, calc(100vw - 24px));
-  max-height: min(520px, var(--radix-popover-content-available-height, 70dvh));
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
-  overflow: hidden;
-  padding: 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  background: var(--popover);
-  color: var(--popover-foreground);
-  box-shadow: var(--shadow);
-  transform-origin: var(--radix-popover-content-transform-origin);
-  animation: composer-prompt-popover-in 140ms var(--ease-emphasis);
-}
-
-@keyframes composer-prompt-popover-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px) scale(0.985);
-  }
-}
-
-.composer-prompt-header {
-  display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 7px 8px 8px;
-}
-
-.composer-prompt-heading {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.composer-prompt-header-action {
-  width: 76px;
-  flex: 0 0 76px;
-}
-
-.composer-prompt-header strong {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.composer-prompt-header small {
-  color: var(--muted-foreground-2);
-  font-size: 11.5px;
-}
-
-.composer-prompt-manage,
-.composer-prompt-refresh,
-.composer-prompt-status button,
-.composer-prompt-inline-error button {
-  min-height: 28px;
-  flex: 0 0 auto;
-  padding: 0 9px;
-  border-radius: var(--radius-ctl);
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.composer-prompt-manage,
-.composer-prompt-refresh {
-  width: 100%;
-}
-
-.composer-prompt-refresh {
-  display: grid;
-  place-items: center;
-}
-
-.composer-prompt-manage:hover,
-.composer-prompt-refresh:hover,
-.composer-prompt-status button:hover,
-.composer-prompt-inline-error button:hover {
-  background: var(--accent);
-  color: var(--foreground);
-}
-
-.composer-prompt-manage:focus-visible,
-.composer-prompt-refresh:focus-visible,
-.composer-prompt-status button:focus-visible,
-.composer-prompt-inline-error button:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
-}
-
-.composer-prompt-search {
-  display: flex;
-  height: 36px;
-  align-items: center;
-  margin: 0 2px 5px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  background: var(--background);
-}
-
-.composer-prompt-search:focus-within {
-  border-color: var(--ring);
-  box-shadow: 0 0 0 1px var(--ring);
-}
-
-.composer-prompt-search input {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--foreground);
-  font: inherit;
-  font-size: 13px;
-}
-
-.composer-prompt-search input::placeholder {
-  color: var(--muted-foreground-2);
-}
-
-.composer-prompt-list {
-  min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
-}
-
-.composer-prompt-row {
-  display: grid;
-  width: 100%;
-  min-width: 0;
-  min-height: 48px;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 7px 6px 10px;
-  border-top: 1px solid var(--border-soft);
-  border-radius: var(--radius-ctl);
-  background: transparent;
-  color: var(--foreground);
-  transition: background var(--motion-fast);
-}
-
-.composer-prompt-row:hover,
-.composer-prompt-row:has(.composer-prompt-action:focus-visible) {
-  background: var(--accent);
-}
-
-.composer-prompt-preview {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-  text-align: left;
-}
-
-.composer-prompt-send-target {
-  width: 100%;
-  min-height: 36px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-ctl);
-  outline: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-
-.composer-prompt-send-target:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
-}
-
-.composer-prompt-send-target:disabled {
-  cursor: default;
-  opacity: 0.42;
-}
-
-.composer-prompt-preview > span,
-.composer-prompt-preview > small {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.composer-prompt-preview > span {
-  font-size: 13px;
-  font-weight: 550;
-}
-
-.composer-prompt-preview > small {
-  color: var(--muted-foreground-2);
-  font-size: 11.5px;
-  line-height: 1.35;
-}
-
-.composer-prompt-actions {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 3px;
-}
-
-.composer-prompt-action {
-  display: inline-grid;
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
-  place-items: center;
-  border-radius: var(--radius-ctl);
-  background: transparent;
-  color: var(--muted-foreground);
-  transition:
-    background var(--motion-fast),
-    color var(--motion-fast),
-    opacity var(--motion-fast);
-}
-
-.composer-prompt-action:hover:not(:disabled) {
-  background: color-mix(in oklch, var(--foreground) 9%, transparent);
-  color: var(--foreground);
-}
-
-.composer-prompt-action:last-child {
-  color: var(--primary);
-}
-
-.composer-prompt-action:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
-}
-
-.composer-prompt-action:disabled {
-  cursor: default;
-  opacity: 0.42;
-}
-
-.composer-prompt-action svg {
-  width: 16px;
-  height: 16px;
-  pointer-events: none;
-}
-
-.composer-prompt-status {
-  margin: 0;
-  padding: 18px 12px;
-  color: var(--muted-foreground-2);
-  font-size: 12.5px;
-  line-height: 1.45;
-  text-align: center;
-}
-
-.composer-prompt-status p {
-  margin: 0 0 8px;
-}
-
-.composer-prompt-status button {
-  border: 1px solid var(--border);
-}
-
-.composer-prompt-inline-error {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-  margin: 5px 2px 1px;
-  padding: 7px 8px;
-  border: 1px solid color-mix(in oklch, var(--destructive) 35%, var(--border));
-  border-radius: var(--radius-ctl);
-  background: color-mix(in oklch, var(--destructive) 8%, transparent);
-  color: var(--destructive);
-  font-size: 11.5px;
-}
-
-.composer-prompt-inline-error span {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow-wrap: anywhere;
-}
-
-.composer-prompt-inline-error button {
-  color: currentColor;
-}
-
-.composer-prompt-swipe-handle {
-  display: none;
-}
-
-@media (max-width: 819px), (pointer: coarse) {
-  .composer-prompt-popover[data-layout="mobile"] {
-    width: min(520px, calc(100vw - 16px));
-    max-height: min(
-      62dvh,
-      var(--radix-popover-content-available-height, 62dvh)
-    );
-    padding: 5px 6px max(6px, env(safe-area-inset-bottom));
-    border-radius: var(--radius-lg) var(--radius-lg) var(--radius-card)
-      var(--radius-card);
-    grid-template-rows: auto auto minmax(0, 1fr) auto;
-    overscroll-behavior: contain;
-  }
-
-  .composer-prompt-swipe-handle {
-    display: block;
-    width: 42px;
-    height: 5px;
-    margin: 2px auto 4px;
-    border-radius: 999px;
-    background: color-mix(in oklch, var(--muted-foreground) 38%, transparent);
-    touch-action: none;
-  }
-
-  .composer-prompt-header {
-    padding-block: 6px 9px;
-  }
-
-  .composer-prompt-manage,
-  .composer-prompt-refresh {
-    min-height: 44px;
-    padding-inline: 12px;
-  }
-
-  .composer-prompt-row {
-    min-height: 58px;
-    gap: 5px;
-    padding: 6px 6px 6px 10px;
-  }
-
-  .composer-prompt-preview > span {
-    font-size: 13.5px;
-  }
-
-  .composer-prompt-send-target {
-    min-height: 44px;
-    touch-action: manipulation;
-  }
-
-  .composer-prompt-actions {
-    gap: 2px;
-  }
-
-  .composer-prompt-action {
-    width: 44px;
-    height: 44px;
-    flex-basis: 44px;
-    touch-action: manipulation;
-  }
-
-  .composer-prompt-status button,
-  .composer-prompt-inline-error button {
-    min-height: 44px;
-  }
-}
-
 .composer:focus-within {
   border-color: var(--ring);
 }
@@ -9851,7 +8178,7 @@ tr.diff-hunk td {
   content: "Add task to prompt";
   position: absolute;
   inset: 6px;
-  z-index: 4;
+  z-index: calc(var(--z-sticky) + 3);
   display: grid;
   place-items: center;
   border: 1px dashed var(--primary);
@@ -9877,7 +8204,7 @@ tr.diff-hunk td {
 .thread-task-drop-indicator {
   position: absolute;
   inset: 52px 8px 8px;
-  z-index: 20;
+  z-index: calc(var(--z-sticky) + 19);
   display: grid;
   place-items: center;
   border: 2px dashed var(--primary);
@@ -9920,21 +8247,6 @@ tr.diff-hunk td {
 [data-slot="attachment-trigger"]:hover [data-slot="attachment-media"] {
   opacity: 0.88;
   box-shadow: 0 0 0 1px var(--ring);
-}
-
-.attachment-image-dialog {
-  width: min(920px, calc(100vw - 32px));
-  height: min(760px, calc(100dvh - 48px));
-  overflow: hidden;
-  padding: 0;
-}
-
-@media (max-width: 640px) {
-  .attachment-image-dialog {
-    width: calc(100vw - 16px);
-    max-width: calc(100vw - 16px);
-    height: calc(100dvh - 16px);
-  }
 }
 
 .composer-attachment-error {
@@ -10011,43 +8323,6 @@ tr.diff-hunk td {
   opacity: 0.72;
 }
 
-.context-usage-popover {
-  z-index: 50;
-  display: grid;
-  width: max-content;
-  max-width: calc(100vw - 24px);
-  gap: 5px;
-  padding: 11px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  background: var(--popover);
-  color: var(--foreground);
-  text-align: center;
-  box-shadow: var(--shadow);
-  animation: context-popover-in 140ms ease-out;
-}
-
-.context-usage-popover strong {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
-.context-usage-popover span {
-  font-size: 12.5px;
-  line-height: 1.3;
-  white-space: nowrap;
-}
-
-@keyframes context-popover-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-}
-
 .composer textarea {
   display: block;
   width: 100%;
@@ -10117,7 +8392,7 @@ tr.diff-hunk td {
   gap: 7px;
   padding: 5px 7px 5px 9px;
   border: 1px solid var(--border-soft);
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-ctl);
   background: color-mix(in oklch, var(--card) 76%, transparent);
   color: var(--muted-foreground);
 }
@@ -10176,7 +8451,7 @@ tr.diff-hunk td {
   margin-block: 6px;
   padding: 8px 10px;
   border: 1px solid var(--border-soft);
-  border-radius: var(--radius-control);
+  border-radius: var(--radius-ctl);
   background: color-mix(in oklch, var(--card) 74%, transparent);
 }
 
@@ -10236,89 +8511,77 @@ tr.diff-hunk td {
 }
 
 /* Slash-command listbox. It is drawn inside the composer card rather than
-   floating, so it keeps the inset --muted well, but its rows, radii, padding
-   and type are the same menu language as .menu-popover / ContextMenu. */
+   floating, so it keeps an inset --muted well; its rows are the menu row
+   anatomy (ui/floating.ts). */
 .command-menu {
-  display: grid;
+  display: flex;
   max-height: min(280px, 38dvh);
-  gap: 1px;
-  margin: 0 9px 7px;
-  padding: 5px;
+  flex-direction: column;
+  margin: 0 var(--space-2) var(--space-2);
+  padding: var(--menu-panel-padding);
   overflow-y: auto;
   border: 1px solid var(--border-soft);
-  border-radius: var(--radius-card);
+  border-radius: var(--menu-panel-radius);
   background: var(--muted);
-  box-shadow: var(--shadow-small);
-}
-
-.command-menu [role="option"] {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 2px 10px;
-  padding: 7px 10px;
-  border-radius: var(--radius-ctl);
-  background: transparent;
-  color: var(--foreground);
-  text-align: left;
-}
-
-.command-menu [role="option"].active,
-.command-menu [role="option"]:hover {
-  background: var(--accent);
-  color: var(--foreground);
-}
-
-.command-menu [role="option"] > span {
-  display: flex;
-  min-width: 0;
-  align-items: baseline;
-  gap: 7px;
-}
-
-/* Menu-row voice, same ramp as every other popover: 13px invocation,
-   12px hint/description, 11px uppercase source tag. */
-.command-menu strong {
-  color: var(--primary);
-  font-family: var(--font-mono);
-  font-size: 13px;
-}
-
-.command-menu em,
-.command-menu small {
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  font-style: normal;
-  line-height: 1.4;
-}
-
-.command-menu b {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-}
-
-.command-menu small {
-  overflow: hidden;
-  grid-column: 1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.command-menu b {
-  grid-column: 2;
-  grid-row: 1;
-  text-transform: uppercase;
+  box-shadow: var(--elevation-2);
 }
 
 .composer-footer {
   display: flex;
-  min-height: 44px;
+  min-height: 52px;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
   padding: 4px 8px 8px 8px;
+}
+
+/* Roomier composer actions and setting selectors. */
+.composer-footer :is(.skill-button, .attachment-button, .stash-button,
+  .context-usage-meter, .composer-prompt-toolbar, .codex-goal-indicator,
+  .codex-fast-mode-toggle) {
+  width: var(--control-lg);
+  min-width: var(--control-lg);
+  height: var(--control-lg);
+}
+
+.composer-footer .send-button {
+  width: 40px;
+  height: 40px;
+}
+
+.composer-footer :is(.skill-button, .attachment-button, .stash-button,
+  .composer-prompt-toolbar, .codex-goal-indicator, .codex-fast-mode-toggle) svg {
+  width: 18px;
+  height: 18px;
+}
+
+.composer-footer .thread-setting-pill > :is(button, [role="combobox"]) {
+  height: var(--control-md);
+  min-width: 0;
+  max-width: 100%;
+  font-size: var(--text-ui);
+}
+
+.composer-footer .thread-setting-pill > :is(button, [role="combobox"]) svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.composer-footer .delivery-split {
+  height: 40px;
+}
+
+.composer-footer .delivery-split-submit,
+.composer-footer .delivery-split-menu {
+  height: 38px;
+}
+
+.composer-footer .delivery-split-submit {
+  width: 38px;
+}
+
+.composer-footer .delivery-split-menu {
+  width: var(--control-sm);
 }
 
 .composer-tools {
@@ -10328,6 +8591,21 @@ tr.diff-hunk td {
   flex-wrap: wrap;
   align-items: center;
   gap: 2px;
+}
+
+.composer-footer[data-reasoning-collapsed]:not([data-reasoning-measuring])
+  [data-setting-id="thinking_level"] {
+  display: none;
+}
+
+.composer-footer[data-reasoning-measuring] .composer-tools {
+  flex-wrap: nowrap;
+}
+
+.composer-footer[data-reasoning-measuring]
+  [data-setting-id="thinking_level"] > button {
+  flex-shrink: 0;
+  max-width: none;
 }
 
 .send-group {
@@ -10728,450 +9006,14 @@ tr.diff-hunk td {
   overflow-wrap: anywhere;
 }
 
-/* One floating-popover surface: --popover, hairline, radius-card, --shadow.
-   The stash popover used to sit a step darker (--secondary) than the actions
-   menu it floats beside; both now read as the same elevation. */
-.stash-popover,
-.skill-popover,
-.menu-popover {
-  z-index: 50;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  background: var(--popover);
-  color: var(--foreground);
-  box-shadow: var(--shadow);
-  max-height: min(var(--radix-popover-content-available-height, 70dvh), 70dvh);
-  overflow-y: auto;
-}
-
+/* The skill picker (ui/popover) reads as a near-full-width companion to
+   the input: the trigger sits 9px inside the composer card, and the far
+   edge keeps the same inset. */
 .skill-popover {
-  display: flex;
-  flex-direction: column;
-  /* The trigger sits 9px inside the composer card. Match that inset on the
-     far edge so the picker reads as a near-full-width companion to the input
-     while its arrow remains anchored to the skill button. */
   width: min(
     calc(var(--measure) - 18px),
     calc(100vw - clamp(14px, 4vw, 48px) - clamp(14px, 4vw, 48px) - 18px)
   );
-  padding: 5px;
-  overflow: hidden;
-}
-
-.skill-search {
-  flex-shrink: 0;
-  display: flex;
-  height: 36px;
-  align-items: center;
-  gap: 8px;
-  margin: 2px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  color: var(--muted-foreground-2);
-}
-
-.skill-search:focus-within {
-  border-color: var(--ring);
-}
-
-.skill-search input {
-  width: 100%;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--foreground);
-  font-size: 13px;
-}
-
-.skill-list {
-  min-height: 0;
-  overscroll-behavior: contain;
-  max-height: min(340px, 55dvh);
-  margin-top: 4px;
-  overflow-y: auto;
-}
-
-.skill-list > button {
-  display: grid;
-  width: 100%;
-  min-width: 0;
-  gap: 2px;
-  padding: 8px 10px;
-  border-radius: var(--radius-ctl);
-  text-align: left;
-}
-
-.skill-list > button:hover,
-.skill-list > button[aria-pressed="true"] {
-  background: var(--accent);
-}
-
-.skill-list > button > span {
-  display: flex;
-  min-width: 0;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.skill-list strong {
-  overflow: hidden;
-  color: var(--foreground);
-  font-size: 13px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.skill-list small {
-  overflow: hidden;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.skill-status {
-  display: flex;
-  min-height: 70px;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 12px;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  text-align: center;
-}
-
-.skill-status button {
-  color: var(--primary);
-  font-weight: 600;
-}
-
-.mobile-config {
-  display: none;
-}
-
-.draft-location {
-  display: grid;
-  gap: 4px;
-  padding: 6px 10px 8px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-
-.stash-popover {
-  width: min(520px, calc(100vw - 28px));
-  max-height: min(430px, 70dvh);
-  padding: 5px;
-  overflow: hidden;
-}
-
-.stash-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 6px 10px 8px;
-}
-
-.stash-heading > div {
-  display: grid;
-  gap: 1px;
-}
-
-.stash-heading strong {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.stash-heading small {
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-}
-
-.stash-list {
-  max-height: 330px;
-  overflow-y: auto;
-}
-
-.stash-item {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 2px;
-  padding: 0 2px;
-}
-
-.stash-item + .stash-item {
-  border-top: 1px solid var(--border-soft);
-}
-
-/* Menu-row anatomy (radius-ctl, neutral wash, 13px label over 12px meta). */
-.stash-restore {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-  gap: 1px;
-  padding: 7px 8px;
-  border-radius: var(--radius-ctl);
-  background: transparent;
-  text-align: left;
-}
-
-.stash-restore:hover {
-  background: var(--accent);
-}
-
-.stash-restore span {
-  overflow: hidden;
-  color: var(--foreground);
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.stash-restore small {
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-}
-
-.delete-stash {
-  color: var(--muted-foreground-2);
-}
-
-.delete-stash:hover:not(:disabled) {
-  color: var(--destructive);
-}
-
-.stash-empty {
-  display: grid;
-  justify-items: center;
-  padding: 30px 15px;
-  color: var(--muted-foreground-2);
-  text-align: center;
-}
-
-.stash-empty p {
-  margin: 8px 0 3px;
-  color: var(--foreground);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.stash-empty small {
-  font-size: 12px;
-}
-
-.menu-popover {
-  width: 264px;
-  padding: 5px;
-  border-radius: var(--radius-card);
-  background: var(--popover);
-}
-
-.thread-actions-popover {
-  width: min(360px, calc(100vw - 16px));
-}
-
-.thread-actions-separator {
-  height: 1px;
-  margin: 5px 4px;
-  background: var(--border-soft);
-}
-
-.menu-label {
-  margin: 0;
-  padding: 6px 10px 4px;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.agent-tool-menu-item {
-  height: auto;
-  min-height: 48px;
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: center;
-  gap: 2px;
-  white-space: normal;
-}
-
-.agent-tool-menu-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.agent-tool-menu-summary {
-  margin-left: 24px;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
-
-/* Legacy native menu rows; guarded so they never fight the Button primitive
-   items now used by ThreadHeader's thread-actions menu (Phase 1). */
-.menu-popover > button:not([data-slot="button"]) {
-  display: flex;
-  width: 100%;
-  min-height: 32px;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-radius: var(--radius-ctl);
-  background: transparent;
-  color: var(--foreground);
-  font-size: 13px;
-  text-align: left;
-}
-
-.menu-popover > button:not([data-slot="button"]):hover:not(:disabled) {
-  background: color-mix(in oklch, var(--foreground) 6%, transparent);
-}
-
-.menu-popover > button:not([data-slot="button"]).danger {
-  color: var(--destructive);
-}
-
-/* Button-primitive menu items keep the menu's row layout (ThreadHeader).
-   Font size comes from the Button primitive (13px) — the ramp lives there. */
-.menu-popover > [data-slot="button"] {
-  width: 100%;
-  justify-content: flex-start;
-  padding-inline: 10px;
-  font-weight: 450;
-  text-align: left;
-}
-
-/* ── Reserved icon column (menus) ──
-   Iconed and un-iconed rows must start their labels on the same x, or the
-   menu grows a ragged left edge. The gutter is the icon box (16px, from the
-   primitives' `[&_svg:not([class*='size-'])]:size-4`) plus the row gap the
-   iconed sibling already spends. Only menus that actually contain an icon
-   reserve the column, so an all-text menu keeps its tight inset. */
-.menu-popover:has([data-slot="button"] > svg)
-  > [data-slot="button"]:not(:has(> svg)) {
-  /* Button size="default": padding-inline 10px above, gap-1.5 = 6px. */
-  padding-left: calc(10px + 16px + 6px);
-}
-
-[data-slot="context-menu-content"]:has([data-slot="context-menu-item"] > svg)
-  [data-slot="context-menu-item"]:not(:has(> svg)),
-[data-slot="dropdown-menu-content"]:has([data-slot="dropdown-menu-item"] > svg)
-  [data-slot="dropdown-menu-item"]:not(:has(> svg)):not(.sidebar-usage-action) {
-  /* Menu items: px-2.5 = 10px, gap-2 = 8px. */
-  padding-left: calc(10px + 16px + 8px);
-}
-
-.menu-popover > [data-slot="button"][data-variant="ghost"]:hover {
-  background: color-mix(in oklch, var(--foreground) 6%, transparent);
-  color: var(--foreground);
-}
-
-/* Destructive rows in menus (Archive) hover with the SAME neutral wash as
-   every other row — only the text/icon carries `--destructive`. The filled
-   red treatment stays reserved for standalone destructive buttons. */
-.menu-popover > [data-slot="button"][data-variant="destructive"] {
-  background: transparent;
-  color: var(--destructive);
-}
-
-.menu-popover
-  > [data-slot="button"][data-variant="destructive"]:hover:not(:disabled) {
-  background: color-mix(in oklch, var(--foreground) 6%, transparent);
-  color: var(--destructive);
-}
-
-.menu-error {
-  margin: 5px 10px;
-  color: var(--destructive);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.execution-workspace-actions {
-  display: flex;
-  flex-direction: column;
-}
-
-.execution-workspace-actions > [data-slot="button"] {
-  width: 100%;
-  justify-content: flex-start;
-  padding-inline: 10px;
-  font-weight: 450;
-}
-
-.execution-workspace-actions
-  > [data-slot="button"][data-variant="destructive"] {
-  background: transparent;
-  color: var(--destructive);
-}
-
-.execution-workspace-actions > p[role="status"] {
-  margin: 4px 10px;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-}
-
-.execution-workspace-git-warnings {
-  margin: 8px 0;
-  padding-left: 22px;
-  color: var(--destructive);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.archive-workspace-disposition {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px;
-  margin: 2px 0;
-  border: 1px solid var(--border-soft, var(--border));
-  border-radius: var(--radius-ctl);
-}
-
-.archive-workspace-disposition > p {
-  margin: 0;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.archive-choice-menu {
-  z-index: 90;
-  width: min(300px, calc(100vw - 16px));
-}
-
-.archive-choice-menu [data-slot$="-item"] {
-  white-space: normal;
-}
-
-.archive-choice-menu .archive-menu-status {
-  display: grid;
-  gap: 2px;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.archive-menu-retry {
-  color: var(--foreground);
-  font-weight: 600;
-}
-
-/* Every floating popover sits on --popover, so one arrow fill serves all. */
-.popover-arrow {
-  fill: var(--popover);
 }
 
 /* ── Interaction (approval) card: docked between transcript and composer.
@@ -11349,29 +9191,6 @@ tr.diff-hunk td {
   gap: 6px;
 }
 
-.interaction-field > input,
-.interaction-field > select {
-  width: 100%;
-  min-width: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--input);
-  border-radius: var(--radius-ctl);
-  background: var(--code);
-  color: var(--foreground);
-  font: inherit;
-}
-
-.interaction-field > input:focus-visible,
-.interaction-field > select:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
-}
-
-.interaction-field input:disabled,
-.interaction-field select:disabled {
-  opacity: 0.55;
-}
-
 .interaction-field-options {
   display: grid;
   gap: 6px;
@@ -11387,8 +9206,6 @@ tr.diff-hunk td {
 }
 
 @media (max-width: 819px), (pointer: coarse) {
-  .interaction-field > input,
-  .interaction-field > select,
   .interaction-field-inclusion,
   .interaction-field-options label {
     min-height: 44px;
@@ -11515,7 +9332,7 @@ tr.diff-hunk td {
 /* Interaction requests dock in flow between the transcript and the composer:
    they stay visible without obscuring, overlapping, or disabling the thread. */
 .interaction-takeover {
-  z-index: 20;
+  z-index: calc(var(--z-sticky) + 19);
   display: flex;
   min-width: 0;
   flex: 0 0 auto;
@@ -11556,41 +9373,6 @@ tr.diff-hunk td {
   border-left: 1px solid color-mix(in oklch, currentColor 24%, transparent);
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
-}
-
-.interaction-action-menu {
-  width: max-content;
-  max-width: min(
-    var(--measure),
-    calc(100vw - clamp(14px, 4vw, 48px) - clamp(14px, 4vw, 48px))
-  );
-}
-
-.interaction-action-menu [data-slot="dropdown-menu-item"],
-.interaction-action-menu-copy {
-  min-width: 0;
-  max-width: 100%;
-}
-
-.interaction-action-menu-copy {
-  display: grid;
-  gap: 2px;
-}
-
-.interaction-action-menu-copy > span,
-.interaction-action-menu-copy small {
-  display: -webkit-box;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-  white-space: normal;
-}
-
-.interaction-action-menu-copy small {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
 }
 
 .interaction-questionnaire {
@@ -11771,7 +9553,7 @@ tr.diff-hunk td {
 
 .interaction-unanswered-confirm {
   position: absolute;
-  z-index: 2;
+  z-index: calc(var(--z-sticky) + 1);
   inset: auto calc(var(--interaction-pad-x) * -1)
     calc(var(--interaction-pad-b) * -1);
   display: grid;
@@ -11828,82 +9610,21 @@ tr.diff-hunk td {
    run-history sections.
    ─────────────────────────────────────────────────────────────────────── */
 
-.dialog-overlay {
-  position: fixed;
-  z-index: 60;
-  inset: 0;
-  background: var(--scrim);
-  animation: fade-in 130ms ease-out;
-}
-
-.dialog-card {
-  position: fixed;
-  z-index: 61;
-  top: 50%;
-  left: 50%;
-  width: min(420px, calc(100vw - 30px));
-  padding: 20px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--secondary);
-  box-shadow: var(--shadow);
-  transform: translate(-50%, -50%);
-  max-height: calc(100dvh - 24px);
-  overflow-y: auto;
-  animation: dialog-in var(--motion-pop);
-}
-
-/* Dialogs launched from a drawer or popover must clear both interactive
-   surfaces so their scrim and card remain modal at every viewport width. */
-.dialog-overlay.over-drawer {
-  z-index: 100;
-}
-
-.dialog-card.over-drawer {
-  z-index: 101;
-}
-
-.dialog-card h2 {
+.force-reset-status {
   margin: 0;
-  font-size: 14.5px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  color: var(--muted-foreground);
 }
 
-.dialog-card > p {
-  margin: 4px 0 16px;
+.force-reset-list {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: var(--space-4);
+  list-style: disc;
+}
+
+.force-reset-list li::marker {
   color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.force-reset-dialog {
-  width: min(460px, calc(100vw - 30px));
-}
-
-.force-reset-impact {
-  display: grid;
-  gap: 10px;
-  margin-bottom: 16px;
-  font-size: 12.5px;
-  line-height: 1.45;
-}
-
-.force-reset-impact h3,
-.force-reset-impact p,
-.force-reset-impact ul {
-  margin: 0;
-}
-
-.force-reset-impact h3 {
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.force-reset-impact > ul {
-  display: grid;
-  gap: 4px;
-  padding-left: 20px;
 }
 
 .force-reset-threads {
@@ -11912,126 +9633,36 @@ tr.diff-hunk td {
 }
 
 .force-reset-threads li {
-  display: grid;
   overflow-wrap: anywhere;
 }
 
 .force-reset-threads small {
-  color: var(--destructive);
+  display: block;
+  color: var(--muted-foreground);
+  font-size: var(--text-meta);
 }
 
 .force-reset-warnings {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid color-mix(in oklch, var(--destructive) 35%, var(--border));
-  border-radius: var(--radius-ctl);
-  background: color-mix(in oklch, var(--destructive) 10%, transparent);
-  color: var(--destructive);
+  margin-top: var(--space-1-5);
 }
 
-.force-reset-warnings ul {
-  display: grid;
-  gap: 5px;
-  padding-left: 17px;
-}
-
-.dialog-close {
-  position: absolute;
-  top: 9px;
-  right: 9px;
-}
-
-.field {
-  display: grid;
-  gap: 6px;
-}
-
-.field > span {
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.field > span small {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 400;
-}
-
-/* Quick-pick chips (SnoozeDialog presets): outline pills on the grey-wash
-   hover language; the Button primitive supplies the interactive states. */
-.preset-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 7px;
-  margin-top: 20px;
-}
-
-/* datetime-local stays native (correct mobile pickers — Phase 1 decision);
-   only its box is normalized onto the token system (SnoozeDialog). */
-.dialog-card .field input[type="datetime-local"] {
-  min-height: 34px;
-  padding: 6px 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  background: var(--background);
-  color: var(--foreground);
-  font-size: 13px;
-}
-
-.snooze-reminder-input {
-  min-height: 88px;
-  resize: vertical;
-  padding: 9px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  background: var(--background);
-  color: var(--foreground);
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.dialog-card .field + .field {
-  margin-top: 12px;
-}
-
-.session-stats-dialog {
-  width: min(640px, calc(100vw - 28px));
-}
-
-.session-identifiers {
-  margin-top: 16px;
-  padding: 11px 14px 5px;
+/* Session stats: DialogSection labels over hairline cards; stat cards
+   title themselves inside. */
+.session-stats-card {
+  min-width: 0;
+  padding: var(--space-1) var(--space-3);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-card);
   background: var(--card);
 }
 
-.session-identifiers h3 {
-  margin: 0 0 3px;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
 .session-identifier-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 4px 10px;
+  gap: var(--space-1) var(--space-2-5);
   align-items: center;
   min-width: 0;
-  padding: 5px 0;
+  padding: var(--space-1-5) 0;
 }
 
 .session-identifier-row + .session-identifier-row {
@@ -12041,14 +9672,14 @@ tr.diff-hunk td {
 .session-identifier-label {
   grid-column: 1 / -1;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-meta);
 }
 
 .session-identifier-row code {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--text-meta);
   user-select: text;
 }
 
@@ -12056,21 +9687,13 @@ tr.diff-hunk td {
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--foreground);
-  font-size: 12px;
-}
-
-.session-identifier-copy {
-  height: 26px;
-  gap: 4px;
-  padding-inline: 7px;
-  font-size: 11px;
+  font-size: var(--text-meta);
 }
 
 .session-stats-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 12px;
-  margin-top: 16px;
+  gap: var(--space-2-5) var(--space-3);
 }
 
 /* An odd card count left a hole in the last row (the five-group case:
@@ -12081,32 +9704,30 @@ tr.diff-hunk td {
 }
 
 .session-stats-empty {
-  margin: 16px 0 4px;
-  padding: 22px 12px;
+  margin: 0;
+  padding: var(--space-5) var(--space-3);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-card);
   color: var(--muted-foreground-2);
-  font-size: 12.5px;
+  font-size: var(--text-meta);
   text-align: center;
 }
 
-/* Stat groups: 11px uppercase label over hairline definition rows,
-   values in tabular-nums (dialog card-group language). */
+/* Stat groups: a titled hairline card of definition rows, values in
+   tabular-nums. */
 .session-stat-group {
   min-width: 0;
-  padding: 11px 14px 5px;
+  padding: var(--space-2-5) var(--space-3) var(--space-1);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-card);
   background: var(--card);
 }
 
-.session-stat-group h3 {
-  margin: 0 0 3px;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
+.session-stat-group h4 {
+  margin: 0 0 var(--space-0-5);
+  color: var(--foreground);
+  font-size: var(--text-meta);
+  font-weight: var(--weight-semibold);
 }
 
 .session-stat-group dl {
@@ -12119,8 +9740,8 @@ tr.diff-hunk td {
   min-width: 0;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
-  padding: 5px 0;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
 }
 
 .session-stat-group dl > div + div {
@@ -12129,71 +9750,38 @@ tr.diff-hunk td {
 
 .session-stat-group dt {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-meta);
 }
 
 .session-stat-group dd {
   overflow: hidden;
   margin: 0;
   color: var(--foreground);
-  font-size: 12.5px;
+  font-size: var(--text-meta);
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* ── Settings dialog: left nav column of category pages + content region.
-   Unlayered rules deliberately override the ui/dialog utility defaults
-   (grid, padding, radius) for the two-region layout. ── */
-/* Sized to its content, not to a fixed 460px: with one setting on the page
-   the old height left ~330px of empty card below the row. The min-height
-   keeps the nav column reading as a column and stops the dialog resizing
-   between the two pages; the max-height takes over once pages grow. */
-.agent-tool-dialog {
-  display: grid;
-  overflow: hidden;
-  width: min(760px, calc(100vw - 24px));
-  max-width: none;
-  max-height: calc(100dvh - 24px);
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
-  gap: 0;
-  padding: 0;
-  border-radius: var(--radius-lg);
-}
-
-.agent-tool-dialog-header,
-.agent-tool-dialog-global,
-.agent-tool-dialog-notices {
-  padding: 16px 18px;
-}
-
-.agent-tool-dialog-header {
-  padding-right: 52px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
+/* ── Agent tools dialog: settings rows (text left, one right-aligned
+   control column) above a two-pane group browser in one hairline card. The
+   dialog body is the scroll region; the group nav stays in view. ── */
 .agent-tool-dialog-global {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 24px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.agent-tool-environment-access-setting {
-  grid-column: 1 / -1;
+  gap: var(--space-3);
 }
 
 .agent-tool-environment-access-setting[data-caution="true"] {
-  padding: 10px;
-  border: 1px solid color-mix(in oklch, var(--warning) 35%, var(--border-soft));
+  margin-inline: calc(-1 * var(--space-2-5) - 1px);
+  padding: var(--space-2) var(--space-2-5);
+  border: 1px solid var(--warning-border);
   border-radius: var(--radius-ctl);
-  background: color-mix(in oklch, var(--warning) 8%, transparent);
+  background: var(--warning-soft);
 }
 
-.agent-tool-dialog-setting.agent-tool-environment-access-setting
-  [data-slot="select-trigger"] {
-  width: 176px;
-  flex: 0 0 176px;
+.agent-tool-dialog-setting [data-slot="select-trigger"] {
+  width: 240px;
+  flex: 0 0 240px;
 }
 
 .agent-tool-environment-access-option {
@@ -12213,24 +9801,26 @@ tr.diff-hunk td {
 .agent-tool-dialog-tool {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: var(--space-2-5);
 }
 
 .agent-tool-dialog-setting {
+  align-items: center;
   justify-content: space-between;
+  gap: var(--space-6);
 }
 
 .agent-tool-dialog-setting > span,
 .agent-tool-dialog-tool > span {
   display: grid;
   min-width: 0;
-  gap: 3px;
+  gap: var(--space-0-5);
 }
 
 .agent-tool-dialog-setting strong,
 .agent-tool-dialog-tool strong {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
 }
 
 .agent-tool-dialog-setting small,
@@ -12238,37 +9828,35 @@ tr.diff-hunk td {
 .agent-tool-group-content header p {
   margin: 0;
   color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: var(--text-meta);
+  line-height: var(--leading-snug);
 }
 
-.agent-tool-dialog-setting [data-slot="select-trigger"] {
-  width: 128px;
-}
-
-.agent-tool-dialog-body {
+.agent-tool-dialog-panes {
   display: grid;
   min-height: 280px;
+  flex: 0 0 auto;
   grid-template-columns: 190px minmax(0, 1fr);
-  overflow: hidden;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
 }
 
 .agent-tool-group-nav {
+  position: sticky;
+  top: 0;
   display: flex;
+  align-self: start;
   flex-direction: column;
-  gap: 2px;
-  overflow-y: auto;
-  padding: 12px 10px;
-  border-right: 1px solid var(--border-soft);
-  background: var(--card);
+  gap: var(--space-0-5);
+  padding: var(--space-2);
 }
 
 .agent-tool-group-nav-row {
   display: flex;
-  min-height: 34px;
+  min-height: var(--control-md);
   align-items: center;
-  gap: 8px;
-  padding: 3px 7px;
+  gap: var(--space-2);
+  padding: var(--space-0-5) var(--space-1-5);
   border-radius: var(--radius-ctl);
 }
 
@@ -12285,9 +9873,12 @@ tr.diff-hunk td {
   cursor: not-allowed;
 }
 
-.agent-tool-group-nav-row:hover,
+.agent-tool-group-nav-row:hover {
+  background: var(--hover);
+}
+
 .agent-tool-group-nav-row[data-active="true"] {
-  background: var(--secondary);
+  background: var(--selected);
 }
 
 .agent-tool-group-nav-row button:not([data-slot="checkbox"]) {
@@ -12295,8 +9886,8 @@ tr.diff-hunk td {
   flex: 1;
   align-self: stretch;
   color: var(--muted-foreground);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
   text-align: left;
 }
 
@@ -12306,22 +9897,24 @@ tr.diff-hunk td {
 }
 
 .agent-tool-group-content {
-  overflow-y: auto;
-  padding: 16px 18px;
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border-left: 1px solid var(--border-soft);
 }
 
 .agent-tool-group-content header h3 {
-  margin: 0 0 4px;
-  font-size: 15px;
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-ui);
+  font-weight: var(--weight-semibold);
 }
 
 .agent-tool-dialog-list {
   display: grid;
-  margin-top: 14px;
+  margin-top: var(--space-2);
 }
 
 .agent-tool-dialog-tool {
-  padding: 11px 0;
+  padding: var(--space-2-5) 0;
 }
 
 .agent-tool-dialog-tool + .agent-tool-dialog-tool {
@@ -12341,31 +9934,14 @@ tr.diff-hunk td {
   color: var(--warning) !important;
 }
 
-.agent-tool-dialog-tool:has([data-slot="checkbox"]:disabled),
-.agent-tool-policy-tool:has([data-slot="checkbox"]:disabled) {
+.agent-tool-dialog-tool:has([data-slot="checkbox"]:disabled) {
   opacity: 0.72;
 }
 
 .agent-tool-dialog-notices {
   display: grid;
-  gap: 5px;
-  border-top: 1px solid var(--border-soft);
-  background: color-mix(in oklch, var(--muted) 45%, transparent);
-}
-
-.agent-tool-dialog-notices p {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-
-.agent-tool-dialog-notices [role="alert"] {
-  color: var(--destructive);
-}
-
-.agent-tool-dialog-footer {
-  margin: 0 0 0 auto;
-  padding: 16px 18px;
+  flex: 0 0 auto;
+  gap: var(--space-2);
 }
 
 .application-main {
@@ -12387,7 +9963,6 @@ tr.diff-hunk td {
 .application-workspace[data-active="false"] { visibility: hidden; opacity: 0; pointer-events: none; }
 
 .settings-view {
-  container: settings / inline-size;
   position: absolute;
   inset: 0;
   display: flex;
@@ -12398,1065 +9973,170 @@ tr.diff-hunk td {
   overflow: clip;
 }
 
+/* Without the sidebar nav (phones, a collapsed desktop sidebar) a slim bar
+   carries the sidebar trigger and the way back: to the list from a page, to
+   the workspace from the list. It matches the full-pane routes' nav bar. */
 .settings-view-header {
   display: flex;
+  min-height: var(--workbench-bar-height);
   flex: 0 0 auto;
   align-items: center;
-  gap: 12px;
-  padding: 10px 20px;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-2-5);
   border-bottom: 1px solid var(--border-soft);
 }
 
-.settings-view-heading { font-size: 14px; font-weight: 600; }
-.settings-return { min-height: 36px; gap: 8px; }
-.settings-category-picker { display: none; }
-
-.settings-view-body {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
+/* A page's own "‹" link (SettingsBackLink) renders into the slot and then
+   replaces "‹ Settings", so the bar shows one way up. */
+.settings-view-back-slot {
+  display: contents;
 }
 
-.settings-page-body { width: 100%; max-width: 760px; }
-.settings-view[data-page="environments"] .settings-page-body,
-.settings-view[data-page="backends"] .settings-page-body,
-.settings-view[data-page="projects"] .settings-page-body,
-.settings-view[data-page="tool_clients"] .settings-page-body,
-.settings-view[data-page="prompts"] .settings-page-body { max-width: none; }
-.settings-page-body > [hidden] { display: none; }
-.settings-home-title { margin: 0 0 8px; font-size: 24px; font-weight: 600; }
-.settings-home-description { margin: 0 0 24px; color: var(--muted-foreground); font-size: 14px; }
-.settings-category-list { display: grid; gap: 0; border-top: 1px solid var(--border-soft); }
-.settings-category-list > button {
-  display: flex;
+.settings-view-back-slot:not(:empty) ~ .settings-view-back {
+  display: none;
+}
+
+.settings-view-back,
+.settings-view-back-slot > [data-slot="settings-page-back"] {
+  display: inline-flex;
+  width: auto;
+  min-height: var(--control-default);
   align-items: center;
-  gap: 14px;
-  min-height: 56px;
-  padding: 12px 4px;
-  border-bottom: 1px solid var(--border-soft);
-  color: var(--foreground);
-  text-align: start;
-  font-size: 14px;
-}
-.settings-category-list > button > span { flex: 1; }
-.settings-category-list > button > svg { flex: none; color: var(--muted-foreground); }
-.settings-category-list > button:hover { background: var(--secondary); }
-.settings-category-list > button:focus-visible,
-.settings-page-link:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
-
-.settings-view[data-page="prompts"] .settings-page-body {
-  height: 100%;
-}
-
-.canned-prompts-settings-page {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-  gap: 12px;
-}
-
-.canned-prompts-settings-page > * {
-  flex: 0 0 auto;
-}
-
-.canned-prompts-page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.canned-prompts-page-header > div {
-  min-width: 0;
-}
-
-.canned-prompts-page-header .settings-page-title {
-  margin-bottom: 3px;
-}
-
-.canned-prompts-page-header p,
-.canned-prompts-empty,
-.canned-prompt-editor-empty {
+  gap: var(--space-1-5);
   margin: 0;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.canned-prompts-page-header > [data-slot="button"] {
-  flex: 0 0 auto;
-}
-
-.canned-prompts-page-actions {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 8px;
-}
-
-.canned-prompts-settings-page > .settings-row {
-  padding: 10px 12px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-card);
-  background: var(--card);
-}
-
-.canned-prompts-layout {
-  display: grid;
-  flex: 1 1 0;
-  min-height: 0;
-  grid-template-columns: minmax(240px, 0.9fr) minmax(300px, 1.1fr);
-  overflow: hidden;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-card);
-  background: var(--card);
-}
-
-.canned-prompts-list {
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  border-right: 1px solid var(--border-soft);
-  background: var(--card);
-}
-
-.canned-prompts-empty,
-.canned-prompt-editor-empty {
-  padding: 18px;
-}
-
-.canned-prompt-list-item {
-  position: relative;
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr);
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.canned-prompt-select {
-  display: grid;
-  width: 100%;
-  min-width: 0;
-  gap: 4px;
-  padding: 11px 12px 8px;
-  background: transparent;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-ctl);
   color: var(--foreground);
-  text-align: left;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+  text-decoration: none;
   transition: background var(--motion-fast);
 }
 
-.canned-prompt-select:hover,
-.canned-prompt-select[aria-current="page"] {
-  background: var(--secondary);
+/* Touch keeps :hover after a tap, and the bar's link changes in place
+   ("‹ Settings" becomes "Back to workspace"): only a pointer hovers. */
+@media (hover: hover) {
+  .settings-view-back:hover,
+  .settings-view-back-slot > [data-slot="settings-page-back"]:hover {
+    background: var(--hover);
+  }
 }
 
-.canned-prompt-select:focus-visible {
-  position: relative;
-  z-index: 1;
-  outline: 2px solid var(--ring);
-  outline-offset: -2px;
+.settings-view-back:focus-visible,
+.settings-view-back-slot > [data-slot="settings-page-back"]:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
-.canned-prompt-select strong,
-.canned-prompt-select span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.settings-view-back svg,
+.settings-view-back-slot > [data-slot="settings-page-back"] svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+  flex: none;
 }
 
-.canned-prompt-select strong {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.canned-prompt-select span {
-  color: var(--muted-foreground-2);
-  font-size: 11.5px;
-}
-
-.canned-prompt-order-controls {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  gap: 2px;
-  padding: 0 7px 7px;
-}
-
-.canned-prompt-order-controls [data-slot="button"] {
-  color: var(--muted-foreground);
-  font-size: 11px;
-}
-
-.canned-prompt-order-controls [data-slot="button"]:last-child {
-  margin-left: auto;
-  color: var(--destructive);
-}
-
-.canned-prompt-delete-confirmation {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px 9px;
-  border-top: 1px solid
-    color-mix(in oklch, var(--destructive) 30%, var(--border-soft));
-  background: color-mix(in oklch, var(--destructive) 7%, transparent);
-}
-
-.canned-prompt-delete-confirmation > span {
-  min-width: 120px;
-  flex: 1 1 auto;
-  color: var(--foreground);
-  font-size: 11.5px;
-}
-
-.canned-prompt-editor {
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  background: color-mix(in oklch, var(--card) 92%, var(--background));
-}
-
-.canned-prompt-editor form {
-  display: grid;
-  gap: 7px;
-  padding: 16px;
-}
-
-.canned-prompt-editor h4 {
-  margin: 0 0 5px;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.canned-prompt-editor [data-slot="label"] {
-  margin-top: 4px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.canned-prompt-editor [data-slot="input"],
-.canned-prompt-editor [data-slot="textarea"] {
-  width: 100%;
-  min-width: 0;
-  background: var(--background);
-}
-
-.canned-prompt-editor [data-slot="textarea"] {
-  min-height: 150px;
-  max-height: min(340px, 42dvh);
-  resize: vertical;
-}
-
-.canned-prompt-editor-actions {
-  position: sticky;
-  bottom: -16px;
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin: 7px -16px -16px;
-  padding: 11px 16px calc(11px + env(safe-area-inset-bottom));
-  border-top: 1px solid var(--border-soft);
-  background: var(--card);
-}
-
-.canned-prompts-message {
-  margin: 0;
-  padding: 9px 10px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-ctl);
-  background: var(--card);
-  color: var(--muted-foreground);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.canned-prompts-message[role="alert"] {
-  border-color: color-mix(in oklch, var(--destructive) 38%, var(--border));
-  background: color-mix(in oklch, var(--destructive) 8%, transparent);
-  color: var(--destructive);
-}
-
-.tool-clients-page-header,
-.tool-client-editor-actions,
-.tool-client-toggle {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.tool-clients-page-header {
-  margin-bottom: 12px;
-}
-
-.tool-clients-page-header .settings-page-title {
-  margin-bottom: 3px;
-}
-
-.tool-clients-page-header p,
-.tool-client-editor-form header p,
-.tool-client-field small,
-.tool-client-toggle small,
-.tool-client-environments small,
-.tool-clients-empty,
-.tool-client-editor-empty {
-  margin: 0;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.tool-clients-layout {
-  display: grid;
-  min-height: 0;
-  height: calc(100% - 52px);
-  grid-template-columns: minmax(210px, 280px) minmax(0, 1fr);
-  overflow: hidden;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-card);
-}
-
-.tool-clients-list {
-  min-width: 0;
-  overflow-y: auto;
-  border-right: 1px solid var(--border-soft);
-  background: var(--card);
-}
-
-.tool-client-list-item {
-  display: grid;
-  width: 100%;
-  gap: 4px;
-  padding: 11px 12px;
-  border-bottom: 1px solid var(--border-soft);
-  background: transparent;
-  text-align: left;
-}
-
-.tool-client-list-item:hover,
-.tool-client-list-item[aria-current="page"] {
-  background: var(--secondary);
-}
-
-.tool-client-list-item strong,
-.tool-client-list-item span,
-.tool-client-list-item small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tool-client-list-item span,
-.tool-client-list-item small {
-  color: var(--muted-foreground-2);
-  font-size: 11.5px;
-}
-
-.tool-clients-empty,
-.tool-client-editor-empty {
-  padding: 16px;
-}
-
-.tool-client-editor {
-  min-width: 0;
-  overflow-y: auto;
-  background: var(--card);
-}
-
-.tool-client-editor-form {
-  display: grid;
-  gap: 14px;
-  padding: 16px;
-}
-
-.tool-client-editor-form header h4,
-.tool-client-policy-section h5 {
-  margin: 0 0 3px;
-  font-size: 14px;
-}
-
-.tool-client-field,
-.tool-client-policy-section,
-.tool-client-environments,
-.tool-client-credential-values,
-.tool-client-credential-values > div {
-  display: grid;
-  gap: 6px;
-}
-
-.tool-client-field > span,
-.tool-client-environments legend,
-.tool-client-credential-values span {
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.tool-client-toggle > span {
-  display: grid;
-  gap: 3px;
-}
-
-.tool-client-policy-section {
-  padding-top: 12px;
-  border-top: 1px solid var(--border-soft);
-}
-
-.tool-client-environments {
-  min-width: 0;
-  margin: 0;
-  padding: 11px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-ctl);
-}
-
-.tool-client-environments > label,
-.tool-client-http-warning label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-}
-
-.tool-client-http-warning,
-.tool-client-risk-warning,
-.tool-client-attention,
-.tool-clients-message {
-  margin: 0;
-  padding: 9px 10px;
-  border: 1px solid color-mix(in oklch, var(--warning) 45%, var(--border));
-  border-radius: var(--radius-ctl);
-  background: color-mix(in oklch, var(--warning) 9%, transparent);
-  color: var(--foreground);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.tool-client-http-warning p {
-  margin: 0 0 8px;
-}
-
-.tool-clients-message {
-  margin-top: 10px;
-}
-
-.tool-client-editor-actions {
-  position: sticky;
-  bottom: -16px;
-  align-items: center;
-  margin: 0 -16px -16px;
-  padding: 11px 16px;
-  border-top: 1px solid var(--border-soft);
-  background: var(--card);
-}
-
-.tool-client-editor-actions > span {
-  flex: 1 1 auto;
-}
-
-.tool-client-credential-dialog {
-  width: min(620px, calc(100vw - 24px));
-  max-width: none;
-}
-
-.tool-client-credential-values > div {
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  padding: 10px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-ctl);
-}
-
-.tool-client-credential-values span {
-  grid-column: 1 / -1;
-}
-
-.tool-client-credential-values code {
-  min-width: 0;
-  overflow-x: auto;
-  padding: 7px 8px;
-  border-radius: var(--radius-ctl);
-  background: var(--code-bg);
-  color: var(--code-text);
-  white-space: nowrap;
-}
-
-.settings-nav {
-  display: flex;
-  flex: 0 0 200px;
-  min-height: 0;
-  overflow-y: auto;
-  flex-direction: column;
-  gap: 8px;
-  padding: 20px 12px;
-  border-right: 1px solid var(--border-soft);
-  background: var(--card);
-}
-
-.settings-nav-pages {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.settings-page-link {
-  display: flex;
-  min-height: 38px;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border-radius: var(--radius-ctl);
-  background: transparent;
-  color: var(--muted-foreground);
-  font-size: 13px;
-  font-weight: 500;
-  text-align: left;
-  transition:
-    background var(--motion-fast),
-    color var(--motion-fast);
-}
-
-.settings-page-link svg {
-  flex: 0 0 auto;
-  color: var(--muted-foreground-2);
-}
-
-.settings-page-link:hover {
-  background: var(--secondary);
-}
-
-.settings-page-link[data-active="true"] {
-  background: var(--accent);
-  color: var(--foreground);
-}
-
-.settings-page-link[data-active="true"] svg {
-  color: var(--foreground);
-}
-
+/* The page column: the one scroller, and the size container the pages
+   (and the execution split view) query. SettingsPage centers itself. */
 .settings-content {
+  container: settings-content / inline-size;
+  display: grid;
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
-  padding: 28px 32px;
+  align-content: start;
+  /* A sticky SaveBar stops at the bottom padding edge and bleeds over it. */
+  padding: var(--space-8) var(--space-8) var(--space-6);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
-.settings-page-title {
-  margin: 0 0 12px;
-  font-size: 14.5px;
-  font-weight: 600;
+.settings-content > [hidden] {
+  display: none;
 }
 
-.settings-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px 24px;
-  flex-wrap: wrap;
-  padding: 10px 0;
+@media (max-width: 819px) {
+  .settings-content {
+    padding: var(--space-5) var(--space-4);
+  }
 }
 
-.settings-row + .settings-row {
-  border-top: 1px solid var(--border-soft);
-}
-
-.settings-row-text {
-  display: grid;
-  min-width: 200px;
-  flex: 1 1 200px;
-  gap: 3px;
-}
-
-.settings-row-label {
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.settings-row-description {
-  margin: 0;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.settings-row [data-slot="checkbox"] {
-  margin-top: 2px;
-}
-
-.settings-diagnostic-controls {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.settings-diagnostic-status {
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-}
-
+/* Saved Sedes servers on the packaged client: in Settings and on the
+   launch and sign-in screens. */
 .server-settings-form {
   display: grid;
   width: min(100%, 34rem);
-  gap: 0.85rem;
-  margin-top: 0.75rem;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
   text-align: left;
 }
 
-.server-settings-field {
+.server-settings-profiles {
   display: grid;
-  gap: 0.45rem;
+  min-width: 0;
+}
+
+.server-settings-profiles > [data-slot="settings-action-row"] {
+  padding-block: var(--space-3);
+}
+
+.server-settings-profiles > [data-slot="settings-action-row"] + [data-slot="settings-action-row"] {
+  border-top: 1px solid var(--border-soft);
+}
+
+.server-settings-add {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-4);
+}
+
+[data-slot="settings-section-body"] > .server-settings-add {
+  padding-block: var(--space-4);
 }
 
 .server-settings-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
-}
-
-.server-settings-status {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: 0.75rem;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }
 
 .launch-state > .server-settings-form {
-  width: min(calc(100vw - 2rem), 34rem);
-  padding: 1rem;
+  width: min(calc(100vw - 2 * var(--space-4)), 34rem);
+  padding: var(--space-4);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--card);
-}
-
-/* A radio group is a labelled set of choices, not a single trailing control:
-   pushing it to the far right of a 640px dialog stranded it ~300px from the
-   "Theme" label it belongs to. Rows that hold one stack instead, and the
-   options sit as a left-aligned wrapping row directly under their label. */
-.settings-row:has(> .settings-radio-group) {
-  display: grid;
-  justify-items: start;
-  gap: 9px;
-}
-
-.settings-radio-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 18px;
-  padding-top: 2px;
-}
-
-.settings-radio-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.settings-radio-option [data-slot="label"] {
-  font-size: 13px;
-  font-weight: 400;
-}
-
-.settings-palette-group {
-  gap: 10px 22px;
-}
-
-.settings-environment-colors-row,
-.settings-environment-color-controls,
-.settings-environment-color-field {
-  display: grid;
-  justify-items: start;
-}
-
-.settings-environment-colors-row {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 9px;
-}
-
-.settings-environment-color-controls {
-  grid-column: 1 / -1;
-  width: 100%;
-  gap: 16px;
-  transition: opacity var(--motion-fast);
-}
-
-.settings-environment-color-controls[data-disabled="true"] {
-  opacity: 0.55;
-}
-
-.settings-environment-color-field {
-  gap: 7px;
-}
-
-.settings-environment-slider-field {
-  width: min(420px, 100%);
-}
-
-.settings-environment-slider-heading {
-  display: flex;
-  width: 100%;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.settings-control-label {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.settings-environment-slider-value {
-  color: var(--foreground);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-.settings-environment-slider {
-  width: 100%;
-  height: 28px;
-  margin: 0;
-  accent-color: var(--foreground);
-  cursor: pointer;
-}
-
-.settings-environment-slider:focus-visible {
-  border-radius: 999px;
-  outline: 3px solid color-mix(in oklch, var(--ring) 45%, transparent);
-  outline-offset: 1px;
-}
-
-.settings-environment-slider-description {
-  margin: -2px 0 0;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.settings-palette-label {
-  display: grid;
-  gap: 4px;
-}
-
-.settings-palette-preview {
-  display: flex;
-  gap: 5px;
-}
-
-.settings-palette-preview > span {
-  width: 9px;
-  height: 9px;
-  border-radius: 999px;
-  background: oklch(
-    var(--environment-tint-lightness) var(--environment-chroma)
-      var(--environment-hue)
-  );
-  box-shadow: 0 0 0 2px
-    oklch(
-      var(--environment-tint-lightness) var(--environment-chroma)
-        var(--environment-hue) / 0.1
-    );
-}
-
-/* ── Saved Agents ─────────────────────────────────────────────────────── */
-.agents-view {
-  display: grid;
-  width: min(1180px, 100%);
-  min-height: 0;
-  flex: 1 1 auto;
-  grid-template-rows: auto minmax(0, 1fr);
-  margin: 0 auto;
-  padding: 24px;
-}
-
-.agents-header,
-.agents-editor-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.agents-header h1,
-.agents-editor-header h1 {
-  margin: 2px 0 4px;
-  font-size: 24px;
-}
-
-.agents-header p,
-.agents-editor-header p {
-  margin: 0;
-  color: var(--muted-foreground-2);
-  font-size: 13px;
-}
-
-.agents-layout {
-  display: grid;
-  min-height: 0;
-  grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
-  gap: 18px;
-  margin-top: 20px;
-}
-
-.agents-list-pane,
-.agents-editor {
-  min-width: 0;
-  border: 1px solid var(--border-soft);
   border-radius: var(--radius-card);
   background: var(--card);
 }
 
-.agents-list-controls {
-  padding: 12px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.agents-list {
-  display: grid;
-  align-content: start;
-  max-height: calc(100dvh - 190px);
-  overflow-y: auto;
-}
-
-.agents-list-item {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--border-soft);
-  text-align: left;
-}
-
-.agents-list-item:hover,
-.agents-list-item[aria-current="page"] {
-  background: var(--secondary);
-}
-
-.agents-list-item strong,
-.agents-list-item small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agents-list-item small,
-.agents-list-status {
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-}
-
-.agents-list-status {
-  padding: 16px;
-  text-align: center;
-}
-
-.agents-editor {
-  overflow-y: auto;
-  max-height: calc(100dvh - 190px);
-  padding: 18px;
-}
-
-.agents-editor-form {
-  display: grid;
-  gap: 18px;
-}
-
-.agents-editor-mobile-back {
-  display: none;
-}
-
-.agents-editor-fields,
-.agent-configuration-fields,
-.agent-tool-policy-editor {
-  display: grid;
-  gap: 12px;
-}
-
-.agent-editor-field {
-  display: grid;
-  gap: 6px;
-}
-
-.agent-editor-field > span,
-.agent-configuration-field legend {
-  color: var(--foreground);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.agent-editor-field small,
-.agent-editor-toggle small,
-.agent-editor-section header p,
-.agent-configuration-field p,
-.agent-configuration-resolved,
-.agent-tool-policy-group small {
-  margin: 0;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.agent-editor-field textarea {
-  min-height: 88px;
-  resize: vertical;
-}
-
-.agent-editor-section {
-  display: grid;
-  gap: 12px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-soft);
-}
-
-.agent-editor-section header h2 {
-  margin: 0 0 3px;
-  font-size: 15px;
-}
-
-.agent-editor-toggle,
-.agent-tool-policy-tool,
-.agent-tool-policy-group legend {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.agent-editor-toggle {
-  justify-content: space-between;
-}
-
-.agent-editor-toggle > span,
-.agent-tool-policy-tool > span,
-.agent-tool-policy-group legend > span {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.agent-configuration-field,
-.agent-tool-policy-group {
-  display: grid;
-  min-width: 0;
-  gap: 10px;
-  margin: 0;
-  padding: 12px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-ctl);
-}
-
-.agent-configuration-field > [data-slot="select-trigger"] {
-  width: 100%;
-}
-
-.agent-tool-policy-global {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-}
-
-.agent-tool-policy-tool {
-  padding: 8px 0;
-}
-
-.agent-tool-policy-tool + .agent-tool-policy-tool {
-  border-top: 1px solid var(--border-soft);
-}
-
-.agent-tool-policy-unavailable {
-  border-color: color-mix(in oklch, var(--warning) 45%, var(--border));
-}
-
-.agents-editor-actions {
-  position: sticky;
-  bottom: -18px;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-  margin: 0 -18px -18px;
-  padding: 12px 18px;
-  border-top: 1px solid var(--border-soft);
-  background: var(--card);
-}
-
-@media (max-width: 819px) {
-  .agents-view {
-    padding: 14px;
-  }
-
-  .agents-layout {
-    display: block;
-    min-height: 0;
-    margin-top: 14px;
-    overflow: hidden;
-  }
-
-  .agents-layout[data-editor-open="true"] .agents-list-pane,
-  .agents-layout:not([data-editor-open="true"]) .agents-editor {
-    display: none;
-  }
-
-  .agents-list,
-  .agents-editor {
-    max-height: none;
-  }
-
-  .agents-editor {
-    height: 100%;
-    overscroll-behavior: contain;
-  }
-
-  .agents-editor-actions {
-    padding-bottom: calc(12px + env(safe-area-inset-bottom));
-  }
-
-  .agents-editor-mobile-back {
-    display: inline-flex;
-  }
-}
-
+/* Narrow viewports: the settings stack and the group nav becomes a
+   horizontal row above the tools. */
 @media (max-width: 520px) {
-  .agents-header,
-  .agents-editor-header,
-  .agent-tool-policy-global {
-    grid-template-columns: 1fr;
+  .agent-tool-dialog-setting {
+    align-items: stretch;
     flex-direction: column;
-  }
-}
-
-/* Narrow viewports: single column, nav becomes a horizontal row. */
-@media (max-width: 520px) {
-  .agent-tool-dialog {
-    width: calc(100vw - 16px);
-    max-height: calc(100dvh - 16px);
+    gap: var(--space-2);
   }
 
-  .agent-tool-dialog-global {
-    grid-template-columns: 1fr;
+  .agent-tool-dialog-setting [data-slot="select-trigger"] {
+    width: 100%;
+    flex-basis: auto;
   }
 
-  .agent-tool-dialog-body {
+  .agent-tool-dialog-panes {
     display: flex;
     min-height: 0;
     flex-direction: column;
   }
 
   .agent-tool-group-nav {
-    flex: 0 0 auto;
+    position: static;
     flex-direction: row;
     overflow-x: auto;
-    overflow-y: hidden;
-    border-right: 0;
     border-bottom: 1px solid var(--border-soft);
+  }
+
+  .agent-tool-group-content {
+    border-left: 0;
   }
 
   .agent-tool-group-nav-row {
@@ -13466,263 +10146,34 @@ tr.diff-hunk td {
   .agent-tool-group-nav-row button:not([data-slot="checkbox"]) {
     white-space: nowrap;
   }
-
-  .settings-view[data-page="prompts"] .settings-page-body,
-  .canned-prompts-settings-page {
-    height: auto;
-  }
-
-  .canned-prompts-page-header {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  .canned-prompts-page-actions > [data-slot="button"] {
-    min-height: 44px;
-    flex: 1 1 0;
-  }
-
-  .canned-prompts-layout {
-    display: block;
-    flex: none;
-    min-height: 0;
-    overflow: visible;
-  }
-
-  .canned-prompts-layout[data-editor-open="true"] .canned-prompts-list,
-  .canned-prompts-layout:not([data-editor-open="true"]) .canned-prompt-editor {
-    display: none;
-  }
-
-  .canned-prompts-list {
-    max-height: none;
-    overflow: visible;
-    border-right: 0;
-  }
-
-  .canned-prompt-select {
-    min-height: 52px;
-  }
-
-  .canned-prompt-order-controls [data-slot="button"],
-  .canned-prompt-delete-confirmation [data-slot="button"] {
-    min-height: 44px;
-  }
-
-  .canned-prompt-editor {
-    overflow: visible;
-  }
-
-  .canned-prompt-editor form {
-    padding: 14px;
-  }
-
-  .canned-prompt-editor [data-slot="input"] {
-    min-height: 44px;
-  }
-
-  .canned-prompt-editor [data-slot="textarea"] {
-    min-height: 180px;
-    max-height: 42dvh;
-  }
-
-  .canned-prompt-editor-actions {
-    bottom: -16px;
-    margin-right: -14px;
-    margin-bottom: -14px;
-    margin-left: -14px;
-    padding-inline: 14px;
-  }
-
-  .canned-prompt-editor-actions [data-slot="button"] {
-    min-height: 44px;
-    flex: 1 1 0;
-  }
-
-  .tool-clients-layout {
-    display: block;
-    height: auto;
-    min-height: 0;
-    overflow: visible;
-  }
-
-  .tool-clients-list {
-    max-height: 190px;
-    border-right: 0;
-    border-bottom: 1px solid var(--border-soft);
-  }
-
-  .tool-client-editor {
-    overflow: visible;
-  }
-
-  .tool-client-credential-values > div {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .tool-client-credential-values code {
-    grid-column: 1 / -1;
-  }
 }
 
-/* Keep every prompt reachable when the controls consume a short window. */
-@media (max-height: 420px) {
-  .settings-view[data-page="prompts"] .settings-page-body,
-  .canned-prompts-settings-page {
-    height: auto;
-  }
-
-  .canned-prompts-layout {
-    flex: none;
-    overflow: visible;
-  }
-
-  .canned-prompts-list,
-  .canned-prompt-editor {
-    overflow-y: visible;
-  }
-}
-
-/* On short viewports the fixed rows can exceed the dialog's height before its
-   content row has any usable space. Let the dialog itself scroll so the
-   settings and confirmation actions remain reachable in landscape. */
-@media (max-height: 600px) {
-  .agent-tool-dialog {
-    display: block;
-    overflow-x: hidden;
-    overflow-y: auto;
-  }
-
-  .agent-tool-dialog-body,
-  .agent-tool-group-content {
-    overflow: visible;
-  }
-}
-
-/* `--editor-pad` is the editor's padding origin; the pinned close control
-   (a sibling of the editor, so it inherits from `.automation-dialog`) is
-   positioned on the same value, which is what puts it on Save's baseline. */
-.automation-dialog {
-  --editor-pad: clamp(18px, 3vw, 36px);
-}
-
-.automation-editor {
-  width: 100%;
-  max-width: 1280px;
-  min-width: 0;
-  height: 100%;
-  overflow: auto;
-  margin: 0 auto;
-  padding: var(--editor-pad, clamp(18px, 3vw, 36px));
-}
-
-.automation-editor-header {
+/* Automation editor: a side dialog (layout="side", size="lg"; a sheet on
+   touch) whose body sets the form beside the run-history rail. Sections are
+   DialogSection labels over hairline cards. */
+.automation-dialog-title {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 20px;
-}
-
-.automation-editor-header h1 {
-  margin: 3px 0 4px;
-  font-size: 20px;
-  font-weight: 650;
-  letter-spacing: -0.015em;
-}
-
-.automation-dialog {
-  position: fixed;
-  z-index: 62;
-  inset: 0 0 0 auto;
-  width: min(860px, calc(100vw - 260px));
   min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  border-left: 1px solid var(--border);
-  background: var(--background);
-  box-shadow: var(--shadow);
-  animation: automation-dialog-in var(--motion-pop);
+  align-items: center;
+  gap: var(--space-2);
 }
 
-.automation-dialog .automation-editor {
-  max-width: none;
-}
-
-/* The close control is pinned to the panel (the editor beneath it scrolls),
-   but it must still read as part of the header's action row. It is placed on
-   the editor's own padding origin — `--editor-pad`, the same clamp the editor
-   uses — so its top and right edges line up with Save's, and the header
-   reserves a gutter the width of the button plus enough clearance that the
-   two focus rings can never overlap. */
-.automation-dialog-close {
-  position: absolute;
-  z-index: 2;
-  top: var(--editor-pad);
-  right: var(--editor-pad);
-}
-
-.automation-dialog .automation-editor-header {
-  /* 32px icon button + 12px clearance. */
-  padding-right: 44px;
-}
-
-.automation-thread-title {
+.automation-loading {
   margin: 0;
   color: var(--muted-foreground-2);
-  font-size: 12px;
-}
-
-@keyframes automation-dialog-in {
-  from {
-    transform: translateX(20px);
-    opacity: 0;
-  }
-}
-
-.automation-editor.loading {
-  display: grid;
-  place-items: center;
-  color: var(--muted-foreground-2);
-}
-
-.automation-editor-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
 }
 
 .automation-editor-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
   align-items: start;
-  gap: 24px;
+  gap: var(--space-6);
 }
 
 .automation-form {
   display: grid;
   min-width: 0;
-  gap: 16px;
-}
-
-/* ── Section language: 11px uppercase label above a hairline card group
-   (radius-card), replacing the old fieldset-with-legend panels. ── */
-.automation-section {
-  display: grid;
-  min-width: 0;
-  gap: 7px;
-}
-
-.automation-section-label {
-  margin: 0;
-  padding-left: 2px;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
+  gap: var(--space-4);
 }
 
 .automation-section-card {
@@ -13735,26 +10186,33 @@ tr.diff-hunk td {
 
 .automation-section-card.padded {
   display: grid;
-  gap: 12px;
-  padding: 14px;
+  gap: var(--space-3);
+  padding: var(--space-3);
 }
 
-.automation-section-card .field {
-  display: grid;
-  min-width: 0;
-  gap: 6px;
+.automation-help {
+  margin: 0;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
 }
 
-.automation-section-card input:not([type="radio"]):not([type="checkbox"]),
-.automation-section-card textarea {
-  width: 100%;
-  min-width: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-ctl);
-  background: var(--background);
-  color: var(--foreground);
-  font-size: 13px;
+/* The Field primitive's error line, for controls their section names. */
+.automation-field-error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1-5);
+  margin: 0;
+  color: var(--destructive);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
+}
+
+.automation-field-error svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  flex-shrink: 0;
+  margin-top: 1px;
 }
 
 /* Anchor-thread note leading the run-mode card. */
@@ -13838,13 +10296,9 @@ tr.diff-hunk td {
 
 .precheck-options {
   display: grid;
-  grid-template-columns: minmax(120px, 0.35fr) minmax(0, 1fr);
-  align-items: center;
+  grid-template-columns: minmax(150px, 0.4fr) minmax(0, 1fr);
+  align-items: end;
   gap: 14px;
-}
-
-.precheck-test-button {
-  justify-self: start;
 }
 
 .precheck-test-result {
@@ -13903,53 +10357,11 @@ tr.diff-hunk td {
   line-height: 1.5;
 }
 
-.automation-section-card small,
-.schedule-timezone {
+.automation-section-card small {
   margin: 0;
   color: var(--muted-foreground-2);
   font-size: 12px;
   line-height: 1.45;
-}
-
-/* Schedule-kind segmented control: inset track, raised selected segment.
-   Selection is aria-pressed + .selected (e2e contract unchanged). */
-.segmented-control {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 1fr;
-  gap: 2px;
-  padding: 3px;
-  border-radius: var(--radius-ctl);
-  background: var(--code);
-}
-
-/* Nested step: the track is radius-ctl with a 3px inset, so the geometric
-   inner radius is 8 − 3 = 5; the ramp's 6px nested step is the value that
-   keeps the segment concentric with the track. */
-.segmented-control button {
-  min-height: 30px;
-  padding: 5px 8px;
-  border-radius: var(--radius-inline);
-  background: transparent;
-  color: var(--muted-foreground);
-  font-size: 12.5px;
-  font-weight: 550;
-  transition:
-    background var(--motion-fast),
-    color var(--motion-fast),
-    box-shadow var(--motion-fast);
-}
-
-.segmented-control button:hover {
-  color: var(--foreground);
-}
-
-.segmented-control button.selected {
-  background: var(--secondary);
-  color: var(--foreground);
-  box-shadow:
-    inset 0 0 0 1px var(--border-soft),
-    var(--shadow-small);
 }
 
 .interval-fields {
@@ -14056,13 +10468,15 @@ tr.diff-hunk td {
   display: flex;
   width: 100%;
   min-width: 0;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 7px;
+  column-gap: 7px;
 }
 
 .automation-run-head strong {
   font-size: 13px;
   font-weight: 550;
+  white-space: nowrap;
 }
 
 .automation-run-state {
@@ -14174,13 +10588,13 @@ tr.diff-hunk td {
 }
 
 .codex-fast-mode-tooltip {
-  z-index: 100;
+  z-index: var(--z-over-dialog);
   max-width: 300px;
   padding: 6px 9px;
   border: 1px solid var(--border);
   border-radius: var(--radius-ctl);
   background: var(--popover);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--elevation-2);
   color: var(--popover-foreground);
   font-size: 12px;
   line-height: 1.35;
@@ -14244,235 +10658,11 @@ tr.diff-hunk td {
   color: var(--success);
 }
 
-.codex-goal-popover {
-  z-index: 50;
-  display: grid;
-  width: min(340px, calc(100vw - 24px));
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  background: var(--popover);
-  color: var(--foreground);
-  box-shadow: var(--shadow);
-  max-height: calc(100dvh - 16px);
-  overflow-y: auto;
-}
-
-.codex-goal-popover[data-state="open"] {
-  animation: ui-pop-in var(--motion-pop);
-}
-
-.codex-goal-popover[data-side="top"] {
-  --ui-pop-y: 4px;
-}
-
-.codex-goal-mobile-card {
-  inset: auto 8px
-    calc(
-      8px + env(safe-area-inset-bottom) + var(--codex-goal-keyboard-inset, 0px)
-    );
-  display: grid;
-  width: auto;
-  max-width: none;
-  max-height: min(
-    70dvh,
-    calc(100dvh - 16px - var(--codex-goal-keyboard-inset, 0px))
-  );
-  translate: none;
-  gap: 10px;
-  overflow-y: auto;
-  border-radius: var(--radius-card);
-  padding: 14px;
-  background: var(--popover);
-  color: var(--foreground);
-  box-shadow: var(--shadow);
-  overscroll-behavior: contain;
-}
-
-/* 11px eyebrow — same voice as .menu-label. */
-.codex-goal-popover-title {
-  margin: 0;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.codex-goal-create,
-.codex-goal-details {
-  display: grid;
-  gap: 8px;
-}
-
-.codex-goal-create label {
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.codex-goal-create textarea {
-  width: 100%;
-  min-height: 96px;
-  resize: vertical;
-  padding: 8px 10px;
-  border: 1px solid var(--input);
-  border-radius: var(--radius-ctl);
-  background: var(--background);
-  color: var(--foreground);
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.5;
-  transition: border-color var(--motion-fast);
-}
-
-.codex-goal-create textarea:focus-visible {
-  border-color: var(--ring);
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
-}
-
-.codex-goal-status-line {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.codex-goal-full-objective {
-  margin: 0;
-  color: var(--foreground);
-  font-size: 13px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.codex-goal-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.codex-goal-pending,
-.codex-goal-error {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.codex-goal-pending {
-  color: var(--muted-foreground-2);
-}
-
-.codex-goal-error {
-  color: var(--destructive);
-}
-
-.provider-feature-control {
-  display: contents;
-}
-
 .provider-feature-unavailable {
   max-width: 20rem;
   margin: 0;
   color: var(--warning);
   font-size: 12px;
-}
-
-/* Codex execution settings — a labelled section of the thread-actions menu,
-   row rhythm matched to the ThreadSettingsControls mobile rows (11px
-   uppercase label column + select). */
-.codex-execution {
-  display: grid;
-  gap: 6px;
-  padding: 6px 5px 8px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.codex-execution-label {
-  margin: 0;
-  padding: 0 5px;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.codex-execution-select {
-  display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
-  align-items: center;
-  gap: 2px 7px;
-  padding-left: 5px;
-}
-
-.codex-execution-row-label {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-/* Forced/disabled selects stay legible in both themes: the stock 50%
-   opacity over the popover surface washes the value text out. */
-.codex-execution [data-slot="select-trigger"]:disabled {
-  opacity: 1;
-  border-style: dashed;
-  color: var(--muted-foreground);
-}
-
-.codex-execution [data-slot="select-trigger"]:disabled svg {
-  opacity: 0.4;
-}
-
-/* Claude's provider-private permission mode uses the same compact settings
-   rhythm as Codex without sharing either backend's semantic contract. */
-.claude-permissions {
-  display: grid;
-  gap: 6px;
-  padding: 6px 5px 8px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.claude-permissions-label {
-  margin: 0;
-  padding: 0 5px;
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.claude-permissions-select {
-  display: grid;
-  grid-template-columns: 110px minmax(0, 1fr);
-  align-items: center;
-  gap: 2px 7px;
-  padding-left: 5px;
-}
-
-.claude-permissions-row-label {
-  color: var(--muted-foreground-2);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-}
-
-.claude-permissions [data-slot="select-trigger"]:disabled {
-  opacity: 1;
-  border-style: dashed;
-  color: var(--muted-foreground);
-}
-
-.claude-permissions [data-slot="select-trigger"]:disabled svg {
-  opacity: 0.4;
 }
 
 /* ───────────────────────────────────────────────────────────────────────
@@ -14538,19 +10728,6 @@ tr.diff-hunk td {
   }
   to {
     transform: translateX(240%);
-  }
-}
-
-@keyframes fade-in {
-  from {
-    opacity: 0;
-  }
-}
-
-@keyframes dialog-in {
-  from {
-    opacity: 0;
-    transform: translate(-50%, -47%) scale(0.98);
   }
 }
 
@@ -14627,17 +10804,13 @@ tr.diff-hunk td {
     min-width: 44px;
   }
 
-  .interaction-action-menu {
-    max-width: calc(100vw - 18px);
-  }
-
   .interaction-question-options {
     max-height: min(42dvh, 330px);
   }
 
   .mobile-drawer {
     position: fixed;
-    z-index: 81;
+    z-index: var(--z-drawer);
     top: var(--workbench-bar-height);
     right: auto;
     bottom: 0;
@@ -14656,17 +10829,20 @@ tr.diff-hunk td {
     display: inline-flex;
   }
 
-  .thread-tools-shell > button,
-  .thread-controls > .thread-find-trigger {
-    width: 28px;
-    height: 28px;
-    flex: 0 0 28px;
+  .thread-header {
+    --thread-toolbar-height: 56px;
   }
 
-  .thread-tools-shell > button svg,
+  /* Roomier controls in the expandable mobile toolbar. */
+  .thread-controls > .thread-find-trigger {
+    width: var(--control-touch);
+    height: var(--control-touch);
+    flex: 0 0 var(--control-touch);
+  }
+
   .thread-controls > .thread-find-trigger svg {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
   }
 
   .thread-tools-toggle svg {
@@ -14678,18 +10854,18 @@ tr.diff-hunk td {
   }
 
   .thread-header:has(.thread-controls:not([hidden])) {
-    margin-bottom: 40px;
+    margin-bottom: var(--thread-toolbar-height);
   }
 
   .thread-controls {
     position: absolute;
-    z-index: 5;
+    z-index: calc(var(--z-sticky) + 4);
     top: 100%;
     right: 0;
     left: 0;
-    height: 40px;
+    height: var(--thread-toolbar-height);
     justify-content: flex-start;
-    gap: 6px;
+    gap: 8px;
     padding: 5px 9px;
     border-bottom: 1px solid var(--border-soft);
     background: var(--background);
@@ -14700,7 +10876,7 @@ tr.diff-hunk td {
   }
 
   .thread-controls > .thread-worktree-trigger {
-    height: 28px;
+    height: var(--control-touch);
     min-width: 0;
     max-width: none;
     flex: 1 1 auto;
@@ -14709,7 +10885,7 @@ tr.diff-hunk td {
     border-radius: var(--radius-ctl);
     background: var(--secondary);
     color: var(--foreground);
-    font-size: 12px;
+    font-size: 14px;
   }
 
   .thread-controls > .thread-worktree-trigger::before {
@@ -14717,14 +10893,13 @@ tr.diff-hunk td {
   }
 
   .thread-controls > .thread-worktree-trigger svg {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
   }
 
   /* Keep the existing reasoning shortcut on mobile; other settings remain
      reachable through the thread actions menu. */
-  .desktop-config[data-variant="pill"]
-    > :not([data-setting-id="thinking_level"]) {
+  .desktop-config > :not([data-setting-id="thinking_level"]) {
     display: none;
   }
 
@@ -14736,28 +10911,8 @@ tr.diff-hunk td {
     margin: 8px 10px 0;
   }
 
-  .mobile-config {
-    display: grid;
-    gap: 6px;
-    padding: 6px 5px 8px;
-    border-bottom: 1px solid var(--border-soft);
-  }
-
   .session-stats-grid {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .mobile-config [data-slot="thread-setting-row"] {
-    display: grid;
-    grid-template-columns: 72px minmax(0, 1fr);
-    align-items: center;
-    gap: 7px;
-    padding-left: 5px;
-    color: var(--muted-foreground-2);
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
   }
 
   .message-content {
@@ -14856,14 +11011,10 @@ tr.diff-hunk td {
   .shelf-trigger,
   .project-row,
   .project-filter-shortcut,
-  .sidebar-project-filter,
   .sidebar-scope-select,
   .sidebar-create-action,
   .back-button,
   .archive-row-title,
-  .preset-row button,
-  .stash-restore,
-  .delete-stash,
   .queue-button {
     min-height: 44px;
   }
@@ -14885,36 +11036,6 @@ tr.diff-hunk td {
     right: 5px;
   }
 
-  [data-slot="dialog-content"].advisory-center-sheet {
-    top: auto;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    width: 100vw;
-    max-height: min(88dvh, 720px);
-    padding-bottom: env(safe-area-inset-bottom);
-    border: 1px solid var(--border);
-    border-bottom: 0;
-    border-radius: 16px 16px 0 0;
-  }
-
-  .advisory-center-sheet > [data-slot="dialog-close"] {
-    top: 5px;
-    width: 44px;
-    height: 44px;
-  }
-
-  .advisory-center-header {
-    padding-top: 16px;
-    padding-right: 56px;
-    padding-left: max(16px, env(safe-area-inset-left));
-  }
-
-  .advisory-center-item {
-    padding-right: max(16px, env(safe-area-inset-right));
-    padding-left: max(16px, env(safe-area-inset-left));
-  }
-
   .materialization-recovery {
     margin: 8px 10px 0;
   }
@@ -14933,39 +11054,6 @@ tr.diff-hunk td {
 
   .archive-row {
     align-items: stretch;
-  }
-
-  .automation-editor {
-    padding: 18px 14px calc(30px + env(safe-area-inset-bottom));
-  }
-
-  .automation-dialog {
-    --editor-pad: 14px;
-    inset: 52px 0 0;
-    width: 100%;
-    border-left: 0;
-  }
-
-  /* Stacked header: the actions are their own full-width row below the
-     title, so the close control cannot reach them and the desktop gutter
-     would only narrow the buttons. */
-  .automation-dialog .automation-editor-header {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 14px;
-    padding-right: 0;
-  }
-
-  .automation-editor-header > div:first-child {
-    padding-right: 40px;
-  }
-
-  .automation-editor-actions {
-    justify-content: stretch;
-  }
-
-  .automation-editor-actions [data-slot="button"] {
-    flex: 1 1 auto;
   }
 
   .automation-editor-grid {
@@ -15093,7 +11181,7 @@ tr.diff-hunk td {
 @media (max-width: 390px) {
   .turn-fork-footer {
     min-height: 44px;
-    padding-inline: 4px;
+    padding-inline: 0 4px;
   }
 
   .turn-fork-action {
@@ -15131,21 +11219,6 @@ tr.diff-hunk td {
     margin-left: 0;
   }
 
-  .automation-editor-actions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-  }
-
-  /* Phase 1: Save is a ui/ Button default-variant now. */
-  .automation-editor-actions [data-slot="button"][data-variant="default"] {
-    grid-column: 1 / -1;
-  }
-
-  .segmented-control {
-    grid-auto-flow: row;
-    grid-auto-columns: unset;
-  }
-
   .interval-fields {
     grid-template-columns: 1fr;
   }
@@ -15173,7 +11246,7 @@ tr.diff-hunk td {
 
 .pierre-selection-action {
   position: fixed;
-  z-index: 90;
+  z-index: calc(var(--z-dialog) + 10);
   display: flex;
   width: max-content;
   max-width: min(560px, calc(100vw - 24px));
@@ -15185,7 +11258,7 @@ tr.diff-hunk td {
   border-radius: 10px;
   background: var(--popover);
   color: var(--popover-foreground);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--elevation-3);
 }
 
 .pierre-selection-anchor {
@@ -15242,7 +11315,7 @@ tr.diff-hunk td {
 
 .context-selection-confirmation {
   position: absolute;
-  z-index: 11;
+  z-index: calc(var(--z-sticky) + 10);
   right: 12px;
   bottom: 12px;
   display: flex;
@@ -15476,7 +11549,6 @@ tr.diff-hunk td {
 }
 
 .electron-connection-card__error,
-.electron-connections__dialog-error,
 .electron-connection-editor__error {
   color: var(--destructive);
 }
@@ -15630,8 +11702,7 @@ tr.diff-hunk td {
   font-family: var(--font-mono);
 }
 
-.electron-connection-editor__error,
-.electron-connections__dialog-error {
+.electron-connection-editor__error {
   margin: 0;
   font-size: 12px;
   line-height: 1.4;
@@ -15645,7 +11716,7 @@ tr.diff-hunk td {
 
 .electron-switch-failure {
   position: fixed;
-  z-index: 80;
+  z-index: var(--z-dialog);
   right: 18px;
   bottom: 18px;
   display: flex;
@@ -15657,7 +11728,7 @@ tr.diff-hunk td {
   border: 1px solid color-mix(in oklch, var(--destructive), transparent 55%);
   border-radius: var(--radius-ctl);
   background: var(--card);
-  box-shadow: var(--shadow-large);
+  box-shadow: var(--elevation-3);
   color: var(--destructive);
   font-size: 12px;
 }
@@ -15743,68 +11814,6 @@ tr.diff-hunk td {
     max-height: min(36dvh, 240px);
   }
 }
-
-.notification-settings-fields {
-  display: grid;
-  gap: 0.65rem;
-  min-width: 0;
-  margin: 1rem 0;
-  padding: 0;
-  border: 0;
-}
-.notification-settings-fields legend {
-  margin-bottom: 0.75rem;
-  font-weight: 600;
-}
-.notification-settings-fields .settings-row {
-  margin: 0;
-}
-.notification-event {
-  flex-direction: column;
-  align-items: stretch;
-}
-.notification-event-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-.notification-event-option {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-left: 16px;
-}
-.notification-result-label {
-  font-size: 0.8125rem;
-  font-weight: 500;
-}
-.notification-result-phases {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-}
-.notification-result-phase {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.notification-result-phase:has(button:disabled) label {
-  opacity: 0.5;
-}
-.notification-event .settings-row-text {
-  min-width: 0;
-}
-.notification-settings-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-.notification-silenced-status {
-  padding: 0.65rem;
-  border: 1px solid var(--border);
-  border-radius: 0.4rem;
-}
 .notification-silence-control {
   position: relative;
   display: inline-flex;
@@ -15822,83 +11831,14 @@ tr.diff-hunk td {
   top: 100%;
   left: 0;
   width: min(18rem, 80vw);
-  z-index: 50;
+  z-index: var(--z-floating);
   background: var(--background);
   color: var(--foreground);
   padding: 0.5rem;
   border: 1px solid var(--border);
   border-radius: 0.4rem;
 }
-.notification-test-error {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-height: 12rem;
-  overflow: auto;
-}
 
-@media (max-width: 819px) {
-  .settings-view-header { flex-wrap: wrap; gap: 4px 8px; padding: 8px 12px; }
-  .settings-view-heading { margin-inline-start: auto; }
-  .settings-return { min-height: 44px; padding-inline: 8px; }
-  .settings-category-picker {
-    display: block;
-    flex: 1 0 100%;
-    width: 100%;
-    min-width: 0;
-    min-height: 44px;
-    padding: 8px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-ctl);
-    background: var(--secondary);
-    color: var(--foreground);
-    font-size: 16px;
-  }
-  .settings-nav { display: none; }
-  .settings-content { padding: 20px 16px; }
-  .settings-home-description { margin-bottom: 20px; }
-}
-
-@container settings (max-width: 760px) {
-  .settings-view-header { flex-wrap: wrap; gap: 4px 8px; padding: 8px 12px; }
-  .settings-view-heading { margin-inline-start: auto; }
-  .settings-return { min-height: 44px; padding-inline: 8px; }
-  .settings-category-picker {
-    display: block;
-    flex: 1 0 100%;
-    width: 100%;
-    min-width: 0;
-    min-height: 44px;
-    padding: 8px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-ctl);
-    background: var(--secondary);
-    color: var(--foreground);
-    font-size: 16px;
-  }
-  .settings-nav { display: none; }
-  .settings-content { padding: 20px 16px; }
-  .settings-home-description { margin-bottom: 20px; }
-}
-
-/* The page and picker already name Settings; keep the narrow header to two rows. */
-@container settings (max-width: 380px) {
-  .settings-view-heading { display: none; }
-}
-
-/* Persisted accounting uses the same compact overlay as context occupancy. */
-.turn-usage-popover {
-  box-sizing: border-box;
-  width: min(264px, calc(100dvw - 24px));
-  max-width: min(calc(100dvw - 24px), var(--radix-popover-content-available-width));
-  max-height: min(calc(100dvh - 24px), var(--radix-popover-content-available-height));
-  overflow: auto;
-  gap: 8px;
-  padding: 12px 14px;
-  text-align: left;
-  font-size: 12px;
-  line-height: 1.4;
-}
-.turn-usage-heading { display: block; }
 .recorded-usage { display: grid; gap: 9px; min-width: 0; font-size: 12px; line-height: 1.4; }
 .recorded-usage p { margin: 0; overflow-wrap: anywhere; }
 .recorded-usage-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -15913,7 +11853,7 @@ tr.diff-hunk td {
 .recorded-usage-note, .recorded-usage-model { color: var(--muted-foreground); font-size: 11px; }
 .recorded-usage-model { overflow-wrap: anywhere; }
 .recorded-usage-legacy { display: grid; gap: 7px; border-top: 1px solid var(--border); padding-top: 9px; }
-.session-recorded-usage { padding-block: 12px; }
+.session-recorded-usage { padding-block: var(--space-3); }
 .recorded-usage-breakdown { min-width: 0; overflow-x: auto; }
 .recorded-usage-breakdown table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .recorded-usage-breakdown th, .recorded-usage-breakdown td { padding: 5px 6px; text-align: end; }

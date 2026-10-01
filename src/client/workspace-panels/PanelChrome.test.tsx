@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PanelChrome, panelContentId } from "./PanelChrome.js";
 
@@ -9,12 +9,14 @@ function FileIcon(): React.JSX.Element {
 }
 
 let singlePane = false;
+let coarsePointer = false;
 
 beforeEach(() => {
   singlePane = false;
+  coarsePointer = false;
   vi.stubGlobal("matchMedia", (query: string) => ({
     get matches() {
-      return singlePane;
+      return singlePane || (coarsePointer && query.includes("(pointer: coarse)"));
     },
     media: query,
     onchange: null,
@@ -96,6 +98,117 @@ describe("PanelChrome", () => {
     ).toBeTruthy();
     expect(header.querySelector(".lucide-ellipsis-vertical")).not.toBeNull();
     expect(header.querySelector(".lucide-ellipsis")).toBeNull();
+  });
+
+  it("checks the current dock edge and docks only at another edge", () => {
+    const onDock = vi.fn();
+    render(
+      <PanelChrome
+        tenant={{ id: "workspace-files", title: "Files", icon: FileIcon }}
+        controls={{
+          onCollapse: () => undefined,
+          onClose: () => undefined,
+          onDock,
+          dockEdge: "right",
+        }}
+      />,
+    );
+
+    const openMenu = () =>
+      fireEvent.pointerDown(
+        screen.getByRole("button", { name: "Files panel actions" }),
+        { button: 0, ctrlKey: false },
+      );
+    openMenu();
+    const dock = screen.getByRole("group", { name: "Dock" });
+    const edges = within(dock).getAllByRole("menuitemradio");
+    expect(edges.map((edge) => edge.textContent)).toEqual([
+      "Left",
+      "Right",
+      "Top",
+      "Bottom",
+    ]);
+    expect(
+      edges.map((edge) => edge.getAttribute("aria-checked")),
+    ).toEqual(["false", "true", "false", "false"]);
+    expect(edges[1]).toHaveAttribute("data-state", "checked");
+
+    // The current edge is a no-op; another edge docks there.
+    fireEvent.click(within(dock).getByRole("menuitemradio", { name: "Right" }));
+    expect(onDock).not.toHaveBeenCalled();
+    openMenu();
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "Bottom" }));
+    expect(onDock).toHaveBeenCalledExactlyOnceWith("bottom");
+  });
+
+  it("checks no edge for a panel that is not docked at one", () => {
+    render(
+      <PanelChrome
+        tenant={{ id: "workspace-files", title: "Files", icon: FileIcon }}
+        controls={{
+          onCollapse: () => undefined,
+          onClose: () => undefined,
+          onDock: () => undefined,
+        }}
+      />,
+    );
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Files panel actions" }),
+      { button: 0, ctrlKey: false },
+    );
+    expect(
+      screen
+        .getAllByRole("menuitemradio")
+        .map((edge) => edge.getAttribute("aria-checked")),
+    ).toEqual(["false", "false", "false", "false"]);
+  });
+
+  it("presents the Dock group with panel items as a sheet on touch", () => {
+    coarsePointer = true;
+    const onDock = vi.fn();
+    render(
+      <PanelChrome
+        panelTitle="Terminals"
+        leading={<span>Terminals</span>}
+        controls={{
+          onCollapse: () => undefined,
+          onClose: () => undefined,
+          onDock,
+          dockEdge: "bottom",
+          renderMenuItems: <button>Transcript</button>,
+        }}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Terminals panel actions" }),
+    );
+    const sheet = screen.getByRole("dialog", { name: "Terminals panel" });
+    expect(
+      within(sheet).getByRole("menuitemradio", { name: "Bottom" }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(within(sheet).getByRole("menuitemradio", { name: "Left" }));
+    expect(onDock).toHaveBeenCalledExactlyOnceWith("left");
+    cleanup();
+
+    // Four Dock rows alone stay a menu.
+    render(
+      <PanelChrome
+        panelTitle="Chat"
+        leading={<span>Chat</span>}
+        controls={{
+          onCollapse: () => undefined,
+          onClose: () => undefined,
+          onDock: () => undefined,
+        }}
+      />,
+    );
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Chat panel actions" }),
+      { button: 0, ctrlKey: false },
+    );
+    expect(screen.getByRole("menu")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("drops the panel menu on single-pane layouts that cannot dock", () => {

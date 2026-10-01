@@ -32,6 +32,9 @@ import { boundText } from "../../conversations/payload-policy.js";
 import type { ValidatedWorkspace } from "../../execution/contracts.js";
 import { piThinkingLevels } from "./pi-thread-presentation-provider.js";
 import { piCancellationStream } from "./pi-cancellation-stream.js";
+import { PiRequestThroughput } from "./pi-request-throughput.js";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { RequestThroughput } from "../turn-throughput.js";
 import { assertNoPiAgentToolExtensionCollisions } from "./pi-agent-tool-adapter.js";
 import type { PiAgentToolCliEnvironment } from "./pi-agent-tool-presentation.js";
 import {
@@ -80,6 +83,7 @@ export interface PiSdkSession {
 
   ready(): Promise<void>;
   subscribe(listener: (event: AgentSessionEvent) => void): Unsubscribe;
+  takeRequestThroughput(message: AssistantMessage): RequestThroughput | undefined;
   prompt(
     text: string,
     options: {
@@ -606,6 +610,7 @@ class DefaultPiSdkSession implements PiSdkSession {
 
   constructor(
     session: AgentSession,
+    readonly requestThroughput: PiRequestThroughput,
     extensions: LoadExtensionsResult,
     diagnosticNotices: readonly { readonly text: string }[] = [],
     ready: Promise<void> = Promise.resolve(),
@@ -633,6 +638,10 @@ class DefaultPiSdkSession implements PiSdkSession {
   async ready(): Promise<void> {
     await this.#ready;
     this.#fence.assertActive();
+  }
+
+  takeRequestThroughput(message: AssistantMessage): RequestThroughput | undefined {
+    return this.requestThroughput.take(message);
   }
 
   get sessionId(): string {
@@ -1059,8 +1068,9 @@ export class DefaultPiSdkSessionFactory implements PiSdkSessionFactory {
         ? { customTools: fencedCustomTools(sessionTools, fence) }
         : {}),
     });
-    result.session.agent.streamFunction = piCancellationStream(
-      result.session.agent.streamFunction,
+    const requestThroughput = new PiRequestThroughput();
+    result.session.agent.streamFunction = requestThroughput.wrap(
+      piCancellationStream(result.session.agent.streamFunction),
     );
     const trustedBuiltinOverrides = new Set<
       import("./pi-tool-identities.js").PiBuiltinToolKind
@@ -1129,6 +1139,7 @@ export class DefaultPiSdkSessionFactory implements PiSdkSessionFactory {
       });
     return new DefaultPiSdkSession(
       result.session,
+      requestThroughput,
       result.extensionsResult,
       services.diagnostics.map(({ type, message }) =>
         boundedDisplay(`Pi ${type}: ${message}`, 500),

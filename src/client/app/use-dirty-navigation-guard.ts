@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   installNavigationBlocker,
   navigate,
+  navigateUp,
   parseRoute,
   sameRoute,
   type Route,
@@ -11,7 +12,8 @@ export interface DirtyNavigationGuard {
   readonly pendingRoute?: Route;
   readonly cancel: () => void;
   readonly discardAndContinue: () => void;
-  readonly proceed: (path: string, options?: { readonly replace?: boolean }) => void;
+  /** Navigates past this guard: a push, a replace, or `up` through history like a "‹" link. */
+  readonly proceed: (path: string, options?: { readonly replace?: boolean; readonly up?: boolean }) => void;
 }
 
 /**
@@ -63,7 +65,8 @@ export function useDirtyNavigationGuard(dirty: boolean): DirtyNavigationGuard {
       bypass.current = next;
       pendingContinuation.current = undefined;
       setPendingRoute(undefined);
-      navigate(path, options);
+      if (options?.up) navigateUp(path);
+      else navigate(path, options);
     },
   };
 }

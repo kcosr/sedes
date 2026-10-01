@@ -8,6 +8,7 @@ import {
   expectNoPageOverflow,
   fillAndPersistDraft,
   openSedesWorkspace,
+  overlaySettled,
   selectRadixOption,
   sendCurrentDraft,
 } from "./helpers";
@@ -29,23 +30,32 @@ test.describe.serial("agent tool policy", () => {
     ).toBeVisible();
 
     await page.getByRole("button", { name: "Thread actions" }).click();
-    const agentToolsRow = page.getByRole("button", {
-      name: /Agent tools…\s*Off/,
+    const actionsMenu = page.getByRole("menu", { name: "Thread actions" });
+    await expect(actionsMenu).toBeVisible();
+    await overlaySettled(actionsMenu);
+    const agentToolsRow = actionsMenu.getByRole("menuitem", {
+      name: /^Agent tools…\s*Off/,
     });
-    const [labelBounds, summaryBounds] = await Promise.all([
-      agentToolsRow.locator(".agent-tool-menu-label").boundingBox(),
-      agentToolsRow.locator(".agent-tool-menu-summary").boundingBox(),
-    ]);
-    expect(labelBounds).not.toBeNull();
-    expect(summaryBounds).not.toBeNull();
-    expect(summaryBounds!.y).toBeGreaterThanOrEqual(
-      labelBounds!.y + labelBounds!.height,
+    const summary = agentToolsRow.locator(
+      '[data-slot="dropdown-menu-item-description"]',
     );
+    await expect(summary).toHaveText("Off");
+    // The summary is the row's second line, below the "Agent tools…" label.
+    const { labelBottom, summaryTop } = await summary.evaluate((element) => {
+      const label = document.createRange();
+      label.selectNodeContents(element.parentElement!.firstChild!);
+      return {
+        labelBottom: label.getBoundingClientRect().bottom,
+        summaryTop: element.getBoundingClientRect().top,
+      };
+    });
+    expect(labelBottom).toBeGreaterThan(0);
+    expect(summaryTop).toBeGreaterThanOrEqual(labelBottom);
     await agentToolsRow.click();
     const settings = page.getByRole("dialog", { name: "Agent tools" });
     await expect(settings).toBeVisible();
     await expect(
-      settings.getByRole("checkbox", { name: "Enable agent tools" }),
+      settings.getByRole("switch", { name: "Enable agent tools" }),
     ).not.toBeChecked();
     await expect(
       settings.getByRole("combobox", { name: "Agent tool surface" }),
@@ -65,7 +75,7 @@ test.describe.serial("agent tool policy", () => {
 
     await secondPage.getByRole("button", { name: "Thread actions" }).click();
     await secondPage
-      .getByRole("button", { name: /Agent tools…\s*Off/ })
+      .getByRole("menuitem", { name: /^Agent tools…\s*Off/ })
       .click();
     const secondSettings = secondPage.getByRole("dialog", {
       name: "Agent tools",
@@ -84,7 +94,7 @@ test.describe.serial("agent tool policy", () => {
     });
 
     await settings
-      .getByRole("checkbox", { name: "Enable agent tools" })
+      .getByRole("switch", { name: "Enable agent tools" })
       .click();
     await settings.getByRole("checkbox", { name: "Agent context" }).click();
     await selectRadixOption(
@@ -143,7 +153,7 @@ test.describe.serial("agent tool policy", () => {
     expect(policyMutationCount).toBe(1);
 
     await expect(
-      secondSettings.getByRole("checkbox", { name: "Enable agent tools" }),
+      secondSettings.getByRole("switch", { name: "Enable agent tools" }),
     ).toBeChecked();
     await expect(
       secondSettings.getByRole("checkbox", { name: "Agent context" }),
@@ -165,14 +175,14 @@ test.describe.serial("agent tool policy", () => {
 
     await page.reload();
     await page.getByRole("button", { name: "Thread actions" }).click();
-    const persistedSummary = page.getByRole("button", {
-      name: /Agent tools…\s*1 enabled · Allow without asking/,
+    const persistedSummary = page.getByRole("menuitem", {
+      name: /^Agent tools…\s*1 enabled · Allow without asking/,
     });
     await expect(persistedSummary).toBeVisible();
     await persistedSummary.click();
     const reloadedSettings = page.getByRole("dialog", { name: "Agent tools" });
     await expect(
-      reloadedSettings.getByRole("checkbox", { name: "Enable agent tools" }),
+      reloadedSettings.getByRole("switch", { name: "Enable agent tools" }),
     ).toBeChecked();
     await expect(
       reloadedSettings.getByRole("checkbox", { name: "Agent context" }),
@@ -202,11 +212,11 @@ test.describe.serial("agent tool policy", () => {
     await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
 
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page.getByRole("button", { name: /Agent tools…/ }).click();
+    await page.getByRole("menuitem", { name: /^Agent tools…/ }).click();
     const settings = page.getByRole("dialog", { name: "Agent tools" });
     await expect(settings).toBeVisible();
     await expect(
-      settings.getByRole("checkbox", { name: "Enable agent tools" }),
+      settings.getByRole("switch", { name: "Enable agent tools" }),
     ).toBeDisabled();
     await expect(
       settings.getByRole("combobox", { name: "Agent tool surface" }),
@@ -283,7 +293,7 @@ test.describe.serial("agent tool policy", () => {
     const settings = page.getByRole("dialog", { name: "Agent tools" });
     const openSettings = async () => {
       await page.getByRole("button", { name: "Thread actions" }).click();
-      await page.getByRole("button", { name: /Agent tools…/ }).click();
+      await page.getByRole("menuitem", { name: /^Agent tools…/ }).click();
       await expect(settings).toBeVisible();
     };
     const saveSettings = async () => {
@@ -312,7 +322,7 @@ test.describe.serial("agent tool policy", () => {
     await secondPage.goto(cliThreadPath);
     await expect(secondPage.getByRole("textbox", { name: "Message Scripted agent" })).toBeVisible();
     await secondPage.getByRole("button", { name: "Thread actions" }).click();
-    await secondPage.getByRole("button", { name: /Agent tools…/ }).click();
+    await secondPage.getByRole("menuitem", { name: /^Agent tools…/ }).click();
     const secondSettings = secondPage.getByRole("dialog", { name: "Agent tools" });
     await expect(secondSettings).toBeVisible();
 
@@ -322,14 +332,14 @@ test.describe.serial("agent tool policy", () => {
     await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
     try {
       await openSettings();
-      await expect(settings.getByRole("checkbox", { name: "Enable agent tools" })).toBeEnabled();
+      await expect(settings.getByRole("switch", { name: "Enable agent tools" })).toBeEnabled();
       await expect(settings.getByRole("combobox", { name: "Agent tool surface" })).toBeDisabled();
       await expect(settings.getByRole("combobox", { name: "Agent tool presentation" })).toBeDisabled();
-      await settings.getByRole("checkbox", { name: "Enable agent tools" }).check();
+      await settings.getByRole("switch", { name: "Enable agent tools" }).check();
       await settings.getByRole("checkbox", { name: "Agent context" }).check();
       await capture(page, testInfo, "agent-tools-cli-in-flight.png");
       await saveSettings();
-      await expect(secondSettings.getByRole("checkbox", { name: "Enable agent tools" })).toBeChecked();
+      await expect(secondSettings.getByRole("switch", { name: "Enable agent tools" })).toBeChecked();
       await expect(secondSettings.getByRole("checkbox", { name: "Agent context" })).toBeChecked();
 
       await openSettings();
@@ -342,13 +352,13 @@ test.describe.serial("agent tool policy", () => {
       await expect(secondSettings.getByRole("checkbox", { name: "Thread status" })).toBeChecked();
 
       await openSettings();
-      await settings.getByRole("checkbox", { name: "Enable agent tools" }).uncheck();
+      await settings.getByRole("switch", { name: "Enable agent tools" }).uncheck();
       await saveSettings();
-      await expect(secondSettings.getByRole("checkbox", { name: "Enable agent tools" })).not.toBeChecked();
+      await expect(secondSettings.getByRole("switch", { name: "Enable agent tools" })).not.toBeChecked();
       await openSettings();
-      await settings.getByRole("checkbox", { name: "Enable agent tools" }).check();
+      await settings.getByRole("switch", { name: "Enable agent tools" }).check();
       await saveSettings();
-      await expect(secondSettings.getByRole("checkbox", { name: "Enable agent tools" })).toBeChecked();
+      await expect(secondSettings.getByRole("switch", { name: "Enable agent tools" })).toBeChecked();
 
       const session = await (await page.request.get("/api/application/session")).json() as { csrfToken: string };
       const snapshot = normalizedThreadSnapshotSchema.parse(
@@ -394,12 +404,12 @@ test.describe.serial("agent tool policy", () => {
     await createDraftThread(page);
     await page.setViewportSize({ width: 390, height: 430 });
     await page.getByRole("button", { name: "Thread actions" }).click();
-    await page.getByRole("button", { name: /Agent tools…/ }).click();
+    await page.getByRole("menuitem", { name: /^Agent tools…/ }).click();
 
     const settings = page.getByRole("dialog", { name: "Agent tools" });
     await expect(settings).toBeVisible();
     await settings
-      .getByRole("checkbox", { name: "Enable agent tools" })
+      .getByRole("switch", { name: "Enable agent tools" })
       .click();
     const accessBoundary = settings.getByRole("combobox", {
       name: "Access boundary",
@@ -446,7 +456,12 @@ test.describe.serial("agent tool policy", () => {
     ).toBeVisible();
     await settings.getByRole("button", { name: "New client" }).click();
     await settings.getByLabel("Tool client name").fill("E2E external CLI");
+    // Tool groups start collapsed behind their selection summary.
+    const threadsGroup = settings.getByRole("button", { name: "Threads", exact: true });
+    await expect(threadsGroup).toHaveAttribute("aria-expanded", "false");
+    await threadsGroup.click();
     await settings.getByRole("checkbox", { name: "Thread status" }).click();
+    await expect(threadsGroup).toHaveAccessibleDescription(/^1 of \d+ tools /u);
 
     const createdResponse = page.waitForResponse(
       (response) =>
@@ -488,7 +503,7 @@ test.describe.serial("agent tool policy", () => {
       .click();
     await expect(credentialDialog).toHaveCount(0);
 
-    const enabled = settings.getByRole("checkbox", {
+    const enabled = settings.getByRole("switch", {
       name: "Enable tool client",
     });
     await expect(enabled).toBeChecked();
@@ -499,13 +514,13 @@ test.describe.serial("agent tool policy", () => {
         /\/api\/tool-clients\/[0-9a-f-]+$/u.test(response.url()) &&
         response.ok(),
     );
-    await settings.getByRole("button", { name: "Save" }).click();
+    await settings.getByRole("button", { name: "Save", exact: true }).click();
     await disabledResponse;
     await expect(
-      settings.getByRole("button", { name: /E2E external CLI Disabled/u }),
-    ).toBeVisible();
+      settings.getByRole("button", { name: "E2E external CLI", exact: true }),
+    ).toHaveAccessibleDescription(/Disabled/u);
 
-    await settings.getByRole("button", { name: "Rotate credential" }).click();
+    await settings.getByRole("button", { name: "Rotate credential…", exact: true }).click();
     const rotateConfirmation = page.getByRole("dialog", {
       name: "Rotate credential?",
     });
@@ -535,7 +550,7 @@ test.describe.serial("agent tool policy", () => {
       .getByRole("button", { name: "I saved it — close" })
       .click();
 
-    await settings.getByRole("button", { name: "Revoke" }).click();
+    await settings.getByRole("button", { name: "Revoke…", exact: true }).click();
     const revokeConfirmation = page.getByRole("dialog", {
       name: "Revoke tool client?",
     });
@@ -550,7 +565,8 @@ test.describe.serial("agent tool policy", () => {
       .click();
     await revokedResponse;
     await expect(
-      settings.getByRole("button", { name: /E2E external CLI Revoked/u }),
-    ).toBeVisible();
+      settings.getByRole("button", { name: "E2E external CLI", exact: true }),
+    ).toHaveAccessibleDescription(/Revoked/u);
+    await expect(settings.getByText("Tool client revoked. Its credentials can no longer be used.")).toBeVisible();
   });
 });

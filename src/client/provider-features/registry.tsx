@@ -6,7 +6,13 @@ import type {
   ProviderFeatureRef,
   ProviderFeatureStateEnvelope,
 } from "../../shared/index.js";
+import { Fragment } from "react";
+import { Puzzle } from "lucide-react";
 import type { ThreadClientStore } from "../stores/ThreadClientStore.js";
+import {
+  DropdownMenuItem,
+  DropdownMenuValue,
+} from "@client/components/ui/dropdown-menu";
 import { codexExecutionClientFeature } from "./codex-execution.js";
 import { codexFastModeClientFeature } from "./codex-fast-mode.js";
 import { codexGoalClientFeature } from "./codex-goal.js";
@@ -14,6 +20,7 @@ import { claudePermissionsClientFeature } from "./claude-permissions.js";
 
 export interface ClientProviderFeatureModule {
   readonly ref: ProviderFeatureRef;
+  /** Rows for the Thread actions menu, built from the DropdownMenu parts. */
   renderThreadDetails(input: {
     readonly store: ThreadClientStore;
     readonly snapshot: NormalizedThreadSnapshot;
@@ -135,6 +142,11 @@ function ProviderFeatureConversationItemList({
   );
 }
 
+/**
+ * The provider features' rows in the Thread actions menu (DropdownMenu
+ * parts, e.g. a "Codex execution" radio submenu). The menu renders as a
+ * sheet on touch, and the same parts follow it there.
+ */
 export function ProviderFeatureThreadDetails({
   store,
   snapshot,
@@ -160,17 +172,15 @@ export function ProviderFeatureThreadDetails({
           const module = clientProviderFeatures.module(capability.ref);
           if (!module) {
             return (
-              <p
-                className="provider-feature-unavailable"
-                key={key}
-                role="status"
-              >
-                {capability.label.text} is unavailable in this client version.
-              </p>
+              <DropdownMenuItem key={key} disabled>
+                <Puzzle aria-hidden="true" />
+                {capability.label.text}
+                <DropdownMenuValue>Needs a client update</DropdownMenuValue>
+              </DropdownMenuItem>
             );
           }
           return (
-            <div className="provider-feature-control" key={key}>
+            <Fragment key={key}>
               {module.renderThreadDetails({
                 store,
                 snapshot,
@@ -179,7 +189,7 @@ export function ProviderFeatureThreadDetails({
                 disabled,
                 mobile,
               })}
-            </div>
+            </Fragment>
           );
         })}
     </>

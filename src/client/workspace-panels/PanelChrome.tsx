@@ -4,18 +4,28 @@ import { Button } from "../components/ui/button.js";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.js";
 import { useMediaQuery } from "../app/use-media-query.js";
+import { useTouchDensity } from "../app/use-touch-density.js";
 import type { EnvironmentTintStyle } from "../app/environment-palette.js";
 import type { PanelPlacementEdge } from "./layout-tree.js";
 import type { WorkspacePanelTenant } from "./registry.js";
 
 /** Matches PanelLayout's narrow layout: exactly one pane is ever on stage. */
 const SINGLE_PANE_QUERY = "(max-width: 819px)";
+
+const DOCK_EDGES: readonly PanelPlacementEdge[] = ["left", "right", "top", "bottom"];
+const DOCK_LABEL: Record<PanelPlacementEdge, string> = {
+  left: "Left",
+  right: "Right",
+  top: "Top",
+  bottom: "Bottom",
+};
 
 export interface PanelChromeStatus {
   readonly busy?: boolean;
@@ -28,6 +38,8 @@ export interface PanelChromeControls {
   readonly onCollapse: () => void;
   readonly onClose: (invoker: HTMLElement) => void;
   readonly onDock: (edge: PanelPlacementEdge) => void;
+  /** The edge the panel is docked at now, if any; the Dock group checks it. */
+  readonly dockEdge?: PanelPlacementEdge;
   readonly renderMenuItems?: React.ReactNode;
 }
 
@@ -113,6 +125,9 @@ function PanelChromeActions({
   const [menuOpen, setMenuOpen] = useState(false);
   const docking = !useMediaQuery(SINGLE_PANE_QUERY);
   const hasMenu = docking || Boolean(controls.renderMenuItems);
+  // The Dock group plus a tenant's own items can run past six rows, which
+  // touch presents as a sheet.
+  const sheet = useTouchDensity() && docking && Boolean(controls.renderMenuItems);
   return (
     <div className="workspace-panel-actions">
       <Button
@@ -126,7 +141,11 @@ function PanelChromeActions({
       </Button>
 
       {hasMenu ? (
-        <DropdownMenu open={controls.active !== false && menuOpen} onOpenChange={setMenuOpen}>
+        <DropdownMenu
+          presentation={sheet ? "sheet" : "menu"}
+          open={controls.active !== false && menuOpen}
+          onOpenChange={setMenuOpen}
+        >
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
@@ -137,22 +156,26 @@ function PanelChromeActions({
               <MoreVertical size={16} />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent
-            className="workspace-panel-menu"
-            align="end"
-            sideOffset={6}
-          >
+          <DropdownMenuContent align="end" sheetTitle={`${title} panel`}>
             {docking ? (
               <>
                 <DropdownMenuLabel>Dock</DropdownMenuLabel>
-                {(["left", "right", "top", "bottom"] as const).map((edge) => (
-                  <DropdownMenuItem
-                    key={edge}
-                    onSelect={() => controls.onDock(edge)}
-                  >
-                    Dock {edge}
-                  </DropdownMenuItem>
-                ))}
+                <DropdownMenuRadioGroup
+                  aria-label="Dock"
+                  value={controls.dockEdge ?? ""}
+                  onValueChange={(value) => {
+                    // Docking again at the current edge would only reset
+                    // the panel's size.
+                    const edge = DOCK_EDGES.find((candidate) => candidate === value);
+                    if (edge && edge !== controls.dockEdge) controls.onDock(edge);
+                  }}
+                >
+                  {DOCK_EDGES.map((edge) => (
+                    <DropdownMenuRadioItem key={edge} value={edge}>
+                      {DOCK_LABEL[edge]}
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
               </>
             ) : null}
             {controls.renderMenuItems && (

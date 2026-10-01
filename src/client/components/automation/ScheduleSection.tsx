@@ -9,12 +9,20 @@ import {
   SelectValue,
 } from "@client/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@client/components/ui/radio-group";
+import { Callout } from "@client/components/ui/callout";
+import { DialogSection } from "@client/components/ui/dialog";
+import { Field } from "@client/components/ui/field";
+import { Input } from "@client/components/ui/input";
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from "@client/components/ui/segmented-control";
 
 export type ScheduleKind = AutomationSchedule["kind"];
 export type IntervalUnit = "minutes" | "hours" | "days";
 
-/** "When" section: schedule-kind segmented control, per-kind native inputs,
- * and the next-occurrences preview. Presentation only — all state lives in
+/** "When" section: schedule-kind segmented control, per-kind fields, and
+ * the next-occurrences preview. Presentation only — all state lives in
  * ThreadAutomationDialog. */
 export function AutomationScheduleSection({
   scheduleKind,
@@ -48,46 +56,32 @@ export function AutomationScheduleSection({
   previewError: string;
 }): React.JSX.Element {
   return (
-    <section className="automation-section">
-      <h2 className="automation-section-label">When</h2>
+    <DialogSection title="When">
       <div className="automation-section-card padded">
-        <div
-          className="segmented-control"
-          role="group"
+        <SegmentedControl
           aria-label="Schedule type"
+          className="w-full"
+          value={scheduleKind}
+          onValueChange={(kind) => onScheduleKindChange(kind as ScheduleKind)}
         >
-          {([
-            ["date_time", "Date & time"],
-            ["interval", "Every interval"],
-            ["cron", "Cron"],
-          ] as const).map(([kind, label]) => (
-            <button
-              type="button"
-              className={scheduleKind === kind ? "selected" : ""}
-              aria-pressed={scheduleKind === kind}
-              key={kind}
-              onClick={() => onScheduleKindChange(kind)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+          <SegmentedControlItem value="date_time">Date & time</SegmentedControlItem>
+          <SegmentedControlItem value="interval">Every interval</SegmentedControlItem>
+          <SegmentedControlItem value="cron">Cron</SegmentedControlItem>
+        </SegmentedControl>
         {scheduleKind === "date_time" && (
-          <label className="field">
-            <span>Local date and time</span>
-            <input
+          <Field label="Local date and time">
+            <Input
               type="datetime-local"
               min={localDateTimeValue(new Date(Date.now() + 60_000))}
               value={dateTime}
               onChange={(event) => onDateTimeChange(event.target.value)}
             />
-          </label>
+          </Field>
         )}
         {scheduleKind === "interval" && (
           <div className="interval-fields">
-            <label className="field">
-              <span>Every</span>
-              <input
+            <Field label="Every">
+              <Input
                 type="number"
                 min={intervalUnit === "minutes" ? 5 : 1}
                 max={
@@ -103,19 +97,15 @@ export function AutomationScheduleSection({
                   onIntervalAmountChange(event.target.valueAsNumber)
                 }
               />
-            </label>
-            <div className="field">
-              <span id="automation-interval-unit-label">Unit</span>
+            </Field>
+            <Field label="Unit">
               <Select
                 value={intervalUnit}
                 onValueChange={(value) =>
                   onIntervalUnitChange(value as IntervalUnit)
                 }
               >
-                <SelectTrigger
-                  className="w-full"
-                  aria-labelledby="automation-interval-unit-label"
-                >
+                <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -124,30 +114,27 @@ export function AutomationScheduleSection({
                   <SelectItem value="days">Days</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
+            </Field>
           </div>
         )}
         {scheduleKind === "cron" && (
-          <>
-            <label className="field">
-              <span>Five-field cron expression</span>
-              <input
-                value={cronExpression}
-                spellCheck={false}
-                placeholder="0 9 * * 1-5"
-                onChange={(event) =>
-                  onCronExpressionChange(event.target.value)
-                }
-              />
-            </label>
-            <p className="schedule-timezone">
-              Timezone:{" "}
-              {schedule?.kind === "cron" ? schedule.timeZone : timeZone}
-            </p>
-          </>
+          <Field
+            label="Five-field cron expression"
+            description={`Timezone: ${schedule?.kind === "cron" ? schedule.timeZone : timeZone}`}
+          >
+            <Input
+              className="font-mono"
+              value={cronExpression}
+              spellCheck={false}
+              placeholder="0 9 * * 1-5"
+              onChange={(event) => onCronExpressionChange(event.target.value)}
+            />
+          </Field>
         )}
         {previewError ? (
-          <p className="notice error" role="alert">{previewError}</p>
+          <Callout tone="danger" role="alert">
+            {previewError}
+          </Callout>
         ) : preview.length > 0 ? (
           <div className="schedule-preview" aria-live="polite">
             <strong>Next occurrences</strong>
@@ -158,12 +145,12 @@ export function AutomationScheduleSection({
             </ol>
           </div>
         ) : schedule ? (
-          <p className="schedule-timezone" role="status">
+          <p className="automation-help" role="status">
             Checking schedule…
           </p>
         ) : null}
       </div>
-    </section>
+    </DialogSection>
   );
 }
 
@@ -176,8 +163,7 @@ export function AutomationMisfireSection({
   onMisfirePolicyChange: (policy: AutomationMisfirePolicy) => void;
 }): React.JSX.Element {
   return (
-    <section className="automation-section">
-      <h2 className="automation-section-label">After downtime</h2>
+    <DialogSection title="After downtime">
       <div className="automation-section-card">
         <RadioGroup
           className="automation-option-group"
@@ -209,6 +195,6 @@ export function AutomationMisfireSection({
           </label>
         </RadioGroup>
       </div>
-    </section>
+    </DialogSection>
   );
 }

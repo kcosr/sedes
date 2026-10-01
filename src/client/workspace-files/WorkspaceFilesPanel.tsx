@@ -19,11 +19,14 @@ import {
   AlertCircle,
   Check,
   ChevronDown,
+  ClipboardCheck,
   Download,
   FilePenLine,
   FolderPlus,
   FolderTree,
+  History as HistoryIcon,
   LoaderCircle,
+  MessageSquareText,
   RefreshCw,
   Save,
   Trash2,
@@ -44,25 +47,41 @@ import {
 } from "../../shared/index.js";
 import { Button } from "../components/ui/button.js";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "../components/ui/popover.js";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuItemDescription,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuValue,
+  DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu.js";
 import { ApiError, type ApiClient } from "../api/ApiClient.js";
 import { useApplicationStore } from "../stores/ApplicationClientStore.js";
 import {
   downloadWorkspaceFileInPackagedClient,
   supportsPackagedWorkspaceFileDownloads,
 } from "../app/packaged-workspace-file-download.js";
+import { ConfirmDialog } from "../components/ui/confirm-dialog.js";
 import {
   Dialog,
+  DialogAlert,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
+  DialogSection,
   DialogTitle,
 } from "../components/ui/dialog.js";
+import { DiscardChangesDialog } from "../components/ui/discard-changes-dialog.js";
+import { Field } from "../components/ui/field.js";
 import { Input } from "../components/ui/input.js";
+import { NativeSelect } from "../components/ui/native-select.js";
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from "../components/ui/segmented-control.js";
 import { DirectoryPickerDialog } from "../components/DirectoryPickerDialog.js";
 import { Textarea } from "../components/ui/textarea.js";
 import type { WorkspacePanelContext } from "../workspace-panels/registry.js";
@@ -2930,9 +2949,14 @@ export function WorkspaceFilesPanel({
       (compareHistoryReviews.find((review) => review.id === activeCompareReviewId && review.id !== currentCompareReview?.id)?.id ?? compareHistoryReviews.find((review) => review.id !== currentCompareReview?.id)?.id));
     setCompareDetailsOpen(true);
   };
+  const startReviewBlocked = compareReviewLoading
+    ? "Loading…"
+    : compareReviewMutating || compareCommentSaving
+      ? "Saving…"
+      : undefined;
   const compareReviewControls = (
-    <Popover open={reviewMenuOpen} onOpenChange={setReviewMenuOpen}>
-      <PopoverTrigger asChild>
+    <DropdownMenu open={reviewMenuOpen} onOpenChange={setReviewMenuOpen}>
+      <DropdownMenuTrigger asChild>
         <button
           type="button"
           className="workspace-compare-toolbar-button"
@@ -2950,55 +2974,49 @@ export function WorkspaceFilesPanel({
           )}
           <ChevronDown aria-hidden="true" size={13} />
         </button>
-      </PopoverTrigger>
-      <PopoverContent
-        align="end"
-        className="workspace-files-review-menu"
-        aria-label="Review options"
-      >
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-56">
         {currentCompareReview ? (
-          <p>{compareReviewedCount} of {compareFiles.length} reviewed</p>
+          <>
+            <DropdownMenuLabel variant="header">
+              {compareReviewedCount} of {compareFiles.length} files reviewed
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => showReviewInspector("current")}>
+              <MessageSquareText aria-hidden="true" />
+              Comments
+              <DropdownMenuValue>{compareCommentCount}</DropdownMenuValue>
+            </DropdownMenuItem>
+          </>
         ) : (
-          <p>Start a review to save comments and reviewed files.</p>
-        )}
-        {!currentCompareReview && (
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={!activeComparison || compareReviewLoading || compareReviewMutating || compareCommentSaving}
-            onClick={() => {
-              setReviewMenuOpen(false);
-              void startCompareReview();
-            }}
+          <DropdownMenuItem
+            disabled={!activeComparison || startReviewBlocked !== undefined}
+            onSelect={() => void startCompareReview()}
           >
-            Start review
-          </Button>
+            <ClipboardCheck aria-hidden="true" />
+            <span className="min-w-0 flex-1">
+              Start review
+              <DropdownMenuItemDescription>
+                Save comments and reviewed files.
+              </DropdownMenuItemDescription>
+            </span>
+            {startReviewBlocked && (
+              <DropdownMenuValue>{startReviewBlocked}</DropdownMenuValue>
+            )}
+          </DropdownMenuItem>
         )}
-        {currentCompareReview && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setReviewMenuOpen(false);
-              showReviewInspector("current");
-            }}
-          >
-            Comments ({compareCommentCount})
-          </Button>
-        )}
-        <Button
-          variant="ghost"
-          size="sm"
+        <DropdownMenuItem
           disabled={compareRepositoryHistoryCount === 0}
-          onClick={() => {
-            setReviewMenuOpen(false);
-            showReviewInspector("history");
-          }}
+          onSelect={() => showReviewInspector("history")}
         >
+          <HistoryIcon aria-hidden="true" />
           History
-        </Button>
-      </PopoverContent>
-    </Popover>
+          {compareRepositoryHistoryCount === 0 && (
+            <DropdownMenuValue>None yet</DropdownMenuValue>
+          )}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
   const activeCompareRefresh = compareRefreshControl?.scope === compareRefreshScope
     ? compareRefreshControl : undefined;
@@ -3624,11 +3642,13 @@ export function WorkspaceFilesPanel({
                 Unsaved Browse drafts are excluded from this comparison.
               </p>
             )}
-            {compareReviewError && (
-              <p className="workspace-files-save-error" role="alert">
-                {compareReviewError}
-              </p>
-            )}
+            {compareReviewError &&
+              compareCommentDraft === undefined &&
+              !compareDetailsOpen && (
+                <p className="workspace-files-save-error" role="alert">
+                  {compareReviewError}
+                </p>
+              )}
             <WorkspaceCompareView
               key={JSON.stringify([navigationScope, workspaceId, activeRootId])}
               initialNavigation={workspaceCompareStorage.get(navigationScope, workspaceId, activeRootId)?.navigation}
@@ -3696,10 +3716,12 @@ export function WorkspaceFilesPanel({
       <Dialog
         open={context.visible && (compareCommentDraft !== undefined)}
         onOpenChange={(open) => {
-          if (!compareCommentSaving && !open) setCompareCommentDraft(undefined);
+          if (compareCommentSaving || open) return;
+          setCompareCommentDraft(undefined);
+          setCompareReviewError(undefined);
         }}
       >
-        <DialogContent showCloseButton={false}>
+        <DialogContent size="md" dismissible={!compareCommentSaving}>
           <DialogHeader>
             <DialogTitle>
               {compareCommentDraft?.mode === "edit"
@@ -3712,64 +3734,71 @@ export function WorkspaceFilesPanel({
                 : "This comment stays attached to the current comparison review."}
             </DialogDescription>
           </DialogHeader>
-          <label className="workspace-files-compare-comment-field">
-            Comment
-            <Textarea
-              aria-label="Workspace diff review comment"
-              disabled={compareCommentSaving}
-              value={compareCommentDraft?.body ?? ""}
-              onChange={(event) =>
-                setCompareCommentDraft((current) =>
-                  current ? { ...current, body: event.target.value } : current,
-                )
-              }
-              rows={5}
-            />
-          </label>
-          <label className="workspace-files-compare-comment-field">
-            State
-            <select
-              aria-label="Workspace diff review comment state"
-              disabled={compareCommentSaving}
-              value={compareCommentDraft?.state ?? "published"}
-              onChange={(event) =>
-                setCompareCommentDraft((current) =>
-                  current?.mode === "edit"
-                    ? {
-                        ...current,
-                        state: event.target
-                          .value as WorkspaceDiffReviewCommentState,
-                      }
-                    : current?.mode === "create"
+          <DialogBody>
+            <Field label="Comment">
+              <Textarea
+                aria-label="Workspace diff review comment"
+                className="min-h-28"
+                disabled={compareCommentSaving}
+                value={compareCommentDraft?.body ?? ""}
+                onChange={(event) =>
+                  setCompareCommentDraft((current) =>
+                    current ? { ...current, body: event.target.value } : current,
+                  )
+                }
+                rows={5}
+              />
+            </Field>
+            <Field label="State">
+              <NativeSelect
+                aria-label="Workspace diff review comment state"
+                disabled={compareCommentSaving}
+                value={compareCommentDraft?.state ?? "published"}
+                onChange={(event) =>
+                  setCompareCommentDraft((current) =>
+                    current?.mode === "edit"
                       ? {
                           ...current,
-                          state: event.target.value as "draft" | "published",
+                          state: event.target
+                            .value as WorkspaceDiffReviewCommentState,
                         }
-                      : current,
-                )
-              }
-            >
-              {compareCommentDraft?.mode === "edit" ? (
-                <>
-                  <option value="draft">Draft</option>
-                  <option value="published">Published</option>
-                  <option value="resolved">Resolved</option>
-                  <option value="outdated">Outdated</option>
-                  <option value="unplaced">Unplaced</option>
-                </>
-              ) : (
-                <>
-                  <option value="published">Published</option>
-                  <option value="draft">Draft</option>
-                </>
-              )}
-            </select>
-          </label>
+                      : current?.mode === "create"
+                        ? {
+                            ...current,
+                            state: event.target.value as "draft" | "published",
+                          }
+                        : current,
+                  )
+                }
+              >
+                {compareCommentDraft?.mode === "edit" ? (
+                  <>
+                    <option value="draft">Draft</option>
+                    <option value="published">Published</option>
+                    <option value="resolved">Resolved</option>
+                    <option value="outdated">Outdated</option>
+                    <option value="unplaced">Unplaced</option>
+                  </>
+                ) : (
+                  <>
+                    <option value="published">Published</option>
+                    <option value="draft">Draft</option>
+                  </>
+                )}
+              </NativeSelect>
+            </Field>
+            {compareReviewError && (
+              <DialogAlert tone="danger">{compareReviewError}</DialogAlert>
+            )}
+          </DialogBody>
           <DialogFooter>
             <Button
               variant="outline"
               disabled={compareCommentSaving}
-              onClick={() => setCompareCommentDraft(undefined)}
+              onClick={() => {
+                setCompareCommentDraft(undefined);
+                setCompareReviewError(undefined);
+              }}
             >
               Cancel
             </Button>
@@ -3777,7 +3806,7 @@ export function WorkspaceFilesPanel({
               disabled={compareCommentSaving}
               onClick={() => void submitCompareComment()}
             >
-              Save comment
+              {compareCommentSaving ? "Saving…" : "Save comment"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -3785,13 +3814,15 @@ export function WorkspaceFilesPanel({
       <Dialog
         open={context.visible && (compareDetailsOpen)}
         onOpenChange={(open) => {
-          if (!compareReviewMutating) setCompareDetailsOpen(open);
+          if (compareReviewMutating) return;
+          setCompareDetailsOpen(open);
+          if (!open) setCompareReviewError(undefined);
         }}
       >
         <DialogContent
-          showCloseButton={false}
-          placement="side"
-          className="workspace-files-compare-details-dialog"
+          layout="side"
+          size="md"
+          dismissible={!compareReviewMutating}
         >
           <DialogHeader>
             <DialogTitle>
@@ -3802,184 +3833,195 @@ export function WorkspaceFilesPanel({
               saved comments.
             </DialogDescription>
           </DialogHeader>
-          <div className="workspace-files-mode-switcher" aria-label="Review view">
-            <button type="button" className={reviewInspectorMode === "current" ? "is-active" : undefined}
-              onClick={() => showReviewInspector("current")}>Current review</button>
-            <button type="button" className={reviewInspectorMode === "history" ? "is-active" : undefined}
-              onClick={() => showReviewInspector("history")}>History</button>
-          </div>
-          {reviewInspectorMode === "history" && <>
-            <p className="workspace-files-review-history-note">Historical comments belong to their original comparison. Selecting a review does not restore an old working tree.</p>
-            <label className="workspace-files-compare-review-picker">Historical review
-              <select aria-label="Historical workspace diff review" value={activeCompareReviewId ?? ""}
-                onChange={(event) => setActiveCompareReviewId(event.target.value || undefined)}>
-                <option value="">Select a historical review</option>
-                {compareHistoryReviews.filter((review) => review.id !== currentCompareReview?.id).map((review) =>
-                  <option key={review.id} value={review.id}>{review.title || "Workspace review"} · {review.updatedAt}</option>)}
-              </select>
-            </label>
-          </>}
-          {activeCompareReview && <Button variant="ghost" size="sm" disabled={compareReviewMutating || compareCommentSaving}
-            onClick={() => void toggleCompareReviewState()}>{activeCompareReview.state === "open" ? "Archive" : "Reopen"}</Button>}
-          {activeCompareReview ? (
-            <div className="workspace-files-compare-details-body">
-              <label className="workspace-files-compare-comment-field">
-                Title
-                <Input
-                  aria-label="Workspace diff review title"
-                  value={compareReviewTitleDraft}
-                  onChange={(event) =>
-                    setCompareReviewTitleDraft(event.target.value)
-                  }
-                />
-              </label>
-              <label className="workspace-files-compare-comment-field">
-                Summary
-                <Textarea
-                  aria-label="Workspace diff review summary"
-                  value={compareReviewSummaryDraft}
-                  onChange={(event) =>
-                    setCompareReviewSummaryDraft(event.target.value)
-                  }
-                  rows={4}
-                />
-              </label>
-              <label className="workspace-files-compare-comment-field">
-                State
-                <select
-                  aria-label="Workspace diff review state"
-                  value={compareReviewStateDraft}
-                  onChange={(event) =>
-                    setCompareReviewStateDraft(
-                      event.target.value as "open" | "archived",
-                    )
-                  }
-                >
-                  <option value="open">Open</option>
-                  <option value="archived">Archived</option>
-                </select>
-              </label>
-              <div className="workspace-files-compare-details-meta">
-                <span>
-                  {activeCompareReview.id === currentInlineReviewIdRef.current
-                    ? "Current review"
-                    : "Repository history"}
-                </span>
-                <span>{compareComments.length} comments</span>
-                <span>
-                  {compareReviewedFiles.filter((file) => file.reviewed).length}{" "}
-                  reviewed
-                </span>
-              </div>
-              <div className="workspace-files-compare-details-list">
-                {compareComments.map((comment) => (
-                  <article
-                    key={comment.id}
-                    className="workspace-files-compare-comment-card"
+          <DialogBody>
+            <SegmentedControl
+              aria-label="Review view"
+              size="sm"
+              className="w-full"
+              value={reviewInspectorMode}
+              onValueChange={(view) =>
+                showReviewInspector(view as "current" | "history")
+              }
+            >
+              <SegmentedControlItem value="current">Current review</SegmentedControlItem>
+              <SegmentedControlItem value="history">History</SegmentedControlItem>
+            </SegmentedControl>
+            {reviewInspectorMode === "history" && <>
+              <p className="workspace-files-review-history-note">Historical comments belong to their original comparison. Selecting a review does not restore an old working tree.</p>
+              <Field label="Historical review">
+                <NativeSelect aria-label="Historical workspace diff review" value={activeCompareReviewId ?? ""}
+                  onChange={(event) => setActiveCompareReviewId(event.target.value || undefined)}>
+                  <option value="">Select a historical review</option>
+                  {compareHistoryReviews.filter((review) => review.id !== currentCompareReview?.id).map((review) =>
+                    <option key={review.id} value={review.id}>{review.title || "Workspace review"} · {review.updatedAt}</option>)}
+                </NativeSelect>
+              </Field>
+            </>}
+            {activeCompareReview && <Button variant="outline" size="sm" className="justify-self-start" disabled={compareReviewMutating || compareCommentSaving}
+              onClick={() => void toggleCompareReviewState()}>{activeCompareReview.state === "open" ? "Archive" : "Reopen"}</Button>}
+            {activeCompareReview ? (
+              <>
+                <Field label="Title">
+                  <Input
+                    aria-label="Workspace diff review title"
+                    value={compareReviewTitleDraft}
+                    onChange={(event) =>
+                      setCompareReviewTitleDraft(event.target.value)
+                    }
+                  />
+                </Field>
+                <Field label="Summary">
+                  <Textarea
+                    aria-label="Workspace diff review summary"
+                    value={compareReviewSummaryDraft}
+                    onChange={(event) =>
+                      setCompareReviewSummaryDraft(event.target.value)
+                    }
+                    rows={4}
+                  />
+                </Field>
+                <Field label="State">
+                  <NativeSelect
+                    aria-label="Workspace diff review state"
+                    value={compareReviewStateDraft}
+                    onChange={(event) =>
+                      setCompareReviewStateDraft(
+                        event.target.value as "open" | "archived",
+                      )
+                    }
                   >
-                    <header>
-                      <div>
-                        <strong>
-                          {WORKSPACE_DIFF_COMMENT_STATE_LABELS[comment.state]}
-                        </strong>
-                        <span>
-                          {comment.newPath ?? comment.oldPath ?? "File"} ·{" "}
-                          {comment.startLine}
-                          {comment.startLine === comment.endLine
-                            ? ""
-                            : `–${comment.endLine}`}
-                        </span>
-                      </div>
-                      <div className="workspace-files-compare-comment-actions">
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          onClick={() => editCompareComment(comment)}
-                        >
-                          Edit
-                        </Button>
-                        {comment.state !== "published" && (
+                    <option value="open">Open</option>
+                    <option value="archived">Archived</option>
+                  </NativeSelect>
+                </Field>
+                <div className="workspace-files-compare-details-meta">
+                  <span>
+                    {activeCompareReview.id === currentInlineReviewIdRef.current
+                      ? "Current review"
+                      : "Repository history"}
+                  </span>
+                  <span>{compareComments.length} comments</span>
+                  <span>
+                    {compareReviewedFiles.filter((file) => file.reviewed).length}{" "}
+                    reviewed
+                  </span>
+                </div>
+                <DialogSection title="Comments">
+                  {compareComments.map((comment) => (
+                    <article
+                      key={comment.id}
+                      className="workspace-files-compare-comment-card"
+                    >
+                      <header>
+                        <div>
+                          <strong>
+                            {WORKSPACE_DIFF_COMMENT_STATE_LABELS[comment.state]}
+                          </strong>
+                          <span>
+                            {comment.newPath ?? comment.oldPath ?? "File"} ·{" "}
+                            {comment.startLine}
+                            {comment.startLine === comment.endLine
+                              ? ""
+                              : `–${comment.endLine}`}
+                          </span>
+                        </div>
+                        <div className="workspace-files-compare-comment-actions">
                           <Button
                             variant="ghost"
                             size="xs"
-                            onClick={() =>
-                              void updateCompareCommentState(
-                                comment,
-                                "published",
-                              )
-                            }
+                            onClick={() => editCompareComment(comment)}
                           >
-                            Publish
+                            Edit
                           </Button>
-                        )}
-                        {comment.state !== "resolved" && (
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            onClick={() =>
-                              void updateCompareCommentState(
-                                comment,
-                                "resolved",
-                              )
-                            }
-                          >
-                            Resolve
-                          </Button>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          onClick={() =>
-                            activeCompareReview
-                              ? void deleteCompareComment(
-                                  activeCompareReview,
+                          {comment.state !== "published" && (
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              onClick={() =>
+                                void updateCompareCommentState(
                                   comment,
+                                  "published",
                                 )
-                              : undefined
-                          }
-                        >
-                          Delete
-                        </Button>
-                      </div>
-                    </header>
-                    <p>{comment.body}</p>
-                  </article>
-                ))}
-                {compareComments.length === 0 && (
-                  <p className="workspace-files-boundary-note">
-                    No saved comments for this review yet.
-                  </p>
-                )}
-              </div>
-              <div className="workspace-files-compare-details-list">
-                {compareReviewedFiles.map((file) => (
-                  <div
-                    key={file.fileIdentity}
-                    className="workspace-files-compare-reviewed-row"
-                  >
-                    <span>{file.filePath}</span>
-                    <span>{file.reviewed ? "Reviewed" : "Needs review"}</span>
-                  </div>
-                ))}
-                {compareReviewedFiles.length === 0 && (
-                  <p className="workspace-files-boundary-note">
-                    No reviewed-file markers for this review yet.
-                  </p>
-                )}
-              </div>
-            </div>
-          ) : (
-            <p className="workspace-files-boundary-note">
-              Select a review to inspect its details.
-            </p>
-          )}
+                              }
+                            >
+                              Publish
+                            </Button>
+                          )}
+                          {comment.state !== "resolved" && (
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              onClick={() =>
+                                void updateCompareCommentState(
+                                  comment,
+                                  "resolved",
+                                )
+                              }
+                            >
+                              Resolve
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            onClick={() =>
+                              activeCompareReview
+                                ? void deleteCompareComment(
+                                    activeCompareReview,
+                                    comment,
+                                  )
+                                : undefined
+                            }
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      </header>
+                      <p>{comment.body}</p>
+                    </article>
+                  ))}
+                  {compareComments.length === 0 && (
+                    <p className="workspace-files-review-history-note">
+                      No saved comments for this review yet.
+                    </p>
+                  )}
+                </DialogSection>
+                <DialogSection title="Reviewed files">
+                  {compareReviewedFiles.map((file) => (
+                    <div
+                      key={file.fileIdentity}
+                      className="workspace-files-compare-reviewed-row"
+                    >
+                      <span>{file.filePath}</span>
+                      <span>{file.reviewed ? "Reviewed" : "Needs review"}</span>
+                    </div>
+                  ))}
+                  {compareReviewedFiles.length === 0 && (
+                    <p className="workspace-files-review-history-note">
+                      No reviewed-file markers for this review yet.
+                    </p>
+                  )}
+                </DialogSection>
+              </>
+            ) : (
+              <p className="workspace-files-review-history-note">
+                Select a review to inspect its details.
+              </p>
+            )}
+            {compareReviewError && (
+              <DialogAlert tone="danger">{compareReviewError}</DialogAlert>
+            )}
+          </DialogBody>
           <DialogFooter>
             <Button
               variant="outline"
               disabled={compareReviewMutating}
-              onClick={() => setCompareDetailsOpen(false)}
+              onClick={() => {
+                setCompareDetailsOpen(false);
+                setCompareReviewError(undefined);
+              }}
             >
-              Close
+              Cancel
             </Button>
             <Button
               disabled={!activeCompareReview || compareReviewMutating}
@@ -4010,140 +4052,85 @@ export function WorkspaceFilesPanel({
         submitError={attachError}
         onSubmit={submitAttach}
       >
-        <label>
-          Display label (optional)
+        <Field label="Display label (optional)">
           <Input
             aria-label="Folder display label"
             value={attachLabel}
             onChange={(event) => setAttachLabel(event.target.value)}
           />
-        </label>
+        </Field>
       </DirectoryPickerDialog>
-      <Dialog
+      <ConfirmDialog
         open={context.visible && (pendingDownload !== undefined)}
         onOpenChange={(open) => {
           if (!open) setPendingDownload(undefined);
         }}
-      >
-        <DialogContent showCloseButton={false}>
-          <DialogHeader>
-            <DialogTitle>Download saved version?</DialogTitle>
-            <DialogDescription>
-              {pendingDownload?.path ?? "This file"} has unsaved changes. The
-              download will contain the version currently saved on disk, not
-              your draft.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setPendingDownload(undefined)}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={() => {
-                const target = pendingDownload;
-                if (target) void downloadFile(target);
-              }}
-            >
-              Download saved version
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <Dialog
+        title="Download saved version?"
+        description={`${pendingDownload?.path ?? "This file"} has unsaved changes. The download will contain the version currently saved on disk, not your draft.`}
+        confirmLabel="Download saved version"
+        onConfirm={() => {
+          const target = pendingDownload;
+          if (target) void downloadFile(target);
+        }}
+      />
+      <DiscardChangesDialog
         open={context.visible && (pendingClose !== undefined)}
         onOpenChange={(open) => {
           if (!open) setPendingClose(undefined);
         }}
-      >
-        <DialogContent showCloseButton={false}>
-          <DialogHeader>
-            <DialogTitle>Discard unsaved changes?</DialogTitle>
-            <DialogDescription>
-              Closing {pendingClose?.path ?? "this file"} will discard its
-              unsaved changes.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setPendingClose(undefined)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                const next = pendingClose;
-                setPendingClose(undefined);
-                if (next) removeTab(next, true);
-              }}
-            >
-              Discard and close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <Dialog
+        description={`Closing ${pendingClose?.path ?? "this file"} will discard its unsaved changes.`}
+        discardLabel="Discard and close"
+        onDiscard={() => {
+          const next = pendingClose;
+          setPendingClose(undefined);
+          if (next) removeTab(next, true);
+        }}
+      />
+      <ConfirmDialog
         open={context.visible && (pendingRemove !== undefined)}
         onOpenChange={(open) => {
           if (!open && !removing) setPendingRemove(undefined);
         }}
-      >
-        <DialogContent showCloseButton={false}>
-          <DialogHeader>
-            <DialogTitle>Remove folder from Files?</DialogTitle>
-            <DialogDescription>
-              {pendingRemove &&
-              tabs.files.some(
-                (file) =>
-                  file.rootId === pendingRemove.rootId &&
-                  workspaceFileDocumentIsDirty(
-                    documents.get(workspaceFileDocumentKey(file)),
-                  ),
-              )
-                ? `Removing ${pendingRemove.displayLabel} will discard unsaved changes in its open files.`
-                : `Remove ${pendingRemove?.displayLabel ?? "this folder"} from this workspace? Files on disk are not deleted.`}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              disabled={removing}
-              onClick={() => setPendingRemove(undefined)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={removing}
-              onClick={() => void confirmRemoveRoot()}
-            >
-              Remove folder
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        title="Remove folder from Files?"
+        description={
+          pendingRemove &&
+          tabs.files.some(
+            (file) =>
+              file.rootId === pendingRemove.rootId &&
+              workspaceFileDocumentIsDirty(
+                documents.get(workspaceFileDocumentKey(file)),
+              ),
+          )
+            ? `Removing ${pendingRemove.displayLabel} will discard unsaved changes in its open files.`
+            : `Remove ${pendingRemove?.displayLabel ?? "this folder"} from this workspace? Files on disk are not deleted.`
+        }
+        confirmLabel="Remove folder"
+        pendingLabel="Removing…"
+        tone="danger"
+        onConfirm={confirmRemoveRoot}
+      />
       <Dialog open={context.visible && (conflictDialogOpen)} onOpenChange={setConflictDialogOpen}>
-        <DialogContent showCloseButton={false}>
+        <DialogContent showClose={false}>
           <DialogHeader>
             <DialogTitle>File changed on disk</DialogTitle>
             <DialogDescription>
               Another process changed this file after it was opened. Your draft
-              has not been lost.
+              has not been lost. Reload to replace your draft with the file on
+              disk, or overwrite the file with your draft.
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
+          <DialogFooter
+            start={
+              <Button variant="outline" onClick={() => void reload()}>
+                Reload
+              </Button>
+            }
+          >
             <Button
               variant="outline"
               onClick={() => setConflictDialogOpen(false)}
             >
               Keep editing
-            </Button>
-            <Button variant="outline" onClick={() => void reload()}>
-              Reload
             </Button>
             <Button variant="destructive" onClick={() => void overwrite()}>
               Overwrite
@@ -4151,40 +4138,20 @@ export function WorkspaceFilesPanel({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <Dialog
+      <DiscardChangesDialog
         open={context.visible && (pendingRefreshReload !== undefined)}
         onOpenChange={(open) => {
           if (!open) setPendingRefreshReload(undefined);
         }}
-      >
-        <DialogContent showCloseButton={false}>
-          <DialogHeader>
-            <DialogTitle>Reload file from disk?</DialogTitle>
-            <DialogDescription>
-              This file has unsaved changes. Discard them and reload the latest
-              contents from disk?
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setPendingRefreshReload(undefined)}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                if (pendingRefreshReload) {
-                  void refreshOpenFile(pendingRefreshReload);
-                }
-              }}
-            >
-              Discard and reload
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        title="Reload file from disk?"
+        description="This file has unsaved changes. Discard them and reload the latest contents from disk?"
+        discardLabel="Discard and reload"
+        onDiscard={() => {
+          if (pendingRefreshReload) {
+            void refreshOpenFile(pendingRefreshReload);
+          }
+        }}
+      />
     </section>
   );
 }

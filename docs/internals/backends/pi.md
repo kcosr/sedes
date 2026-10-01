@@ -179,6 +179,35 @@ cardinality; unproven extension overlap remains unallocated. Live usage events
 retain context occupancy and transcript counters, not accumulated token/cost
 authority. See [usage accounting](../usage-accounting.md).
 
+Completed-turn throughput is a separate, volatile performance measurement.
+Pi advertises `turnThroughput: "supported"` independently of usage accounting.
+The SDK facade wraps the cancellation-normalized `agent.streamFunction`, taking
+a monotonic start before invocation and an end when its terminal result arrives.
+It snapshots output tokens and duration against the exact result object before
+extension handlers can mutate that object. The driver consumes each measurement
+once at ordinary assistant `message_end` and attributes it to the active Sedes
+turn. Native message timestamps and presentation-item timing are not substitutes
+for request timing.
+
+The numerator is main-agent output, already inclusive of reasoning. The
+denominator sums those same requests' durations, including provider startup,
+network latency, and retries internal to the provider stream. Tools, approval
+waits, compaction, summaries, cache warming, subagents, and gaps between requests
+are excluded. Any emitted error response suppresses the entire turn's rate,
+even if SDK retry or context-overflow recovery later succeeds. Interrupted,
+missing, or invalid response measurements also suppress the rate. Zero output
+with nonempty response content is invalid; a genuinely empty zero-output response
+can contribute request time to an otherwise positive aggregate. Only completed
+turns with a positive valid aggregate carry normalized
+`{ outputTokens, requestDurationMs }`.
+
+The thread handle retains at most 100 completed measurements in memory and
+decorates live turns, replacement snapshots, history pages, and targeted turn
+reads while resident. Projection refreshes preserve the measurements; handle
+closure clears them. Nothing is appended to Pi history or stored in Sedes's
+database, and a new runtime never reconstructs timing from old messages. Browser
+full/summary views and reconnect checkpoints carry the same optional metadata.
+
 Pi 0.86.0 can compact automatically after a tool result and then resume the
 same provider run. Sedes therefore keeps the current live projection open
 until `agent_settled`, then requests exactly one replacement generation that
@@ -462,9 +491,10 @@ client; destination model work still uses the destination thread's own
 Pi/Sedes policy. Pi CLI spawn hygiene removes any ambient Tool client token
 before installing the thread source reference.
 
-The thread menu's **New** action captures the same complete durable tuple from
-an available source thread, revision-fences it, and revalidates it against the
-current Pi catalog and policy before creating an independent empty draft.
+The thread menu's **New with same settings** action captures the same
+complete durable tuple from an available source thread, revision-fences it, and
+revalidates it against the current Pi catalog and policy before creating an
+independent empty draft.
 
 ## Verification and change contract
 

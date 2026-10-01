@@ -121,8 +121,9 @@ and loopback model/MCP fixtures only; it does not call authenticated providers.
 It does not replace the explicitly authorized `test:live-opencode` gate.
 
 When the user authorizes a real-Pi suite, preserve the `test:real-pi` and
-`test:real-pi-cli` self-gates on exactly one authenticated `xai/grok-4.5`
-provider/model pair with low reasoning and read-only tools verified before
+`test:real-pi-cli` self-gates on exactly one authenticated AW Qwen
+`aw-qwen-3-8-27b/aw-qwen-3-8-27b` provider/model pair with low reasoning and
+read-only tools verified before
 prompting; do not weaken either gate or point it at an existing session.
 
 For live delivery or client-rendering debugging, use only the implemented,

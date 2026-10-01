@@ -6,6 +6,7 @@ import type {
   BackendConversationEvent,
   BackendCapabilityDocument,
   BackendEffectiveSettings,
+  BackendTurn,
 } from "../../shared/protocol/backend.js";
 import type { NormalizedThreadEvent } from "../../shared/protocol/conversation.js";
 import type {
@@ -63,6 +64,28 @@ export const DEFAULT_PROJECTION_UPDATE_INTERVAL_MILLISECONDS = 50;
 export const DEFAULT_MAXIMUM_PENDING_PROJECTION_ITEMS = 512;
 export const DEFAULT_MAXIMUM_PENDING_PROJECTION_BYTES = 16 * 1_024 * 1_024;
 export const MAXIMUM_TARGETED_TURN_LOOKUP_CANDIDATES = 12_800;
+
+function supportsTurnThroughput(
+  capabilities: BackendCapabilityDocument | undefined,
+  turns: readonly BackendTurn[],
+): boolean {
+  return capabilities?.turnThroughput === "supported" ||
+    turns.every((turn) => turn.throughput === undefined);
+}
+
+function assertTurnThroughputSupported(
+  capabilities: BackendCapabilityDocument | undefined,
+  turns: readonly BackendTurn[],
+): void {
+  if (supportsTurnThroughput(capabilities, turns)) return;
+  throw new BackendError({
+    category: "invalid_state",
+    retryable: false,
+    crossedSubmissionBoundary: false,
+    backendCode: "backend_turn_throughput_unsupported",
+    safeMessage: "The backend returned unsupported turn throughput measurements.",
+  });
+}
 
 type AncillaryBackendEvent = Extract<
   BackendConversationEvent,
@@ -422,13 +445,15 @@ export class ConversationActor {
       if (!this.#snapshotState) {
         throw new Error("conversation_actor_snapshot_state_unavailable");
       }
+      const page = await this.#handle.history({ ...input, signal });
+      assertTurnThroughputSupported(
+        this.#snapshotState.backendCapabilities,
+        Object.values(page.turnsById),
+      );
       return {
         generation: this.#projector.timeline().generation,
         page: this.#projector.projectHistoryPage(
-          await this.#handle.history({
-            ...input,
-            signal,
-          }),
+          page,
           {
             branching: this.#snapshotState.backendCapabilities.branching,
             sourceRunState: this.#projector.timeline().runState,
@@ -795,6 +820,10 @@ export class ConversationActor {
       ...(input.signal ? { signal: input.signal } : {}),
     });
     if (result.status !== "found") return result;
+    assertTurnThroughputSupported(
+      this.#snapshotState?.backendCapabilities,
+      Object.values(result.page.turnsById),
+    );
     if (
       result.page.previousCursor !== undefined ||
       result.page.orderedBackendTurnIds.length !== 1 ||
@@ -1221,6 +1250,16 @@ export class ConversationActor {
     if (this.#handleReplacementRequired) {
       throw new Error("conversation_actor_handle_replacement_required");
     }
+    // The established handle buffers the capture-to-subscription gap. Validate
+    // capabilities before replacing either the private or browser projection.
+    const backendCapabilities = await this.#handle.backendCapabilities();
+    if (this.#handleReplacementRequired) {
+      throw new Error("conversation_actor_handle_replacement_required");
+    }
+    assertTurnThroughputSupported(
+      backendCapabilities,
+      Object.values(established.snapshot.turnsById),
+    );
     // Each established handle projection replays its authoritative pending
     // interactions. Retire the previous view before accepting that replay.
     this.#pendingInteractions.clear();
@@ -1237,7 +1276,6 @@ export class ConversationActor {
       established,
       epoch,
     );
-    const backendCapabilities = await this.#handle.backendCapabilities();
     const state = {
       timeline,
       backendCapabilities,
@@ -1267,6 +1305,16 @@ export class ConversationActor {
       void this.#mailbox
         .enqueue(async () => {
           if (epoch !== this.#establishmentEpoch) return;
+          const nativeEvent = event.event;
+          const throughputSupported = nativeEvent.type === "capabilities_changed"
+            ? supportsTurnThroughput(nativeEvent.capabilities, this.#projector.backendTurns())
+            : nativeEvent.type === "turn_started" || nativeEvent.type === "turn_updated" || nativeEvent.type === "turn_completed"
+              ? supportsTurnThroughput(this.#snapshotState?.backendCapabilities, [nativeEvent.turn])
+              : true;
+          if (!throughputSupported) {
+            await this.#recoverProjection();
+            return;
+          }
           const application = this.#projector.apply(event);
           await this.#applyProjection(application);
           if (application.kind === "resnapshot_required") {

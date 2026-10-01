@@ -1,12 +1,22 @@
-import * as Dialog from "@radix-ui/react-dialog";
 import {
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useSyncExternalStore,
 } from "react";
 import { LoaderCircle } from "lucide-react";
-import { Button } from "../components/ui/button.js";
+import { Button } from "@client/components/ui/button";
+import {
+  Dialog,
+  DialogAlert,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  initialFocusTarget,
+} from "@client/components/ui/dialog";
 import {
   getBlockingOperation,
   subscribeBlockingOperation,
@@ -38,7 +48,7 @@ if (typeof window !== "undefined") {
   );
 }
 
-export function OperationLoading({
+function OperationLoading({
   message,
   onCancel,
   cancelLabel = "Cancel",
@@ -64,18 +74,32 @@ export function OperationLoading({
   );
 }
 
-export function useOperationContentFocus(
+/**
+ * Moves focus after a phase change while the dialog stays open: into the
+ * progress (its Cancel, else the surface), then into the settled dialog by
+ * the dialog focus rule (first field, else the primary action).
+ */
+function useOperationContentFocus(
   phase: unknown,
+  settled: boolean,
 ): React.RefObject<HTMLDivElement | null> {
   const content = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    // Move focus after a phase change, including button-free progress.
-    if (content.current) {
-      const target = content.current.querySelector<HTMLButtonElement>("button") ?? content.current;
-      target.focus();
-    }
+    const node = content.current;
+    if (!node) return;
+    const target = settled
+      ? initialFocusTarget(node)
+      : (node.querySelector<HTMLButtonElement>("button") ?? node);
+    target.focus({ preventScroll: true });
+    // Focus follows the phase only; `settled` changes with it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
   return content;
+}
+
+/** Operation messages read as progress ("Creating fork…"); the error title names what failed. */
+function failureTitle(message: string): string {
+  return `${message.replace(/…$/u, "")} failed`;
 }
 
 export function OperationOverlayHost({
@@ -88,7 +112,11 @@ export function OperationOverlayHost({
     getBlockingOperation,
     () => null,
   );
-  const content = useOperationContentFocus(operation?.error);
+  const content = useOperationContentFocus(
+    operation?.error,
+    Boolean(operation?.error),
+  );
+  const errorId = useId();
   useEffect(
     () => () => {
       getBlockingOperation()?.cancel();
@@ -102,63 +130,79 @@ export function OperationOverlayHost({
     };
   }, [threadRegistry]);
   if (!operation) return null;
+  const retry = operation.retry;
+  const primaryAction = retry ? undefined : operation.actions.at(-1);
+  const secondaryActions = operation.actions.filter(
+    (action) => action !== primaryAction,
+  );
   return (
-    <Dialog.Root open>
-      <Dialog.Portal>
-        <Dialog.Overlay className="dialog-overlay operation-overlay-backdrop" />
-        <Dialog.Content
-          ref={content}
-          className={
-            operation.error
-              ? "dialog-card operation-error"
-              : "operation-overlay-content"
-          }
-          data-blocking-operation="true"
-          onEscapeKeyDown={(event) => event.preventDefault()}
-          onInteractOutside={(event) => event.preventDefault()}
-          onKeyDown={(event) => event.stopPropagation()}
-          aria-describedby={
-            operation.error ? "operation-error-description" : undefined
-          }
-        >
-          <Dialog.Title className="sr-only">{operation.message}</Dialog.Title>
-          {operation.error ? (
-            <>
-              <Dialog.Description id="operation-error-description" role="alert">
+    <Dialog open>
+      <DialogContent
+        ref={content}
+        layer="blocking"
+        showClose={false}
+        dismissible={false}
+        className={operation.error ? undefined : "operation-progress-surface"}
+        data-blocking-operation="true"
+        onKeyDown={(event) => event.stopPropagation()}
+        aria-describedby={operation.error ? errorId : undefined}
+      >
+        {operation.error ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>{failureTitle(operation.message)}</DialogTitle>
+            </DialogHeader>
+            <DialogBody>
+              <DialogAlert id={errorId} tone="danger">
                 {operation.error}
-              </Dialog.Description>
-              <div className="operation-error-actions">
-                <Button variant="outline" onClick={operation.cancel}>
-                  Close
+              </DialogAlert>
+            </DialogBody>
+            <DialogFooter
+              start={
+                secondaryActions.length > 0
+                  ? secondaryActions.map((action) => (
+                      <Button
+                        key={action.label}
+                        variant="outline"
+                        onClick={() => {
+                          operation.cancel();
+                          void action.onClick();
+                        }}
+                      >
+                        {action.label}
+                      </Button>
+                    ))
+                  : undefined
+              }
+            >
+              <Button variant="outline" onClick={operation.cancel}>
+                Close
+              </Button>
+              {retry && <Button onClick={retry}>{operation.retryLabel}</Button>}
+              {primaryAction && (
+                <Button
+                  onClick={() => {
+                    operation.cancel();
+                    void primaryAction.onClick();
+                  }}
+                >
+                  {primaryAction.label}
                 </Button>
-                {operation.retry && (
-                  <Button onClick={operation.retry}>
-                    {operation.retryLabel}
-                  </Button>
-                )}
-                {operation.actions.map((action) => (
-                  <Button
-                    key={action.label}
-                    onClick={() => {
-                      operation.cancel();
-                      void action.onClick();
-                    }}
-                  >
-                    {action.label}
-                  </Button>
-                ))}
-              </div>
-            </>
-          ) : (
+              )}
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogTitle className="sr-only">{operation.message}</DialogTitle>
             <OperationLoading
               message={operation.message}
               deferred={operation.deferProgress}
               onCancel={operation.allowCancel ? operation.cancel : undefined}
               cancelLabel={operation.cancelLabel}
             />
-          )}
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }

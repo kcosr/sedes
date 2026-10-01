@@ -13,14 +13,7 @@ import {
   useRoute,
   type Route,
 } from "../app/router";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "./ui/dialog.js";
+import { DiscardChangesDialog } from "./ui/discard-changes-dialog.js";
 import {
   applySidebarWidth,
   clampSidebarWidth,
@@ -33,7 +26,6 @@ import {
 import { InventorySidebar } from "./InventorySidebar";
 import { installAndroidBackButton } from "../app/android-back.js";
 import { isAndroidClient } from "../app/client-platform.js";
-import { Button } from "@client/components/ui/button";
 import { FullPageError, FullPageLoading } from "./LoadingStates";
 import { PaneResizeHandle } from "./PaneResizeHandle";
 import { Workbench } from "./Workbench";
@@ -50,7 +42,11 @@ import {
   getSidebarViewPreferences,
   hasActiveSidebarFilters,
 } from "../app/sidebar-view-store.js";
-import { SettingsView } from "./SettingsView.js";
+import { SettingsView, useSettingsPages } from "./SettingsView.js";
+import { SettingsNav } from "./settings/SettingsNav.js";
+import { settingsNavInSidebar } from "./settings/settings-navigation.js";
+import { SIDEBAR_NAV_MEDIA_QUERY } from "./SidebarNavTrigger.js";
+import { useMediaQuery } from "../app/use-media-query.js";
 import { TasksPanel } from "./tasks/TasksPanel.js";
 import {
   ServerSettingsForm,
@@ -128,6 +124,14 @@ export function ApplicationShell({
     }),
     [applicationStore],
   );
+  const settingsSources = {
+    applicationStore,
+    serverSettings,
+    electronConnectionSettings,
+    configuration: applicationStore.api,
+    cannedPrompts: applicationStore.cannedPrompts,
+    notifications: applicationStore.notifications,
+  };
   const toolClients = useMemo(
     () => ({
       api: applicationStore.api,
@@ -150,6 +154,10 @@ export function ApplicationShell({
     }),
     [applicationStore, state.snapshot, toolClientEndpoint],
   );
+  const settingsPages = useSettingsPages({ ...settingsSources, toolClients });
+  const settingsReturn = () => navigate(routePath(workspaceReturnRoute.current));
+  const settingsReturnLabel =
+    workspaceReturnRoute.current.name === "thread" ? "Back to chat" : "Back to workspace";
   const mobileNavigationTrigger = useRef<HTMLButtonElement>(null);
   const workspaceElement = useRef<HTMLDivElement>(null);
   const settingsReturnFocus = useRef<HTMLElement | null>(null);
@@ -181,6 +189,23 @@ export function ApplicationShell({
   const drawerDismissedFromPersistentBar = useRef(false);
   const [sidebarCollapsed, setSidebarCollapsedState] =
     useState(getSidebarCollapsed);
+  const mobileLayout = useMediaQuery(SIDEBAR_NAV_MEDIA_QUERY);
+  const settingsNavVisible =
+    settingsActive && settingsNavInSidebar({ mobileLayout, sidebarCollapsed });
+  const settingsNav = useRef<HTMLElement>(null);
+  const previousSettingsNavVisible = useRef(settingsNavVisible);
+  useLayoutEffect(() => {
+    const wasVisible = previousSettingsNavVisible.current;
+    previousSettingsNavVisible.current = settingsNavVisible;
+    // Restoring the sidebar from the compact Settings header removes that
+    // header's trigger; continue from the current page in the nav.
+    if (!settingsNavVisible || wasVisible || !settingsActive) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLElement && active !== document.body && active.isConnected) return;
+    settingsNav.current
+      ?.querySelector<HTMLElement>('[aria-current="page"], [data-slot="settings-nav-link"]')
+      ?.focus({ preventScroll: true });
+  }, [settingsActive, settingsNavVisible]);
   const navigationControls = useMemo(
     () => ({
       notifications: applicationStore.notifications,
@@ -295,12 +320,12 @@ export function ApplicationShell({
       onNavigate={(options) => {
         if (!options?.keepDrawerOpen) setDrawerOpen(false);
       }}
-      onOpenSettings={(trigger) => {
+      onOpenSettings={(trigger, page) => {
         // The drawer's Settings button disappears when the drawer closes.
         // Return to the persistent workspace trigger, even on a fast round trip.
         settingsReturnFocus.current = peekEnabled ? trigger : mobileNavigationTrigger.current;
         setDrawerOpen(false);
-        navigate(settingsPath());
+        navigate(settingsPath(page));
       }}
       showFooterConnectionStatus={peekEnabled && route.name !== "thread"}
       peekEnabled={peekEnabled}
@@ -356,9 +381,27 @@ export function ApplicationShell({
         id="desktop-sidebar"
         className="desktop-sidebar"
         data-testid="desktop-sidebar"
-        aria-label="Thread inventory"
+        data-mode={settingsActive ? "settings" : "inventory"}
+        aria-label={settingsActive ? "Settings" : "Thread inventory"}
       >
-        {sidebar(true)}
+        {/* The inventory stays mounted under Settings so its scroll,
+            disclosure and virtualization state survive the round trip. */}
+        <div
+          className="desktop-sidebar-inventory"
+          inert={settingsActive}
+          aria-hidden={settingsActive || undefined}
+        >
+          {sidebar(true)}
+        </div>
+        {settingsNavVisible ? (
+          <SettingsNav
+            ref={settingsNav}
+            pages={settingsPages}
+            page={route.page}
+            returnLabel={settingsReturnLabel}
+            onReturn={settingsReturn}
+          />
+        ) : null}
       </aside>
       <SidebarResizeHandle />
       <NavigationControlsContext.Provider value={navigationControls}>
@@ -385,6 +428,16 @@ export function ApplicationShell({
               onInteractOutside={(event) => {
                 const target = event.target;
                 if (!(target instanceof Element)) return;
+                if (
+                  event.detail.originalEvent.type === "focusin" &&
+                  target.closest('[data-slot="dialog-content"]')
+                ) {
+                  // A dialog opened from the drawer (a confirmation, a
+                  // blocking check) layers above it and takes focus; the
+                  // drawer stays open beneath it.
+                  event.preventDefault();
+                  return;
+                }
                 if (target.closest(".sidebar-nav-trigger")) {
                   // Let the persistent toggle own the state transition. If the
                   // dismissable layer closed first, the click would reopen it.
@@ -416,59 +469,31 @@ export function ApplicationShell({
           </div>
           {route.name === "settings" ? (
             <SettingsView
-              applicationStore={applicationStore}
+              {...settingsSources}
               page={route.page}
-              onReturn={() => navigate(routePath(workspaceReturnRoute.current))}
-              returnLabel={workspaceReturnRoute.current.name === "thread"
-                ? "Back to chat" : "Back to workspace"}
-              serverSettings={serverSettings}
-              electronConnectionSettings={electronConnectionSettings}
+              onReturn={settingsReturn}
+              returnLabel={settingsReturnLabel}
               applicationPreferences={applicationPreferences}
-              configuration={applicationStore.api}
-              cannedPrompts={applicationStore.cannedPrompts}
-              notifications={applicationStore.notifications}
               toolClients={toolClients}
             />
           ) : null}
         </div>
-        <Dialog
+        <DiscardChangesDialog
           open={Boolean(workspaceNavConfirm)}
           onOpenChange={(open) => {
             if (!open) setWorkspaceNavConfirm(undefined);
           }}
-        >
-          <DialogContent showCloseButton={false}>
-            <DialogHeader>
-              <DialogTitle>Discard unsaved changes?</DialogTitle>
-              <DialogDescription>
-                This workspace has unsaved panel changes. Discard them and leave
-                this workspace?
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => setWorkspaceNavConfirm(undefined)}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="destructive"
-                onClick={() => {
-                  const confirmation = workspaceNavConfirm;
-                  setWorkspaceNavConfirm(undefined);
-                  if (!confirmation) return;
-                  panelLayoutStore.discardWorkspacePanelChanges(
-                    confirmation.workspaceId,
-                  );
-                  confirmation.proceed();
-                }}
-              >
-                Discard and leave
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+          description="This workspace has unsaved panel changes. Discard them and leave this workspace?"
+          discardLabel="Discard and leave"
+          onDiscard={() => {
+            const confirmation = workspaceNavConfirm;
+            if (!confirmation) return;
+            panelLayoutStore.discardWorkspacePanelChanges(
+              confirmation.workspaceId,
+            );
+            confirmation.proceed();
+          }}
+        />
         </NavigationControlsContext.Provider>
       </div>
     </TaskDragProvider>

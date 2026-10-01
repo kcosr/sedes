@@ -1,0 +1,101 @@
+import "./settings.css";
+import { createContext, useContext } from "react";
+import { createPortal } from "react-dom";
+import { ChevronLeft } from "lucide-react";
+import { navigateUp } from "../../app/router.js";
+import { isPlainClick } from "./SettingsNav.js";
+import type { SettingsSelection } from "./SettingsSplit.js";
+
+export interface SettingsBack {
+  readonly label: string;
+  /** Rendered as a link that goes up to this path when set; `onNavigate`
+   * can still intercept the click by preventing its default. */
+  readonly href?: string;
+  readonly onNavigate?: (event: React.MouseEvent<HTMLElement>) => void;
+}
+
+export type SettingsPageProps = Omit<React.ComponentProps<"div">, "title"> & {
+  readonly title: React.ReactNode;
+  readonly description?: React.ReactNode;
+  /** Header actions, right-aligned; put the primary action last. */
+  readonly actions?: React.ReactNode;
+  /** A "‹ Settings" style link above the title. */
+  readonly back?: SettingsBack;
+  /** `wide` is for inventory pages (lists beside details). */
+  readonly width?: "default" | "wide";
+  /** An inventory page's selection beside its SettingsSplit list; the stacked layout shows one of them. */
+  readonly selection?: SettingsSelection;
+  /** The page heading takes focus after navigation (it has tabIndex -1). */
+  readonly headingRef?: React.Ref<HTMLHeadingElement>;
+};
+
+/** One settings page: back link, title, description and actions over the page body. */
+export function SettingsPage({
+  title,
+  description,
+  actions,
+  back,
+  width = "default",
+  selection,
+  headingRef,
+  className,
+  children,
+  ...props
+}: SettingsPageProps): React.JSX.Element {
+  return (
+    <div data-slot="settings-page" data-width={width} data-selection={selection} className={className} {...props}>
+      <header data-slot="settings-page-header">
+        {back ? <SettingsBackLink {...back} /> : null}
+        <div data-slot="settings-page-heading">
+          <div data-slot="settings-page-titles">
+            <h1 ref={headingRef} tabIndex={-1} data-slot="settings-page-title">{title}</h1>
+            {description ? <p data-slot="settings-page-description">{description}</p> : null}
+          </div>
+          {actions ? <div data-slot="settings-page-actions">{actions}</div> : null}
+        </div>
+      </header>
+      <div data-slot="settings-page-body">{children}</div>
+    </div>
+  );
+}
+
+export type SettingsBackLinkProps = SettingsBack &
+  Omit<React.HTMLAttributes<HTMLElement>, "children" | "onClick"> & {
+    /** Only in the stacked layout: beside its list (split), the list is the way back. */
+    readonly stackOnly?: boolean;
+  };
+
+/**
+ * Where "‹" links render instead of above their title: the compact settings
+ * header (no sidebar nav), whose one back link then goes up a level, as
+ * Escape does, in place of its "‹ Settings". Null renders them in place.
+ */
+export const SettingsBackSlotContext = createContext<HTMLElement | null>(null);
+
+/**
+ * "‹ Settings" style link above a page or pane title, or in the compact
+ * settings header (SettingsBackSlotContext). A link goes up through
+ * `navigateUp`, so it and browser or Android Back walk the same history;
+ * without `href` it is a button for `onNavigate`.
+ */
+export function SettingsBackLink(props: SettingsBackLinkProps): React.JSX.Element {
+  const slot = useContext(SettingsBackSlotContext);
+  const link = <BackLink {...props} />;
+  return slot ? createPortal(link, slot) : link;
+}
+
+function BackLink({ label, href, onNavigate, stackOnly = false, ...props }: SettingsBackLinkProps): React.JSX.Element {
+  const content = <><ChevronLeft aria-hidden="true" />{label}</>;
+  return href === undefined ? (
+    <button type="button" data-slot="settings-page-back" data-stack-only={stackOnly || undefined} {...props} onClick={onNavigate}>
+      {content}
+    </button>
+  ) : (
+    <a data-slot="settings-page-back" data-stack-only={stackOnly || undefined} href={href} {...props} onClick={(event) => {
+      onNavigate?.(event);
+      if (event.defaultPrevented || !isPlainClick(event)) return;
+      event.preventDefault();
+      navigateUp(href);
+    }}>{content}</a>
+  );
+}

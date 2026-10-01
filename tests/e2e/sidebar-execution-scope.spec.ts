@@ -6,6 +6,7 @@ import { expect, test } from "./fixtures";
 import {
   capture,
   expectNoPageOverflow,
+  overlaySettled,
   repositoryLabel,
   selectCustomNewThreadTarget,
   selectProjectIfNeeded,
@@ -163,6 +164,7 @@ async function searchDirectoryEnvironment(
 
 async function expectMobileProjectSheet(page: Page, dialog: Locator): Promise<void> {
   const viewport = page.viewportSize()!;
+  await overlaySettled(dialog);
   const bounds = await dialog.boundingBox();
   expect(bounds).not.toBeNull();
   expect(bounds!.x).toBeCloseTo(0, 0);
@@ -348,8 +350,9 @@ test("sidebar execution scope filters creation and persists responsively", async
   await targetFilter.click();
   await expect(targetSearch).toHaveValue("");
   await targetSearch.fill("alternate");
+  // The target's name leads; its backend reads as the second line.
   const alternateOption = page.getByRole("option", {
-    name: "Alternate scripted agent · Pi SDK",
+    name: "Alternate scripted agent Pi SDK",
     exact: true,
   });
   await expect(alternateOption).toBeVisible();

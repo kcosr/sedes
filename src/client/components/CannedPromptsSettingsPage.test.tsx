@@ -9,6 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import type {
   CannedPrompt,
   CannedPromptLibrary,
@@ -17,6 +18,7 @@ import type {
 import { ApiError, type ApiClient } from "../api/ApiClient.js";
 import { CannedPromptClientStore } from "../stores/CannedPromptClientStore.js";
 import { CannedPromptsSettingsPage } from "./CannedPromptsSettingsPage.js";
+import { useSettingsEscape } from "./settings/settings-escape.js";
 
 function prompt(
   id: string,
@@ -88,7 +90,7 @@ describe("Canned prompts settings", () => {
     expect(await screen.findByText("Review")).toBeVisible();
     expect(listCannedPrompts).toHaveBeenCalledTimes(2);
 
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    fireEvent.click(screen.getByRole("button", { name: "Refresh prompts" }));
     await waitFor(() => expect(listCannedPrompts).toHaveBeenCalledTimes(3));
   });
 
@@ -108,11 +110,17 @@ describe("Canned prompts settings", () => {
       );
     render(<CannedPromptsSettingsPage store={store({ createCannedPrompt })} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Add prompt" }));
+    // An empty library's empty state carries the one "Add prompt".
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add prompt" }).closest('[data-slot="empty-state"]')).not.toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Add prompt" }));
     fireEvent.click(screen.getAllByRole("button", { name: "Add prompt" })[1]!);
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Enter a prompt title.",
-    );
+    // Each problem is reported on its own field, and focus goes to the first.
+    const title = screen.getByLabelText("Title");
+    expect(title).toHaveAttribute("aria-invalid", "true");
+    expect(title).toHaveAccessibleDescription("Enter a prompt title.");
+    expect(title).toHaveFocus();
+    expect(screen.getByLabelText("Prompt")).toHaveAccessibleDescription("Enter prompt text.");
+    expect(screen.queryByRole("alert")).toBeNull();
     fireEvent.change(screen.getByLabelText("Title"), {
       target: { value: " Review " },
     });
@@ -186,13 +194,67 @@ describe("Canned prompts settings", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Delete Test" }));
-    const confirmation = screen.getByRole("group", { name: "Delete Test?" });
+    const confirmation = screen.getByRole("dialog", { name: "Delete Test?" });
     fireEvent.click(
-      within(confirmation).getByRole("button", { name: "Delete" }),
+      within(confirmation).getByRole("button", { name: "Delete prompt" }),
     );
     await waitFor(() => expect(deleteCannedPrompt).toHaveBeenCalled());
     expect(await screen.findByText("Prompt deleted.")).toBeVisible();
     expect(screen.queryByLabelText(/icon/u)).toBeNull();
+  });
+
+  it("returns focus to Delete on cancel and to the next row after deleting", async () => {
+    const user = userEvent.setup();
+    const first = prompt("prompt-1", "Review", "Review changes.", 0);
+    const second = prompt("prompt-2", "Test", "Run tests.", 1);
+    const third = prompt("prompt-3", "Ship", "Ship it.", 2);
+    const deleteCannedPrompt = vi
+      .fn()
+      .mockResolvedValueOnce(
+        result([first, { ...third, position: 1 }], 4),
+      )
+      .mockResolvedValueOnce(result([first], 5))
+      .mockResolvedValueOnce(result([], 6));
+    render(
+      <CannedPromptsSettingsPage
+        store={store({
+          listCannedPrompts: vi
+            .fn()
+            .mockResolvedValue(library([first, second, third], 3)),
+          deleteCannedPrompt,
+        })}
+      />,
+    );
+
+    const deleteTest = await screen.findByRole("button", { name: "Delete Test" });
+    await user.click(deleteTest);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(deleteTest).toHaveFocus());
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("dialog", { name: "Delete Test?" })).toBeVisible();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(deleteTest).toHaveFocus());
+
+    // The deleted row's place goes to the next prompt.
+    await user.click(deleteTest);
+    await user.click(screen.getByRole("button", { name: "Delete prompt" }));
+    expect(await screen.findByText("Prompt deleted.")).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Ship" })).toHaveFocus(),
+    );
+    // With no next prompt, the new last one.
+    await user.click(screen.getByRole("button", { name: "Delete Ship" }));
+    await user.click(screen.getByRole("button", { name: "Delete prompt" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Review" })).toHaveFocus(),
+    );
+    // With none left, the page's Add prompt action.
+    await user.click(screen.getByRole("button", { name: "Delete Review" }));
+    await user.click(screen.getByRole("button", { name: "Delete prompt" }));
+    expect(await screen.findByText("No saved prompts yet")).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Add prompt" })).toHaveFocus(),
+    );
   });
 
   it("reports conflict reconciliation and closes the stale editor", async () => {
@@ -223,5 +285,37 @@ describe("Canned prompts settings", () => {
     expect(screen.getByText("Changed elsewhere")).toBeVisible();
     expect(screen.queryByLabelText("Prompt")).toBeNull();
     expect(listCannedPrompts).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes an open editor on Escape before leaving the page, asking first when it has edits", async () => {
+    const onReturn = vi.fn();
+    function EscapeHost(): null {
+      useSettingsEscape({ location: { page: "prompts" }, navInSidebar: true, onReturn });
+      return null;
+    }
+    render(<><EscapeHost /><CannedPromptsSettingsPage store={store({
+      listCannedPrompts: vi.fn().mockResolvedValue(library([prompt("prompt-1", "Review", "Review changes.", 0)])),
+    })} /></>);
+    const user = userEvent.setup();
+    await user.click((await screen.findByText("Review")).closest("button")!);
+    const editor = screen.getByRole("region", { name: "Prompt editor" });
+    expect(within(editor).getByLabelText("Title")).toHaveValue("Review");
+    await user.keyboard("{Escape}");
+    expect(within(editor).queryByLabelText("Title")).toBeNull();
+    expect(onReturn).not.toHaveBeenCalled();
+
+    await user.click(screen.getByText("Review").closest("button")!);
+    await user.type(within(editor).getByLabelText("Title"), " again");
+    // The field keeps the first Escape; the next asks before discarding.
+    await user.keyboard("{Escape}{Escape}");
+    await user.click(await screen.findByRole("button", { name: "Keep editing" }));
+    expect(within(editor).getByLabelText("Title")).toHaveValue("Review again");
+    await user.keyboard("{Escape}");
+    await user.click(await screen.findByRole("button", { name: "Discard and close" }));
+    await waitFor(() => expect(within(editor).queryByLabelText("Title")).toBeNull());
+    expect(onReturn).not.toHaveBeenCalled();
+    // With the editor closed, Escape leaves the page.
+    await user.keyboard("{Escape}");
+    expect(onReturn).toHaveBeenCalledOnce();
   });
 });

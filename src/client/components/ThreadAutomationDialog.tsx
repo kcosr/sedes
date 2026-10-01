@@ -1,5 +1,11 @@
-import * as Dialog from "@radix-ui/react-dialog";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { AutomationSchedule } from "../../shared/protocol/automation";
 import type {
   AutomationMisfirePolicy,
@@ -16,8 +22,31 @@ import type {
   ThreadAutomationRun,
 } from "../types";
 import { mutationId } from "../lib/ids";
-import { X } from "lucide-react";
+import { useMediaQuery } from "../app/use-media-query";
+import { Ellipsis, Pause, Play, Power } from "lucide-react";
 import { Button } from "@client/components/ui/button";
+import { ConfirmDialog } from "@client/components/ui/confirm-dialog";
+import {
+  Dialog,
+  DialogAlert,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogSection,
+  DialogTitle,
+  DIALOG_FOOTER_STACK_QUERY,
+} from "@client/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@client/components/ui/dropdown-menu";
+import { StatusPill } from "@client/components/ui/status-pill";
+import { Tag } from "@client/components/ui/tag";
+import { Textarea } from "@client/components/ui/textarea";
 import {
   AutomationMisfireSection,
   AutomationScheduleSection,
@@ -27,6 +56,7 @@ import {
 import { AutomationRunModeSection } from "./automation/RunModeSection";
 import { AutomationPrecheckSection } from "./automation/PrecheckSection";
 import { AutomationRunHistory } from "./automation/RunHistory";
+import { AutomationFieldError } from "./automation/AutomationFieldError";
 
 const maximumPromptBytes = 65_536;
 const maximumPrecheckCommandBytes = 4_096;
@@ -54,14 +84,25 @@ export function ThreadAutomationDialog({
 }): React.JSX.Element {
   const automationSummaryRevision = automationSummary?.revision;
   const [definition, setDefinition] = useState<ThreadAutomationDefinition>();
+  // Where the footer would stack (phones), Run now and Enable/Pause move to
+  // a header menu, so the footer is Cancel and Save.
+  const stackedFooter = useMediaQuery(DIALOG_FOOTER_STACK_QUERY);
   const definitionRef = useRef(definition);
   definitionRef.current = definition;
   const [history, setHistory] = useState<ThreadAutomationRun[]>([]);
   const [loading, setLoading] = useState(automationSummary !== null);
-  const [saving, setSaving] = useState(false);
+  // The action in flight: every action locks the others, and only the
+  // pending one shows its progress label.
+  const [busy, setBusy] = useState<
+    "save" | "state" | "run" | "resolve" | "delete"
+  >();
+  const saving = busy !== undefined;
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const promptHelpId = useId();
+  const promptErrorId = useId();
   const [prompt, setPrompt] = useState("");
   const [runMode, setRunMode] = useState<AutomationRunMode>("same_thread");
   const [scheduleKind, setScheduleKind] = useState<ScheduleKind>("date_time");
@@ -327,7 +368,7 @@ export function ThreadAutomationDialog({
 
   const save = async () => {
     if (!schedule || !valid) return;
-    setSaving(true);
+    setBusy("save");
     setError("");
     try {
       const fields = {
@@ -367,7 +408,7 @@ export function ThreadAutomationDialog({
         setError(messageFrom(reason));
       }
     } finally {
-      setSaving(false);
+      setBusy(undefined);
     }
   };
 
@@ -411,7 +452,7 @@ export function ThreadAutomationDialog({
 
   const setState = async (action: "enable" | "pause") => {
     if (!definition) return;
-    setSaving(true);
+    setBusy("state");
     setError("");
     try {
       const updated = await store.api.setThreadAutomationState(
@@ -424,13 +465,13 @@ export function ThreadAutomationDialog({
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
-      setSaving(false);
+      setBusy(undefined);
     }
   };
 
   const runNow = async () => {
     if (!definition) return;
-    setSaving(true);
+    setBusy("run");
     setError("");
     try {
       const run = await store.api.runThreadAutomationNow(
@@ -441,13 +482,13 @@ export function ThreadAutomationDialog({
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
-      setSaving(false);
+      setBusy(undefined);
     }
   };
 
   const resolveRun = async (runId: string) => {
     if (!definition) return;
-    setSaving(true);
+    setBusy("resolve");
     setError("");
     try {
       const run = await store.api.resolveThreadAutomationRun(
@@ -464,13 +505,13 @@ export function ThreadAutomationDialog({
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
-      setSaving(false);
+      setBusy(undefined);
     }
   };
 
   const remove = async () => {
-    if (!definition || !window.confirm(`Delete automation for “${threadTitle}”?`)) return;
-    setSaving(true);
+    if (!definition) return;
+    setBusy("delete");
     setError("");
     try {
       await store.api.deleteThreadAutomation(
@@ -478,70 +519,73 @@ export function ThreadAutomationDialog({
         definition.revision,
         mutationId(),
       );
-      onClose();
     } catch (reason) {
-      setError(messageFrom(reason));
-      setSaving(false);
+      setBusy(undefined);
+      throw new Error(messageFrom(reason));
     }
+    onClose();
   };
 
-  const frame = (content: React.ReactNode): React.JSX.Element => (
-    <Dialog.Root
+  const frame = (
+    header: React.ReactNode,
+    body: React.ReactNode,
+    footer: React.ReactNode,
+  ): React.JSX.Element => (
+    <Dialog
       open
       onOpenChange={(open) => {
         if (!open) onClose();
       }}
     >
-      <Dialog.Portal>
-        <Dialog.Overlay className="dialog-overlay" data-testid="dialog-overlay" />
-        <Dialog.Content
-          className="automation-dialog"
-          aria-describedby={undefined}
-        >
-          <Dialog.Title className="sr-only">
-            Automation settings for {threadTitle}
-          </Dialog.Title>
-          <Dialog.Close asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="automation-dialog-close"
-              aria-label="Close automation settings"
-            >
-              <X size={18} strokeWidth={1.8} />
-            </Button>
-          </Dialog.Close>
-          {content}
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+      <DialogContent
+        layout="side"
+        size="lg"
+        layer="over-dialog"
+      >
+        <DialogHeader>
+          <div className="automation-dialog-title">
+            <DialogTitle>
+              Automation{" "}
+              <span className="sr-only">settings for {threadTitle}</span>
+            </DialogTitle>
+            {header}
+          </div>
+          <DialogDescription>{threadTitle}</DialogDescription>
+        </DialogHeader>
+        {body}
+        {footer}
+      </DialogContent>
+    </Dialog>
   );
 
   if (loading) {
     return frame(
-      <section className="automation-editor loading" role="status">
-        Loading automation…
-      </section>,
+      null,
+      <DialogBody>
+        <p className="automation-loading" role="status">
+          Loading automation…
+        </p>
+      </DialogBody>,
+      null,
     );
   }
 
   if (loadError && !definition) {
     return frame(
-      <section className="automation-editor automation-load-error">
-        <p className="eyebrow">Automation unavailable</p>
-        <h1>We couldn’t load this automation</h1>
-        <p className="notice error" role="alert">
+      null,
+      <DialogBody>
+        <DialogAlert tone="danger" title="We couldn’t load this automation">
           {loadError}
-        </p>
-        <div className="automation-editor-actions">
-          <Button onClick={() => setLoadAttempt((current) => current + 1)}>
-            Try again
-          </Button>
-          <Button variant="outline" onClick={onClose}>
-            Back to thread
-          </Button>
-        </div>
-      </section>,
+        </DialogAlert>
+      </DialogBody>,
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>
+          Back to thread
+        </Button>
+        <Button onClick={() => setLoadAttempt((current) => current + 1)}>
+          Try again
+        </Button>
+      </DialogFooter>,
     );
   }
 
@@ -556,113 +600,132 @@ export function ThreadAutomationDialog({
     definition?.lastRun?.state === "uncertain" ||
     liveSummary?.lastRun?.state === "uncertain";
 
-  return frame(
-    <section className="automation-editor">
-      <header className="automation-editor-header">
-        <div>
-          <p className="eyebrow">{definition ? definition.status : "New automation"}</p>
-          <h1>Automation</h1>
-          <p className="automation-thread-title">{threadTitle}</p>
-        </div>
-        <div className="automation-editor-actions">
-          {definition && (
-            <>
-              <Button
-                variant="outline"
-                disabled={
-                  saving ||
-                  snoozed ||
-                  outcomeUncertain ||
-                  Boolean(newerSummary)
-                }
-                onClick={() => void runNow()}
-              >
-                Run now
-              </Button>
-              <Button
-                variant="outline"
-                disabled={
-                  saving ||
-                  Boolean(newerSummary) ||
-                  outcomeUncertain
-                }
-                onClick={() =>
-                  void setState(
-                    definition.status === "paused" ? "enable" : "pause",
-                  )
-                }
-              >
-                {definition.status === "paused" ? "Enable" : "Pause"}
-              </Button>
-            </>
-          )}
-          <Button
-            disabled={!valid || saving || outcomeUncertain || Boolean(newerSummary)}
-            onClick={() => void save()}
-          >
-            {saving ? "Saving…" : "Save"}
-          </Button>
-        </div>
-      </header>
+  const runDisabled =
+    saving || snoozed || outcomeUncertain || Boolean(newerSummary);
+  const stateDisabled = saving || Boolean(newerSummary) || outcomeUncertain;
+  const paused = definition?.status === "paused";
+  const runLabel = busy === "run" ? "Running…" : "Run now";
+  const stateLabel =
+    busy === "state"
+      ? paused
+        ? "Enabling…"
+        : "Pausing…"
+      : paused
+        ? "Enable"
+        : "Pause";
+  const toggleState = () => void setState(paused ? "enable" : "pause");
 
-      {error && <p className="notice error" role="alert">{error}</p>}
+  return frame(
+    definition ? (
+      <>
+        <StatusPill
+          tone={definition.status === "enabled" ? "success" : "neutral"}
+          className="capitalize"
+        >
+          {definition.status}
+        </StatusPill>
+        {stackedFooter && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              {/* Sized like the X beside it and centred on the title line. */}
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="ml-auto size-(--dialog-close-size) my-[calc((var(--dialog-title-line)-var(--dialog-close-size))/2)] text-muted-foreground"
+                aria-label="More automation actions"
+                title="More automation actions"
+              >
+                <Ellipsis aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                disabled={runDisabled}
+                onSelect={() => void runNow()}
+              >
+                <Play aria-hidden="true" />
+                {runLabel}
+              </DropdownMenuItem>
+              <DropdownMenuItem disabled={stateDisabled} onSelect={toggleState}>
+                {paused ? (
+                  <Power aria-hidden="true" />
+                ) : (
+                  <Pause aria-hidden="true" />
+                )}
+                {stateLabel}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </>
+    ) : (
+      <Tag>New</Tag>
+    ),
+    <DialogBody>
+      {error && <DialogAlert tone="danger">{error}</DialogAlert>}
       {loadError && definition && (
-        <p className="notice error" role="alert">
+        <DialogAlert tone="danger">
           The latest automation state could not be loaded: {loadError}
-        </p>
+        </DialogAlert>
       )}
       {newerSummary && (
-        <div className="notice warning" role="status">
+        <DialogAlert
+          tone="warning"
+          role="status"
+          action={
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setLoadAttempt((current) => current + 1)}
+            >
+              Reload automation
+            </Button>
+          }
+        >
           This automation changed elsewhere. Reload before making another
           change.
-          <Button
-            variant="link"
-            size="sm"
-            onClick={() => setLoadAttempt((current) => current + 1)}
-          >
-            Reload automation
-          </Button>
-        </div>
+        </DialogAlert>
       )}
       {outcomeUncertain && (
-        <p className="notice warning" role="status">
+        <DialogAlert tone="warning" role="status">
           Resolve the uncertain run in history before editing, running, enabling,
           or deleting this automation.
-        </p>
+        </DialogAlert>
       )}
       {snoozed && (
-        <p className="notice warning" role="status">
+        <DialogAlert tone="warning" role="status">
           This thread is snoozed. Wake it before running the automation
           manually; scheduled occurrences are skipped while it sleeps.
-        </p>
+        </DialogAlert>
       )}
 
       <div className="automation-editor-grid">
         <div className="automation-form">
-          <section className="automation-section">
-            <h2 className="automation-section-label">Prompt</h2>
+          <DialogSection title="Prompt">
             <div className="automation-section-card padded">
-              <label className="field">
-                <textarea
-                  className="automation-prompt"
-                  aria-label="Canned prompt"
-                  value={prompt}
-                  maxLength={65_536}
-                  placeholder="Review the current project status and continue with the highest-priority task."
-                  onChange={(event) => {
-                    setPrompt(event.target.value);
-                    setPrecheckResult(undefined);
-                  }}
-                />
-                <small>This is separate from the thread composer and its stashes.</small>
-                {promptBytes > maximumPromptBytes && (
-                  <small className="notice error" role="alert">
-                    Prompt must be at most 65,536 UTF-8 bytes.
-                  </small>
-                )}
-              </label>
+              <Textarea
+                className="automation-prompt"
+                aria-label="Canned prompt"
+                aria-describedby={`${promptHelpId}${promptBytes > maximumPromptBytes ? ` ${promptErrorId}` : ""}`}
+                aria-invalid={promptBytes > maximumPromptBytes || undefined}
+                value={prompt}
+                maxLength={65_536}
+                placeholder="Review the current project status and continue with the highest-priority task."
+                onChange={(event) => {
+                  setPrompt(event.target.value);
+                  setPrecheckResult(undefined);
+                }}
+              />
+              <p id={promptHelpId} className="automation-help">
+                This is separate from the thread composer and its stashes.
+              </p>
+              {promptBytes > maximumPromptBytes && (
+                <AutomationFieldError id={promptErrorId}>
+                  Prompt must be at most 65,536 UTF-8 bytes.
+                </AutomationFieldError>
+              )}
             </div>
-          </section>
+          </DialogSection>
 
           <AutomationPrecheckSection
             enabled={precheckEnabled}
@@ -726,9 +789,9 @@ export function ThreadAutomationDialog({
               variant="destructive"
               className="justify-self-start"
               disabled={saving || outcomeUncertain || Boolean(newerSummary)}
-              onClick={() => void remove()}
+              onClick={() => setDeleteOpen(true)}
             >
-              Delete automation
+              Delete automation…
             </Button>
           )}
         </div>
@@ -739,7 +802,50 @@ export function ThreadAutomationDialog({
           onResolveRun={(runId) => void resolveRun(runId)}
         />
       </div>
-    </section>,
+      <ConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        layer="over-dialog"
+        title="Delete this automation?"
+        description={`Scheduled and manual runs for “${threadTitle}” stop, and its settings are removed. This can’t be undone.`}
+        confirmLabel="Delete automation"
+        pendingLabel="Deleting…"
+        tone="danger"
+        onConfirm={remove}
+      />
+    </DialogBody>,
+    <DialogFooter
+      start={
+        definition && !stackedFooter ? (
+          <>
+            <Button
+              variant="outline"
+              disabled={runDisabled}
+              onClick={() => void runNow()}
+            >
+              {runLabel}
+            </Button>
+            <Button
+              variant="outline"
+              disabled={stateDisabled}
+              onClick={toggleState}
+            >
+              {stateLabel}
+            </Button>
+          </>
+        ) : undefined
+      }
+    >
+      <Button variant="outline" onClick={onClose}>
+        Cancel
+      </Button>
+      <Button
+        disabled={!valid || saving || outcomeUncertain || Boolean(newerSummary)}
+        onClick={() => void save()}
+      >
+        {busy === "save" ? "Saving…" : "Save"}
+      </Button>
+    </DialogFooter>,
   );
 }
 

@@ -145,7 +145,7 @@ function selectedBranchingCapabilities(
       creationRecovery: "idempotent",
     },
     interactionKinds: [],
-    usageAccounting: "supported" as const, usageSections: [],
+    usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
     effectiveSettings: { toolAccess: "read_only" },
   };
 }
@@ -205,7 +205,7 @@ class FakeHandle {
         reason: { text: "Branching is unavailable in this fixture." },
       },
       interactionKinds: [],
-      usageAccounting: "supported" as const, usageSections: [],
+      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
       effectiveSettings: {},
     }),
   );
@@ -382,6 +382,154 @@ function fixture(
     manager,
   };
 }
+
+describe("turn throughput capability admission", () => {
+  const throughput = { outputTokens: 120, requestDurationMs: 3_000 };
+
+  function measuredSnapshot(): BackendConversationSnapshot {
+    const measured = snapshot();
+    measured.turnsById["turn-1"]!.throughput = throughput;
+    return measured;
+  }
+
+  function measuredPage(): BackendHistoryPage {
+    const { orderedBackendTurnIds, turnsById, itemsById } = measuredSnapshot();
+    return { orderedBackendTurnIds, turnsById, itemsById };
+  }
+
+  it("rejects an unsupported measured snapshot before publishing or retaining it", async () => {
+    const completion = vi.fn<AuthoritativeCompletionObserver>();
+    const { manager, driver, handle } = fixture(completion);
+    handle.establishmentSnapshots[0] = measuredSnapshot();
+    await expect(manager.acquire({
+      scope, binding, workspace, opaqueBindingDetail: "opaque", driver,
+    })).rejects.toMatchObject({ backendCode: "backend_turn_throughput_unsupported" });
+    expect(completion).not.toHaveBeenCalled();
+    expect(handle.establishmentListeners.some(Boolean)).toBe(false);
+    expect(handle.close).toHaveBeenCalledOnce();
+    await manager.close();
+  });
+
+  it.each(["history", "locate"] as const)(
+    "rejects unsupported throughput from %s without changing the visible timeline",
+    async (read) => {
+      const { manager, driver, handle } = fixture();
+      const acquired = await manager.acquire({
+        scope, binding, workspace, opaqueBindingDetail: "opaque", driver,
+      });
+      try {
+        handle.history.mockResolvedValueOnce(measuredPage());
+        handle.locateTurn.mockResolvedValueOnce({ status: "found", page: measuredPage() });
+        const result = read === "history"
+          ? acquired.actor.history({ limit: 100 })
+          : acquired.actor.locateTurn({ targetTurnId: projectedTurnId });
+        await expect(result).rejects.toMatchObject({ backendCode: "backend_turn_throughput_unsupported" });
+        expect(acquired.actor.timeline.turnsById[projectedTurnId]).not.toHaveProperty("throughput");
+      } finally {
+        acquired.release();
+        await manager.close();
+      }
+    },
+  );
+
+  it("preserves supported throughput through snapshots, history, and targeted reads", async () => {
+    const { manager, driver, handle } = fixture();
+    const capabilities = await handle.backendCapabilities();
+    handle.backendCapabilities.mockResolvedValue({ ...capabilities, turnThroughput: "supported" });
+    handle.establishmentSnapshots[0] = measuredSnapshot();
+    const acquired = await manager.acquire({
+      scope, binding, workspace, opaqueBindingDetail: "opaque", driver,
+    });
+    try {
+      expect(acquired.actor.timeline.turnsById[projectedTurnId]?.throughput).toEqual(throughput);
+      handle.history.mockResolvedValueOnce(measuredPage());
+      expect((await acquired.actor.history({ limit: 100 })).page.turnsById[projectedTurnId]?.throughput).toEqual(throughput);
+      handle.locateTurn.mockResolvedValueOnce({ status: "found", page: measuredPage() });
+      const located = await acquired.actor.locateTurn({ targetTurnId: projectedTurnId });
+      expect(located.status).toBe("found");
+      if (located.status !== "found") throw new Error("expected located turn");
+      expect(located.page.turnsById[projectedTurnId]?.throughput).toEqual(throughput);
+    } finally {
+      acquired.release();
+      await manager.close();
+    }
+  });
+
+  it("recovers unsupported live measurements before publishing a turn or completion", async () => {
+    const completion = vi.fn<AuthoritativeCompletionObserver>();
+    const { manager, driver, handle } = fixture(completion);
+    handle.establishmentSnapshots[0] = snapshot("running", "initial");
+    handle.establishmentSnapshots.push(snapshot("running", "authoritative"));
+    const acquired = await manager.acquire({
+      scope, binding, workspace, opaqueBindingDetail: "opaque", driver,
+    });
+    const received: ConversationActorEvent[] = [];
+    acquired.actor.subscribe((event) => received.push(event));
+    try {
+      handle.emit(0, {
+        type: "turn_completed",
+        turn: {
+          ...measuredSnapshot().turnsById["turn-1"]!,
+          completionCorrelations: ["unsupported-measurement"],
+        },
+      });
+      await acquired.actor.captureSnapshotState();
+      expect(handle.establishCount).toBe(2);
+      expect(acquired.actor.timeline.turnsById[projectedTurnId]).not.toHaveProperty("throughput");
+      expect(acquired.actor.timeline.runState).toBe("running");
+      expect(received.map((event) => event.type)).toEqual(["projection_replaced", "projection_replaced"]);
+      expect(completion).not.toHaveBeenCalled();
+    } finally {
+      acquired.release();
+      await manager.close();
+    }
+  });
+
+  it("keeps the valid projection stale when unsupported measurements also poison recovery", async () => {
+    const { manager, driver, handle } = fixture();
+    handle.establishmentSnapshots.push(measuredSnapshot());
+    const acquired = await manager.acquire({
+      scope, binding, workspace, opaqueBindingDetail: "opaque", driver,
+    });
+    const received: ConversationActorEvent[] = [];
+    acquired.actor.subscribe((event) => received.push(event));
+    try {
+      handle.emit(0, { type: "turn_updated", turn: measuredSnapshot().turnsById["turn-1"]! });
+      await acquired.actor.captureSnapshotState();
+      expect(handle.establishCount).toBe(4);
+      expect(acquired.actor.projectionRecoveryRequired).toBe(true);
+      expect(acquired.actor.timeline.turnsById[projectedTurnId]).not.toHaveProperty("throughput");
+      expect(received).toContainEqual(expect.objectContaining({
+        type: "backend_event",
+        event: expect.objectContaining({ type: "notice", notice: expect.objectContaining({ tone: "error" }) }),
+      }));
+    } finally {
+      acquired.release();
+      await manager.close();
+    }
+  });
+
+  it("replaces measured turns when throughput capability is withdrawn", async () => {
+    const { manager, driver, handle } = fixture();
+    const unsupported = await handle.backendCapabilities();
+    handle.backendCapabilities.mockResolvedValueOnce({ ...unsupported, turnThroughput: "supported" });
+    handle.establishmentSnapshots[0] = measuredSnapshot();
+    handle.establishmentSnapshots.push(snapshot());
+    const acquired = await manager.acquire({
+      scope, binding, workspace, opaqueBindingDetail: "opaque", driver,
+    });
+    try {
+      handle.emit(0, { type: "capabilities_changed", capabilities: unsupported });
+      const state = await acquired.actor.captureSnapshotState();
+      expect(handle.establishCount).toBe(2);
+      expect(state.backendCapabilities.turnThroughput).toBe("unsupported");
+      expect(state.timeline.turnsById[projectedTurnId]).not.toHaveProperty("throughput");
+    } finally {
+      acquired.release();
+      await manager.close();
+    }
+  });
+});
 
 describe("ConversationActorManager", () => {
   it.each([
@@ -2455,7 +2603,7 @@ describe("ConversationActorManager", () => {
         creationRecovery: "idempotent",
       },
       interactionKinds: [],
-      usageAccounting: "supported" as const, usageSections: [],
+      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
       effectiveSettings: {
         model: { provider: "test", id: "model" },
         thinkingLevel: "low",
@@ -3087,7 +3235,7 @@ describe("ConversationActorManager", () => {
         creationRecovery: "idempotent",
       },
       interactionKinds: [],
-      usageAccounting: "supported" as const, usageSections: [],
+      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
       effectiveSettings: { toolAccess: "read_only" },
     });
     const acquired = await manager.acquire({
@@ -3223,7 +3371,7 @@ describe("ConversationActorManager", () => {
           creationRecovery: "idempotent",
         },
         interactionKinds: [],
-        usageAccounting: "supported" as const, usageSections: [],
+        usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
         effectiveSettings: { toolAccess: "read_only" },
       });
       handle.establishmentHistories[0] = {

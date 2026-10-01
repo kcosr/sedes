@@ -279,7 +279,10 @@ The endpoint must use HTTPS without embedded credentials, query or fragment.
 The native provider ID is fixed to `sedes-live-gate`, so stock built-in provider
 plugins cannot substitute another transport or reshape the rehearsed request.
 Set `SEDES_LIVE_OPENCODE_TOKEN_FIELD` to `max_completion_tokens` if that endpoint
-requires it; the default is `max_tokens`. The gate places a 256-token limit in
+requires it; the default is `max_tokens`. For the AW Qwen endpoint, set
+`SEDES_LIVE_OPENCODE_REASONING_FORMAT=chat-template` to send its explicit
+low-reasoning chat-template settings. No provider or model is auto-selected.
+The gate places a 256-token limit in
 the actual request body, with a 16 KiB observed text limit, two logical model
 steps, a 45-second total runner deadline including setup, and native 20-second
 request/10-second chunk timeouts. A synchronous check refuses to submit if
@@ -313,8 +316,9 @@ not qualify a real provider or its billing behavior.
 When a backend-specific change affects protocol handling, streaming, history,
 lifecycle, tools, interactions, or provider integration, ask whether to run the
 relevant live suite. The main Pi gate is self-limiting: it refuses to prompt
-until exactly one authenticated `xai/grok-4.5` provider/model pair is available
-at low reasoning with read-only tools. Do not weaken the gate, substitute a
+until exactly one authenticated AW Qwen
+`aw-qwen-3-8-27b/aw-qwen-3-8-27b` provider/model pair is available at low
+reasoning with read-only tools. Do not weaken the gate, substitute a
 model, or point it at an existing session.
 
 ```sh

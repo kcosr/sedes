@@ -104,19 +104,19 @@
 
 .flat-row-card-has-group > .flat-row-link,
 .flat-row-card-has-group .flat-row-card-content {
-  min-height: 70px;
-  padding-bottom: 23px;
+  min-height: 74px;
+  padding-bottom: 27px;
 }
 
 .flat-row-group {
   position: absolute;
   right: 8px;
   bottom: 7px;
-  z-index: 2;
+  z-index: calc(var(--z-sticky) + 1);
   max-width: calc(100% - 86px);
   overflow: hidden;
   padding: 2px 5px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border);
   border-radius: 3px;
   background: var(--background);
   color: var(--muted-foreground);
@@ -368,7 +368,7 @@
 .flat-row-actions {
   position: absolute;
   right: 0;
-  z-index: 1;
+  z-index: var(--z-sticky);
   display: flex;
   align-items: center;
   justify-self: end;
@@ -569,7 +569,7 @@
 
 .thread-peek {
   position: fixed;
-  z-index: 60;
+  z-index: calc(var(--z-floating) + 10);
   width: 236px;
   padding: 10px 12px;
   border: 1px solid var(--border);
@@ -715,7 +715,7 @@ button.flat-row-question-indicator {
 
 .flat-row .flat-row-location-filter {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-sticky);
   pointer-events: auto;
   border: 0;
   background: transparent;

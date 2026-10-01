@@ -194,10 +194,14 @@ describe("Sidebar Usage", () => {
     accounts.focus();
     await user.keyboard("{ArrowRight}");
 
+    const checkAll = await screen.findByRole("menuitem", { name: "Check all" });
+    expect(checkAll).toBeVisible();
+    expect(checkAll.querySelector("svg")).not.toBeNull();
     expect(
-      await screen.findByRole("menuitem", { name: "Check" }),
+      screen.getByRole("menuitem", { name: "Save snapshot" }),
     ).toBeVisible();
-    expect(screen.getByRole("menuitem", { name: "Snapshot" })).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("No provider accounts.");
+    expect(screen.getByRole("status")).not.toHaveAttribute("tabindex");
   });
 
   it("renders banked reset count and nearest expiry without other usage metrics", async () => {

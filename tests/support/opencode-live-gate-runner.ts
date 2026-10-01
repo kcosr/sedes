@@ -128,7 +128,7 @@ export async function runOpenCodeReadonlyGate(input: ReturnType<typeof parseLive
           const completedRead = assistants.some(message => message.content.some(part => part.type === "tool" && part.name === "read"
             && part.state.status === "completed" && part.state.input.path === canaryFile));
           if (!completedRead) throw new Error("Canary read did not complete");
-          expect(text.includes(canary)).toBe(true);
+          expect(text).toContain(canary);
           const snapshot = await handle!.establishProjection({ signal: lifetime.signal });
           const turnId = openCodeHistoryTurnId(session.id, period.openingId);
           expect(snapshot.snapshot.turnsById[turnId]).toMatchObject({ status: "completed", completionCorrelations: expect.arrayContaining([operation.applicationOperationId]) });

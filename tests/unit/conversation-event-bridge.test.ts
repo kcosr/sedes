@@ -62,7 +62,7 @@ function actorState(generation: string) {
         reason: { text: "Branching is unavailable in this fixture." },
       },
       interactionKinds: [],
-      usageAccounting: "supported" as const, usageSections: [],
+      usageAccounting: "supported" as const, turnThroughput: "unsupported" as const, usageSections: [],
       effectiveSettings: {},
     },
     usage: {},

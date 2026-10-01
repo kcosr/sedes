@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ConfigurationRuntimeState } from "../../../shared/protocol/configuration-admin.js";
-import { presentRuntime, type RuntimePresentationOptions } from "./runtime-presentation.js";
+import { presentRuntime, worstStatus, type RuntimePresentationOptions } from "./runtime-presentation.js";
 import { backendEditors, backendStopEffect } from "./backend-editors.js";
 
 const environmentActions: ConfigurationRuntimeState["supportedActions"] = ["connect", "disconnect", "start", "stop", "restart", "upgrade"];
@@ -11,7 +11,7 @@ function runtime(overrides: Partial<ConfigurationRuntimeState> = {}): Configurat
 }
 const summarize = (state: ConfigurationRuntimeState | undefined, options: RuntimePresentationOptions = { resourceKind: "environment", sidecar: true }) => {
   const presented = presentRuntime(state, options);
-  return { headline: presented.headline, qualifier: presented.qualifier, primary: presented.primary?.label, secondary: presented.secondary.map((entry) => entry.label), tone: presented.tone };
+  return { headline: presented.headline, qualifier: presented.qualifier, primary: presented.primary?.label, secondary: presented.secondary.map((entry) => entry.label), tone: presented.tone, pill: presented.pill.label };
 };
 
 describe("runtime presentation", () => {
@@ -32,19 +32,19 @@ describe("runtime presentation", () => {
   });
 
   it.each([
-    ["healthy", runtime(), { headline: "Connected", qualifier: undefined, primary: undefined, secondary: ["Restart", "Stop", "Disconnect"], tone: "connected" }],
-    ["upgrade required", runtime({ upgradeState: "required", applyState: "pending" }), { headline: "Connected", qualifier: "Upgrade required", primary: "Upgrade and restart", secondary: ["Stop", "Disconnect"], tone: "attention" }],
-    ["upgrade available", runtime({ upgradeState: "pending" }), { headline: "Connected", qualifier: "Upgrade available", primary: "Upgrade and restart", secondary: ["Stop", "Disconnect"], tone: "connected" }],
-    ["changes pending", runtime({ applyState: "pending", effectiveRevision: 3 }), { headline: "Connected", qualifier: "Changes pending", primary: "Restart", secondary: ["Stop", "Disconnect"], tone: "connected" }],
-    ["configuration not applied", runtime({ applyState: "unavailable" }), { headline: "Connected", qualifier: "Configuration not applied", primary: "Reapply configuration", secondary: ["Restart", "Stop", "Disconnect"], tone: "attention" }],
-    ["intentionally disconnected", runtime({ connectionState: "disconnected", preference: "disconnected" }), { headline: "Intentionally disconnected", qualifier: undefined, primary: "Connect", secondary: ["Stop"], tone: "neutral" }],
-    ["disconnected with upgrade", runtime({ connectionState: "disconnected", upgradeState: "pending" }), { headline: "Disconnected", qualifier: "Upgrade available", primary: "Connect", secondary: ["Disconnect", "Stop", "Upgrade and restart"], tone: "neutral" }],
-    ["intentionally stopped", runtime({ connectionState: "stopped", preference: "stopped" }), { headline: "Intentionally stopped", qualifier: undefined, primary: "Start", secondary: [], tone: "neutral" }],
-    ["unreachable", runtime({ connectionState: "unreachable", applyState: "unavailable" }), { headline: "Unreachable", qualifier: undefined, primary: "Retry connection", secondary: ["Stop", "Disconnect"], tone: "attention" }],
-    ["recovery required", runtime({ connectionState: "recovery_required" }), { headline: "Recovery required", qualifier: undefined, primary: "Retry connection", secondary: ["Stop", "Disconnect"], tone: "attention" }],
-    ["reconciling", runtime({ connectionState: "reconciling" }), { headline: "Reconciling", qualifier: undefined, primary: undefined, secondary: ["Stop", "Disconnect"], tone: "neutral" }],
-    ["unknown", runtime({ connectionState: "unknown", applyState: "pending" }), { headline: "Status unknown", qualifier: "Changes pending", primary: "Connect", secondary: ["Stop", "Disconnect"], tone: "neutral" }],
-    ["not reported", undefined, { headline: "Status not reported", qualifier: undefined, primary: undefined, secondary: [], tone: "neutral" }],
+    ["healthy", runtime(), { headline: "Connected", qualifier: undefined, primary: undefined, secondary: ["Restart", "Stop", "Disconnect"], tone: "success", pill: "Connected" }],
+    ["upgrade required", runtime({ upgradeState: "required", applyState: "pending" }), { headline: "Connected", qualifier: "Upgrade required", primary: "Upgrade and restart", secondary: ["Stop", "Disconnect"], tone: "warning", pill: "Upgrade required" }],
+    ["upgrade available", runtime({ upgradeState: "pending" }), { headline: "Connected", qualifier: "Upgrade available", primary: "Upgrade and restart", secondary: ["Stop", "Disconnect"], tone: "info", pill: "Upgrade available" }],
+    ["changes pending", runtime({ applyState: "pending", effectiveRevision: 3 }), { headline: "Connected", qualifier: "Changes pending", primary: "Restart", secondary: ["Stop", "Disconnect"], tone: "warning", pill: "Changes pending" }],
+    ["configuration not applied", runtime({ applyState: "unavailable" }), { headline: "Connected", qualifier: "Configuration not applied", primary: "Reapply configuration", secondary: ["Restart", "Stop", "Disconnect"], tone: "danger", pill: "Configuration not applied" }],
+    ["intentionally disconnected", runtime({ connectionState: "disconnected", preference: "disconnected" }), { headline: "Intentionally disconnected", qualifier: undefined, primary: "Connect", secondary: ["Stop"], tone: "neutral", pill: "Intentionally disconnected" }],
+    ["disconnected with upgrade", runtime({ connectionState: "disconnected", upgradeState: "pending" }), { headline: "Disconnected", qualifier: "Upgrade available", primary: "Connect", secondary: ["Disconnect", "Stop", "Upgrade and restart"], tone: "info", pill: "Upgrade available" }],
+    ["intentionally stopped", runtime({ connectionState: "stopped", preference: "stopped" }), { headline: "Intentionally stopped", qualifier: undefined, primary: "Start", secondary: [], tone: "neutral", pill: "Intentionally stopped" }],
+    ["unreachable", runtime({ connectionState: "unreachable", applyState: "unavailable" }), { headline: "Unreachable", qualifier: undefined, primary: "Retry connection", secondary: ["Stop", "Disconnect"], tone: "warning", pill: "Unreachable" }],
+    ["recovery required", runtime({ connectionState: "recovery_required" }), { headline: "Recovery required", qualifier: undefined, primary: "Retry connection", secondary: ["Stop", "Disconnect"], tone: "danger", pill: "Recovery required" }],
+    ["reconciling", runtime({ connectionState: "reconciling" }), { headline: "Reconciling", qualifier: undefined, primary: undefined, secondary: ["Stop", "Disconnect"], tone: "info", pill: "Reconciling" }],
+    ["unknown", runtime({ connectionState: "unknown", applyState: "pending" }), { headline: "Status unknown", qualifier: "Changes pending", primary: "Connect", secondary: ["Stop", "Disconnect"], tone: "warning", pill: "Changes pending" }],
+    ["not reported", undefined, { headline: "Status not reported", qualifier: undefined, primary: undefined, secondary: [], tone: "neutral", pill: "Status not reported" }],
   ] as const)("presents %s", (_name, state, expected) => {
     expect(summarize(state)).toEqual(expected);
   });
@@ -127,9 +127,26 @@ describe("runtime presentation", () => {
 
   it("presents backend definitions that are disabled but still own a runtime", () => {
     const backend = { resourceKind: "backend" as const, sidecar: false, enabled: false };
-    expect(summarize(runtime({ resourceKind: "backend", supportedActions: ["disconnect", "stop"] }), backend)).toMatchObject({ qualifier: "Backend disabled", primary: "Stop", secondary: ["Disconnect"], tone: "attention" });
+    expect(summarize(runtime({ resourceKind: "backend", supportedActions: ["disconnect", "stop"] }), backend)).toMatchObject({ qualifier: "Backend disabled", primary: "Stop", secondary: ["Disconnect"], tone: "warning", pill: "Backend disabled" });
     expect(summarize(runtime({ resourceKind: "backend", connectionState: "stopped", supportedActions: ["disconnect", "stop"] }), backend)).toMatchObject({ qualifier: "Backend disabled", primary: undefined, secondary: [] });
     expect(summarize(runtime({ resourceKind: "backend", supportedActions: ["connect", "start", "stop", "restart"] }), { ...backend, enabled: true })).toMatchObject({ primary: undefined, secondary: ["Restart", "Stop"] });
+  });
+
+  it("names an unconfirmed command in the pill without hiding a failed apply", () => {
+    const operation = { mutationId: "31000000-0000-4000-8000-000000000002", action: "connect" as const };
+    expect(summarize(runtime({ connectionState: "unknown", lifecycleOperation: { ...operation, state: "unknown" } })))
+      .toMatchObject({ headline: "Status unknown", qualifier: "Outcome unknown", tone: "warning", pill: "Outcome unknown" });
+    expect(summarize(runtime({ lifecycleOperation: { ...operation, state: "pending" } })))
+      .toMatchObject({ headline: "Connected", qualifier: "Checking outcome", tone: "info", pill: "Checking outcome" });
+    expect(summarize(runtime({ applyState: "rejected", lifecycleOperation: { ...operation, state: "unknown" } })))
+      .toMatchObject({ qualifier: "Configuration not applied", tone: "danger" });
+  });
+
+  it("lets the state that most needs attention win one pill, keeping the first on a tie", () => {
+    expect(worstStatus({ label: "Host online", tone: "success" }, { label: "Status unknown", tone: "neutral" })).toEqual({ label: "Host online", tone: "success" });
+    expect(worstStatus({ label: "Host online", tone: "success" }, { label: "Connected", tone: "success" })).toEqual({ label: "Host online", tone: "success" });
+    expect(worstStatus({ label: "Host offline", tone: "warning" }, { label: "Recovery required", tone: "danger" })).toEqual({ label: "Recovery required", tone: "danger" });
+    expect(worstStatus(undefined)).toEqual({ label: "Status not reported", tone: "neutral" });
   });
 
   it("flags retained results that need recovery", () => {

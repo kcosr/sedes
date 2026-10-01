@@ -2919,6 +2919,7 @@ describe("CodexConversationBackendDriver", () => {
     );
 
     const unconfirmed = await handle.backendCapabilities();
+    expect(unconfirmed.turnThroughput).toBe("unsupported");
     expect(unconfirmed.branching).toEqual({
       availability: "unavailable",
       reason: {
@@ -2932,6 +2933,7 @@ describe("CodexConversationBackendDriver", () => {
       settings: executionSettingsTuple(),
     };
     const available = await handle.backendCapabilities();
+    expect(available.turnThroughput).toBe("unsupported");
     expect(available.branching).toMatchObject({
       availability: "available",
       boundaries: [

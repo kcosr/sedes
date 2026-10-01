@@ -1970,6 +1970,7 @@ describe("ClaudeConversationHandle", () => {
     await handle.establishProjection({ signal: new AbortController().signal });
 
     await expect(handle.backendCapabilities()).resolves.toMatchObject({
+      turnThroughput: "unsupported",
       deliveryModes: ["submit", "steer"],
       branching: { availability: "available" },
     });

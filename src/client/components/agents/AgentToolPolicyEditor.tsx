@@ -4,8 +4,7 @@ import type {
   AgentToolPresentationMode,
   AgentToolPresentationSurface,
 } from "../../../shared/index.js";
-import { useId } from "react";
-import { Checkbox } from "@client/components/ui/checkbox";
+import { Callout } from "@client/components/ui/callout";
 import {
   Select,
   SelectContent,
@@ -13,20 +12,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@client/components/ui/select";
+import { SettingsField, SwitchField } from "../settings/SettingsField.js";
+import { SettingsSection, SettingsSubgroup } from "../settings/SettingsSection.js";
 import { ExactToolSelector } from "./ExactToolSelector.js";
 
 export function AgentToolPolicyEditor({
+  id,
   catalog,
   value,
   disabled = false,
   onChange,
 }: {
+  /** The section's id, a target for the editor's section anchors. */
+  readonly id?: string;
   readonly catalog: AgentToolBootstrapDescriptor;
   readonly value?: AgentToolBootstrapPolicy;
   readonly disabled?: boolean;
   readonly onChange: (value: AgentToolBootstrapPolicy | undefined) => void;
 }): React.JSX.Element {
-  const descriptionId = useId();
   const knownToolIds = catalog.groups.flatMap(({ tools }) =>
     tools.map(({ id }) => id),
   );
@@ -55,197 +58,160 @@ export function AgentToolPolicyEditor({
     ) ?? catalog.presentationOptions[0]!;
 
   return (
-    <section
-      className="agent-editor-section"
-      aria-labelledby="agent-tools-title"
+    <SettingsSection
+      id={id}
+      title="Sedes tools"
+      description="Choose whether new threads inherit the ordinary tool policy."
+      card
     >
-      <header>
-        <h2 id="agent-tools-title">Sedes tools</h2>
-        <p>Choose whether new threads inherit the ordinary tool policy.</p>
-      </header>
-      <label className="agent-editor-toggle">
-        <span>
-          <strong>Use default tool policy</strong>
-          <small id={`${descriptionId}-default-policy`}>
-            Use the selected target’s ordinary new-thread settings.
-          </small>
-        </span>
-        <Checkbox
-          aria-label="Use default tool policy"
-          aria-describedby={`${descriptionId}-default-policy`}
-          checked={value === undefined}
-          disabled={disabled}
-          onCheckedChange={(checked) => {
-            if (checked === true) {
-              onChange(undefined);
-              return;
-            }
-            onChange({
-              enabled: catalog.defaultPolicy.enabled,
-              enabledToolIds: catalog.defaultPolicy.enabledToolIds,
-              presentation: catalog.defaultPolicy.presentation,
-              accessBoundary: catalog.defaultPolicy.accessBoundary,
-            });
-          }}
-        />
-      </label>
+      <SwitchField
+        label="Use default tool policy"
+        description="Use the selected target’s ordinary new-thread settings."
+        checked={value === undefined}
+        disabled={disabled}
+        onCheckedChange={(checked) => {
+          if (checked) {
+            onChange(undefined);
+            return;
+          }
+          onChange({
+            enabled: catalog.defaultPolicy.enabled,
+            enabledToolIds: catalog.defaultPolicy.enabledToolIds,
+            presentation: catalog.defaultPolicy.presentation,
+            accessBoundary: catalog.defaultPolicy.accessBoundary,
+          });
+        }}
+      />
       {value && (
-        <div className="agent-tool-policy-editor">
-          <div className="agent-tool-policy-global">
-            <label className="agent-editor-toggle">
-              <span>
-                <strong>Enable Sedes tools</strong>
-                <small id={`${descriptionId}-enabled`}>
-                  Expose the selected tools on new threads.
-                </small>
-              </span>
-              <Checkbox
-                aria-label="Enable Sedes tools"
-                aria-describedby={`${descriptionId}-enabled`}
-                checked={value.enabled}
-                disabled={disabled}
-                onCheckedChange={(checked) =>
-                  onChange({
-                    ...value,
-                    enabled: checked === true,
-                  })
-                }
-              />
-            </label>
-            {catalog.presentationOptions.length > 1 && (
-              <label className="agent-editor-field">
-                <span>Surface</span>
-                <small id="agent-tool-surface-description">
-                  Expose Sedes operations as native tools or CLI commands.
-                </small>
-                <Select
-                  value={presentation.surface}
-                  disabled={disabled}
-                  onValueChange={(nextSurface) => {
-                    const option = catalog.presentationOptions.find(
-                      ({ surface }) => surface === nextSurface,
-                    );
-                    if (!option) return;
-                    onChange({
-                      ...value,
-                      presentation: {
-                        surface:
-                          nextSurface as AgentToolPresentationSurface,
-                        mode: option.modes.includes(presentation.mode)
-                          ? presentation.mode
-                          : option.modes[0]!,
-                      },
-                    });
-                  }}
-                >
-                  <SelectTrigger
-                    aria-label="Sedes tool surface"
-                    aria-describedby="agent-tool-surface-description"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {catalog.presentationOptions.map((option) => (
-                      <SelectItem key={option.surface} value={option.surface}>
-                        {surfaceLabel(option.surface)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </label>
-            )}
-            {selectedPresentationOption.modes.length > 1 && (
-              <label className="agent-editor-field">
-                <span>Presentation</span>
-                <small id="agent-tool-presentation-description">
-                  Choose progressive discovery or individual operations.
-                </small>
-                <Select
-                  value={presentation.mode}
-                  disabled={disabled}
-                  onValueChange={(nextMode) =>
-                    onChange({
-                      ...value,
-                      presentation: {
-                        ...presentation,
-                        mode: nextMode as AgentToolPresentationMode,
-                      },
-                    })
-                  }
-                >
-                  <SelectTrigger
-                    aria-label="Sedes tool presentation"
-                    aria-describedby="agent-tool-presentation-description"
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {selectedPresentationOption.modes.map((mode) => (
-                      <SelectItem key={mode} value={mode}>
-                        {modeLabel(mode)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </label>
-            )}
-            <label className="agent-editor-field">
-              <span>Access boundary</span>
-              <small id={`${descriptionId}-environment-access`}>
-                For each thread created from this Agent, that thread’s execution
-                environment is treated as its current environment.
-              </small>
+        <>
+          <SwitchField
+            label="Enable Sedes tools"
+            description="Expose the selected tools on new threads."
+            checked={value.enabled}
+            disabled={disabled}
+            onCheckedChange={(enabled) => onChange({ ...value, enabled })}
+          />
+          {catalog.presentationOptions.length > 1 && (
+            <SettingsField
+              label="Surface"
+              description="Expose Sedes operations as native tools or CLI commands."
+            >
               <Select
-                value={value.accessBoundary}
+                value={presentation.surface}
                 disabled={disabled}
-                onValueChange={(next) =>
+                onValueChange={(nextSurface) => {
+                  const option = catalog.presentationOptions.find(
+                    ({ surface }) => surface === nextSurface,
+                  );
+                  if (!option) return;
                   onChange({
                     ...value,
-                    accessBoundary: next as AgentToolBootstrapPolicy["accessBoundary"],
-                  })
-                }
+                    presentation: {
+                      surface: nextSurface as AgentToolPresentationSurface,
+                      mode: option.modes.includes(presentation.mode)
+                        ? presentation.mode
+                        : option.modes[0]!,
+                    },
+                  });
+                }}
               >
-                <SelectTrigger
-                  aria-label="Access boundary"
-                  aria-describedby={`${descriptionId}-environment-access`}
-                >
+                <SelectTrigger className="w-full" aria-label="Sedes tool surface">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="thread">Ask outside this thread</SelectItem>
-                  <SelectItem value="environment">Ask outside this environment</SelectItem>
-                  <SelectItem value="unrestricted">Allow without asking</SelectItem>
+                  {catalog.presentationOptions.map((option) => (
+                    <SelectItem key={option.surface} value={option.surface}>
+                      {surfaceLabel(option.surface)}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
-              <small>
-                Thread access asks before accessing project, global, or other-thread resources.
-              </small>
-              {value.accessBoundary === "unrestricted" && (
-                <small role="status">
-                  Threads created from this Agent may use enabled Sedes tools
-                  in other environments without asking. Existing threads are not
-                  changed when this Agent is edited.
-                </small>
-              )}
-            </label>
-          </div>
-          <ExactToolSelector
-            groups={groups}
-            selectedToolIds={value.enabledToolIds}
-            unavailableToolIds={unavailableIds}
-            disabled={disabled}
-            onChange={(toolIds) =>
-              onChange({
-                enabled: value.enabled,
-                enabledToolIds: [...toolIds],
-                presentation,
-                accessBoundary: value.accessBoundary,
-              })
-            }
-          />
-        </div>
+            </SettingsField>
+          )}
+          {selectedPresentationOption.modes.length > 1 && (
+            <SettingsField
+              label="Presentation"
+              description="Choose progressive discovery or individual operations."
+            >
+              <Select
+                value={presentation.mode}
+                disabled={disabled}
+                onValueChange={(nextMode) =>
+                  onChange({
+                    ...value,
+                    presentation: {
+                      ...presentation,
+                      mode: nextMode as AgentToolPresentationMode,
+                    },
+                  })
+                }
+              >
+                <SelectTrigger className="w-full" aria-label="Sedes tool presentation">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {selectedPresentationOption.modes.map((mode) => (
+                    <SelectItem key={mode} value={mode}>
+                      {modeLabel(mode)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </SettingsField>
+          )}
+          <SettingsField
+            label="Access boundary"
+            description="For each thread created from this Agent, that thread’s execution environment is treated as its current environment. Thread access asks before accessing project, global, or other-thread resources."
+          >
+            <Select
+              value={value.accessBoundary}
+              disabled={disabled}
+              onValueChange={(next) =>
+                onChange({
+                  ...value,
+                  accessBoundary: next as AgentToolBootstrapPolicy["accessBoundary"],
+                })
+              }
+            >
+              <SelectTrigger className="w-full" aria-label="Access boundary">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="thread">Ask outside this thread</SelectItem>
+                <SelectItem value="environment">Ask outside this environment</SelectItem>
+                <SelectItem value="unrestricted">Allow without asking</SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingsField>
+          {value.accessBoundary === "unrestricted" && (
+            <Callout tone="warning" role="status">
+              Threads created from this Agent may use enabled Sedes tools in
+              other environments without asking. Existing threads are not
+              changed when this Agent is edited.
+            </Callout>
+          )}
+          <SettingsSubgroup
+            title="Tools"
+            description="The tools new threads expose when Sedes tools are enabled."
+          >
+            <ExactToolSelector
+              groups={groups}
+              selectedToolIds={value.enabledToolIds}
+              unavailableToolIds={unavailableIds}
+              disabled={disabled}
+              onChange={(toolIds) =>
+                onChange({
+                  enabled: value.enabled,
+                  enabledToolIds: [...toolIds],
+                  presentation,
+                  accessBoundary: value.accessBoundary,
+                })
+              }
+            />
+          </SettingsSubgroup>
+        </>
       )}
-    </section>
+    </SettingsSection>
   );
 }
 

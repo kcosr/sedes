@@ -9,7 +9,7 @@ viewed images, Sedes MCP/CLI tools, owned thread execution variables, and manual
 compaction. Native forks, commands, generated images, and managed TUI are
 unavailable.
 The normalized backend identity is `opencode`, its connection kind is
-`opencode_http`, and the browser brand is `opencode`. Client protocol 129
+`opencode_http`, and the browser brand is `opencode`. Client protocol 130
 includes these closed-enum additions and terminal Stop diagnostics.
 
 Conversation, catalog and tool consumers use the provider-private

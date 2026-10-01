@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useImperativeHandle, useRef, useState } from "react";
 import {
+  Check,
   Plus,
   Pencil,
+  RotateCw,
   Terminal as TerminalIcon,
   X,
 } from "lucide-react";
@@ -10,20 +12,27 @@ import type { ApiClient } from "../api/ApiClient.js";
 import { getPanelPresentation } from "../app/settings.js";
 import { Input } from "../components/ui/input.js";
 import { Button } from "../components/ui/button.js";
+import { ConfirmDialog } from "../components/ui/confirm-dialog.js";
 import {
   Dialog,
+  DialogAlert,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "../components/ui/dialog.js";
+import { Field } from "../components/ui/field.js";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuEmpty,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuValue,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.js";
 import { isTerminalProcessLive, terminalStatusLabel, terminalTerminationLabel, terminalTerminationDescription, terminalTerminationPendingLabel } from "./domain.js";
@@ -31,6 +40,10 @@ import {
   resolvePanelPresentation,
   type PanelPresentation,
 } from "../workspace-panels/panel-presentation.js";
+import { cn } from "../lib/utils.js";
+
+/** A row's square icon action (rename, tear down) beside the terminal entry. */
+const TERMINAL_ROW_ACTION_CLASS = "w-(--menu-row-height) justify-center px-0";
 
 interface LifecycleConfirmation {
   readonly terminal: TerminalResource;
@@ -95,10 +108,9 @@ export function ThreadTerminalMenu({
   const [entryPending, setEntryPending] = useState(false);
   const [entryRetryPresentation, setEntryRetryPresentation] =
     useState<PanelPresentation>();
+  const entryFailureId = useId();
   const [lifecycleConfirmation, setLifecycleConfirmation] =
     useState<LifecycleConfirmation>();
-  const [lifecyclePending, setLifecyclePending] = useState(false);
-  const [lifecycleError, setLifecycleError] = useState<string>();
   const [message, setMessage] = useState<string>();
   const createMutationId = useRef<string | null>(null);
   const selectedPresentation = useRef<PanelPresentation | undefined>(undefined);
@@ -151,8 +163,6 @@ export function ThreadTerminalMenu({
     setRenameError(undefined);
     setEntryFailureOpen(false);
     setLifecycleConfirmation(undefined);
-    setLifecyclePending(false);
-    setLifecycleError(undefined);
     setTerminals([]);
     setLoading(false);
     setCreating(false);
@@ -306,11 +316,14 @@ export function ThreadTerminalMenu({
     entryPanelOpenedRef.current = false;
   };
 
+  /**
+   * Ends or removes a terminal. A failure refreshes the inventory (the
+   * confirmation may turn from end into remove) and rejects, so the
+   * confirmation shows the error; results from a thread the user already
+   * left are dropped.
+   */
   const tearDown = async (confirmation: LifecycleConfirmation) => {
-    if (lifecyclePending) return;
     const actionThreadId = threadId;
-    setLifecyclePending(true);
-    setLifecycleError(undefined);
     setMessage(undefined);
     const terminal = confirmation.terminal;
     const key = `${confirmation.action}:${terminal.terminalId}`;
@@ -353,11 +366,7 @@ export function ThreadTerminalMenu({
           action: isTerminalProcessLive(current.lifecycle) ? "end" : "remove",
         });
       }
-      setLifecycleError(failure);
-    } finally {
-      if (currentThreadIdRef.current === actionThreadId) {
-        setLifecyclePending(false);
-      }
+      throw new Error(failure);
     }
   };
 
@@ -385,9 +394,8 @@ export function ThreadTerminalMenu({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent
-            className="thread-terminal-menu"
+            className="min-w-60"
             align="end"
-            sideOffset={6}
             onCloseAutoFocus={(event) => {
               if (!suppressCloseAutoFocus.current) return;
               event.preventDefault();
@@ -411,27 +419,37 @@ export function ThreadTerminalMenu({
               void create(presentation);
             }}
           >
-            <Plus size={15} aria-hidden="true" />
+            <Plus aria-hidden="true" />
             {creating ? "Creating…" : "New terminal"}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           {loading && terminals.length === 0 ? (
-            <DropdownMenuItem disabled>Loading terminals…</DropdownMenuItem>
+            <DropdownMenuEmpty loading>Loading terminals…</DropdownMenuEmpty>
           ) : terminals.length === 0 ? (
-            <DropdownMenuItem disabled>No terminals for this thread</DropdownMenuItem>
+            message ? null : <DropdownMenuEmpty>No terminals for this thread</DropdownMenuEmpty>
           ) : (
             terminals.map((terminal) => {
               const alreadyDisplayed =
                 displayedTerminalIds?.has(terminal.terminalId) === true;
               const live = isTerminalProcessLive(terminal.lifecycle);
+              const teardownLabel =
+                terminal.terminationEffect === "disconnect_transport" && live
+                  ? `Disconnect and remove ${terminal.displayName}`
+                  : `Tear down and remove ${terminal.displayName}`;
               return (
-                <div className="thread-terminal-menu-row" key={terminal.terminalId}>
+                // One row per terminal: open it, rename it, or tear it down.
+                <DropdownMenuGroup
+                  key={terminal.terminalId}
+                  aria-label={terminal.displayName}
+                  className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-0.5"
+                >
+                  {/* A terminal already open in this panel carries a check;
+                      choosing it brings its tab forward. */}
                   <DropdownMenuItem
-                    className="thread-terminal-menu-entry"
-                    disabled={terminal.incarnationId === null || alreadyDisplayed}
+                    disabled={terminal.incarnationId === null}
                     title={
                       alreadyDisplayed
-                        ? "Already open in this terminal panel"
+                        ? "Open in this terminal panel"
                         : undefined
                     }
                     onSelect={() => {
@@ -451,16 +469,22 @@ export function ThreadTerminalMenu({
                       selectedPresentation.current = undefined;
                     }}
                   >
-                    <TerminalIcon size={15} aria-hidden="true" />
-                    <span className="thread-terminal-menu-name">{terminal.displayName}</span>
-                    <span className="thread-terminal-menu-status">
+                    <TerminalIcon aria-hidden="true" />
+                    <span className="min-w-0 truncate">{terminal.displayName}</span>
+                    <DropdownMenuValue>
                       {terminalStatusLabel(terminal)}
-                      {alreadyDisplayed ? " · Open" : ""}
-                    </span>
+                    </DropdownMenuValue>
+                    {alreadyDisplayed && (
+                      <>
+                        <Check aria-hidden="true" className="text-foreground" />
+                        <span className="sr-only">, open</span>
+                      </>
+                    )}
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    className="thread-terminal-menu-rename"
+                    className={TERMINAL_ROW_ACTION_CLASS}
                     aria-label={`Rename ${terminal.displayName}`}
+                    title={`Rename ${terminal.displayName}`}
                     onSelect={() => {
                       suppressCloseAutoFocus.current = true;
                       setRenameTarget(terminal);
@@ -468,35 +492,38 @@ export function ThreadTerminalMenu({
                       setRenameError(undefined);
                     }}
                   >
-                    <Pencil size={15} aria-hidden="true" />
+                    <Pencil aria-hidden="true" />
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    className="thread-terminal-menu-teardown"
-                    variant="destructive"
-                    aria-label={terminal.terminationEffect === "disconnect_transport" && live ? `Disconnect and remove ${terminal.displayName}` : `Tear down and remove ${terminal.displayName}`}
-                    title={terminal.terminationEffect === "disconnect_transport" && live ? `Disconnect and remove ${terminal.displayName}` : `Tear down and remove ${terminal.displayName}`}
+                    className={cn(
+                      TERMINAL_ROW_ACTION_CLASS,
+                      "data-highlighted:[&_svg]:text-destructive",
+                    )}
+                    aria-label={teardownLabel}
+                    title={teardownLabel}
                     onSelect={() => {
                       suppressCloseAutoFocus.current = true;
-                      setLifecycleError(undefined);
                       setLifecycleConfirmation({
                         terminal,
                         action: live ? "end" : "remove",
                       });
                     }}
                   >
-                    <X size={15} aria-hidden="true" />
+                    {/* Muted at rest; red only while the row is highlighted. */}
+                    <X aria-hidden="true" className="text-muted-foreground" />
                   </DropdownMenuItem>
-                </div>
+                </DropdownMenuGroup>
               );
             })
           )}
-          {message ? <DropdownMenuItem disabled>{message}</DropdownMenuItem> : null}
+          {message ? <DropdownMenuEmpty role="alert">{message}</DropdownMenuEmpty> : null}
           {entryRetryPresentation ? (
             <DropdownMenuItem
               onSelect={() => {
                 activatePrimaryTrigger(entryRetryPresentation);
               }}
             >
+              <RotateCw aria-hidden="true" />
               Retry
             </DropdownMenuItem>
           ) : null}
@@ -504,26 +531,25 @@ export function ThreadTerminalMenu({
         </DropdownMenu>
       </div> : null}
 
-      <Dialog open={active && entryFailureOpen} onOpenChange={setEntryFailureOpen}>
-        <DialogContent onCloseAutoFocus={restoreEntryFocus}>
-          <DialogHeader>
-            <DialogTitle>Could not open Terminals</DialogTitle>
-            <DialogDescription>{message}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEntryFailureOpen(false)}>Cancel</Button>
-            <Button disabled={entryPending || creating} onClick={() => {
-              setEntryFailureOpen(false);
-              if (entryRetryPresentation) activatePrimaryTrigger(entryRetryPresentation);
-            }}>Retry</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ConfirmDialog
+        open={active && entryFailureOpen}
+        onOpenChange={setEntryFailureOpen}
+        onCloseAutoFocus={restoreEntryFocus}
+        aria-describedby={entryFailureId}
+        title="Could not open Terminals"
+        confirmLabel="Retry"
+        cancelLabel="Close"
+        onConfirm={() => {
+          if (entryRetryPresentation) activatePrimaryTrigger(entryRetryPresentation);
+        }}
+      >
+        <DialogAlert id={entryFailureId} tone="danger">{message}</DialogAlert>
+      </ConfirmDialog>
 
       <Dialog open={active && Boolean(renameTarget)} onOpenChange={(nextOpen) => {
         if (!nextOpen && !renamePending) setRenameTarget(undefined);
       }}>
-        <DialogContent onCloseAutoFocus={(event) => {
+        <DialogContent dismissible={!renamePending} onCloseAutoFocus={(event) => {
           event.preventDefault();
           tabMenuTriggerRef.current?.focus();
         }}>
@@ -531,7 +557,7 @@ export function ThreadTerminalMenu({
             <DialogTitle>Rename terminal</DialogTitle>
             <DialogDescription>Choose a name for this terminal.</DialogDescription>
           </DialogHeader>
-          <form onSubmit={(event) => {
+          <form className="contents" onSubmit={(event) => {
             event.preventDefault();
             if (!renameTarget || renamePending || !renameDraft.trim()) return;
             const actionThreadId = threadId;
@@ -545,9 +571,13 @@ export function ThreadTerminalMenu({
               if (currentThreadIdRef.current === actionThreadId) setRenamePending(false);
             });
           }}>
-            <Input aria-label="Terminal name" value={renameDraft} maxLength={120}
-              disabled={renamePending} onChange={(event) => setRenameDraft(event.target.value)} />
-            {renameError ? <p className="terminal-operation-message" role="alert">{renameError}</p> : null}
+            <DialogBody>
+              <Field label="Terminal name">
+                <Input value={renameDraft} maxLength={120}
+                  disabled={renamePending} onChange={(event) => setRenameDraft(event.target.value)} />
+              </Field>
+              {renameError ? <DialogAlert tone="danger">{renameError}</DialogAlert> : null}
+            </DialogBody>
             <DialogFooter>
               <Button type="button" variant="outline" disabled={renamePending} onClick={() => setRenameTarget(undefined)}>Cancel</Button>
               <Button type="submit" disabled={renamePending || !renameDraft.trim()}>{renamePending ? "Saving…" : "Save name"}</Button>
@@ -556,63 +586,38 @@ export function ThreadTerminalMenu({
         </DialogContent>
       </Dialog>
 
-      <Dialog
+      <ConfirmDialog
+        key={threadId}
         open={active && Boolean(lifecycleConfirmation)}
         onOpenChange={(nextOpen) => {
-          if (!nextOpen && !lifecyclePending) {
-            setLifecycleConfirmation(undefined);
-            setLifecycleError(undefined);
-          }
+          if (!nextOpen) setLifecycleConfirmation(undefined);
         }}
-      >
-        <DialogContent showCloseButton={false}>
-          <DialogHeader>
-            <DialogTitle>
-              {lifecycleConfirmation?.action === "end"
-                ? `${terminalTerminationLabel(lifecycleConfirmation.terminal)}?`
-                : "Remove terminal?"}
-            </DialogTitle>
-            <DialogDescription>
-              {lifecycleConfirmation?.action === "end"
-                ? terminalTerminationDescription(lifecycleConfirmation.terminal)
-                : `Remove ${lifecycleConfirmation?.terminal.displayName ?? "this terminal"} and permanently delete its retained history?`}
-            </DialogDescription>
-            {lifecycleError ? (
-              <p className="terminal-operation-message" role="alert">
-                {lifecycleError}
-              </p>
-            ) : null}
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              disabled={lifecyclePending}
-              onClick={() => {
-                setLifecycleConfirmation(undefined);
-                setLifecycleError(undefined);
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              disabled={lifecyclePending}
-              onClick={() => {
-                const confirmation = lifecycleConfirmation;
-                if (confirmation) void tearDown(confirmation);
-              }}
-            >
-              {lifecyclePending
-                ? lifecycleConfirmation?.action === "end"
-                  ? terminalTerminationPendingLabel(lifecycleConfirmation.terminal)
-                  : "Removing…"
-                : lifecycleConfirmation?.action === "end"
-                  ? terminalTerminationLabel(lifecycleConfirmation.terminal)
-                  : "Remove terminal"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        title={
+          lifecycleConfirmation?.action === "end"
+            ? `${terminalTerminationLabel(lifecycleConfirmation.terminal)}?`
+            : "Remove terminal?"
+        }
+        description={
+          lifecycleConfirmation?.action === "end"
+            ? terminalTerminationDescription(lifecycleConfirmation.terminal)
+            : `Remove ${lifecycleConfirmation?.terminal.displayName ?? "this terminal"} and permanently delete its retained history?`
+        }
+        confirmLabel={
+          lifecycleConfirmation?.action === "end"
+            ? terminalTerminationLabel(lifecycleConfirmation.terminal)
+            : "Remove terminal"
+        }
+        pendingLabel={
+          lifecycleConfirmation?.action === "end"
+            ? terminalTerminationPendingLabel(lifecycleConfirmation.terminal)
+            : "Removing…"
+        }
+        tone="danger"
+        onConfirm={async () => {
+          const confirmation = lifecycleConfirmation;
+          if (confirmation) await tearDown(confirmation);
+        }}
+      />
     </>
   );
 }

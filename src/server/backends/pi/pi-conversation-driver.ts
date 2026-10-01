@@ -1,5 +1,6 @@
 import { ConversationInterruptLedger } from "../conversation-interrupt.js";
 import { PiUsageAccounting } from "./pi-usage-accounting.js";
+import { TurnThroughputRecorder } from "../turn-throughput.js";
 import type { UsageSink } from "../../usage/contracts.js";
 import type {
   OutputArtifactPublisher,
@@ -739,6 +740,7 @@ function capabilities(
     ],
     usageSections: ["context", "counters"],
     usageAccounting: "supported",
+    turnThroughput: "supported",
     effectiveSettings: {
       ...(session.model
         ? {
@@ -2571,6 +2573,8 @@ interface PiConversationHandleOptions {
 class PiConversationHandle implements ConversationHandle {
   readonly automaticEviction = "requires_quiescence" as const;
   readonly #usageAccounting: PiUsageAccounting | undefined;
+  readonly #throughput = new TurnThroughputRecorder();
+  readonly #measuredResponses = new WeakSet<object>();
   static readonly #assistantSourceOrderStride =
     PI_ASSISTANT_SOURCE_ORDER_STRIDE;
 
@@ -2761,6 +2765,7 @@ class PiConversationHandle implements ConversationHandle {
       try {
         this.#consume(event);
       } catch {
+        this.#throughput.invalidate();
         this.#emit({
           type: "resnapshot_required",
           reason: "contradictory_state",
@@ -2868,7 +2873,7 @@ class PiConversationHandle implements ConversationHandle {
       input.signal,
     );
     return selectPiHistoryPage(
-      this.#fillViewedImages(projected, pageTurnIds).snapshot,
+      this.#withThroughput(this.#fillViewedImages(projected, pageTurnIds).snapshot),
       this.#session.sessionId,
       before,
       input.limit,
@@ -2907,7 +2912,7 @@ class PiConversationHandle implements ConversationHandle {
         input.signal,
       );
       const selected = selectPiHistoryPage(
-        this.#fillViewedImages(projected, turnIds).snapshot,
+        this.#withThroughput(this.#fillViewedImages(projected, turnIds).snapshot),
         this.#session.sessionId,
         index + 1,
         1,
@@ -3949,6 +3954,7 @@ class PiConversationHandle implements ConversationHandle {
     if (this.#closed) return;
     this.#closed = true;
     this.#controlLifetime.abort();
+    this.#throughput.clear();
     let failure: unknown;
     let failed = false;
     const captureFailure = (cause: unknown): void => {
@@ -4110,6 +4116,11 @@ class PiConversationHandle implements ConversationHandle {
       this.#consumeAssistantUpdate(event);
     } else if (event.type === "message_end") {
       if (event.message.role === "assistant") {
+        if (!this.#measuredResponses.has(event.message)) {
+          this.#measuredResponses.add(event.message);
+          const request = this.#session.takeRequestThroughput(event.message);
+          if (this.#activeTurnId) this.#throughput.record(this.#activeTurnId, request);
+        }
         this.#completeAssistantItems(event.message);
         if (event.message.stopReason === "error") {
           this.#terminalOutcome = "failed";
@@ -4738,7 +4749,7 @@ class PiConversationHandle implements ConversationHandle {
       ...(prior.completionCorrelations ?? []),
       ...(completionCorrelation ? [completionCorrelation] : []),
     ].filter((value, index, values) => values.indexOf(value) === index);
-    const { completedAt: _completedAt, endedBy: _endedBy, failure: _failure, ...active } = prior;
+    const { completedAt: _completedAt, endedBy: _endedBy, failure: _failure, throughput: _throughput, ...active } = prior;
     return {
       ...active,
       ...(completionCorrelations.length > 0 ? { completionCorrelations } : {}),
@@ -4776,7 +4787,7 @@ class PiConversationHandle implements ConversationHandle {
       new Set(projected.snapshot.orderedBackendTurnIds.slice(-readSnapshotTurns)),
     );
     const seed = selectPiProjectionWindow(
-      filled.snapshot,
+      this.#withThroughput(filled.snapshot),
       readSnapshotTurns,
       this.#session.sessionId,
     );
@@ -5091,7 +5102,25 @@ class PiConversationHandle implements ConversationHandle {
     });
   }
 
+  #withThroughput(snapshot: BackendConversationSnapshot): BackendConversationSnapshot {
+    return {
+      ...snapshot,
+      turnsById: Object.fromEntries(Object.entries(snapshot.turnsById).map(([id, turn]) => [id, this.#turnWithThroughput(turn)])),
+    };
+  }
+
+  #turnWithThroughput(turn: BackendTurn): BackendTurn {
+    const { throughput: _throughput, ...rest } = turn;
+    const throughput = turn.status === "completed" ? this.#throughput.get(turn.backendTurnId) : undefined;
+    return throughput ? { ...rest, throughput } : rest;
+  }
+
   #emit(event: BackendConversationEvent): void {
+    if (event.type === "turn_started") this.#throughput.start(event.turn.backendTurnId);
+    if (event.type === "turn_completed") this.#throughput.finish(event.turn.backendTurnId, event.turn.status === "completed");
+    if (event.type === "turn_started" || event.type === "turn_updated" || event.type === "turn_completed") {
+      event = { ...event, turn: this.#turnWithThroughput(event.turn) };
+    }
     const result = backendConversationEventSchema.safeParse(event);
     const parsed: BackendConversationEvent = result.success
       ? result.data

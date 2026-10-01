@@ -52,7 +52,7 @@ test("notification settings persist and passive server scripts follow selected l
   const threadId = threadPath.split("/").at(-1)!;
   let settings = await openNotifications(page);
   await settings
-    .getByRole("checkbox", { name: "Enable notifications", exact: true })
+    .getByRole("switch", { name: "Enable notifications", exact: true })
     .check();
   await settings
     .getByLabel("Server script path", { exact: true })
@@ -62,7 +62,7 @@ test("notification settings persist and passive server scripts follow selected l
     .fill(payloadPath);
   await settings.getByLabel("Timeout (seconds)", { exact: true }).fill("10");
   await settings
-    .getByRole("checkbox", { name: "Turn completed", exact: true })
+    .getByRole("switch", { name: "Turn completed", exact: true })
     .check();
   await expect(settings.getByRole("group", { name: "Response text", exact: true })).toBeVisible();
   await expect(settings.getByRole("checkbox", { name: "Include assistant response text", exact: true })).toHaveCount(0);
@@ -73,12 +73,12 @@ test("notification settings persist and passive server scripts follow selected l
     await phase.check();
   }
   await settings
-    .getByRole("checkbox", { name: "Automation started", exact: true })
+    .getByRole("switch", { name: "Automation started", exact: true })
     .check();
   for (const name of ["Approval requested", "Input requested"]) {
-    const checkbox = settings.getByRole("checkbox", { name, exact: true });
-    await expect(checkbox).not.toBeChecked();
-    await checkbox.check();
+    const event = settings.getByRole("switch", { name, exact: true });
+    await expect(event).not.toBeChecked();
+    await event.check();
   }
   for (const name of [
     "Turn failed",
@@ -86,14 +86,14 @@ test("notification settings persist and passive server scripts follow selected l
     "Snooze wake",
     "Automation failed before starting",
   ]) {
-    await settings.getByRole("checkbox", { name, exact: true }).uncheck();
+    await settings.getByRole("switch", { name, exact: true }).uncheck();
   }
   await settings
     .getByRole("button", { name: "Save notifications", exact: true })
     .click();
-  await expect(
-    settings.getByText("Notification settings saved.", { exact: true }),
-  ).toBeVisible();
+  // "Saved" shows briefly in the save bar, which then has nothing to save.
+  await expect(settings.locator('[data-slot="save-bar-status"]')).toHaveText("Saved");
+  await expect(settings.getByRole("button", { name: "Save notifications", exact: true })).toBeDisabled();
   await settings
     .getByRole("button", { name: "Send test notification", exact: true })
     .click();
@@ -125,11 +125,11 @@ test("notification settings persist and passive server scripts follow selected l
     settings.getByLabel("Arguments (one per line)", { exact: true }),
   ).toHaveValue(payloadPath);
   await expect(
-    settings.getByRole("checkbox", { name: "Automation started", exact: true }),
+    settings.getByRole("switch", { name: "Automation started", exact: true }),
   ).toBeChecked();
   for (const name of ["Approval requested", "Input requested"]) {
     await expect(
-      settings.getByRole("checkbox", { name, exact: true }),
+      settings.getByRole("switch", { name, exact: true }),
     ).toBeChecked();
   }
   for (const name of ["Provisional", "Final", "Unclassified"]) {
@@ -138,7 +138,7 @@ test("notification settings persist and passive server scripts follow selected l
   // The saved selection controls which sections the external script receives.
   await settings.getByRole("checkbox", { name: "Provisional", exact: true }).uncheck();
   await settings.getByRole("button", { name: "Save notifications", exact: true }).click();
-  await expect(settings.getByText("Notification settings saved.", { exact: true })).toBeVisible();
+  await expect(settings.locator('[data-slot="save-bar-status"]')).toHaveText("Saved");
   await page.setViewportSize({ width: 390, height: 844 });
   await expectNoPageOverflow(page);
   await settings
@@ -146,7 +146,7 @@ test("notification settings persist and passive server scripts follow selected l
     .scrollIntoViewIfNeeded();
   await capture(page, testInfo, "notification-settings-mobile.png");
   await settings
-    .getByRole("checkbox", { name: "Automation started", exact: true })
+    .getByRole("switch", { name: "Automation started", exact: true })
     .scrollIntoViewIfNeeded();
   await capture(page, testInfo, "notification-settings-mobile-events.png");
   await page.setViewportSize({ width: 1440, height: 1000 });
