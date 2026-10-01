@@ -281,6 +281,42 @@ test.describe("panel-instance workbench", () => {
     await expect(page.locator('[data-panel-id="chat"]')).toHaveCount(1);
   });
 
+  test("composer shrinks back to its empty height under reduced motion after Chat is collapsed beside Files", async ({
+    page,
+  }) => {
+    // A collapsed Chat keeps the composer laid out with no content width, so the
+    // placeholder wraps and the textarea measures at its 220px maximum. Reduced
+    // motion gives every element a 0.01ms transition, which must not hold the
+    // old height while the textarea measures itself back down.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openSedesWorkspace(page);
+    await createDraftThread(page);
+    const textarea = page.getByRole("textbox", {
+      name: "Message Scripted agent",
+    });
+    const height = () =>
+      textarea.evaluate((element) => element.getBoundingClientRect().height);
+    const empty = await height();
+
+    await openPanelsTrigger(page).click();
+    await page.getByRole("menuitem", { name: /^Files(?: —|$)/ }).click();
+    await expect(
+      page.getByRole("region", { name: "Workspace files" }),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect.poll(height).toBe(empty);
+    await page.getByRole("button", { name: "Collapse Chat panel" }).click();
+    await expect(page.getByTestId("thread-view")).toBeHidden();
+    await restoreCollapsed(page, "Chat");
+    await expect(textarea).toBeVisible();
+    await expect.poll(height).toBe(empty);
+
+    await textarea.fill("one\ntwo\nthree\nfour\nfive");
+    await expect.poll(height).toBeGreaterThan(empty);
+    await textarea.fill("");
+    await expect.poll(height).toBe(empty);
+  });
+
   test("narrow Files panel collapses without unmounting and can become the base surface", async ({
     page,
   }, testInfo) => {
