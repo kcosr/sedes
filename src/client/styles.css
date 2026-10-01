@@ -226,7 +226,7 @@
      (z-[90]) clear it from inside the dialog band. The overlay primitives
      keep those literals until they become dialog-aware. */
   --z-sticky: 1; /* in-page raised and sticky chrome (+0…+20) */
-  --z-floating: 50; /* in-page popovers, tasks panel and sheet, legacy dialog cards (+0…+12) */
+  --z-floating: 50; /* in-page popovers: notification errors, the thread peek (+0…+10) */
   --z-dialog: 80; /* Dialog primitive band; floating content above dialogs (+8…+11) */
   --z-drawer: 81; /* mobile drawer; menus opened over it +1 */
   --z-over-dialog: 100; /* sheets and dialogs over the drawer and dialog band, tooltips */
