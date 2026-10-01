@@ -299,12 +299,6 @@ test.describe.serial("Tasks panel", () => {
     await expect(completed).toHaveText("Completed1", {
       timeout: TASK_MUTATION_TIMEOUT_MS,
     });
-    // Completing offers Undo in a toast.
-    const toast = page.locator('[data-slot="toast"]');
-    await expect(toast).toContainText("Task completed");
-    await expect(toast.getByRole("button", { name: "Undo" })).toBeVisible();
-    await toast.getByRole("button", { name: "Dismiss" }).click();
-    await expect(toast).toHaveCount(0);
     await expect(
       sidebarThread.getByRole("img", {
         name: "1 open task",

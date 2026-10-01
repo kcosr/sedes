@@ -16,7 +16,7 @@ import {
   scopeKey,
   taskFileName,
   taskFileParent,
-  viewOptionsFilter,
+  viewFilters,
   viewUnavailableReason,
   type TasksContext,
 } from "./task-view-model.js";
@@ -130,9 +130,16 @@ describe("search, filters and order", () => {
     expect(matchesOnly(task({ pinned: true, files: ["/a"] }), options)).toBe(true);
     expect(matchesOnly(task({ pinned: true }), options)).toBe(false);
     expect(matchesOnly(task({ details: "   " }), { ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, onlyWithNotes: true })).toBe(false);
-    expect(viewOptionsFilter(TASKS_VIEW_OPTIONS_DEFAULTS.thread)).toBe(false);
-    expect(viewOptionsFilter({ ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, sort: "title", searchNotes: true })).toBe(false);
-    expect(viewOptionsFilter({ ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, show: "completed" })).toBe(true);
+    expect(viewFilters(TASKS_VIEW_OPTIONS_DEFAULTS.thread)).toEqual([]);
+    // Sorting and search scope do not narrow the list.
+    expect(viewFilters({ ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, sort: "title", searchNotes: true })).toEqual([]);
+    expect(
+      viewFilters({ ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, show: "completed", onlyPinned: true, onlyWithNotes: true }),
+    ).toEqual([
+      { key: "completed", label: "Completed", clear: { show: "open" } },
+      { key: "pinned", label: "Pinned only", clear: { onlyPinned: false } },
+      { key: "notes", label: "With notes", clear: { onlyWithNotes: false } },
+    ]);
   });
 
   it("orders pinned first then newest, and never reorders on edit", () => {

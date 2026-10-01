@@ -16,7 +16,15 @@ export const tasksTenant: WorkspacePanelTenant = {
   icon: ListChecks,
   scope: "thread",
   header: "tenant",
-  size: { minWidth: 300, minHeight: 240, preferredWidth: 380, preferredHeight: 480 },
+  // About a third of the stage, 300–380px, so Chat keeps its header and
+  // composer at 1024px.
+  size: {
+    minWidth: 300,
+    minHeight: 240,
+    preferredWidth: 380,
+    preferredHeight: 480,
+    preferredShare: 0.35,
+  },
   preferredPlacement: { edge: "right" },
   availability: () => ({ available: true }),
   render: () => <TasksDockSlot />,

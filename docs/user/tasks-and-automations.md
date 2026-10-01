@@ -37,17 +37,23 @@ appears depends on the page:
   by default. Like Files and Workpads, you can resize it, collapse it, dock it
   on another edge from **Tasks panel actions**, close it, or open it from the
   **Panels** menu. It stays open or collapsed as you switch threads, and its
-  content follows the current chat.
+  content follows the current chat. When Tasks is collapsed, by you or to
+  make room for another panel, the button keeps an outline; select it to show
+  Tasks again, which makes room in turn.
 - **On Home, Archived, and Usage**, the button in the top-right corner opens
   Tasks as a popover. Clicking outside it, pressing Escape, or navigating
   closes it.
 
 On phones and other narrow screens, Tasks opens as a bottom sheet on every
-page.
+page. Resizing the window across that width closes the popover or sheet,
+unless you are editing a Task: then Tasks stays open in the new presentation,
+with your edit as you left it.
 
 The button's badge counts open Tasks: the current thread's Tasks in a thread,
-and Global Tasks on the other pages. The Tasks header shows the open count of
-the current view.
+and Global Tasks on the other pages. The Tasks header counts what the list
+shows: the view's open Tasks, like its scope segment, or "1 of 3" while a
+search or **Only** narrows them, and completed Tasks under **Show** ›
+**Completed**.
 
 Only open Tasks directly scoped to a thread contribute to that sidebar row's
 Task count. Project and global Tasks, and Tasks on fork descendants, are not
@@ -65,15 +71,17 @@ count:
 - **All**: every Task.
 
 The views always follow the current chat. A view that does not apply, such as
-Thread on Home, is unavailable, and its tooltip gives the reason. Tasks opens
-on the view you last chose; when that view is unavailable, it falls back to
-Project, then Global.
+Thread on Home, is unavailable; point at it, or tap it on a phone, to see why.
+Tasks opens on the view you last chose; when that view is unavailable, it falls
+back to Project, then Global.
 
 **All** is grouped by project: Global first, then each project, the current one
 first, with each thread's Tasks in a group under its project. Select a group
 heading to collapse or expand it, or use **Collapse all groups** in the Tasks
 menu (**⋯**, or **Tasks panel actions** when docked). Turn off **Group by
-project** in **View options** for one flat list.
+project** in **View options** for one flat list. Without group headings, as in
+that list or in Project with **Include thread tasks**, each row shows where
+its Task belongs on a quiet line under the title.
 
 ## Add Tasks
 
@@ -113,9 +121,11 @@ clears the search and closes it.
 | **Include thread tasks** | Project only; off by default |
 | **Search notes** | Off by default |
 
-Each view remembers its own options on this device. The filter icon shows a
-dot while **Show** or **Only** hides Tasks; when nothing matches, the list
-offers to reset them. On phones, View options are in the sheet's **⋯** menu.
+Each view remembers its own options on this device. While **Show** or **Only**
+hides Tasks, a chip for each one, such as **Pinned only**, sits under the
+scope control, and the filter icon shows a dot; select a chip's **×** to
+remove it. When nothing matches, the list offers to reset them. On phones,
+View options are in the sheet's **⋯** menu.
 
 With the default sort, pinned Tasks come first, then the most recently created.
 Editing or moving a Task does not change its creation order.
@@ -138,7 +148,7 @@ them.
 ### See the details
 
 Select a row, or press Enter on it, to expand it in place. One row is
-expanded at a time. The detail shows:
+expanded at a time, and its title shows whole. The detail shows:
 
 - the notes as plain text, with **Show more** for long notes;
 - the linked files, which open in Files when the project is available;
@@ -186,12 +196,10 @@ Archived threads are not offered as destinations. Moving a Task that links to
 files out of its project asks first, because the absolute file paths do not
 change.
 
-### Undo
-
-After you complete or reopen a Task, or move it with **Move to** or by
-dragging, a notice at the bottom of the workspace offers **Undo** for about
-five seconds. Press F8 to move focus to it. Delete has no Undo, which is why it
-asks first.
+There is no Undo. To take back a completion, open the **Completed** section
+and select the Task's circle to reopen it. To take back a move, move the Task
+back with **Move to** or **Edit**'s **Belongs to**. Delete cannot be taken
+back, which is why it asks first.
 
 ### Drag a Task
 
@@ -250,7 +258,7 @@ Sedes adds the Task to the current thread's composer as a compact pill with
 the Task's title and a remove button. A completed Task's pill is muted and a
 deleted Task's pill shows a warning; hover over the pill to see why. Add to prompt needs an open thread,
 so it is unavailable on Home, Archived, and Usage. On phones, it closes the
-sheet and confirms with a notice.
+sheet so you can see the pill arrive.
 
 Before delivery, the pill follows live Task renames and completion state. At
 Send, Queue, or Steer acceptance, Sedes records an immutable snapshot so the

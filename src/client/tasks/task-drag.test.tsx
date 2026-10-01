@@ -7,7 +7,6 @@ import type {
   NormalizedApplicationSnapshot,
 } from "../../shared/index.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
-import { ToastProvider } from "../components/ui/toast.js";
 import {
   TaskDragProvider,
   handleTaskDragStart,
@@ -81,14 +80,12 @@ function renderTargets() {
   } as unknown as ApplicationClientStore;
   const snapshot = { threads: [], workspaces: [], tasks: [task] };
   render(
-    <ToastProvider>
-      <TaskDragProvider
-        store={store}
-        snapshot={snapshot as unknown as NormalizedApplicationSnapshot}
-      >
-        <Targets />
-      </TaskDragProvider>
-    </ToastProvider>,
+    <TaskDragProvider
+      store={store}
+      snapshot={snapshot as unknown as NormalizedApplicationSnapshot}
+    >
+      <Targets />
+    </TaskDragProvider>,
   );
   return { moveTask };
 }
@@ -146,18 +143,6 @@ describe("useTaskScopeDropTargets", () => {
     expect(moveTask).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("over")).toHaveTextContent("none");
     expect(screen.getByTestId("project")).not.toHaveAttribute("data-task-drop-armed");
-
-    // Every move offers Undo, which moves the task back where it was.
-    const toast = await screen.findByText("Moved to acme-web");
-    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
-    await waitFor(() =>
-      expect(moveTask).toHaveBeenLastCalledWith(
-        task,
-        task.scope,
-        expect.any(String),
-      ),
-    );
-    expect(toast).not.toBeInTheDocument();
   });
 
   it("ignores drags that do not carry a task", () => {

@@ -17,7 +17,6 @@ import type {
 import { ApiError } from "../api/ApiClient.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { ConfirmDialog } from "../components/ui/confirm-dialog.js";
-import { useToast } from "../components/ui/toast.js";
 
 export const TASK_DRAG_MIME = "application/x-sedes-task+json";
 
@@ -126,7 +125,6 @@ export function TaskDragProvider({
   const activePayloadRef = useRef<TaskDragPayload | undefined>(undefined);
   const highlightedTargetRef = useRef<HTMLElement | undefined>(undefined);
   const moveMutationIds = useRef(new Map<string, string>());
-  const toast = useToast();
 
   const announce = useCallback((message: string, error = false) => {
     setAnnouncement("");
@@ -170,24 +168,6 @@ export function TaskDragProvider({
     [store],
   );
 
-  /** Moves a task back to the scope it was moved from. */
-  const undoMove = useCallback(
-    async (taskId: string, scope: TaskScope) => {
-      const current = store.getTasks().find(({ id }) => id === taskId);
-      if (!current) {
-        announce("That task is gone, so the move can't be undone.", true);
-        return;
-      }
-      try {
-        await store.moveTask(current, scope, crypto.randomUUID());
-        announce(`Moved “${current.title}” back.`);
-      } catch (error) {
-        announce(moveErrorMessage(error), true);
-      }
-    },
-    [announce, store],
-  );
-
   const performMove = useCallback(
     /** Resolves with the failure message when the move did not happen. */
     async (
@@ -225,15 +205,6 @@ export function TaskDragProvider({
         moveMutationIds.current.delete(fingerprint);
         setPendingMove(undefined);
         announce(`Moved “${current.title}” to ${target.label}.`);
-        // Every move can be undone: Undo moves the task back where it was.
-        const previous = current.scope;
-        toast.show({
-          message: `Moved to ${target.label}`,
-          action: {
-            label: "Undo",
-            onAction: () => void undoMove(current.id, previous),
-          },
-        });
         return undefined;
       } catch (error) {
         // An HTTP response is definitive. A transport failure can be
@@ -246,7 +217,7 @@ export function TaskDragProvider({
         return message;
       }
     },
-    [announce, store, toast, undoMove],
+    [announce, store],
   );
 
   const requestScopeMove = useCallback(

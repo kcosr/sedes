@@ -774,13 +774,18 @@ export class PanelLayoutStore {
     const edge = tenant.preferredPlacement.edge;
     const available =
       edge === "right" ? input.availableWidth : input.availableHeight;
-    const preferred =
+    const [minimum, preferred] =
       edge === "right"
-        ? tenant.size.preferredWidth
-        : tenant.size.preferredHeight;
+        ? [tenant.size.minWidth, tenant.size.preferredWidth]
+        : [tenant.size.minHeight, tenant.size.preferredHeight];
     if (!available || !Number.isFinite(available) || available <= 0)
       return undefined;
-    return Math.min(0.7, Math.max(0.1, preferred / available));
+    const share = tenant.size.preferredShare;
+    const size =
+      share === undefined
+        ? preferred
+        : Math.min(preferred, Math.max(minimum, share * available));
+    return Math.min(0.7, Math.max(0.1, size / available));
   }
 
   #requestFocus(

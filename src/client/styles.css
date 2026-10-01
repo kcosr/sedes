@@ -220,18 +220,17 @@
      context. The values are today's stacking bands, kept exactly, so a
      declaration that must stay above another in its band adds
      `calc(var(--z-x) + n)`. Today's order is sticky < floating < dialog
-     < drawer < over-dialog < blocking < toast: in-page popovers and the
+     < drawer < over-dialog < blocking: in-page popovers and the
      DropdownMenu primitive (z-50) sit below the Dialog primitive
      (z-[80]/z-[81]), and the Popover, Select and ContextMenu primitives
      (z-[90]) clear it from inside the dialog band. The overlay primitives
      keep those literals until they become dialog-aware. */
   --z-sticky: 1; /* in-page raised and sticky chrome (+0…+20) */
-  --z-floating: 50; /* in-page popovers, tasks panel and sheet, legacy dialog cards (+0…+12) */
+  --z-floating: 50; /* in-page popovers: notification errors, the thread peek (+0…+10) */
   --z-dialog: 80; /* Dialog primitive band; floating content above dialogs (+8…+11) */
   --z-drawer: 81; /* mobile drawer; menus opened over it +1 */
   --z-over-dialog: 100; /* sheets and dialogs over the drawer and dialog band, tooltips */
   --z-blocking: 110; /* operation overlay; confirmations and pickers over sheets */
-  --z-toast: 120;
 
   /* floating surfaces and dialogs */
   --menu-row-height: 32px;
@@ -4673,6 +4672,12 @@ textarea:disabled {
   width: auto;
   gap: var(--space-1);
   padding-inline: var(--space-1-5);
+}
+
+/* Docked Tasks open but off stage (collapsed, or to make room): the pressed
+   chip's outline without its fill. */
+.tasks-panel-toggle[data-state="collapsed"] {
+  box-shadow: inset 0 0 0 1px var(--input);
 }
 
 .thread-find-bar {

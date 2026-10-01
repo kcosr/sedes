@@ -1,4 +1,5 @@
 import { createPortal } from "react-dom";
+import { Tooltip } from "radix-ui";
 import { StablePaneSlot } from "../../workspace-panels/StablePaneSlot.js";
 import {
   Dialog,
@@ -71,7 +72,8 @@ import { ApiError } from "../../api/ApiClient.js";
 import { Button } from "@client/components/ui/button";
 import { Callout } from "@client/components/ui/callout";
 import { ConfirmDialog } from "@client/components/ui/confirm-dialog";
-import { CountBadge } from "@client/components/ui/count-badge";
+import { CountBadge, countBadgeVariants } from "@client/components/ui/count-badge";
+import { cn } from "@client/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -99,7 +101,6 @@ import {
   useTaskScopeDropTargets,
   type TaskScopeDropTarget,
 } from "../../tasks/task-drag.js";
-import { useToast } from "../ui/toast.js";
 import { TaskAddRow, EMPTY_TASK_ADD_DRAFT, type TaskAddDraft } from "./TaskAddRow.js";
 import { TaskEditDialog } from "./TaskEditDialog.js";
 import {
@@ -136,7 +137,7 @@ import {
   scopeKey,
   TASK_PASTE_MAX_TITLES,
   TASKS_VIEW_LABEL,
-  viewOptionsFilter,
+  viewFilters,
   viewUnavailableReason,
   type TaskGroup,
 } from "./task-view-model.js";
@@ -169,14 +170,18 @@ export interface TasksPanelContentProps {
   /**
    * Closes a popover or sheet: its ×, Escape, and on a phone the actions
    * that continue elsewhere (Add to prompt, opening a file or a thread).
+   * An announcement is made by the host, since this content (and its live
+   * region) goes with the surface.
    */
-  readonly onRequestClose: () => void;
+  readonly onRequestClose: (announcement?: string) => void;
   /**
    * Docked only: the layout's collapse, dock and close controls. The
    * content then draws its header as the panel's `PanelChrome`, with its
    * own ⋯ items folded into the panel's actions menu.
    */
   readonly panelControls?: PanelChromeControls;
+  /** Whether a task is open in the editor, whose unsaved edits the host keeps. */
+  readonly onEditingChange?: (editing: boolean) => void;
 }
 
 type PendingActions = ReadonlyMap<string, ReadonlySet<TaskAction>>;
@@ -264,6 +269,7 @@ export function TasksPanelContent({
   active,
   onRequestClose,
   panelControls,
+  onEditingChange,
 }: TasksPanelContentProps): React.JSX.Element {
   const sheet = presentation === "sheet";
   const application = useApplicationStore(store);
@@ -271,7 +277,6 @@ export function TasksPanelContent({
   const tasks = useMemo(() => snapshot?.tasks ?? [], [snapshot?.tasks]);
   const composerDraft = useComposerDraftStaging();
   const taskDrag = useTaskDrag();
-  const toast = useToast();
   const touch = useTouchDensity();
   const destinations = useTaskDestinations(snapshot, route);
   const { context } = destinations;
@@ -367,10 +372,6 @@ export function TasksPanelContent({
     },
     [markPending],
   );
-  const latest = useCallback(
-    (taskId: string) => store.getTasks().find(({ id }) => id === taskId),
-    [store],
-  );
 
   // ── What the view shows ──────────────────────────────────────────────────
   const query = normalizeQuery(searchOpen ? searchText : "");
@@ -460,6 +461,11 @@ export function TasksPanelContent({
   const sheetDetail = sheet && expandedTask !== undefined;
 
   // ── Effects ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    onEditingChange?.(editingId !== null);
+  }, [editingId, onEditingChange]);
+  useEffect(() => () => onEditingChange?.(false), [onEditingChange]);
+
   // Forget optimistic rows once their task has been published.
   useEffect(() => {
     if (
@@ -600,7 +606,7 @@ export function TasksPanelContent({
 
   // ── Actions ──────────────────────────────────────────────────────────────
   const setCompleted = useCallback(
-    async (task: AssociatedTask, completed: boolean, offerUndo: boolean) => {
+    async (task: AssociatedTask, completed: boolean) => {
       const result = await runTask(
         task,
         "complete",
@@ -609,24 +615,12 @@ export function TasksPanelContent({
       );
       if (!result.ok) return;
       announce(completed ? `Completed “${task.title}”.` : `Reopened “${task.title}”.`);
-      if (!offerUndo) return;
-      toast.show({
-        message: completed ? "Task completed" : "Task reopened",
-        action: {
-          label: "Undo",
-          onAction: () => {
-            const current = latest(task.id);
-            if (current) void setCompleted(current, !completed, false);
-          },
-        },
-      });
     },
-    [announce, latest, runTask, store, toast],
+    [announce, runTask, store],
   );
 
   const moveNow = useCallback(
-    async (task: AssociatedTask, scope: TaskScope, offerUndo: boolean) => {
-      const previous = task.scope;
+    async (task: AssociatedTask, scope: TaskScope) => {
       markPending(task.id, "move", true);
       try {
         await store.moveTask(task, scope);
@@ -634,24 +628,9 @@ export function TasksPanelContent({
         markPending(task.id, "move", false);
       }
       setError(null);
-      const label = destinations.label(scope);
-      announce(`Moved “${task.title}” to ${label}.`);
-      if (!offerUndo) return;
-      toast.show({
-        message: `Moved to ${label}`,
-        action: {
-          label: "Undo",
-          onAction: () => {
-            const current = latest(task.id);
-            if (!current) return;
-            void moveNow(current, previous, false).catch((cause: unknown) =>
-              setError(`Couldn't move “${task.title}” back: ${errorMessage(cause)}`),
-            );
-          },
-        },
-      });
+      announce(`Moved “${task.title}” to ${destinations.label(scope)}.`);
     },
-    [announce, destinations, latest, markPending, store, toast],
+    [announce, destinations, markPending, store],
   );
 
   const moveTo = useCallback(
@@ -673,7 +652,7 @@ export function TasksPanelContent({
         setPendingMove({ task, scope });
         return;
       }
-      void moveNow(task, scope, true).catch((cause: unknown) =>
+      void moveNow(task, scope).catch((cause: unknown) =>
         setError(`Couldn't move “${task.title}”: ${errorMessage(cause)}`),
       );
     },
@@ -695,13 +674,12 @@ export function TasksPanelContent({
         return;
       }
       setError(null);
-      announce(`Added “${task.title}” to the prompt.`);
-      if (sheet) {
-        onRequestClose();
-        toast.show({ message: "Added to prompt" });
-      }
+      const message = `Added “${task.title}” to the prompt.`;
+      // On a phone the sheet closes, so the chip arriving is visible.
+      if (sheet) onRequestClose(message);
+      else announce(message);
     },
-    [announce, composerDraft, onRequestClose, sheet, threadId, toast],
+    [announce, composerDraft, onRequestClose, sheet, threadId],
   );
 
   const openFile = useCallback(
@@ -746,7 +724,7 @@ export function TasksPanelContent({
   const actions: TaskListActions = useMemo(
     () => ({
       toggleComplete: (task) =>
-        void setCompleted(task, task.completedAt === null, true),
+        void setCompleted(task, task.completedAt === null),
       togglePin: (task) =>
         void runTask(
           task,
@@ -989,7 +967,7 @@ export function TasksPanelContent({
 
   // ── Drag onto a scope segment, or the list, moves the task there ────────
   // The drag controller confirms a move across projects for a task with
-  // files and offers Undo, as for every other drop.
+  // files, as for every other drop.
   const draggedTask = taskDrag?.activeTaskId
     ? tasks.find(({ id }) => id === taskDrag.activeTaskId)
     : undefined;
@@ -1020,12 +998,32 @@ export function TasksPanelContent({
 
   // ── Rendering ────────────────────────────────────────────────────────────
   const searchFiltering = query.length > 0;
-  const filtering = viewOptionsFilter(options);
+  // Lists that mix scopes without group headings say where each task
+  // belongs: All ungrouped, and Project with its threads' tasks.
+  const showLocation =
+    (view === "all" && !options.groupByProject) ||
+    (view === "project" && options.includeThreadTasks);
+  const locationOf = (task: AssociatedTask) => {
+    const label = destinations.label(task.scope);
+    const project =
+      view === "all" &&
+      task.scope.kind === "thread" &&
+      task.associatedWorkspaceId !== null
+        ? destinations.workspaceLabels.get(task.associatedWorkspaceId)
+        : undefined;
+    return {
+      kind: task.scope.kind,
+      label: project ? `${label} · ${project}` : label,
+    };
+  };
+  const filters = viewFilters(options);
+  const filtering = filters.length > 0;
   const renderRow = (task: AssociatedTask) => (
     <TaskRow
       key={task.id}
       task={task}
       expanded={expandedId === task.id}
+      {...(showLocation ? { location: locationOf(task) } : {})}
       focusable={rovingKey === taskNavKey(task.id)}
       inlineDetail={!sheet}
       moveOpen={moveMenuId === task.id}
@@ -1142,37 +1140,40 @@ export function TasksPanelContent({
     >
       {TASKS_VIEWS.map((candidate) => {
         const reason = viewUnavailableReason(candidate, context);
-        return (
-          <span
-            key={candidate}
-            className="tasks-scope-slot"
-            title={reason}
+        const segment = (
+          <SegmentedControlItem
+            value={candidate}
+            disabled={reason !== undefined}
+            className="tasks-scope-item"
+            // A phone sheet opens on the view, not the add bar, so the
+            // soft keyboard does not cover the list on every open.
+            data-autofocus={sheet && candidate === view ? "" : undefined}
+            aria-describedby={`${scopeHintId}-${candidate}`}
+            {...scopeDrop.props(candidate, scopeDropTarget(candidate))}
           >
-            <SegmentedControlItem
-              value={candidate}
-              disabled={reason !== undefined}
-              className="tasks-scope-item"
-              // A phone sheet opens on the view, not the add bar, so the
-              // soft keyboard does not cover the list on every open.
-              data-autofocus={sheet && candidate === view ? "" : undefined}
-              aria-describedby={
-                reason === undefined ? `${scopeHintId}-${candidate}` : undefined
-              }
-              {...scopeDrop.props(candidate, scopeDropTarget(candidate))}
-            >
-              {TASKS_VIEW_LABEL[candidate]}
-              {reason === undefined && (
-                <span className="tasks-scope-count" aria-hidden="true">
-                  {viewCount(candidate)}
-                </span>
-              )}
-            </SegmentedControlItem>
+            {TASKS_VIEW_LABEL[candidate]}
             {reason === undefined && (
-              <span id={`${scopeHintId}-${candidate}`} className="sr-only">
-                {viewCount(candidate)} open
+              <span className="tasks-scope-count" aria-hidden="true">
+                {viewCount(candidate)}
               </span>
             )}
+          </SegmentedControlItem>
+        );
+        const description = (
+          <span id={`${scopeHintId}-${candidate}`} className="sr-only">
+            {reason ?? `${viewCount(candidate)} open`}
           </span>
+        );
+        return reason === undefined ? (
+          <span key={candidate} className="tasks-scope-slot">
+            {segment}
+            {description}
+          </span>
+        ) : (
+          <UnavailableScopeSlot key={candidate} reason={reason}>
+            {segment}
+            {description}
+          </UnavailableScopeSlot>
         );
       })}
     </SegmentedControl>
@@ -1264,18 +1265,81 @@ export function TasksPanelContent({
       className="tasks-header-button"
       aria-label="Close Tasks panel"
       title="Close"
-      onClick={onRequestClose}
+      onClick={() => onRequestClose()}
     >
       <X aria-hidden="true" />
     </Button>
   );
 
-  const countBadge = (
-    <CountBadge
-      count={viewCount(view)}
-      className="tasks-title-count"
-      aria-label={`${viewCount(view)} open`}
-    />
+  // The header counts what the list shows, like the segments when nothing
+  // narrows it; search or an Only option makes it "1 of 3", out of the
+  // segment's count. Show › Completed counts completed tasks.
+  const listedKind = options.show === "completed" ? "completed" : "open";
+  const listedTotal =
+    options.show === "completed"
+      ? tasks.filter(
+          (task) =>
+            task.completedAt !== null &&
+            inViewScope(task, view, context, options.includeThreadTasks),
+        ).length
+      : viewCount(view);
+  const countBadge =
+    mainTasks.length === listedTotal ? (
+      <CountBadge
+        count={listedTotal}
+        className="tasks-title-count"
+        aria-label={`${listedTotal} ${listedKind}`}
+      />
+    ) : (
+      <span
+        data-slot="count-badge"
+        data-tone="neutral"
+        className={cn(countBadgeVariants(), "tasks-title-count")}
+        aria-label={`${mainTasks.length} of ${listedTotal} ${listedKind} shown`}
+      >
+        {mainTasks.length} of {listedTotal}
+      </span>
+    );
+
+  // Removing a chip moves focus to its neighbour, else to the scope.
+  const filtersRef = useRef<HTMLDivElement>(null);
+  const removeFilter = (index: number) => {
+    const filter = filters[index];
+    if (!filter) return;
+    setOptions(filter.clear);
+    const keys = filters.map(({ key }) => key);
+    const next = keys[index + 1] ?? keys[index - 1];
+    requestAnimationFrame(() => {
+      const target = next
+        ? filtersRef.current?.querySelector<HTMLElement>(`[data-filter="${next}"]`)
+        : rootRef.current?.querySelector<HTMLElement>(
+            '.tasks-scope-item[data-state="on"]',
+          );
+      target?.focus();
+    });
+  };
+  const filterChips = filtering && (
+    <div
+      ref={filtersRef}
+      className="tasks-filters"
+      role="group"
+      aria-label="View filters"
+    >
+      {filters.map((filter, index) => (
+        <Button
+          key={filter.key}
+          variant="outline"
+          size="sm"
+          className="tasks-filter-chip"
+          data-filter={filter.key}
+          aria-label={`Remove filter: ${filter.label}`}
+          onClick={() => removeFilter(index)}
+        >
+          {filter.label}
+          <X data-icon="inline-end" aria-hidden="true" />
+        </Button>
+      ))}
+    </div>
   );
 
   const header = sheetDetail ? (
@@ -1518,7 +1582,7 @@ export function TasksPanelContent({
               <TaskFacts task={expandedTask} />
             </div>
             {errorCallout}
-            <div className="tasks-sheet-actions" data-toast-avoid="">
+            <div className="tasks-sheet-actions">
               <Button
                 variant="outline"
                 size="lg"
@@ -1545,6 +1609,7 @@ export function TasksPanelContent({
               <span id={scopeHintId} className="sr-only">
                 {scopeHint}
               </span>
+              {filterChips}
               {!sheet && addRow}
             </div>
             {errorCallout}
@@ -1562,7 +1627,8 @@ export function TasksPanelContent({
           key={editingId}
           task={editingTask}
           open={active}
-            store={store}
+          surface={presentation}
+          store={store}
           destinations={destinations}
           onClose={() => setEditingId(null)}
         />
@@ -1601,7 +1667,7 @@ export function TasksPanelContent({
         }}
         onConfirm={async () => {
           if (!pendingMove) return;
-          await moveNow(pendingMove.task, pendingMove.scope, true);
+          await moveNow(pendingMove.task, pendingMove.scope);
         }}
       />
       <ConfirmDialog
@@ -1702,6 +1768,52 @@ export function TasksPanelContent({
   );
 }
 
+/**
+ * The slot of a scope segment that does not apply. A disabled segment takes
+ * neither focus nor pointer events, so its slot shows the reason: a tooltip
+ * on hover, and on a tap or click, which is all touch has. Keyboard and
+ * screen-reader users have it in the control's description.
+ */
+function UnavailableScopeSlot({
+  reason,
+  children,
+}: {
+  readonly reason: string;
+  readonly children: ReactNode;
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  return (
+    <Tooltip.Provider delayDuration={300}>
+      <Tooltip.Root open={open} onOpenChange={setOpen}>
+        <Tooltip.Trigger asChild>
+          <span
+            className="tasks-scope-slot"
+            data-unavailable=""
+            onClick={(event) => {
+              // The trigger would close the tooltip on a click.
+              event.preventDefault();
+              setOpen(true);
+            }}
+          >
+            {children}
+          </span>
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content
+            className="lineage-tooltip"
+            side="bottom"
+            sideOffset={6}
+            collisionPadding={8}
+          >
+            {reason}
+            <Tooltip.Arrow className="lineage-tooltip-arrow" />
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+    </Tooltip.Provider>
+  );
+}
+
 function createBodyTarget(): HTMLElement {
   const target = document.createElement("div");
   target.style.display = "contents";
@@ -1743,6 +1855,8 @@ export function TasksPanel({
   const threadWorkspace = route.name === "thread";
   const routeKey = threadWorkspace ? `thread:${route.threadId}` : route.name;
   const [overlayOpen, setOverlayOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [announcement, setAnnouncement] = useState("");
   const [dock, publishDock] = useState<TasksDock>();
   const [bodyTarget] = useState(createBodyTarget);
   const popoverAnchor = useRef<HTMLElement | null>(null);
@@ -1751,11 +1865,6 @@ export function TasksPanel({
   // must not pull focus back into the hidden workspace.
   const activeRef = useRef(active);
   activeRef.current = active;
-
-  // The popover and the sheet are transient: navigating or crossing the
-  // phone breakpoint closes them. The docked panel's open state is the
-  // panel layout's.
-  useEffect(() => setOverlayOpen(false), [routeKey, mobile]);
 
   const placement: TasksPresentation | undefined = mobile
     ? overlayOpen
@@ -1769,16 +1878,46 @@ export function TasksPanel({
         ? "popover"
         : undefined;
 
-  const latest = useRef({ mobile, threadWorkspace, dock, placement });
-  latest.current = { mobile, threadWorkspace, dock, placement };
+  const latest = useRef({ mobile, threadWorkspace, dock, placement, editing });
+  latest.current = { mobile, threadWorkspace, dock, placement, editing };
+  // The presentation the content keeps while retained without a surface.
+  const lastPlacement = useRef<TasksPresentation>("popover");
+  if (placement) lastPlacement.current = placement;
+
+  // The popover and the sheet are transient: navigating or crossing the
+  // phone breakpoint closes them. The docked panel's open state is the
+  // panel layout's. An open editor is the exception at the breakpoint: so
+  // its unsaved edits survive, Tasks shows in the new presentation instead
+  // (the sheet, the popover, or the dock opened for it). While no surface
+  // shows an open editor, the content stays mounted, hidden, until one does.
+  const crossed = useRef({ routeKey, mobile });
+  useEffect(() => {
+    const before = crossed.current;
+    crossed.current = { routeKey, mobile };
+    if (before.routeKey === routeKey && before.mobile === mobile) return;
+    const { editing, dock } = latest.current;
+    if (before.routeKey !== routeKey || !editing) {
+      setOverlayOpen(false);
+      return;
+    }
+    if (mobile) {
+      setOverlayOpen(true);
+    } else if (threadWorkspace) {
+      setOverlayOpen(false);
+      if (dock && !dock.visible) dock.open({ focus: false });
+    }
+  }, [routeKey, mobile, threadWorkspace]);
 
   const toggleOverlay = useCallback(
     () => setOverlayOpen((open) => !open),
     [],
   );
-  const requestClose = useCallback(() => {
+  const requestClose = useCallback((message?: string) => {
     if (latest.current.placement === "panel") latest.current.dock?.close();
     else setOverlayOpen(false);
+    if (message === undefined) return;
+    setAnnouncement("");
+    window.setTimeout(() => setAnnouncement(message), 0);
   }, []);
   const toggle = useCallback(() => {
     const { mobile, threadWorkspace, dock } = latest.current;
@@ -1946,16 +2085,26 @@ export function TasksPanel({
           <StablePaneSlot target={bodyTarget} />
         </div>
       ) : null}
-      {placement
+      {/* Outlives the popover and the sheet, for what is announced as
+          they close. */}
+      <div className="sr-only" role="status" aria-live="polite">
+        {announcement}
+      </div>
+      {placement || editing
         ? createPortal(
             <TasksPanelContent
               store={store}
               panelLayoutStore={panelLayoutStore}
               route={route}
-              active={active && (placement !== "panel" || dock?.visible === true)}
-              presentation={placement}
+              active={
+                active &&
+                placement !== undefined &&
+                (placement !== "panel" || dock?.visible === true)
+              }
+              presentation={placement ?? lastPlacement.current}
               onRequestClose={requestClose}
               panelControls={placement === "panel" ? dock?.controls : undefined}
+              onEditingChange={setEditing}
             />,
             bodyTarget,
           )

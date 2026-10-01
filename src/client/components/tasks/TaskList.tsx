@@ -482,9 +482,17 @@ function InlineDetail({
   );
 }
 
+/** Where a task belongs, for lists that mix scopes without group headings. */
+export interface TaskRowLocation {
+  readonly kind: TaskScope["kind"];
+  readonly label: string;
+}
+
 export interface TaskRowProps {
   readonly task: AssociatedTask;
   readonly expanded: boolean;
+  /** A quiet second line under the title; its text is the row's description. */
+  readonly location?: TaskRowLocation;
   /** The roving tab stop of the list. */
   readonly focusable: boolean;
   /** Render the detail inline under the row (panel and popover). */
@@ -506,6 +514,7 @@ export interface TaskRowProps {
 export function TaskRow({
   task,
   expanded,
+  location,
   focusable,
   inlineDetail,
   moveOpen,
@@ -515,6 +524,7 @@ export function TaskRow({
 }: TaskRowProps): React.JSX.Element {
   const { touch, taskDrag, pending } = useTaskList();
   const detailId = useId();
+  const locationId = useId();
   const busy = pending(task.id);
   const draggable = !touch && taskDrag !== undefined;
   return (
@@ -550,14 +560,31 @@ export function TaskRow({
           tabIndex={focusable ? 0 : -1}
           aria-expanded={expanded}
           aria-controls={expanded && inlineDetail ? detailId : undefined}
+          aria-describedby={location ? locationId : undefined}
+          data-location={location ? "" : undefined}
           onClick={(event) => {
             event.stopPropagation();
             onToggle(task);
           }}
           onKeyDown={(event) => onTitleKeyDown(event, task)}
         >
-          {task.title}
+          {location ? (
+            <>
+              <span className="tasks-row-title-text">{task.title}</span>
+              <span className="tasks-row-location" aria-hidden="true">
+                <ScopeIcon kind={location.kind} />
+                <span className="tasks-row-location-label">{location.label}</span>
+              </span>
+            </>
+          ) : (
+            task.title
+          )}
         </button>
+        {location && (
+          <span id={locationId} className="sr-only">
+            In {location.label}
+          </span>
+        )}
         <TaskIndicators task={task} />
         <TaskRowMenu task={task} focusable={focusable} />
       </div>

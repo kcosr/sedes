@@ -79,11 +79,9 @@
   **Recently updated**, or **Title**; show **Open** or **Completed** Tasks;
   show only pinned Tasks, Tasks with notes, or Tasks with files; group All by
   project; include thread Tasks in Project; and search notes. Each view
-  remembers its own options on the device.
-
-- Completing, reopening, or moving a Task shows a notice with **Undo** for
-  about five seconds, whether the move came from **Move to** or a drag. F8 moves
-  focus to the notice. Deleting still asks first and has no Undo.
+  remembers its own options on the device. Options that hide Tasks show as
+  removable chips under the scope control, and the header then counts the
+  Tasks shown, such as "1 of 3".
 
 - Ctrl+Shift+L (Command+Shift+L on macOS) opens and closes Tasks. Inside
   Tasks, N adds, `/` searches, and the arrow keys move between Tasks; on a
@@ -202,7 +200,9 @@
   floating card, and resizes, collapses, docks on another edge, and closes
   like Files and Workpads. Home, Archived, and Usage open Tasks as a popover
   from the corner button, and phones keep a bottom sheet. The card's pin is
-  gone.
+  gone. Docked Tasks opens at about a third of the stage, and its button keeps
+  an outline while Tasks is collapsed, by hand or to make room for another
+  panel.
 
 - One scope control, **Thread**, **Project**, **Global**, and **All**,
   replaces the old view switcher and its project and thread picker. Each view
@@ -220,10 +220,12 @@
   **Completed** section, most recently completed first; pinning no longer
   lifts them above open Tasks.
 
-- Selecting a Task expands it in place, with its notes, files, when and where
-  it was added, and **Add to prompt**, **Edit**, and **Move to…**. **Edit**
-  opens a dialog with labelled fields, **Belongs to**, Files, Pinned, and
-  **Delete…**. On phones, a Task opens as a detail view in the sheet.
+- Selecting a Task expands it in place, with its whole title, its notes,
+  files, when and where it was added, and **Add to prompt**, **Edit**, and
+  **Move to…**. Lists without group headings show where each Task belongs on
+  a second line. **Edit** opens a dialog with labelled fields, **Belongs to**,
+  Files, Pinned, and **Delete…**. On phones, a Task opens as a detail view in
+  the sheet.
 
 - Each Task row has a **⋯** menu with **Add to prompt**, **Edit…**, **Pin**,
   **Move to** (this thread, this project, Global, or a searchable choice), and

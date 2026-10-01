@@ -167,8 +167,8 @@
   width: 100%;
 }
 
-/* The slot carries a disabled segment's reason as its tooltip (a disabled
-   segment takes no pointer events itself). */
+/* A disabled segment takes no pointer events itself, so its slot shows the
+   reason (UnavailableScopeSlot): a tooltip on hover, a tap or a click. */
 .tasks-scope-slot {
   display: flex;
   flex: 1 1 0;
@@ -194,6 +194,30 @@
   .tasks-scope-item {
     padding-inline: var(--space-1);
     font-size: var(--text-meta);
+  }
+}
+
+/* Active View option filters, under the scope control: one removable chip
+   each ("Pinned only ×"). */
+.tasks-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.tasks-filter-chip {
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  font-weight: var(--weight-medium);
+}
+
+.tasks-filter-chip:hover {
+  color: var(--foreground);
+}
+
+@media (max-width: 819px), (pointer: coarse) {
+  .tasks-filter-chip {
+    height: var(--control-md);
   }
 }
 
@@ -468,6 +492,73 @@
   outline: none;
 }
 
+/* Lists that mix scopes without group headings put where a task belongs on
+   a quiet second line, so it never takes room from the title. */
+.tasks-row-title[data-location] {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.tasks-row-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-row-location {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-snug);
+}
+
+.tasks-row-location svg {
+  flex: none;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+
+.tasks-row-location-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Expanded, the title shows whole: it wraps, and the circle, indicators and
+   ⋯ stay level with its first line. */
+.tasks-row[data-expanded] > .tasks-row-main {
+  align-items: flex-start;
+}
+
+.tasks-row[data-expanded] .tasks-row-title,
+.tasks-row[data-expanded] .tasks-row-title-text {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.tasks-row[data-expanded] .tasks-row-title {
+  padding-block: calc(
+    (var(--tasks-row-height) - var(--tasks-row-text) * var(--leading-snug)) / 2
+  );
+}
+
+.tasks-row[data-expanded] > .tasks-row-main > .tasks-check {
+  margin-top: calc((var(--tasks-row-height) - var(--tasks-check-target)) / 2);
+}
+
+.tasks-row[data-expanded] .tasks-row-meta {
+  height: var(--tasks-row-height);
+}
+
+.tasks-row[data-expanded] .tasks-row-more {
+  margin-top: calc((var(--tasks-row-height) - var(--tasks-more-width)) / 2);
+}
+
 /* Pending rows are spans: they keep the row's line box. */
 span.tasks-row-title {
   display: flex;
@@ -476,6 +567,11 @@ span.tasks-row-title {
 
 .tasks-row[data-completed] .tasks-row-title {
   color: var(--muted-foreground);
+}
+
+/* The strike covers the title, not a location line under it. */
+.tasks-row[data-completed] .tasks-row-title:not([data-location]),
+.tasks-row[data-completed] .tasks-row-title-text {
   text-decoration: line-through;
   text-decoration-color: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
 }

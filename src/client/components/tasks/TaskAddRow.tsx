@@ -70,8 +70,6 @@ export function TaskAddRow({
       className="tasks-add"
       data-variant={variant}
       data-notes={draft.notesOpen || undefined}
-      // Toasts sit above the phone sheet's pinned bar rather than on it.
-      data-toast-avoid={variant === "bar" ? "" : undefined}
     >
       <div className="tasks-add-field">
         {variant === "row" && <Plus className="tasks-add-icon" aria-hidden="true" />}

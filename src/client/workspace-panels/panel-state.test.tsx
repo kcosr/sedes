@@ -64,7 +64,13 @@ function createStore(storage = memoryStorage().storage) {
         title: "Tasks",
         scope: "thread",
         header: "tenant",
-        size: { minWidth: 300, minHeight: 240, preferredWidth: 380, preferredHeight: 480 },
+        size: {
+          minWidth: 300,
+          minHeight: 240,
+          preferredWidth: 380,
+          preferredHeight: 480,
+          preferredShare: 0.35,
+        },
       },
     ]),
     {
@@ -137,7 +143,20 @@ describe("PanelLayoutStore panel instances", () => {
     expect(root.forThread("thread-2").hasPanel("workpads")).toBe(false);
   });
 
-  it("docks Tasks right of Chat at its preferred width and restores it after reload", () => {
+  it("opens Tasks at its share of the stage, between its minimum and preferred width", () => {
+    const opened = (availableWidth: number) => {
+      const store = createStore();
+      store.openPanel("tasks", { availableWidth, presentation: "split" });
+      return (store.getSnapshot().tree as SplitNode).sizes[1]! * availableWidth;
+    };
+    // 1024px window: 35% of the stage would be 267px; the minimum holds.
+    expect(opened(764)).toBeCloseTo(300);
+    expect(opened(1_000)).toBeCloseTo(350);
+    // 1440px window: 35% would be 413px; the preferred width caps it.
+    expect(opened(1_180)).toBeCloseTo(380);
+  });
+
+  it("docks Tasks right of Chat at its preferred share and restores it after reload", () => {
     const { storage, values } = memoryStorage();
     const store = createStore(storage);
     expect(
@@ -146,7 +165,7 @@ describe("PanelLayoutStore panel instances", () => {
     const tree = store.getSnapshot().tree as SplitNode;
     expect(store.panels().map((panel) => panel.kind)).toEqual(["chat", "tasks"]);
     expect(panelDockEdge(tree, "tasks")).toBe("right");
-    expect(tree.sizes[1]).toBeCloseTo(0.38);
+    expect(tree.sizes[1]).toBeCloseTo(0.35);
     // A second open reveals the singleton rather than adding another.
     expect(store.openPanel("tasks", { presentation: "split" })).toBe(true);
     expect(store.panels().filter((panel) => panel.kind === "tasks")).toHaveLength(1);

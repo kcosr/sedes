@@ -46,9 +46,6 @@ import { setPanelPresentation } from "../../app/settings.js";
 import { TASK_DRAG_MIME, TaskDragProvider } from "../../tasks/task-drag.js";
 import { CLOSE_TASK_DETAIL_EVENT } from "../../app/android-back.js";
 
-const toast = vi.hoisted(() => ({ show: vi.fn() }));
-vi.mock("../ui/toast.js", () => ({ useToast: () => toast }));
-
 const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
   HTMLElement.prototype,
   "scrollIntoView",
@@ -76,7 +73,6 @@ beforeEach(() => {
   // Desktop shell: the panel renders as the floating card, not the sheet.
   stubDensity(false);
   resetStorage();
-  toast.show.mockReset();
 });
 
 afterEach(() => {
@@ -381,12 +377,17 @@ function seededStore(extra: readonly AssociatedTask[] = []) {
 }
 
 const panel = () => screen.getByRole("region", { name: "Tasks" });
+/** Whether a polite live region currently says `text`. */
+const announced = (text: string) =>
+  screen.queryAllByRole("status").some((region) => region.textContent === text);
 const scope = () => screen.getByRole("radiogroup", { name: "Task scope view" });
 const segment = (name: string) => within(scope()).getByRole("radio", { name });
 const rowTitle = (title: string) => screen.getByRole("button", { name: title });
 const rowOf = (title: string) => rowTitle(title).closest(".tasks-row") as HTMLElement;
 const titles = () =>
-  [...panel().querySelectorAll(".tasks-row-title")].map((node) => node.textContent);
+  [...panel().querySelectorAll(".tasks-row-title")].map(
+    (node) => (node.querySelector(".tasks-row-title-text") ?? node).textContent,
+  );
 const addInput = () => screen.getByRole("textbox", { name: "Add a task" });
 
 /**
@@ -456,10 +457,27 @@ describe("TasksPanel scope", () => {
     expect(scope()).toHaveAccessibleDescription(
       "Thread: Open a thread to see its tasks. Project: Open a thread in a project to see its project tasks.",
     );
-    expect(segment("Thread").parentElement).toHaveAttribute(
-      "title",
-      "Open a thread to see its tasks.",
+    // Each segment carries its own reason, and nothing relies on a native title.
+    expect(segment("Thread")).toHaveAccessibleDescription("Open a thread to see its tasks.");
+    expect(segment("Project")).toHaveAccessibleDescription(
+      "Open a thread in a project to see its project tasks.",
     );
+    expect(segment("Global")).toHaveAccessibleDescription("1 open");
+    expect(scope().querySelector("[title]")).toBeNull();
+  });
+
+  it("shows a disabled view's reason when its segment is tapped", async () => {
+    const store = makeStore([makeTask()], { threads: THREADS, workspaces: WORKSPACES });
+    // The tooltip's positioning measures its arrow.
+    vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
+    renderPanel(store);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    // A disabled segment takes no pointer events: the tap lands on its slot.
+    fireEvent.click(segment("Thread").parentElement!);
+
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Open a thread to see its tasks.");
+    expect(segment("Global")).toHaveAttribute("aria-checked", "true");
   });
 
   it("groups All by Global, then projects with their threads, collapsibly", () => {
@@ -506,6 +524,30 @@ describe("TasksPanel scope", () => {
     ]);
     expect(segment("Project")).toHaveAccessibleDescription("4 open");
     expect(titles()).not.toContain("Round invoices half-even");
+    // Without group headings, each row says where it belongs on a second
+    // line; its name stays the title.
+    expect(rowTitle("Sibling thread task")).toHaveAccessibleDescription("In Sibling thread");
+    expect(rowTitle("Upgrade the test runner")).toHaveAccessibleDescription("In acme-web");
+    expect(rowOf("Sibling thread task").querySelector(".tasks-row-location")).toHaveTextContent(
+      "Sibling thread",
+    );
+  });
+
+  it("says where each task belongs in All without grouping, and not with it", async () => {
+    const user = userEvent.setup();
+    renderPanel(seededStore());
+    await user.click(segment("All"));
+    expect(panel().querySelector(".tasks-row-location")).toBeNull();
+    expect(rowTitle("Rotate staging credentials")).not.toHaveAttribute("aria-describedby");
+
+    await user.click(screen.getByRole("button", { name: "View options" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Group by project" }));
+    await user.keyboard("{Escape}");
+    expect(rowTitle("Rotate staging credentials")).toHaveAccessibleDescription("In Global");
+    // A thread task names its project too, as the grouped headings do.
+    expect(rowTitle("Add retry to the payment call")).toHaveAccessibleDescription(
+      "In Checkout flow refactor · acme-web",
+    );
   });
 });
 
@@ -621,7 +663,7 @@ describe("TasksPanel add row", () => {
 });
 
 describe("TasksPanel rows", () => {
-  it("collapses completed tasks into a muted Completed section with undo", async () => {
+  it("collapses completed tasks into a muted Completed section, where they reopen", async () => {
     const user = userEvent.setup();
     const store = seededStore();
     renderPanel(store);
@@ -637,10 +679,10 @@ describe("TasksPanel rows", () => {
     ).toBeChecked();
 
     await user.click(screen.getByRole("checkbox", { name: 'Mark "Add retry to the payment call" as done' }));
-    expect(toast.show).toHaveBeenCalledWith({
-      message: "Task completed",
-      action: { label: "Undo", onAction: expect.any(Function) },
-    });
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-retry", revision: 0 }),
+      { completed: true },
+    );
     store.publish(
       store.getTasks().map((task) =>
         task.id === "t-retry" ? { ...task, completedAt: "2026-08-05T10:00:00.000Z", revision: 1 } : task,
@@ -654,7 +696,8 @@ describe("TasksPanel rows", () => {
       "Remove the legacy flag",
     ]);
 
-    await act(async () => toast.show.mock.calls[0]![0].action.onAction());
+    // A completed task reopens from its row in the Completed section.
+    await user.click(screen.getByRole("checkbox", { name: 'Mark "Add retry to the payment call" as open' }));
     expect(store.updateTask).toHaveBeenLastCalledWith(
       expect.objectContaining({ id: "t-retry", revision: 1 }),
       { completed: false },
@@ -698,7 +741,6 @@ describe("TasksPanel rows", () => {
       titleSnapshot: "Add retry to the payment call",
     });
     expect(panel()).toBeInTheDocument();
-    expect(toast.show).not.toHaveBeenCalled();
   });
 
   it("explains when no composer can receive the task", async () => {
@@ -709,7 +751,7 @@ describe("TasksPanel rows", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("The message composer is unavailable.");
   });
 
-  it("moves through the row menu with an undo toast", async () => {
+  it("moves through the row menu", async () => {
     const user = userEvent.setup();
     const store = seededStore();
     renderPanel(store);
@@ -741,17 +783,7 @@ describe("TasksPanel rows", () => {
       expect.objectContaining({ id: "t-retry" }),
       { kind: "workspace", workspaceId: "workspace-1" },
     );
-    await waitFor(() =>
-      expect(toast.show).toHaveBeenCalledWith({
-        message: "Moved to acme-web",
-        action: { label: "Undo", onAction: expect.any(Function) },
-      }),
-    );
-    await act(async () => toast.show.mock.calls[0]![0].action.onAction());
-    expect(store.moveTask).toHaveBeenLastCalledWith(
-      expect.objectContaining({ id: "t-retry" }),
-      { kind: "thread", threadId: "thread-9" },
-    );
+    await waitFor(() => expect(announced("Moved “Add retry to the payment call” to acme-web.")).toBe(true));
   });
 
   it("pins from the row menu without expanding the row", async () => {
@@ -884,19 +916,7 @@ describe("TasksPanel rows", () => {
         expect.any(String),
       ),
     );
-    await waitFor(() =>
-      expect(toast.show).toHaveBeenCalledWith({
-        message: "Moved to acme-web",
-        action: { label: "Undo", onAction: expect.any(Function) },
-      }),
-    );
-    // Undo moves it back where it came from.
-    await act(async () => toast.show.mock.calls[0]![0].action.onAction());
-    expect(store.moveTask).toHaveBeenLastCalledWith(
-      expect.objectContaining({ id: "t-retry" }),
-      { kind: "thread", threadId: "thread-9" },
-      expect.any(String),
-    );
+    await waitFor(() => expect(announced("Moved “Add retry to the payment call” to acme-web.")).toBe(true));
   });
 
   it("moves a task dropped on the list to the scope in view", async () => {
@@ -964,9 +984,7 @@ describe("TasksPanel rows", () => {
         expect.any(String),
       ),
     );
-    await waitFor(() =>
-      expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ message: "Moved to Global" })),
-    );
+    await waitFor(() => expect(announced("Moved “Audit checkout error states” to Global.")).toBe(true));
   });
 });
 
@@ -1133,6 +1151,43 @@ describe("TasksPanel view options and search", () => {
     await user.click(screen.getByRole("menuitemradio", { name: "Completed" }));
     expect(titles()).toEqual(["Remove the legacy flag"]);
     expect(screen.queryByRole("button", { name: /^Completed/ })).not.toBeInTheDocument();
+  });
+
+  it("shows narrowing options as removable chips and counts what is listed", async () => {
+    const user = userEvent.setup();
+    renderPanel(seededStore());
+    const count = () => panel().querySelector(".tasks-title-count")!;
+    const filters = () => screen.queryByRole("group", { name: "View filters" });
+    // Nothing narrows the list: the header counts like the Thread segment.
+    expect(filters()).not.toBeInTheDocument();
+    expect(count()).toHaveTextContent("2");
+    expect(count()).toHaveAttribute("aria-label", "2 open");
+    expect(segment("Thread")).toHaveAccessibleDescription("2 open");
+
+    await user.click(screen.getByRole("button", { name: "View options" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Pinned" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Completed" }));
+    await user.keyboard("{Escape}");
+    expect(within(filters()!).getAllByRole("button").map((chip) => chip.textContent)).toEqual([
+      "Completed",
+      "Pinned only",
+    ]);
+    // Completed counts completed tasks; none of them is pinned.
+    expect(count()).toHaveTextContent("0 of 1");
+    expect(count()).toHaveAttribute("aria-label", "0 of 1 completed shown");
+
+    await user.click(screen.getByRole("button", { name: "Remove filter: Completed" }));
+    expect(titles()).toEqual(["Audit checkout error states"]);
+    expect(count()).toHaveTextContent("1 of 2");
+    // Focus moves to the chip that remains, then back to the scope.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Remove filter: Pinned only" })).toHaveFocus(),
+    );
+    await user.keyboard("{Enter}");
+    expect(filters()).not.toBeInTheDocument();
+    expect(count()).toHaveTextContent("2");
+    expect(screen.getByRole("button", { name: "View options" })).not.toHaveAttribute("data-filtering");
+    await waitFor(() => expect(segment("Thread")).toHaveFocus());
   });
 
   it("searches titles, and notes when asked, without blocking the add row", async () => {
@@ -1380,8 +1435,10 @@ describe("TasksPanel phone sheet", () => {
     await user.click(rowTitle("Add retry to the payment call"));
     await user.click(within(sheet).getByRole("button", { name: "Add to prompt" }));
     expect(stageTaskReference).toHaveBeenCalledWith({ taskId: "t-retry", titleSnapshot: "Add retry to the payment call" });
-    expect(toast.show).toHaveBeenCalledWith({ message: "Added to prompt" });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Tasks" })).not.toBeInTheDocument());
+    // The sheet closes so the chip is seen arriving; the host announces it,
+    // since the sheet's content has gone.
+    await waitFor(() => expect(announced("Added “Add retry to the payment call” to the prompt.")).toBe(true));
   });
 
   it("closes the detail with Escape before the sheet", () => {

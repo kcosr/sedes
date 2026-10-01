@@ -457,7 +457,7 @@ export function ApplicationShell({
             </DialogPrimitive.Content>
           </DialogPrimitive.Portal>
         </DialogPrimitive.Root>
-        <div className="application-main" data-toast-region>
+        <div className="application-main">
           <div
             ref={workspaceElement}
             className="application-workspace"

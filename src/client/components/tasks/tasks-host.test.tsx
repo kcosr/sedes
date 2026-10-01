@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -15,7 +15,6 @@ import {
   subscribeReveal,
 } from "../../app/tasks-panel-store.js";
 import { MessageTaskCard } from "../conversation/renderers/MessageTaskCard.js";
-import { ToastProvider } from "../ui/toast.js";
 import { TasksPanel } from "./TasksPanel.js";
 import {
   TasksCornerControls,
@@ -169,13 +168,11 @@ function renderHost({
   if (thread) act(() => navigate(threadPath("thread-1")));
   let host: ReturnType<typeof useTasksHost>;
   const content = (isActive: boolean) => (
-    <ToastProvider>
-      <TasksPanel store={makeStore()} panelLayoutStore={panelLayoutStore} active={isActive}>
-        <Probe onHost={(value) => (host = value)} />
-        {thread ? <Workspace spy={spy} /> : <TasksCornerControls />}
-        {extra}
-      </TasksPanel>
-    </ToastProvider>
+    <TasksPanel store={makeStore()} panelLayoutStore={panelLayoutStore} active={isActive}>
+      <Probe onHost={(value) => (host = value)} />
+      {thread ? <Workspace spy={spy} /> : <TasksCornerControls />}
+      {extra}
+    </TasksPanel>
   );
   const view = render(content(active));
   return {
@@ -307,13 +304,121 @@ describe("Tasks host in a thread workspace", () => {
         name: "Tasks",
       }),
     ).toHaveAttribute("data-presentation", "sheet");
-    expect(
-      // The modal sheet hides the workbench from the accessibility tree.
-      within(screen.getByRole("region", { name: "Tasks panel", hidden: true })).queryByRole(
-        "region",
-        { name: "Tasks", hidden: true },
-      ),
-    ).toBeNull();
+    // The modal sheet hides the workbench (and so its name) from the
+    // accessibility tree; the docked slot stays empty.
+    const workbench = document.querySelector<HTMLElement>('section[aria-label="Tasks panel"]')!;
+    expect(workbench).toHaveAttribute("aria-hidden", "true");
+    expect(within(workbench).queryByRole("region", { name: "Tasks", hidden: true })).toBeNull();
+  });
+});
+
+describe("Tasks host across the phone breakpoint", () => {
+  /** Lets the phone query change while mounted, as a window resize does. */
+  function stubBreakpoint(): (next: boolean) => void {
+    const listeners = new Set<(event: MediaQueryListEvent) => void>();
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        get matches() {
+          return query === "(max-width: 819px)" ? phone : false;
+        },
+        media: query,
+        addEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+          if (query === "(max-width: 819px)") listeners.add(listener);
+        },
+        removeEventListener: (_type: string, listener: (event: MediaQueryListEvent) => void) => {
+          listeners.delete(listener);
+        },
+      })),
+    );
+    return (next) =>
+      act(() => {
+        phone = next;
+        for (const listener of listeners) listener({ matches: next } as MediaQueryListEvent);
+      });
+  }
+
+  const editor = () => screen.queryByRole("dialog", { name: "Edit task" });
+  // The surface behind the modal editor is hidden from the accessibility tree.
+  const surfaceElement = () => document.querySelector('[data-slot="tasks-panel"]');
+  /** The editor is the open dialog on top, with focus inside it. */
+  async function expectEditorOnTop(): Promise<void> {
+    await waitFor(() => {
+      const open = [...document.querySelectorAll('[data-slot="dialog-content"][data-state="open"]')];
+      expect(open.at(-1)).toBe(editor());
+      expect(editor()).toContainElement(document.activeElement as HTMLElement);
+    });
+  }
+
+  async function editNotes(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+    fireEvent.keyDown(screen.getByRole("button", { name: "Audit error states" }), { key: "e" });
+    await user.type(within(editor()!).getByRole("textbox", { name: "Notes" }), "Unsaved notes");
+  }
+
+  it("closes an overlay with nothing unsaved in it", async () => {
+    const setPhone = stubBreakpoint();
+    const user = userEvent.setup();
+    renderHost();
+    await user.click(toggle());
+    expect(tasksSurface()).toHaveAttribute("data-presentation", "popover");
+    setPhone(true);
+    expect(tasksSurface()).toBeNull();
+  });
+
+  it("keeps an edit open from the phone sheet to the desktop popover", async () => {
+    phone = true;
+    const setPhone = stubBreakpoint();
+    const user = userEvent.setup();
+    renderHost();
+    await user.click(toggle());
+    // Home shows Global; the task belongs to a thread.
+    await user.click(screen.getByRole("radio", { name: "All" }));
+    await editNotes(user);
+
+    setPhone(false);
+
+    expect(surfaceElement()).toHaveAttribute("data-presentation", "popover");
+    await expectEditorOnTop();
+    expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved notes");
+  });
+
+  it("keeps an edit open from the docked panel to the phone sheet, and back", async () => {
+    const setPhone = stubBreakpoint();
+    const user = userEvent.setup();
+    act(() => navigate(threadPath("thread-1")));
+    const { spy } = renderHost({ thread: true });
+    await editNotes(user);
+
+    setPhone(true);
+    // The sheet mounts over the editor, which opens again on top of it.
+    expect(document.querySelector(".tasks-sheet")).toBeInTheDocument();
+    await expectEditorOnTop();
+    expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved notes");
+
+    setPhone(false);
+    expect(surfaceElement()).toHaveAttribute("data-presentation", "panel");
+    expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved notes");
+    // The dock was still on stage, so nothing had to reopen it.
+    expect(spy.open).not.toHaveBeenCalled();
+  });
+
+  it("opens the dock for an edit from the phone sheet when Tasks is not docked", async () => {
+    const setPhone = stubBreakpoint();
+    const user = userEvent.setup();
+    act(() => navigate(threadPath("thread-1")));
+    const { spy, host } = renderHost({ thread: true });
+    // Tasks is not on the desktop stage: its panel was closed.
+    fireEvent.click(screen.getByRole("button", { name: "Close Tasks panel" }));
+    expect(tasksSurface()).toBeNull();
+    setPhone(true);
+    act(() => host()?.toggleOverlay());
+    await editNotes(user);
+
+    setPhone(false);
+
+    expect(spy.open).toHaveBeenCalledWith({ focus: false });
+    expect(surfaceElement()).toHaveAttribute("data-presentation", "panel");
+    expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved notes");
   });
 });
 

@@ -41,7 +41,6 @@ import {
   TaskDragProvider,
   useTaskDrag,
 } from "../tasks/task-drag.js";
-import { ToastProvider } from "./ui/toast.js";
 
 type ThreadSummary = ApplicationClientState["visibleThreads"][number];
 type TaskSummary = NonNullable<
@@ -415,14 +414,12 @@ function renderSidebar(
       />
     );
     return withTaskDragProvider ? (
-      <ToastProvider>
       <TaskDragProvider store={store} snapshot={current.snapshot!}>
         {current.snapshot!.tasks[0] ? (
           <TaskDragTestSource task={current.snapshot!.tasks[0]} />
         ) : null}
         {sidebar}
       </TaskDragProvider>
-      </ToastProvider>
     ) : (
       sidebar
     );

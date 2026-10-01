@@ -48,7 +48,6 @@ import {
   TaskDragProvider,
   useTaskDrag,
 } from "../tasks/task-drag.js";
-import { ToastProvider } from "./ui/toast.js";
 
 function TaskDragTestSource({ task }: { readonly task: AssociatedTask }) {
   const taskDrag = useTaskDrag();
@@ -508,7 +507,6 @@ describe("ThreadView backend interaction modes", () => {
     } as unknown as DataTransfer;
 
     render(
-      <ToastProvider>
       <TaskDragProvider
         store={state.applicationStore}
         snapshot={applicationSnapshot as NormalizedApplicationSnapshot}
@@ -521,8 +519,7 @@ describe("ThreadView backend interaction modes", () => {
           registry={state.registry}
           applicationStore={state.applicationStore}
         />
-      </TaskDragProvider>
-      </ToastProvider>,
+      </TaskDragProvider>,
     );
 
     const bounds = vi

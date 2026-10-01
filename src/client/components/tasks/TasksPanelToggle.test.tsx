@@ -80,4 +80,26 @@ describe("TasksPanelToggle", () => {
     expect(toggle).toHaveAttribute("aria-expanded", "false");
     expect(toggle).toHaveAccessibleName("Open Tasks panel, 2 open tasks");
   });
+
+  it("tells open but off stage apart from closed", () => {
+    const { rerender } = render(
+      <TasksPanelToggle open={false} onToggle={() => undefined} count={2} />,
+    );
+    const toggle = screen.getByTestId("tasks-panel-toggle");
+    expect(toggle).toHaveAttribute("data-state", "closed");
+
+    rerender(
+      <TasksPanelToggle open={false} collapsed onToggle={() => undefined} count={2} />,
+    );
+    expect(toggle).toHaveAttribute("data-state", "collapsed");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveAccessibleName("Show collapsed Tasks panel, 2 open tasks");
+
+    // Shown, it is simply open.
+    rerender(
+      <TasksPanelToggle open collapsed onToggle={() => undefined} count={2} />,
+    );
+    expect(toggle).toHaveAttribute("data-state", "open");
+    expect(toggle).toHaveAccessibleName("Close Tasks panel, 2 open tasks");
+  });
 });

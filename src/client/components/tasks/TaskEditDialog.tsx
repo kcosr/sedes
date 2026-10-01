@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FileText, Plus, Trash2, X } from "lucide-react";
 import {
   TASK_DETAILS_MAX_CHARACTERS,
@@ -87,10 +87,16 @@ function filePathError(path: string, files: readonly string[]): string | undefin
  * with Delete… on the footer's leading edge. Its state outlives `open`, so
  * an edit survives the Tasks surface being suspended (Settings) and comes
  * back when it is shown again. Unsaved changes are guarded on every way out.
+ *
+ * When the surface Tasks is shown on changes under it (crossing the phone
+ * breakpoint), the new surface mounts over the dialog and takes focus. The
+ * dialog then closes until its old content has gone, and opens again on
+ * top, with its edits.
  */
 export function TaskEditDialog({
   task,
   open,
+  surface,
   store,
   destinations,
   onClose,
@@ -98,6 +104,8 @@ export function TaskEditDialog({
   /** The live task; undefined once it has been deleted elsewhere. */
   readonly task: AssociatedTask | undefined;
   readonly open: boolean;
+  /** The surface Tasks is shown on: the panel, the popover or the sheet. */
+  readonly surface: string;
   readonly store: ApplicationClientStore;
   readonly destinations: TaskDestinations;
   readonly onClose: () => void;
@@ -118,6 +126,17 @@ export function TaskEditDialog({
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [shownSurface, setShownSurface] = useState(surface);
+  const [contentMounted, setContentMounted] = useState(false);
+  const contentRef = useCallback(
+    (node: HTMLDivElement | null) => setContentMounted(node !== null),
+    [],
+  );
+  const moving = shownSurface !== surface;
+  useEffect(() => {
+    if (moving && !contentMounted) setShownSurface(surface);
+  }, [moving, contentMounted, surface]);
+  const shown = open && !moving;
 
   const dirty =
     draft !== undefined &&
@@ -210,12 +229,13 @@ export function TaskEditDialog({
   return (
     <>
       <Dialog
-        open={open}
+        open={shown}
         onOpenChange={(next) => {
-          if (!next) requestClose();
+          if (!next && shown) requestClose();
         }}
       >
         <DialogContent
+          ref={contentRef}
           size="md"
           dismissible={!saving}
           className="tasks-edit-dialog"
@@ -405,7 +425,7 @@ export function TaskEditDialog({
         </DialogContent>
       </Dialog>
       <DiscardChangesDialog
-        open={open && confirmDiscard}
+        open={shown && confirmDiscard}
         description="Your changes to this task have not been saved."
         discardLabel="Discard and close"
         onOpenChange={(next) => {
@@ -417,7 +437,7 @@ export function TaskEditDialog({
         }}
       />
       <ConfirmDialog
-        open={open && confirmDelete && task !== undefined}
+        open={shown && confirmDelete && task !== undefined}
         tone="danger"
         title="Delete task?"
         description={`“${task?.title ?? draft?.title ?? ""}” will be deleted permanently. Prompts that already carry it keep their copy.`}
