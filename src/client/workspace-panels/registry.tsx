@@ -7,6 +7,7 @@ import type {
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry.js";
 import { workpadsTenant } from "../workpads/workpads-tenant.js";
+import { tasksTenant } from "../tasks/tasks-tenant.js";
 import { workspaceFilesTenant } from "../workspace-files/workspace-files-tenant.js";
 import type { ComposerDraftStagingTarget } from "../context-excerpts/coordinator.js";
 
@@ -57,6 +58,13 @@ export interface WorkspacePanelTenant {
   readonly title: string;
   readonly icon: ComponentType<{ readonly size?: number }>;
   readonly scope: WorkspacePanelScope;
+  /**
+   * Who renders the panel header. `chrome` (the default): the layout's
+   * shared `PanelChrome`. `tenant`: the content renders its own header and
+   * shows the layout's collapse, dock and close controls in it, so the
+   * surface never carries two headers.
+   */
+  readonly header?: "chrome" | "tenant";
   readonly size: {
     readonly minWidth: number;
     readonly minHeight: number;
@@ -122,4 +130,5 @@ function freezeTenant(tenant: WorkspacePanelTenant): WorkspacePanelTenant {
 export const workspacePanelTenants = new WorkspacePanelTenantRegistry([
   workspaceFilesTenant,
   workpadsTenant,
+  tasksTenant,
 ]);

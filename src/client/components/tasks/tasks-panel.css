@@ -1,50 +1,19 @@
-/* Tasks panel — desktop floating card + mobile sheet. Follows the canonical
-   floating-surface tokens (§ styles.css "one floating-popover surface"). */
+/* Tasks surfaces. One retained body is shown docked beside Chat (a
+   workspace panel), as a popover on pages without panels, or as a phone
+   sheet; `.tasks-surface` is the element that adopts it in each. */
 
-.tasks-panel {
-  position: fixed;
-  /* Keep the shared workbench bar and panel chrome reachable while Tasks is
-     open. The card used to begin halfway through the panel header after the
-     workbench bar was introduced, which made the underlying Chat/Files
-     controls impossible to click. */
-  top: 96px;
-  right: 12px;
-  z-index: var(--z-floating);
-  width: var(--tasks-panel-width, 340px);
-  max-width: calc(100vw - 24px);
-  max-height: min(70dvh, calc(100dvh - 108px));
+.tasks-surface {
   display: flex;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  background: var(--popover);
-  box-shadow: var(--shadow);
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
 }
 
-.tasks-panel-resize-handle {
-  position: absolute;
-  z-index: var(--z-sticky);
-  top: 8px;
-  bottom: 8px;
-  left: -5px;
-  width: 9px;
-  cursor: col-resize;
-  touch-action: none;
-  outline: none;
-}
-
-.tasks-panel-resize-handle::after {
-  content: "";
-  position: absolute;
-  inset: 0 4px;
-  border-radius: 1px;
-  background: transparent;
-  transition: background var(--motion-fast);
-}
-
-.tasks-panel-resize-handle:hover::after,
-.tasks-panel-resize-handle:focus-visible::after,
-.tasks-panel-resize-handle[data-dragging]::after {
-  background: var(--muted-foreground-2);
+/* Docked, the surface fills its panel like every other tenant. */
+.tasks-surface[data-presentation="panel"] {
+  height: 100%;
+  background: var(--background);
 }
 
 /* Mobile bottom sheet (the Dialog sheet layout, which lifts itself above
@@ -76,11 +45,6 @@
   width: 100%;
   min-height: 0;
   overflow-y: auto;
-}
-
-.tasks-panel-body[data-task-scope-drop-target="true"] {
-  box-shadow: inset 0 0 0 2px var(--accent, var(--primary));
-  border-radius: var(--radius-card);
 }
 
 .tasks-panel-header {
@@ -510,10 +474,6 @@ button.tasks-file-row:hover {
 }
 
 @media (max-width: 819px) {
-  .tasks-panel {
-    display: none;
-  }
-
   .tasks-row-pin {
     opacity: 1;
   }

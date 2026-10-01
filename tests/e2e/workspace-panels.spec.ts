@@ -232,7 +232,7 @@ test.describe("panel-instance workbench", () => {
     await expect(chat).toBeVisible();
   });
 
-  test("Tasks stays open with Chat collapsed and any sidebar thread selection restores and focuses Chat", async ({
+  test("docked Tasks stays open with Chat collapsed, follows thread switches, and selection restores and focuses Chat", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -242,10 +242,14 @@ test.describe("panel-instance workbench", () => {
     const firstThreadId = firstThreadPath.split("/").at(-1)!;
     const secondThreadId = secondThreadPath.split("/").at(-1)!;
 
+    const tasks = page.locator('[data-slot="tasks-panel"]');
+    const tasksLeaf = page.locator('[data-panel-id="tasks"]');
     await page.getByTestId("tasks-panel-toggle").click();
-    await expect(page.locator('[data-slot="tasks-panel"]')).toBeVisible();
+    await expect(tasks).toBeVisible();
+    await expect(tasks).toHaveAttribute("data-presentation", "panel");
+    await expect(tasksLeaf).toBeVisible();
     await page.getByRole("button", { name: "Collapse Chat panel" }).click();
-    await expect(page.locator('[data-slot="tasks-panel"]')).toBeVisible();
+    await expect(tasks).toBeVisible();
 
     await page
       .getByTestId("desktop-sidebar")
@@ -257,6 +261,12 @@ test.describe("panel-instance workbench", () => {
       page.getByRole("textbox", { name: "Message Scripted agent" }),
     ).toBeFocused();
     await expect(page.locator('[data-panel-id="chat"]')).toHaveCount(1);
+    // Tasks stays docked in the next thread's layout, beside its Chat.
+    await expect(tasksLeaf).toBeVisible();
+    await expect(tasks).toHaveAttribute("data-presentation", "panel");
+    const chatBox = await page.locator('[data-panel-id="chat"]').boundingBox();
+    const tasksBox = await tasksLeaf.boundingBox();
+    expect(tasksBox!.x).toBeGreaterThanOrEqual(chatBox!.x + chatBox!.width);
 
     await page.getByRole("button", { name: "Collapse Chat panel" }).click();
     await page

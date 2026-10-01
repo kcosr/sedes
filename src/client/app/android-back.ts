@@ -30,9 +30,6 @@ export const OPEN_OVERLAY_SELECTORS = [
   '[data-slot="popover-content"][data-state="open"]',
   '[data-slot="select-content"][data-state="open"]',
   '[data-selection-action-overlay]',
-  // The desktop Tasks panel float is not a Radix layer; it closes itself on
-  // the same synthetic Escape when no Radix overlay sits above it.
-  '[data-slot="tasks-panel"][data-state="open"]',
   // Thread find is an in-layout control rather than a Radix overlay, but Back
   // must dismiss it before navigating away from the active thread.
   '.thread-find-bar[data-open="true"]',

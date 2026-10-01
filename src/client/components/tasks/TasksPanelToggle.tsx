@@ -1,33 +1,36 @@
 import { ListChecks } from "lucide-react";
-import {
-  setTasksPanelOpen,
-  useTasksPanelPreferences,
-} from "../../app/tasks-panel-store.js";
 import { Button } from "@client/components/ui/button";
 
-/** Toggles the Tasks popup from the application header and Home/Archived controls. */
+/**
+ * The Tasks toggle in the workbench bar and in the pane corner of pages
+ * without panels. Its host decides what opening means there: the docked
+ * panel, the popover or the phone sheet.
+ */
 export function TasksPanelToggle({
-  openThreadTaskCount = 0,
+  open,
+  onToggle,
+  count = 0,
 }: {
-  readonly openThreadTaskCount?: number;
+  /** Whether Tasks is shown in this page's presentation. */
+  readonly open: boolean;
+  readonly onToggle: (invoker: HTMLButtonElement) => void;
+  /** Open tasks in the current context. */
+  readonly count?: number;
 }): React.JSX.Element {
-  const preferences = useTasksPanelPreferences();
-  const action = preferences.open ? "Close" : "Open";
+  const action = open ? "Close" : "Open";
   const taskCountLabel =
-    openThreadTaskCount > 0
-      ? `, ${openThreadTaskCount} open ${openThreadTaskCount === 1 ? "task" : "tasks"} for this thread`
-      : "";
+    count > 0 ? `, ${count} open ${count === 1 ? "task" : "tasks"}` : "";
   return (
     <Button
-      variant={preferences.open ? "secondary" : "ghost"}
+      variant={open ? "secondary" : "ghost"}
       size="icon"
       className="tasks-panel-toggle"
       aria-label={`${action} Tasks panel${taskCountLabel}`}
-      aria-expanded={preferences.open}
+      aria-expanded={open}
       aria-controls="tasks-panel"
-      data-has-items={openThreadTaskCount > 0 || undefined}
+      data-has-items={count > 0 || undefined}
       data-testid="tasks-panel-toggle"
-      onClick={() => setTasksPanelOpen(!preferences.open)}
+      onClick={(event) => onToggle(event.currentTarget)}
     >
       <ListChecks size={20} strokeWidth={1.8} aria-hidden="true" />
     </Button>

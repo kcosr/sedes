@@ -405,6 +405,89 @@ export function useTaskDrag(): TaskDragController | undefined {
   return useContext(TaskDragContext) ?? undefined;
 }
 
+/** Spread on an element to make it a scope drop target. */
+export interface TaskScopeDropProps {
+  readonly onDragEnter: (event: ReactDragEvent<HTMLElement>) => void;
+  readonly onDragOver: (event: ReactDragEvent<HTMLElement>) => void;
+  readonly onDragLeave: (event: ReactDragEvent<HTMLElement>) => void;
+  readonly onDrop: (event: ReactDragEvent<HTMLElement>) => void;
+  /** While a task drag is in progress: this target accepts it. */
+  readonly "data-task-drop-armed"?: "true";
+  /** While the dragged task is over this target. */
+  readonly "data-task-drop-target"?: "true";
+}
+
+export interface TaskScopeDropTargets<Key extends string> {
+  /** The target the dragged task is over, if any. */
+  readonly over: Key | undefined;
+  /**
+   * Props for one keyed target that moves a dropped task to `target`; an
+   * undefined target (a scope that does not apply) accepts nothing. Targets
+   * may nest: the innermost one under the pointer takes the drop.
+   */
+  props(key: Key, target: TaskScopeDropTarget | undefined): TaskScopeDropProps;
+}
+
+/**
+ * Drop targets that move a dragged task to a scope, for the Tasks scope
+ * segments and the Tasks body wherever Tasks is presented (docked, popover
+ * or sheet). Feedback uses the shared `data-task-drop-*` styles.
+ */
+export function useTaskScopeDropTargets<
+  Key extends string,
+>(): TaskScopeDropTargets<Key> {
+  const taskDrag = useTaskDrag();
+  const [over, setOver] = useState<Key>();
+  const dragging = taskDrag?.activeTaskId !== undefined;
+  useEffect(() => {
+    if (!dragging) setOver(undefined);
+  }, [dragging]);
+
+  const props = (
+    key: Key,
+    target: TaskScopeDropTarget | undefined,
+  ): TaskScopeDropProps => {
+    const accepts = (event: ReactDragEvent<HTMLElement>) =>
+      target !== undefined && taskDrag?.isTaskDrag(event.dataTransfer) === true;
+    const mark = (event: ReactDragEvent<HTMLElement>) => {
+      if (!accepts(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = "move";
+      setOver(key);
+    };
+    return {
+      onDragEnter: mark,
+      onDragOver: mark,
+      onDragLeave: (event) => {
+        if (!accepts(event)) return;
+        event.stopPropagation();
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+          setOver((current) => (current === key ? undefined : current));
+      },
+      onDrop: (event) => {
+        if (!accepts(event) || !taskDrag || !target) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const task = taskDrag.resolveDraggedTask(event.dataTransfer);
+        taskDrag.endTaskDrag();
+        setOver(undefined);
+        if (!task) {
+          taskDrag.announce(
+            "That task changed before it could be moved. Review it and try again.",
+            true,
+          );
+          return;
+        }
+        void taskDrag.requestScopeMove(task, target);
+      },
+      ...(dragging && target ? { "data-task-drop-armed": "true" as const } : {}),
+      ...(over === key && target ? { "data-task-drop-target": "true" as const } : {}),
+    };
+  };
+  return { over, props };
+}
+
 export function handleTaskDragStart(
   controller: TaskDragController | undefined,
   task: AssociatedTask,

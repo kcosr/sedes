@@ -44,68 +44,40 @@ test.describe.serial("Tasks panel", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openTaskWorkspace(page);
 
-    // Home has no implicit task destination; available projects can be searched.
-    await page.getByTestId("tasks-panel-toggle").first().click();
+    // Home has no panels and no implicit task destination: Tasks is a
+    // popover anchored to the corner toggle, with no pin and no resize.
+    const homeTasksToggle = page.getByTestId("tasks-panel-toggle").first();
+    await homeTasksToggle.click();
     const panel = page.locator('[data-slot="tasks-panel"]');
     await expect(panel).toBeVisible();
-    const resize = page.getByRole("separator", {
-      name: "Resize Tasks panel",
-    });
-    const initialPanelBox = await panel.boundingBox();
-    const resizeBox = await resize.boundingBox();
-    expect(initialPanelBox).not.toBeNull();
-    expect(resizeBox).not.toBeNull();
-    await page.mouse.move(
-      resizeBox!.x + resizeBox!.width / 2,
-      resizeBox!.y + resizeBox!.height / 2,
-    );
-    await page.mouse.down();
-    await page.mouse.move(
-      resizeBox!.x + resizeBox!.width / 2 - 96,
-      resizeBox!.y + resizeBox!.height / 2,
-    );
-    await page.mouse.up();
-    const widenedPanelBox = await panel.boundingBox();
-    expect(widenedPanelBox).not.toBeNull();
-    expect(widenedPanelBox!.width).toBeGreaterThan(initialPanelBox!.width + 80);
-    const savedWidth = await page.evaluate(() =>
-      localStorage.getItem("sedes.tasks.panel.width"),
-    );
-    expect(Number(savedWidth)).toBeCloseTo(widenedPanelBox!.width, 0);
+    await expect(panel).toHaveAttribute("data-presentation", "popover");
+    await expect(homeTasksToggle).toHaveAttribute("aria-expanded", "true");
+    const popoverBox = await panel.boundingBox();
+    const toggleBox = await homeTasksToggle.boundingBox();
+    expect(popoverBox!.y).toBeGreaterThanOrEqual(toggleBox!.y + toggleBox!.height);
+    expect(popoverBox!.x + popoverBox!.width).toBeLessThanOrEqual(1440);
+    await expect(panel.getByRole("button", { name: /Pin Tasks panel/ })).toHaveCount(0);
+    await expect(page.getByRole("separator", { name: "Resize Tasks panel" })).toHaveCount(0);
     await panel.getByRole("button", { name: "Close Tasks panel" }).click();
-    await page.getByTestId("tasks-panel-toggle").first().click();
-    await expect
-      .poll(async () => (await panel.boundingBox())?.width)
-      .toBeCloseTo(Number(savedWidth), 0);
-    const panelPin = panel.getByRole("button", {
-      name: "Unpin Tasks panel",
-    });
-    await panelPin.click();
-    expect(
-      await page.evaluate(() =>
-        JSON.parse(localStorage.getItem("sedes.tasks.panel") ?? "null"),
-      ),
-    ).toMatchObject({ pinned: false });
+    await expect(panel).toHaveCount(0);
+    await expect(homeTasksToggle).toBeFocused();
+    await homeTasksToggle.click();
+    await expect(panel).toBeVisible();
+    // An outside press dismisses the popover; the toggle reopens it.
     await page
       .getByRole("heading", { name: "What should the agent work on?" })
       .click();
     await expect(panel).toHaveCount(0);
-    await page.getByTestId("tasks-panel-toggle").first().click();
-    await expect(
-      panel.getByRole("button", { name: "Pin Tasks panel" }),
-    ).toBeVisible();
-    await panel.getByRole("button", { name: "Pin Tasks panel" }).click();
-    await page
-      .getByRole("heading", { name: "What should the agent work on?" })
-      .click();
+    await homeTasksToggle.click();
     await expect(panel).toBeVisible();
+    // View options belong to the view in front: Thread, the first view.
+    await expect(panel.getByRole("radio", { name: "Thread" })).toBeChecked();
     const panelOptions = panel.getByRole("button", {
       name: "Tasks panel options",
     });
     await panelOptions.click();
-    await expect(
-      page.getByRole("menuitemradio", { name: "Thread", exact: true }),
-    ).toBeChecked();
+    // The last view is remembered; there is no default-view preference.
+    await expect(page.getByRole("group", { name: "Default view" })).toHaveCount(0);
     const searchContent = page.getByRole("menuitemcheckbox", {
       name: "Search task content",
     });
@@ -139,13 +111,44 @@ test.describe.serial("Tasks panel", () => {
     ).toBeVisible();
     await capture(page, testInfo, "tasks-panel-home-global.png");
 
-    // Thread route: all three scopes; create a thread task.
+    // Thread route: Tasks docks beside Chat; create a thread task.
     const threadPath = await createDraftThread(page);
     const threadId = threadPath.split("/").at(-1)!;
     const threadTasksToggle = page
       .getByTestId("workspace-workbench-bar")
       .getByTestId("tasks-panel-toggle");
     await expect(threadTasksToggle).toBeVisible();
+    await expect(panel).toHaveCount(0);
+    await threadTasksToggle.click();
+    await expect(panel).toHaveAttribute("data-presentation", "panel");
+    await expect(threadTasksToggle).toHaveAttribute("aria-expanded", "true");
+    const tasksLeaf = page.locator('[data-panel-id="tasks"]');
+    const chatLeaf = page.locator('[data-panel-id="chat"]');
+    const dockedBox = await tasksLeaf.boundingBox();
+    const chatBox = await chatLeaf.boundingBox();
+    // Docked right of Chat, reflowing it rather than covering it.
+    expect(dockedBox!.x).toBeGreaterThanOrEqual(chatBox!.x + chatBox!.width);
+    expect(dockedBox!.y).toBeCloseTo(chatBox!.y, 0);
+    expect(dockedBox!.height).toBeCloseTo(chatBox!.height, 0);
+    // One header: the content's panel chrome with the layout's controls.
+    await expect(tasksLeaf.locator("header")).toHaveCount(1);
+    await expect(tasksLeaf.getByRole("button", { name: "Collapse Tasks panel" })).toBeVisible();
+    const resize = page.getByRole("separator", { name: "Resize Chat and Files panels" });
+    const resizeBox = await resize.boundingBox();
+    await page.mouse.move(
+      resizeBox!.x + resizeBox!.width / 2,
+      resizeBox!.y + resizeBox!.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      resizeBox!.x + resizeBox!.width / 2 - 96,
+      resizeBox!.y + resizeBox!.height / 2,
+    );
+    await page.mouse.up();
+    await expect
+      .poll(async () => (await tasksLeaf.boundingBox())?.width ?? 0)
+      .toBeGreaterThan(dockedBox!.width + 80);
+    const widenedWidth = (await tasksLeaf.boundingBox())!.width;
     const sidebarThread = page
       .getByTestId("desktop-sidebar")
       .locator(`[data-thread-id="${threadId}"]`);
@@ -164,11 +167,11 @@ test.describe.serial("Tasks panel", () => {
       sidebarThread.getByRole("img", { name: "1 open task" }),
     ).toBeVisible();
     await expect(threadTasksToggle).toHaveAccessibleName(
-      "Close Tasks panel, 1 open task for this thread",
+      "Close Tasks panel, 1 open task",
     );
     await expect(threadTasksToggle).toHaveAttribute("data-has-items", "true");
 
-    // Tasks belongs to the application header and survives collapsing Chat.
+    // Docked Tasks is a panel of its own and stays on stage when Chat collapses.
     await page.getByRole("button", { name: "Collapse Chat panel" }).click();
     await expect(panel).toBeVisible();
     await expect(threadTasksToggle).toBeVisible();
@@ -196,7 +199,7 @@ test.describe.serial("Tasks panel", () => {
       sidebarThread.getByRole("img", { name: "2 open tasks" }),
     ).toBeVisible();
     await expect(threadTasksToggle).toHaveAccessibleName(
-      "Close Tasks panel, 2 open tasks for this thread",
+      "Close Tasks panel, 2 open tasks",
     );
     await expect(threadTasksToggle).toHaveAttribute("data-has-items", "true");
     await threadTask
@@ -339,7 +342,7 @@ test.describe.serial("Tasks panel", () => {
       sidebarThread.getByRole("img", { name: "1 open task" }),
     ).toBeVisible();
     await expect(threadTasksToggle).toHaveAccessibleName(
-      "Close Tasks panel, 1 open task for this thread",
+      "Close Tasks panel, 1 open task",
     );
     const followUpTask = panel
       .locator(".tasks-row")
@@ -384,9 +387,13 @@ test.describe.serial("Tasks panel", () => {
     ).toBeVisible();
     await capture(page, testInfo, "tasks-panel-global-nested.png");
 
-    // Panel open state and preference survive a reload.
+    // The docked panel, its width and the per-view options survive a reload.
     await page.reload();
     await expect(page.locator('[data-slot="tasks-panel"]')).toBeVisible();
+    await expect(panel).toHaveAttribute("data-presentation", "panel");
+    await expect
+      .poll(async () => (await tasksLeaf.boundingBox())?.width ?? 0)
+      .toBeCloseTo(widenedWidth, 0);
     await panel.getByRole("radio", { name: "Global" }).click();
     await expect(
       panel.getByRole("checkbox", { name: "Include nested scopes" }),
@@ -394,10 +401,19 @@ test.describe.serial("Tasks panel", () => {
     await expect(
       panel.getByRole("button", { name: 'View "Verify endpoint"' }),
     ).toBeVisible();
+    // Search content was switched on for the Thread view, on Home.
+    await panel.getByRole("radio", { name: "Thread" }).click();
     await panelOptions.click();
     await expect(
       page.getByRole("menuitemcheckbox", { name: "Search task content" }),
     ).toBeChecked();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await panel.getByRole("radio", { name: "Global" }).click();
+    await panelOptions.click();
+    await expect(
+      page.getByRole("menuitemcheckbox", { name: "Search task content" }),
+    ).not.toBeChecked();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("menu")).toHaveCount(0);
 
@@ -409,6 +425,11 @@ test.describe.serial("Tasks panel", () => {
     await threadTasksToggle.click();
     const sheet = page.getByRole("dialog", { name: "Tasks", exact: true });
     await expect(sheet).toBeVisible();
+    await expect(panel).toHaveAttribute("data-presentation", "sheet");
+    await expect(page.locator('[data-panel-id="tasks"]')).toHaveCount(0);
+    // The sheet opens on the last view chosen, whatever presented it.
+    await expect(sheet.getByRole("radio", { name: "Global" })).toBeChecked();
+    await sheet.getByRole("radio", { name: "Thread" }).click();
     await expect(sheet.getByRole("radio", { name: "Thread" })).toBeChecked();
     await expect(sheet.getByRole("combobox", { name: "Task thread", exact: true })).toContainText("Current thread");
     await sheet.getByRole("combobox", { name: "Task thread" }).click();
@@ -435,10 +456,18 @@ test.describe.serial("Tasks panel", () => {
     await expect(page.getByRole("button", { name: "Thread actions" })).toBeVisible();
     await page.setViewportSize({ width: 1440, height: 900 });
     await threadTasksToggle.click();
+    await expect(panel).toHaveAttribute("data-presentation", "panel");
 
-    // Escape closes the open desktop panel even when focus is elsewhere.
+    // Escape leaves the docked panel alone; Ctrl+Shift+L toggles it from
+    // anywhere, including the composer.
     await page.keyboard.press("Escape");
+    await expect(panel).toBeVisible();
+    await page.getByRole("textbox", { name: "Message Scripted agent", exact: true }).click();
+    await page.keyboard.press("Control+Shift+L");
     await expect(page.locator('[data-slot="tasks-panel"]')).toHaveCount(0);
+    await expect(threadTasksToggle).toHaveAttribute("aria-expanded", "false");
+    await page.keyboard.press("Control+Shift+L");
+    await expect(panel).toHaveAttribute("data-presentation", "panel");
   });
 
   test("archiving a thread with open tasks routes through the disposition modal and moves them to the project", async ({

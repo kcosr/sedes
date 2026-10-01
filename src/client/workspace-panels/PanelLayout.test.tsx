@@ -14,7 +14,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pushHistoryEntry } from "../app/router.js";
 import { ApiError } from "../api/ApiClient.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
-import { setTasksPanelOpen } from "../app/tasks-panel-store.js";
+import { tasksTenant } from "../tasks/tasks-tenant.js";
+import { TasksPanel } from "../components/tasks/TasksPanel.js";
+import {
+  TasksHostContext,
+  type TasksDock,
+  type TasksHost,
+} from "../components/tasks/tasks-host.js";
 import { NavigationControlsContext } from "../app/navigation-controls.js";
 import type { ThreadClientState } from "../stores/ThreadClientStore.js";
 import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry.js";
@@ -22,6 +28,7 @@ import type { AssociatedTask, TerminalResource } from "../../shared/index.js";
 import { PanelChrome, type PanelChromeControls } from "./PanelChrome.js";
 import { PanelLayout } from "./PanelLayout.js";
 import { PanelLayoutStore, type PanelLayoutStorage } from "./panel-state.js";
+import { panelDockEdge, type SplitNode } from "./layout-tree.js";
 import { setConfirmTerminalTermination, setPanelPresentation } from "../app/settings.js";
 import {
   WorkspacePanelTenantRegistry,
@@ -179,7 +186,6 @@ vi.mock("../terminals/TerminalPanel.js", async () => {
 
 beforeEach(() => {
   window.localStorage.clear();
-  setTasksPanelOpen(false);
   threadState = initialThreadState;
   threadListeners = new Set();
   applicationListeners = new Set();
@@ -349,6 +355,9 @@ function setup(
     readonly unmountedChat?: () => void;
     readonly chatDisabledUntilAuthoritative?: boolean;
     readonly chatUnmountedUntilReady?: boolean;
+    readonly tasksHost?: TasksHost;
+    /** Wraps the layout in the real Tasks host, as the application shell does. */
+    readonly withTasksPanel?: boolean;
   } = {},
 ) {
   const registry = new WorkspacePanelTenantRegistry([
@@ -364,7 +373,15 @@ function setup(
     storage: input.storage ?? { getItem: () => null, setItem: () => undefined },
     createId: (kind) => `${kind}-${++panelSequence}`,
   });
-  const renderLayout = (workspaceId: string, active = true) => (
+  const fakeHost = (layout: React.JSX.Element) =>
+    input.tasksHost ? (
+      <TasksHostContext.Provider value={input.tasksHost}>
+        {layout}
+      </TasksHostContext.Provider>
+    ) : (
+      layout
+    );
+  const renderLayout = (workspaceId: string, active = true) => fakeHost(
     <NavigationControlsContext.Provider
       value={{
         openDrawer: vi.fn(),
@@ -405,12 +422,24 @@ function setup(
           )
         }
       />
-    </NavigationControlsContext.Provider>
+    </NavigationControlsContext.Provider>,
   );
-  const view = render(renderLayout("workspace-1"));
+  const withHost = (layout: React.JSX.Element) =>
+    input.withTasksPanel ? (
+      <TasksPanel
+        store={applicationStore}
+        panelLayoutStore={store}
+        route={{ name: "thread", threadId: "thread-1", automationOpen: false }}
+      >
+        {layout}
+      </TasksPanel>
+    ) : (
+      layout
+    );
+  const view = render(withHost(renderLayout("workspace-1")));
   return Object.assign(store, {
-    setActive: (active: boolean) => view.rerender(renderLayout("workspace-1", active)),
-    rerenderWorkspace: (workspaceId: string) => view.rerender(renderLayout(workspaceId)),
+    setActive: (active: boolean) => view.rerender(withHost(renderLayout("workspace-1", active))),
+    rerenderWorkspace: (workspaceId: string) => view.rerender(withHost(renderLayout(workspaceId))),
   });
 }
 
@@ -461,12 +490,12 @@ describe("PanelLayout singleton surfaces", () => {
       { ...makeThreadTask({ id: "project" }), scope: { kind: "workspace", workspaceId: "workspace-1" } },
       { ...makeThreadTask({ id: "global" }), scope: { kind: "global" } },
     ] } };
-    setup();
+    setup({ extraTenants: [tasksTenant] });
     const toggle = within(screen.getByTestId("workspace-workbench-bar")).getByTestId("tasks-panel-toggle");
-    expect(toggle).toHaveAccessibleName("Open Tasks panel, 2 open tasks for this thread");
+    expect(toggle).toHaveAccessibleName("Open Tasks panel, 2 open tasks");
     expect(toggle).toHaveAttribute("data-has-items", "true");
     fireEvent.click(toggle);
-    expect(toggle).toHaveAccessibleName("Close Tasks panel, 2 open tasks for this thread");
+    expect(toggle).toHaveAccessibleName("Close Tasks panel, 2 open tasks");
     expect(toggle).toHaveAttribute("aria-expanded", "true");
   });
 
@@ -2565,8 +2594,8 @@ describe("PanelLayout singleton surfaces", () => {
     expect(screen.getAllByRole("menuitem")).toHaveLength(4);
   });
 
-  it("keeps Tasks available and open across Chat collapse and close", async () => {
-    setup();
+  it("keeps docked Tasks on stage across Chat collapse and close", async () => {
+    const store = setup({ extraTenants: [tasksTenant] });
     const tasks = within(screen.getByTestId("workspace-workbench-bar")).getByTestId("tasks-panel-toggle");
     fireEvent.click(tasks);
     expect(tasks).toHaveAttribute("aria-expanded", "true");
@@ -2581,9 +2610,13 @@ describe("PanelLayout singleton surfaces", () => {
       ).toBeVisible(),
     );
     fireEvent.click(screen.getByRole("button", { name: "Close Chat panel" }));
-    expect(screen.getByTestId("workspace-panel-empty")).toHaveTextContent(
-      "No panels are open",
-    );
+    // Tasks is a panel of its own: closing Chat leaves it alone on stage.
+    expect(screen.queryByTestId("workspace-panel-empty")).toBeNull();
+    expect(store.panels().map((panel) => panel.kind)).toEqual(["tasks"]);
+    expect(store.isVisible("tasks")).toBe(true);
+    expect(
+      screen.getByRole("region", { name: "Tasks panel" }),
+    ).toHaveAttribute("data-panel-id", "tasks");
     expect(tasks).toBeVisible();
     expect(tasks).toHaveAttribute("aria-expanded", "true");
   });
@@ -2779,5 +2812,172 @@ describe("PanelLayout mobile terminal dismissal", () => {
     await waitFor(() => expect(store.terminalPanel()).toBeUndefined());
     expect(store.terminalTab(TERMINAL_ID)).toBeUndefined();
     expect(window.location.pathname).toBe("/threads/thread-1");
+  });
+});
+
+function fakeTasksHost(overrides: Partial<TasksHost> = {}): TasksHost & {
+  readonly docks: (TasksDock | undefined)[];
+} {
+  const docks: (TasksDock | undefined)[] = [];
+  return {
+    bodyTarget: document.createElement("div"),
+    placement: undefined,
+    overlayOpen: false,
+    toggleOverlay: vi.fn(),
+    setPopoverAnchor: vi.fn(),
+    publishDock: (dock) => docks.push(dock),
+    docks,
+    ...overrides,
+  };
+}
+
+describe("PanelLayout Tasks tenant", () => {
+  const tasksToggle = () =>
+    within(screen.getByTestId("workspace-workbench-bar")).getByTestId(
+      "tasks-panel-toggle",
+    );
+
+  it("docks Tasks right of Chat from the toggle and closes it again", () => {
+    const store = setup({ extraTenants: [tasksTenant] });
+    expect(tasksToggle()).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(tasksToggle());
+    const tree = store.getSnapshot().tree as SplitNode;
+    expect(store.panels().map((panel) => panel.kind)).toEqual(["chat", "tasks"]);
+    expect(panelDockEdge(tree, "tasks")).toBe("right");
+    // The tenant renders its own header: the layout adds no PanelChrome.
+    const leaf = screen.getByRole("region", { name: "Tasks panel" });
+    expect(leaf.querySelector(".workspace-panel-chrome")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Collapse Tasks panel" }),
+    ).toBeNull();
+    expect(tasksToggle()).toHaveAttribute("aria-expanded", "true");
+    expect(tasksToggle()).toHaveAccessibleName("Close Tasks panel");
+
+    fireEvent.click(tasksToggle());
+    expect(store.hasPanel("tasks")).toBe(false);
+    expect(tasksToggle()).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("reveals a collapsed or solo-hidden Tasks panel instead of closing it", () => {
+    const store = setup({ extraTenants: [tasksTenant] });
+    act(() => {
+      store.openPanel("tasks", { focus: false });
+      store.collapsePanel("tasks");
+    });
+    expect(tasksToggle()).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(tasksToggle());
+    expect(store.isCollapsed("tasks")).toBe(false);
+    expect(store.isVisible("tasks")).toBe(true);
+
+    // Under the single-panel presentation Tasks still docks beside Chat.
+    act(() => {
+      store.activatePanel("chat", { presentation: "single" });
+    });
+    expect(store.isVisible("tasks")).toBe(false);
+    fireEvent.click(tasksToggle());
+    expect(store.getSnapshot().soloPanelInstanceId).toBeUndefined();
+    expect(store.isVisible("tasks")).toBe(true);
+    expect(store.isVisible("chat")).toBe(true);
+  });
+
+  it("lists Tasks in the Panels menu but not among the panel shortcuts", async () => {
+    const store = setup({ extraTenants: [tasksTenant] });
+    await openPanelsMenu();
+    const row = screen.getByRole("menuitem", { name: /^Tasks/ });
+    expect(row).toHaveAttribute("aria-description", "Closed");
+    fireEvent.click(row);
+    expect(store.isVisible("tasks")).toBe(true);
+    expect(
+      screen.queryByRole("button", { name: "Open Tasks panel" }),
+    ).toBeNull();
+    expect(
+      within(screen.getByRole("group", { name: "Panel shortcuts" }))
+        .getAllByRole("button")
+        .map((button) => button.getAttribute("aria-label")),
+    ).toEqual(["Open Chat panel"]);
+  });
+
+  it("publishes the docked panel and its controls to the Tasks host", () => {
+    const host = fakeTasksHost();
+    const store = setup({ extraTenants: [tasksTenant], tasksHost: host });
+    expect(host.docks.at(-1)).toMatchObject({ present: false, visible: false });
+    fireEvent.click(tasksToggle());
+    const dock = host.docks.at(-1)!;
+    expect(dock).toMatchObject({
+      present: true,
+      visible: true,
+      controls: { active: true, dockEdge: "right" },
+    });
+    const published = host.docks.length;
+    publishThreadState({ ...threadState, status: "loading" });
+    expect(host.docks).toHaveLength(published);
+
+    act(() => dock.controls.onDock("bottom"));
+    expect(panelDockEdge(store.getSnapshot().tree, "tasks")).toBe("bottom");
+    expect(host.docks.at(-1)?.controls.dockEdge).toBe("bottom");
+    act(() => host.docks.at(-1)!.controls.onCollapse());
+    expect(store.isCollapsed("tasks")).toBe(true);
+    expect(host.docks.at(-1)).toMatchObject({ present: true, visible: false });
+    act(() => host.docks.at(-1)!.open({ focus: false }));
+    expect(store.isVisible("tasks")).toBe(true);
+    act(() => host.docks.at(-1)!.close());
+    expect(store.hasPanel("tasks")).toBe(false);
+    expect(host.docks.at(-1)).toMatchObject({ present: false });
+
+    cleanup();
+    expect(host.docks.at(-1)).toBeUndefined();
+  });
+
+  it("opens the host's sheet from the toggle on phones, never a stage panel", async () => {
+    mobile = true;
+    const host = fakeTasksHost({ overlayOpen: true });
+    const store = setup({ extraTenants: [tasksTenant], tasksHost: host });
+    expect(tasksToggle()).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(tasksToggle());
+    expect(host.toggleOverlay).toHaveBeenCalledTimes(1);
+    expect(store.hasPanel("tasks")).toBe(false);
+
+    // A Tasks panel left in the layout from a wider window stays off stage.
+    act(() => {
+      store.openPanel("tasks", { focus: true });
+    });
+    expect(screen.queryByRole("region", { name: "Tasks panel" })).toBeNull();
+    expect(screen.getByRole("region", { name: "Chat panel" })).toBeInTheDocument();
+    await openPanelsMenu();
+    expect(screen.queryByRole("menuitem", { name: /^Tasks/ })).toBeNull();
+  });
+
+  it("hosts the retained Tasks body in the docked panel with one header", () => {
+    applicationState = {
+      ...applicationState,
+      snapshot: {
+        threads: [{ id: "thread-1", workspaceId: "workspace-1", title: { text: "Thread" }, inventoryState: "active" }],
+        workspaces: [{ id: "workspace-1", label: { text: "Workspace" }, displayPath: { text: "/workspace" } }],
+        environments: [],
+        tasks: [makeThreadTask({ id: "open-1" })],
+      },
+    };
+    const store = setup({ extraTenants: [tasksTenant], withTasksPanel: true });
+    fireEvent.click(tasksToggle());
+    const leaf = screen.getByRole("region", { name: "Tasks panel" });
+    const surface = within(leaf).getByRole("region", { name: "Tasks" });
+    expect(surface).toHaveAttribute("data-presentation", "panel");
+    expect(within(leaf).getByRole("button", { name: 'View "Task open-1"' })).toBeInTheDocument();
+    expect(leaf.querySelectorAll("header")).toHaveLength(1);
+    const body = leaf.querySelector(".tasks-panel-body");
+
+    fireEvent.click(within(leaf).getByRole("button", { name: "Collapse Tasks panel" }));
+    expect(store.isCollapsed("tasks")).toBe(true);
+    expect(tasksToggle()).toHaveAttribute("aria-expanded", "false");
+    // Collapsed surfaces stay mounted: the body keeps its state.
+    expect(body).toBeInTheDocument();
+
+    fireEvent.click(tasksToggle());
+    const restored = screen.getByRole("region", { name: "Tasks panel" });
+    expect(restored.querySelector(".tasks-panel-body")).toBe(body);
+
+    fireEvent.click(within(restored).getByRole("button", { name: "Close Tasks panel" }));
+    expect(store.hasPanel("tasks")).toBe(false);
+    expect(document.querySelector(".tasks-panel-body")).toBeNull();
   });
 });

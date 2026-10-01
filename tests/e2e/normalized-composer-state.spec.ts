@@ -481,6 +481,7 @@ test.describe.serial("normalized composer state", () => {
 
     await page.getByTestId("tasks-panel-toggle").first().click();
     const tasksPanel = page.locator('[data-slot="tasks-panel"]');
+    await expect(tasksPanel).toHaveAttribute("data-presentation", "panel");
     await tasksPanel.getByRole("radio", { name: "Thread" }).click();
 
     const taskCreated = page.waitForResponse(
@@ -641,7 +642,12 @@ test.describe.serial("normalized composer state", () => {
       .getByRole("button", { name: "Delete", exact: true })
       .click();
     await taskDeleted;
-    await page.keyboard.press("Escape");
+    // Close docked Tasks: Escape leaves a docked panel open.
+    await page
+      .getByTestId("workspace-workbench-bar")
+      .getByTestId("tasks-panel-toggle")
+      .click();
+    await expect(tasksPanel).toHaveCount(0);
 
     const missingTaskChip = page
       .getByTestId("composer")

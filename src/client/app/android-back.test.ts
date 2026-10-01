@@ -81,14 +81,22 @@ describe("resolveAndroidBackAction", () => {
     contextMenu.remove();
   });
 
-  it("recognizes the open desktop Tasks panel as an overlay", () => {
-    const tasksPanel = document.createElement("section");
-    tasksPanel.dataset.slot = "tasks-panel";
-    tasksPanel.dataset.state = "open";
-    document.body.append(tasksPanel);
-    expect(document.querySelector(OPEN_OVERLAY_SELECTOR)).toBe(tasksPanel);
-    tasksPanel.remove();
+  it("treats the Tasks popover as an overlay but not the docked Tasks panel", () => {
+    const docked = document.createElement("section");
+    docked.dataset.slot = "tasks-panel";
+    docked.dataset.presentation = "panel";
+    document.body.append(docked);
     expect(document.querySelector(OPEN_OVERLAY_SELECTOR)).toBeNull();
+
+    const popover = document.createElement("div");
+    popover.setAttribute("role", "dialog");
+    popover.dataset.slot = "popover-content";
+    popover.dataset.state = "open";
+    popover.append(docked.cloneNode());
+    document.body.append(popover);
+    expect(document.querySelector(OPEN_OVERLAY_SELECTOR)).toBe(popover);
+    popover.remove();
+    docked.remove();
   });
 
   it("recognizes selection actions as an overlay", () => {

@@ -272,6 +272,34 @@ describe("panel-instance layout v4 persistence", () => {
     ).toBeNull();
   });
 
+  it("round-trips the docked Tasks panel as one more singleton", () => {
+    const tasks: PanelInstance = { panelInstanceId: "tasks", kind: "tasks" };
+    const tree = split(stack("left", chatPanelInstance), stack("right", tasks));
+    expect(validatePanelLayout(tree)).toEqual([]);
+    expect(
+      deserializePanelLayout(THREAD_ID, serializePanelLayout(THREAD_ID, tree)),
+    ).toEqual(tree);
+    expect(panelDockEdge(tree, "tasks")).toBe("right");
+    expect(
+      openPanel(tree, { panelInstanceId: "tasks-2", kind: "tasks" }, {
+        edge: "left",
+        splitId: "second",
+        stackId: "second-stack",
+      }),
+    ).toBe(tree);
+    const duplicated = split(
+      stack("left", chatPanelInstance, tasks),
+      stack("right", { panelInstanceId: "tasks-2", kind: "tasks" }),
+    );
+    expect(validatePanelLayout(duplicated)).toContain("singleton_panel_kinds");
+    expect(
+      deserializePanelLayout(
+        THREAD_ID,
+        JSON.stringify({ version: 4, threadId: THREAD_ID, tree: duplicated }),
+      ),
+    ).toBe(defaultPanelLayout);
+  });
+
   it("round-trips an empty terminal panel with no active terminal", () => {
     const tree = stack("empty-terminals", terminals([]));
     expect(validatePanelLayout(tree)).toEqual([]);

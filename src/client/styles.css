@@ -8190,6 +8190,13 @@ tr.diff-hunk td {
   pointer-events: none;
 }
 
+/* While a task is dragged, every surface that accepts it is outlined;
+   the one under the pointer takes a solid ring and a wash. */
+[data-task-drop-armed="true"] {
+  outline: 1px dashed color-mix(in oklch, var(--primary) 55%, transparent);
+  outline-offset: -1px;
+}
+
 [data-task-drop-target="true"] {
   outline: 2px solid var(--primary);
   outline-offset: -2px;
@@ -8201,19 +8208,42 @@ tr.diff-hunk td {
   outline-offset: -2px;
 }
 
+/* Over the chat, the composer stays visible as the other drop zone. */
+.thread-view[data-task-drop-active] [data-task-drop-surface="composer"] {
+  outline: 2px dashed color-mix(in oklch, var(--primary) 55%, transparent);
+  outline-offset: 2px;
+}
+
+/* ThreadView measures the zone between the header and the composer; the
+   inset is the fallback before the first measurement. */
 .thread-task-drop-indicator {
   position: absolute;
-  inset: 52px 8px 8px;
+  inset: var(--workbench-bar-height) var(--space-2) var(--space-2);
   z-index: calc(var(--z-sticky) + 19);
   display: grid;
   place-items: center;
   border: 2px dashed var(--primary);
   border-radius: var(--radius-card);
-  background: color-mix(in oklch, var(--background) 86%, transparent);
-  color: var(--foreground);
-  font-size: 14px;
-  font-weight: 600;
+  background: color-mix(
+    in oklch,
+    var(--primary) 6%,
+    color-mix(in oklch, var(--background) 88%, transparent)
+  );
   pointer-events: none;
+}
+
+.thread-task-drop-label {
+  max-width: calc(100% - var(--space-8));
+  overflow: hidden;
+  padding: var(--space-1-5) var(--space-3);
+  border-radius: var(--radius-ctl);
+  background: var(--primary);
+  box-shadow: var(--elevation-2);
+  color: var(--primary-foreground);
+  font-size: var(--text-ui);
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .composer-attachment-list {
