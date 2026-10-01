@@ -418,7 +418,9 @@
 
 - Searching **Archived** no longer lists non-matching fork parents, and the
   page no longer re-renders for unrelated application events, which made large
-  archives slow to use.
+  archives slow to use. Thread menus mount their dialogs only when first
+  opened, the sidebar no longer builds lineage for archived threads, and
+  events that change nothing no longer re-render the app.
 
 - Archive progress now offers **Dismiss** throughout. Closing progress keeps
   the archive workflow running, including required choices, and reports failures

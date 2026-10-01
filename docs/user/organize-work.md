@@ -293,9 +293,10 @@ never grouped by date. Sedes remembers these choices on this device. Each row
 shows the backend, the title on up to two lines, the project, a Target whose
 name differs from its backend, the thread's worktree branch, and marks for an
 unavailable project, environment, or Target. The age at the end of the row is
-the time since archiving (or last activity when sorted that way); hover it for
-both dates. The page shows 100 threads at a time; choose **Show more** for the
-next 100.
+the time since archiving (or last activity when sorted that way); hover the row
+for both dates. A fork shows the fork mark before its age; choose it to open
+the fork point in the source thread. The page shows 100 threads at a time;
+choose **Show more** for the next 100.
 
 Choose the restore button at the end of a row to return the thread to Active;
 right-click or long-press a row for the same **Restore to Active** and the
