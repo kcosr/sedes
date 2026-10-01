@@ -43,9 +43,6 @@ import {
   Square,
   TextCursorInput,
   Trash2,
-  ListTodo,
-  CircleCheck,
-  AlertTriangle,
   LoaderCircle,
   X,
 } from "lucide-react";
@@ -112,6 +109,7 @@ import {
   subscribeShowPromptsTab,
 } from "../../app/settings.js";
 import { PendingInputStrip } from "./PendingInputStrip.js";
+import { ComposerTaskChips } from "./ComposerTaskChips.js";
 import { ChatViewVisibilityContext } from "./chat-view-visibility.js";
 import {
   DurableAttachmentCard,
@@ -2901,61 +2899,23 @@ export function Composer({
                     </button>
                   </div>
                 )}
-                {taskReferences.length > 0 && (
-                  <div
-                    className="composer-task-list"
-                    aria-label="Attached tasks"
-                  >
-                    {taskReferences.map((reference) => {
-                      const current = currentTasks.get(reference.taskId);
-                      const state = taskProjectionChecking
+                <ComposerTaskChips
+                  chips={taskReferences.map((reference) => {
+                    const current = currentTasks.get(reference.taskId);
+                    return {
+                      taskId: reference.taskId,
+                      label: current?.title ?? reference.titleSnapshot,
+                      state: taskProjectionChecking
                         ? "checking"
                         : current
                           ? current.completedAt
                             ? "completed"
                             : "available"
-                          : "missing";
-                      const label = current?.title ?? reference.titleSnapshot;
-                      return (
-                        <div
-                          className="composer-task-chip"
-                          data-state={state}
-                          data-task-id={reference.taskId}
-                          key={reference.taskId}
-                        >
-                          {state === "completed" ? (
-                            <CircleCheck size={14} aria-hidden="true" />
-                          ) : state === "missing" ? (
-                            <AlertTriangle size={14} aria-hidden="true" />
-                          ) : state === "checking" ? (
-                            <LoaderCircle size={14} aria-hidden="true" />
-                          ) : (
-                            <ListTodo size={14} aria-hidden="true" />
-                          )}
-                          <span className="composer-task-title">{label}</span>
-                          <span className="composer-task-state">
-                            {state === "completed"
-                              ? "Completed"
-                              : state === "missing"
-                                ? "Missing task"
-                                : state === "checking"
-                                  ? "Checking"
-                                  : "Task"}
-                          </span>
-                          <button
-                            type="button"
-                            aria-label={`Remove task: ${label}`}
-                            onClick={() =>
-                              unstageTaskReference(reference.taskId)
-                            }
-                          >
-                            <X size={12} strokeWidth={2} aria-hidden="true" />
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                          : "missing",
+                    };
+                  })}
+                  onRemove={unstageTaskReference}
+                />
                 {missingTaskReferences.length > 0 && (
                   <div className="composer-task-error" role="alert">
                     Remove the missing task before sending.

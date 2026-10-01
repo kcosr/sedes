@@ -13,7 +13,7 @@
     "components/thread/flat-thread-row.css": 12,
     "components/thread/question-inbox.css": 8,
     "components/thread/thread-group-roster.css": 1,
-    "styles.css": 245,
+    "styles.css": 243,
     "usage/usage.css": 23,
     "workpads/WorkpadDocument.css": 2,
     "workpads/workpads-panel.css": 7,
@@ -25,7 +25,7 @@
     "components/thread/flat-thread-row.css": 5,
     "components/thread/question-inbox.css": 2,
     "components/thread/thread-group-roster.css": 1,
-    "styles.css": 84,
+    "styles.css": 83,
     "usage/usage.css": 16,
     "workpads/workpads-panel.css": 2,
     "workspace-files/workspace-compare.css": 2
