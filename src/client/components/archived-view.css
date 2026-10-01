@@ -250,10 +250,11 @@
   color: var(--muted-foreground-2);
 }
 
+/* Positioned after the open button, so they paint and take pointer
+   events above its overlay. */
 .archive-row .archive-row-fork,
 .archive-row-restore {
   position: relative;
-  z-index: 1;
 }
 
 .archive-row .archive-row-fork {

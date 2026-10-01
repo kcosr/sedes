@@ -18,10 +18,15 @@ import { BackendBrandIcon } from "./brand-icons.js";
 import { ForkProvenanceButton } from "./lineage/ForkProvenanceButton.js";
 import { ThreadContextMenu } from "./ThreadContextMenu.js";
 
+/**
+ * A restore's progress for one row. Pending and restored statuses carry the
+ * inventory revision they were started against, so a row that changed since
+ * (for example, archived again elsewhere) is not left busy.
+ */
 export type ArchiveRestoreStatus =
-  | { readonly kind: "pending" }
+  | { readonly kind: "pending"; readonly revision: number }
   /** Accepted; the row stays busy until the stream removes it. */
-  | { readonly kind: "restored" }
+  | { readonly kind: "restored"; readonly revision: number }
   | { readonly kind: "error"; readonly message: string };
 
 /** A muted marker that names what is unavailable for assistive technology. */
@@ -57,6 +62,7 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
   ageDateTime,
   restoreStatus,
   onRestore,
+  onMenuRestored,
 }: {
   readonly row: ArchivedThreadRowModel;
   readonly store: ApplicationClientStore;
@@ -69,6 +75,8 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
   readonly ageDateTime: string;
   readonly restoreStatus?: ArchiveRestoreStatus;
   readonly onRestore: (row: ArchivedThreadRowModel) => void;
+  /** The thread actions menu's Restore was accepted. */
+  readonly onMenuRestored: (row: ArchivedThreadRowModel) => void;
 }): React.JSX.Element {
   const busy =
     restoreStatus?.kind === "pending" || restoreStatus?.kind === "restored";
@@ -105,6 +113,9 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
         placement={row.placement}
         sourceTitle={row.forkSourceTitle}
         configurationCopyPending={row.configurationCopyPending}
+        onAction={(action) => {
+          if (action === "restore") onMenuRestored(row);
+        }}
       >
         <div
           className="archive-row"

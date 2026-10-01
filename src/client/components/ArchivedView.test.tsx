@@ -533,6 +533,72 @@ describe("ArchivedView restore", () => {
     ).toHaveFocus();
   });
 
+  it("ignores a late restore response once the row has changed", async () => {
+    const snapshot = makeSnapshot(threads);
+    const { store, publish } = createStore(snapshot);
+    let accept!: () => void;
+    store.mutateInventory.mockImplementation(
+      () => new Promise<void>((resolve) => (accept = resolve)),
+    );
+    render(<ArchivedView store={store} />);
+    fireEvent.click(screen.getByRole("button", { name: "Restore Second" }));
+    // The stream reports the restore, then another client archives the
+    // thread again, before this response arrives.
+    publish({
+      snapshot: {
+        ...snapshot,
+        threads: [
+          threads[0]!,
+          { ...threads[1]!, inventoryState: "active", inventoryRevision: 2 },
+          threads[2]!,
+        ],
+      },
+    });
+    publish({
+      snapshot: {
+        ...snapshot,
+        threads: [
+          threads[0]!,
+          { ...threads[1]!, inventoryRevision: 3 },
+          threads[2]!,
+        ],
+      },
+    });
+    await act(async () => accept());
+    expect(
+      screen.getByRole("button", { name: "Restore Second" }),
+    ).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("treats a Restore accepted from the actions menu like the row's own", async () => {
+    const snapshot = makeSnapshot(threads);
+    const { store, publish } = createStore(snapshot);
+    render(<ArchivedView store={store} />);
+    const row = screen
+      .getAllByTestId("archive-row")
+      .find((candidate) => candidate.textContent?.includes("Second"))!;
+    fireEvent.contextMenu(row);
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("menuitem", { name: "Restore to Active" }));
+    expect(store.mutateInventory).toHaveBeenCalledWith(threads[1], "restore");
+    expect(screen.getByRole("status")).toHaveTextContent("Restored Second");
+    expect(
+      screen.getByRole("button", { name: "Restore Second" }),
+    ).toHaveAttribute("aria-disabled", "true");
+    publish({
+      snapshot: {
+        ...snapshot,
+        threads: [
+          threads[0]!,
+          { ...threads[1]!, inventoryState: "active", inventoryRevision: 2 },
+          threads[2]!,
+        ],
+      },
+    });
+    expect(rowTitles()).toEqual(["First", "Third"]);
+  });
+
   it("reports a failed restore inline without a pop-up", async () => {
     const { store } = createStore(makeSnapshot(threads));
     store.mutateInventory.mockRejectedValueOnce(
@@ -582,6 +648,17 @@ describe("ArchivedView paging and view options", () => {
     // Returning to the earlier listing starts from its first page too.
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "" } });
     expect(screen.getAllByTestId("archive-row")).toHaveLength(100);
+  });
+
+  it("moves keyboard focus to the first added row when the last page loads", async () => {
+    const { store } = createStore(makeSnapshot(many));
+    render(<ArchivedView store={store} />);
+    const more = screen.getByTestId("archive-show-more");
+    more.focus();
+    await userEvent.setup().keyboard("{Enter}");
+    expect(screen.queryByTestId("archive-show-more")).toBeNull();
+    expect(document.activeElement).toHaveClass("archive-row-open");
+    expect(document.activeElement).toHaveTextContent("Thread 100");
   });
 
   it("sorts and groups from View options and remembers the choice", async () => {

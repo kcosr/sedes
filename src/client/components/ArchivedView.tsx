@@ -33,6 +33,7 @@ import {
   selectArchiveBase,
   type ArchiveBase,
   type ArchiveGroupBy,
+  type ArchiveProjection,
   type ArchiveSort,
   type ArchivedThreadRow as ArchivedThreadRowModel,
 } from "../archive/archived-threads.js";
@@ -181,6 +182,19 @@ function ArchiveViewOptions({
   );
 }
 
+/** The row at a list position, counting through the groups in order. */
+function rowAt(
+  projection: ArchiveProjection,
+  index: number,
+): ArchivedThreadRowModel | undefined {
+  let offset = index;
+  for (const group of projection.groups) {
+    if (offset < group.rows.length) return group.rows[offset];
+    offset -= group.rows.length;
+  }
+  return undefined;
+}
+
 interface FocusAfterRestore {
   readonly threadId: string;
   /** Following rows first, then preceding rows nearest first. */
@@ -248,16 +262,17 @@ export const ArchivedView = memo(function ArchivedView({
     () => pageArchivedThreads(projection, limit),
     [limit, projection],
   );
-  const showMore = useCallback(
-    () =>
-      setPaging((current) => ({
-        key: pageKey,
-        limit:
-          (current.key === pageKey ? current.limit : ARCHIVE_PAGE_SIZE) +
-          ARCHIVE_PAGE_SIZE,
-      })),
-    [pageKey],
-  );
+  // The first row a "Show more" adds, to take focus if the button unmounts.
+  const [focusAfterShowMore, setFocusAfterShowMore] = useState<string>();
+  const showMore = useCallback(() => {
+    setFocusAfterShowMore(rowAt(projection, page.rows.length)?.id);
+    setPaging((current) => ({
+      key: pageKey,
+      limit:
+        (current.key === pageKey ? current.limit : ARCHIVE_PAGE_SIZE) +
+        ARCHIVE_PAGE_SIZE,
+    }));
+  }, [page.rows.length, pageKey, projection]);
 
   const [restoreStatus, setRestoreStatus] = useState<
     ReadonlyMap<string, ArchiveRestoreStatus>
@@ -283,26 +298,41 @@ export const ArchivedView = memo(function ArchivedView({
     [],
   );
 
+  /** Following rows first, then preceding rows nearest first. */
+  const focusCandidates = useCallback((threadId: string): string[] => {
+    const rows = pageRowsRef.current;
+    const index = rows.findIndex(({ id }) => id === threadId);
+    return index < 0
+      ? []
+      : [
+          ...rows.slice(index + 1).map(({ id }) => id),
+          ...rows
+            .slice(0, index)
+            .reverse()
+            .map(({ id }) => id),
+        ];
+  }, []);
+
   const restore = useCallback(
     (row: ArchivedThreadRowModel) => {
       const status = restoreStatusRef.current.get(row.id);
       if (status?.kind === "pending" || status?.kind === "restored") return;
-      const rows = pageRowsRef.current;
-      const index = rows.findIndex(({ id }) => id === row.id);
-      const candidates =
-        index < 0
-          ? []
-          : [
-              ...rows.slice(index + 1).map(({ id }) => id),
-              ...rows
-                .slice(0, index)
-                .reverse()
-                .map(({ id }) => id),
-            ];
-      setStatus(row.id, { kind: "pending" });
+      const candidates = focusCandidates(row.id);
+      const revision = row.thread.inventoryRevision;
+      setStatus(row.id, { kind: "pending", revision });
       store.mutateInventory(row.thread, "restore").then(
         () => {
-          setStatus(row.id, { kind: "restored" });
+          // The stream may already have removed the row (and its pending
+          // status); a late response must not mark a row that is no longer
+          // this restore's.
+          setRestoreStatus((current) => {
+            const pending = current.get(row.id);
+            if (pending?.kind !== "pending" || pending.revision !== revision)
+              return current;
+            const next = new Map(current);
+            next.set(row.id, { kind: "restored", revision });
+            return next;
+          });
           setAnnouncement(`Restored ${row.title}`);
           setFocusAfterRestore({ threadId: row.id, candidates });
         },
@@ -310,18 +340,46 @@ export const ArchivedView = memo(function ArchivedView({
           setStatus(row.id, { kind: "error", message: messageFrom(error) }),
       );
     },
-    [setStatus, store],
+    [focusCandidates, setStatus, store],
   );
 
-  // Forget statuses of rows that left the archive, and move focus on from a
-  // restored row once the stream removes it.
-  const archivedIds = useMemo(
-    () => new Set(base.rows.map(({ id }) => id)),
+  // A Restore accepted from the thread actions menu gets the same busy row,
+  // announcement, and focus recovery as the row's own Restore.
+  const menuRestored = useCallback(
+    (row: ArchivedThreadRowModel) => {
+      const revision = row.thread.inventoryRevision;
+      setRestoreStatus((current) => {
+        if (!archivedRevisionsRef.current.has(row.id)) return current;
+        const next = new Map(current);
+        next.set(row.id, { kind: "restored", revision });
+        return next;
+      });
+      setAnnouncement(`Restored ${row.title}`);
+      setFocusAfterRestore({
+        threadId: row.id,
+        candidates: focusCandidates(row.id),
+      });
+    },
+    [focusCandidates],
+  );
+
+  // Forget statuses of rows that left the archive or changed since their
+  // restore started, and move focus on from a restored row once the stream
+  // removes it.
+  const archivedRevisions = useMemo(
+    () =>
+      new Map(base.rows.map(({ id, thread }) => [id, thread.inventoryRevision])),
     [base.rows],
   );
+  const archivedRevisionsRef = useRef(archivedRevisions);
+  archivedRevisionsRef.current = archivedRevisions;
   useEffect(() => {
-    const stale = [...restoreStatus.keys()].filter(
-      (id) => !archivedIds.has(id),
+    const stale = [...restoreStatus].flatMap(([id, status]) =>
+      !archivedRevisions.has(id) ||
+      (status.kind !== "error" &&
+        status.revision !== archivedRevisions.get(id))
+        ? [id]
+        : [],
     );
     if (stale.length === 0) return;
     setRestoreStatus((current) => {
@@ -329,7 +387,7 @@ export const ArchivedView = memo(function ArchivedView({
       for (const id of stale) next.delete(id);
       return next;
     });
-  }, [archivedIds, restoreStatus]);
+  }, [archivedRevisions, restoreStatus]);
   useLayoutEffect(() => {
     if (!focusAfterRestore) return;
     if (page.rows.some(({ id }) => id === focusAfterRestore.threadId)) return;
@@ -350,6 +408,19 @@ export const ArchivedView = memo(function ArchivedView({
     }
     searchRef.current?.focus();
   }, [focusAfterRestore, page.rows]);
+
+  useLayoutEffect(() => {
+    if (focusAfterShowMore === undefined) return;
+    setFocusAfterShowMore(undefined);
+    const active = document.activeElement;
+    // The last page unmounts the button: continue from the first added row.
+    if (active !== null && active !== document.body) return;
+    listRef.current
+      ?.querySelector<HTMLElement>(
+        `.archive-row[data-thread-id="${CSS.escape(focusAfterShowMore)}"] > .archive-row-open`,
+      )
+      ?.focus();
+  }, [focusAfterShowMore]);
 
   const searching = deferredSearch.trim().length > 0;
   const filtered = searching || scopeActive;
@@ -412,12 +483,9 @@ export const ArchivedView = memo(function ArchivedView({
         <header className="archive-header">
           <div className="archive-heading">
             <h1 id="archive-view-title">Archived</h1>
-            <span
-              className="archive-count"
-              data-testid="archive-count"
-              aria-label={`${countFormat.format(projection.total)} archived threads`}
-            >
+            <span className="archive-count" data-testid="archive-count">
               {countFormat.format(projection.total)}
+              <span className="sr-only"> archived threads</span>
             </span>
           </div>
           <div className="archive-tools">
@@ -494,6 +562,7 @@ export const ArchivedView = memo(function ArchivedView({
                       ageDateTime={new Date(timestamp).toISOString()}
                       restoreStatus={restoreStatus.get(row.id)}
                       onRestore={restore}
+                      onMenuRestored={menuRestored}
                     />
                   );
                 })}
