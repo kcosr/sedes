@@ -541,11 +541,16 @@ export class ApplicationClientStore {
     return this.#state.snapshot?.tasks ?? [];
   }
 
-  async createTask(title: string, scope: TaskScope): Promise<Task> {
+  async createTask(
+    title: string,
+    scope: TaskScope,
+    details?: string,
+  ): Promise<Task> {
     return this.api.createTask({
       mutationId: crypto.randomUUID(),
       title,
       scope,
+      ...(details === undefined || details.length === 0 ? {} : { details }),
     });
   }
 

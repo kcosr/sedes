@@ -15,6 +15,7 @@ import {
   subscribeReveal,
 } from "../../app/tasks-panel-store.js";
 import { MessageTaskCard } from "../conversation/renderers/MessageTaskCard.js";
+import { ToastProvider } from "../ui/toast.js";
 import { TasksPanel } from "./TasksPanel.js";
 import {
   TasksCornerControls,
@@ -168,11 +169,13 @@ function renderHost({
   if (thread) act(() => navigate(threadPath("thread-1")));
   let host: ReturnType<typeof useTasksHost>;
   const content = (isActive: boolean) => (
-    <TasksPanel store={makeStore()} panelLayoutStore={panelLayoutStore} active={isActive}>
-      <Probe onHost={(value) => (host = value)} />
-      {thread ? <Workspace spy={spy} /> : <TasksCornerControls />}
-      {extra}
-    </TasksPanel>
+    <ToastProvider>
+      <TasksPanel store={makeStore()} panelLayoutStore={panelLayoutStore} active={isActive}>
+        <Probe onHost={(value) => (host = value)} />
+        {thread ? <Workspace spy={spy} /> : <TasksCornerControls />}
+        {extra}
+      </TasksPanel>
+    </ToastProvider>
   );
   const view = render(content(active));
   return {
@@ -261,7 +264,7 @@ describe("Tasks host on pages without panels", () => {
       const user = userEvent.setup();
       const view = renderHost();
       await user.click(toggle());
-      const body = document.querySelector(".tasks-panel-body");
+      const body = document.querySelector(".tasks-content");
       expect(body).toBeInTheDocument();
       view.setActive(false);
       await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
@@ -271,7 +274,7 @@ describe("Tasks host on pages without panels", () => {
       // Closing must not pull focus back to the hidden workspace's toggle.
       expect(screen.getByTestId("tasks-panel-toggle")).not.toHaveFocus();
       view.setActive(true);
-      expect(document.querySelector(".tasks-panel-body")).toBe(body);
+      expect(document.querySelector(".tasks-content")).toBe(body);
     },
   );
 });
@@ -319,8 +322,11 @@ describe("revealTask", () => {
     renderHost();
     act(() => revealTask("task-1"));
     expect(tasksSurface()).toHaveAttribute("data-presentation", "popover");
-    // The content, not the host, consumes the request.
-    expect(getPendingReveal()).toMatchObject({ taskId: "task-1" });
+    // The content, not the host, takes the request: it shows the task.
+    expect(getPendingReveal()).toBeUndefined();
+    expect(
+      screen.getByRole("button", { name: "Audit error states" }),
+    ).toHaveAttribute("aria-expanded", "true");
   });
 
   it("opens the docked panel without moving focus in a thread workspace", () => {

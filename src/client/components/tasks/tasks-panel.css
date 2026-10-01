@@ -23,443 +23,947 @@
   padding: 0;
 }
 
-/* As a sheet the body sits on the dialog sheets' inset, so its header lines
-   up with every other sheet's. */
-.tasks-sheet .tasks-panel-body {
-  padding:
-    var(--dialog-padding)
-    max(var(--dialog-padding), env(safe-area-inset-right))
-    max(var(--dialog-padding), env(safe-area-inset-bottom))
-    max(var(--dialog-padding), env(safe-area-inset-left));
+/* ── Tasks content (TasksPanelContent): the header and body in every host ──
+   One flex column: the header, search and toolbar never scroll; the list
+   region is the only scroller, so a long detail can never squeeze the list
+   or push the header away. Rows follow the density switch: 36px with a
+   32px completion target, 48px with 44px targets under touch density. */
+.tasks-content {
+  --tasks-row-height: var(--control-lg);
+  --tasks-check-target: var(--control-md);
+  --tasks-check-icon: calc(var(--icon-md) + var(--space-0-5));
+  --tasks-row-text: var(--text-ui);
+  --tasks-row-icon: var(--icon-sm);
+  --tasks-more-width: var(--control-sm);
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  container: tasks-content / inline-size;
+  color: var(--foreground);
+  font-size: var(--text-ui);
 }
 
-.tasks-panel-body {
-  padding-bottom: max(12px, env(safe-area-inset-bottom));
+@media (max-width: 819px), (pointer: coarse) {
+  .tasks-content {
+    --tasks-row-height: calc(var(--control-touch) + var(--space-1));
+    --tasks-check-target: var(--control-touch);
+    --tasks-check-icon: var(--icon-lg);
+    --tasks-row-text: var(--text-title);
+    --tasks-row-icon: var(--icon-md);
+    --tasks-more-width: var(--control-touch);
+  }
 }
 
-.tasks-panel-body {
+/* ── Header: title and open count, then ⌕, View options, ⋯ and × on the
+   panel-header control steps. */
+.tasks-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--workbench-bar-height);
+  padding: var(--space-1-5) var(--space-1) var(--space-1-5) var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.tasks-title {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  margin: 0;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+}
+
+.tasks-header-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 1px;
+  color: var(--muted-foreground);
+}
+
+.tasks-header-button {
+  position: relative;
+  width: var(--bar-control-width);
+  height: var(--bar-control);
+  color: inherit;
+}
+
+.tasks-header-button svg {
+  width: var(--bar-icon);
+  height: var(--bar-icon);
+}
+
+/* View options narrow the list: a dot says so while the menu is closed. */
+.tasks-header-button[data-filtering]::after {
+  content: "";
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  width: var(--space-1-5);
+  height: var(--space-1-5);
+  border-radius: 50%;
+  background: var(--info);
+}
+
+/* ── Search row (⌕): filters the view; Escape clears and closes it. */
+.tasks-search {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-default);
+  padding: 0 var(--space-2) 0 var(--space-4);
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--muted-foreground-2);
+}
+
+.tasks-search-icon {
+  flex: none;
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+
+.tasks-search-input,
+.tasks-add-input,
+.tasks-add-notes-input {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: var(--text-input);
+  outline: none;
+}
+
+.tasks-search-input {
+  flex: 1 1 auto;
+  align-self: stretch;
+}
+
+.tasks-search-input::placeholder,
+.tasks-add-input::placeholder,
+.tasks-add-notes-input::placeholder {
+  color: var(--muted-foreground-2);
+}
+
+/* ── Toolbar: the one scope control, then the add row. */
+.tasks-toolbar {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-3) var(--space-1-5);
+}
+
+.tasks-scope {
+  width: 100%;
+}
+
+/* The slot carries a disabled segment's reason as its tooltip (a disabled
+   segment takes no pointer events itself). */
+.tasks-scope-slot {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.tasks-scope-item {
+  gap: var(--space-1);
+}
+
+.tasks-scope-count {
+  color: var(--muted-foreground-2);
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.tasks-scope-item[data-state="on"] .tasks-scope-count {
+  color: var(--muted-foreground);
+}
+
+@container tasks-content (max-width: 339px) {
+  .tasks-scope-item {
+    padding-inline: var(--space-1);
+    font-size: var(--text-meta);
+  }
+}
+
+/* ── Add row: a dashed slot that becomes a focused field. */
+.tasks-add {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
-  width: 100%;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.tasks-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.tasks-panel-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.tasks-panel-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.tasks-segments {
-  display: flex;
-  align-items: stretch;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--border-soft, var(--border));
+  border: 1px dashed var(--input);
   border-radius: var(--radius-ctl);
-  background: color-mix(in srgb, var(--secondary) 55%, transparent);
+  transition:
+    border-color var(--motion-fast),
+    box-shadow var(--motion-fast);
 }
 
-.tasks-segment {
-  flex: 1;
-  padding: 5px 8px;
+.tasks-add[data-variant="row"]:focus-within {
+  border-style: solid;
+  border-color: var(--ring);
+  box-shadow: var(--focus-ring);
+}
+
+.tasks-add-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-default);
+  padding: 0 var(--space-1) 0 var(--space-2-5);
+}
+
+.tasks-add-icon {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--muted-foreground-2);
+}
+
+.tasks-add-input {
+  flex: 1 1 auto;
+  align-self: stretch;
+}
+
+.tasks-add-hint {
+  flex: none;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-label);
+  white-space: nowrap;
+}
+
+.tasks-add-details {
+  flex: none;
+  color: var(--muted-foreground);
+}
+
+@container tasks-content (max-width: 379px) {
+  .tasks-add-field > .tasks-add-hint {
+    display: none;
+  }
+}
+
+.tasks-add-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  padding: 0 var(--space-2) var(--space-2);
+  border-top: 1px solid var(--border-soft);
+}
+
+.tasks-add-notes-input {
+  width: 100%;
+  max-height: 30dvh;
+  padding: var(--space-2) var(--space-0-5);
+  field-sizing: content;
+  line-height: var(--leading-normal);
+  resize: none;
+}
+
+.tasks-add-notes-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1-5);
+}
+
+.tasks-add-notes-actions > .tasks-add-hint {
+  margin-right: auto;
+}
+
+/* The phone sheet's add bar: pinned under the list, above the keyboard
+   (the sheet itself lifts by the shared keyboard inset). */
+.tasks-add[data-variant="bar"] {
+  flex: none;
+  padding:
+    var(--space-2-5) max(var(--space-3), env(safe-area-inset-right))
+    max(var(--space-3), env(safe-area-inset-bottom))
+    max(var(--space-3), env(safe-area-inset-left));
   border: 0;
-  border-radius: calc(var(--radius-ctl) - 2px);
-  background: transparent;
+  border-top: 1px solid var(--border-soft);
+  border-radius: 0;
+}
+
+.tasks-add[data-variant="bar"] .tasks-add-field {
+  padding: 0;
+}
+
+.tasks-add[data-variant="bar"] .tasks-add-input {
+  height: var(--control-touch);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--input);
+  border-radius: var(--radius-card);
+}
+
+.tasks-add[data-variant="bar"] .tasks-add-input:focus-visible {
+  border-color: var(--ring);
+  box-shadow: var(--focus-ring);
+}
+
+.tasks-content[data-touch] .tasks-add-details {
+  width: var(--control-touch);
+  height: var(--control-touch);
+}
+
+.tasks-add[data-variant="bar"] .tasks-add-notes {
+  padding: var(--space-2) 0 0;
+  border-top: 0;
+}
+
+.tasks-add-submit {
+  flex: none;
+  width: var(--control-touch);
+  height: var(--control-touch);
+  border-radius: var(--radius-card);
+}
+
+/* An error under the toolbar; its dismiss button sits in the corner so a
+   short message keeps one line. */
+.tasks-alert {
+  position: relative;
+  flex: none;
+  margin: 0 var(--space-3) var(--space-2);
+}
+
+.tasks-alert > [data-slot="callout"] {
+  padding-right: var(--space-8);
+}
+
+.tasks-alert-dismiss {
+  position: absolute;
+  top: var(--space-1-5);
+  right: var(--space-1-5);
   color: var(--muted-foreground);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
 }
 
-.tasks-segment[aria-checked="true"] {
-  background: var(--secondary);
-  color: var(--foreground);
-}
-
-.tasks-segment[data-task-scope-drop-target="true"] {
-  background: color-mix(
-    in srgb,
-    var(--accent, var(--primary)) 18%,
-    var(--secondary)
-  );
-  color: var(--foreground);
-  box-shadow: inset 0 0 0 1px var(--accent, var(--primary));
-}
-
-.tasks-segment:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.tasks-segments[data-size="small"] .tasks-segment {
-  padding: 3px 6px;
-  font-size: 12px;
-}
-
-.tasks-nested-scopes-toggle {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  color: var(--muted-foreground);
-  cursor: pointer;
-}
-
-.tasks-new-input {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.tasks-panel-error {
-  margin: 0;
-  font-size: 12px;
-  color: var(--destructive, #b91c1c);
+/* ── List region: the one scroller. */
+.tasks-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--space-0-5) var(--space-2) var(--space-3);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .tasks-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 .tasks-empty {
-  padding: 14px 4px;
-  font-size: 13px;
-  color: var(--muted-foreground);
+  padding-inline: var(--space-2);
 }
 
-/* The whole row is the select affordance (the checkbox stops propagation);
-   the title button inside carries the keyboard/AT semantics. */
+/* ── Rows: completion circle, one-line title, quiet indicators, ⋯. */
 .tasks-row {
   display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tasks-row-main {
+  display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 7px 4px;
-  border-bottom: 1px solid var(--border-soft, var(--border));
-  cursor: pointer;
+  gap: var(--space-1);
+  min-width: 0;
+  min-height: var(--tasks-row-height);
+  padding-right: var(--space-1);
+  border-radius: var(--radius-ctl);
 }
 
-.tasks-row:hover {
-  background: color-mix(in srgb, var(--secondary) 40%, transparent);
-}
-
-.tasks-row[data-selected] {
-  background: color-mix(in srgb, var(--secondary) 65%, transparent);
-}
-
-.tasks-row:last-child {
-  border-bottom: 0;
-}
-
-.tasks-row-drag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 24px;
-  margin-right: -4px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-inline);
-  background: transparent;
-  color: var(--muted-foreground);
+.tasks-row-main[draggable="true"] {
   cursor: grab;
-  opacity: 0.45;
 }
 
-.tasks-row-drag:hover,
-.tasks-row-drag:focus-visible {
-  background: color-mix(in srgb, var(--secondary) 72%, transparent);
-  color: var(--foreground);
-  opacity: 1;
-}
-
-.tasks-row-drag:active {
+.tasks-row-main[draggable="true"]:active,
+.tasks-row-main[data-dragging] {
   cursor: grabbing;
 }
 
-.tasks-row-checkbox {
-  display: inline-flex;
-  align-items: center;
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: var(--muted-foreground);
-  cursor: pointer;
+.tasks-row-main[data-dragging] {
+  opacity: var(--disabled-opacity);
 }
 
-.tasks-row[data-completed] .tasks-row-checkbox {
-  color: var(--foreground);
+@media (hover: hover) {
+  .tasks-row-main:hover {
+    background: var(--hover);
+  }
+}
+
+.tasks-row[data-expanded] > .tasks-row-main {
+  background: var(--selected);
+}
+
+/* The row draws the title's focus ring, so it never butts against the
+   completion circle. */
+.tasks-row-main:has(> .tasks-row-title:focus-visible) {
+  box-shadow: var(--focus-ring);
+}
+
+.tasks-check {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--tasks-check-target);
+  height: var(--tasks-check-target);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted-foreground-2);
+  cursor: pointer;
+  outline: none;
+}
+
+.tasks-check svg {
+  width: var(--tasks-check-icon);
+  height: var(--tasks-check-icon);
+}
+
+@media (hover: hover) {
+  .tasks-check:hover {
+    color: var(--foreground);
+  }
+}
+
+.tasks-check:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.tasks-check[aria-checked="true"] {
+  color: var(--success);
 }
 
 .tasks-row-title {
-  flex: 1;
+  flex: 1 1 auto;
+  align-self: stretch;
   min-width: 0;
+  margin: 0;
+  padding: 0 var(--space-1);
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: inherit;
   font: inherit;
-  font-size: 14px;
+  font-size: var(--tasks-row-text);
+  line-height: var(--leading-snug);
   text-align: left;
-  padding: 2px 4px;
-  margin: -2px -4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: inherit;
+  outline: none;
+}
+
+/* Pending rows are spans: they keep the row's line box. */
+span.tasks-row-title {
+  display: flex;
+  align-items: center;
+}
+
+.tasks-row[data-completed] .tasks-row-title {
+  color: var(--muted-foreground);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
+}
+
+.tasks-row[data-creating] .tasks-row-title,
+.tasks-row[data-busy] .tasks-row-title {
+  color: var(--muted-foreground);
+}
+
+.tasks-row-meta {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.tasks-row-meta svg {
+  width: var(--tasks-row-icon);
+  height: var(--tasks-row-icon);
+}
+
+.tasks-row-files {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-0-5);
+}
+
+.tasks-row-meta .tasks-row-pin {
+  color: var(--foreground);
+}
+
+/* ⋯ takes no room until the row is hovered or focused (always on touch). */
+.tasks-row-more {
+  flex: none;
+  width: 0;
+  margin-left: calc(-1 * var(--space-1));
+  overflow: hidden;
+  color: var(--muted-foreground);
+  opacity: 0;
+}
+
+.tasks-row-main:hover > .tasks-row-more,
+.tasks-row-main:focus-within > .tasks-row-more,
+.tasks-row-more[data-state="open"],
+.tasks-content[data-touch] .tasks-row-more {
+  width: var(--tasks-more-width);
+  margin-left: 0;
+  opacity: 1;
+}
+
+.tasks-content[data-touch] .tasks-row-more {
+  height: var(--tasks-more-width);
+}
+
+/* ── Inline detail, aligned with the title. */
+.tasks-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2-5);
+  min-width: 0;
+  padding:
+    var(--space-1-5) var(--space-2) var(--space-3)
+    calc(var(--tasks-check-target) + var(--space-2));
+}
+
+.tasks-detail-notes-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.tasks-detail-notes {
+  margin: 0;
+  color: var(--muted-foreground);
+  line-height: var(--leading-normal);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tasks-detail-notes[data-clamped] {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 8;
+  line-clamp: 8;
+}
+
+.tasks-detail-more {
+  height: auto;
+  padding: 0;
+}
+
+.tasks-file-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tasks-file-chips > li {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* The file icon never shrinks and the file name shows before the folder:
+   the parent folder gives way first. */
+.tasks-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 100%;
+  height: var(--control-xs);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-inline);
+  background: var(--code);
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
+  outline: none;
+}
+
+.tasks-file-chip > svg {
+  flex: none;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+  color: var(--muted-foreground);
+}
+
+button.tasks-file-chip {
+  cursor: pointer;
+}
+
+button.tasks-file-chip:hover {
+  background: var(--selected);
+}
+
+.tasks-file-chip:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.tasks-file-parent {
+  flex: 0 100 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-file-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tasks-file-remove {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--icon-md);
+  height: var(--icon-md);
+  margin-right: calc(-1 * var(--space-1));
+  padding: 0;
   border: 0;
   border-radius: var(--radius-inline);
   background: transparent;
-  color: inherit;
+  color: var(--muted-foreground);
   cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  outline: none;
 }
 
-.tasks-row-title:focus-visible {
-  background: color-mix(in srgb, var(--secondary) 55%, transparent);
+.tasks-file-remove::before {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--space-1));
 }
 
-.tasks-row-location {
-  max-width: 42%;
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: 10.5px;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.tasks-file-remove:hover {
+  background: var(--hover);
+  color: var(--foreground);
 }
 
-.tasks-detail-area {
-  flex: 0 0 auto;
-  margin-top: auto;
-  padding: 10px 4px 2px;
-  border-top: 1px solid var(--border-soft, var(--border));
+.tasks-file-remove:focus-visible {
+  box-shadow: var(--focus-ring);
 }
 
-.tasks-detail-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+.tasks-file-remove svg {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
 }
 
-.tasks-detail-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.tasks-detail-facts {
+  margin: 0;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
+  line-height: var(--leading-normal);
 }
 
-.tasks-detail-description {
-  margin: 0 0 8px;
-  max-height: 30dvh;
-  overflow-y: auto;
-  color: var(--muted-foreground);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.tasks-detail-link {
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-inline);
+  background: none;
+  color: var(--foreground);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+  text-underline-offset: 2px;
+  cursor: pointer;
+  outline: none;
+}
+
+.tasks-detail-link:hover {
+  text-decoration-color: currentColor;
+}
+
+.tasks-detail-link:focus-visible {
+  box-shadow: var(--focus-ring);
 }
 
 .tasks-detail-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 
-.tasks-row-notes,
-.tasks-row-files {
-  display: inline-flex;
-  align-items: center;
-  color: var(--muted-foreground);
-}
-
-.tasks-row-pin {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-inline);
-  background: transparent;
-  color: var(--muted-foreground);
-  cursor: pointer;
-  opacity: 0;
-}
-
-.tasks-row:hover .tasks-row-pin,
-.tasks-row-pin:focus-visible,
-.tasks-row-pin[data-pinned] {
-  opacity: 1;
-}
-
-.tasks-row-pin[data-pinned] {
-  color: var(--foreground);
-}
-
-.tasks-row-pin[data-pinned] svg {
-  fill: currentColor;
-}
-
-.tasks-detail-heading-actions,
-.tasks-editor-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.tasks-files {
+/* ── All: collapsible groups (Global, each project, its threads), and the
+   Completed section at the end of every view. */
+.tasks-group {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  margin: 0 0 8px;
+  min-width: 0;
 }
 
-.tasks-files-label {
-  font-size: 12px;
-  color: var(--muted-foreground);
-}
-
-.tasks-file-row {
+.tasks-group-heading,
+.tasks-section-heading {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-1-5);
+  width: 100%;
   min-width: 0;
-  padding: 6px;
+  min-height: var(--control-md);
+  padding: var(--space-2) var(--space-2) var(--space-1);
   border: 0;
   border-radius: var(--radius-ctl);
-  background: color-mix(in srgb, var(--secondary) 38%, transparent);
+  background: transparent;
   color: var(--muted-foreground);
   font: inherit;
   text-align: left;
+  cursor: pointer;
+  outline: none;
 }
 
-button.tasks-file-row {
-  cursor: pointer;
+.tasks-group-heading {
+  font-size: var(--text-meta);
+  font-weight: var(--weight-semibold);
+}
+
+.tasks-section-heading {
+  margin-top: var(--space-1);
+  color: var(--muted-foreground-2);
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.tasks-group-heading:hover,
+.tasks-section-heading:hover {
   color: var(--foreground);
 }
 
-button.tasks-file-row:hover {
-  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+.tasks-group-heading:focus-visible,
+.tasks-section-heading:focus-visible {
+  box-shadow: var(--focus-ring);
 }
 
-.tasks-file-text {
-  display: flex;
-  flex-direction: column;
+.tasks-heading-chevron {
+  flex: none;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+  transition: transform var(--motion-fast);
+}
+
+[aria-expanded="true"] > .tasks-heading-chevron {
+  transform: rotate(90deg);
+}
+
+.tasks-heading-icon {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  color: var(--muted-foreground-2);
+}
+
+.tasks-heading-label {
   min-width: 0;
-}
-
-.tasks-file-name {
-  font-size: 12.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.tasks-file-path {
-  font-family: var(--font-mono, monospace);
-  font-size: 10.5px;
+.tasks-heading-count {
+  flex: none;
+  color: var(--muted-foreground-2);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.tasks-group[data-kind="thread"] > .tasks-group-heading {
+  padding-left: var(--space-5);
+  font-weight: var(--weight-medium);
+}
+
+.tasks-group[data-kind="thread"] > .tasks-list {
+  padding-left: var(--space-3);
+}
+
+/* ── Phone sheet: the list with a pinned add bar, or one task's detail with
+   its actions pinned at the bottom. The sheet keeps one height while its
+   content changes. */
+.tasks-content[data-presentation="sheet"] {
+  flex: 1 1 85dvh;
+}
+
+.tasks-content[data-presentation="sheet"] .tasks-header {
+  min-height: calc(var(--control-touch) + var(--space-3));
+  padding:
+    var(--space-2) max(var(--space-2), env(safe-area-inset-right))
+    var(--space-1) max(var(--space-5), env(safe-area-inset-left));
+  border-bottom: 0;
+}
+
+.tasks-content[data-presentation="sheet"] .tasks-header[data-detail] {
+  padding-left: max(var(--space-2), env(safe-area-inset-left));
+}
+
+.tasks-content[data-presentation="sheet"] .tasks-title {
+  font-size: var(--text-sheet-title);
+}
+
+.tasks-content[data-presentation="sheet"] .tasks-search {
+  padding-left: var(--space-5);
+}
+
+.tasks-content[data-presentation="sheet"] .tasks-toolbar {
+  padding: var(--space-1) var(--space-4) var(--space-2);
+}
+
+.tasks-sheet-detail {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 0;
+  padding: var(--space-1) var(--space-5) var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.tasks-sheet-detail-title {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-left: calc(-1 * var(--space-3));
+}
+
+.tasks-sheet-detail-title h3 {
+  min-width: 0;
+  margin: 0;
+  padding-top: var(--space-2-5);
+  font-size: var(--text-sheet-title);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-snug);
+  overflow-wrap: anywhere;
+}
+
+.tasks-sheet-detail .tasks-detail-notes {
+  font-size: var(--text-title);
+}
+
+.tasks-sheet-detail .tasks-detail-facts {
+  font-size: var(--text-ui);
+}
+
+.tasks-sheet-detail .tasks-file-chip {
+  height: var(--control-md);
+  font-size: var(--text-ui);
+}
+
+.tasks-sheet-actions {
+  display: grid;
+  flex: none;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-2);
+  padding:
+    var(--space-2-5) max(var(--space-3), env(safe-area-inset-right))
+    max(var(--space-3), env(safe-area-inset-bottom))
+    max(var(--space-3), env(safe-area-inset-left));
+  border-top: 1px solid var(--border-soft);
+}
+
+.tasks-sheet-actions [data-slot="button"] {
+  height: var(--control-touch);
+}
+
+/* ── Dialogs opened from Tasks. */
+.tasks-edit-notes {
+  min-height: calc(3 * var(--space-8));
+  max-height: 40dvh;
+}
+
+.tasks-edit-files {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+}
+
+.tasks-edit-files > .tasks-file-chips {
+  display: contents;
+}
+
+.tasks-edit-file-add {
+  display: flex;
+  gap: var(--space-1-5);
+  width: 100%;
+}
+
+.tasks-edit-add-file {
   color: var(--muted-foreground);
+}
+
+.searchable-select-sheet.tasks-move-dialog {
+  height: min(480px, calc(100dvh - var(--keyboard-inset) - var(--space-4)));
+}
+
+.tasks-paste-preview {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--muted-foreground);
+}
+
+.tasks-paste-preview > li {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.tasks-editor {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  border-top: 1px solid var(--border-soft, var(--border));
-  padding-top: 10px;
+.tasks-paste-preview > .tasks-paste-more {
+  color: var(--muted-foreground-2);
+  list-style: none;
 }
 
-.tasks-editor-title {
-  font-size: 14px;
-  font-weight: 600;
+.tasks-shortcuts-note {
+  margin: 0 0 var(--space-2);
+  color: var(--muted-foreground-2);
+  font-size: var(--text-meta);
 }
 
-.tasks-editor-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 30px;
-  gap: 8px;
-}
-
-.tasks-editor-delete-prompt {
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.tasks-editor-scope {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.tasks-editor-label {
-  font-size: 13px;
-  color: var(--muted-foreground);
-}
-
-.tasks-editor-scope .tasks-segments {
-  flex: 1;
-}
-
-.tasks-editor-files {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.tasks-editor-file-row,
-.tasks-editor-file-add {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.tasks-editor-file-row {
-  padding-left: 5px;
-  color: var(--muted-foreground);
-}
-
-.tasks-editor-file-path {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--font-mono, monospace);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.tasks-kbd {
+  padding: 0 var(--space-1-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-inline);
+  background: var(--code);
+  font-family: var(--font-mono);
+  font-size: var(--text-meta);
   white-space: nowrap;
-}
-
-.tasks-editor-file-add > :first-child {
-  flex: 1;
-}
-
-.tasks-editor-actions-main {
-  display: flex;
-  align-items: center;
-  gap: 6px;
 }
 
 /* Home/archived routes have no thread header; the toggle floats in the pane
@@ -471,10 +975,4 @@ button.tasks-file-row:hover {
   z-index: calc(var(--z-sticky) + 4);
   display: flex;
   align-items: center;
-}
-
-@media (max-width: 819px) {
-  .tasks-row-pin {
-    opacity: 1;
-  }
 }

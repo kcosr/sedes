@@ -16,6 +16,7 @@ import { ApiError } from "../api/ApiClient.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { tasksTenant } from "../tasks/tasks-tenant.js";
 import { TasksPanel } from "../components/tasks/TasksPanel.js";
+import { ToastProvider } from "../components/ui/toast.js";
 import {
   TasksHostContext,
   type TasksDock,
@@ -426,13 +427,15 @@ function setup(
   );
   const withHost = (layout: React.JSX.Element) =>
     input.withTasksPanel ? (
-      <TasksPanel
-        store={applicationStore}
-        panelLayoutStore={store}
-        route={{ name: "thread", threadId: "thread-1", automationOpen: false }}
-      >
-        {layout}
-      </TasksPanel>
+      <ToastProvider>
+        <TasksPanel
+          store={applicationStore}
+          panelLayoutStore={store}
+          route={{ name: "thread", threadId: "thread-1", automationOpen: false }}
+        >
+          {layout}
+        </TasksPanel>
+      </ToastProvider>
     ) : (
       layout
     );
@@ -2962,9 +2965,9 @@ describe("PanelLayout Tasks tenant", () => {
     const leaf = screen.getByRole("region", { name: "Tasks panel" });
     const surface = within(leaf).getByRole("region", { name: "Tasks" });
     expect(surface).toHaveAttribute("data-presentation", "panel");
-    expect(within(leaf).getByRole("button", { name: 'View "Task open-1"' })).toBeInTheDocument();
+    expect(within(leaf).getByRole("button", { name: "Task open-1" })).toBeInTheDocument();
     expect(leaf.querySelectorAll("header")).toHaveLength(1);
-    const body = leaf.querySelector(".tasks-panel-body");
+    const body = leaf.querySelector(".tasks-content");
 
     fireEvent.click(within(leaf).getByRole("button", { name: "Collapse Tasks panel" }));
     expect(store.isCollapsed("tasks")).toBe(true);
@@ -2974,11 +2977,11 @@ describe("PanelLayout Tasks tenant", () => {
 
     fireEvent.click(tasksToggle());
     const restored = screen.getByRole("region", { name: "Tasks panel" });
-    expect(restored.querySelector(".tasks-panel-body")).toBe(body);
+    expect(restored.querySelector(".tasks-content")).toBe(body);
 
     fireEvent.click(within(restored).getByRole("button", { name: "Close Tasks panel" }));
     expect(store.hasPanel("tasks")).toBe(false);
-    expect(document.querySelector(".tasks-panel-body")).toBeNull();
+    expect(document.querySelector(".tasks-content")).toBeNull();
   });
 });
 
