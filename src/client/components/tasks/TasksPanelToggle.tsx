@@ -9,18 +9,17 @@ import { Button } from "@client/components/ui/button";
 export function TasksPanelToggle({
   open,
   onToggle,
-  openThreadTaskCount = 0,
+  count = 0,
 }: {
   /** Whether Tasks is shown in this page's presentation. */
   readonly open: boolean;
   readonly onToggle: (invoker: HTMLButtonElement) => void;
-  readonly openThreadTaskCount?: number;
+  /** Open tasks in the current context. */
+  readonly count?: number;
 }): React.JSX.Element {
   const action = open ? "Close" : "Open";
   const taskCountLabel =
-    openThreadTaskCount > 0
-      ? `, ${openThreadTaskCount} open ${openThreadTaskCount === 1 ? "task" : "tasks"} for this thread`
-      : "";
+    count > 0 ? `, ${count} open ${count === 1 ? "task" : "tasks"}` : "";
   return (
     <Button
       variant={open ? "secondary" : "ghost"}
@@ -29,7 +28,7 @@ export function TasksPanelToggle({
       aria-label={`${action} Tasks panel${taskCountLabel}`}
       aria-expanded={open}
       aria-controls="tasks-panel"
-      data-has-items={openThreadTaskCount > 0 || undefined}
+      data-has-items={count > 0 || undefined}
       data-testid="tasks-panel-toggle"
       onClick={(event) => onToggle(event.currentTarget)}
     >

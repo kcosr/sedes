@@ -1615,7 +1615,7 @@ function PanelLayoutReady({
             onToggle={(invoker) =>
               desktop ? toggleTasksPanel(invoker) : tasksHost?.toggleOverlay()
             }
-            openThreadTaskCount={openThreadTaskCount}
+            count={openThreadTaskCount}
           />
           <div className="workspace-panel-open-menu">
             <div

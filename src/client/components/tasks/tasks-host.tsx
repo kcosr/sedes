@@ -131,7 +131,12 @@ export function TasksDockSlot(): React.JSX.Element | null {
 }
 
 /** The Tasks toggle in the pane corner of pages without panels. */
-export function TasksCornerControls(): React.JSX.Element {
+export function TasksCornerControls({
+  count,
+}: {
+  /** Open tasks in this page's context. */
+  readonly count?: number;
+}): React.JSX.Element {
   const host = useTasksHost();
   return (
     <div
@@ -141,6 +146,7 @@ export function TasksCornerControls(): React.JSX.Element {
       <TasksPanelToggle
         open={host?.overlayOpen ?? false}
         onToggle={() => host?.toggleOverlay()}
+        {...(count === undefined ? {} : { count })}
       />
     </div>
   );

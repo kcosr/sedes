@@ -64,6 +64,15 @@ export function Workbench({
   const environmentTintEnabled =
     environmentColorsEnabled &&
     (application.snapshot?.environments.length ?? 0) > 1;
+  // Pages without panels have no thread or project: their Tasks context is
+  // Global, so the corner toggle counts open global tasks.
+  const openGlobalTaskCount = useMemo(
+    () =>
+      (application.snapshot?.tasks ?? []).filter(
+        (task) => task.completedAt === null && task.scope.kind === "global",
+      ).length,
+    [application.snapshot?.tasks],
+  );
   const environmentIds = useMemo(
     () => application.snapshot?.environments.map(({ id }) => id) ?? [],
     [application.snapshot?.environments],
@@ -114,7 +123,7 @@ export function Workbench({
           <div className="pane-nav-header">
             <SidebarNavTrigger />
           </div>
-          <TasksCornerControls />
+          <TasksCornerControls count={openGlobalTaskCount} />
           <ArchivedView store={applicationStore} />
         </div>
       </main>
@@ -127,7 +136,7 @@ export function Workbench({
           <div className="pane-nav-header">
             <SidebarNavTrigger />
           </div>
-          <TasksCornerControls />
+          <TasksCornerControls count={openGlobalTaskCount} />
           {application.experimentalUsageEnabled ? <UsageView store={applicationStore} /> : <p>Experimental usage accounting is disabled on this server.</p>}
         </div>
       </main>
@@ -181,7 +190,7 @@ export function Workbench({
         <div className="pane-nav-header">
           <SidebarNavTrigger />
         </div>
-        <TasksCornerControls />
+        <TasksCornerControls count={openGlobalTaskCount} />
         <section className="welcome">
           <div className="welcome-symbol">
             <SedesMark size={44} />
