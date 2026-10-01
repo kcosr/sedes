@@ -15,7 +15,7 @@ const DEFAULT_PANEL_FRACTION = 0.3;
 const MIN_POSITIVE_FRACTION = 1e-6;
 const FRACTION_EPSILON = 1e-9;
 
-export type PanelKind = "chat" | "files" | "workpads" | "terminals";
+export type PanelKind = "chat" | "files" | "workpads" | "tasks" | "terminals";
 export type PanelInstanceId = string;
 export type PanelId = PanelInstanceId;
 export type SplitOrientation = "row" | "column";
@@ -25,6 +25,7 @@ export type PanelInstance =
   | { readonly panelInstanceId: PanelInstanceId; readonly kind: "chat" }
   | { readonly panelInstanceId: PanelInstanceId; readonly kind: "files" }
   | { readonly panelInstanceId: PanelInstanceId; readonly kind: "workpads" }
+  | { readonly panelInstanceId: PanelInstanceId; readonly kind: "tasks" }
   | {
       readonly panelInstanceId: "terminals";
       readonly kind: "terminals";
@@ -196,6 +197,7 @@ interface LayoutStats {
   chatCount: number;
   filesCount: number;
   workpadsCount: number;
+  tasksCount: number;
   terminalsCount: number;
 }
 
@@ -282,6 +284,7 @@ function collectValidation(
     if (panel.kind === "chat") stats.chatCount += 1;
     else if (panel.kind === "files") stats.filesCount += 1;
     else if (panel.kind === "workpads") stats.workpadsCount += 1;
+    else if (panel.kind === "tasks") stats.tasksCount += 1;
     else if (panel.kind === "terminals") {
       stats.terminalsCount += 1;
       validateTerminalContainer(panel, errors);
@@ -300,10 +303,17 @@ export function validatePanelLayout(tree: PanelLayoutTree): readonly string[] {
     chatCount: 0,
     filesCount: 0,
     workpadsCount: 0,
+    tasksCount: 0,
     terminalsCount: 0,
   };
   collectValidation(tree, 0, stats, errors);
-  if (stats.chatCount > 1 || stats.filesCount > 1 || stats.workpadsCount > 1 || stats.terminalsCount > 1)
+  if (
+    stats.chatCount > 1 ||
+    stats.filesCount > 1 ||
+    stats.workpadsCount > 1 ||
+    stats.tasksCount > 1 ||
+    stats.terminalsCount > 1
+  )
     errors.add("singleton_panel_kinds");
   for (const nodeId of stats.nodeIds) {
     if (stats.panelIds.has(nodeId)) errors.add("unique_layout_ids");
@@ -491,7 +501,11 @@ function canAddPanel(tree: PanelLayoutTree, panel: PanelInstance): boolean {
     if (errors.size > 0) return false;
   }
   return !(
-    (panel.kind === "chat" || panel.kind === "files" || panel.kind === "workpads" || panel.kind === "terminals") &&
+    (panel.kind === "chat" ||
+      panel.kind === "files" ||
+      panel.kind === "workpads" ||
+      panel.kind === "tasks" ||
+      panel.kind === "terminals") &&
     findPanelByKind(tree, panel.kind)
   );
 }
@@ -717,6 +731,12 @@ function decodePanel(
       ? null
       : freezePanel({ panelInstanceId: input.panelInstanceId, kind: "workpads" });
   }
+  if (input.kind === "tasks") {
+    budget.tasksCount += 1;
+    return budget.tasksCount > 1
+      ? null
+      : freezePanel({ panelInstanceId: input.panelInstanceId, kind: "tasks" });
+  }
   if (
     input.kind === "terminals" &&
     input.panelInstanceId === "terminals" &&
@@ -863,6 +883,7 @@ export function deserializePanelLayout(
         chatCount: 0,
         filesCount: 0,
         workpadsCount: 0,
+        tasksCount: 0,
         terminalsCount: 0,
       }) ?? defaultPanelLayout
     );

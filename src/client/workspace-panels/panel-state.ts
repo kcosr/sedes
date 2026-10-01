@@ -30,6 +30,29 @@ export const PANEL_SIZE_STORAGE_KEY = "sedes-panel-instance-sizes@4";
 export const WORKSPACE_FILES_STATE_STORAGE_KEY =
   "sedes-workspace-files-panel-state@1";
 export const WORKPADS_STATE_STORAGE_KEY = "sedes-workpads-panel-state@1";
+export const TASKS_STATE_STORAGE_KEY = "sedes-tasks-panel-state@1";
+
+/**
+ * Singletons whose membership and collapse belong to this browser client
+ * across every thread layout; only their placement is thread-local. Tasks
+ * follows the current chat, so a thread switch keeps it docked.
+ */
+const SHARED_PANEL_KINDS = ["workpads", "tasks"] as const;
+type SharedPanelKind = (typeof SHARED_PANEL_KINDS)[number];
+const SHARED_PANEL_STORAGE_KEYS: Readonly<Record<SharedPanelKind, string>> = {
+  workpads: WORKPADS_STATE_STORAGE_KEY,
+  tasks: TASKS_STATE_STORAGE_KEY,
+};
+
+interface SharedPanelVisibility {
+  readonly open: boolean;
+  readonly collapsed: boolean;
+}
+
+const CLOSED_SHARED_PANEL: SharedPanelVisibility = Object.freeze({
+  open: false,
+  collapsed: false,
+});
 const PANEL_SIZE_STORAGE_VERSION = 4 as const;
 const PANEL_COLLAPSED_STORAGE_VERSION = 4 as const;
 export function panelCollapsedStorageKey(threadId: string): string {
@@ -95,11 +118,8 @@ interface SharedPanelState {
   readonly dirtyListeners: Set<() => void>;
   readonly workspaceDirty: Map<string, Map<string, Set<string>>>;
   readonly threadStores: Map<string, PanelLayoutStore>;
-  workpadsState: { readonly open: boolean; readonly collapsed: boolean };
-  workspaceFilesState?: {
-    readonly open: boolean;
-    readonly collapsed: boolean;
-  };
+  readonly sharedPanels: Map<SharedPanelKind, SharedPanelVisibility>;
+  workspaceFilesState?: SharedPanelVisibility;
 }
 
 function browserStorage(): PanelLayoutStorage | undefined {
@@ -113,7 +133,7 @@ function browserStorage(): PanelLayoutStorage | undefined {
 function readSharedPanelState(
   storage: PanelLayoutStorage | undefined,
   key: string,
-): SharedPanelState["workspaceFilesState"] {
+): SharedPanelVisibility | undefined {
   try {
     const serialized = storage?.getItem(key);
     if (!serialized) return undefined;
@@ -208,7 +228,13 @@ export class PanelLayoutStore {
       workspaceDirty: new Map(),
       threadStores: new Map(),
       workspaceFilesState: readSharedPanelState(this.#storage, WORKSPACE_FILES_STATE_STORAGE_KEY),
-      workpadsState: readSharedPanelState(this.#storage, WORKPADS_STATE_STORAGE_KEY) ?? { open: false, collapsed: false },
+      sharedPanels: new Map(
+        SHARED_PANEL_KINDS.map((kind) => [
+          kind,
+          readSharedPanelState(this.#storage, SHARED_PANEL_STORAGE_KEYS[kind]) ??
+            CLOSED_SHARED_PANEL,
+        ]),
+      ),
     };
     let stored: string | null = null;
     let storedSizes: string | null = null;
@@ -230,7 +256,7 @@ export class PanelLayoutStore {
       collapsed: deserializeCollapsedPanels(storedCollapsed, tree),
       revision: 0,
     };
-    this.#reconcileWorkpads();
+    this.#reconcileSharedPanels();
     if (options.threadId) this.#shared.threadStores.set(options.threadId, this);
   }
 
@@ -248,7 +274,7 @@ export class PanelLayoutStore {
     const existing = this.#shared.threadStores.get(threadId);
     if (existing) {
       existing.#reconcileWorkspaceFiles();
-      existing.#reconcileWorkpads();
+      existing.#reconcileSharedPanels();
       return existing;
     }
     const store = new PanelLayoutStore(this.registry, {
@@ -345,12 +371,7 @@ export class PanelLayoutStore {
   }
 
   openPanel(panelId: string, input: PanelOpenInput = {}): boolean {
-    const kind =
-      panelId === "chat"
-        ? "chat"
-        : panelId === "workspace-files"
-          ? "files"
-          : panelId === "workpads" ? "workpads" : undefined;
+    const kind = panelKindForId(panelId);
     if (!kind || (kind !== "chat" && !this.registry.has(panelId)))
       return false;
     const existing = findPanelByKind(this.#snapshot.tree, kind);
@@ -738,7 +759,7 @@ export class PanelLayoutStore {
     if (kind === "chat") return "left";
     if (kind === "terminals") return "bottom";
     return (
-      this.registry.tenant(kind === "files" ? "workspace-files" : "workpads")?.preferredPlacement.edge ??
+      this.registry.tenant(tenantIdForKind(kind))?.preferredPlacement.edge ??
       "right"
     );
   }
@@ -747,8 +768,8 @@ export class PanelLayoutStore {
     kind: PanelKind,
     input: PanelOpenInput,
   ): number | undefined {
-    if (kind !== "files" && kind !== "workpads") return undefined;
-    const tenant = this.registry.tenant(kind === "files" ? "workspace-files" : "workpads");
+    if (kind === "chat" || kind === "terminals") return undefined;
+    const tenant = this.registry.tenant(tenantIdForKind(kind));
     if (!tenant) return undefined;
     const edge = tenant.preferredPlacement.edge;
     const available =
@@ -817,26 +838,31 @@ export class PanelLayoutStore {
     }
   }
 
-  #reconcileWorkpads(): void {
-    if (!this.registry.has("workpads")) return;
-    const state = this.#shared.workpadsState;
-    const panel = findPanelByKind(this.#snapshot.tree, "workpads");
+  #reconcileSharedPanels(): void {
     let tree = this.#snapshot.tree;
-    if (!state.open && panel) tree = closeLayoutPanel(tree, panel.panelInstanceId);
-    if (state.open && !panel) {
-      tree = openLayoutPanel(tree, { panelInstanceId: "workpads", kind: "workpads" }, {
-        edge: this.#preferredEdge("workpads"),
-        preferredPanelFraction: this.#retainedPanelSizes.get("workpads")?.fraction,
-        splitId: this.#createId("split"),
-        stackId: this.#createId("stack"),
-      });
-    }
     const collapsed = new Set(this.#snapshot.collapsed);
-    if (state.open && state.collapsed) collapsed.add("workpads");
-    else collapsed.delete("workpads");
-    if (tree !== this.#snapshot.tree || state.collapsed !== this.#snapshot.collapsed.has("workpads")) {
-      this.#publish({ tree, collapsed });
+    let changed = false;
+    for (const kind of SHARED_PANEL_KINDS) {
+      if (!this.registry.has(kind)) continue;
+      const state = this.#shared.sharedPanels.get(kind) ?? CLOSED_SHARED_PANEL;
+      const panel = findPanelByKind(tree, kind);
+      if (!state.open && panel) tree = closeLayoutPanel(tree, panel.panelInstanceId);
+      if (state.open && !panel) {
+        tree = openLayoutPanel(tree, { panelInstanceId: kind, kind }, {
+          edge: this.#preferredEdge(kind),
+          preferredPanelFraction: this.#retainedPanelSizes.get(kind)?.fraction,
+          splitId: this.#createId("split"),
+          stackId: this.#createId("stack"),
+        });
+      }
+      const shouldCollapse = state.open && state.collapsed;
+      if (shouldCollapse !== collapsed.has(kind)) {
+        changed = true;
+        if (shouldCollapse) collapsed.add(kind);
+        else collapsed.delete(kind);
+      }
     }
+    if (changed || tree !== this.#snapshot.tree) this.#publish({ tree, collapsed });
   }
 
   #reconcileWorkspaceFiles(): void {
@@ -886,8 +912,9 @@ export class PanelLayoutStore {
     readonly persistTree?: boolean;
     readonly persistCollapsed?: boolean;
   }): void {
-    const previousWorkpadsOpen = this.hasPanelKind("workpads");
-    const previousWorkpadsCollapsed = this.isCollapsed("workpads");
+    const previousShared = new Map(
+      SHARED_PANEL_KINDS.map((kind) => [kind, this.#sharedVisibility(kind)]),
+    );
     const tree = "tree" in input ? input.tree! : this.#snapshot.tree;
     const collapsed =
       input.collapsed === undefined
@@ -913,18 +940,26 @@ export class PanelLayoutStore {
       ...(focusRequest ? { focusRequest } : {}),
       revision: this.#snapshot.revision + 1,
     };
-    // Layout placement stays thread-local; Workpads membership and collapse
-    // belong to this browser client's panel state, across all threads.
-    if ((input.persistTree || input.persistCollapsed) && (
-      previousWorkpadsOpen !== this.hasPanelKind("workpads") ||
-      previousWorkpadsCollapsed !== this.isCollapsed("workpads")
-    )) {
-      const state = { open: this.hasPanelKind("workpads"), collapsed: this.isCollapsed("workpads") };
-      this.#shared.workpadsState = state;
-      try {
-        this.#storage?.setItem(WORKPADS_STATE_STORAGE_KEY, JSON.stringify({ version: 1, ...state }));
-      } catch {
-        // Persistence is best effort.
+    // Layout placement stays thread-local; Workpads and Tasks membership and
+    // collapse belong to this browser client's panel state, across threads.
+    if (input.persistTree || input.persistCollapsed) {
+      for (const kind of SHARED_PANEL_KINDS) {
+        const previous = previousShared.get(kind)!;
+        const state = this.#sharedVisibility(kind);
+        if (
+          previous.open === state.open &&
+          previous.collapsed === state.collapsed
+        )
+          continue;
+        this.#shared.sharedPanels.set(kind, state);
+        try {
+          this.#storage?.setItem(
+            SHARED_PANEL_STORAGE_KEYS[kind],
+            JSON.stringify({ version: 1, ...state }),
+          );
+        } catch {
+          // Persistence is best effort.
+        }
       }
     }
     if (input.persistTree) {
@@ -944,6 +979,13 @@ export class PanelLayoutStore {
       } catch {}
     }
     for (const listener of this.#listeners) listener();
+  }
+
+  #sharedVisibility(kind: SharedPanelKind): SharedPanelVisibility {
+    return {
+      open: this.hasPanelKind(kind),
+      collapsed: this.isCollapsed(kind),
+    };
   }
 
   #presentationTarget(
@@ -977,6 +1019,20 @@ export class PanelLayoutStore {
     const stack = findStackForPanel(projected, panelInstanceId);
     return stack?.activePanelInstanceId === panelInstanceId;
   }
+}
+
+function panelKindForId(
+  panelId: string,
+): Exclude<PanelKind, "terminals"> | undefined {
+  if (panelId === "chat") return "chat";
+  if (panelId === "workspace-files") return "files";
+  if (panelId === "workpads") return "workpads";
+  if (panelId === "tasks") return "tasks";
+  return undefined;
+}
+
+function tenantIdForKind(kind: "files" | "workpads" | "tasks"): string {
+  return kind === "files" ? "workspace-files" : kind;
 }
 
 function panelFractionInParent(
@@ -1049,7 +1105,7 @@ function deserializeRetainedPanelSizes(
     const sizes = (parsed as Record<string, unknown>).sizes;
     if (typeof sizes !== "object" || sizes === null || Array.isArray(sizes))
       return retained;
-    for (const kind of ["chat", "files", "workpads", "terminals"] as const) {
+    for (const kind of ["chat", "files", "workpads", "tasks", "terminals"] as const) {
       const raw = (sizes as Record<string, unknown>)[kind];
       if (typeof raw !== "object" || raw === null || Array.isArray(raw))
         continue;

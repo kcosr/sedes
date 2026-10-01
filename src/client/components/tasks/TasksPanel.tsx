@@ -1,11 +1,15 @@
 import { createPortal } from "react-dom";
 import { StablePaneSlot } from "../../workspace-panels/StablePaneSlot.js";
-import { DismissableLayer } from "@radix-ui/react-dismissable-layer";
 import {
   Dialog,
   DialogContent,
   DialogTitle,
 } from "@client/components/ui/dialog";
+import {
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+} from "@client/components/ui/popover";
 import {
   useCallback,
   useEffect,
@@ -13,6 +17,8 @@ import {
   useRef,
   useState,
   type DragEvent as ReactDragEvent,
+  type ReactNode,
+  type RefObject,
 } from "react";
 import {
   AlignLeft,
@@ -39,21 +45,17 @@ import {
   type TaskScope,
 } from "../../../shared/index.js";
 import {
-  setTasksPanelDefaultView,
-  setTasksPanelIncludeNestedScopes,
-  setTasksPanelOpen,
-  setTasksPanelPinned,
-  setTasksPanelSearchContent,
+  setTasksLastView,
+  setTasksViewOptions,
+  subscribeReveal,
   useTasksPanelPreferences,
-  type TasksPanelScopePreference,
+  useTasksViewOptions,
+  type TasksView as TasksPanelView,
 } from "../../app/tasks-panel-store.js";
 import { useRoute, type Route } from "../../app/router.js";
 import { useComposerDraftStaging } from "../../context-excerpts/coordinator.js";
 import { useMediaQuery } from "../../app/use-media-query.js";
-import {
-  CLOSE_TASK_DETAIL_EVENT,
-  OPEN_OVERLAY_SELECTORS,
-} from "../../app/android-back.js";
+import { CLOSE_TASK_DETAIL_EVENT } from "../../app/android-back.js";
 import {
   useApplicationStore,
   type ApplicationClientStore,
@@ -63,10 +65,6 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@client/components/ui/dropdown-menu";
 import { Input } from "@client/components/ui/input";
@@ -75,30 +73,30 @@ import { SearchableSelect } from "../ui/searchable-select.js";
 import { workspaceDisplayLabel } from "../../app/sidebar-scope-presentation.js";
 import { SegmentedControl } from "./SegmentedControl.js";
 import type { PanelLayoutStore } from "../../workspace-panels/panel-state.js";
+import {
+  PanelChrome,
+  type PanelChromeControls,
+} from "../../workspace-panels/PanelChrome.js";
 import type { PanelPresentation } from "../../workspace-panels/panel-presentation.js";
 import { resolvePanelPresentation } from "../../workspace-panels/panel-presentation.js";
 import { getPanelPresentation } from "../../app/settings.js";
 import { createWorkspaceFilesOpenIntent } from "../../workspace-files/open-intent.js";
 import {
-  applyTasksPanelWidth,
-  clampTasksPanelWidth,
-  getTasksPanelWidth,
-  setTasksPanelWidth,
-  tasksPanelWidthDefault,
-  tasksPanelWidthMax,
-  tasksPanelWidthMin,
-} from "../../app/tasks-panel-width.js";
-import { PaneResizeHandle } from "../PaneResizeHandle.js";
-import {
   handleTaskDragStart,
   useTaskDrag,
   type TaskScopeDropTarget,
 } from "../../tasks/task-drag.js";
+import {
+  TASKS_SHEET_QUERY,
+  TasksHostContext,
+  TasksSurface,
+  type TasksDock,
+  type TasksHost,
+  type TasksPresentation,
+} from "./tasks-host.js";
 import "./tasks-panel.css";
 
-const MOBILE_QUERY = "(max-width: 819px)";
-
-type TasksView = TasksPanelScopePreference;
+type TasksView = Exclude<TasksPanelView, "all">;
 
 const VIEW_ORDER: readonly TasksView[] = ["global", "project", "thread"];
 const VIEW_LABEL: Record<TasksView, string> = {
@@ -112,78 +110,6 @@ type ScopeSelection =
   | { readonly kind: "global" }
   | { readonly kind: "workspace"; readonly workspaceId: string | undefined }
   | { readonly kind: "thread"; readonly threadId: string | undefined };
-
-/** Radix layers above the panel own their own Escape dismissal. */
-const OTHER_OVERLAY_SELECTOR = OPEN_OVERLAY_SELECTORS.filter(
-  (selector) => !selector.includes("tasks-panel"),
-).join(", ");
-
-/**
- * Right offset anchoring the desktop card to the primary chat column rather
- * than the viewport: docked workspace panels own the screen's right edge and
- * the card must float over the chat, not over them.
- */
-function usePrimaryRightAnchor(enabled: boolean, routeKey: string): number {
-  const [offset, setOffset] = useState(12);
-  useEffect(() => {
-    if (!enabled) return undefined;
-    let frame = 0;
-    let observed: Element | null = null;
-    const resizeObserver =
-      typeof ResizeObserver === "undefined"
-        ? undefined
-        : new ResizeObserver(() => schedule());
-    // On reload this card can mount before the primary column does; keep
-    // watching the DOM so the anchor re-acquires the column when it appears
-    // (or reappears after navigation) instead of staying at the viewport edge.
-    const mutationObserver =
-      typeof MutationObserver === "undefined"
-        ? undefined
-        : new MutationObserver(() => {
-            if (
-              document.querySelector('[data-testid="thread-view"]') !== observed
-            ) {
-              schedule();
-            }
-          });
-    const measure = () => {
-      frame = 0;
-      const primary = document.querySelector('[data-testid="thread-view"]');
-      if (primary !== observed) {
-        if (observed) resizeObserver?.unobserve(observed);
-        if (primary) resizeObserver?.observe(primary);
-        observed = primary;
-      }
-      if (!primary) {
-        setOffset(12);
-        return;
-      }
-      const rect = primary.getBoundingClientRect();
-      setOffset(
-        rect.width > 0 && rect.height > 0
-          ? Math.max(12, Math.round(window.innerWidth - rect.right) + 12)
-          : 12,
-      );
-    };
-    const schedule = () => {
-      if (!frame) frame = requestAnimationFrame(measure);
-    };
-    measure();
-    mutationObserver?.observe(document.body, {
-      childList: true,
-      subtree: true,
-    });
-    window.addEventListener("resize", schedule);
-    return () => {
-      window.removeEventListener("resize", schedule);
-      if (frame) cancelAnimationFrame(frame);
-      resizeObserver?.disconnect();
-      mutationObserver?.disconnect();
-    };
-  }, [enabled, routeKey]);
-  return offset;
-}
-
 
 type ViewContext = {
   readonly threadId?: string;
@@ -332,16 +258,20 @@ function TasksPanelBody({
   active,
   store,
   panelLayoutStore,
-  onClose,
-  mobile,
+  presentation,
+  onRequestClose,
+  panelControls,
 }: {
   store: ApplicationClientStore;
   panelLayoutStore: PanelLayoutStore;
-  onClose: () => void;
-  mobile: boolean;
+  presentation: TasksPresentation;
+  onRequestClose: () => void;
+  /** The docked panel's collapse, dock and close controls. */
+  panelControls?: PanelChromeControls;
   route: Route;
   active: boolean;
 }): React.JSX.Element {
+  const mobile = presentation === "sheet";
   const preferences = useTasksPanelPreferences();
   const application = useApplicationStore(store);
   const composerDraft = useComposerDraftStaging();
@@ -398,7 +328,12 @@ function TasksPanelBody({
     project: chosenProjectId !== null || (application.snapshot?.workspaces.length ?? 0) > 0,
     thread: chosenThreadId !== null || taskThreads.length > 0,
   };
-  const view = clampView(chosenView ?? preferences.defaultView, availableViews);
+  const view = clampView(
+    chosenView ??
+      (preferences.lastView === "all" ? "global" : preferences.lastView),
+    availableViews,
+  );
+  const viewPreferences = useTasksViewOptions(view);
   const context = view === "thread" ? threadContext : projectContext;
   const currentScope = resolvedScope(viewScope(view, context));
   // Single-select pure-filter views: the composer always adds to the scope
@@ -489,7 +424,7 @@ function TasksPanelBody({
         threadOptions.some(({ value }) => value === editorScope.threadId))
   );
   const includeNestedScopes =
-    view !== "thread" && preferences.includeNestedScopes;
+    view !== "thread" && viewPreferences.includeThreadTasks;
   const normalizedSearchQuery = newTitle.trim().toLocaleLowerCase();
   const visible = useMemo(
     () =>
@@ -499,7 +434,7 @@ function TasksPanelBody({
           (task) =>
             normalizedSearchQuery.length === 0 ||
             task.title.toLocaleLowerCase().includes(normalizedSearchQuery) ||
-            (preferences.searchContent &&
+            (viewPreferences.searchNotes &&
               task.details.toLocaleLowerCase().includes(normalizedSearchQuery)),
         )
         .sort(
@@ -516,7 +451,7 @@ function TasksPanelBody({
       context,
       includeNestedScopes,
       normalizedSearchQuery,
-      preferences.searchContent,
+      viewPreferences.searchNotes,
     ],
   );
   const editingTask = editor
@@ -686,7 +621,7 @@ function TasksPanelBody({
           target: { kind: "file" },
         }),
       });
-      if (mobile && opened) setTasksPanelOpen(false);
+      if (mobile && opened) onRequestClose();
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -808,44 +743,8 @@ function TasksPanelBody({
       dropOnScope(candidate, event),
   }));
 
-  return (
-    <div
-      className="tasks-panel-body"
-      data-task-detail-open={
-        selectedTask !== undefined || editor !== null || undefined
-      }
-      data-task-scope-drop-target={scopeDropView === view || undefined}
-      onDragEnter={(event) => markScopeDrop(view, event)}
-      onDragOver={(event) => markScopeDrop(view, event)}
-      onDragLeave={(event) => leaveScopeDrop(view, event)}
-      onDrop={(event) => dropOnScope(view, event)}
-    >
-      <header className="tasks-panel-header">
-        <h2 className="tasks-panel-title">Tasks</h2>
-        <div className="tasks-panel-header-actions">
-          {!mobile && (
-            <Button
-              variant={preferences.pinned ? "secondary" : "ghost"}
-              size="icon-sm"
-              aria-label={
-                preferences.pinned ? "Unpin Tasks panel" : "Pin Tasks panel"
-              }
-              aria-pressed={preferences.pinned}
-              title={
-                preferences.pinned
-                  ? "Keep Tasks open when clicking elsewhere"
-                  : "Close Tasks when clicking elsewhere"
-              }
-              onClick={() => setTasksPanelPinned(!preferences.pinned)}
-            >
-              <Pin
-                size={15}
-                strokeWidth={1.8}
-                fill={preferences.pinned ? "currentColor" : "none"}
-                aria-hidden="true"
-              />
-            </Button>
-          )}
+  const headerActions = (
+    <>
           <DropdownMenu open={active && optionsOpen} onOpenChange={setOptionsOpen}>
             <DropdownMenuTrigger asChild>
               <Button
@@ -857,25 +756,11 @@ function TasksPanelBody({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Default view</DropdownMenuLabel>
-              <DropdownMenuRadioGroup
-                aria-label="Default view"
-                value={preferences.defaultView}
-                onValueChange={(value) => {
-                  const next = VIEW_ORDER.find((candidate) => candidate === value);
-                  if (next) setTasksPanelDefaultView(next);
-                }}
-              >
-                {VIEW_ORDER.map((candidate) => (
-                  <DropdownMenuRadioItem key={candidate} value={candidate}>
-                    {VIEW_LABEL[candidate]}
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-              <DropdownMenuSeparator />
               <DropdownMenuCheckboxItem
-                checked={preferences.searchContent}
-                onCheckedChange={setTasksPanelSearchContent}
+                checked={viewPreferences.searchNotes}
+                onCheckedChange={(searchNotes) =>
+                  setTasksViewOptions(view, { searchNotes })
+                }
               >
                 Search task content
               </DropdownMenuCheckboxItem>
@@ -894,23 +779,60 @@ function TasksPanelBody({
           >
             <Plus size={16} strokeWidth={1.8} />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="tasks-panel-close"
-            aria-label="Close Tasks panel"
-            onClick={onClose}
-          >
-            <X size={16} strokeWidth={1.8} />
-          </Button>
-        </div>
-      </header>
+    </>
+  );
+
+  return (
+    <>
+      {/* Docked, the header is the panel's own chrome with the layout's
+          collapse, dock and close controls: one header, never two. */}
+      {presentation === "panel" && panelControls ? (
+        <PanelChrome
+          className="tasks-panel-chrome"
+          panelTitle="Tasks"
+          panelActions={
+            <div className="tasks-panel-header-actions">{headerActions}</div>
+          }
+          controls={panelControls}
+        />
+      ) : null}
+    <div
+      className="tasks-panel-body"
+      data-task-detail-open={
+        selectedTask !== undefined || editor !== null || undefined
+      }
+      data-task-scope-drop-target={scopeDropView === view || undefined}
+      onDragEnter={(event) => markScopeDrop(view, event)}
+      onDragOver={(event) => markScopeDrop(view, event)}
+      onDragLeave={(event) => leaveScopeDrop(view, event)}
+      onDrop={(event) => dropOnScope(view, event)}
+    >
+      {presentation === "panel" ? null : (
+        <header className="tasks-panel-header">
+          <h2 className="tasks-panel-title">Tasks</h2>
+          <div className="tasks-panel-header-actions">
+            {headerActions}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="tasks-panel-close"
+              aria-label="Close Tasks panel"
+              onClick={onRequestClose}
+            >
+              <X size={16} strokeWidth={1.8} />
+            </Button>
+          </div>
+        </header>
+      )}
 
       <SegmentedControl
         ariaLabel="Task scope view"
         value={view}
         options={viewOptions}
-        onChange={(value) => setChosenView(value as TasksView)}
+        onChange={(value) => {
+          setChosenView(value as TasksView);
+          setTasksLastView(value as TasksView);
+        }}
       />
 
       {view === "project" && (
@@ -962,9 +884,11 @@ function TasksPanelBody({
         <label className="tasks-nested-scopes-toggle">
           <input
             type="checkbox"
-            checked={preferences.includeNestedScopes}
+            checked={viewPreferences.includeThreadTasks}
             onChange={(event) =>
-              setTasksPanelIncludeNestedScopes(event.target.checked)
+              setTasksViewOptions(view, {
+                includeThreadTasks: event.target.checked,
+              })
             }
           />
           Include nested scopes
@@ -1423,70 +1347,171 @@ function TasksPanelBody({
         </div>
       )}
     </div>
+    </>
   );
 }
 
+
+function createBodyTarget(): HTMLElement {
+  const target = document.createElement("div");
+  target.style.display = "contents";
+  return target;
+}
+
+/** Interaction inside a menu, picker or dialog layered above the popover. */
+function insideOtherLayer(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    target.closest(
+      '[role="menu"], [role="listbox"], [role="dialog"], [role="alertdialog"], [data-slot="popover-content"], [data-slot="dropdown-menu-content"]',
+    ) !== null
+  );
+}
+
+/**
+ * The Tasks host: one retained body, shown docked beside Chat in a thread
+ * workspace, as a popover on pages without panels, and as a sheet on phones.
+ * It wraps the workbench so its toggles and the `tasks` panel tenant reach
+ * it through context.
+ */
 export function TasksPanel({
   active = true,
   route: retainedRoute,
   store,
   panelLayoutStore,
+  children,
 }: {
   store: ApplicationClientStore;
   panelLayoutStore: PanelLayoutStore;
   active?: boolean;
   route?: Route;
-}): React.JSX.Element | null {
-  const preferences = useTasksPanelPreferences();
-  const mobile = useMediaQuery(MOBILE_QUERY);
-  const close = useCallback(() => setTasksPanelOpen(false), []);
-  const activeRef = useRef(active);
-  activeRef.current = active;
-  const [bodyTarget] = useState(() => {
-    const target = document.createElement("div");
-    target.style.display = "contents";
-    return target;
-  });
+  children?: ReactNode;
+}): React.JSX.Element {
+  const mobile = useMediaQuery(TASKS_SHEET_QUERY);
   const currentRoute = useRoute();
   const route = retainedRoute ?? currentRoute;
-  const rightOffset = usePrimaryRightAnchor(
-    active && preferences.open && !mobile,
-    route.name === "thread" ? `thread:${route.threadId}` : route.name,
+  const threadWorkspace = route.name === "thread";
+  const routeKey = threadWorkspace ? `thread:${route.threadId}` : route.name;
+  const [overlayOpen, setOverlayOpen] = useState(false);
+  const [dock, publishDock] = useState<TasksDock>();
+  const [bodyTarget] = useState(createBodyTarget);
+  const popoverAnchor = useRef<HTMLElement | null>(null);
+  const dismissedOutside = useRef(false);
+
+  // The popover and the sheet are transient: navigating or crossing the
+  // phone breakpoint closes them. The docked panel's open state is the
+  // panel layout's.
+  useEffect(() => setOverlayOpen(false), [routeKey, mobile]);
+
+  const placement: TasksPresentation | undefined = mobile
+    ? overlayOpen
+      ? "sheet"
+      : undefined
+    : threadWorkspace
+      ? dock?.present
+        ? "panel"
+        : undefined
+      : overlayOpen
+        ? "popover"
+        : undefined;
+
+  const latest = useRef({ mobile, threadWorkspace, dock, placement });
+  latest.current = { mobile, threadWorkspace, dock, placement };
+
+  const toggleOverlay = useCallback(
+    () => setOverlayOpen((open) => !open),
+    [],
   );
-  const widthRef = useRef(0);
-  if (widthRef.current === 0) widthRef.current = getTasksPanelWidth();
+  const requestClose = useCallback(() => {
+    if (latest.current.placement === "panel") latest.current.dock?.close();
+    else setOverlayOpen(false);
+  }, []);
 
-  useEffect(() => {
-    if (!active || !preferences.open || mobile) return undefined;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      if (document.querySelector(OTHER_OVERLAY_SELECTOR) !== null) return;
-      close();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [active, preferences.open, mobile, close]);
+  useEffect(
+    () =>
+      subscribeReveal(() => {
+        const { mobile, threadWorkspace, dock } = latest.current;
+        // The content switches view and expands the task itself.
+        if (!mobile && threadWorkspace) dock?.open({ focus: false });
+        else setOverlayOpen(true);
+      }),
+    [],
+  );
 
-  if (!preferences.open) return null;
+  const host = useMemo<TasksHost>(
+    () => ({
+      bodyTarget,
+      placement,
+      overlayOpen,
+      toggleOverlay,
+      setPopoverAnchor: (element) => {
+        popoverAnchor.current = element;
+      },
+      publishDock,
+    }),
+    [bodyTarget, placement, overlayOpen, toggleOverlay],
+  );
 
-  const surface = mobile ? (
+  const focusToggle = () =>
+    popoverAnchor.current
+      ?.querySelector<HTMLElement>('[data-testid="tasks-panel-toggle"]')
+      ?.focus();
+
+  const surface =
+    placement === "popover" ? (
+      <Popover
+        open
+        onOpenChange={(open) => {
+          if (!open) setOverlayOpen(false);
+        }}
+      >
+        <PopoverAnchor virtualRef={popoverAnchor as RefObject<HTMLElement>} />
+        <PopoverContent
+          side="bottom"
+          align="end"
+          aria-label="Tasks"
+          className="tasks-popover max-h-[min(var(--radix-popover-content-available-height),680px)] w-[min(400px,calc(100vw-16px))] gap-0 overflow-hidden p-0"
+          onOpenAutoFocus={() => {
+            dismissedOutside.current = false;
+          }}
+          onInteractOutside={(event) => {
+            const target = event.detail.originalEvent.target;
+            // The toggle closes the popover itself, and menus or pickers
+            // opened from the retained body live outside this layer.
+            if (
+              (target instanceof Node &&
+                popoverAnchor.current?.contains(target)) ||
+              insideOtherLayer(target)
+            ) {
+              event.preventDefault();
+              return;
+            }
+            dismissedOutside.current = true;
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            if (!dismissedOutside.current) focusToggle();
+          }}
+        >
+          <TasksSurface presentation="popover" target={bodyTarget} />
+        </PopoverContent>
+      </Popover>
+    ) : placement === "sheet" ? (
       <Dialog
         open
         onOpenChange={(open) => {
-          if (!open) close();
+          if (!open) setOverlayOpen(false);
         }}
       >
         <DialogContent
           layout="sheet"
           showClose={false}
           className="tasks-sheet"
-          onCloseAutoFocus={(event) => {
-            if (!activeRef.current) event.preventDefault();
-          }}
           onInteractOutside={(event) => {
             // The retained body is portaled into this surface. Its React
             // event ancestry differs from its physical DOM ancestry.
-            if (bodyTarget.contains(event.detail.originalEvent.target as Node)) event.preventDefault();
+            if (bodyTarget.contains(event.detail.originalEvent.target as Node))
+              event.preventDefault();
           }}
           aria-describedby={undefined}
           onEscapeKeyDown={(event) => {
@@ -1504,59 +1529,41 @@ export function TasksPanel({
           }}
         >
           <DialogTitle className="sr-only">Tasks</DialogTitle>
-          <StablePaneSlot target={bodyTarget} style={{ display: "contents" }} />
+          <TasksSurface presentation="sheet" target={bodyTarget} />
         </DialogContent>
       </Dialog>
-    ) : (
-    <DismissableLayer
-      asChild
-      disableOutsidePointerEvents={false}
-      onFocusOutside={(event) => event.preventDefault()}
-      onPointerDownOutside={(event) => {
-        if (preferences.pinned || bodyTarget.contains(event.detail.originalEvent.target as Node)) event.preventDefault();
-      }}
-      onEscapeKeyDown={(event) => {
-        event.preventDefault();
-        close();
-      }}
-      onDismiss={() => {
-        if (!preferences.pinned) close();
-      }}
-    >
-      <section
-        id="tasks-panel"
-        className="tasks-panel"
-        data-slot="tasks-panel"
-        data-state="open"
-        role="region"
-        aria-label="Tasks"
-        style={{ right: rightOffset }}
-      >
-        <PaneResizeHandle
-          className="tasks-panel-resize-handle"
-          orientation="row"
-          reverse
-          value={widthRef.current}
-          min={tasksPanelWidthMin}
-          max={tasksPanelWidthMax}
-          resetValue={tasksPanelWidthDefault}
-          ariaLabel="Resize Tasks panel"
-          normalizeValue={clampTasksPanelWidth}
-          onPreview={(width) => {
-            widthRef.current = width;
-            applyTasksPanelWidth(width);
-          }}
-          onCommit={(width) => {
-            widthRef.current = setTasksPanelWidth(width);
-          }}
-        />
-        <StablePaneSlot target={bodyTarget} style={{ display: "contents" }} />
-      </section>
-    </DismissableLayer>
+    ) : null;
+
+  return (
+    <TasksHostContext.Provider value={host}>
+      {children}
+      {/* Settings suspends the popover and the sheet but keeps the body
+          (and any unsaved edit in it) mounted; the docked panel stays in
+          the retained workbench. */}
+      {active ? (
+        surface
+      ) : surface ? (
+        <div hidden aria-hidden="true" inert>
+          <StablePaneSlot target={bodyTarget} />
+        </div>
+      ) : null}
+      {placement
+        ? createPortal(
+            // At integration this becomes `TasksPanelContent` with the same
+            // props (track B's content renders the header for each
+            // presentation and the docked header from `panelControls`).
+            <TasksPanelBody
+              store={store}
+              panelLayoutStore={panelLayoutStore}
+              route={route}
+              active={active && (placement !== "panel" || dock?.visible === true)}
+              presentation={placement}
+              onRequestClose={requestClose}
+              panelControls={placement === "panel" ? dock?.controls : undefined}
+            />,
+            bodyTarget,
+          )
+        : null}
+    </TasksHostContext.Provider>
   );
-  return <>
-    {active ? surface : <div hidden aria-hidden="true" inert><StablePaneSlot target={bodyTarget} /></div>}
-    {createPortal(<TasksPanelBody store={store} panelLayoutStore={panelLayoutStore}
-      route={route} active={active} onClose={close} mobile={mobile} />, bodyTarget)}
-  </>;
 }

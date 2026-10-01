@@ -31,7 +31,6 @@
     "workspace-files/workspace-compare.css": 2
   },
   "borderRadiusLiterals": {
-    "components/tasks/tasks-panel.css": 1,
     "components/thread/flat-thread-row.css": 3,
     "components/thread/question-inbox.css": 3,
     "styles.css": 21,

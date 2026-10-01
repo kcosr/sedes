@@ -48,7 +48,11 @@ describe("WorkspacePanelTenantRegistry", () => {
 
   it("ships the singleton workspace file browser", () => {
     const files = workspacePanelTenants.tenant("workspace-files");
-    expect(workspacePanelTenants.entries).toHaveLength(2);
+    expect(workspacePanelTenants.entries.map(({ id }) => id)).toEqual([
+      "workspace-files",
+      "workpads",
+      "tasks",
+    ]);
     expect(workspacePanelTenants.tenant("workpads")).toMatchObject({ scope: "global", title: "Workpads", preferredPlacement: { edge: "right" } });
     expect(files).toMatchObject({
       id: "workspace-files",
@@ -81,5 +85,19 @@ describe("WorkspacePanelTenantRegistry", () => {
         },
       }),
     ).toEqual({ available: true });
+  });
+
+  it("ships Tasks as a tenant that docks right and renders its own header", () => {
+    const tasks = workspacePanelTenants.tenant("tasks");
+    expect(tasks).toMatchObject({
+      id: "tasks",
+      title: "Tasks",
+      scope: "thread",
+      header: "tenant",
+      preferredPlacement: { edge: "right" },
+      size: { minWidth: 300, preferredWidth: 380 },
+    });
+    expect(tasks?.availability({})).toEqual({ available: true });
+    expect(workspacePanelTenants.tenant("workspace-files")?.header).toBeUndefined();
   });
 });

@@ -11,7 +11,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useLayoutEffect } from "react";
+import { useLayoutEffect, useState } from "react";
 import {
   TASK_DETAILS_MAX_CHARACTERS,
   type AssociatedTask,
@@ -20,17 +20,28 @@ import {
   type WorkspaceFileLinkReference,
 } from "../../../shared/index.js";
 import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
-import { navigate, threadPath } from "../../app/router.js";
+import {
+  navigate,
+  threadPath,
+  useRoute,
+  type Route,
+} from "../../app/router.js";
 import {
   ComposerDraftProvider,
   useComposerDraftCoordinator,
 } from "../../context-excerpts/coordinator.js";
 import {
-  setTasksPanelIncludeNestedScopes,
-  setTasksPanelOpen,
-  setTasksPanelPinned,
+  TASKS_PANEL_STORAGE_KEY,
+  getTasksPanelPreferences,
+  setTasksViewOptions,
 } from "../../app/tasks-panel-store.js";
 import { TasksPanel } from "./TasksPanel.js";
+import {
+  TasksDockSlot,
+  usePublishTasksDock,
+  useTasksHost,
+  type TasksHost,
+} from "./tasks-host.js";
 import type { PanelLayoutStore } from "../../workspace-panels/panel-state.js";
 import { setPanelPresentation } from "../../app/settings.js";
 import { TASK_DRAG_MIME, TaskDragProvider } from "../../tasks/task-drag.js";
@@ -48,9 +59,10 @@ beforeEach(() => {
       removeEventListener: vi.fn(),
     })),
   );
-  setTasksPanelIncludeNestedScopes(false);
-  setTasksPanelPinned(true);
-  setTasksPanelOpen(true);
+  window.localStorage.clear();
+  window.dispatchEvent(
+    new StorageEvent("storage", { key: TASKS_PANEL_STORAGE_KEY }),
+  );
 });
 
 afterEach(() => {
@@ -60,7 +72,7 @@ afterEach(() => {
   } else {
     Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
   }
-  setTasksPanelOpen(false);
+  tasksHost = undefined;
   vi.unstubAllGlobals();
   window.localStorage.clear();
   navigate("/", { replace: true });
@@ -169,33 +181,103 @@ function makePanelLayoutStore(): PanelLayoutStore {
   } as unknown as PanelLayoutStore;
 }
 
+let tasksHost: TasksHost | undefined;
+
+/** Captures the host and anchors its popover, as the corner toggle does. */
+function HostProbe(): React.JSX.Element {
+  tasksHost = useTasksHost();
+  return <span ref={(element) => tasksHost?.setPopoverAnchor(element)} />;
+}
+
+/** Stands in for a thread workspace with the Tasks panel docked in it. */
+function DockedTasks({ active }: { readonly active: boolean }): React.JSX.Element {
+  const [present, setPresent] = useState(true);
+  usePublishTasksDock({
+    present,
+    visible: present && active,
+    controls: {
+      active,
+      onCollapse: () => undefined,
+      onClose: () => setPresent(false),
+      onDock: () => undefined,
+    },
+    open: () => setPresent(true),
+    toggle: () => setPresent((current) => !current),
+    close: () => setPresent(false),
+  });
+  // Settings hides the retained workspace (and so the docked panel).
+  return (
+    <div hidden={!active}>
+      <TasksDockSlot />
+    </div>
+  );
+}
+
+function TasksHarness({
+  store,
+  panelLayoutStore,
+  route: retainedRoute,
+  active = true,
+}: {
+  readonly store: ApplicationClientStore;
+  readonly panelLayoutStore: PanelLayoutStore;
+  readonly route?: Route;
+  readonly active?: boolean;
+}): React.JSX.Element {
+  const currentRoute = useRoute();
+  const route = retainedRoute ?? currentRoute;
+  return (
+    <TasksPanel
+      store={store}
+      panelLayoutStore={panelLayoutStore}
+      route={route}
+      active={active}
+    >
+      <HostProbe />
+      {route.name === "thread" ? <DockedTasks active={active} /> : null}
+    </TasksPanel>
+  );
+}
+
+/**
+ * Shows Tasks the way the page presents it: docked in a thread workspace,
+ * otherwise the popover, or the sheet on phones.
+ */
+function openTasks(): void {
+  if (tasksHost?.placement === undefined) act(() => tasksHost?.toggleOverlay());
+}
+
 function renderPanel(
   store: ApplicationClientStore,
   panelLayoutStore = makePanelLayoutStore(),
   stageTaskReference?: (reference: unknown) => void,
 ) {
-  return render(
+  const view = render(
     <ComposerDraftProvider threadId="thread-9" workspaceId="workspace-1">
       {stageTaskReference && (
         <DraftConsumer stageTaskReference={stageTaskReference} />
       )}
-      <TasksPanel store={store} panelLayoutStore={panelLayoutStore} />
+      <TasksHarness store={store} panelLayoutStore={panelLayoutStore} />
     </ComposerDraftProvider>,
   );
+  openTasks();
+  return view;
 }
 
 function renderPanelWithTaskDrag(store: ApplicationClientStore) {
   const snapshot = store.getSnapshot().snapshot!;
-  return render(
+  const view = render(
     <TaskDragProvider
       store={store}
       snapshot={snapshot as NormalizedApplicationSnapshot}
     >
       <ComposerDraftProvider threadId="thread-9" workspaceId="workspace-1">
-        <TasksPanel store={store} panelLayoutStore={makePanelLayoutStore()} />
+        <TasksHarness store={store} panelLayoutStore={makePanelLayoutStore()} />
       </ComposerDraftProvider>
     </TaskDragProvider>,
   );
+  openTasks();
+  return view;
 }
 
 function DraftConsumer({
@@ -229,8 +311,9 @@ describe("TasksPanel", () => {
     });
     const panelLayoutStore = makePanelLayoutStore();
     const route = { name: "thread", threadId: "thread-1", automationOpen: false } as const;
-    const content = (active: boolean) => <TasksPanel store={store} panelLayoutStore={panelLayoutStore} route={route} active={active} />;
+    const content = (active: boolean) => <TasksHarness store={store} panelLayoutStore={panelLayoutStore} route={route} active={active} />;
     const view = render(content(true));
+    openTasks();
     fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
     fireEvent.click(screen.getByRole("button", { name: /Edit/ }));
     const notes = screen.getByLabelText("Task notes");
@@ -245,8 +328,7 @@ describe("TasksPanel", () => {
     expect(notes).toHaveValue("Unsaved while configuring");
   });
 
-  it("treats pointer events inside the retained body as inside an unpinned Tasks surface", async () => {
-    setTasksPanelPinned(false);
+  it("treats pointer events inside the retained body as inside the Tasks popover", async () => {
     const store = makeStore([makeTask()]);
     renderPanel(store);
     const user = userEvent.setup();
@@ -373,10 +455,7 @@ describe("TasksPanel", () => {
     expect(screen.queryByTitle("Global")).not.toBeInTheDocument();
     expect(screen.getByTitle("Sedes")).toBeInTheDocument();
     expect(screen.getByTitle("Sedes / Task thread")).toBeInTheDocument();
-    expect(
-      JSON.parse(window.localStorage.getItem("sedes.tasks.panel") ?? "null")
-        .includeNestedScopes,
-    ).toBe(true);
+    expect(getTasksPanelPreferences().views.global.includeThreadTasks).toBe(true);
 
     fireEvent.change(screen.getByRole("searchbox"), {
       target: { value: "Create global" },
@@ -585,7 +664,7 @@ describe("TasksPanel", () => {
     ).toBeDisabled();
   });
 
-  it("stages the task reference without closing an unpinned panel", () => {
+  it("stages the task reference without closing the docked panel", () => {
     act(() => navigate(threadPath("thread-9")));
     const store = makeStore(
       [
@@ -608,7 +687,6 @@ describe("TasksPanel", () => {
     const stage = vi.fn();
     renderPanel(store, makePanelLayoutStore(), stage);
 
-    fireEvent.click(screen.getByRole("button", { name: "Unpin Tasks panel" }));
     fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
     fireEvent.click(screen.getByRole("button", { name: /Add to prompt/ }));
 
@@ -619,27 +697,15 @@ describe("TasksPanel", () => {
     expect(screen.getByRole("region", { name: "Tasks" })).toBeInTheDocument();
   });
 
-  it("dismisses only an unpinned desktop panel on an outside pointer", async () => {
+  it("dismisses the Tasks popover on an outside pointer and offers no pin", async () => {
     const user = userEvent.setup();
     const outside = document.createElement("button");
     document.body.append(outside);
     renderPanel(makeStore([]));
     await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
 
-    expect(
-      screen.getByRole("button", { name: "Unpin Tasks panel" }),
-    ).toHaveAttribute("aria-pressed", "true");
-    await user.click(outside);
     expect(screen.getByRole("region", { name: "Tasks" })).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Unpin Tasks panel" }));
-    expect(
-      screen.getByRole("button", { name: "Pin Tasks panel" }),
-    ).toHaveAttribute("aria-pressed", "false");
-    expect(
-      JSON.parse(window.localStorage.getItem("sedes.tasks.panel") ?? "null")
-        .pinned,
-    ).toBe(false);
+    expect(screen.queryByRole("button", { name: /Pin Tasks panel/ })).toBeNull();
     await user.click(outside);
     await waitFor(() =>
       expect(
@@ -818,7 +884,8 @@ describe("TasksPanel", () => {
       threads: [{ id: "archived-thread", workspaceId: "workspace-1", inventoryState: "archived", title: { text: "Finished planning" } }],
       workspaces: [{ id: "workspace-1", label: { text: "Sedes" }, displayPath: { text: "/sedes" } }],
     });
-    setTasksPanelIncludeNestedScopes(true);
+    setTasksViewOptions("project", { includeThreadTasks: true });
+    setTasksViewOptions("global", { includeThreadTasks: true });
     renderPanel(store);
     fireEvent.click(screen.getByRole("radio", { name: "Global" }));
     fireEvent.click(screen.getByRole("button", { name: 'View "Write docs"' }));
@@ -1103,7 +1170,8 @@ describe("TasksPanel", () => {
   });
 
   it("moves a nested task to the scope represented by the Tasks card", async () => {
-    setTasksPanelIncludeNestedScopes(true);
+    setTasksViewOptions("project", { includeThreadTasks: true });
+    setTasksViewOptions("global", { includeThreadTasks: true });
     const task = makeTask({
       scope: { kind: "workspace", workspaceId: "workspace-1" },
       associatedWorkspaceId: "workspace-1",
@@ -1144,7 +1212,8 @@ describe("TasksPanel", () => {
   });
 
   it("shows a cross-project scope-drop failure inside its confirmation", async () => {
-    setTasksPanelIncludeNestedScopes(true);
+    setTasksViewOptions("project", { includeThreadTasks: true });
+    setTasksViewOptions("global", { includeThreadTasks: true });
     act(() => navigate(threadPath("thread-9")));
     const task = makeTask({
       scope: { kind: "workspace", workspaceId: "workspace-2" },
@@ -1596,40 +1665,34 @@ describe("TasksPanel", () => {
     expect(
       screen.getByRole("button", { name: 'View "Ship release"' }),
     ).toBeInTheDocument();
-    expect(
-      JSON.parse(window.localStorage.getItem("sedes.tasks.panel") ?? "null")
-        .searchContent,
-    ).toBe(true);
+    expect(getTasksPanelPreferences().views.global.searchNotes).toBe(true);
     fireEvent.pointerDown(options, { button: 0, ctrlKey: false });
     expect(
       screen.getByRole("menuitemcheckbox", { name: "Search task content" }),
     ).toBeChecked();
   });
 
-  it("persists the default view from the options menu", () => {
-    renderPanel(makeStore([makeTask({ id: "task-docs", title: "Write docs" })]));
-    const options = screen.getByRole("button", { name: "Tasks panel options" });
-    fireEvent.pointerDown(options, { button: 0, ctrlKey: false });
+  it("remembers the last chosen view instead of a default view", () => {
+    act(() => navigate(threadPath("thread-9")));
+    const store = makeStore([makeTask({ id: "task-docs", title: "Write docs" })], {
+      threads: [{ id: "thread-9", workspaceId: "workspace-1", title: { text: "Current thread" } }],
+      workspaces: [{ id: "workspace-1", label: { text: "Sedes" }, displayPath: { text: "/sedes" } }],
+    });
+    const view = renderPanel(store);
+    const scope = screen.getByRole("radiogroup", { name: "Task scope view" });
+    expect(within(scope).getByRole("radio", { name: "Thread" })).toBeChecked();
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Tasks panel options" }), { button: 0, ctrlKey: false });
+    expect(screen.queryByRole("group", { name: "Default view" })).toBeNull();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
 
-    const defaultView = screen.getByRole("group", { name: "Default view" });
-    const views = within(defaultView).getAllByRole("menuitemradio");
-    expect(views.map((view) => view.textContent)).toEqual([
-      "Global",
-      "Project",
-      "Thread",
-    ]);
+    fireEvent.click(within(scope).getByRole("radio", { name: "Global" }));
+    expect(getTasksPanelPreferences().lastView).toBe("global");
+    view.unmount();
+    renderPanel(store);
     expect(
-      views.map((view) => view.getAttribute("aria-checked")),
-    ).toEqual(["false", "false", "true"]);
-    fireEvent.click(within(defaultView).getByRole("menuitemradio", { name: "Global" }));
-
-    expect(
-      JSON.parse(window.localStorage.getItem("sedes.tasks.panel") ?? "null")
-        .defaultView,
-    ).toBe("global");
-    fireEvent.pointerDown(options, { button: 0, ctrlKey: false });
-    expect(screen.getByRole("menuitemradio", { name: "Global" })).toBeChecked();
-    expect(screen.getByRole("menuitemradio", { name: "Thread" })).not.toBeChecked();
+      within(screen.getByRole("radiogroup", { name: "Task scope view" }))
+        .getByRole("radio", { name: "Global" }),
+    ).toBeChecked();
   });
 
   it("selects the exact Enter-created duplicate after publication lag and shows read-only detail", async () => {
@@ -1891,6 +1954,8 @@ describe("TasksPanel", () => {
   });
 
   it("keeps the search query while task detail is open and resets it after panel close", () => {
+    // The query matches the task's notes, not its title.
+    setTasksViewOptions("global", { searchNotes: true });
     const store = makeStore([
       makeTask({ details: "Cover the tasks API end to end." }),
     ]);
@@ -1907,7 +1972,8 @@ describe("TasksPanel", () => {
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Close Tasks panel" }));
-    act(() => setTasksPanelOpen(true));
+    expect(screen.queryByRole("region", { name: "Tasks" })).toBeNull();
+    openTasks();
     expect(
       screen.getByRole("searchbox", { name: "Search or add task" }),
     ).toHaveValue("");
@@ -1958,17 +2024,14 @@ describe("TasksPanel", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("closes an open desktop Tasks panel with Escape", () => {
+  it("closes the Tasks popover with Escape", () => {
     renderPanel(makeStore([]));
-    const outside = document.createElement("button");
-    document.body.append(outside);
-    outside.focus();
+    expect(screen.getByRole("region", { name: "Tasks" })).toBeInTheDocument();
 
-    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.keyDown(document.activeElement ?? document, { key: "Escape" });
 
     expect(
       screen.queryByRole("region", { name: "Tasks" }),
     ).not.toBeInTheDocument();
-    outside.remove();
   });
 });

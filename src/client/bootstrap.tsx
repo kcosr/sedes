@@ -5,7 +5,6 @@ import { installAppearance } from "./app/appearance";
 import { installEnvironmentColors } from "./app/environment-palette";
 import { installSidebarCollapsed } from "./app/sidebar-collapsed";
 import { installSidebarWidth } from "./app/sidebar-width";
-import { installTasksPanelWidth } from "./app/tasks-panel-width";
 import type { WorkspacePanelTenantRegistry } from "./workspace-panels/registry";
 import "./styles.css";
 
@@ -15,7 +14,6 @@ export function startApplication(
   const removeAppearanceListener = installAppearance();
   const removeEnvironmentColorListener = installEnvironmentColors();
   installSidebarWidth();
-  installTasksPanelWidth();
   installSidebarCollapsed();
   if (import.meta.hot) {
     import.meta.hot.dispose(() => {

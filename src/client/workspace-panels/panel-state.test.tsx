@@ -6,12 +6,17 @@ import { terminalProducerIdSchema } from "../../shared/index.js";
 import {
   PANEL_SIZE_STORAGE_KEY,
   PanelLayoutStore,
+  TASKS_STATE_STORAGE_KEY,
   WORKSPACE_FILES_STATE_STORAGE_KEY,
   WORKPADS_STATE_STORAGE_KEY,
   panelCollapsedStorageKey,
   usePanelLayout,
 } from "./panel-state.js";
-import { panelLayoutStorageKey, type SplitNode } from "./layout-tree.js";
+import {
+  panelDockEdge,
+  panelLayoutStorageKey,
+  type SplitNode,
+} from "./layout-tree.js";
 import {
   WorkspacePanelTenantRegistry,
   type WorkspacePanelTenant,
@@ -50,7 +55,18 @@ function createStore(storage = memoryStorage().storage) {
   let sequence = 0;
   let producerSequence = 0;
   return new PanelLayoutStore(
-    new WorkspacePanelTenantRegistry([filesTenant(), { ...filesTenant(), id: "workpads", title: "Workpads", scope: "global" }]),
+    new WorkspacePanelTenantRegistry([
+      filesTenant(),
+      { ...filesTenant(), id: "workpads", title: "Workpads", scope: "global" },
+      {
+        ...filesTenant(),
+        id: "tasks",
+        title: "Tasks",
+        scope: "thread",
+        header: "tenant",
+        size: { minWidth: 300, minHeight: 240, preferredWidth: 380, preferredHeight: 480 },
+      },
+    ]),
     {
       threadId: "thread-1",
       storage,
@@ -119,6 +135,67 @@ describe("PanelLayoutStore panel instances", () => {
     expect(root.forThread("thread-1").isCollapsed("workpads")).toBe(false);
     root.resetLayout();
     expect(root.forThread("thread-2").hasPanel("workpads")).toBe(false);
+  });
+
+  it("docks Tasks right of Chat at its preferred width and restores it after reload", () => {
+    const { storage, values } = memoryStorage();
+    const store = createStore(storage);
+    expect(
+      store.openPanel("tasks", { availableWidth: 1_000, presentation: "split" }),
+    ).toBe(true);
+    const tree = store.getSnapshot().tree as SplitNode;
+    expect(store.panels().map((panel) => panel.kind)).toEqual(["chat", "tasks"]);
+    expect(panelDockEdge(tree, "tasks")).toBe("right");
+    expect(tree.sizes[1]).toBeCloseTo(0.38);
+    // A second open reveals the singleton rather than adding another.
+    expect(store.openPanel("tasks", { presentation: "split" })).toBe(true);
+    expect(store.panels().filter((panel) => panel.kind === "tasks")).toHaveLength(1);
+
+    store.resizeSplit(tree.id, [0.7, 0.3]);
+    store.collapsePanel("tasks");
+    const reloaded = createStore(storage);
+    expect(reloaded.isCollapsed("tasks")).toBe(true);
+    expect((reloaded.getSnapshot().tree as SplitNode).sizes).toEqual([0.7, 0.3]);
+    expect(JSON.parse(values.get(TASKS_STATE_STORAGE_KEY)!)).toEqual({
+      version: 1,
+      open: true,
+      collapsed: true,
+    });
+    reloaded.closePanel("tasks");
+    expect(JSON.parse(values.get(PANEL_SIZE_STORAGE_KEY)!).sizes.tasks).toEqual({
+      fraction: 0.3,
+    });
+    const reopened = createStore(storage);
+    expect(reopened.hasPanel("tasks")).toBe(false);
+    reopened.openPanel("tasks", { availableWidth: 1_000 });
+    expect((reopened.getSnapshot().tree as SplitNode).sizes[1]).toBeCloseTo(0.3);
+  });
+
+  it("keeps Tasks docked across thread layouts so it follows the current chat", () => {
+    const { storage } = memoryStorage();
+    const root = createStore(storage);
+    root.openPanel("tasks");
+    const second = root.forThread("thread-2");
+    expect(second.hasPanel("tasks")).toBe(true);
+    expect(panelDockEdge(second.getSnapshot().tree, "tasks")).toBe("right");
+    second.collapsePanel("tasks");
+    expect(root.forThread("thread-1").isCollapsed("tasks")).toBe(true);
+    root.restorePanel("tasks");
+    expect(root.forThread("thread-2").isVisible("tasks")).toBe(true);
+    // Placement stays thread-local: docking one layout leaves the other.
+    second.dockPanel("tasks", "left");
+    expect(panelDockEdge(root.forThread("thread-1").getSnapshot().tree, "tasks")).toBe("right");
+    second.closePanel("tasks");
+    expect(root.forThread("thread-1").hasPanel("tasks")).toBe(false);
+    expect(root.forThread("never-visited").hasPanel("tasks")).toBe(false);
+    // Workpads keeps its own shared state beside Tasks.
+    root.openPanel("workpads");
+    root.openPanel("tasks");
+    root.closePanel("workpads");
+    expect(root.forThread("thread-2").hasPanel("tasks")).toBe(true);
+    expect(root.forThread("thread-2").hasPanel("workpads")).toBe(false);
+    root.resetLayout();
+    expect(root.forThread("thread-2").hasPanel("tasks")).toBe(false);
   });
 
   it("projects a single panel without changing the canonical layout", () => {
@@ -373,6 +450,7 @@ describe("PanelLayoutStore v4 persistence", () => {
     expect(storage.getItem.mock.calls.map(([key]) => key)).toEqual([
       WORKSPACE_FILES_STATE_STORAGE_KEY,
       WORKPADS_STATE_STORAGE_KEY,
+      TASKS_STATE_STORAGE_KEY,
       panelLayoutStorageKey("thread-1"),
       PANEL_SIZE_STORAGE_KEY,
       panelCollapsedStorageKey("thread-1"),
