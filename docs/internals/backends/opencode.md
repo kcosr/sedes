@@ -280,7 +280,11 @@ startup evidence. Starting adds no recovery banner or synthetic turn and keeps
 transitional delivery gates closed. Inbox is read before activity to follow
 promotion into execution. If inactive activity follows an unfinished history
 cut, confirm the finite history head once within the same acquisition budget
-before projecting uncertainty. Inactive unfinished history or unresolved
+before projecting uncertainty. Terminal evidence precedes its inbox snapshot;
+a newly confirmed terminal gets one inbox/activity recheck so consumed rows
+cannot look parked. Active execution with a closed history cut also schedules
+read-only startup rechecks, since native active removal can follow its final
+durable event. Inactive unfinished history or unresolved
 interactions remain unknown even with pending input; connection loss still
 follows normal projection recovery.
 Child execution and attributed shell changes refresh the scoped activity inventory
