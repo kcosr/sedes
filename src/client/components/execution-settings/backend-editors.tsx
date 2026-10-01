@@ -416,7 +416,7 @@ function OpenCodeBackendEditor({ value, environment, onChange, errors, disabled 
   const update = (next: typeof configuration) => onChange({ ...value, moduleConfiguration: next });
   const error = (field: string) => errors.under(`moduleConfiguration.${field}`);
   return <>
-    <SelectField label="Connection ownership" disabled={disabled} error={error("connection")} value={channel.type} options={[
+    <SelectField label="Connection ownership" disabled={disabled} error={errors.get("moduleConfiguration.connection")} value={channel.type} options={[
       { value: "process_stdio", label: "Sedes-managed process" }, { value: "http", label: "External HTTP server" },
     ]} onChange={(type) => update({ ...configuration, connection: type === "process_stdio"
       ? { ownership: "owned", channel: { type, executablePath: "", workingDirectory: "" } }

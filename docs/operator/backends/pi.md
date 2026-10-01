@@ -314,8 +314,9 @@ logs or issue reports.
 ## Opt-in live verification
 
 The real-Pi suites consume authenticated provider capacity and are not routine
-verification. The main gate requires exactly one authenticated `xai/grok-4.5`
-model at low reasoning and verifies read-only tool state before prompting:
+verification. The main gate requires exactly one authenticated AW Qwen
+`aw-qwen-3-8-27b/aw-qwen-3-8-27b` provider/model pair at low reasoning and
+verifies read-only tool state before prompting:
 
 ```sh
 env -u NODE_ENV npm run test:real-pi

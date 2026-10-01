@@ -741,6 +741,27 @@ describe("execution configuration administration", () => {
     expect(api.saveConfiguration).not.toHaveBeenCalled();
   });
 
+  it("focuses an invalid OpenCode password reference without marking connection ownership invalid", async () => {
+    const api = renderAt("/settings/backends/~new");
+    fireEvent.change(await screen.findByLabelText("Execution environment"), { target: { value: localId } });
+    fireEvent.change(screen.getByLabelText("Backend type"), { target: { value: "opencode" } });
+    fireEvent.change(screen.getByLabelText("Backend name"), { target: { value: "OpenCode" } });
+    fireEvent.change(screen.getByLabelText("Native database path"), { target: { value: "/data/opencode.db" } });
+    const ownership = screen.getByLabelText("Connection ownership");
+    fireEvent.change(ownership, { target: { value: "http" } });
+    fireEvent.change(screen.getByLabelText("HTTP endpoint"), { target: { value: "http://127.0.0.1:4096" } });
+    fireEvent.change(screen.getByLabelText("Password source"), { target: { value: "environment" } });
+    const password = screen.getByLabelText("Password environment variable");
+    fireEvent.change(password, { target: { value: "MY_PASSWORD" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save backend" }));
+    await waitFor(() => expect(password).toHaveFocus());
+    expect(password).toHaveAttribute("aria-invalid", "true");
+    expect(password).toHaveAccessibleDescription(/starts with SEDES_OPENCODE_ and contains PASSWORD/u);
+    expect(ownership).not.toHaveAttribute("aria-invalid");
+    expect(screen.getAllByText(/Use an approved name that starts with SEDES_OPENCODE_/u)).toHaveLength(1);
+    expect(api.saveConfiguration).not.toHaveBeenCalled();
+  });
+
   it("requires an environment before choosing an eligible backend and keeps Grok local", async () => {
     renderAt("/settings/backends", controls(configurationWithOutbound()));
     await waitFor(() => expect(screen.getByRole("button", { name: "Add backend" })).toBeEnabled());
