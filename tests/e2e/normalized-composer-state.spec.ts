@@ -480,7 +480,8 @@ test.describe.serial("normalized composer state", () => {
     await createDraftThread(page);
 
     await page.getByTestId("tasks-panel-toggle").first().click();
-    const tasksPanel = page.locator('[data-slot="tasks-panel"]');
+    const tasksPanel = page.locator(".tasks-content").filter({ visible: true });
+    const taskEditor = page.getByRole("dialog", { name: "Edit task" });
     await tasksPanel.getByRole("radio", { name: "Thread" }).click();
 
     const taskCreated = page.waitForResponse(
@@ -490,16 +491,19 @@ test.describe.serial("normalized composer state", () => {
         response.status() === 201,
     );
     await tasksPanel
-      .getByPlaceholder("Search or add task")
+      .getByRole("textbox", { name: "Add a task" })
       .fill("Implement durable task context");
-    await tasksPanel.getByPlaceholder("Search or add task").press("Enter");
+    await tasksPanel.getByRole("textbox", { name: "Add a task" }).press("Enter");
     const createdTask = (await (await taskCreated).json()).task as {
       id: string;
     };
 
-    await tasksPanel.getByRole("button", { name: "Edit", exact: true }).click();
     await tasksPanel
-      .getByRole("textbox", { name: "Task notes" })
+      .getByRole("button", { name: "Implement durable task context", exact: true })
+      .click();
+    await tasksPanel.getByRole("button", { name: "Edit", exact: true }).click();
+    await taskEditor
+      .getByRole("textbox", { name: "Notes" })
       .fill("Preserve this exact body when the prompt is accepted.");
     const taskEdited = page.waitForResponse(
       (response) =>
@@ -507,7 +511,7 @@ test.describe.serial("normalized composer state", () => {
         response.url().endsWith(`/api/tasks/${createdTask.id}`) &&
         response.ok(),
     );
-    await tasksPanel.getByRole("button", { name: "Save task" }).click();
+    await taskEditor.getByRole("button", { name: "Save", exact: true }).click();
     await taskEdited;
 
     let attachedDraftRequest: Record<string, unknown> | undefined;
@@ -561,14 +565,14 @@ test.describe.serial("normalized composer state", () => {
 
     await tasksPanel.getByRole("radio", { name: "Thread" }).click();
     await tasksPanel
-      .getByRole("button", { name: 'View "Implement durable task context"' })
+      .getByRole("button", { name: "Implement durable task context", exact: true })
       .click();
     await tasksPanel.getByRole("button", { name: "Edit", exact: true }).click();
-    await tasksPanel
-      .getByRole("textbox", { name: "Task title" })
+    await taskEditor
+      .getByRole("textbox", { name: "Title" })
       .fill("Ship durable task context");
-    await tasksPanel
-      .getByRole("textbox", { name: "Task notes" })
+    await taskEditor
+      .getByRole("textbox", { name: "Notes" })
       .fill("This is the body captured at send time.");
     const taskRenamed = page.waitForResponse(
       (response) =>
@@ -576,7 +580,7 @@ test.describe.serial("normalized composer state", () => {
         response.url().endsWith(`/api/tasks/${createdTask.id}`) &&
         response.ok(),
     );
-    await tasksPanel.getByRole("button", { name: "Save task" }).click();
+    await taskEditor.getByRole("button", { name: "Save", exact: true }).click();
     await taskRenamed;
     await expect(durableTaskChip).toContainText("Ship durable task context");
 
@@ -606,9 +610,9 @@ test.describe.serial("normalized composer state", () => {
         response.status() === 201,
     );
     await tasksPanel
-      .getByPlaceholder("Search or add task")
+      .getByRole("textbox", { name: "Add a task" })
       .fill("Disposable task reference");
-    await tasksPanel.getByPlaceholder("Search or add task").press("Enter");
+    await tasksPanel.getByRole("textbox", { name: "Add a task" }).press("Enter");
     const disposableTask = (await (await missingTaskCreated).json()).task as {
       id: string;
     };
@@ -625,23 +629,28 @@ test.describe.serial("normalized composer state", () => {
       };
       return body.taskReferenceIds?.includes(disposableTask.id) === true;
     });
+    await tasksPanel
+      .getByRole("button", { name: "Disposable task reference", exact: true })
+      .click();
     await tasksPanel.getByRole("button", { name: "Add to prompt" }).click();
     await disposableAttached;
 
     await tasksPanel.getByRole("radio", { name: "Thread" }).click();
     await tasksPanel.getByRole("button", { name: "Edit", exact: true }).click();
-    await tasksPanel.getByRole("button", { name: "Delete task" }).click();
+    await taskEditor.getByRole("button", { name: "Delete…" }).click();
     const taskDeleted = page.waitForResponse(
       (response) =>
         response.request().method() === "DELETE" &&
         response.url().endsWith(`/api/tasks/${disposableTask.id}`) &&
         response.status() === 204,
     );
-    await tasksPanel
-      .getByRole("button", { name: "Delete", exact: true })
+    await page
+      .getByRole("dialog", { name: "Delete task?" })
+      .getByRole("button", { name: "Delete task" })
       .click();
     await taskDeleted;
-    await page.keyboard.press("Escape");
+    await expect(taskEditor).toHaveCount(0);
+    await tasksPanel.getByRole("button", { name: "Close Tasks panel" }).click();
 
     const missingTaskChip = page
       .getByTestId("composer")
@@ -705,22 +714,26 @@ test.describe.serial("normalized composer state", () => {
     );
     await page.getByTestId("tasks-panel-toggle").first().click();
     await tasksPanel.getByRole("radio", { name: "Thread" }).click();
+    // Completed earlier, the task waits in the collapsed Completed section.
+    await tasksPanel.getByRole("button", { name: /^Completed/ }).click();
     await tasksPanel
-      .getByRole("button", { name: 'View "Ship durable task context"' })
+      .getByRole("button", { name: "Ship durable task context", exact: true })
       .click();
     await tasksPanel.getByRole("button", { name: "Edit", exact: true }).click();
-    await tasksPanel.getByRole("button", { name: "Delete task" }).click();
+    await taskEditor.getByRole("button", { name: "Delete…" }).click();
     const deliveredTaskDeleted = page.waitForResponse(
       (response) =>
         response.request().method() === "DELETE" &&
         response.url().endsWith(`/api/tasks/${createdTask.id}`) &&
         response.status() === 204,
     );
-    await tasksPanel
-      .getByRole("button", { name: "Delete", exact: true })
+    await page
+      .getByRole("dialog", { name: "Delete task?" })
+      .getByRole("button", { name: "Delete task" })
       .click();
     await deliveredTaskDeleted;
-    await page.keyboard.press("Escape");
+    await expect(taskEditor).toHaveCount(0);
+    await tasksPanel.getByRole("button", { name: "Close Tasks panel" }).click();
 
     await expect(deliveredTask).toContainText("Ship durable task context");
     await expect(deliveredTask).toContainText(
