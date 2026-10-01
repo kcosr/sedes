@@ -1,7 +1,15 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./dropdown-menu.js";
+import { Popover, PopoverContent, PopoverTrigger } from "./popover.js";
 import { ToastProvider, useToast, type ToastOptions } from "./toast.js";
 
 let show: (options: ToastOptions) => void;
@@ -225,8 +233,112 @@ describe("Toast", () => {
     expect(viewport().style.getPropertyValue("--toast-region-width")).toBe("390px");
   });
 
+  it("dismisses on a downward swipe and springs back from a short one", () => {
+    const capture = {
+      setPointerCapture: HTMLElement.prototype.setPointerCapture,
+      releasePointerCapture: HTMLElement.prototype.releasePointerCapture,
+      hasPointerCapture: HTMLElement.prototype.hasPointerCapture,
+    };
+    HTMLElement.prototype.setPointerCapture = vi.fn();
+    HTMLElement.prototype.releasePointerCapture = vi.fn();
+    HTMLElement.prototype.hasPointerCapture = vi.fn(() => true);
+    try {
+      renderToasts();
+      act(() => show({ message: "Task completed" }));
+      const swipe = (distance: number) => {
+        const item = toast()!;
+        fireEvent.pointerDown(item, { button: 0, clientX: 100, clientY: 100, pointerType: "touch" });
+        fireEvent.pointerMove(item, { clientX: 100, clientY: 112, pointerType: "touch" });
+        fireEvent.pointerMove(item, { clientX: 100, clientY: 100 + distance, pointerType: "touch" });
+        expect(item).toHaveAttribute("data-swipe", "move");
+        fireEvent.pointerUp(item, { clientX: 100, clientY: 100 + distance, pointerType: "touch" });
+        return item;
+      };
+
+      expect(swipe(20)).toHaveAttribute("data-swipe", "cancel");
+      expect(toast()).toHaveAttribute("data-state", "open");
+
+      swipe(80);
+      expect(toast()).toBeNull();
+    } finally {
+      Object.assign(HTMLElement.prototype, capture);
+    }
+  });
+
   it("requires its provider", () => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     expect(() => render(<Harness />)).toThrow("useToast must be used inside ToastProvider");
+  });
+});
+
+describe("Toast and Escape", () => {
+  // Menus and popovers open through real pointer and focus sequences.
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("lets Escape close a menu beneath it while focus is outside the toast", async () => {
+    const user = userEvent.setup();
+    renderToasts(
+      <DropdownMenu>
+        <DropdownMenuTrigger>Actions</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuItem>Rename</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+    await user.click(screen.getByRole("button", { name: "Actions" }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    act(() => show({ message: "Task completed" }));
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(toast()).toHaveAttribute("data-state", "open");
+  });
+
+  it("leaves Escape to the page while focus is outside it", () => {
+    const onPage = vi.fn((event: KeyboardEvent) => event.defaultPrevented);
+    window.addEventListener("keydown", onPage);
+    try {
+      renderToasts();
+      act(() => show({ message: "Task completed" }));
+
+      fireEvent.keyDown(document.body, { key: "Escape" });
+
+      expect(onPage).toHaveReturnedWith(false);
+      expect(toast()).toHaveAttribute("data-state", "open");
+    } finally {
+      window.removeEventListener("keydown", onPage);
+    }
+  });
+
+  it("takes Escape while focused, before a popover beneath it, and hands focus back", async () => {
+    const user = userEvent.setup();
+    renderToasts(
+      <Popover>
+        <PopoverTrigger>Tasks</PopoverTrigger>
+        <PopoverContent aria-label="Tasks popover">
+          <button type="button">Inside</button>
+        </PopoverContent>
+      </Popover>,
+    );
+    await user.click(screen.getByRole("button", { name: "Tasks" }));
+    const inside = screen.getByRole("button", { name: "Inside" });
+    act(() => inside.focus());
+    act(() =>
+      show({ message: "Task completed", action: { label: "Undo", onAction: () => undefined } }),
+    );
+
+    // F8 moves focus to the toast; the popover stays open around it.
+    await user.keyboard("{F8}");
+    expect(toast()).toHaveFocus();
+    expect(screen.getByRole("dialog", { name: "Tasks popover" })).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+
+    expect(toast()).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Tasks popover" })).toBeInTheDocument();
+    expect(inside).toHaveFocus();
   });
 });

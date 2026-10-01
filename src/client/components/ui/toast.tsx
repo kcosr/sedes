@@ -1,6 +1,7 @@
 import * as React from "react"
+import { createPortal } from "react-dom"
 import { X } from "lucide-react"
-import { Toast as ToastPrimitive } from "radix-ui"
+import { DismissableLayer, Presence } from "radix-ui/internal"
 
 import { useKeyboardInset } from "@client/app/use-keyboard-inset"
 import { useTouchDensity } from "@client/app/use-touch-density"
@@ -26,6 +27,12 @@ type ToastControls = {
 
 const TOAST_DURATION = 5_000
 
+/** A downward drag at least this long dismisses the toast. */
+const SWIPE_THRESHOLD = 50
+
+/** How long the announcement stays in its live region. */
+const ANNOUNCEMENT_DURATION = 1_000
+
 const ToastContext = React.createContext<ToastControls | null>(null)
 
 type ToastEntry = {
@@ -37,9 +44,14 @@ type ToastEntry = {
 /**
  * The app's one toast region, mounted once at the root. It holds one toast
  * at a time: a new toast replaces the current one. A toast closes after its
- * duration, which pauses while the pointer is over it or focus is inside
- * it (Radix Toast also pauses while the window is in the background). F8
- * moves focus to the region; Escape or a downward swipe dismisses.
+ * duration, which pauses while the pointer is over it, focus is inside it,
+ * or the window is in the background. F8 moves focus to it; Escape, while
+ * focus is inside it, or a downward swipe dismisses it.
+ *
+ * A toast is not a dismissable layer (unlike Radix Toast, whose every toast
+ * is one and so takes Escape from an open menu, popover or sheet beneath
+ * it). Its region is a dismissable-layer branch instead, so pressing or
+ * focusing a toast never dismisses the layer underneath.
  */
 function ToastProvider({ children }: { readonly children: React.ReactNode }) {
   const [toast, setToast] = React.useState<ToastEntry | null>(null)
@@ -61,63 +73,306 @@ function ToastProvider({ children }: { readonly children: React.ReactNode }) {
 
   return (
     <ToastContext.Provider value={controls}>
-      <ToastPrimitive.Provider
-        duration={TOAST_DURATION}
-        swipeDirection="down"
-        label="Notification"
-      >
-        {children}
-        {toast && (
-          <ToastItem
-            key={toast.id}
-            options={toast.options}
-            open={toast.open}
-            onClose={() => close(toast.id)}
-          />
-        )}
-        <ToastViewport active={toast?.open ?? false} />
-      </ToastPrimitive.Provider>
+      {children}
+      <ToastRegion toast={toast} onClose={close} />
     </ToastContext.Provider>
   )
+}
+
+function ToastRegion({
+  toast,
+  onClose,
+}: {
+  readonly toast: ToastEntry | null
+  readonly onClose: (id: number) => void
+}) {
+  const open = toast?.open ?? false
+  const region = React.useRef<HTMLDivElement>(null)
+  const viewport = React.useRef<HTMLOListElement>(null)
+  // Where focus was before it entered the region, to return it on close.
+  const returnFocus = React.useRef<HTMLElement | null>(null)
+  const [hovered, setHovered] = React.useState(false)
+  const [focused, setFocused] = React.useState(false)
+  const [windowBlurred, setWindowBlurred] = React.useState(false)
+  const placement = useToastPlacement(open)
+  const toastId = toast?.id
+  const closeCurrent = React.useCallback(() => {
+    if (toastId !== undefined) onClose(toastId)
+  }, [onClose, toastId])
+
+  // F8 moves focus to the toast.
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "F8" && event.code !== "F8") return
+      const item = viewport.current?.querySelector<HTMLElement>(
+        '[data-slot="toast"][data-state="open"]'
+      )
+      if (!item) return
+      event.preventDefault()
+      item.focus()
+    }
+    document.addEventListener("keydown", onKeyDown)
+    return () => document.removeEventListener("keydown", onKeyDown)
+  }, [])
+
+  // Escape belongs to the toast only while focus is inside it; otherwise it
+  // reaches whatever is underneath, such as an open menu, a popover, a
+  // sheet or Settings. The window's capture phase runs before the topmost
+  // Radix layer's document listener, so a focused toast closes first, and
+  // the handled event goes no further.
+  React.useEffect(() => {
+    if (!open) return undefined
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing)
+        return
+      if (!(event.target instanceof Node) || !region.current?.contains(event.target))
+        return
+      event.preventDefault()
+      event.stopPropagation()
+      closeCurrent()
+    }
+    window.addEventListener("keydown", onKeyDown, { capture: true })
+    return () =>
+      window.removeEventListener("keydown", onKeyDown, { capture: true })
+  }, [open, closeCurrent])
+
+  React.useEffect(() => {
+    if (!open) return undefined
+    const onBlur = () => setWindowBlurred(true)
+    const onFocus = () => setWindowBlurred(false)
+    window.addEventListener("blur", onBlur)
+    window.addEventListener("focus", onFocus)
+    return () => {
+      window.removeEventListener("blur", onBlur)
+      window.removeEventListener("focus", onFocus)
+      setWindowBlurred(false)
+    }
+  }, [open])
+
+  // A toast that closes with focus inside it hands focus back to where it
+  // came from (the viewport when that is gone), so it is not dropped.
+  React.useEffect(() => {
+    if (open) return
+    const active = document.activeElement
+    if (!active || !region.current?.contains(active)) return
+    const target = returnFocus.current
+    returnFocus.current = null
+    if (target?.isConnected) target.focus({ preventScroll: true })
+    else viewport.current?.focus({ preventScroll: true })
+  }, [open])
+
+  return (
+    <DismissableLayer.Branch
+      ref={region}
+      role="region"
+      aria-label="Notifications (F8)"
+      onPointerMove={() => setHovered(true)}
+      onPointerLeave={() => setHovered(false)}
+      onFocus={(event) => {
+        const from = event.relatedTarget
+        if (
+          from instanceof HTMLElement &&
+          !event.currentTarget.contains(from)
+        )
+          returnFocus.current = from
+        setFocused(true)
+      }}
+      onBlur={(event) => {
+        const to = event.relatedTarget
+        if (!(to instanceof Node) || !event.currentTarget.contains(to))
+          setFocused(false)
+      }}
+    >
+      <ol
+        ref={viewport}
+        data-slot="toast-viewport"
+        tabIndex={-1}
+        style={
+          placement
+            ? ({
+                "--toast-x": `${placement.x}px`,
+                "--toast-bottom": `${placement.bottom}px`,
+                "--toast-region-width": `${placement.regionWidth}px`,
+              } as React.CSSProperties)
+            : undefined
+        }
+      >
+        {toast && (
+          <Presence.Presence key={toast.id} present={toast.open}>
+            <ToastItem
+              options={toast.options}
+              open={toast.open}
+              paused={hovered || focused || windowBlurred}
+              onClose={closeCurrent}
+            />
+          </Presence.Presence>
+        )}
+      </ol>
+    </DismissableLayer.Branch>
+  )
+}
+
+type Swipe = {
+  readonly startX: number
+  readonly startY: number
+  started: boolean
+  distance: number
 }
 
 function ToastItem({
   options,
   open,
+  paused,
   onClose,
+  ref,
 }: {
   readonly options: ToastOptions
   readonly open: boolean
+  readonly paused: boolean
   readonly onClose: () => void
+  readonly ref?: React.Ref<HTMLLIElement>
 }) {
-  const { message, action, duration } = options
+  const { message, action, duration = TOAST_DURATION } = options
+  const remaining = React.useRef(duration)
+  const swipe = React.useRef<Swipe | null>(null)
+
+  React.useEffect(() => {
+    if (!open || paused || !Number.isFinite(remaining.current)) return undefined
+    const started = Date.now()
+    const timer = window.setTimeout(onClose, Math.max(0, remaining.current))
+    return () => {
+      window.clearTimeout(timer)
+      remaining.current -= Date.now() - started
+    }
+  }, [open, paused, onClose])
+
+  const endSwipe = (element: HTMLLIElement, pointerId: number) => {
+    const current = swipe.current
+    swipe.current = null
+    if (!current?.started) return
+    if (element.hasPointerCapture(pointerId))
+      element.releasePointerCapture(pointerId)
+    element.style.removeProperty("--toast-swipe-move-y")
+    if (current.distance >= SWIPE_THRESHOLD) {
+      element.setAttribute("data-swipe", "end")
+      element.style.setProperty("--toast-swipe-end-y", `${current.distance}px`)
+      onClose()
+    } else {
+      element.setAttribute("data-swipe", "cancel")
+    }
+    // The press that ended a swipe is not a click on the toast's controls.
+    element.addEventListener(
+      "click",
+      (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+      },
+      { once: true, capture: true }
+    )
+  }
+
   return (
-    <ToastPrimitive.Root
+    <li
+      ref={ref}
       data-slot="toast"
-      // "background" announces politely instead of interrupting.
-      type="background"
-      open={open}
-      duration={duration}
-      onOpenChange={(next) => {
-        if (!next) onClose()
+      data-state={open ? "open" : "closed"}
+      data-swipe-direction="down"
+      tabIndex={0}
+      style={{ userSelect: "none", touchAction: "none" }}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return
+        swipe.current = {
+          startX: event.clientX,
+          startY: event.clientY,
+          started: false,
+          distance: 0,
+        }
+      }}
+      onPointerMove={(event) => {
+        const current = swipe.current
+        if (!current) return
+        const x = event.clientX - current.startX
+        const y = event.clientY - current.startY
+        if (!current.started) {
+          const buffer = event.pointerType === "touch" ? 10 : 2
+          if (y > buffer && Math.abs(x) <= y) {
+            current.started = true
+            event.currentTarget.setPointerCapture(event.pointerId)
+            event.currentTarget.setAttribute("data-swipe", "start")
+          } else if (Math.abs(x) > buffer || Math.abs(y) > buffer) {
+            // Moving any other way is not a swipe.
+            swipe.current = null
+          }
+          return
+        }
+        current.distance = Math.max(0, y)
+        event.currentTarget.setAttribute("data-swipe", "move")
+        event.currentTarget.style.setProperty(
+          "--toast-swipe-move-y",
+          `${current.distance}px`
+        )
+      }}
+      onPointerUp={(event) => endSwipe(event.currentTarget, event.pointerId)}
+      onPointerCancel={(event) => {
+        const current = swipe.current
+        if (current) current.distance = 0
+        endSwipe(event.currentTarget, event.pointerId)
       }}
     >
-      <ToastPrimitive.Description data-slot="toast-message">
-        {message}
-      </ToastPrimitive.Description>
+      <ToastAnnouncement
+        text={
+          action
+            ? `${message}. ${action.label} is available: press F8.`
+            : message
+        }
+      />
+      <div data-slot="toast-message">{message}</div>
       {action && (
-        <ToastPrimitive.Action
+        <button
+          type="button"
           data-slot="toast-action"
-          altText={action.label}
-          onClick={action.onAction}
+          onClick={() => {
+            action.onAction()
+            onClose()
+          }}
         >
           {action.label}
-        </ToastPrimitive.Action>
+        </button>
       )}
-      <ToastPrimitive.Close data-slot="toast-close" aria-label="Dismiss">
+      <button
+        type="button"
+        data-slot="toast-close"
+        aria-label="Dismiss"
+        onClick={onClose}
+      >
         <X aria-hidden="true" />
-      </ToastPrimitive.Close>
-    </ToastPrimitive.Root>
+      </button>
+    </li>
+  )
+}
+
+/**
+ * Announces a toast politely. The live region is a fresh child of the
+ * document body, outside anything a modal layer hides, and is filled a
+ * frame after it mounts so screen readers notice the change.
+ */
+function ToastAnnouncement({ text }: { readonly text: string }) {
+  const [filled, setFilled] = React.useState(false)
+  const [done, setDone] = React.useState(false)
+  React.useEffect(() => {
+    const frame = window.requestAnimationFrame(() => setFilled(true))
+    const timer = window.setTimeout(() => setDone(true), ANNOUNCEMENT_DURATION)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.clearTimeout(timer)
+    }
+  }, [])
+  if (done) return null
+  return createPortal(
+    <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+      {filled ? text : null}
+    </div>,
+    document.body
   )
 }
 
@@ -172,7 +427,13 @@ function measureToastPlacement(keyboardInset: number): ToastPlacement {
   }
 }
 
-function ToastViewport({ active }: { readonly active: boolean }) {
+/**
+ * The toast's placement while one is up, measured again on resize and when
+ * the region or an avoided element changes size: the composer grows and
+ * shrinks while a toast is up, for example when the chip a toast announces
+ * arrives.
+ */
+function useToastPlacement(active: boolean): ToastPlacement | undefined {
   const touch = useTouchDensity()
   const keyboardInset = useKeyboardInset(touch && active)
   const [placement, setPlacement] = React.useState<ToastPlacement>()
@@ -191,8 +452,6 @@ function ToastViewport({ active }: { readonly active: boolean }) {
     }
     update()
     window.addEventListener("resize", update)
-    // The composer grows and shrinks while a toast is up, for example when
-    // the chip a toast announces arrives.
     const observer =
       typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update)
     const region = document.querySelector<HTMLElement>("[data-toast-region]")
@@ -206,20 +465,7 @@ function ToastViewport({ active }: { readonly active: boolean }) {
     }
   }, [active, keyboardInset])
 
-  return (
-    <ToastPrimitive.Viewport
-      data-slot="toast-viewport"
-      style={
-        placement
-          ? ({
-              "--toast-x": `${placement.x}px`,
-              "--toast-bottom": `${placement.bottom}px`,
-              "--toast-region-width": `${placement.regionWidth}px`,
-            } as React.CSSProperties)
-          : undefined
-      }
-    />
-  )
+  return placement
 }
 
 /** Shows toasts in the app's toast region. Use inside `ToastProvider`. */

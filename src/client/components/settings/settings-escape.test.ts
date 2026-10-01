@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, render, renderHook } from "@testing-library/react";
+import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { navigate, settingsPath } from "../../app/router.js";
 import { settingsResourceParent } from "../../app/settings-route.js";
+import { ToastProvider, useToast, type ToastControls } from "../ui/toast.js";
 import {
   hasOpenLayer,
   isEditingElement,
@@ -217,6 +219,34 @@ describe("useSettingsEscape", () => {
     // The next Escape, with nothing open, goes up.
     press(document, { cancelable: false });
     expect(onReturn).toHaveBeenCalledOnce();
+  });
+
+  it("still goes up while a toast is visible, and leaves the Escape a focused toast takes", () => {
+    navigate("/settings/general", { replace: true });
+    const onReturn = vi.fn();
+    let toasts: ToastControls | undefined;
+    function SettingsPage() {
+      toasts = useToast();
+      useSettingsEscape({ location: { page: "general" }, navInSidebar: true, onReturn });
+      return null;
+    }
+    render(createElement(ToastProvider, null, createElement(SettingsPage)));
+    act(() => toasts?.show({ message: "Task completed", action: { label: "Undo", onAction: vi.fn() } }));
+    const toast = document.querySelector<HTMLElement>('[data-slot="toast"]')!;
+
+    // The toast region is not an open layer, and the toast leaves Escape
+    // alone while focus is outside it.
+    expect(hasOpenLayer()).toBe(false);
+    press();
+    expect(onReturn).toHaveBeenCalledOnce();
+    expect(toast).toHaveAttribute("data-state", "open");
+
+    // Focused (F8), the toast takes Escape: it closes and Settings stays.
+    act(() => toast.focus());
+    const event = press(toast);
+    expect(event.defaultPrevented).toBe(true);
+    expect(onReturn).toHaveBeenCalledOnce();
+    expect(document.querySelector('[data-slot="toast"]')).toBeNull();
   });
 
   it("blurs a focused field first, without preventing its own Escape", () => {

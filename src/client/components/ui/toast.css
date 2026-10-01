@@ -9,6 +9,8 @@
    - --toast-bottom: the distance from the viewport bottom to the lowest
      clear edge;
    - --toast-region-width: the workspace width, less the side insets.
+   A downward swipe sets --toast-swipe-move-y while it moves and
+   --toast-swipe-end-y when it dismisses.
    ─────────────────────────────────────────────────────────────────────── */
 
 [data-slot="toast-viewport"] {
@@ -43,6 +45,10 @@
   font-size: var(--text-ui);
   line-height: var(--leading-snug);
   outline: none;
+  /* Stays pressable while a modal layer disables pointer events outside it;
+     its region is a dismissable-layer branch, so pressing it does not
+     dismiss that layer. */
+  pointer-events: auto;
 }
 
 [data-slot="toast"]:focus-visible {
@@ -111,7 +117,7 @@
 }
 
 [data-slot="toast"][data-swipe="move"] {
-  transform: translateY(var(--radix-toast-swipe-move-y));
+  transform: translateY(var(--toast-swipe-move-y));
 }
 
 [data-slot="toast"][data-swipe="cancel"] {
@@ -132,7 +138,7 @@
 
 @keyframes ui-toast-swipe-out {
   from {
-    transform: translateY(var(--radix-toast-swipe-end-y));
+    transform: translateY(var(--toast-swipe-end-y));
   }
 
   to {

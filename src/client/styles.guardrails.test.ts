@@ -32,6 +32,8 @@ const RUNTIME_SET_PROPERTIES: readonly string[] = [
   // components/ui/toast.tsx: the measured toast placement in the workspace
   "--toast-bottom",
   "--toast-region-width",
+  "--toast-swipe-end-y",
+  "--toast-swipe-move-y",
   "--toast-x",
 ];
 
