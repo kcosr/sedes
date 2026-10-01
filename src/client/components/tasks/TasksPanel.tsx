@@ -1503,7 +1503,6 @@ export function TasksPanelContent({
         data-presentation={presentation}
         data-touch={touch || undefined}
         data-task-detail-open={sheetDetail || undefined}
-        data-dragging={draggedTask !== undefined || undefined}
         onKeyDown={onRootKeyDown}
       >
         {header}
