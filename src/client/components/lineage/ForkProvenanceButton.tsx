@@ -6,6 +6,12 @@ import {
   pointerPanelPresentation,
 } from "../../workspace-panels/thread-panel-navigation.js";
 
+// Shared by every fork row: constructing a formatter per render is costly.
+const forkPointTime = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
 export function ForkProvenanceButton({
   origin,
   sourceTitle,
@@ -20,10 +26,7 @@ export function ForkProvenanceButton({
   const sourceAvailable = origin.sourceThreadId !== null;
   const source = sourceTitle ? `“${sourceTitle}”` : "the source thread";
   const completedAt = origin.sourceTurnCompletedAt
-    ? new Intl.DateTimeFormat(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
-      }).format(new Date(origin.sourceTurnCompletedAt))
+    ? forkPointTime.format(new Date(origin.sourceTurnCompletedAt))
     : undefined;
   const attribution =
     origin.originKind === "agent_fork"
