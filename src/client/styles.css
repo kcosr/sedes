@@ -220,7 +220,7 @@
      context. The values are today's stacking bands, kept exactly, so a
      declaration that must stay above another in its band adds
      `calc(var(--z-x) + n)`. Today's order is sticky < floating < dialog
-     < drawer < over-dialog < blocking < toast: in-page popovers and the
+     < drawer < over-dialog < blocking: in-page popovers and the
      DropdownMenu primitive (z-50) sit below the Dialog primitive
      (z-[80]/z-[81]), and the Popover, Select and ContextMenu primitives
      (z-[90]) clear it from inside the dialog band. The overlay primitives
@@ -231,7 +231,6 @@
   --z-drawer: 81; /* mobile drawer; menus opened over it +1 */
   --z-over-dialog: 100; /* sheets and dialogs over the drawer and dialog band, tooltips */
   --z-blocking: 110; /* operation overlay; confirmations and pickers over sheets */
-  --z-toast: 120;
 
   /* floating surfaces and dialogs */
   --menu-row-height: 32px;

@@ -299,12 +299,6 @@ test.describe.serial("Tasks panel", () => {
     await expect(completed).toHaveText("Completed1", {
       timeout: TASK_MUTATION_TIMEOUT_MS,
     });
-    // Completing offers Undo in a toast.
-    const toast = page.locator('[data-slot="toast"]');
-    await expect(toast).toContainText("Task completed");
-    await expect(toast.getByRole("button", { name: "Undo" })).toBeVisible();
-    await toast.getByRole("button", { name: "Dismiss" }).click();
-    await expect(toast).toHaveCount(0);
     await expect(
       sidebarThread.getByRole("img", {
         name: "1 open task",
@@ -648,37 +642,4 @@ test("mobile task destinations remain usable with long lists and short viewports
   await expect(move).toHaveCount(0);
   await moved;
   await expect(sheet.getByRole("button", { name: "Chooser task 0", exact: true })).toHaveCount(0);
-
-  // Undo lives inside the modal sheet, so a screen reader and the keyboard
-  // reach it there, not just the pointer.
-  const toast = sheet.locator('[data-slot="toast"]');
-  await expect(toast).toContainText("Moved to Chooser project 10");
-  await sheet.getByRole("button", { name: "Undo", exact: true }).click();
-  await expect(toast).toHaveCount(0);
-  await sheet.getByRole("button", { name: "Back to tasks" }).click();
-  await expect(sheet.getByRole("button", { name: "Chooser task 0", exact: true })).toBeVisible({
-    timeout: TASK_MUTATION_TIMEOUT_MS,
-  });
-
-  // Completing a task offers Undo, by pointer...
-  await page.setViewportSize({ width: 412, height: 915 });
-  const done = (title: string) => sheet.getByRole("checkbox", { name: `Mark "${title}" as done` });
-  await done("Chooser task 1").click();
-  await expect(toast).toContainText("Task completed");
-  await expect(done("Chooser task 1")).toHaveCount(0, { timeout: TASK_MUTATION_TIMEOUT_MS });
-  await sheet.getByRole("button", { name: "Undo", exact: true }).click();
-  await expect(toast).toHaveCount(0);
-  await expect(done("Chooser task 1")).not.toBeChecked({ timeout: TASK_MUTATION_TIMEOUT_MS });
-
-  // ...and by keyboard: F8 reaches the toast inside the sheet's focus trap.
-  await done("Chooser task 2").click();
-  await expect(toast).toContainText("Task completed");
-  await expect(done("Chooser task 2")).toHaveCount(0, { timeout: TASK_MUTATION_TIMEOUT_MS });
-  await page.keyboard.press("F8");
-  await expect(toast).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(sheet.getByRole("button", { name: "Undo", exact: true })).toBeFocused();
-  await page.keyboard.press("Enter");
-  await expect(done("Chooser task 2")).not.toBeChecked({ timeout: TASK_MUTATION_TIMEOUT_MS });
-  await capture(page, testInfo, "tasks-mobile-undo-in-sheet.png");
 });

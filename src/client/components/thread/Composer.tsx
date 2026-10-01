@@ -2730,7 +2730,6 @@ export function Composer({
       <div
         ref={composerStack}
         className="composer-stack"
-        data-toast-avoid
         onClickCapture={(event) => {
           if (
             event.target instanceof Element &&

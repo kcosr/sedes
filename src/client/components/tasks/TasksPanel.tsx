@@ -99,7 +99,6 @@ import {
   useTaskScopeDropTargets,
   type TaskScopeDropTarget,
 } from "../../tasks/task-drag.js";
-import { useToast } from "../ui/toast.js";
 import { TaskAddRow, EMPTY_TASK_ADD_DRAFT, type TaskAddDraft } from "./TaskAddRow.js";
 import { TaskEditDialog } from "./TaskEditDialog.js";
 import {
@@ -273,7 +272,6 @@ export function TasksPanelContent({
   const tasks = useMemo(() => snapshot?.tasks ?? [], [snapshot?.tasks]);
   const composerDraft = useComposerDraftStaging();
   const taskDrag = useTaskDrag();
-  const toast = useToast();
   const touch = useTouchDensity();
   const destinations = useTaskDestinations(snapshot, route);
   const { context } = destinations;
@@ -368,10 +366,6 @@ export function TasksPanelContent({
       }
     },
     [markPending],
-  );
-  const latest = useCallback(
-    (taskId: string) => store.getTasks().find(({ id }) => id === taskId),
-    [store],
   );
 
   // ── What the view shows ──────────────────────────────────────────────────
@@ -602,7 +596,7 @@ export function TasksPanelContent({
 
   // ── Actions ──────────────────────────────────────────────────────────────
   const setCompleted = useCallback(
-    async (task: AssociatedTask, completed: boolean, offerUndo: boolean) => {
+    async (task: AssociatedTask, completed: boolean) => {
       const result = await runTask(
         task,
         "complete",
@@ -611,25 +605,12 @@ export function TasksPanelContent({
       );
       if (!result.ok) return;
       announce(completed ? `Completed “${task.title}”.` : `Reopened “${task.title}”.`);
-      if (!offerUndo) return;
-      toast.show({
-        message: completed ? "Task completed" : "Task reopened",
-        anchor: rootRef.current,
-        action: {
-          label: "Undo",
-          onAction: () => {
-            const current = latest(task.id);
-            if (current) void setCompleted(current, !completed, false);
-          },
-        },
-      });
     },
-    [announce, latest, runTask, store, toast],
+    [announce, runTask, store],
   );
 
   const moveNow = useCallback(
-    async (task: AssociatedTask, scope: TaskScope, offerUndo: boolean) => {
-      const previous = task.scope;
+    async (task: AssociatedTask, scope: TaskScope) => {
       markPending(task.id, "move", true);
       try {
         await store.moveTask(task, scope);
@@ -637,25 +618,9 @@ export function TasksPanelContent({
         markPending(task.id, "move", false);
       }
       setError(null);
-      const label = destinations.label(scope);
-      announce(`Moved “${task.title}” to ${label}.`);
-      if (!offerUndo) return;
-      toast.show({
-        message: `Moved to ${label}`,
-        anchor: rootRef.current,
-        action: {
-          label: "Undo",
-          onAction: () => {
-            const current = latest(task.id);
-            if (!current) return;
-            void moveNow(current, previous, false).catch((cause: unknown) =>
-              setError(`Couldn't move “${task.title}” back: ${errorMessage(cause)}`),
-            );
-          },
-        },
-      });
+      announce(`Moved “${task.title}” to ${destinations.label(scope)}.`);
     },
-    [announce, destinations, latest, markPending, store, toast],
+    [announce, destinations, markPending, store],
   );
 
   const moveTo = useCallback(
@@ -677,7 +642,7 @@ export function TasksPanelContent({
         setPendingMove({ task, scope });
         return;
       }
-      void moveNow(task, scope, true).catch((cause: unknown) =>
+      void moveNow(task, scope).catch((cause: unknown) =>
         setError(`Couldn't move “${task.title}”: ${errorMessage(cause)}`),
       );
     },
@@ -749,7 +714,7 @@ export function TasksPanelContent({
   const actions: TaskListActions = useMemo(
     () => ({
       toggleComplete: (task) =>
-        void setCompleted(task, task.completedAt === null, true),
+        void setCompleted(task, task.completedAt === null),
       togglePin: (task) =>
         void runTask(
           task,
@@ -992,7 +957,7 @@ export function TasksPanelContent({
 
   // ── Drag onto a scope segment, or the list, moves the task there ────────
   // The drag controller confirms a move across projects for a task with
-  // files and offers Undo, as for every other drop.
+  // files, as for every other drop.
   const draggedTask = taskDrag?.activeTaskId
     ? tasks.find(({ id }) => id === taskDrag.activeTaskId)
     : undefined;
@@ -1521,7 +1486,7 @@ export function TasksPanelContent({
               <TaskFacts task={expandedTask} />
             </div>
             {errorCallout}
-            <div className="tasks-sheet-actions" data-toast-avoid="">
+            <div className="tasks-sheet-actions">
               <Button
                 variant="outline"
                 size="lg"
@@ -1604,7 +1569,7 @@ export function TasksPanelContent({
         }}
         onConfirm={async () => {
           if (!pendingMove) return;
-          await moveNow(pendingMove.task, pendingMove.scope, true);
+          await moveNow(pendingMove.task, pendingMove.scope);
         }}
       />
       <ConfirmDialog

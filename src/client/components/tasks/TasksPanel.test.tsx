@@ -46,9 +46,6 @@ import { setPanelPresentation } from "../../app/settings.js";
 import { TASK_DRAG_MIME, TaskDragProvider } from "../../tasks/task-drag.js";
 import { CLOSE_TASK_DETAIL_EVENT } from "../../app/android-back.js";
 
-const toast = vi.hoisted(() => ({ show: vi.fn() }));
-vi.mock("../ui/toast.js", () => ({ useToast: () => toast }));
-
 const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
   HTMLElement.prototype,
   "scrollIntoView",
@@ -76,7 +73,6 @@ beforeEach(() => {
   // Desktop shell: the panel renders as the floating card, not the sheet.
   stubDensity(false);
   resetStorage();
-  toast.show.mockReset();
 });
 
 afterEach(() => {
@@ -381,6 +377,9 @@ function seededStore(extra: readonly AssociatedTask[] = []) {
 }
 
 const panel = () => screen.getByRole("region", { name: "Tasks" });
+/** Whether a polite live region currently says `text`. */
+const announced = (text: string) =>
+  screen.queryAllByRole("status").some((region) => region.textContent === text);
 const scope = () => screen.getByRole("radiogroup", { name: "Task scope view" });
 const segment = (name: string) => within(scope()).getByRole("radio", { name });
 const rowTitle = (title: string) => screen.getByRole("button", { name: title });
@@ -621,7 +620,7 @@ describe("TasksPanel add row", () => {
 });
 
 describe("TasksPanel rows", () => {
-  it("collapses completed tasks into a muted Completed section with undo", async () => {
+  it("collapses completed tasks into a muted Completed section, where they reopen", async () => {
     const user = userEvent.setup();
     const store = seededStore();
     renderPanel(store);
@@ -637,13 +636,10 @@ describe("TasksPanel rows", () => {
     ).toBeChecked();
 
     await user.click(screen.getByRole("checkbox", { name: 'Mark "Add retry to the payment call" as done' }));
-    expect(toast.show).toHaveBeenCalledWith({
-      message: "Task completed",
-      anchor: expect.any(HTMLElement),
-      action: { label: "Undo", onAction: expect.any(Function) },
-    });
-    // The toast sits on the Tasks surface it came from.
-    expect(toast.show.mock.calls[0]![0].anchor.closest("[data-toast-region]")).toBe(panel());
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-retry", revision: 0 }),
+      { completed: true },
+    );
     store.publish(
       store.getTasks().map((task) =>
         task.id === "t-retry" ? { ...task, completedAt: "2026-08-05T10:00:00.000Z", revision: 1 } : task,
@@ -657,7 +653,8 @@ describe("TasksPanel rows", () => {
       "Remove the legacy flag",
     ]);
 
-    await act(async () => toast.show.mock.calls[0]![0].action.onAction());
+    // A completed task reopens from its row in the Completed section.
+    await user.click(screen.getByRole("checkbox", { name: 'Mark "Add retry to the payment call" as open' }));
     expect(store.updateTask).toHaveBeenLastCalledWith(
       expect.objectContaining({ id: "t-retry", revision: 1 }),
       { completed: false },
@@ -701,7 +698,6 @@ describe("TasksPanel rows", () => {
       titleSnapshot: "Add retry to the payment call",
     });
     expect(panel()).toBeInTheDocument();
-    expect(toast.show).not.toHaveBeenCalled();
   });
 
   it("explains when no composer can receive the task", async () => {
@@ -712,7 +708,7 @@ describe("TasksPanel rows", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("The message composer is unavailable.");
   });
 
-  it("moves through the row menu with an undo toast", async () => {
+  it("moves through the row menu", async () => {
     const user = userEvent.setup();
     const store = seededStore();
     renderPanel(store);
@@ -744,19 +740,7 @@ describe("TasksPanel rows", () => {
       expect.objectContaining({ id: "t-retry" }),
       { kind: "workspace", workspaceId: "workspace-1" },
     );
-    await waitFor(() =>
-      expect(toast.show).toHaveBeenCalledWith({
-        message: "Moved to acme-web",
-        anchor: expect.any(HTMLElement),
-        action: { label: "Undo", onAction: expect.any(Function) },
-      }),
-    );
-    expect(toast.show.mock.calls[0]![0].anchor.closest("[data-toast-region]")).toBe(panel());
-    await act(async () => toast.show.mock.calls[0]![0].action.onAction());
-    expect(store.moveTask).toHaveBeenLastCalledWith(
-      expect.objectContaining({ id: "t-retry" }),
-      { kind: "thread", threadId: "thread-9" },
-    );
+    await waitFor(() => expect(announced("Moved “Add retry to the payment call” to acme-web.")).toBe(true));
   });
 
   it("pins from the row menu without expanding the row", async () => {
@@ -889,21 +873,7 @@ describe("TasksPanel rows", () => {
         expect.any(String),
       ),
     );
-    await waitFor(() =>
-      expect(toast.show).toHaveBeenCalledWith({
-        message: "Moved to acme-web",
-        anchor: expect.any(HTMLElement),
-        action: { label: "Undo", onAction: expect.any(Function) },
-      }),
-    );
-    expect(toast.show.mock.calls[0]![0].anchor.closest("[data-toast-region]")).toBe(panel());
-    // Undo moves it back where it came from.
-    await act(async () => toast.show.mock.calls[0]![0].action.onAction());
-    expect(store.moveTask).toHaveBeenLastCalledWith(
-      expect.objectContaining({ id: "t-retry" }),
-      { kind: "thread", threadId: "thread-9" },
-      expect.any(String),
-    );
+    await waitFor(() => expect(announced("Moved “Add retry to the payment call” to acme-web.")).toBe(true));
   });
 
   it("moves a task dropped on the list to the scope in view", async () => {
@@ -971,9 +941,7 @@ describe("TasksPanel rows", () => {
         expect.any(String),
       ),
     );
-    await waitFor(() =>
-      expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ message: "Moved to Global" })),
-    );
+    await waitFor(() => expect(announced("Moved “Audit checkout error states” to Global.")).toBe(true));
   });
 });
 
@@ -1388,16 +1356,9 @@ describe("TasksPanel phone sheet", () => {
     await user.click(within(sheet).getByRole("button", { name: "Add to prompt" }));
     expect(stageTaskReference).toHaveBeenCalledWith({ taskId: "t-retry", titleSnapshot: "Add retry to the payment call" });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Tasks" })).not.toBeInTheDocument());
-    // No toast: the sheet closes so the chip is seen arriving, and the host
-    // announces it, since the sheet's content has gone.
-    expect(toast.show).not.toHaveBeenCalled();
-    await waitFor(() =>
-      expect(
-        screen.getAllByRole("status").some(
-          (region) => region.textContent === "Added “Add retry to the payment call” to the prompt.",
-        ),
-      ).toBe(true),
-    );
+    // The sheet closes so the chip is seen arriving; the host announces it,
+    // since the sheet's content has gone.
+    await waitFor(() => expect(announced("Added “Add retry to the payment call” to the prompt.")).toBe(true));
   });
 
   it("closes the detail with Escape before the sheet", () => {

@@ -186,12 +186,10 @@ Archived threads are not offered as destinations. Moving a Task that links to
 files out of its project asks first, because the absolute file paths do not
 change.
 
-### Undo
-
-After you complete or reopen a Task, or move it with **Move to** or by
-dragging, a notice at the bottom of the workspace offers **Undo** for about
-five seconds. Press F8 to move focus to it. Delete has no Undo, which is why it
-asks first.
+There is no Undo. To take back a completion, open the **Completed** section
+and select the Task's circle to reopen it. To take back a move, move the Task
+back with **Move to** or **Edit**'s **Belongs to**. Delete cannot be taken
+back, which is why it asks first.
 
 ### Drag a Task
 
@@ -250,7 +248,7 @@ Sedes adds the Task to the current thread's composer as a compact pill with
 the Task's title and a remove button. A completed Task's pill is muted and a
 deleted Task's pill shows a warning; hover over the pill to see why. Add to prompt needs an open thread,
 so it is unavailable on Home, Archived, and Usage. On phones, it closes the
-sheet and confirms with a notice.
+sheet so you can see the pill arrive.
 
 Before delivery, the pill follows live Task renames and completion state. At
 Send, Queue, or Steer acceptance, Sedes records an immutable snapshot so the

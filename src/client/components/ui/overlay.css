@@ -25,7 +25,7 @@
 
 /* Stacking bands (the `layer` prop): dialogs opened from the mobile drawer
    or a sheet clear the over-dialog band; blocking-operation dialogs clear
-   everything but toasts. */
+   everything. */
 [data-slot="dialog-overlay"][data-layer="over-dialog"] {
   z-index: var(--z-over-dialog);
 }

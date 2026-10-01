@@ -15,7 +15,6 @@ import {
   subscribeReveal,
 } from "../../app/tasks-panel-store.js";
 import { MessageTaskCard } from "../conversation/renderers/MessageTaskCard.js";
-import { ToastProvider } from "../ui/toast.js";
 import { TasksPanel } from "./TasksPanel.js";
 import {
   TasksCornerControls,
@@ -169,13 +168,11 @@ function renderHost({
   if (thread) act(() => navigate(threadPath("thread-1")));
   let host: ReturnType<typeof useTasksHost>;
   const content = (isActive: boolean) => (
-    <ToastProvider>
-      <TasksPanel store={makeStore()} panelLayoutStore={panelLayoutStore} active={isActive}>
-        <Probe onHost={(value) => (host = value)} />
-        {thread ? <Workspace spy={spy} /> : <TasksCornerControls />}
-        {extra}
-      </TasksPanel>
-    </ToastProvider>
+    <TasksPanel store={makeStore()} panelLayoutStore={panelLayoutStore} active={isActive}>
+      <Probe onHost={(value) => (host = value)} />
+      {thread ? <Workspace spy={spy} /> : <TasksCornerControls />}
+      {extra}
+    </TasksPanel>
   );
   const view = render(content(active));
   return {

@@ -17,7 +17,6 @@ import type {
 import { ApiError } from "../api/ApiClient.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { ConfirmDialog } from "../components/ui/confirm-dialog.js";
-import { useToast } from "../components/ui/toast.js";
 
 export const TASK_DRAG_MIME = "application/x-sedes-task+json";
 
@@ -49,15 +48,7 @@ type PendingMove = {
 export interface TaskDragController {
   readonly activeTaskId?: string;
   isTaskDrag(dataTransfer: DataTransfer): boolean;
-  /**
-   * Starts dragging a task from `source`; a move it ends in shows its Undo
-   * toast on the surface it came from.
-   */
-  beginTaskDrag(
-    task: AssociatedTask,
-    dataTransfer: DataTransfer,
-    source?: Element,
-  ): void;
+  beginTaskDrag(task: AssociatedTask, dataTransfer: DataTransfer): void;
   endTaskDrag(): void;
   resolveDraggedTask(dataTransfer: DataTransfer): AssociatedTask | undefined;
   requestMove(
@@ -133,11 +124,7 @@ export function TaskDragProvider({
   const [announcementError, setAnnouncementError] = useState(false);
   const activePayloadRef = useRef<TaskDragPayload | undefined>(undefined);
   const highlightedTargetRef = useRef<HTMLElement | undefined>(undefined);
-  // The toast region of the surface the last drag began in (the dragged row
-  // may be gone by the time the move lands).
-  const sourceRegionRef = useRef<Element | null>(null);
   const moveMutationIds = useRef(new Map<string, string>());
-  const toast = useToast();
 
   const announce = useCallback((message: string, error = false) => {
     setAnnouncement("");
@@ -153,8 +140,7 @@ export function TaskDragProvider({
   }, []);
 
   const beginTaskDrag = useCallback(
-    (task: AssociatedTask, dataTransfer: DataTransfer, source?: Element) => {
-      sourceRegionRef.current = source?.closest("[data-toast-region]") ?? null;
+    (task: AssociatedTask, dataTransfer: DataTransfer) => {
       const payload: TaskDragPayload = {
         version: 1,
         taskId: task.id,
@@ -180,24 +166,6 @@ export function TaskDragProvider({
       return task?.revision === payload.revision ? task : undefined;
     },
     [store],
-  );
-
-  /** Moves a task back to the scope it was moved from. */
-  const undoMove = useCallback(
-    async (taskId: string, scope: TaskScope) => {
-      const current = store.getTasks().find(({ id }) => id === taskId);
-      if (!current) {
-        announce("That task is gone, so the move can't be undone.", true);
-        return;
-      }
-      try {
-        await store.moveTask(current, scope, crypto.randomUUID());
-        announce(`Moved “${current.title}” back.`);
-      } catch (error) {
-        announce(moveErrorMessage(error), true);
-      }
-    },
-    [announce, store],
   );
 
   const performMove = useCallback(
@@ -237,16 +205,6 @@ export function TaskDragProvider({
         moveMutationIds.current.delete(fingerprint);
         setPendingMove(undefined);
         announce(`Moved “${current.title}” to ${target.label}.`);
-        // Every move can be undone: Undo moves the task back where it was.
-        const previous = current.scope;
-        toast.show({
-          message: `Moved to ${target.label}`,
-          anchor: sourceRegionRef.current,
-          action: {
-            label: "Undo",
-            onAction: () => void undoMove(current.id, previous),
-          },
-        });
         return undefined;
       } catch (error) {
         // An HTTP response is definitive. A transport failure can be
@@ -259,7 +217,7 @@ export function TaskDragProvider({
         return message;
       }
     },
-    [announce, store, toast, undoMove],
+    [announce, store],
   );
 
   const requestScopeMove = useCallback(
@@ -535,5 +493,5 @@ export function handleTaskDragStart(
   task: AssociatedTask,
   event: ReactDragEvent,
 ): void {
-  controller?.beginTaskDrag(task, event.dataTransfer, event.currentTarget);
+  controller?.beginTaskDrag(task, event.dataTransfer);
 }

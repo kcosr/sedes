@@ -81,10 +81,6 @@
   project; include thread Tasks in Project; and search notes. Each view
   remembers its own options on the device.
 
-- Completing, reopening, or moving a Task shows a notice with **Undo** for
-  about five seconds, whether the move came from **Move to** or a drag. F8 moves
-  focus to the notice. Deleting still asks first and has no Undo.
-
 - Ctrl+Shift+L (Command+Shift+L on macOS) opens and closes Tasks. Inside
   Tasks, N adds, `/` searches, and the arrow keys move between Tasks; on a
   Task, Enter expands it, Space completes it, E edits, P pins, M moves, Delete

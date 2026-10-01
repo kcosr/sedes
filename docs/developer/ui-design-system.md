@@ -125,34 +125,6 @@ an action with `variant="destructive"` instead.
 | `EmptyState` | Nothing to show: `panel` for a page or pane, `inline` inside a list |
 | `KeyValueList` | Labelled facts in a `max-content 1fr` grid; `mono` for identifiers |
 
-**Toast.** Brief confirmation of something the user just did, with at most one
-action, such as Undo (`components/ui/toast.tsx`, CSS in `toast.css` beside it).
-`ToastProvider` is mounted once at the root of the connected app (`app/App.tsx`);
-call `useToast().show({ message, action?: { label, onAction }, duration? })`.
-There is one toast at a time, and a new one replaces it. It closes after about
-five seconds, pausing while the pointer is over it, focus is inside it, or the
-window is in the background. It has a dismiss control, a downward swipe
-dismisses it, and choosing the action also closes it. It is announced through a
-polite live region, and F8 moves focus to it; when it closes with focus inside,
-focus returns to where it came from.
-
-A toast takes Escape only while focus is inside it. Otherwise Escape reaches
-whatever is underneath: an open menu, popover, or sheet, or Settings, whose
-Escape-to-go-up does not count a visible toast as an open layer. The toast is
-not a dismissable layer (unlike Radix Toast); its region is a dismissable-layer
-branch, so pressing or focusing a toast never dismisses the layer beneath it.
-
-It sits on the inverse surface (`--primary`) at `--z-toast`, centred at the
-bottom of the element marked `data-toast-region` (the workspace). It rises
-above the soft keyboard and above every visible `data-toast-avoid` element
-across that region, such as the composer; elements behind a modal dialog or
-sheet do not count. Its placement is measured again when the window resizes,
-when the region or an avoided element changes size, and when avoided elements
-appear, disappear, or are covered, such as a sheet opening or closing. Mark a
-bottom-docked bar the toast must not cover, such as a sheet's add bar, with
-`data-toast-avoid`. A toast is never the only record of an error: use a
-`Callout` for those.
-
 ## Dialogs
 
 | `DialogContent` prop | Values and use |
@@ -273,7 +245,6 @@ their stacking context. Within a band, use `calc(var(--z-x) + n)`.
 | `--z-drawer` | 81 | The mobile drawer |
 | `--z-over-dialog` | 100 | Sheets and dialogs over the drawer or a dialog, menu sheets, tooltips |
 | `--z-blocking` | 110 | The operation overlay, dialogs over it, confirmations and pickers over sheets |
-| `--z-toast` | 120 | Toasts |
 
 ## Style guardrails
 

@@ -100,8 +100,7 @@ export function usePublishTasksDock(dock: TasksDock | undefined): void {
 /**
  * The surface that adopts the retained body. Every presentation shares the
  * `tasks-panel` slot and id, so the toggle's `aria-controls` and tests find
- * Tasks wherever it is shown. It is a toast region: Undo and the other
- * toasts Tasks raises sit at its bottom centre.
+ * Tasks wherever it is shown.
  */
 export function TasksSurface({
   presentation,
@@ -116,7 +115,6 @@ export function TasksSurface({
       className="tasks-surface"
       data-slot="tasks-panel"
       data-presentation={presentation}
-      data-toast-region=""
       aria-label="Tasks"
     >
       <StablePaneSlot target={target} style={{ display: "contents" }} />

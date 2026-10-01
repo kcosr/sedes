@@ -16,7 +16,6 @@ import { ApiError } from "../api/ApiClient.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { tasksTenant } from "../tasks/tasks-tenant.js";
 import { TasksPanel } from "../components/tasks/TasksPanel.js";
-import { ToastProvider } from "../components/ui/toast.js";
 import {
   TasksHostContext,
   type TasksDock,
@@ -427,15 +426,13 @@ function setup(
   );
   const withHost = (layout: React.JSX.Element) =>
     input.withTasksPanel ? (
-      <ToastProvider>
-        <TasksPanel
-          store={applicationStore}
-          panelLayoutStore={store}
-          route={{ name: "thread", threadId: "thread-1", automationOpen: false }}
-        >
-          {layout}
-        </TasksPanel>
-      </ToastProvider>
+      <TasksPanel
+        store={applicationStore}
+        panelLayoutStore={store}
+        route={{ name: "thread", threadId: "thread-1", automationOpen: false }}
+      >
+        {layout}
+      </TasksPanel>
     ) : (
       layout
     );

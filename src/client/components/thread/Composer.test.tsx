@@ -48,7 +48,6 @@ import {
   TaskDragProvider,
   useTaskDrag,
 } from "../../tasks/task-drag.js";
-import { ToastProvider } from "../ui/toast.js";
 import type { NormalizedApplicationSnapshot } from "../../../shared/index.js";
 
 import {
@@ -724,7 +723,6 @@ describe("task references", () => {
       counts: { active: 0, snoozed: 0, settled: 0, archived: 0 },
     } as unknown as NormalizedApplicationSnapshot;
     render(
-      <ToastProvider>
       <TaskDragProvider store={taskStore} snapshot={applicationSnapshot}>
         <ComposerDraftProvider threadId="thread-1" workspaceId="workspace-1">
           <Composer
@@ -732,8 +730,7 @@ describe("task references", () => {
             applicationStore={taskStore}
           />
         </ComposerDraftProvider>
-      </TaskDragProvider>
-      </ToastProvider>,
+      </TaskDragProvider>,
     );
     const encoded = JSON.stringify({
       version: 1,
@@ -780,7 +777,6 @@ describe("task references", () => {
       counts: { active: 0, snoozed: 0, settled: 0, archived: 0 },
     } as unknown as NormalizedApplicationSnapshot;
     render(
-      <ToastProvider>
       <TaskDragProvider store={taskStore} snapshot={applicationSnapshot}>
         <TaskDragTestSource task={task} />
         <ComposerDraftProvider threadId="thread-1" workspaceId="workspace-1">
@@ -789,8 +785,7 @@ describe("task references", () => {
             applicationStore={taskStore}
           />
         </ComposerDraftProvider>
-      </TaskDragProvider>
-      </ToastProvider>,
+      </TaskDragProvider>,
     );
     const values = new Map<string, string>();
     const types: string[] = [];
