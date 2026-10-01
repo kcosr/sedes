@@ -2086,8 +2086,13 @@ export function TasksPanel({
         </div>
       ) : null}
       {/* Outlives the popover and the sheet, for what is announced as
-          they close. */}
-      <div className="sr-only" role="status" aria-live="polite">
+          they close. Mounted on every page, so it takes the status role only
+          while it has something to say. */}
+      <div
+        className="sr-only"
+        role={announcement.length > 0 ? "status" : undefined}
+        aria-live="polite"
+      >
         {announcement}
       </div>
       {placement || editing

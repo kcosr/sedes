@@ -218,6 +218,11 @@ async function expectOnTop(name: string): Promise<void> {
 const expectEditorOnTop = () => expectOnTop("Edit task");
 
 describe("Tasks host on pages without panels", () => {
+  it("adds no status region to the page while Tasks has nothing to announce", () => {
+    renderHost();
+    expect(screen.queryAllByRole("status")).toEqual([]);
+  });
+
   it("opens a popover from the corner toggle and closes it again", async () => {
     const user = userEvent.setup();
     const { host } = renderHost();
