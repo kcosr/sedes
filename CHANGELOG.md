@@ -402,7 +402,8 @@
 
 - Archive progress now offers **Dismiss** throughout. Closing progress keeps
   the archive workflow running, including required choices, and reports failures
-  that arrive after dismissal.
+  that arrive after dismissal or navigation. Pending archives are shared across
+  entry points; choosing Archive again reopens progress for the existing request.
 
 - With reduced motion turned on, the composer shrinks back after its text is
   cleared or Chat is collapsed and restored. Before, it stayed at its tallest

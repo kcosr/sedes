@@ -63,6 +63,7 @@ import {
   type ElectronConnectionRuntimeStateChange,
 } from "./electron-connection-runtime-plugin.js";
 import { Button } from "../components/ui/button.js";
+import { ThreadArchiveOperationHost } from "../operations/ThreadArchiveOperationHost.js";
 import { OperationOverlayHost } from "../operations/OperationOverlay.js";
 
 export function App({
@@ -782,6 +783,7 @@ function ConnectedApp({
   return (
     <>
     <OperationOverlayHost threadRegistry={dependencies.threadRegistry} />
+    <ThreadArchiveOperationHost store={dependencies.applicationStore} />
     <ApplicationShell
       state={state}
       applicationStore={dependencies.applicationStore}

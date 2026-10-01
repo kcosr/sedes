@@ -616,6 +616,9 @@ test.describe.serial("normalized target and mobile navigation", () => {
     const sourceUrl = page.url();
     await checkingArchive.getByRole("button", { name: "Dismiss", exact: true }).click();
     await expect(checkingArchive).toBeHidden();
+    // Closing the drawer removes the row and its archive hook.
+    await page.getByRole("button", { name: "Close thread navigation" }).click();
+    await expect(drawer).toBeHidden();
     const archiveResponse = page.waitForResponse((response) =>
       response.request().method() === "PATCH" && response.url().endsWith("/inventory"),
     );
@@ -625,6 +628,8 @@ test.describe.serial("normalized target and mobile navigation", () => {
     // Nothing needs a choice for this childless thread, so the check archives
     // it directly instead of opening the archive choices dialog.
     await expect(page).toHaveURL(sourceUrl);
+    await page.getByRole("button", { name: "Open thread navigation" }).click();
+    await expect(drawer).toBeVisible();
     await expect(selectedRow).toBeHidden();
     await expect(checkingArchive).toBeHidden();
     await expect(

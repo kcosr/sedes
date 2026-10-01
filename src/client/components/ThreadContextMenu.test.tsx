@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { ThreadArchiveOperationHost } from "../operations/ThreadArchiveOperationHost.js";
 import { OperationOverlayHost } from "../operations/OperationOverlay.js";
 vi.mock("../operations/thread-readiness.js", () => ({ waitForOperationThreadReady: vi.fn(async () => undefined), setOperationThreadRegistry: vi.fn() }));
 
@@ -144,7 +145,10 @@ function makeStore(): ApplicationClientStore & {
   updateLineagePlacement: ReturnType<typeof vi.fn>;
 } {
   const state = {
+    connection: "connected",
+    authoritative: true,
     snapshot: {
+      threads: [],
       executionTargets: [
         {
           id: "target-1",
@@ -153,7 +157,7 @@ function makeStore(): ApplicationClientStore & {
       ],
     },
   } as unknown as ApplicationClientState;
-  return {
+  const store = {
     subscribe: vi.fn(() => () => undefined),
     getSnapshot: vi.fn(() => state),
     createThread: vi.fn(),
@@ -212,6 +216,8 @@ function makeStore(): ApplicationClientStore & {
     renameThread: ReturnType<typeof vi.fn>;
     updateLineagePlacement: ReturnType<typeof vi.fn>;
   };
+  render(<ThreadArchiveOperationHost store={store} />);
+  return store;
 }
 
 async function openMenu(trigger: HTMLElement): Promise<HTMLElement> {
@@ -1797,7 +1803,7 @@ describe("ThreadContextMenu actions", () => {
       name: "Archive this thread",
     });
     expect(dialog).toHaveAccessibleDescription(
-      "Archived threads leave the inventory until restored.",
+      "Review backend contract. Archived threads leave the inventory until restored.",
     );
     expect(
       within(dialog).queryByRole("checkbox", {
@@ -1955,7 +1961,7 @@ describe("ThreadContextMenu actions", () => {
       name: "Archive this thread",
     });
     expect(dialog).toHaveAccessibleDescription(
-      "Choose whether this thread's forked descendants should be archived too.",
+      "Review backend contract. Choose whether this thread's forked descendants should be archived too.",
     );
     // Only this thread by default: its own task, prompt and workspace.
     expect(within(dialog).getByText("Root warning")).toBeVisible();
@@ -2189,6 +2195,7 @@ function sidebarFixture(
     visibleThreads: [thread],
   };
   const store = makeStore();
+  store.getSnapshot.mockReturnValue(state);
   store.getThreadArchiveImpact.mockResolvedValue({
     descendantCount: options.descendantCount ?? 0,
     pendingQuestions: { root: 0, descendants: 0 },
@@ -2407,26 +2414,67 @@ describe("sidebar row archive control", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("continues a dismissed archive check and still requests required choices", async () => {
+  it("retains a dismissed archive across drawer removal and another entry point", async () => {
     const thread = makeThread();
     const { state, store } = sidebarFixture(thread, { descendantCount: 2 });
     const impact = await store.getThreadArchiveImpact(thread.id);
     const pending = deferred<typeof impact>();
     store.getThreadArchiveImpact.mockClear();
     store.getThreadArchiveImpact.mockReturnValueOnce(pending.promise);
-    render(<InventorySidebar state={state} store={store}
+    const drawer = render(<InventorySidebar state={state} store={store}
       onNavigate={() => undefined} onOpenSettings={() => undefined} />);
     await userEvent.click(screen.getByTestId("thread-row-archive"));
     expect(await screen.findByRole("status")).toHaveTextContent("Archiving thread…");
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    expect(screen.queryByRole("dialog")).toBeNull();
-    await userEvent.click(screen.getByTestId("thread-row-archive"));
+    drawer.unmount();
+    // The row's hook is gone. A new context-menu instance must share its guard.
+    const trigger = renderMenu(thread, store);
+    const menu = await openMenu(trigger);
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Archive" }));
     expect(store.getThreadArchiveImpact).toHaveBeenCalledTimes(1);
     await act(async () => { pending.resolve(impact); });
-    expect(await screen.findByRole("dialog", { name: "Archive this thread" })).toBeVisible();
+    const dialog = await screen.findByRole("dialog", { name: "Archive this thread" });
+    expect(within(dialog).getByText(thread.title.text)).toBeVisible();
     expect(store.mutateInventory).not.toHaveBeenCalled();
     expect(store.archiveThreadFamily).not.toHaveBeenCalled();
+  });
+
+  it("preserves attached archive navigation when its inventory event removes the initiating row", async () => {
+    window.history.pushState(null, "", "/threads/thread-1");
+    const thread = makeThread();
+    const { state, store } = sidebarFixture(thread);
+    const mutation = deferred<void>();
+    store.mutateInventory.mockReturnValueOnce(mutation.promise);
+    const onNavigate = vi.fn();
+    const view = render(<InventorySidebar state={state} store={store}
+      selectedThreadId={thread.id} onNavigate={onNavigate} onOpenSettings={() => undefined} />);
+    await userEvent.click(screen.getByTestId("thread-row-archive"));
+    await waitFor(() => expect(store.mutateInventory).toHaveBeenCalledOnce());
+    // Inventory publication can arrive before the HTTP mutation response.
+    const archivedState = { ...state, visibleThreads: [], snapshot: { ...state.snapshot!, threads: [] } };
+    view.rerender(<InventorySidebar state={archivedState} store={store}
+      selectedThreadId={thread.id} onNavigate={onNavigate} onOpenSettings={() => undefined} />);
+    expect(screen.queryByTestId("thread-row-archive")).toBeNull();
+    await act(async () => { mutation.resolve(); });
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+    expect(onNavigate).toHaveBeenCalledOnce();
+  });
+
+  it("retains an archive failure after the drawer containing its row closes", async () => {
+    const thread = makeThread();
+    const { state, store } = sidebarFixture(thread);
+    let fail!: (error: Error) => void;
+    store.mutateInventory.mockReturnValueOnce(new Promise((_, reject) => { fail = reject; }));
+    const drawer = render(<InventorySidebar state={state} store={store}
+      onNavigate={() => undefined} onOpenSettings={() => undefined} />);
+    await userEvent.click(screen.getByTestId("thread-row-archive"));
+    await waitFor(() => expect(store.mutateInventory).toHaveBeenCalledOnce());
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    drawer.unmount();
+    await act(async () => { fail(new Error("Archive request failed")); });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Archive request failed");
+    expect(screen.getByRole("dialog", { name: "Could not archive thread" })).toHaveTextContent(thread.title.text);
   });
 
   it("disables family archive when the authoritative impact reports a blocked descendant", async () => {

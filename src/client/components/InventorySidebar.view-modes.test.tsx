@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { ThreadArchiveOperationHost } from "../operations/ThreadArchiveOperationHost.js";
 import { OperationOverlayHost } from "../operations/OperationOverlay.js";
 import { getBlockingOperation } from "../operations/blocking-operation.js";
 
@@ -318,6 +319,7 @@ function renderSidebar(
     createThread: vi.fn(),
     openWorkspace: vi.fn().mockResolvedValue("workspace-new"),
     refresh: vi.fn().mockResolvedValue(undefined),
+    subscribe: () => () => undefined,
     getSnapshot: vi.fn(() => state),
     getTasks: vi.fn(() => state.snapshot?.tasks ?? []),
     moveTask: vi.fn().mockResolvedValue(undefined),
@@ -424,6 +426,7 @@ function renderSidebar(
       sidebar
     );
   };
+  render(<ThreadArchiveOperationHost store={store} />);
   const result = render(content(state));
   return {
     ...result,

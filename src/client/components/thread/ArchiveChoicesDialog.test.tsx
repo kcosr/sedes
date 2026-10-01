@@ -11,6 +11,8 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedApplicationThreadSummary } from "../../../shared/index.js";
+import { ThreadArchiveOperationHost } from "../../operations/ThreadArchiveOperationHost.js";
+import { OperationOverlayHost } from "../../operations/OperationOverlay.js";
 import { getBlockingOperation } from "../../operations/blocking-operation.js";
 import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
 import {
@@ -66,7 +68,10 @@ function makeStore(): ApplicationClientStore & {
   archiveThreadFamily: ReturnType<typeof vi.fn>;
   getThreadArchiveImpact: ReturnType<typeof vi.fn>;
 } {
-  return {
+  const state = { connection: "connected", authoritative: true, snapshot: { threads: [] } };
+  const store = {
+    subscribe: () => () => undefined,
+    getSnapshot: () => state,
     mutateInventory: vi.fn().mockResolvedValue(undefined),
     archiveThreadFamily: vi
       .fn()
@@ -85,6 +90,8 @@ function makeStore(): ApplicationClientStore & {
     archiveThreadFamily: ReturnType<typeof vi.fn>;
     getThreadArchiveImpact: ReturnType<typeof vi.fn>;
   };
+  render(<ThreadArchiveOperationHost store={store} />);
+  return store;
 }
 
 /** The dialog as the archive action opens it: with the impact its check found. */
@@ -700,7 +707,6 @@ describe("useArchiveThreadAction", () => {
           Archive…
         </button>
         <output aria-label="Choices open">{String(archive.open)}</output>
-        {archive.dialog}
       </>
     );
   }
@@ -774,7 +780,7 @@ describe("useArchiveThreadAction", () => {
     ).not.toBeChecked();
   });
 
-  it("keeps the check pending after dismissal and opens required choices", async () => {
+  it("reopens dismissed progress for the same check and hands off required choices", async () => {
     const store = makeStore();
     const impact = await store.getThreadArchiveImpact("thread-1");
     let answer!: (value: typeof impact) => void;
@@ -784,6 +790,7 @@ describe("useArchiveThreadAction", () => {
       }),
     );
     const onPendingChange = vi.fn();
+    render(<OperationOverlayHost />);
     render(
       <ArchiveAction
         store={store}
@@ -794,28 +801,49 @@ describe("useArchiveThreadAction", () => {
     await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
     expect(onPendingChange).toHaveBeenLastCalledWith(true);
     expect(getBlockingOperation()?.message).toBe("Archiving thread…");
-    act(() => getBlockingOperation()!.dismiss());
-    expect(onPendingChange).toHaveBeenLastCalledWith(true);
+    await userEvent.click(await screen.findByRole("button", { name: "Dismiss" }));
+    expect(onPendingChange).toHaveBeenLastCalledWith(false);
     await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
     expect(store.getThreadArchiveImpact).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole("dialog", { name: "Archiving thread…" })).toBeVisible();
     answer(impact);
     await act(async () => {});
     expect(await screen.findByRole("dialog", { name: "Archive this thread" })).toBeVisible();
     expect(onPendingChange).toHaveBeenLastCalledWith(false);
     expect(screen.getByLabelText("Choices open")).toHaveTextContent("true");
   });
-  it("shows an archive failure after progress was dismissed", async () => {
+  it("shows an archive failure after dismissed progress was reopened", async () => {
     const store = makeStore();
     let fail!: (error: Error) => void;
     store.getThreadArchiveImpact.mockReturnValueOnce(new Promise((_, reject) => { fail = reject; }));
+    render(<OperationOverlayHost />);
     render(<ArchiveAction store={store} onArchived={vi.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
     act(() => getBlockingOperation()!.dismiss());
+    await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
+    expect(await screen.findByRole("dialog", { name: "Archiving thread…" })).toBeVisible();
     await act(async () => { fail(new Error("The server is unavailable.")); });
     const dialog = await screen.findByRole("dialog", { name: "Could not archive thread" });
     expect(within(dialog).getByRole("alert")).toHaveTextContent("The server is unavailable.");
+    expect(store.getThreadArchiveImpact).toHaveBeenCalledOnce();
     await userEvent.click(within(dialog).getByRole("button", { name: "Close" }));
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("does not expose one connection's dismissed results in another connection", async () => {
+    const first = makeStore();
+    let fail!: (error: Error) => void;
+    first.getThreadArchiveImpact.mockReturnValueOnce(new Promise((_, reject) => { fail = reject; }));
+    const source = render(<ArchiveAction store={first} onArchived={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
+    act(() => getBlockingOperation()!.dismiss());
+    source.unmount();
+    cleanup();
+    const second = makeStore();
+    render(<ArchiveAction store={second} onArchived={vi.fn()} />);
+    await act(async () => { fail(new Error("Old connection failure")); });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText("Old connection failure")).toBeNull();
   });
 
 });

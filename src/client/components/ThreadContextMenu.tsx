@@ -813,7 +813,6 @@ export function ThreadContextMenu({
           {latestFork.unavailableReason}
         </span>
       )}
-      {archiveAction.dialog}
       <ForceResetDialog
         open={forceResetOpen}
         onOpenChange={setForceResetOpen}

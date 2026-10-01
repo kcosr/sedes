@@ -3796,7 +3796,6 @@ function FlatRowItemContent(
             wrapper out of layout so FlatThreadRow's CSS applies unchanged. */}
         <div style={{ display: "contents" }}>{row}</div>
       </ThreadContextMenu>
-      {archiveAction.dialog}
       <SettleImpactDialog
         open={settleChoicesOpen}
         onOpenChange={setSettleChoicesOpen}
@@ -4838,7 +4837,6 @@ function ThreadRow({
       >
         {row}
       </ThreadContextMenu>
-      {archiveAction.dialog}
       <SettleImpactDialog
         open={settleChoicesOpen}
         onOpenChange={setSettleChoicesOpen}

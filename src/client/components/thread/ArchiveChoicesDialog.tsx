@@ -1,6 +1,6 @@
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import type { ThreadArchiveImpact } from "../../../shared/index.js";
-import { runThreadArchiveCheck } from "../../operations/thread-archive.js";
+import { getThreadArchiveOperations } from "../../operations/thread-archive.js";
 import { Button } from "@client/components/ui/button";
 import { Checkbox } from "@client/components/ui/checkbox";
 import {
@@ -28,7 +28,7 @@ import {
  * The archive choices: descendants, unfinished work and isolated-workspace
  * handling, with the wording, availability gating and error retry of every
  * archive entry point. It opens with the impact that
- * `useArchiveThreadAction`'s blocking check (`runThreadArchiveCheck`) found,
+ * the shared archive workflow found,
  * and refreshes it after a failed archive or on Retry. Focus returns to
  * `returnFocusRef` because the opening menu row unmounts with its menu.
  */
@@ -38,14 +38,7 @@ type ArchiveChoicesDialogProps = ArchiveChoiceProps & {
   readonly returnFocusRef?: React.RefObject<HTMLElement | null>;
 };
 
-/**
- * The one archive flow, for every "Archive" menu item and button: `start()`
- * checks the thread behind the blocking progress, archives at once when
- * nothing needs choosing (`archiveNeedsChoices`), and otherwise opens
- * ArchiveChoicesDialog with the checked impact. Render `dialog` once, outside
- * the menu that calls `start`, so it survives the menu closing; `open`
- * reports the choices dialog to surfaces that track their open overlays.
- */
+/** Every entry point starts the same connection-scoped archive workflow. */
 export function useArchiveThreadAction({
   returnFocusRef,
   ...choiceProps
@@ -54,65 +47,38 @@ export function useArchiveThreadAction({
 }): {
   readonly start: () => void;
   readonly open: boolean;
-  readonly dialog: React.ReactNode;
 } {
-  // The checked impact; the choices dialog is open while one is held.
-  const [impact, setImpact] = useState<ThreadArchiveImpact>();
-  const [backgroundError, setBackgroundError] = useState<string>();
-  const errorId = useId();
-  const pending = useRef(false);
-  const { thread, store, disabled, onArchived, onPendingChange } = choiceProps;
-  const start = () => {
-    if (disabled || pending.current) return;
-    pending.current = true;
-    setBackgroundError(undefined);
-    onPendingChange?.(true);
-    void runThreadArchiveCheck({
-      thread,
-      store,
-      onChoices: setImpact,
-      onDismissedError: (error) =>
-        setBackgroundError(
-          error instanceof Error ? error.message : "The thread could not be archived.",
-        ),
-      onArchived: () => onArchived?.("only", [thread.id]),
-    }).finally(() => {
-      pending.current = false;
-      onPendingChange?.(false);
-    });
-  };
+  const { thread, store, disabled } = choiceProps;
+  const operations = getThreadArchiveOperations(store);
+  const state = useSyncExternalStore(operations.subscribe, operations.getSnapshot);
+  const current = useRef(choiceProps);
+  current.current = choiceProps;
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const stillHere = () => mounted.current && current.current.thread.id === thread.id
+    && current.current.store === store;
   return {
-    start,
-    open: impact !== undefined || backgroundError !== undefined,
-    dialog: backgroundError !== undefined ? (
-      <Dialog open onOpenChange={() => setBackgroundError(undefined)}>
-        <DialogContent
-          layer="blocking"
-          showClose={false}
-          returnFocusRef={returnFocusRef}
-          aria-describedby={errorId}
-        >
-          <DialogHeader>
-            <DialogTitle>Could not archive thread</DialogTitle>
-          </DialogHeader>
-          <DialogBody>
-            <DialogAlert id={errorId} tone="danger">{backgroundError}</DialogAlert>
-          </DialogBody>
-          <DialogFooter>
-            <Button onClick={() => setBackgroundError(undefined)}>Close</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    ) : impact && (
-      <ArchiveChoicesDialog
-        {...choiceProps}
-        initialImpact={impact}
-        onOpenChange={(next) => {
-          if (!next) setImpact(undefined);
-        }}
-        returnFocusRef={returnFocusRef}
-      />
-    ),
+    start: () => {
+      if (disabled) return;
+      void operations.start({
+        thread,
+        returnFocusRef,
+        onPendingChange: (pending) => {
+          if (stillHere()) current.current.onPendingChange?.(pending);
+        },
+        onArchived: (choice, ids) => {
+          // Archiving can remove its own row before the HTTP response. The
+          // operation owner controls dismissal; row unmount is not dismissal.
+          if (current.current.thread.id === thread.id && current.current.store === store) {
+            current.current.onArchived?.(choice, ids);
+          }
+        },
+      });
+    },
+    open: state.some((operation) => operation.thread.id === thread.id && operation.result),
   };
 }
 
@@ -171,6 +137,7 @@ export function ArchiveChoicesDialog({
         <DialogHeader>
           <DialogTitle>Archive this thread</DialogTitle>
           <DialogDescription>
+            <strong>{choiceProps.thread.title.text}</strong>{". "}
             {hasDescendants
               ? "Choose whether this thread's forked descendants should be archived too."
               : "Archived threads leave the inventory until restored."}
@@ -236,7 +203,7 @@ export function ArchiveChoicesDialog({
           </Button>
           <Button
             type="button"
-            disabled={Boolean(selectedReason) || pending}
+            disabled={Boolean(selectedReason) || pending || choiceProps.disabled}
             aria-describedby={selectedReason ? reasonId : undefined}
             onClick={archive}
           >

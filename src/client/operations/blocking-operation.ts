@@ -19,6 +19,7 @@ export interface BlockingOperationOptions<T> {
   readonly retryLabel?: string;
   readonly allowDismiss?: boolean;
   readonly deferProgress?: boolean;
+  readonly onDismiss?: () => void;
   readonly onDismissedError?: (error: unknown) => void;
   readonly errorActions?: (error: unknown) => readonly OperationAction[];
 }
@@ -63,11 +64,16 @@ export async function runBlockingOperation<T>(
   const closed = new Promise<void>((resolve) => {
     finish = resolve;
   });
-  const dismiss = () => {
+  const close = () => {
     if (!active) return;
     active = false;
     publish(null);
     finish();
+  };
+  const dismiss = () => {
+    if (!active) return;
+    options.onDismiss?.();
+    close();
   };
   const context: OperationContext = {
     isActive: () => active,
@@ -88,7 +94,7 @@ export async function runBlockingOperation<T>(
       const value = await options.run();
       if (!active) return;
       await options.onSuccess?.(value, context);
-      if (active) dismiss();
+      if (active) close();
     } catch (error) {
       if (!active) {
         options.onDismissedError?.(error);
