@@ -39,6 +39,16 @@ match them, not the reverse.
   header's action glyphs are one step quieter (`--bar-icon` − 2px) on the same
   hit areas.
 
+**Workspace panels** have minimum widths: Chat 360px, a tenant its
+`size.minWidth` (Tasks 300px, Files and Workpads 320px), and Terminals and
+panels without a declared minimum the divider's 160px floor. A split gives each
+pane its fraction but never less than its minimum; when it cannot hold both,
+the minimums shrink together in proportion. A panel that arrives on the desktop
+stage collapses the least recently used side panels when the visible minimums
+no longer fit; resizing the window or switching threads never collapses one.
+The rules are in `workspace-panels/layout-fit.ts`; declare a new tenant's
+minimum in its `size`.
+
 ## Tokens
 
 `:root` holds the light values and `:root[data-theme="dark"]` overrides only
@@ -120,15 +130,28 @@ action, such as Undo (`components/ui/toast.tsx`, CSS in `toast.css` beside it).
 `ToastProvider` is mounted once at the root of the connected app (`app/App.tsx`);
 call `useToast().show({ message, action?: { label, onAction }, duration? })`.
 There is one toast at a time, and a new one replaces it. It closes after about
-five seconds, pausing while hovered or focused, and it has a dismiss control;
-choosing the action also closes it. It is announced through a polite live
-region, and F8 moves focus to it. It sits on the inverse surface (`--primary`) at
-`--z-toast`, centred at the bottom of the element marked `data-toast-region` (the
-workspace). It rises above the soft keyboard and above every visible
-`data-toast-avoid` element across that region, such as the composer; elements
-behind a modal dialog or sheet do not count. Mark a bottom-docked bar the toast
-must not cover, such as a sheet's add bar, with `data-toast-avoid`. A toast is
-never the only record of an error: use a `Callout` for those.
+five seconds, pausing while the pointer is over it, focus is inside it, or the
+window is in the background. It has a dismiss control, a downward swipe
+dismisses it, and choosing the action also closes it. It is announced through a
+polite live region, and F8 moves focus to it; when it closes with focus inside,
+focus returns to where it came from.
+
+A toast takes Escape only while focus is inside it. Otherwise Escape reaches
+whatever is underneath: an open menu, popover, or sheet, or Settings, whose
+Escape-to-go-up does not count a visible toast as an open layer. The toast is
+not a dismissable layer (unlike Radix Toast); its region is a dismissable-layer
+branch, so pressing or focusing a toast never dismisses the layer beneath it.
+
+It sits on the inverse surface (`--primary`) at `--z-toast`, centred at the
+bottom of the element marked `data-toast-region` (the workspace). It rises
+above the soft keyboard and above every visible `data-toast-avoid` element
+across that region, such as the composer; elements behind a modal dialog or
+sheet do not count. Its placement is measured again when the window resizes,
+when the region or an avoided element changes size, and when avoided elements
+appear, disappear, or are covered, such as a sheet opening or closing. Mark a
+bottom-docked bar the toast must not cover, such as a sheet's add bar, with
+`data-toast-avoid`. A toast is never the only record of an error: use a
+`Callout` for those.
 
 ## Dialogs
 
@@ -245,7 +268,7 @@ their stacking context. Within a band, use `calc(var(--z-x) + n)`.
 | Layer | Value | Holds |
 | --- | --- | --- |
 | `--z-sticky` | 1 | In-page sticky and raised chrome |
-| `--z-floating` | 50 | In-page popovers, the Tasks panel |
+| `--z-floating` | 50 | In-page popovers |
 | `--z-dialog` | 80 | Dialogs; floating surfaces portalled to the body sit at +10 |
 | `--z-drawer` | 81 | The mobile drawer |
 | `--z-over-dialog` | 100 | Sheets and dialogs over the drawer or a dialog, menu sheets, tooltips |

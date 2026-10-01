@@ -820,6 +820,7 @@ test("move to group searches destinations on desktop and mobile", async ({
   await expect(submenu.getByRole("menuitemradio", { name: "Alpha planning" })).toBeFocused();
   await expect(submenu.getByRole("menuitemradio", { name: "Beta delivery" })).toBeChecked();
   await page.keyboard.press("ArrowUp");
+  await expect(submenu.getByRole("menuitem", { name: "New group…", exact: true })).toBeFocused();
   await page.keyboard.press("ArrowUp");
   await expect(search).toBeFocused();
 

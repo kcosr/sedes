@@ -28,9 +28,9 @@ when remote operations are unavailable.
 
 The panel retains its tree, open tabs, scroll, and editor drafts while
 collapsed. On a narrow screen it becomes a foreground sheet. Opening a file
-link or Task shortcut makes Files visible automatically. That opening follows
-the device's **Opening panels** preference; Shift-click temporarily uses the
-opposite presentation without changing the preference.
+link or a file linked from a Task makes Files visible automatically. That
+opening follows the device's **Opening panels** preference; Shift-click
+temporarily uses the opposite presentation without changing the preference.
 
 The tree honors configured roots and Git ignore information when available.
 Git is optional for ordinary browsing, but required for Changes.
@@ -226,8 +226,8 @@ checks. Merely rendering a link does not authorize a path, attach a directory,
 or grant the agent access. Ambiguous, truncated, missing, or disallowed targets
 fail instead of guessing.
 
-Task file shortcuts remain workspace-scoped and relative paths use Primary.
-They retain the same safety checks.
+Files linked from Tasks remain workspace-scoped and relative paths use
+Primary. They retain the same safety checks.
 
 ## Attach whole files or images to the composer
 
