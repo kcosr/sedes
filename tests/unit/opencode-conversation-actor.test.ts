@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendConversationEvent } from "../../src/shared/protocol/backend.js";
 import type { SessionMessageInfo } from "@opencode/client";
+import { RuntimeBackedQueuedInputConversationGateway } from "../../src/server/conversations/queued-input-conversation-gateway.js";
 import type { ConversationActorEvent } from "../../src/server/conversations/conversation-actor.js";
 import { createOpenCodeConversationFixture, scope, threadID } from "../support/opencode-conversation-fixture.js";
 
@@ -22,6 +23,62 @@ function completedMessages(turns: number): SessionMessageInfo[] {
 }
 
 describe("OpenCode driver through the shared conversation actor", () => {
+  it("keeps admitted input starting and action-safe until native history catches up without replacing the owner", async () => {
+    const current = fixture({ messages: completedMessages(1) });
+    const inboxPath = `/api/session/${current.wire.sessionID}/inbox`;
+    current.wire.setResponse(inboxPath, 200, { data: [{ id: "msg_pending", sessionID: current.wire.sessionID,
+      type: "user", delivery: "queue", payload: { text: "Next question" }, time: { created: 4 } }] });
+    const acquired = await current.acquire();
+    try {
+      const initial = await acquired.actor.captureSnapshotState();
+      expect(initial.timeline.runState).toBe("starting");
+      expect(initial.timeline.activeTurnId).toBeUndefined();
+      expect(initial.timeline.orderedTurnIds).toHaveLength(1);
+      expect(acquired.actor.authoritativelySettled).toBe(false);
+      expect(acquired.actor.canEvict).toBe(false);
+      expect(acquired.actor.canAutomaticallyEvict).toBe(false);
+      const idleWork = vi.fn();
+      expect(await acquired.actor.runIfIdle(idleWork)).toEqual({ executed: false });
+      expect(idleWork).not.toHaveBeenCalled();
+      const gateway = new RuntimeBackedQueuedInputConversationGateway({
+        runtimes: { acquire: () => current.acquire() },
+        targets: { resolve: async () => { throw new Error("unexpected target resolution"); } },
+      });
+      await gateway.withConversation(scope, threadID, async conversation => {
+        // These are the admission gates used by automatic Queue and Steer.
+        expect(conversation.authoritativelySettled).toBe(false);
+        expect(await conversation.steerTarget!()).toBeNull();
+        expect(await conversation.steerTarget!({ allowSettledConversation: true })).toBeNull();
+        await expect(conversation.captureSubmissionRetryAnchor()).rejects.toMatchObject({ backendCode: "opencode_retry_anchor_requires_settled" });
+      });
+      const raw: BackendConversationEvent[] = [];
+      (await current.handle()).subscribe(event => raw.push(event));
+      const states = [initial.timeline.runState];
+      acquired.actor.subscribe(() => states.push(acquired.actor.timeline.runState));
+      // Stop remains callable through session control before a native turn ID
+      // exists. Idle interruption is a no-op; this foreign inbox row is not ours
+      // to withdraw and may subsequently be promoted by the native owner.
+      current.wire.setResponse(`/api/session/${current.wire.sessionID}/interrupt`, 200, { interrupted: false });
+      await acquired.actor.interrupt({ applicationOperationId: "stop-pending-presentation", deadlineAt: Date.now() + 30_000 });
+      expect(current.interrupts()).toHaveLength(1);
+      expect(acquired.actor.timeline.runState).toBe("starting");
+      current.wire.clearResponse(inboxPath);
+      current.wire.messages.push({ id: "msg_pending", type: "user", text: "Next question", time: { created: 4 } });
+      current.wire.setResponse("/api/session/active", 200, { data: { [current.wire.sessionID]: { type: "running" } } });
+      current.wire.send({ id: "evt_execution_started", type: "session.execution.started", created: 5,
+        durable: { aggregateID: current.wire.sessionID, seq: 1, version: 1 }, data: { sessionID: current.wire.sessionID } });
+      await vi.waitFor(() => expect(acquired.actor.timeline.runState).toBe("running"));
+      expect(acquired.actor.timeline.activeTurnId).toBeDefined();
+      expect(acquired.actor.timeline.orderedTurnIds).toHaveLength(2);
+      expect(acquired.actor.timeline.generation).toBe(initial.timeline.generation);
+      expect(states).not.toContain("disconnected"); expect(states).not.toContain("reconciling");
+      expect(raw.some(event => event.type === "resnapshot_required")).toBe(false);
+      expect(current.attached).toHaveBeenCalledOnce();
+      expect(current.runtime.snapshot()).toMatchObject({ state: "ready", generation: "native-generation", references: 2 });
+      expect(current.client.lifetime.aborted).toBe(false);
+    } finally { acquired.release(); }
+  });
+
   it("publishes native control before slow initial history and admits Stop before releasing that read", async () => {
     const current = fixture({ messages: completedMessages(1) });
     const gate = current.wire.hold(`/api/session/${current.wire.sessionID}/message`);

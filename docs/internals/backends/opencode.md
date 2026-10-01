@@ -271,6 +271,12 @@ completion alone is not an immutability guarantee. A retry that changes the
 record's creation anchor triggers a fresh projection generation.
 Live durable changes reuse the retained native cut and unchanged
 closed-turn projections; text fragments update only affected normalized items.
+Positive native inbox evidence, or active execution ahead of the retained
+history, uses the existing normalized `starting` state until an active turn is
+observed. It adds no recovery banner or synthetic turn and keeps transitional
+delivery gates closed. Inbox is read before activity to follow promotion into
+execution. Inactive unfinished history without pending input remains unknown;
+connection loss still follows normal projection recovery.
 Child execution and attributed shell changes refresh the scoped activity inventory
 without reading parent history. Paging and lookup operate on the retained
 projection and cannot consume live events. It does not write a transcript mirror. Limits are 32 MiB per

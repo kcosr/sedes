@@ -89,7 +89,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   #projection?: OpenCodeHistoryProjection;
   #viewedImages: ReadonlyMap<string, OpenCodeViewedImage> = new Map();
   #retained?: OpenCodeRetainedHistory;
-  #activity: "running" | "idle" | "unknown" = "unknown";
+  #activity: "starting" | "running" | "idle" | "unknown" = "unknown";
   #background: BackgroundActivity = unknownActivity;
   #tail: Promise<unknown> = Promise.resolve();
   #pump?: Promise<void>;
@@ -475,10 +475,12 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       chargedExtraRecords = this.#eventRecords - initialEventRecords;
       this.#retained = retained;
       this.#pruneParts(retained);
-      const [session, activity, pending, interactions] = await Promise.all([
+      // Inbox removal can mean promotion into execution. Read activity after
+      // the inbox so that handoff cannot combine old idle with new empty inbox.
+      const pending = await this.#api.getPending(this.binding.backendConversationId, signal);
+      const [session, activity, interactions] = await Promise.all([
         this.#api.getSession(this.binding.backendConversationId, signal),
         this.#api.getActivity(this.binding.backendConversationId, this.input.workspace.canonicalPath, signal),
-        this.#api.getPending(this.binding.backendConversationId, signal),
         this.#api.getInteractions(this.binding.backendConversationId, signal),
       ]);
       if (session.location.directory !== this.input.workspace.canonicalPath) {
@@ -486,11 +488,13 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       }
       const suffix = retained.messages.slice(retained.messages.findLastIndex(message => message.type === "idle") + 1);
       const unfinished = suffix.some(message => ["user", "assistant", "synthetic", "compaction"].includes(message.type));
-      // An empty process-local active list cannot settle an orphaned busy period.
-      // A newer active inventory also cannot invent an opening coordinate in an
-      // older idle cut; the queued finite catch-up supplies that native record.
-      this.#activity = activity.active ? suffix.length ? "running" : "unknown"
-        : unfinished || pending.length || interactions.permissions.length || interactions.forms.length ? "unknown" : "idle";
+      // Positive inbox/active evidence is normal startup, not a disconnection.
+      // Until history supplies the opening coordinate, starting keeps delivery
+      // gates closed without fabricating a turn or showing a recovery banner.
+      // Inactive unfinished history without inbox evidence remains uncertain.
+      this.#activity = activity.active ? suffix.length ? "running" : "starting"
+        : pending.length ? "starting"
+        : unfinished || interactions.permissions.length || interactions.forms.length ? "unknown" : "idle";
       this.#acceptActivity(activity);
       await this.#interactions.refresh(interactions, activity.children, activity.activeChildren);
       await this.runtime.assertCurrent(signal);

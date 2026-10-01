@@ -2,6 +2,7 @@ import { createOpenCodeNativePortFixture } from "../helpers/opencode-native-port
 import { expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { SessionMessageInfo } from "@opencode/client";
+import type { BackendConversationEvent } from "../../src/shared/protocol/backend.js";
 import type { ConversationActor } from "../../src/server/conversations/conversation-actor.js";
 import { OpenCodeHttpClient } from "../../src/server/backends/opencode/opencode-http-client.js";
 import { OpenCodeNativeApi } from "../../src/server/backends/opencode/opencode-native-api.js";
@@ -52,6 +53,13 @@ it.runIf(RUN_REAL_OPENCODE)("projects stock native history and live replacement 
     current = createOpenCodeConversationFixture({ native: { client, sessionID, directory: native.workspace } });
     acquired = await current.acquire();
     const actor = acquired.actor;
+    const observed: BackendConversationEvent[] = [];
+    (await current.handle()).subscribe(event => observed.push(event));
+    const expectHealthyStartup = (since: number) => {
+      expect(observed.slice(since).filter(event => event.type === "run_state_changed" &&
+        (event.state === "disconnected" || event.state === "reconciling"))).toEqual([]);
+      expect(observed.slice(since).filter(event => event.type === "resnapshot_required")).toEqual([]);
+    };
     const initial = await actor.captureSnapshotState();
     expect(initial.timeline.runState).toBe("idle");
     expect(initial.timeline.orderedTurnIds).toHaveLength(10);
@@ -63,6 +71,7 @@ it.runIf(RUN_REAL_OPENCODE)("projects stock native history and live replacement 
     expect(await actor.locateTurn({ targetTurnId: firstTurn })).toMatchObject({ status: "found", page: { orderedTurnIds: [firstTurn] } });
 
     const completedHold = model.holdNextStream("complete through actor"); holds.push(completedHold);
+    const firstStartup = observed.length;
     expect((await native.api("POST", `/api/session/${sessionID}/prompt`, { id: "msg_actor_complete", text: "complete through actor" })).status).toBe(200);
     await completedHold.started;
     // Native request startup alone is insufficient: wait for the actual actor
@@ -73,6 +82,7 @@ it.runIf(RUN_REAL_OPENCODE)("projects stock native history and live replacement 
     const activeTurn = actor.timeline.activeTurnId!;
     expect(actor.timeline.runState).toBe("running");
     expect(activeTurn).toBeDefined();
+    expectHealthyStartup(firstStartup);
     expect(await actor.locateTurn({ targetTurnId: firstTurn })).toMatchObject({ status: "found", page: { orderedTurnIds: [firstTurn] } });
     completedHold.release();
     await vi.waitFor(() => {
@@ -86,6 +96,7 @@ it.runIf(RUN_REAL_OPENCODE)("projects stock native history and live replacement 
     expect((await actor.history({ cursor: initial.history!.previousCursor!, limit: 10 })).page.orderedTurnIds).toEqual(older.page.orderedTurnIds);
 
     const interruptedHold = model.holdNextStream("interrupt through actor"); holds.push(interruptedHold);
+    const secondStartup = observed.length;
     expect((await native.api("POST", `/api/session/${sessionID}/prompt`, { id: "msg_actor_interrupt", text: "interrupt through actor" })).status).toBe(200);
     await interruptedHold.started;
     await vi.waitFor(() => {
@@ -96,6 +107,7 @@ it.runIf(RUN_REAL_OPENCODE)("projects stock native history and live replacement 
       ]));
     }, { timeout: 15_000, interval: 25 });
     const interruptedTurn = actor.timeline.activeTurnId!;
+    expectHealthyStartup(secondStartup);
     const control = current.manager.acquireExistingControl(scope, threadID)!;
     expect(control).toBeDefined();
     const operation = { applicationOperationId: "native-actor-stop", deadlineAt: Date.now() + 30_000 };
