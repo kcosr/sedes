@@ -205,6 +205,13 @@
 
 ### Changed
 
+- **Archived** follows the sidebar's Scope and shares its search, with a status
+  line showing the match count, Scope, search, and **Clear scope**. View options
+  sort by Recently archived, Last active, or Title and group by Date, Project,
+  or None. Rows show the backend, a two-line title, location details, and the
+  archive age, with an always-visible Restore button that reports progress and
+  failures inline. The list shows 100 threads at a time with **Show more**.
+
 - In a thread, Tasks docks beside Chat as a workspace panel instead of a
   floating card, and resizes, collapses, docks on another edge, and closes
   like Files and Workpads. Home, Archived, and Usage open Tasks as a popover
@@ -408,6 +415,10 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Searching **Archived** no longer lists non-matching fork parents, and the
+  page no longer re-renders for unrelated application events, which made large
+  archives slow to use.
 
 - Archive progress now offers **Dismiss** throughout. Closing progress keeps
   the archive workflow running, including required choices, and reports failures
