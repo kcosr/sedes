@@ -2969,6 +2969,9 @@ describe("PanelLayout Tasks tenant", () => {
     fireEvent.click(within(leaf).getByRole("button", { name: "Collapse Tasks panel" }));
     expect(store.isCollapsed("tasks")).toBe(true);
     expect(tasksToggle()).toHaveAttribute("aria-expanded", "false");
+    // Collapsed is not closed: the toggle says Tasks is open off stage.
+    expect(tasksToggle()).toHaveAttribute("data-state", "collapsed");
+    expect(tasksToggle()).toHaveAccessibleName("Show collapsed Tasks panel, 1 open task");
     // Collapsed surfaces stay mounted: the body keeps its state.
     expect(body).toBeInTheDocument();
 
@@ -3078,6 +3081,13 @@ describe("PanelLayout panel minimums", () => {
     expect(store.isVisible("workspace-files")).toBe(true);
     expect(store.isCollapsed("tasks")).toBe(true);
     expect(tasksToggle()).toHaveAttribute("aria-expanded", "false");
+    expect(tasksToggle()).toHaveAttribute("data-state", "collapsed");
+
+    // The toggle brings Tasks back and makes room again.
+    fireEvent.click(tasksToggle());
+    expect(store.isVisible("tasks")).toBe(true);
+    expect(store.isCollapsed("workspace-files")).toBe(true);
+    expect(tasksToggle()).toHaveAttribute("data-state", "open");
   });
 
   it("counts using the retained Tasks body as using its panel", () => {

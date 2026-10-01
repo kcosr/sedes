@@ -37,7 +37,9 @@ appears depends on the page:
   by default. Like Files and Workpads, you can resize it, collapse it, dock it
   on another edge from **Tasks panel actions**, close it, or open it from the
   **Panels** menu. It stays open or collapsed as you switch threads, and its
-  content follows the current chat.
+  content follows the current chat. When Tasks is collapsed, by you or to
+  make room for another panel, the button keeps an outline; select it to show
+  Tasks again, which makes room in turn.
 - **On Home, Archived, and Usage**, the button in the top-right corner opens
   Tasks as a popover. Clicking outside it, pressing Escape, or navigating
   closes it.

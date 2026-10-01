@@ -4674,6 +4674,12 @@ textarea:disabled {
   padding-inline: var(--space-1-5);
 }
 
+/* Docked Tasks open but off stage (collapsed, or to make room): the pressed
+   chip's outline without its fill. */
+.tasks-panel-toggle[data-state="collapsed"] {
+  box-shadow: inset 0 0 0 1px var(--input);
+}
+
 .thread-find-bar {
   container-name: thread-find;
   container-type: inline-size;

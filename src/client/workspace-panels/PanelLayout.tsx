@@ -1723,6 +1723,7 @@ function PanelLayoutReady({
         <div className="workspace-workbench-actions">
           <TasksPanelToggle
             open={desktop ? tasksVisible : (tasksHost?.overlayOpen ?? false)}
+            collapsed={desktop && tasksPanel !== undefined && !tasksVisible}
             onToggle={(invoker) =>
               desktop ? toggleTasksPanel(invoker) : tasksHost?.toggleOverlay()
             }
