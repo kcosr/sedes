@@ -94,6 +94,12 @@ import {
 } from "./layout-tree.js";
 import { projectPanelLayout } from "./layout-presentation.js";
 import {
+  SPLIT_HANDLE_SIZE,
+  panelsToMakeRoom,
+  resolveSplit,
+  type PanelMinimum,
+} from "./layout-fit.js";
+import {
   PanelLayoutStore,
   usePanelLayout,
   type PanelFocusRequest,
@@ -128,8 +134,10 @@ import {
 } from "./panel-presentation.js";
 
 const MOBILE_QUERY = "(max-width: 819px)";
-const SPLIT_HANDLE_SIZE = 5;
+/** The divider's floor, and the minimum of panels without a declared one. */
 const MIN_PANEL_SIZE = 160;
+/** Chat keeps room for the transcript and the composer's controls. */
+const CHAT_MIN_WIDTH = 360;
 const MOBILE_TERMINAL_HISTORY_KEY = "sedesMobileTerminalPanel";
 
 interface DirtyConfirmation {
@@ -226,6 +234,20 @@ function PanelLayoutReady({
   const lastInteractedPanelIdRef = useRef<PanelInstanceId | undefined>(
     undefined,
   );
+  // Panels from least to most recently used: opened, restored, focused or
+  // pressed. Making room collapses the least recently used side panel.
+  const panelRecencyRef = useRef<readonly PanelInstanceId[]>([]);
+  const notePanelUsed = (panelInstanceId: PanelInstanceId) => {
+    panelRecencyRef.current = [
+      ...panelRecencyRef.current.filter((id) => id !== panelInstanceId),
+      panelInstanceId,
+    ];
+  };
+  // The panels last seen on the desktop stage, for the thread they belong to.
+  const stagedPanelsRef = useRef<
+    | { readonly threadId: string; readonly ids: ReadonlySet<PanelInstanceId> }
+    | undefined
+  >(undefined);
   const menuFocusTarget = useRef<PanelInstanceId | undefined>(undefined);
   const mobileTerminalHistoryRef = useRef<
     | {
@@ -380,6 +402,14 @@ function PanelLayoutReady({
     desktop
       ? activeVisibleIds.has(panelInstanceId)
       : selectedMobilePanel?.panelInstanceId === panelInstanceId;
+  const panelMinimum: PanelMinimum = (panel, axis) => {
+    if (panel.kind === "chat")
+      return axis === "width" ? CHAT_MIN_WIDTH : MIN_PANEL_SIZE;
+    if (panel.kind === "terminals") return MIN_PANEL_SIZE;
+    const size = tenants.tenant(tenantIdForKind(panel.kind))?.size;
+    if (!size) return MIN_PANEL_SIZE;
+    return axis === "width" ? size.minWidth : size.minHeight;
+  };
 
   const removeTerminalFromClient = (
     terminalId: string,
@@ -648,6 +678,39 @@ function PanelLayoutReady({
     observer.observe(stage);
     return () => observer.disconnect();
   }, []);
+
+  // A panel that arrives on the desktop stage (opened or restored) makes room
+  // for itself: when the visible panels' minimum width no longer fits, the
+  // least recently used side panels collapse (see layout-fit.ts). What a
+  // thread already shows when it mounts or is switched to is left alone.
+  const stagedPanelIds = desktop && !soloPanel ? layoutActiveVisibleIds : undefined;
+  useLayoutEffect(() => {
+    const previous = stagedPanelsRef.current;
+    stagedPanelsRef.current = stagedPanelIds && { threadId, ids: stagedPanelIds };
+    if (!stagedPanelIds || previous?.threadId !== threadId) return;
+    const arrived = [...stagedPanelIds].filter((id) => !previous.ids.has(id));
+    if (arrived.length === 0) return;
+    for (const id of arrived) notePanelUsed(id);
+    // An unmeasured stage (nothing laid out yet) has no room to make.
+    if (availableSize.width <= 0) return;
+    const room = panelsToMakeRoom({
+      tree,
+      collapsed,
+      width: availableSize.width,
+      minimum: panelMinimum,
+      recency: panelRecencyRef.current,
+      keep: new Set<PanelInstanceId>(["chat", ...arrived]),
+    });
+    const titles: string[] = [];
+    for (const id of room) {
+      const panel = panels.find(({ panelInstanceId }) => panelInstanceId === id);
+      if (panel && store.collapsePanel(id))
+        titles.push(panelTitle(panel, terminalResources));
+    }
+    if (titles.length > 0)
+      setAnnouncement(`${titles.join(" and ")} collapsed to make room.`);
+    // Runs when the staged panels change; the size and recency are read as of then.
+  }, [stagedPanelIds, threadId]);
 
   useEffect(() => {
     if (chatPanel) return;
@@ -1494,46 +1557,63 @@ function PanelLayoutReady({
     );
   };
 
-  const renderDesktopNode = (node: LayoutNode): React.ReactNode => {
+  /**
+   * Renders a node into `width` x `height` pixels. A split gives each pane its
+   * fraction of the space, never less than the pane's minimum (layout-fit.ts);
+   * its nested splits are laid out in the space their pane resolves to.
+   */
+  const renderDesktopNode = (
+    node: LayoutNode,
+    width: number,
+    height: number,
+  ): React.ReactNode => {
     if (node.kind === "tabs") return renderStack(node);
     const split = node as SplitNode;
+    const row = split.orientation === "row";
     const sizes = previewSizes.get(split.id) ?? split.sizes;
-    const total =
-      split.orientation === "row" ? availableSize.width : availableSize.height;
+    const { free, minimums, sizes: resolved } = resolveSplit(
+      split,
+      sizes,
+      row ? width : height,
+      panelMinimum,
+    );
+    // Flex factors of at least 1 each, so a pane held at its minimum leaves
+    // the other pane all the remaining space.
+    const flex = Math.min(sizes[0], sizes[1]);
+    const tracks = `minmax(${minimums[0]}px, ${sizes[0] / flex}fr) ${SPLIT_HANDLE_SIZE}px minmax(${minimums[1]}px, ${sizes[1] / flex}fr)`;
+    const fractionOf = (value: number) => (free > 0 ? value / free : sizes[0]);
     return (
       <div
         className="workspace-panel-grid"
         data-testid="workspace-panel-split"
         data-orientation={split.orientation}
         style={{
-          gridTemplateColumns:
-            split.orientation === "row"
-              ? `${sizes[0]}fr ${SPLIT_HANDLE_SIZE}px ${sizes[1]}fr`
-              : undefined,
-          gridTemplateRows:
-            split.orientation === "column"
-              ? `${sizes[0]}fr ${SPLIT_HANDLE_SIZE}px ${sizes[1]}fr`
-              : undefined,
+          gridTemplateColumns: row ? tracks : undefined,
+          gridTemplateRows: row ? undefined : tracks,
         }}
       >
-        {renderDesktopNode(split.children[0])}
+        {renderDesktopNode(
+          split.children[0],
+          row ? resolved[0] : width,
+          row ? height : resolved[0],
+        )}
         <PaneResizeHandle
           orientation={split.orientation}
-          value={Math.max(0, total * sizes[0])}
-          min={MIN_PANEL_SIZE}
-          max={Math.max(MIN_PANEL_SIZE, total - MIN_PANEL_SIZE)}
-          resetValue={total / 2}
+          value={resolved[0]}
+          min={minimums[0]}
+          max={Math.max(minimums[0], free - minimums[1])}
+          resetValue={free / 2}
           ariaLabel="Resize Chat and Files panels"
           className="workspace-panel-resize-handle"
           testId="workspace-panel-resize-handle"
           onPreview={(value) => {
-            const fraction = total > 0 ? value / total : sizes[0];
+            const fraction = fractionOf(value);
             setPreviewSizes((current) =>
               new Map(current).set(split.id, [fraction, 1 - fraction]),
             );
           }}
           onCommit={(value) => {
-            const fraction = total > 0 ? value / total : sizes[0];
+            const fraction = fractionOf(value);
             setPreviewSizes((current) => {
               const next = new Map(current);
               next.delete(split.id);
@@ -1542,7 +1622,11 @@ function PanelLayoutReady({
             store.resizeSplit(split.id, [fraction, 1 - fraction]);
           }}
         />
-        {renderDesktopNode(split.children[1])}
+        {renderDesktopNode(
+          split.children[1],
+          row ? resolved[1] : width,
+          row ? height : resolved[1],
+        )}
       </div>
     );
   };
@@ -1786,8 +1870,10 @@ function PanelLayoutReady({
               ? event.target.closest<HTMLElement>("[data-panel-instance-id]")
                   ?.dataset.panelInstanceId
               : undefined;
-          if (panelInstanceId)
+          if (panelInstanceId) {
             lastInteractedPanelIdRef.current = panelInstanceId;
+            notePanelUsed(panelInstanceId);
+          }
         }}
         onPointerDownCapture={(event) => {
           const panelInstanceId =
@@ -1795,8 +1881,10 @@ function PanelLayoutReady({
               ? event.target.closest<HTMLElement>("[data-panel-instance-id]")
                   ?.dataset.panelInstanceId
               : undefined;
-          if (panelInstanceId)
+          if (panelInstanceId) {
             lastInteractedPanelIdRef.current = panelInstanceId;
+            notePanelUsed(panelInstanceId);
+          }
         }}
       >
         {desktop ? (
@@ -1808,7 +1896,7 @@ function PanelLayoutReady({
               activePanelInstanceId: soloPanel.panelInstanceId,
             })
           ) : visibleTree ? (
-            renderDesktopNode(visibleTree)
+            renderDesktopNode(visibleTree, availableSize.width, availableSize.height)
           ) : (
             <EmptyWorkbench collapsed={collapsed.size > 0} />
           )

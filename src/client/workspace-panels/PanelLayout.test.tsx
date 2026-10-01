@@ -2981,3 +2981,126 @@ describe("PanelLayout Tasks tenant", () => {
     expect(document.querySelector(".tasks-panel-body")).toBeNull();
   });
 });
+
+describe("PanelLayout panel minimums", () => {
+  const resizeCallbacks: ResizeObserverCallback[] = [];
+
+  function measureStage(width: number) {
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: width,
+      bottom: 800,
+      width,
+      height: 800,
+      toJSON: () => ({}),
+    });
+  }
+
+  beforeEach(() => {
+    resizeCallbacks.length = 0;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          resizeCallbacks.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+  });
+
+  const tasksToggle = () =>
+    within(screen.getByTestId("workspace-workbench-bar")).getByTestId(
+      "tasks-panel-toggle",
+    );
+  const splits = () => screen.getAllByTestId("workspace-panel-split");
+  /** The divider of each split, outermost first. */
+  const handles = () =>
+    splits().map(
+      (split) => split.querySelector<HTMLElement>(':scope > [role="separator"]')!,
+    );
+
+  it("keeps Chat and Tasks at their minimums when a wide panel takes the rest", () => {
+    measureStage(1_185);
+    const store = setup({ extraTenants: [tasksTenant] });
+    fireEvent.click(tasksToggle());
+    act(() => {
+      store.openPanel("workspace-files", { availableWidth: 1_185, focus: false });
+    });
+    const root = store.getSnapshot().tree as SplitNode;
+    act(() => {
+      store.resizeSplit(root.id, [0.2, 0.8]);
+    });
+
+    // Chat beside Tasks needs 360 + 5 + 300: the root holds that, not 20%.
+    expect(splits()[0]!.style.gridTemplateColumns).toMatch(
+      /^minmax\(665px, [\d.]+fr\) 5px minmax\(280px, [\d.]+fr\)$/,
+    );
+    expect(handles()[0]).toHaveAttribute("aria-valuenow", "665");
+    expect(handles()[0]).toHaveAttribute("aria-valuemin", "665");
+    expect(handles()[0]).toHaveAttribute("aria-valuemax", "900");
+    expect(splits()[1]!.style.gridTemplateColumns).toMatch(
+      /^minmax\(360px, [\d.]+fr\) 5px minmax\(300px, [\d.]+fr\)$/,
+    );
+    // The nested divider moves within its own split's 665px, not the stage.
+    expect(handles()[1]).toHaveAttribute("aria-valuemin", "360");
+    expect(handles()[1]).toHaveAttribute("aria-valuemax", "360");
+    expect(store.isVisible("workspace-files")).toBe(true);
+  });
+
+  it("collapses the least recently used side panel when an arriving panel cannot fit", () => {
+    measureStage(764);
+    const store = setup({ extraTenants: [tasksTenant] });
+    act(() => {
+      store.openPanel("workspace-files", { availableWidth: 764 });
+    });
+    // Chat 360 + Files 280 fit.
+    expect(store.isVisible("workspace-files")).toBe(true);
+
+    fireEvent.click(tasksToggle());
+
+    // Adding Tasks (300) does not: Files, the least recently used, collapses.
+    expect(store.isVisible("tasks")).toBe(true);
+    expect(store.isVisible("chat")).toBe(true);
+    expect(store.isCollapsed("workspace-files")).toBe(true);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Files collapsed to make room.",
+    );
+
+    // Restoring Files makes room in turn: now Tasks is the least recent.
+    act(() => {
+      store.restorePanel("workspace-files");
+    });
+    expect(store.isVisible("workspace-files")).toBe(true);
+    expect(store.isCollapsed("tasks")).toBe(true);
+    expect(tasksToggle()).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("never collapses a panel when the window narrows; the minimums shrink together", () => {
+    measureStage(1_200);
+    const store = setup({ extraTenants: [tasksTenant] });
+    act(() => {
+      store.openPanel("workspace-files", { availableWidth: 1_200, focus: false });
+    });
+    fireEvent.click(tasksToggle());
+    expect(store.isVisible("workspace-files")).toBe(true);
+
+    measureStage(764);
+    act(() => {
+      for (const callback of resizeCallbacks)
+        callback([], {} as ResizeObserver);
+    });
+
+    expect(store.isVisible("workspace-files")).toBe(true);
+    expect(store.isVisible("tasks")).toBe(true);
+    const [first, second] = [
+      ...splits()[0]!.style.gridTemplateColumns.matchAll(/minmax\(([\d.]+)px/g),
+    ].map((match) => Number(match[1]));
+    // Chat, Files and Tasks need 950px; 759px is shared in proportion.
+    expect(first! + second!).toBeCloseTo(759);
+  });
+});
