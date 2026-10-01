@@ -55,7 +55,7 @@ it.runIf(RUN_REAL_OPENCODE)("projects stock native history and live replacement 
     const actor = acquired.actor;
     const observed: BackendConversationEvent[] = [];
     (await current.handle()).subscribe(event => observed.push(event));
-    const expectHealthyStartup = (since: number) => {
+    const expectNoRecovery = (since: number) => {
       expect(observed.slice(since).filter(event => event.type === "run_state_changed" &&
         (event.state === "disconnected" || event.state === "reconciling"))).toEqual([]);
       expect(observed.slice(since).filter(event => event.type === "resnapshot_required")).toEqual([]);
@@ -82,7 +82,7 @@ it.runIf(RUN_REAL_OPENCODE)("projects stock native history and live replacement 
     const activeTurn = actor.timeline.activeTurnId!;
     expect(actor.timeline.runState).toBe("running");
     expect(activeTurn).toBeDefined();
-    expectHealthyStartup(firstStartup);
+    expectNoRecovery(firstStartup);
     expect(await actor.locateTurn({ targetTurnId: firstTurn })).toMatchObject({ status: "found", page: { orderedTurnIds: [firstTurn] } });
     completedHold.release();
     await vi.waitFor(() => {
@@ -92,6 +92,7 @@ it.runIf(RUN_REAL_OPENCODE)("projects stock native history and live replacement 
         expect.objectContaining({ turnId: activeTurn, status: "completed", markdown: { text: "PREFIXSUFFIX" } }),
       ]));
     }, { timeout: 15_000, interval: 25 });
+    expectNoRecovery(firstStartup);
     expect(assistantItems(actor).some(item => item.markdown.text.includes("PREFIXPREFIX"))).toBe(false);
     expect((await actor.history({ cursor: initial.history!.previousCursor!, limit: 10 })).page.orderedTurnIds).toEqual(older.page.orderedTurnIds);
 
@@ -107,7 +108,7 @@ it.runIf(RUN_REAL_OPENCODE)("projects stock native history and live replacement 
       ]));
     }, { timeout: 15_000, interval: 25 });
     const interruptedTurn = actor.timeline.activeTurnId!;
-    expectHealthyStartup(secondStartup);
+    expectNoRecovery(secondStartup);
     const control = current.manager.acquireExistingControl(scope, threadID)!;
     expect(control).toBeDefined();
     const operation = { applicationOperationId: "native-actor-stop", deadlineAt: Date.now() + 30_000 };
@@ -122,6 +123,7 @@ it.runIf(RUN_REAL_OPENCODE)("projects stock native history and live replacement 
       expect(actor.timeline.turnsById[interruptedTurn]!.status).toBe("interrupted");
       expect(actor.timeline.runState).toBe("idle");
     }, { timeout: 15_000, interval: 25 });
+    expectNoRecovery(secondStartup);
     interruptedHold.release();
     expect(current.attached).toHaveBeenCalledOnce();
     expect(actor.projectionRecoveryRequired).toBe(false);

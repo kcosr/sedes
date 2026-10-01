@@ -365,6 +365,99 @@ describe("OpenCode SSE and native history composition", () => {
     expect(events.some(({ event }) => event.type === "run_state_changed" &&
       (event.state === "disconnected" || event.state === "reconciling"))).toBe(false);
   });
+  it.each([false, true])("expires an inactive pending input without SSE (repeated refresh: %s)", async repeatRefresh => {
+    const current = await attached([user(), idle()]);
+    const inbox = `/api/session/${current.wire.sessionID}/inbox`;
+    current.wire.setResponse(inbox, 200, { data: [{ type: "user", id: "msg_parked", sessionID: current.wire.sessionID,
+      time: { created: 4 }, payload: { text: "Parked input" }, delivery: "queue" }] });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const baseline = await current.handle.establishProjection({ signal: signal() });
+      expect(baseline.snapshot.runState).toBe("starting");
+      const events: SequencedBackendEvent[] = []; baseline.subscribeFromNext(value => events.push(value));
+      await vi.advanceTimersByTimeAsync(1_000);
+      if (repeatRefresh) for (let index = 0; index < 3; index++) {
+        expect((await current.handle.establishProjection({ signal: signal() })).snapshot.runState).toBe("starting");
+      }
+      const reads = current.wire.requests.filter(request => request.pathname === inbox).length;
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(events).toContainEqual(expect.objectContaining({ event: { type: "run_state_changed", state: "disconnected" } }));
+      expect(current.wire.requests.filter(request => request.pathname === inbox)).toHaveLength(reads + 1);
+      expect((await current.handle.establishProjection({ signal: signal() })).snapshot.runState).toBe("disconnected");
+      expect(events.some(({ event }) => event.type === "resnapshot_required")).toBe(false);
+      expect(current.interrupts()).toHaveLength(0);
+    } finally { await current.handle.close(); vi.useRealTimers(); }
+  });
+  it("does not renew promotion grace as overlapping pending cohorts replace their first row", async () => {
+    const current = await attached([user(), idle()]);
+    const inbox = `/api/session/${current.wire.sessionID}/inbox`;
+    const pending = (ids: readonly string[]) => current.wire.setResponse(inbox, 200, { data: ids.map(id => ({
+      type: "user", id, sessionID: current.wire.sessionID, time: { created: 4 }, payload: { text: id }, delivery: "queue",
+    })) });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      pending(["msg_a"]);
+      expect((await current.handle.establishProjection({ signal: signal() })).snapshot.runState).toBe("starting");
+      await vi.advanceTimersByTimeAsync(700); pending(["msg_a", "msg_b"]);
+      expect((await current.handle.establishProjection({ signal: signal() })).snapshot.runState).toBe("starting");
+      await vi.advanceTimersByTimeAsync(700); pending(["msg_b"]);
+      const baseline = await current.handle.establishProjection({ signal: signal() });
+      expect(baseline.snapshot.runState).toBe("starting");
+      const events: SequencedBackendEvent[] = []; baseline.subscribeFromNext(value => events.push(value));
+      await vi.advanceTimersByTimeAsync(601);
+      expect(events).toContainEqual(expect.objectContaining({ event: { type: "run_state_changed", state: "disconnected" } }));
+      expect((await current.handle.establishProjection({ signal: signal() })).snapshot.runState).toBe("disconnected");
+    } finally { await current.handle.close(); vi.useRealTimers(); }
+  });
+  it.each(["retained idle", "newer session terminal"])("keeps an input surviving %s uncertain immediately", async evidence => {
+    const current = await attached([user(), { ...idle(), outcome: "interrupted" } as SessionMessageInfo]);
+    const created = evidence === "retained idle" ? 2 : 4;
+    if (evidence === "newer session terminal") {
+      current.wire.session.outcome = "interrupted";
+      current.wire.session.time.idle = 5;
+    }
+    current.wire.setResponse(`/api/session/${current.wire.sessionID}/inbox`, 200, { data: [{ type: "user", id: "msg_surviving_stop",
+      sessionID: current.wire.sessionID, time: { created }, payload: { text: "Still parked" }, delivery: "queue" }] });
+    const baseline = await current.handle.establishProjection({ signal: signal() });
+    expect(baseline.snapshot.runState).toBe("disconnected");
+    expect(baseline.snapshot.activeBackendTurnId).toBeUndefined();
+    expect(current.interrupts()).toHaveLength(0);
+  });
+  it("does not let fresh pending input hide inactive unfinished history", async () => {
+    const current = await attached([user(), assistant()]);
+    current.wire.setResponse(`/api/session/${current.wire.sessionID}/inbox`, 200, { data: [{ type: "user", id: "msg_new_pending",
+      sessionID: current.wire.sessionID, time: { created: 4 }, payload: { text: "New input" }, delivery: "queue" }] });
+    const baseline = await current.handle.establishProjection({ signal: signal() });
+    expect(baseline.snapshot.runState).toBe("disconnected");
+    expect(Object.values(baseline.snapshot.turnsById)[0]?.status).toBe("in_progress");
+    expect(baseline.snapshot.activeBackendTurnId).toBeUndefined();
+    expect(current.wire.requests.filter(request => request.query.get("order") === "desc")).toHaveLength(2);
+    expect(current.wire.requests.filter(request => request.query.get("order") === "asc")).toHaveLength(1);
+  });
+  it("confirms native settlement once when execution completes between history and activity reads", async () => {
+    const current = await attached([user(), assistant()]);
+    const getActivity = OpenCodeNativeApi.prototype.getActivity;
+    let completed = false;
+    vi.spyOn(OpenCodeNativeApi.prototype, "getActivity").mockImplementation(async function (this: OpenCodeNativeApi, ...args) {
+      if (!completed) {
+        completed = true;
+        current.wire.messages[1] = { ...assistant([{ type: "text", text: "Final answer" }]), time: { created: 2, completed: 3 } };
+        current.wire.messages.push(idle());
+      }
+      return getActivity.apply(this, args);
+    });
+    const raw: BackendConversationEvent[] = []; current.handle.subscribe(value => raw.push(value));
+    const baseline = await current.handle.establishProjection({ signal: signal() });
+    expect(baseline.snapshot.runState).toBe("idle");
+    expect(Object.values(baseline.snapshot.turnsById)[0]?.status).toBe("completed");
+    expect(baseline.snapshot.itemsById[openCodeHistoryItemId("msg_assistant", 0)])
+      .toMatchObject({ status: "completed", markdown: { text: "Final answer" } });
+    expect(current.wire.requests.filter(request => request.query.get("order") === "desc")).toHaveLength(2);
+    expect(current.wire.requests.filter(request => request.query.get("order") === "asc")).toHaveLength(1);
+    expect(raw.some(event => event.type === "resnapshot_required" || event.type === "run_state_changed" &&
+      (event.state === "disconnected" || event.state === "reconciling"))).toBe(false);
+    expect(current.interrupts()).toHaveLength(0);
+  });
   it("moves each native queued input through startup and execution without a recovery state", async () => {
     const current = await attached([user(), idle()]);
     const baseline = await current.handle.establishProjection({ signal: signal() });
@@ -466,6 +559,8 @@ describe("OpenCode SSE and native history composition", () => {
     const tool = { type: "tool" as const, id: "tool_race", name: "read", state: { status: "running" as const, input: {}, metadata: {} }, time: { created: 2 } };
     const complete = { ...assistant([tool]), time: { created: 2, completed: 3 } };
     const current = await attached([user(), complete, { id: "msg_later", type: "system", text: "Later", time: { created: 4 } }]);
+    // This test exercises live dirty revisions, not inactive orphan recovery.
+    current.wire.setResponse("/api/session/active", 200, { data: { [current.wire.sessionID]: { type: "running" } } });
     const baseline = await current.handle.establishProjection({ signal: signal() }); const events: SequencedBackendEvent[] = [];
     baseline.subscribeFromNext(value => events.push(value));
     const readMessage = OpenCodeNativeApi.prototype.getMessage; let updated = false;

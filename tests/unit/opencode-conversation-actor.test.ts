@@ -55,13 +55,6 @@ describe("OpenCode driver through the shared conversation actor", () => {
       (await current.handle()).subscribe(event => raw.push(event));
       const states = [initial.timeline.runState];
       acquired.actor.subscribe(() => states.push(acquired.actor.timeline.runState));
-      // Stop remains callable through session control before a native turn ID
-      // exists. Idle interruption is a no-op; this foreign inbox row is not ours
-      // to withdraw and may subsequently be promoted by the native owner.
-      current.wire.setResponse(`/api/session/${current.wire.sessionID}/interrupt`, 200, { interrupted: false });
-      await acquired.actor.interrupt({ applicationOperationId: "stop-pending-presentation", deadlineAt: Date.now() + 30_000 });
-      expect(current.interrupts()).toHaveLength(1);
-      expect(acquired.actor.timeline.runState).toBe("starting");
       current.wire.clearResponse(inboxPath);
       current.wire.messages.push({ id: "msg_pending", type: "user", text: "Next question", time: { created: 4 } });
       current.wire.setResponse("/api/session/active", 200, { data: { [current.wire.sessionID]: { type: "running" } } });

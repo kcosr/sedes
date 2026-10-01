@@ -10,7 +10,7 @@ import { BackendError, type AttachConversationInput, type BackendEventListener, 
 import { ConversationInterruptLedger } from "../conversation-interrupt.js";
 import { mapOpenCodeConversationError } from "./opencode-conversation-error.js";
 import { openCodeConversationError, requireOpenCodeBinding, type OpenCodeConversationRuntime, type OpenCodeDriverContext } from "./opencode-conversation-context.js";
-import { OpenCodeNativeApi, OpenCodeNativeProtocolError, OpenCodeNativeReadLimitError, type OpenCodeNativeActivity, type OpenCodeNativeEvent, type OpenCodeNativeObservation } from "./opencode-native-api.js";
+import { OpenCodeNativeApi, OpenCodeNativeProtocolError, OpenCodeNativeReadLimitError, type OpenCodeNativeActivity, type OpenCodeNativeEvent, type OpenCodeNativeInboxItem, type OpenCodeNativeObservation } from "./opencode-native-api.js";
 import { OpenCodeHistoryError, OPENCODE_HISTORY_LIMITS, openCodeHistoryFingerprint, readOpenCodeHistory,
   refreshOpenCodeHistory, restartOpenCodeHistoryAcquisition, type OpenCodeRetainedHistory } from "./opencode-history-reader.js";
 import { OpenCodeHistoryProjection, openCodeHistoryPartKey, openCodeNativePartEnded, type OpenCodeObservedPart } from "./opencode-history-projection.js";
@@ -26,6 +26,7 @@ import { OpenCodeInputEvidenceRepository, openCodeOperationFingerprint } from ".
 
 const JOURNAL_BYTES = 16 * 1024 * 1024;
 const JOURNAL_RECORDS = 4096;
+const PENDING_PROMOTION_MILLISECONDS = 2_000;
 const unknownActivity: BackgroundActivity = { state: "unknown", agents: 0, commands: 0, other: 0 };
 
 export function openCodeObservedActivity(value: OpenCodeNativeActivity): BackgroundActivity {
@@ -100,6 +101,8 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   #observedSettings?: OpenCodeObservedSettings;
   #settingsRefreshSequence = 0;
   #proofRefreshPending = false;
+  #pendingPromotion?: { ids: ReadonlySet<string>; readonly expiresAt: number };
+  #pendingPromotionTimer?: ReturnType<typeof setTimeout>;
   // Keep gates announced to a projection until a subscriber receives their
   // resolution. A native refresh may settle them before the next cut is taken.
   readonly #announcedInteractionIds = new Set<string>();
@@ -340,6 +343,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   async close(_options?: { readonly reason: "evicted" }): Promise<void> {
     if (this.#closed) return;
     this.#closed = true; this.#local.abort();
+    this.#clearPendingPromotion();
     this.#inputObservation.release();
     this.#interactions.close();
     this.lease.client.lifetime.removeEventListener("abort", this.#ownerLost);
@@ -467,7 +471,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
         dirtyMessageIds: new Set(dirtyMessages.keys()) };
       // Install one finite native cut. Work observed during acquisition remains
       // dirty for the pump; unrelated or continuous streaming cannot demand quiet.
-      const retained = this.#retained
+      let retained = this.#retained
         ? await refreshOpenCodeHistory(this.#api, restartOpenCodeHistoryAcquisition(this.#retained), readInput)
         : await readOpenCodeHistory(this.#api, readInput);
       consumedBytes = retained.decodedBytes; consumedRecords = retained.records;
@@ -486,15 +490,30 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       if (session.location.directory !== this.input.workspace.canonicalPath) {
         this.#ownerLost(); throw new OpenCodeHistoryError("invalidated");
       }
-      const suffix = retained.messages.slice(retained.messages.findLastIndex(message => message.type === "idle") + 1);
-      const unfinished = suffix.some(message => ["user", "assistant", "synthetic", "compaction"].includes(message.type));
-      // Positive inbox/active evidence is normal startup, not a disconnection.
-      // Until history supplies the opening coordinate, starting keeps delivery
-      // gates closed without fabricating a turn or showing a recovery banner.
-      // Inactive unfinished history without inbox evidence remains uncertain.
+      let suffix = retained.messages.slice(retained.messages.findLastIndex(message => message.type === "idle") + 1);
+      let unfinished = suffix.some(message => ["user", "assistant", "synthetic", "compaction"].includes(message.type));
+      if (!activity.active && unfinished) {
+        // Execution may have settled after the first finite history cut. Confirm
+        // its terminal once before publishing uncertainty, using the same
+        // acquisition budget rather than restarting it or waiting for quiet.
+        retained = await refreshOpenCodeHistory(this.#api, retained, { ...readInput,
+          dirtyMessageIds: new Set([...this.#dirtyMessages].filter(([id, value]) => dirtyMessages.get(id) !== value).map(([id]) => id)) });
+        consumedBytes = retained.decodedBytes; consumedRecords = retained.records;
+        chargedExtraBytes = this.#eventBytes - initialEventBytes + peakPartBytes;
+        chargedExtraRecords = this.#eventRecords - initialEventRecords;
+        this.#retained = retained; this.#pruneParts(retained);
+        suffix = retained.messages.slice(retained.messages.findLastIndex(message => message.type === "idle") + 1);
+        unfinished = suffix.some(message => ["user", "assistant", "synthetic", "compaction"].includes(message.type));
+      }
+      // An inactive inbox can also be deliberately parked. Only allow a bounded
+      // promotion window, never masking orphaned work or unresolved interactions.
+      const blocked = unfinished || interactions.permissions.length > 0 || interactions.forms.length > 0;
+      const lastIdle = retained.messages.findLast(message => message.type === "idle");
+      const idleAt = Math.max(session.time.idle ?? -Infinity, lastIdle?.time.created ?? -Infinity);
       this.#activity = activity.active ? suffix.length ? "running" : "starting"
-        : pending.length ? "starting"
-        : unfinished || interactions.permissions.length || interactions.forms.length ? "unknown" : "idle";
+        : blocked ? "unknown"
+        : pending.length ? this.#pendingActivity(pending, idleAt) : "idle";
+      if (activity.active || !pending.length) this.#clearPendingPromotion();
       this.#acceptActivity(activity);
       await this.#interactions.refresh(interactions, activity.children, activity.activeChildren);
       await this.runtime.assertCurrent(signal);
@@ -722,7 +741,44 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     if (this.#invalidated && reason !== "provider_handle_closed") return;
     this.#usage.gap("capture_gap");
     this.#invalidated = true; this.#activity = "unknown"; this.#background = unknownActivity;
+    clearTimeout(this.#pendingPromotionTimer); this.#pendingPromotionTimer = undefined;
     this.#emit({ type: "resnapshot_required", reason });
+  }
+  #clearPendingPromotion(): void {
+    clearTimeout(this.#pendingPromotionTimer); this.#pendingPromotionTimer = undefined;
+    this.#pendingPromotion = undefined;
+  }
+  #pendingActivity(pending: readonly OpenCodeNativeInboxItem[], idleAt: number): "starting" | "unknown" {
+    // These timestamps come from the same native host. A row surviving a native
+    // terminal is not evidence of another execution, including after Stop.
+    if (pending.some(item => item.time.created <= idleAt)) {
+      this.#clearPendingPromotion(); return "unknown";
+    }
+    let window = this.#pendingPromotion;
+    if (!window || !pending.some(item => window!.ids.has(item.id))) {
+      this.#clearPendingPromotion();
+      window = { ids: new Set(pending.map(item => item.id)), expiresAt: performance.now() + PENDING_PROMOTION_MILLISECONDS };
+      this.#pendingPromotion = window;
+    }
+    // Track the current cohort without extending its deadline when successive
+    // inbox snapshots overlap, even if every original row eventually leaves.
+    window.ids = new Set(pending.map(item => item.id));
+    const remaining = window.expiresAt - performance.now();
+    if (remaining <= 0) return "unknown";
+    if (!this.#pendingPromotionTimer) {
+      const expected = window;
+      this.#pendingPromotionTimer = setTimeout(() => {
+        this.#pendingPromotionTimer = undefined;
+        if (this.#pendingPromotion !== expected || this.#closed || this.#invalidated || this.#lifetime.aborted) return;
+        // A parked row need not emit another event. Expiry performs one read-only
+        // refresh; the retained deadline prevents that read from renewing grace.
+        void this.#exclusive(this.#lifetime, async signal => {
+          if (this.#pendingPromotion === expected && !this.#invalidated && this.#observation) await this.#refresh(signal);
+        }).catch(() => undefined);
+      }, remaining);
+      this.#pendingPromotionTimer.unref?.();
+    }
+    return "starting";
   }
   #inputProofChanged(): void {
     this.#structuralRevision++;
