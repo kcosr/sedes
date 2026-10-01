@@ -82,6 +82,13 @@ function filePathError(path: string, files: readonly string[]): string | undefin
   return undefined;
 }
 
+/** A ref for a dialog's content, and whether that content is mounted: open or still closing. */
+function useContentMounted(): [(node: HTMLDivElement | null) => void, boolean] {
+  const [mounted, setMounted] = useState(false);
+  const ref = useCallback((node: HTMLDivElement | null) => setMounted(node !== null), []);
+  return [ref, mounted];
+}
+
 /**
  * Edits one task: title, notes, where it belongs, its files and its pin,
  * with Delete… on the footer's leading edge. Its state outlives `open`, so
@@ -90,8 +97,14 @@ function filePathError(path: string, files: readonly string[]): string | undefin
  *
  * When the surface Tasks is shown on changes under it (crossing the phone
  * breakpoint), the new surface mounts over the dialog and takes focus. The
- * dialog then closes until its old content has gone, and opens again on
- * top, with its edits.
+ * dialog, with a confirmation open over it, then closes until their old
+ * content has gone, and opens again on top, with its edits.
+ *
+ * Each dialog hides the rest of the page from assistive technology, and
+ * traps focus, as its content mounts: mounted together, the editor and its
+ * confirmation would hide each other. So when they open again after a move
+ * or Settings, the editor waits for a confirmation still closing from
+ * before, and the confirmation waits for the editor's content to mount.
  */
 export function TaskEditDialog({
   task,
@@ -127,16 +140,16 @@ export function TaskEditDialog({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [shownSurface, setShownSurface] = useState(surface);
-  const [contentMounted, setContentMounted] = useState(false);
-  const contentRef = useCallback(
-    (node: HTMLDivElement | null) => setContentMounted(node !== null),
-    [],
-  );
+  const [editorRef, editorMounted] = useContentMounted();
+  const [discardRef, discardMounted] = useContentMounted();
+  const [deleteRef, deleteMounted] = useContentMounted();
+  const confirmationMounted = discardMounted || deleteMounted;
   const moving = shownSurface !== surface;
   useEffect(() => {
-    if (moving && !contentMounted) setShownSurface(surface);
-  }, [moving, contentMounted, surface]);
-  const shown = open && !moving;
+    if (moving && !editorMounted && !confirmationMounted) setShownSurface(surface);
+  }, [moving, editorMounted, confirmationMounted, surface]);
+  const shown = open && !moving && (editorMounted || !confirmationMounted);
+  const confirmable = shown && editorMounted;
 
   const dirty =
     draft !== undefined &&
@@ -235,7 +248,7 @@ export function TaskEditDialog({
         }}
       >
         <DialogContent
-          ref={contentRef}
+          ref={editorRef}
           size="md"
           dismissible={!saving}
           className="tasks-edit-dialog"
@@ -425,7 +438,8 @@ export function TaskEditDialog({
         </DialogContent>
       </Dialog>
       <DiscardChangesDialog
-        open={shown && confirmDiscard}
+        ref={discardRef}
+        open={confirmable && confirmDiscard}
         description="Your changes to this task have not been saved."
         discardLabel="Discard and close"
         onOpenChange={(next) => {
@@ -437,7 +451,8 @@ export function TaskEditDialog({
         }}
       />
       <ConfirmDialog
-        open={shown && confirmDelete && task !== undefined}
+        ref={deleteRef}
+        open={confirmable && confirmDelete && task !== undefined}
         tone="danger"
         title="Delete task?"
         description={`“${task?.title ?? draft?.title ?? ""}” will be deleted permanently. Prompts that already carry it keep their copy.`}

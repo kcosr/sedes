@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi, type Mock } from "vitest";
 import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
 import type { PanelLayoutStore } from "../../workspace-panels/panel-state.js";
 import { navigate, threadPath } from "../../app/router.js";
@@ -185,6 +185,37 @@ function renderHost({
 
 const toggle = () => screen.getByTestId("tasks-panel-toggle");
 const tasksSurface = () => screen.queryByRole("region", { name: "Tasks" });
+const editor = () => screen.queryByRole("dialog", { name: "Edit task" });
+
+async function editNotes(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  fireEvent.keyDown(screen.getByRole("button", { name: "Audit error states" }), { key: "e" });
+  await user.type(within(editor()!).getByRole("textbox", { name: "Notes" }), "Unsaved notes");
+}
+
+/** The editor's confirmations, the action that opens each, and the way back. */
+const confirmations = [
+  { title: "Discard unsaved changes?", opener: "Cancel", back: "Keep editing" },
+  { title: "Delete task?", opener: "Delete…", back: "Cancel" },
+] as const;
+
+/**
+ * The named dialog is the open dialog on top, exposed to assistive
+ * technology (neither it nor an ancestor is aria-hidden), with focus
+ * inside it.
+ */
+async function expectOnTop(name: string): Promise<void> {
+  // Focus restoration for layers that closed runs on the next tick.
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+  const open = [
+    ...document.querySelectorAll<HTMLElement>('[data-slot="dialog-content"][data-state="open"]'),
+  ];
+  const top = open.at(-1)!;
+  expect(top.querySelector('[data-slot="dialog-title"]')).toHaveTextContent(name);
+  expect(top.closest('[aria-hidden="true"]')).toBeNull();
+  expect(top).toContainElement(document.activeElement as HTMLElement);
+}
+
+const expectEditorOnTop = () => expectOnTop("Edit task");
 
 describe("Tasks host on pages without panels", () => {
   it("opens a popover from the corner toggle and closes it again", async () => {
@@ -310,6 +341,23 @@ describe("Tasks host in a thread workspace", () => {
     expect(workbench).toHaveAttribute("aria-hidden", "true");
     expect(within(workbench).queryByRole("region", { name: "Tasks", hidden: true })).toBeNull();
   });
+
+  it.each(confirmations)(
+    "brings an edit back from Settings with $title on top of the editor",
+    async ({ title, opener }) => {
+      const user = userEvent.setup();
+      const view = renderHost({ thread: true });
+      await editNotes(user);
+      await user.click(within(editor()!).getByRole("button", { name: opener }));
+
+      view.setActive(false);
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      view.setActive(true);
+
+      await expectOnTop(title);
+    },
+  );
 });
 
 describe("Tasks host across the phone breakpoint", () => {
@@ -338,21 +386,41 @@ describe("Tasks host across the phone breakpoint", () => {
       });
   }
 
-  const editor = () => screen.queryByRole("dialog", { name: "Edit task" });
   // The surface behind the modal editor is hidden from the accessibility tree.
   const surfaceElement = () => document.querySelector('[data-slot="tasks-panel"]');
-  /** The editor is the open dialog on top, with focus inside it. */
-  async function expectEditorOnTop(): Promise<void> {
-    await waitFor(() => {
-      const open = [...document.querySelectorAll('[data-slot="dialog-content"][data-state="open"]')];
-      expect(open.at(-1)).toBe(editor());
-      expect(editor()).toContainElement(document.activeElement as HTMLElement);
+
+  /**
+   * jsdom runs no CSS animations, so Radix unmounts a closed dialog at once.
+   * Report overlay.css's motion names for the dialog's state instead, so a
+   * closed dialog stays mounted, animating out, as it does in a browser.
+   */
+  function simulateExitMotion(): void {
+    const computed = window.getComputedStyle.bind(window);
+    const spy = vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
+      const style = computed(element, pseudo);
+      if (!(element instanceof HTMLElement) || element.dataset.slot !== "dialog-content") {
+        return style;
+      }
+      return new Proxy(style, {
+        get(target, property) {
+          if (property === "animationName") {
+            return element.dataset.state === "closed" ? "ui-dialog-out" : "ui-dialog-in";
+          }
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
     });
+    onTestFinished(() => spy.mockRestore());
   }
 
-  async function editNotes(user: ReturnType<typeof userEvent.setup>): Promise<void> {
-    fireEvent.keyDown(screen.getByRole("button", { name: "Audit error states" }), { key: "e" });
-    await user.type(within(editor()!).getByRole("textbox", { name: "Notes" }), "Unsaved notes");
+  /** Ends a closed dialog's exit motion, as the browser's animationend does. */
+  function finishExitMotion(element: Element): void {
+    const end = new Event("animationend");
+    Object.defineProperty(end, "animationName", { value: "ui-dialog-out" });
+    act(() => {
+      element.dispatchEvent(end);
+    });
   }
 
   it("closes an overlay with nothing unsaved in it", async () => {
@@ -419,6 +487,78 @@ describe("Tasks host across the phone breakpoint", () => {
     expect(spy.open).toHaveBeenCalledWith({ focus: false });
     expect(surfaceElement()).toHaveAttribute("data-presentation", "panel");
     expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved notes");
+  });
+
+  it.each(confirmations)(
+    "keeps $title on top of the editor from the docked panel to the phone sheet, and back",
+    async ({ title, opener, back }) => {
+      const setPhone = stubBreakpoint();
+      const user = userEvent.setup();
+      renderHost({ thread: true });
+      await editNotes(user);
+      await user.click(within(editor()!).getByRole("button", { name: opener }));
+      await expectOnTop(title);
+
+      setPhone(true);
+      expect(document.querySelector(".tasks-sheet")).toBeInTheDocument();
+      await expectOnTop(title);
+
+      setPhone(false);
+      expect(surfaceElement()).toHaveAttribute("data-presentation", "panel");
+      await expectOnTop(title);
+
+      // Backing out of the confirmation returns to the edit as it was.
+      await user.click(
+        within(screen.getByRole("dialog", { name: title })).getByRole("button", { name: back }),
+      );
+      await expectEditorOnTop();
+      expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved notes");
+    },
+  );
+
+  it.each(confirmations)(
+    "keeps $title on top of the editor from the phone sheet to the desktop popover",
+    async ({ title, opener }) => {
+      phone = true;
+      const setPhone = stubBreakpoint();
+      const user = userEvent.setup();
+      renderHost();
+      await user.click(toggle());
+      await user.click(screen.getByRole("radio", { name: "All" }));
+      await editNotes(user);
+      await user.click(within(editor()!).getByRole("button", { name: opener }));
+
+      setPhone(false);
+
+      expect(surfaceElement()).toHaveAttribute("data-presentation", "popover");
+      await expectOnTop(title);
+    },
+  );
+
+  it("reopens the editor, then its confirmation, once both have finished closing", async () => {
+    simulateExitMotion();
+    const setPhone = stubBreakpoint();
+    const user = userEvent.setup();
+    renderHost({ thread: true });
+    await editNotes(user);
+    await user.click(within(editor()!).getByRole("button", { name: "Delete…" }));
+
+    setPhone(true);
+
+    // Both animate out under the sheet. The editor's motion may end first;
+    // a confirmation still closing would be hidden by an editor mounted
+    // again over it, so the editor waits.
+    const closing = [
+      ...document.querySelectorAll('[data-slot="dialog-content"][data-state="closed"]'),
+    ];
+    expect(
+      closing.map((dialog) => dialog.querySelector('[data-slot="dialog-title"]')?.textContent),
+    ).toEqual(["Edit task", "Delete task?"]);
+    finishExitMotion(closing[0]!);
+    expect(document.querySelector(".tasks-edit-dialog")).toBeNull();
+    finishExitMotion(closing[1]!);
+
+    await expectOnTop("Delete task?");
   });
 });
 
