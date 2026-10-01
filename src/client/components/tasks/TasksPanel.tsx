@@ -169,8 +169,10 @@ export interface TasksPanelContentProps {
   /**
    * Closes a popover or sheet: its ×, Escape, and on a phone the actions
    * that continue elsewhere (Add to prompt, opening a file or a thread).
+   * An announcement is made by the host, since this content (and its live
+   * region) goes with the surface.
    */
-  readonly onRequestClose: () => void;
+  readonly onRequestClose: (announcement?: string) => void;
   /**
    * Docked only: the layout's collapse, dock and close controls. The
    * content then draws its header as the panel's `PanelChrome`, with its
@@ -697,15 +699,12 @@ export function TasksPanelContent({
         return;
       }
       setError(null);
-      announce(`Added “${task.title}” to the prompt.`);
-      if (sheet) {
-        // The sheet closes, so the toast sits over the composer, where the
-        // chip arrives.
-        onRequestClose();
-        toast.show({ message: "Added to prompt" });
-      }
+      const message = `Added “${task.title}” to the prompt.`;
+      // On a phone the sheet closes, so the chip arriving is visible.
+      if (sheet) onRequestClose(message);
+      else announce(message);
     },
-    [announce, composerDraft, onRequestClose, sheet, threadId, toast],
+    [announce, composerDraft, onRequestClose, sheet, threadId],
   );
 
   const openFile = useCallback(
@@ -1268,7 +1267,7 @@ export function TasksPanelContent({
       className="tasks-header-button"
       aria-label="Close Tasks panel"
       title="Close"
-      onClick={onRequestClose}
+      onClick={() => onRequestClose()}
     >
       <X aria-hidden="true" />
     </Button>
@@ -1747,6 +1746,7 @@ export function TasksPanel({
   const threadWorkspace = route.name === "thread";
   const routeKey = threadWorkspace ? `thread:${route.threadId}` : route.name;
   const [overlayOpen, setOverlayOpen] = useState(false);
+  const [announcement, setAnnouncement] = useState("");
   const [dock, publishDock] = useState<TasksDock>();
   const [bodyTarget] = useState(createBodyTarget);
   const popoverAnchor = useRef<HTMLElement | null>(null);
@@ -1780,9 +1780,12 @@ export function TasksPanel({
     () => setOverlayOpen((open) => !open),
     [],
   );
-  const requestClose = useCallback(() => {
+  const requestClose = useCallback((message?: string) => {
     if (latest.current.placement === "panel") latest.current.dock?.close();
     else setOverlayOpen(false);
+    if (message === undefined) return;
+    setAnnouncement("");
+    window.setTimeout(() => setAnnouncement(message), 0);
   }, []);
   const toggle = useCallback(() => {
     const { mobile, threadWorkspace, dock } = latest.current;
@@ -1950,6 +1953,11 @@ export function TasksPanel({
           <StablePaneSlot target={bodyTarget} />
         </div>
       ) : null}
+      {/* Outlives the popover and the sheet, for what is announced as
+          they close. */}
+      <div className="sr-only" role="status" aria-live="polite">
+        {announcement}
+      </div>
       {placement
         ? createPortal(
             <TasksPanelContent

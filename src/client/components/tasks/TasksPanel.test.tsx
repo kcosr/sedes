@@ -1387,8 +1387,17 @@ describe("TasksPanel phone sheet", () => {
     await user.click(rowTitle("Add retry to the payment call"));
     await user.click(within(sheet).getByRole("button", { name: "Add to prompt" }));
     expect(stageTaskReference).toHaveBeenCalledWith({ taskId: "t-retry", titleSnapshot: "Add retry to the payment call" });
-    expect(toast.show).toHaveBeenCalledWith({ message: "Added to prompt" });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Tasks" })).not.toBeInTheDocument());
+    // No toast: the sheet closes so the chip is seen arriving, and the host
+    // announces it, since the sheet's content has gone.
+    expect(toast.show).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole("status").some(
+          (region) => region.textContent === "Added “Add retry to the payment call” to the prompt.",
+        ),
+      ).toBe(true),
+    );
   });
 
   it("closes the detail with Escape before the sheet", () => {

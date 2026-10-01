@@ -307,13 +307,11 @@ describe("Tasks host in a thread workspace", () => {
         name: "Tasks",
       }),
     ).toHaveAttribute("data-presentation", "sheet");
-    expect(
-      // The modal sheet hides the workbench from the accessibility tree.
-      within(screen.getByRole("region", { name: "Tasks panel", hidden: true })).queryByRole(
-        "region",
-        { name: "Tasks", hidden: true },
-      ),
-    ).toBeNull();
+    // The modal sheet hides the workbench (and so its name) from the
+    // accessibility tree; the docked slot stays empty.
+    const workbench = document.querySelector<HTMLElement>('section[aria-label="Tasks panel"]')!;
+    expect(workbench).toHaveAttribute("aria-hidden", "true");
+    expect(within(workbench).queryByRole("region", { name: "Tasks", hidden: true })).toBeNull();
   });
 });
 
