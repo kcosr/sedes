@@ -246,7 +246,7 @@
 .archive-row-trail {
   flex: 0 0 auto;
   gap: var(--space-1);
-  margin-top: 7px;
+  margin: 7px var(--space-1-5) 0 0;
   color: var(--muted-foreground-2);
 }
 
@@ -342,7 +342,7 @@
   }
 
   .archive-row-trail {
-    margin-top: var(--space-2-5);
+    margin: var(--space-2-5) 0 0;
   }
 
   .archive-row .archive-row-fork {
