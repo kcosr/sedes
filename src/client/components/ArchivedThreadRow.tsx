@@ -162,17 +162,12 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
               <span className="archive-row-meta" id={metaId}>
                 {projectPart && (
                   <span className="archive-row-part" data-part="project">
+                    {/* The folder stays with a lone marker so it reads as the project's. */}
+                    <Folder size={13} strokeWidth={1.8} aria-hidden="true" />
                     {showProject && (
-                      <>
-                        <Folder
-                          size={13}
-                          strokeWidth={1.8}
-                          aria-hidden="true"
-                        />
-                        <span className="archive-row-part-text">
-                          {row.projectLabel}
-                        </span>
-                      </>
+                      <span className="archive-row-part-text">
+                        {row.projectLabel}
+                      </span>
                     )}
                     {projectMarker && (
                       <UnavailableMarker subject={projectMarker} />

@@ -68,7 +68,7 @@ export interface ArchivedThreadRow {
   readonly projectLabel: string;
   readonly projectAvailable: boolean;
   readonly environmentAvailable: boolean;
-  /** Collision-qualified Target label; null when it repeats the backend label. */
+  /** The Target's label (qualified only on collision); null when it is the backend's name. */
   readonly targetLabel: string | null;
   readonly targetAvailable: boolean;
   /** The thread's preferred linked worktree, by branch when it has one. */
@@ -240,16 +240,27 @@ function indexCatalog(catalog: SidebarScopeCatalog): CatalogIndex {
       }),
     );
   }
+  // The brand mark already names the backend, so a Target shows its own
+  // label; only colliding labels take the qualified display label.
+  const labelCounts = new Map<string, number>();
+  for (const target of executionTargets) {
+    labelCounts.set(
+      target.label.text,
+      (labelCounts.get(target.label.text) ?? 0) + 1,
+    );
+  }
   const targetLabels = new Map<string, string>();
   for (const target of executionTargets) {
     targetLabels.set(
       target.id,
-      targetDisplayLabel({
-        target,
-        targets: executionTargets,
-        environments,
-        includeEnvironment: false,
-      }),
+      labelCounts.get(target.label.text) === 1
+        ? target.label.text
+        : targetDisplayLabel({
+            target,
+            targets: executionTargets,
+            environments,
+            includeEnvironment: false,
+          }),
     );
   }
   return {

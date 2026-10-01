@@ -228,7 +228,7 @@ describe("selectArchiveBase", () => {
       title: "Thread a",
       brand: "claude",
       projectLabel: "sedes",
-      targetLabel: "Claude Code · Claude",
+      targetLabel: "Claude Code",
       forkSourceTitle: "Thread active",
       configurationCopyPending: false,
     });
@@ -239,7 +239,7 @@ describe("selectArchiveBase", () => {
       projectLabel: "infra · build-box",
       projectAvailable: false,
       environmentAvailable: false,
-      targetLabel: "Codex on build-box · Codex",
+      targetLabel: "Codex on build-box",
       targetAvailable: false,
     });
     expect(c).toMatchObject({

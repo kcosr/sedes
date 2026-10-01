@@ -311,12 +311,8 @@
 }
 
 /* Touch: Restore keeps a 40px target beside the row instead of hiding
-   behind long-press, and rows gain a little height. */
+   behind long-press, centred on line 1, and rows gain a little height. */
 @media (max-width: 819px), (pointer: coarse) {
-  .archive-row {
-    align-items: center;
-  }
-
   .archive-row-open {
     padding-block: var(--space-2-5);
   }

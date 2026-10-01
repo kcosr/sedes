@@ -276,7 +276,8 @@ describe("ArchivedView rows", () => {
     expect(
       within(row).getByTitle("Project and environment unavailable"),
     ).toHaveTextContent("Project and environment Unavailable");
-    expect(row).toHaveTextContent("Codex SSH · Codex");
+    expect(row).toHaveTextContent("Codex SSH");
+    expect(row).not.toHaveTextContent("Codex SSH · Codex");
     expect(within(row).getByTitle("Target unavailable")).toBeInTheDocument();
     // The backend brand mark, not an archive glyph, identifies the row.
     expect(within(row).getByRole("img", { name: "Codex" })).toBeInTheDocument();
@@ -285,7 +286,7 @@ describe("ArchivedView rows", () => {
     expect(age.title).toMatch(/^Archived .+ · Last active .+$/u);
     const open = screen.getByRole("button", { name: "Archived work" });
     expect(open).toHaveAccessibleDescription(
-      /sedes.*Project and environment.*Unavailable.*Codex SSH · Codex.*Target.*Unavailable.*Codex\. Archived .+ · Last active/u,
+      /sedes.*Project and environment.*Unavailable.*Codex SSH.*Target.*Unavailable.*Codex\. Archived .+ · Last active/u,
     );
     fireEvent.click(open, {
       shiftKey: true,
