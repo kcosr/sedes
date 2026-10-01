@@ -884,6 +884,19 @@ describe("TasksPanel rows", () => {
         expect.any(String),
       ),
     );
+    await waitFor(() =>
+      expect(toast.show).toHaveBeenCalledWith({
+        message: "Moved to acme-web",
+        action: { label: "Undo", onAction: expect.any(Function) },
+      }),
+    );
+    // Undo moves it back where it came from.
+    await act(async () => toast.show.mock.calls[0]![0].action.onAction());
+    expect(store.moveTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-retry" }),
+      { kind: "thread", threadId: "thread-9" },
+      expect.any(String),
+    );
   });
 
   it("moves a task dropped on the list to the scope in view", async () => {
@@ -950,6 +963,9 @@ describe("TasksPanel rows", () => {
         { kind: "global" },
         expect.any(String),
       ),
+    );
+    await waitFor(() =>
+      expect(toast.show).toHaveBeenCalledWith(expect.objectContaining({ message: "Moved to Global" })),
     );
   });
 });
