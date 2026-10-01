@@ -216,15 +216,24 @@ export function transitionSidebarInventoryScope(
   };
 }
 
-/** Exact inventory intersection; availability never hides historical rows. */
-export function filterThreadsBySidebarScope(
-  threads: readonly NormalizedApplicationThreadSummary[],
+/**
+ * Exact inventory intersection; availability never hides historical rows.
+ * Accepts any row that carries a thread's location identity, so pre-indexed
+ * row models (the archive page) share the sidebar's scope rules.
+ */
+export function filterThreadsBySidebarScope<
+  Thread extends Pick<
+    NormalizedApplicationThreadSummary,
+    "targetId" | "groupId" | "workspaceId"
+  >,
+>(
+  threads: readonly Thread[],
   workspaces: SidebarScopeCatalog["workspaces"],
   scope: Pick<
     SidebarInventoryScope,
     "environmentId" | "targetId" | "projectName" | "groupId" | "ungrouped"
   >,
-): readonly NormalizedApplicationThreadSummary[] {
+): readonly Thread[] {
   if (
     scope.environmentId === null &&
     scope.targetId === null &&

@@ -51,11 +51,10 @@ import {
   setSidebarShowFilter,
   setSidebarStackBy,
   updateSidebarModePreferences,
-  useSidebarViewPreferences,
 } from "../app/sidebar-view-store.js";
+import { useSidebarInventoryScope } from "../app/use-sidebar-inventory-scope.js";
 
 import {
-  deriveSidebarInventoryScope,
   deriveSidebarLocationSuppression,
   filterThreadsBySidebarScope,
   sidebarScopeRepairAtCursor,
@@ -63,7 +62,6 @@ import {
 } from "../app/sidebar-scope.js";
 import {
   environmentDisplayLabel,
-  scopeSummaryPresentation,
   targetDisplayLabel,
   workspaceDisplayLabel,
 } from "../app/sidebar-scope-presentation.js";
@@ -415,7 +413,20 @@ export function InventorySidebar({
   );
   const executionTargets = snapshot?.executionTargets ?? [];
   const threadGroups = snapshot?.groups ?? [];
-  const viewPreferences = useSidebarViewPreferences();
+  const {
+    preferences: viewPreferences,
+    scope,
+    summary: {
+      fullLabel: scopeSummary,
+      visibleLabel: visibleScopeSummary,
+    },
+    clearScope,
+  } = useSidebarInventoryScope({
+    environments,
+    executionTargets,
+    workspaces,
+    groups: threadGroups,
+  });
   const environmentPalette = useEnvironmentPalette();
   const environmentPaletteTones = useMemo(
     () =>
@@ -427,14 +438,6 @@ export function InventorySidebar({
   );
   const environmentColorsEnabled = useEnvironmentColorsEnabled();
   const scopeContentId = useId();
-  const scope = useMemo(
-    () =>
-      deriveSidebarInventoryScope(
-        { environments, executionTargets, workspaces, groups: threadGroups },
-        viewPreferences,
-      ),
-    [environments, executionTargets, threadGroups, viewPreferences, workspaces],
-  );
   const environmentTintMode =
     !environmentColorsEnabled || environments.length <= 1
       ? "none"
@@ -449,19 +452,7 @@ export function InventorySidebar({
       ? environmentTintStyle(sidebarEnvironmentTone)
       : undefined;
   const projectFilterName = scope.projectName;
-  const environmentFilter = environments.find(
-    ({ id }) => id === scope.environmentId,
-  );
-  const targetFilter = executionTargets.find(({ id }) => id === scope.targetId);
   const groupFilter = threadGroups.find(({ id }) => id === scope.groupId);
-  const scopeSummaryPresentationValue = scopeSummaryPresentation({
-    environment: environmentFilter,
-    target: targetFilter,
-    projectName: projectFilterName,
-    environments,
-    targets: executionTargets,
-    workspaces,
-  });
   const projectNameOptions = [...new Set([
     ...scope.projectOptions.map((workspace) => workspace.label.text),
     ...(scope.projectName === null ? [] : [scope.projectName]),
@@ -478,18 +469,6 @@ export function InventorySidebar({
       ]),
     };
   });
-  const groupScopeLabel = scope.ungrouped ? "Ungrouped" : groupFilter?.name;
-  const scopeSummary = [
-    scopeSummaryPresentationValue.fullLabel,
-    groupScopeLabel,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  const visibleScopeSummary = groupScopeLabel
-    ? [scopeSummaryPresentationValue.visibleLabel, groupScopeLabel]
-        .filter(Boolean)
-        .join(" · ")
-    : scopeSummaryPresentationValue.visibleLabel || "All threads";
   const scopePreferenceKey = [
     viewPreferences.environmentFilterId,
     viewPreferences.targetFilterId,
@@ -1432,15 +1411,7 @@ export function InventorySidebar({
                   variant="ghost"
                   size="sm"
                   className="sidebar-scope-clear"
-                  onClick={() =>
-                    setSidebarInventoryScope({
-                      environmentFilterId: null,
-                      targetFilterId: null,
-                      projectFilterName: null,
-                      groupFilterId: null,
-                      ungroupedFilter: false,
-                    })
-                  }
+                  onClick={clearScope}
                 >
                   Clear
                 </Button>
