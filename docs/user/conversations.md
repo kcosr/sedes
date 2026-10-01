@@ -211,7 +211,8 @@ picker is open, use its refresh control or reopen it.
 
 ### Add a Task
 
-Choose **Add to prompt** from a Task. This adds a live structured reference,
+Choose **Add to prompt** from a Task, or drag the Task onto the composer. It
+appears as a compact pill above the message box: a live structured reference,
 not copied textarea text. Renames and completion changes remain visible until
 delivery. At acceptance, Sedes records an immutable Task snapshot for history.
 Deleting the Task before acceptance blocks delivery without consuming the
@@ -529,13 +530,21 @@ attended, including during automations. For exact behavior, see
 
 ## Navigate Chat and Files
 
-Chat and Files are the main workbench surfaces. **Collapse** keeps a surface
-mounted, preserving scroll, selections, and unsaved editor content. **Close**
-removes it and asks before discarding dirty Files content. The **Panels** menu
-restores or focuses a surface and offers **Show all** on desktop.
+Chat and Files are the main workbench surfaces; Tasks, Workpads, and
+Terminals dock beside them as panels. **Collapse** keeps a surface mounted,
+preserving scroll, selections, and unsaved editor content. **Close** removes it
+and asks before discarding dirty Files content. The **Panels** menu restores or
+focuses a surface and offers **Show all** on desktop.
 
-On narrow screens, Files becomes a foreground sheet. Returning to Chat uses
-the same retained state rather than rebuilding the file view.
+On desktop, each panel keeps a minimum width. When you open or restore a panel
+and the visible panels no longer fit, Sedes collapses the side panels you used
+least recently to make room and announces which. Chat and the panel you opened
+stay; restore the others from the **Panels** menu. Resizing the window or
+switching threads never collapses a panel.
+
+On narrow screens, Files becomes a foreground sheet and Tasks a bottom sheet.
+Returning to Chat uses the same retained state rather than rebuilding the file
+view.
 
 Previous: [Core concepts](concepts.md) · Next:
 [Organize and reuse work](organize-work.md)

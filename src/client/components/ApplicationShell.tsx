@@ -341,8 +341,15 @@ export function ApplicationShell({
     workbenchRoute.name === "thread"
       ? panelLayoutStore.forThread(workbenchRoute.threadId)
       : panelLayoutStore;
+  // The Tasks host wraps the workbench: its toggles and the docked `tasks`
+  // panel tenant reach the one retained Tasks body through its context.
   const routedContent = (
-    <>
+    <TasksPanel
+      active={!settingsActive}
+      route={workbenchRoute}
+      store={applicationStore}
+      panelLayoutStore={routedPanelLayoutStore}
+    >
       <Workbench
         route={workbenchRoute}
         active={!settingsActive}
@@ -351,13 +358,7 @@ export function ApplicationShell({
         panelLayoutStore={routedPanelLayoutStore}
         panelTenants={panelTenants}
       />
-      <TasksPanel
-        active={!settingsActive}
-        route={workbenchRoute}
-        store={applicationStore}
-        panelLayoutStore={routedPanelLayoutStore}
-      />
-    </>
+    </TasksPanel>
   );
   const composerRoutedContent =
     workbenchRoute.name === "thread" ? (

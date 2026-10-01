@@ -1229,6 +1229,11 @@ describe("searchable Move to group", () => {
     expect(
       within(groups).getAllByRole("menuitem").map((row) => row.textContent),
     ).toEqual(["New group…", "Remove from group"]);
+    // New group… leads the list, right under the search; Remove closes it.
+    expect(
+      Array.from(groups.querySelectorAll('[role="menuitem"], [role="menuitemradio"]'))
+        .map((row) => row.textContent),
+    ).toEqual(["New group…", "Current work", "Backend cleanup", "Release planning", "Remove from group"]);
     await userEvent.click(
       within(groups).getByRole("menuitemradio", { name: "Current work" }),
     );
@@ -1302,6 +1307,9 @@ describe("searchable Move to group", () => {
     const groups = await openGroups(renderMenu(thread, store));
     const search = within(groups).getByRole("searchbox", { name: "Search groups" });
     await waitFor(() => expect(search).toHaveFocus());
+    // The rows follow their order: New group… leads, then the groups.
+    await userEvent.keyboard("{ArrowDown}");
+    expect(within(groups).getByRole("menuitem", { name: "New group…" })).toHaveFocus();
     await userEvent.keyboard("{ArrowDown}");
     expect(within(groups).getByRole("menuitemradio", { name: "Current work" })).toHaveFocus();
     await userEvent.keyboard("{ArrowDown}");
@@ -1312,12 +1320,13 @@ describe("searchable Move to group", () => {
     expect(search).toHaveValue("r");
     expect(groupRows(groups)).toEqual(["Current work", "Release planning"]);
     await userEvent.keyboard("{ArrowDown}");
-    expect(within(groups).getByRole("menuitemradio", { name: "Current work" })).toHaveFocus();
+    expect(within(groups).getByRole("menuitem", { name: "New group…" })).toHaveFocus();
     await userEvent.keyboard("{ArrowUp}");
     expect(search).toHaveFocus();
+    // Up from the search wraps to the last row.
     await userEvent.keyboard("{ArrowUp}");
-    expect(within(groups).getByRole("menuitem", { name: "New group…" })).toHaveFocus();
-    await userEvent.keyboard("{ArrowUp}{Enter}");
+    expect(within(groups).getByRole("menuitemradio", { name: "Release planning" })).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
     expect(assignThreadGroup).toHaveBeenCalledExactlyOnceWith(thread, "release");
   });
 

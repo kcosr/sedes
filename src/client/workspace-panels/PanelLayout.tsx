@@ -14,6 +14,7 @@ import {
   ChevronDown,
   Files,
   LayoutPanelTop,
+  ListChecks,
   MessageSquare,
   NotepadText,
   PanelTop,
@@ -27,6 +28,10 @@ import { ApiError } from "../api/ApiClient.js";
 import { Button } from "../components/ui/button.js";
 import { BackendBrandIcon } from "../components/brand-icons.js";
 import { TasksPanelToggle } from "../components/tasks/TasksPanelToggle.js";
+import {
+  usePublishTasksDock,
+  useTasksHost,
+} from "../components/tasks/tasks-host.js";
 import { SidebarNavTrigger } from "../components/SidebarNavTrigger.js";
 import {
   Dialog,
@@ -89,6 +94,12 @@ import {
 } from "./layout-tree.js";
 import { projectPanelLayout } from "./layout-presentation.js";
 import {
+  SPLIT_HANDLE_SIZE,
+  panelsToMakeRoom,
+  resolveSplit,
+  type PanelMinimum,
+} from "./layout-fit.js";
+import {
   PanelLayoutStore,
   usePanelLayout,
   type PanelFocusRequest,
@@ -123,8 +134,10 @@ import {
 } from "./panel-presentation.js";
 
 const MOBILE_QUERY = "(max-width: 819px)";
-const SPLIT_HANDLE_SIZE = 5;
+/** The divider's floor, and the minimum of panels without a declared one. */
 const MIN_PANEL_SIZE = 160;
+/** Chat keeps room for the transcript and the composer's controls. */
+const CHAT_MIN_WIDTH = 360;
 const MOBILE_TERMINAL_HISTORY_KEY = "sedesMobileTerminalPanel";
 
 interface DirtyConfirmation {
@@ -221,6 +234,20 @@ function PanelLayoutReady({
   const lastInteractedPanelIdRef = useRef<PanelInstanceId | undefined>(
     undefined,
   );
+  // Panels from least to most recently used: opened, restored, focused or
+  // pressed. Making room collapses the least recently used side panel.
+  const panelRecencyRef = useRef<readonly PanelInstanceId[]>([]);
+  const notePanelUsed = (panelInstanceId: PanelInstanceId) => {
+    panelRecencyRef.current = [
+      ...panelRecencyRef.current.filter((id) => id !== panelInstanceId),
+      panelInstanceId,
+    ];
+  };
+  // The panels last seen on the desktop stage, for the thread they belong to.
+  const stagedPanelsRef = useRef<
+    | { readonly threadId: string; readonly ids: ReadonlySet<PanelInstanceId> }
+    | undefined
+  >(undefined);
   const menuFocusTarget = useRef<PanelInstanceId | undefined>(undefined);
   const mobileTerminalHistoryRef = useRef<
     | {
@@ -247,6 +274,15 @@ function PanelLayoutReady({
   const [filesChromeActionsTarget] = useState(createChromeActionsTarget);
   const [workpadsTarget] = useState(() => createPortalTarget("workpads", "Workpads"));
   const [workpadsChromeActionsTarget] = useState(createChromeActionsTarget);
+  const [tasksTarget] = useState(() => createPortalTarget("tasks", "Tasks"));
+  const [tasksChromeActionsTarget] = useState(createChromeActionsTarget);
+  const tasksHost = useTasksHost();
+  const tenantTargets = (kind: "files" | "workpads" | "tasks") =>
+    kind === "files"
+      ? { target: filesTarget, actionsTarget: filesChromeActionsTarget }
+      : kind === "workpads"
+        ? { target: workpadsTarget, actionsTarget: workpadsChromeActionsTarget }
+        : { target: tasksTarget, actionsTarget: tasksChromeActionsTarget };
   const [statuses, setStatuses] = useState<
     ReadonlyMap<PanelInstanceId, PanelChromeStatus>
   >(() => new Map());
@@ -345,14 +381,19 @@ function PanelLayoutReady({
   const chatPanel = panels.find((panel) => panel.kind === "chat");
   const filesPanel = panels.find((panel) => panel.kind === "files");
   const workpadsPanel = panels.find((panel) => panel.kind === "workpads");
+  const tasksPanel = panels.find((panel) => panel.kind === "tasks");
   const terminalsPanel = panels.find((panel) => panel.kind === "terminals");
+  // Phones show Tasks as the host's bottom sheet, never as a stage panel.
+  const stagePanels = desktop
+    ? panels
+    : panels.filter((panel) => panel.kind !== "tasks");
   const filesIntent = filesPanel
     ? store.intent(filesPanel.panelInstanceId)
     : undefined;
   const filesIntentWorkspaceId = objectStringField(filesIntent, "workspaceId");
   const filesIntentSequence = objectSafeIntegerField(filesIntent, "sequence");
   const selectedMobilePanel = chooseMobilePanel(
-    panels,
+    stagePanels,
     layoutActiveVisibleIds,
     mobilePanelId,
     focusRequest?.panelInstanceId,
@@ -361,6 +402,14 @@ function PanelLayoutReady({
     desktop
       ? activeVisibleIds.has(panelInstanceId)
       : selectedMobilePanel?.panelInstanceId === panelInstanceId;
+  const panelMinimum: PanelMinimum = (panel, axis) => {
+    if (panel.kind === "chat")
+      return axis === "width" ? CHAT_MIN_WIDTH : MIN_PANEL_SIZE;
+    if (panel.kind === "terminals") return MIN_PANEL_SIZE;
+    const size = tenants.tenant(tenantIdForKind(panel.kind))?.size;
+    if (!size) return MIN_PANEL_SIZE;
+    return axis === "width" ? size.minWidth : size.minHeight;
+  };
 
   const removeTerminalFromClient = (
     terminalId: string,
@@ -630,6 +679,66 @@ function PanelLayoutReady({
     return () => observer.disconnect();
   }, []);
 
+  // Focusing or pressing inside a panel uses it. The listeners are native,
+  // on the stage element: content portaled into a panel from outside this
+  // React tree (the retained Tasks body) bubbles its React events past the
+  // stage, but its DOM events pass through it.
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return undefined;
+    const noteUse = (event: Event) => {
+      const panelInstanceId =
+        event.target instanceof Element
+          ? event.target.closest<HTMLElement>("[data-panel-instance-id]")
+              ?.dataset.panelInstanceId
+          : undefined;
+      if (!panelInstanceId) return;
+      lastInteractedPanelIdRef.current = panelInstanceId;
+      notePanelUsed(panelInstanceId);
+    };
+    stage.addEventListener("focusin", noteUse, true);
+    stage.addEventListener("pointerdown", noteUse, true);
+    return () => {
+      stage.removeEventListener("focusin", noteUse, true);
+      stage.removeEventListener("pointerdown", noteUse, true);
+    };
+    // notePanelUsed reads and writes refs only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // A panel that arrives on the desktop stage (opened or restored) makes room
+  // for itself: when the visible panels' minimum width no longer fits, the
+  // least recently used side panels collapse (see layout-fit.ts). What a
+  // thread already shows when it mounts or is switched to is left alone.
+  const stagedPanelIds = desktop && !soloPanel ? layoutActiveVisibleIds : undefined;
+  useLayoutEffect(() => {
+    const previous = stagedPanelsRef.current;
+    stagedPanelsRef.current = stagedPanelIds && { threadId, ids: stagedPanelIds };
+    if (!stagedPanelIds || previous?.threadId !== threadId) return;
+    const arrived = [...stagedPanelIds].filter((id) => !previous.ids.has(id));
+    if (arrived.length === 0) return;
+    for (const id of arrived) notePanelUsed(id);
+    // An unmeasured stage (nothing laid out yet) has no room to make.
+    if (availableSize.width <= 0) return;
+    const room = panelsToMakeRoom({
+      tree,
+      collapsed,
+      width: availableSize.width,
+      minimum: panelMinimum,
+      recency: panelRecencyRef.current,
+      keep: new Set<PanelInstanceId>(["chat", ...arrived]),
+    });
+    const titles: string[] = [];
+    for (const id of room) {
+      const panel = panels.find(({ panelInstanceId }) => panelInstanceId === id);
+      if (panel && store.collapsePanel(id))
+        titles.push(panelTitle(panel, terminalResources));
+    }
+    if (titles.length > 0)
+      setAnnouncement(`${titles.join(" and ")} collapsed to make room.`);
+    // Runs when the staged panels change; the size and recency are read as of then.
+  }, [stagedPanelIds, threadId]);
+
   useEffect(() => {
     if (chatPanel) return;
     threadRegistry.retainCached(threadId);
@@ -734,12 +843,12 @@ function PanelLayoutReady({
         }
         return;
       }
-      const target = panelFocusTarget(
-        focusRequest.panelInstanceId,
-        chatTarget,
-        filesTarget,
-        workpadsTarget,
-      );
+      const target = panelFocusTarget(focusRequest.panelInstanceId, {
+        chat: chatTarget,
+        files: filesTarget,
+        workpads: workpadsTarget,
+        tasks: tasksTarget,
+      });
       if (
         !focusInside(
           target,
@@ -777,6 +886,7 @@ function PanelLayoutReady({
     desktop,
     filesTarget,
     workpadsTarget,
+    tasksTarget,
     focusRequest,
     store,
     threadId,
@@ -788,12 +898,12 @@ function PanelLayoutReady({
   useEffect(() => {
     if (!active || !focusRequest || !focusRequestMatchesThread(focusRequest, threadId))
       return;
-    const requestedTarget = panelFocusTarget(
-      focusRequest.panelInstanceId,
-      chatTarget,
-      filesTarget,
-      workpadsTarget,
-    );
+    const requestedTarget = panelFocusTarget(focusRequest.panelInstanceId, {
+      chat: chatTarget,
+      files: filesTarget,
+      workpads: workpadsTarget,
+      tasks: tasksTarget,
+    });
     const abandonDeferredFocus = (event: Event) => {
       if (
         event.target instanceof Node &&
@@ -809,7 +919,7 @@ function PanelLayoutReady({
       document.removeEventListener("pointerdown", abandonDeferredFocus, true);
       document.removeEventListener("keydown", abandonDeferredFocus, true);
     };
-  }, [active, chatTarget, filesTarget, workpadsTarget, focusRequest, store, threadId]);
+  }, [active, chatTarget, filesTarget, workpadsTarget, tasksTarget, focusRequest, store, threadId]);
 
   useEffect(() => {
     if (
@@ -861,7 +971,7 @@ function PanelLayoutReady({
   const focusAfterHide = (hidden: PanelInstanceId) => {
     requestAnimationFrame(() => {
       const currentCollapsed = store.getSnapshot().collapsed;
-      const next = panels.find(
+      const next = stagePanels.find(
         ({ panelInstanceId }) =>
           panelInstanceId !== hidden && !currentCollapsed.has(panelInstanceId),
       );
@@ -869,7 +979,12 @@ function PanelLayoutReady({
         store.activatePanel(next.panelInstanceId, { focus: false });
         setMobilePanelId(next.panelInstanceId);
         focusInside(
-          panelFocusTarget(next.panelInstanceId, chatTarget, filesTarget, workpadsTarget),
+          panelFocusTarget(next.panelInstanceId, {
+            chat: chatTarget,
+            files: filesTarget,
+            workpads: workpadsTarget,
+            tasks: tasksTarget,
+          }),
           desktop,
         );
       } else openPanelsTriggerRef.current?.focus();
@@ -1013,6 +1128,41 @@ function PanelLayoutReady({
     setMobilePanelId(panel.panelInstanceId);
   };
 
+  const openTasksPanel = (focus: boolean) => {
+    // Tasks always docks beside the current surfaces, even under the
+    // single-panel presentation preference.
+    store.openPanel("tasks", {
+      availableWidth: availableSize.width,
+      availableHeight: availableSize.height,
+      presentation: "split",
+      focus,
+    });
+  };
+  const tasksVisible =
+    tasksPanel !== undefined && actuallyVisible(tasksPanel.panelInstanceId);
+  const toggleTasksPanel = (invoker?: HTMLElement) => {
+    if (tasksPanel && tasksVisible) closePanel(tasksPanel, invoker);
+    else openTasksPanel(true);
+  };
+  usePublishTasksDock(
+    tenants.has("tasks")
+      ? {
+          present: tasksPanel !== undefined,
+          visible: active && tasksVisible,
+          controls: {
+            active,
+            onCollapse: () => tasksPanel && collapsePanel(tasksPanel),
+            onClose: (invoker) => tasksPanel && closePanel(tasksPanel, invoker),
+            onDock: (edge) => store.dockPanel("tasks", edge),
+            dockEdge: panelDockEdge(tree, "tasks"),
+          },
+          open: ({ focus }) => openTasksPanel(focus),
+          toggle: toggleTasksPanel,
+          close: () => tasksPanel && closePanel(tasksPanel),
+        }
+      : undefined,
+  );
+
   const chatControls: PanelChromeControls = {
     active,
     onCollapse: () => chatPanel && collapsePanel(chatPanel),
@@ -1034,17 +1184,20 @@ function PanelLayoutReady({
         />
       );
     }
-    if (panel.kind === "files" || panel.kind === "workpads") {
-      const tenant = tenants.tenant(panel.kind === "files" ? "workspace-files" : "workpads");
+    if (
+      panel.kind === "files" ||
+      panel.kind === "workpads" ||
+      panel.kind === "tasks"
+    ) {
+      const tenant = tenants.tenant(tenantIdForKind(panel.kind));
       if (!tenant) return null;
-      const target = panel.kind === "files" ? filesTarget : workpadsTarget;
-      const actionsTarget = panel.kind === "files" ? filesChromeActionsTarget : workpadsChromeActionsTarget;
+      const { target, actionsTarget } = tenantTargets(panel.kind);
       const available = tenant.availability({ snapshot, workspace: snapshot?.workspace });
       const intent = store.intent(panel.panelInstanceId);
       const status = statuses.get(panel.panelInstanceId);
       return (
         <>
-          <PanelChrome
+          {tenant.header === "tenant" ? null : <PanelChrome
             tenant={tenant}
             status={status}
             environmentTintStyle={tint}
@@ -1070,7 +1223,7 @@ function PanelLayoutReady({
                 chromeActionsTarget: actionsTarget,
               }),
             }}
-          />
+          />}
           <StablePaneSlot
             className="workspace-panel-content"
             id={panelContentId(tenant.id)}
@@ -1431,46 +1584,63 @@ function PanelLayoutReady({
     );
   };
 
-  const renderDesktopNode = (node: LayoutNode): React.ReactNode => {
+  /**
+   * Renders a node into `width` x `height` pixels. A split gives each pane its
+   * fraction of the space, never less than the pane's minimum (layout-fit.ts);
+   * its nested splits are laid out in the space their pane resolves to.
+   */
+  const renderDesktopNode = (
+    node: LayoutNode,
+    width: number,
+    height: number,
+  ): React.ReactNode => {
     if (node.kind === "tabs") return renderStack(node);
     const split = node as SplitNode;
+    const row = split.orientation === "row";
     const sizes = previewSizes.get(split.id) ?? split.sizes;
-    const total =
-      split.orientation === "row" ? availableSize.width : availableSize.height;
+    const { free, minimums, sizes: resolved } = resolveSplit(
+      split,
+      sizes,
+      row ? width : height,
+      panelMinimum,
+    );
+    // Flex factors of at least 1 each, so a pane held at its minimum leaves
+    // the other pane all the remaining space.
+    const flex = Math.min(sizes[0], sizes[1]);
+    const tracks = `minmax(${minimums[0]}px, ${sizes[0] / flex}fr) ${SPLIT_HANDLE_SIZE}px minmax(${minimums[1]}px, ${sizes[1] / flex}fr)`;
+    const fractionOf = (value: number) => (free > 0 ? value / free : sizes[0]);
     return (
       <div
         className="workspace-panel-grid"
         data-testid="workspace-panel-split"
         data-orientation={split.orientation}
         style={{
-          gridTemplateColumns:
-            split.orientation === "row"
-              ? `${sizes[0]}fr ${SPLIT_HANDLE_SIZE}px ${sizes[1]}fr`
-              : undefined,
-          gridTemplateRows:
-            split.orientation === "column"
-              ? `${sizes[0]}fr ${SPLIT_HANDLE_SIZE}px ${sizes[1]}fr`
-              : undefined,
+          gridTemplateColumns: row ? tracks : undefined,
+          gridTemplateRows: row ? undefined : tracks,
         }}
       >
-        {renderDesktopNode(split.children[0])}
+        {renderDesktopNode(
+          split.children[0],
+          row ? resolved[0] : width,
+          row ? height : resolved[0],
+        )}
         <PaneResizeHandle
           orientation={split.orientation}
-          value={Math.max(0, total * sizes[0])}
-          min={MIN_PANEL_SIZE}
-          max={Math.max(MIN_PANEL_SIZE, total - MIN_PANEL_SIZE)}
-          resetValue={total / 2}
+          value={resolved[0]}
+          min={minimums[0]}
+          max={Math.max(minimums[0], free - minimums[1])}
+          resetValue={free / 2}
           ariaLabel="Resize Chat and Files panels"
           className="workspace-panel-resize-handle"
           testId="workspace-panel-resize-handle"
           onPreview={(value) => {
-            const fraction = total > 0 ? value / total : sizes[0];
+            const fraction = fractionOf(value);
             setPreviewSizes((current) =>
               new Map(current).set(split.id, [fraction, 1 - fraction]),
             );
           }}
           onCommit={(value) => {
-            const fraction = total > 0 ? value / total : sizes[0];
+            const fraction = fractionOf(value);
             setPreviewSizes((current) => {
               const next = new Map(current);
               next.delete(split.id);
@@ -1479,7 +1649,11 @@ function PanelLayoutReady({
             store.resizeSplit(split.id, [fraction, 1 - fraction]);
           }}
         />
-        {renderDesktopNode(split.children[1])}
+        {renderDesktopNode(
+          split.children[1],
+          row ? resolved[1] : width,
+          row ? height : resolved[1],
+        )}
       </div>
     );
   };
@@ -1547,14 +1721,22 @@ function PanelLayoutReady({
       >
         <SidebarNavTrigger />
         <div className="workspace-workbench-actions">
-          <TasksPanelToggle openThreadTaskCount={openThreadTaskCount} />
+          <TasksPanelToggle
+            open={desktop ? tasksVisible : (tasksHost?.overlayOpen ?? false)}
+            collapsed={desktop && tasksPanel !== undefined && !tasksVisible}
+            onToggle={(invoker) =>
+              desktop ? toggleTasksPanel(invoker) : tasksHost?.toggleOverlay()
+            }
+            count={openThreadTaskCount}
+          />
           <div className="workspace-panel-open-menu">
             <div
               className="workspace-panel-open-icons"
               role="group"
               aria-label="Panel shortcuts"
             >
-              {panels.map((panel) => (
+              {/* The Tasks toggle beside this group stands for Tasks. */}
+              {panels.filter((panel) => panel.kind !== "tasks").map((panel) => (
                 <Button
                   key={panel.panelInstanceId}
                   variant="ghost"
@@ -1602,6 +1784,8 @@ function PanelLayoutReady({
                   { id: "chat", title: "Chat", panel: chatPanel, icon: <MessageSquare size={16} />, available: true },
                   { id: "workspace-files", title: "Files", panel: filesPanel, icon: <Files size={16} />, available: tenants.has("workspace-files") },
                   { id: "workpads", title: "Workpads", panel: workpadsPanel, icon: <NotepadText size={16} />, available: tenants.has("workpads") },
+                  // Phones show Tasks as a sheet from the toggle instead.
+                  { id: "tasks", title: "Tasks", panel: desktop ? tasksPanel : undefined, icon: <ListChecks size={16} />, available: desktop && tenants.has("tasks") },
                   { id: "terminals", title: "Terminals", panel: terminalsPanel, icon: <TerminalIcon size={16} />, available: true },
                 ]).filter(({ available, panel }) => available || panel).map(({ id, title, panel, icon }) => {
                   const status = panel ? statuses.get(panel.panelInstanceId) : undefined;
@@ -1705,28 +1889,7 @@ function PanelLayoutReady({
 
       <ThreadTerminalMenu active={active} ref={terminalEntryRef} threadId={threadId} triggerVariant="panel" {...terminalControls} />
 
-      <div
-        className="workspace-panel-stage"
-        ref={stageRef}
-        onFocusCapture={(event) => {
-          const panelInstanceId =
-            event.target instanceof Element
-              ? event.target.closest<HTMLElement>("[data-panel-instance-id]")
-                  ?.dataset.panelInstanceId
-              : undefined;
-          if (panelInstanceId)
-            lastInteractedPanelIdRef.current = panelInstanceId;
-        }}
-        onPointerDownCapture={(event) => {
-          const panelInstanceId =
-            event.target instanceof Element
-              ? event.target.closest<HTMLElement>("[data-panel-instance-id]")
-                  ?.dataset.panelInstanceId
-              : undefined;
-          if (panelInstanceId)
-            lastInteractedPanelIdRef.current = panelInstanceId;
-        }}
-      >
+      <div className="workspace-panel-stage" ref={stageRef}>
         {desktop ? (
           soloPanel ? (
             renderStack({
@@ -1736,7 +1899,7 @@ function PanelLayoutReady({
               activePanelInstanceId: soloPanel.panelInstanceId,
             })
           ) : visibleTree ? (
-            renderDesktopNode(visibleTree)
+            renderDesktopNode(visibleTree, availableSize.width, availableSize.height)
           ) : (
             <EmptyWorkbench collapsed={collapsed.size > 0} />
           )
@@ -1794,6 +1957,9 @@ function PanelLayoutReady({
         {workpadsPanel && !actuallyVisible(workpadsPanel.panelInstanceId) ? (
           <StablePaneSlot target={workpadsTarget} />
         ) : null}
+        {tasksPanel && !actuallyVisible(tasksPanel.panelInstanceId) ? (
+          <StablePaneSlot target={tasksTarget} />
+        ) : null}
       </div>
 
       {chatPanel
@@ -1806,9 +1972,11 @@ function PanelLayoutReady({
             `chat:${threadId}`,
           )
         : null}
-      {panels.filter(panel => panel.kind === "files" || panel.kind === "workpads").map(panel => {
-        const tenant = tenants.tenant(panel.kind === "files" ? "workspace-files" : "workpads");
+      {panels.map(panel => {
+        if (panel.kind !== "files" && panel.kind !== "workpads" && panel.kind !== "tasks") return null;
+        const tenant = tenants.tenant(tenantIdForKind(panel.kind));
         if (!tenant) return null;
+        const { target, actionsTarget } = tenantTargets(panel.kind);
         return createPortal(
           <TenantContent
             tenant={tenant}
@@ -1820,14 +1988,14 @@ function PanelLayoutReady({
             intent={store.intent(panel.panelInstanceId)}
             visible={active && actuallyVisible(panel.panelInstanceId)}
             presentation={desktop ? "dock" : "sheet"}
-            chromeActionsTarget={panel.kind === "files" ? filesChromeActionsTarget : workpadsChromeActionsTarget}
+            chromeActionsTarget={actionsTarget}
             onStatus={(status) => updateStatus(panel.panelInstanceId, status)}
             onConsumeIntent={(sequence) => store.consumeIntent(panel.panelInstanceId, sequence)}
             onClose={() => closePanel(panel)}
             onKeyboardMove={(edge) => store.dockPanel(panel.panelInstanceId, edge)}
           />,
-          panel.kind === "files" ? filesTarget : workpadsTarget,
-          panel.kind === "files" ? `workspace-files:${workspaceId ?? "none"}` : "workpads",
+          target,
+          panel.kind === "files" ? `workspace-files:${workspaceId ?? "none"}` : panel.kind,
         );
       })}
 
@@ -2088,13 +2256,17 @@ function chooseMobilePanel(
 
 function panelFocusTarget(
   panelInstanceId: PanelInstanceId,
-  chatTarget: HTMLElement,
-  filesTarget: HTMLElement,
-  workpadsTarget: HTMLElement,
+  targets: {
+    readonly chat: HTMLElement;
+    readonly files: HTMLElement;
+    readonly workpads: HTMLElement;
+    readonly tasks: HTMLElement;
+  },
 ): HTMLElement | undefined {
-  if (panelInstanceId === "chat") return chatTarget;
-  if (panelInstanceId === "workspace-files") return filesTarget;
-  if (panelInstanceId === "workpads") return workpadsTarget;
+  if (panelInstanceId === "chat") return targets.chat;
+  if (panelInstanceId === "workspace-files") return targets.files;
+  if (panelInstanceId === "workpads") return targets.workpads;
+  if (panelInstanceId === "tasks") return targets.tasks;
   return [
     ...document.querySelectorAll<HTMLElement>("[data-panel-instance-id]"),
   ].find((element) => element.dataset.panelInstanceId === panelInstanceId);
@@ -2191,6 +2363,7 @@ function panelTitle(
   if (panel.kind === "chat") return "Chat";
   if (panel.kind === "files") return "Files";
   if (panel.kind === "workpads") return "Workpads";
+  if (panel.kind === "tasks") return "Tasks";
   return "Terminals";
 }
 
@@ -2201,6 +2374,7 @@ function panelGlyph(
 ): React.JSX.Element {
   if (panel.kind === "files") return <Files size={size} />;
   if (panel.kind === "workpads") return <NotepadText size={size} />;
+  if (panel.kind === "tasks") return <ListChecks size={size} />;
   if (panel.kind === "terminals") return <TerminalIcon size={size} />;
   if (brand !== undefined)
     return <BackendBrandIcon brand={brand} size={size} />;
@@ -2217,6 +2391,7 @@ function panelMenuLabel(
     return `Chat — ${threadTitle || "Untitled thread"}`;
   if (panel.kind === "files") return `Files — ${workspaceLabel || "Workspace"}`;
   if (panel.kind === "workpads") return "Workpads";
+  if (panel.kind === "tasks") return "Tasks";
   if (panel.activeTerminalId === null) return "Terminals — 0 open";
   const terminal = terminals.get(panel.activeTerminalId);
   return `Terminals — ${panel.tabs.length} open · ${terminal?.displayName ?? "Loading"}`;
@@ -2252,6 +2427,10 @@ function withoutMapKey<K, V>(
   const next = new Map(values);
   next.delete(key);
   return next;
+}
+
+function tenantIdForKind(kind: "files" | "workpads" | "tasks"): string {
+  return kind === "files" ? "workspace-files" : kind;
 }
 
 function arrowEdge(key: string): PanelPlacementEdge | undefined {

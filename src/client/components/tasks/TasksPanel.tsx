@@ -1,1479 +1,2035 @@
 import { createPortal } from "react-dom";
+import { Tooltip } from "radix-ui";
 import { StablePaneSlot } from "../../workspace-panels/StablePaneSlot.js";
-import { DismissableLayer } from "@radix-ui/react-dismissable-layer";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
+  DialogHeader,
   DialogTitle,
 } from "@client/components/ui/dialog";
 import {
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+} from "@client/components/ui/popover";
+import {
   useCallback,
   useEffect,
+  useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
-  type DragEvent as ReactDragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  type RefObject,
 } from "react";
 import {
   AlignLeft,
-  Check,
-  CheckCircle2,
-  Circle,
-  File,
-  Files,
-  GripVertical,
-  MoreHorizontal,
-  Pin,
-  Plus,
-  Trash2,
+  ChevronLeft,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  CornerDownLeft,
+  Ellipsis,
+  Keyboard,
+  ListFilter,
+  Pencil,
+  Search,
   X,
 } from "lucide-react";
 import {
-  TASK_DETAILS_MAX_CHARACTERS,
-  TASK_FILES_MAX_COUNT,
-  TASK_FILE_MAX_PATH_BYTES,
-  taskFilePathSchema,
   workspaceFileAbsolutePathSchema,
   type AssociatedTask,
-  type Task,
   type TaskScope,
 } from "../../../shared/index.js";
 import {
-  setTasksPanelDefaultView,
-  setTasksPanelIncludeNestedScopes,
-  setTasksPanelOpen,
-  setTasksPanelPinned,
-  setTasksPanelSearchContent,
+  TASKS_VIEWS,
+  setTasksLastView,
+  setTasksViewOptions,
+  subscribeReveal,
+  useTaskReveal,
   useTasksPanelPreferences,
-  type TasksPanelScopePreference,
+  useTasksViewOptions,
+  type TasksView,
+  type TasksViewOptions,
 } from "../../app/tasks-panel-store.js";
-import { useRoute, type Route } from "../../app/router.js";
+import {
+  TASKS_TOGGLE_COMMAND,
+  matchesKeyboardShortcut,
+} from "../../app/keyboard-shortcuts.js";
+import { navigate, threadPath, useRoute, type Route } from "../../app/router.js";
 import { useComposerDraftStaging } from "../../context-excerpts/coordinator.js";
 import { useMediaQuery } from "../../app/use-media-query.js";
-import {
-  CLOSE_TASK_DETAIL_EVENT,
-  OPEN_OVERLAY_SELECTORS,
-} from "../../app/android-back.js";
+import { useTouchDensity } from "../../app/use-touch-density.js";
+import { CLOSE_TASK_DETAIL_EVENT } from "../../app/android-back.js";
 import {
   useApplicationStore,
   type ApplicationClientStore,
 } from "../../stores/ApplicationClientStore.js";
+import { ApiError } from "../../api/ApiClient.js";
 import { Button } from "@client/components/ui/button";
+import { Callout } from "@client/components/ui/callout";
+import { ConfirmDialog } from "@client/components/ui/confirm-dialog";
+import { CountBadge, countBadgeVariants } from "@client/components/ui/count-badge";
+import { cn } from "@client/lib/utils";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
+  DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@client/components/ui/dropdown-menu";
-import { Input } from "@client/components/ui/input";
-import { Textarea } from "@client/components/ui/textarea";
-import { SearchableSelect } from "../ui/searchable-select.js";
-import { workspaceDisplayLabel } from "../../app/sidebar-scope-presentation.js";
-import { SegmentedControl } from "./SegmentedControl.js";
+import { EmptyState } from "@client/components/ui/empty-state";
+import { KeyValueList } from "@client/components/ui/key-value-list";
+import { SearchableSelectList } from "@client/components/ui/searchable-select";
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from "@client/components/ui/segmented-control";
 import type { PanelLayoutStore } from "../../workspace-panels/panel-state.js";
-import type { PanelPresentation } from "../../workspace-panels/panel-presentation.js";
+import {
+  PanelChrome,
+  type PanelChromeControls,
+} from "../../workspace-panels/PanelChrome.js";
 import { resolvePanelPresentation } from "../../workspace-panels/panel-presentation.js";
 import { getPanelPresentation } from "../../app/settings.js";
 import { createWorkspaceFilesOpenIntent } from "../../workspace-files/open-intent.js";
 import {
-  applyTasksPanelWidth,
-  clampTasksPanelWidth,
-  getTasksPanelWidth,
-  setTasksPanelWidth,
-  tasksPanelWidthDefault,
-  tasksPanelWidthMax,
-  tasksPanelWidthMin,
-} from "../../app/tasks-panel-width.js";
-import { PaneResizeHandle } from "../PaneResizeHandle.js";
-import {
-  handleTaskDragStart,
   useTaskDrag,
+  useTaskScopeDropTargets,
   type TaskScopeDropTarget,
 } from "../../tasks/task-drag.js";
+import { TaskAddRow, EMPTY_TASK_ADD_DRAFT, type TaskAddDraft } from "./TaskAddRow.js";
+import { TaskEditDialog } from "./TaskEditDialog.js";
+import {
+  PendingTaskRow,
+  TaskCheck,
+  TaskFacts,
+  TaskFileChips,
+  TaskListHeading,
+  TaskListProvider,
+  TaskNotes,
+  TaskRow,
+  TaskRowMenu,
+  taskNavKey,
+  type TaskAction,
+  type TaskListActions,
+  type TaskListEnvironment,
+} from "./TaskList.js";
+import { TaskViewOptionsItems } from "./TaskViewOptions.js";
+import { ScopeIcon, useTaskDestinations } from "./task-destinations.js";
+import {
+  clampView,
+  compareCompleted,
+  compareOpen,
+  destinationScope,
+  groupTasks,
+  inViewScope,
+  matchesOnly,
+  matchesQuery,
+  normalizeQuery,
+  openCount,
+  parseScopeKey,
+  revealView,
+  sameScope,
+  scopeKey,
+  TASK_PASTE_MAX_TITLES,
+  TASKS_VIEW_LABEL,
+  viewFilters,
+  viewUnavailableReason,
+  type TaskGroup,
+} from "./task-view-model.js";
+import {
+  TASKS_SHEET_QUERY,
+  TasksHostContext,
+  TasksSurface,
+  type TasksDock,
+  type TasksHost,
+  type TasksPresentation,
+} from "./tasks-host.js";
 import "./tasks-panel.css";
 
-const MOBILE_QUERY = "(max-width: 819px)";
+// ───────────────────────────────────────────────────────────────────────────
+// Panel content: header and body for one presentation
+// ───────────────────────────────────────────────────────────────────────────
 
-type TasksView = TasksPanelScopePreference;
-
-const VIEW_ORDER: readonly TasksView[] = ["global", "project", "thread"];
-const VIEW_LABEL: Record<TasksView, string> = {
-  global: "Global",
-  project: "Project",
-  thread: "Thread",
-};
-const CURRENT_SCOPE = "current";
-
-type ScopeSelection =
-  | { readonly kind: "global" }
-  | { readonly kind: "workspace"; readonly workspaceId: string | undefined }
-  | { readonly kind: "thread"; readonly threadId: string | undefined };
-
-/** Radix layers above the panel own their own Escape dismissal. */
-const OTHER_OVERLAY_SELECTOR = OPEN_OVERLAY_SELECTORS.filter(
-  (selector) => !selector.includes("tasks-panel"),
-).join(", ");
-
-/**
- * Right offset anchoring the desktop card to the primary chat column rather
- * than the viewport: docked workspace panels own the screen's right edge and
- * the card must float over the chat, not over them.
- */
-function usePrimaryRightAnchor(enabled: boolean, routeKey: string): number {
-  const [offset, setOffset] = useState(12);
-  useEffect(() => {
-    if (!enabled) return undefined;
-    let frame = 0;
-    let observed: Element | null = null;
-    const resizeObserver =
-      typeof ResizeObserver === "undefined"
-        ? undefined
-        : new ResizeObserver(() => schedule());
-    // On reload this card can mount before the primary column does; keep
-    // watching the DOM so the anchor re-acquires the column when it appears
-    // (or reappears after navigation) instead of staying at the viewport edge.
-    const mutationObserver =
-      typeof MutationObserver === "undefined"
-        ? undefined
-        : new MutationObserver(() => {
-            if (
-              document.querySelector('[data-testid="thread-view"]') !== observed
-            ) {
-              schedule();
-            }
-          });
-    const measure = () => {
-      frame = 0;
-      const primary = document.querySelector('[data-testid="thread-view"]');
-      if (primary !== observed) {
-        if (observed) resizeObserver?.unobserve(observed);
-        if (primary) resizeObserver?.observe(primary);
-        observed = primary;
-      }
-      if (!primary) {
-        setOffset(12);
-        return;
-      }
-      const rect = primary.getBoundingClientRect();
-      setOffset(
-        rect.width > 0 && rect.height > 0
-          ? Math.max(12, Math.round(window.innerWidth - rect.right) + 12)
-          : 12,
-      );
-    };
-    const schedule = () => {
-      if (!frame) frame = requestAnimationFrame(measure);
-    };
-    measure();
-    mutationObserver?.observe(document.body, {
-      childList: true,
-      subtree: true,
-    });
-    window.addEventListener("resize", schedule);
-    return () => {
-      window.removeEventListener("resize", schedule);
-      if (frame) cancelAnimationFrame(frame);
-      resizeObserver?.disconnect();
-      mutationObserver?.disconnect();
-    };
-  }, [enabled, routeKey]);
-  return offset;
+export interface TasksPanelContentProps {
+  /** Where the content is hosted: a docked workspace panel, a popover, or a phone sheet. */
+  readonly presentation: TasksPresentation;
+  readonly store: ApplicationClientStore;
+  readonly panelLayoutStore: PanelLayoutStore;
+  /** The route the panel follows (a retained surface keeps its own). */
+  readonly route: Route;
+  /**
+   * False while the surface is retained but hidden (Settings): its menus
+   * and dialogs close and come back, with unsaved edits, when shown again.
+   */
+  readonly active: boolean;
+  /**
+   * Closes a popover or sheet: its ×, Escape, and on a phone the actions
+   * that continue elsewhere (Add to prompt, opening a file or a thread).
+   * An announcement is made by the host, since this content (and its live
+   * region) goes with the surface.
+   */
+  readonly onRequestClose: (announcement?: string) => void;
+  /**
+   * Docked only: the layout's collapse, dock and close controls. The
+   * content then draws its header as the panel's `PanelChrome`, with its
+   * own ⋯ items folded into the panel's actions menu.
+   */
+  readonly panelControls?: PanelChromeControls;
+  /** Whether a task is open in the editor, whose unsaved edits the host keeps. */
+  readonly onEditingChange?: (editing: boolean) => void;
 }
 
+type PendingActions = ReadonlyMap<string, ReadonlySet<TaskAction>>;
 
-type ViewContext = {
-  readonly threadId?: string;
-  readonly workspaceId?: string;
-  readonly workspaceLabel?: string;
-  readonly threadTitle?: string;
-};
-
-function viewAvailable(view: TasksView, context: ViewContext): boolean {
-  if (view === "thread") {
-    return context.threadId !== undefined && context.workspaceId !== undefined;
-  }
-  if (view === "project") return context.workspaceId !== undefined;
-  return true;
+interface PendingCreate {
+  readonly key: string;
+  readonly title: string;
+  readonly scope: TaskScope;
+  readonly createdId?: string;
 }
 
-/** Narrow an unavailable preference along thread → project → global. */
-function clampView(view: TasksView, available: Record<TasksView, boolean>): TasksView {
-  if (available[view]) return view;
-  if (view === "thread" && available.project) return "project";
-  return "global";
-}
-
-function viewScope(view: TasksView, context: ViewContext): ScopeSelection {
-  if (view === "thread") return { kind: "thread", threadId: context.threadId };
-  if (view === "project") {
-    return { kind: "workspace", workspaceId: context.workspaceId };
-  }
-  return { kind: "global" };
-}
-
-function scopeView(scope: ScopeSelection): TasksView {
-  if (scope.kind === "workspace") return "project";
-  return scope.kind;
-}
-
-function resolvedScope(scope: ScopeSelection): TaskScope | undefined {
-  if (scope.kind === "global") return scope;
-  if (scope.kind === "workspace" && scope.workspaceId !== undefined) {
-    return { kind: "workspace", workspaceId: scope.workspaceId };
-  }
-  if (scope.kind === "thread" && scope.threadId !== undefined) {
-    return { kind: "thread", threadId: scope.threadId };
-  }
-  return undefined;
-}
-
-function matchesView(
-  task: AssociatedTask,
-  view: TasksView,
-  context: ViewContext,
-  includeNestedScopes: boolean,
-): boolean {
-  if (view === "global") {
-    return includeNestedScopes || task.scope.kind === "global";
-  }
-  if (view === "project") {
-    if (
-      task.scope.kind === "workspace" &&
-      task.scope.workspaceId === context.workspaceId
-    ) {
-      return true;
-    }
-    return (
-      includeNestedScopes &&
-      task.scope.kind === "thread" &&
-      task.associatedWorkspaceId === context.workspaceId
-    );
-  }
-  return (
-    task.scope.kind === "thread" && task.scope.threadId === context.threadId
-  );
-}
-
-function taskLocationLabel(
-  task: AssociatedTask,
-  view: TasksView,
-  threadTitles: ReadonlyMap<string, string>,
-  workspaceLabels: ReadonlyMap<string, string>,
-): string | null {
-  if (view === "thread" || task.scope.kind === "global") return null;
-  if (view === "project") {
-    if (task.scope.kind !== "thread") return null;
-    return threadTitles.get(task.scope.threadId) ?? "Thread";
-  }
-  if (task.scope.kind === "workspace") {
-    return workspaceLabels.get(task.scope.workspaceId) ?? "Project";
-  }
-  const workspaceLabel = task.associatedWorkspaceId
-    ? workspaceLabels.get(task.associatedWorkspaceId)
-    : undefined;
-  const threadTitle = threadTitles.get(task.scope.threadId);
-  if (workspaceLabel && threadTitle)
-    return `${workspaceLabel} / ${threadTitle}`;
-  if (workspaceLabel) return `${workspaceLabel} / Thread`;
-  return threadTitle ?? "Thread";
-}
-
-function TaskLocation({
-  task,
-  view,
-  threadTitles,
-  workspaceLabels,
-}: {
+interface PendingMove {
   readonly task: AssociatedTask;
-  readonly view: TasksView;
-  readonly threadTitles: ReadonlyMap<string, string>;
-  readonly workspaceLabels: ReadonlyMap<string, string>;
-}): React.JSX.Element | null {
-  const label = taskLocationLabel(task, view, threadTitles, workspaceLabels);
-  return label === null ? null : (
-    <span className="tasks-row-location" title={label}>
-      {label}
-    </span>
-  );
+  readonly scope: TaskScope;
 }
 
-function disabledReason(view: TasksView): string | undefined {
-  if (view === "thread") return "No threads available.";
-  if (view === "project") return "No projects available.";
-  return undefined;
-}
+const NO_PENDING: ReadonlySet<TaskAction> = new Set();
 
 function errorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.status === 409) {
+    return "That task changed elsewhere. Review it and try again.";
+  }
   return error instanceof Error && error.message.length > 0
     ? error.message
     : "The request failed.";
 }
 
-type EditorState = {
-  readonly taskId: string;
-  readonly baseRevision: number;
-  readonly title: string;
-  readonly details: string;
-  readonly scope: ScopeSelection;
-  readonly files: readonly string[];
-};
-
-function taskFileName(path: string): string {
-  const trimmed = path.replace(/\/+$/, "");
-  return trimmed.split("/").at(-1) || path;
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target.isContentEditable ||
+    target.matches(
+      'input, textarea, select, [role="combobox"], [role="textbox"]',
+    )
+  );
 }
 
-function TasksPanelBody({
-  route,
-  active,
+const ADD_PLACEHOLDER: Record<TasksView, string> = {
+  thread: "Add a task to this thread…",
+  project: "Add a task to this project…",
+  global: "Add a global task…",
+  all: "Add a global task…",
+};
+
+const EMPTY_TITLE: Record<TasksView, string> = {
+  thread: "No tasks for this thread yet.",
+  project: "No tasks for this project yet.",
+  global: "No global tasks yet.",
+  all: "No tasks yet.",
+};
+
+const EMPTY_DESCRIPTION: Record<TasksView, string> = {
+  thread: "Tasks you add here stay with the conversation.",
+  project: "Project tasks are shared by every thread in the project.",
+  global: "Global tasks are available from every project and thread.",
+  all: "Add a task here, or from a thread or project.",
+};
+
+const KEYBOARD_SHORTCUTS: readonly { key: string; action: string }[] = [
+  { key: "N", action: "Add a task" },
+  { key: "/", action: "Search" },
+  { key: "↑ ↓", action: "Move between tasks" },
+  { key: "Enter", action: "Show or hide details" },
+  { key: "Space", action: "Complete or reopen" },
+  { key: "E", action: "Edit" },
+  { key: "P", action: "Pin or unpin" },
+  { key: "M", action: "Move to…" },
+  { key: "Delete", action: "Delete" },
+  { key: "Ctrl/⌘ Enter", action: "Add to prompt" },
+  { key: "Esc", action: "Close search or details" },
+];
+
+/**
+ * The Tasks header and body, for a docked panel, a popover or a phone
+ * sheet: count and actions, one scope control that follows the current
+ * chat, the add row, search, the list (grouped in All) with inline detail,
+ * and the Completed section. Pending state is per task and action, so
+ * nothing else is ever disabled and focus is never dropped.
+ */
+export function TasksPanelContent({
+  presentation,
   store,
   panelLayoutStore,
-  onClose,
-  mobile,
-}: {
-  store: ApplicationClientStore;
-  panelLayoutStore: PanelLayoutStore;
-  onClose: () => void;
-  mobile: boolean;
-  route: Route;
-  active: boolean;
-}): React.JSX.Element {
-  const preferences = useTasksPanelPreferences();
+  route,
+  active,
+  onRequestClose,
+  panelControls,
+  onEditingChange,
+}: TasksPanelContentProps): React.JSX.Element {
+  const sheet = presentation === "sheet";
   const application = useApplicationStore(store);
+  const snapshot = application.snapshot;
+  const tasks = useMemo(() => snapshot?.tasks ?? [], [snapshot?.tasks]);
   const composerDraft = useComposerDraftStaging();
   const taskDrag = useTaskDrag();
-
+  const touch = useTouchDensity();
+  const destinations = useTaskDestinations(snapshot, route);
+  const { context } = destinations;
   const threadId = route.name === "thread" ? route.threadId : undefined;
-  const thread = threadId
-    ? application.snapshot?.threads.find(({ id }) => id === threadId)
+  const routeThread = threadId
+    ? snapshot?.threads.find(({ id }) => id === threadId)
     : undefined;
-  const workspace = thread
-    ? application.snapshot?.workspaces.find(
-        ({ id }) => id === thread.workspaceId,
-      )
+  const workspace = routeThread
+    ? snapshot?.workspaces.find(({ id }) => id === routeThread.workspaceId)
     : undefined;
-  const taskThreads = useMemo(
-    () => (application.snapshot?.threads ?? []).filter(({ inventoryState }) => inventoryState !== "archived"),
-    [application.snapshot?.threads],
-  );
-  const currentTaskThread = thread?.inventoryState === "archived" ? undefined : thread;
-  const [chosenProjectId, setChosenProjectId] = useState<string | null>(null);
-  const [chosenThreadId, setChosenThreadId] = useState<string | null>(null);
-  const selectedProject = application.snapshot?.workspaces.find(
-    ({ id }) => id === (chosenProjectId ?? thread?.workspaceId),
-  );
-  const selectedThread = taskThreads.find(
-    ({ id }) => id === (chosenThreadId ?? threadId),
-  );
-  const selectedThreadWorkspace = application.snapshot?.workspaces.find(
-    ({ id }) => id === selectedThread?.workspaceId,
-  );
-  const projectContext: ViewContext = useMemo(
-    () => selectedProject
-      ? { workspaceId: selectedProject.id, workspaceLabel: selectedProject.label.text }
-      : {},
-    [selectedProject],
-  );
-  const threadContext: ViewContext = useMemo(
-    () => ({
-      ...(selectedThread === undefined ? {} : {
-        threadId: selectedThread.id,
-        workspaceId: selectedThread.workspaceId,
-        threadTitle: selectedThread.title.text,
-      }),
-      ...(selectedThreadWorkspace === undefined
-        ? {}
-        : { workspaceLabel: selectedThreadWorkspace.label.text }),
-    }),
-    [selectedThread, selectedThreadWorkspace],
-  );
 
-  const [chosenView, setChosenView] = useState<TasksView | null>(null);
-  const availableViews = {
-    global: true,
-    project: chosenProjectId !== null || (application.snapshot?.workspaces.length ?? 0) > 0,
-    thread: chosenThreadId !== null || taskThreads.length > 0,
-  };
-  const view = clampView(chosenView ?? preferences.defaultView, availableViews);
-  const context = view === "thread" ? threadContext : projectContext;
-  const currentScope = resolvedScope(viewScope(view, context));
-  // Single-select pure-filter views: the composer always adds to the scope
-  // in view; there is no separate add-to preference.
+  const view = clampView(useTasksPanelPreferences().lastView, context);
+  const options = useTasksViewOptions(view);
+  const setOptions = useCallback(
+    (patch: Partial<TasksViewOptions>) => setTasksViewOptions(view, patch),
+    [view],
+  );
+  const projectOptions = useTasksViewOptions("project");
 
-  const [optionsOpen, setOptionsOpen] = useState(false);
-  const [newTitle, setNewTitle] = useState("");
-  const [editor, setEditor] = useState<EditorState | null>(null);
-  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchText, setSearchText] = useState("");
+  const [addDraft, setAddDraft] = useState<TaskAddDraft>(EMPTY_TASK_ADD_DRAFT);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [moveMenuId, setMoveMenuId] = useState<string | null>(null);
+  const [activeNavKey, setActiveNavKey] = useState<string | null>(null);
+  const [completedOpen, setCompletedOpen] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [choosingMoveId, setChoosingMoveId] = useState<string | null>(null);
+  const [pendingMove, setPendingMove] = useState<PendingMove>();
+  const [pasteTitles, setPasteTitles] = useState<readonly string[] | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [newFilePath, setNewFilePath] = useState("");
-  const [scopeDropView, setScopeDropView] = useState<TasksView>();
-  useEffect(() => {
-    if (taskDrag?.activeTaskId === undefined) setScopeDropView(undefined);
-  }, [taskDrag?.activeTaskId]);
+  const [announcement, setAnnouncement] = useState("");
+  const [creating, setCreating] = useState<readonly PendingCreate[]>([]);
+  const [pending, setPending] = useState<PendingActions>(() => new Map());
+  const [revealId, setRevealId] = useState<string | null>(null);
+  const [focusRequest, setFocusRequest] = useState<string | null>(null);
+  const pendingRef = useRef<PendingActions>(pending);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const addInputRef = useRef<HTMLInputElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchButtonRef = useRef<HTMLButtonElement>(null);
+  const lastFocused = useRef<{ key: string; element: HTMLElement } | null>(null);
+  const lastNavOrder = useRef<readonly string[]>([]);
+  const scopeHintId = useId();
 
-  const tasks = application.snapshot?.tasks ?? [];
-  const workspaceLabels = useMemo(
-    () =>
-      new Map(
-        (application.snapshot?.workspaces ?? []).map((candidate) => [
-          candidate.id,
-          candidate.label.text,
-        ]),
-      ),
-    [application.snapshot?.workspaces],
-  );
-  const threadTitles = useMemo(
-    () =>
-      new Map(
-        (application.snapshot?.threads ?? []).map((candidate) => [
-          candidate.id,
-          candidate.title.text,
-        ]),
-      ),
-    [application.snapshot?.threads],
-  );
-  const projectOptions = useMemo(() => {
-    const workspaces = application.snapshot?.workspaces ?? [];
-    const environments = application.snapshot?.environments ?? [];
-    return workspaces.map((candidate) => ({
-      value: candidate.id,
-      label: workspaceDisplayLabel({
-        workspace: candidate,
-        workspaces,
-        environments,
-        includeEnvironment: environments.find(
-          ({ id }) => id === candidate.environmentId,
-        )?.kind !== "local",
-      }),
-      description: candidate.displayPath.text,
-      searchTerms: [candidate.id, candidate.label.text, candidate.displayPath.text],
-    })).sort((left, right) => left.label.localeCompare(right.label) || left.value.localeCompare(right.value));
-  }, [application.snapshot?.workspaces, application.snapshot?.environments]);
-  const threadOptions = useMemo(() => {
-    const projects = new Map(projectOptions.map((option) => [option.value, option]));
-    const threads = taskThreads;
-    const titleCounts = new Map<string, number>();
-    for (const candidate of threads) {
-      const key = JSON.stringify([candidate.workspaceId, candidate.title.text]);
-      titleCounts.set(key, (titleCounts.get(key) ?? 0) + 1);
-    }
-    return threads.map((candidate) => {
-      const project = projects.get(candidate.workspaceId);
-      const duplicate = (titleCounts.get(JSON.stringify([candidate.workspaceId, candidate.title.text])) ?? 0) > 1;
-      return {
-        value: candidate.id,
-        label: [
-          candidate.title.text,
-          project?.label ?? candidate.workspaceId,
-          duplicate ? candidate.id : undefined,
-        ].filter(Boolean).join(" · "),
-
-        searchTerms: [candidate.id, ...(project?.searchTerms ?? [])],
-      };
-    }).sort((left, right) => left.label.localeCompare(right.label) || left.value.localeCompare(right.value));
-  }, [taskThreads, projectOptions]);
-  const editorScope = editor ? resolvedScope(editor.scope) : undefined;
-  const savedEditorScope = tasks.find(({ id }) => id === editor?.taskId)?.scope;
-  const editorScopeAvailable = editorScope !== undefined && (
-    editorScope.kind === "global" ||
-    (editorScope.kind === "workspace"
-      ? (savedEditorScope?.kind === "workspace" && savedEditorScope.workspaceId === editorScope.workspaceId) ||
-        projectOptions.some(({ value }) => value === editorScope.workspaceId)
-      : (savedEditorScope?.kind === "thread" && savedEditorScope.threadId === editorScope.threadId) ||
-        threadOptions.some(({ value }) => value === editorScope.threadId))
-  );
-  const includeNestedScopes =
-    view !== "thread" && preferences.includeNestedScopes;
-  const normalizedSearchQuery = newTitle.trim().toLocaleLowerCase();
-  const visible = useMemo(
-    () =>
-      tasks
-        .filter((task) => matchesView(task, view, context, includeNestedScopes))
-        .filter(
-          (task) =>
-            normalizedSearchQuery.length === 0 ||
-            task.title.toLocaleLowerCase().includes(normalizedSearchQuery) ||
-            (preferences.searchContent &&
-              task.details.toLocaleLowerCase().includes(normalizedSearchQuery)),
-        )
-        .sort(
-          (left, right) =>
-            Number(right.pinned) - Number(left.pinned) ||
-            Number(left.completedAt !== null) -
-              Number(right.completedAt !== null) ||
-            Date.parse(right.createdAt) - Date.parse(left.createdAt) ||
-            left.id.localeCompare(right.id),
-        ),
-    [
-      tasks,
-      view,
-      context,
-      includeNestedScopes,
-      normalizedSearchQuery,
-      preferences.searchContent,
-    ],
-  );
-  const editingTask = editor
-    ? visible.find(({ id }) => id === editor.taskId)
-    : undefined;
-  // Resolve the selection against the visible list so the detail preview
-  // never shows a task the active view filtered out (e.g. after switching
-  // scope tabs); the selection itself survives for a return to that view.
-  const selectedTask = expandedTaskId
-    ? visible.find(({ id }) => id === expandedTaskId)
-    : undefined;
-  useEffect(() => {
-    if (editor && !editingTask) {
-      // Do not keep editing a task that was deleted or hidden by the active
-      // scope/search filters.
-      setEditor(null);
-      setConfirmingDelete(false);
-    }
-  }, [editor, editingTask]);
-
-  useEffect(() => {
-    if (!active || !mobile) return undefined;
-    const closeTaskDetail = () => {
-      setEditor(null);
-      setConfirmingDelete(false);
-      setExpandedTaskId(null);
-    };
-    window.addEventListener(CLOSE_TASK_DETAIL_EVENT, closeTaskDetail);
-    return () =>
-      window.removeEventListener(CLOSE_TASK_DETAIL_EVENT, closeTaskDetail);
-  }, [active, mobile]);
-
-  const run = useCallback(async (operation: () => Promise<unknown>) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await operation();
-      return true;
-    } catch (cause) {
-      setError(errorMessage(cause));
-      return false;
-    } finally {
-      setBusy(false);
-    }
+  const announce = useCallback((message: string) => {
+    setAnnouncement("");
+    window.setTimeout(() => setAnnouncement(message), 0);
   }, []);
 
-  const beginNewTask = () => {
-    setEditor(null);
-    setConfirmingDelete(false);
-    setExpandedTaskId(null);
-  };
+  // ── Per-task, per-action pending state ──────────────────────────────────
+  const markPending = useCallback(
+    (taskId: string, action: TaskAction, on: boolean) => {
+      const next = new Map(pendingRef.current);
+      const actions = new Set(next.get(taskId) ?? []);
+      if (on) actions.add(action);
+      else actions.delete(action);
+      if (actions.size > 0) next.set(taskId, actions);
+      else next.delete(taskId);
+      pendingRef.current = next;
+      setPending(next);
+    },
+    [],
+  );
+  /** Runs one action on one task; a repeat while it runs is ignored. */
+  const runTask = useCallback(
+    async <T,>(
+      task: AssociatedTask,
+      action: TaskAction,
+      operation: () => Promise<T>,
+      failure: string,
+    ): Promise<{ ok: true; value: T } | { ok: false }> => {
+      if (pendingRef.current.get(task.id)?.has(action)) return { ok: false };
+      markPending(task.id, action, true);
+      try {
+        const value = await operation();
+        setError(null);
+        return { ok: true, value };
+      } catch (cause) {
+        setError(`${failure} “${task.title}”: ${errorMessage(cause)}`);
+        return { ok: false };
+      } finally {
+        markPending(task.id, action, false);
+      }
+    },
+    [markPending],
+  );
 
-  const submitNewTask = async () => {
-    const title = newTitle.trim();
-    if (title.length === 0 || busy || !currentScope) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const created = await store.createTask(
-        title,
-        currentScope,
-      );
-      // Creation can resolve before the application snapshot publishes its
-      // task upsert. Keep the authoritative returned ID selected so the
-      // ordinary read-only detail appears as soon as that exact task becomes
-      // visible in this scope; duplicate titles cannot affect the selection.
-      beginNewTask();
-      setExpandedTaskId(created.id);
-      setNewTitle("");
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const openEditor = (task: Task) => {
-    setConfirmingDelete(false);
-    setExpandedTaskId(task.id);
-    setEditor({
-      taskId: task.id,
-      baseRevision: task.revision,
-      title: task.title,
-      details: task.details,
-      scope: task.scope,
-      files: task.files,
-    });
-    setNewFilePath("");
-  };
-
-  const saveEditor = async () => {
-    if (!editor || !editingTask || busy || !editorScope || !editorScopeAvailable) return;
-    const title = editor.title.trim();
-    if (title.length === 0) {
-      setError("A task needs a title.");
-      return;
-    }
-    const saved = await run(() =>
-      store.updateTask(
-        { ...editingTask, revision: editor.baseRevision },
-        {
-          title,
-          details: editor.details,
-          scope: editorScope,
-          files: editor.files,
-        },
+  // ── What the view shows ──────────────────────────────────────────────────
+  const query = normalizeQuery(searchOpen ? searchText : "");
+  const filtered = useMemo(
+    () =>
+      tasks.filter(
+        (task) =>
+          inViewScope(task, view, context, options.includeThreadTasks) &&
+          matchesQuery(task, query, options.searchNotes) &&
+          matchesOnly(task, options),
       ),
+    [tasks, view, context, options, query],
+  );
+  const openTasks = useMemo(
+    () =>
+      filtered
+        .filter(({ completedAt }) => completedAt === null)
+        .sort(compareOpen(options.sort)),
+    [filtered, options.sort],
+  );
+  const doneTasks = useMemo(
+    () =>
+      filtered
+        .filter(({ completedAt }) => completedAt !== null)
+        .sort(compareCompleted(options.sort)),
+    [filtered, options.sort],
+  );
+  const mainTasks = options.show === "completed" ? doneTasks : openTasks;
+  const completedSection = options.show === "open" ? doneTasks : [];
+  const groups = useMemo(
+    () =>
+      view === "all" && options.groupByProject
+        ? groupTasks(
+            mainTasks,
+            {
+              workspaces: destinations.workspaceLabels,
+              threads: destinations.threadTitles,
+            },
+            context,
+          )
+        : undefined,
+    [view, options.groupByProject, mainTasks, destinations, context],
+  );
+  const viewCount = (candidate: TasksView) =>
+    openCount(
+      tasks,
+      candidate,
+      context,
+      candidate === "project" ? projectOptions.includeThreadTasks : false,
     );
-    if (saved) setEditor(null);
-  };
+  const destination = destinationScope(view, context);
+  const visibleCreating = creating.filter(
+    (entry) =>
+      (entry.createdId === undefined ||
+        !tasks.some(({ id }) => id === entry.createdId)) &&
+      destination !== undefined &&
+      (view === "all" || sameScope(entry.scope, destination)),
+  );
 
-  const addTaskToPrompt = (task: Task) => {
-    if (threadId === undefined) return;
-    const result = composerDraft?.stageTaskReference({
-      taskId: task.id,
-      titleSnapshot: task.title,
-    }) ?? {
-      ok: false as const,
-      reason: "This thread has no prompt input to receive the task.",
+  // The focusable items of the list, in order: the roving tab stop is one of them.
+  const navKeys = useMemo(() => {
+    const keys: string[] = [];
+    const pushGroup = (group: TaskGroup) => {
+      keys.push(`group:${group.key}`);
+      if (collapsedGroups.has(group.key)) return;
+      for (const task of group.tasks) keys.push(taskNavKey(task.id));
+      for (const child of group.children) pushGroup(child);
     };
-    if (!result.ok) {
-      setError(result.reason);
+    if (groups) groups.forEach(pushGroup);
+    else for (const task of mainTasks) keys.push(taskNavKey(task.id));
+    if (completedSection.length > 0) {
+      keys.push("completed");
+      if (completedOpen) {
+        for (const task of completedSection) keys.push(taskNavKey(task.id));
+      }
+    }
+    return keys;
+  }, [groups, mainTasks, completedSection, completedOpen, collapsedGroups]);
+  const rovingKey =
+    activeNavKey !== null && navKeys.includes(activeNavKey)
+      ? activeNavKey
+      : navKeys[0];
+
+  const expandedTask = expandedId
+    ? tasks.find(({ id }) => id === expandedId)
+    : undefined;
+  const sheetDetail = sheet && expandedTask !== undefined;
+
+  // ── Effects ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    onEditingChange?.(editingId !== null);
+  }, [editingId, onEditingChange]);
+  useEffect(() => () => onEditingChange?.(false), [onEditingChange]);
+
+  // Forget optimistic rows once their task has been published.
+  useEffect(() => {
+    if (
+      creating.some(
+        (entry) =>
+          entry.createdId !== undefined &&
+          tasks.some(({ id }) => id === entry.createdId),
+      )
+    ) {
+      setCreating((current) =>
+        current.filter(
+          (entry) =>
+            entry.createdId === undefined ||
+            !tasks.some(({ id }) => id === entry.createdId),
+        ),
+      );
+    }
+  }, [creating, tasks]);
+
+  // A row the user was on can leave the list (completed into a collapsed
+  // section, moved, deleted). Keep keyboard focus in the list: the same
+  // task where it went, else its neighbour.
+  useLayoutEffect(() => {
+    const focused = lastFocused.current;
+    const region = listRef.current;
+    if (focused && region && !focused.element.isConnected) {
+      lastFocused.current = null;
+      const activeElement = document.activeElement;
+      if (activeElement === null || activeElement === document.body) {
+        const find = (key: string) =>
+          region.querySelector<HTMLElement>(
+            `[data-tasks-nav="${CSS.escape(key)}"]`,
+          );
+        const index = lastNavOrder.current.indexOf(focused.key);
+        const neighbour =
+          navKeys[Math.min(Math.max(index, 0), navKeys.length - 1)];
+        const target =
+          find(focused.key) ?? (neighbour ? find(neighbour) : null);
+        (target ?? addInputRef.current)?.focus();
+      }
+    }
+    lastNavOrder.current = navKeys;
+  });
+
+  // Reveal requests (transcript "Open task"): switch to a view that holds
+  // the task, make it visible, expand it and move focus to it.
+  useTaskReveal(({ taskId }) => {
+    const task = store.getTasks().find(({ id }) => id === taskId);
+    if (!task) return;
+    setTasksLastView(revealView(task, context));
+    setSearchOpen(false);
+    setSearchText("");
+    setRevealId(taskId);
+  });
+  useEffect(() => {
+    if (revealId === null) return;
+    const task = tasks.find(({ id }) => id === revealId);
+    if (!task) {
+      setRevealId(null);
       return;
     }
-    setError(null);
-  };
-
-  const deleteEditingTask = async () => {
-    if (!editor || busy) return;
-    const deleted = await run(() => store.deleteTask(editor.taskId));
-    if (deleted) {
-      setEditor(null);
-      setConfirmingDelete(false);
-    }
-  };
-
-  const togglePinned = (task: Task) =>
-    run(() => store.updateTask(task, { pinned: !task.pinned }));
-
-  const openTaskFile = async (
-    absolutePath: string,
-    presentation: PanelPresentation,
-  ) => {
-    if (!workspace?.available) return;
-    if (!workspaceFileAbsolutePathSchema.safeParse(absolutePath).success) {
-      setError("That file isn't available in Files.");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const resolved = await store.api.resolveWorkspaceFileLink(workspace.id, {
-        kind: "absolute",
-        path: absolutePath,
+    if (
+      !matchesOnly(task, options) ||
+      (options.show === "completed" && task.completedAt === null)
+    ) {
+      setOptions({
+        show: "open",
+        onlyPinned: false,
+        onlyWithNotes: false,
+        onlyWithFiles: false,
       });
-      if (resolved.status === "not_found") {
+      return;
+    }
+    if (task.completedAt !== null && options.show === "open") {
+      setCompletedOpen(true);
+    }
+    const scope = scopeKey(task.scope);
+    const parent =
+      task.scope.kind === "thread" && task.associatedWorkspaceId
+        ? `workspace:${task.associatedWorkspaceId}`
+        : undefined;
+    setCollapsedGroups((current) => {
+      if (!current.has(scope) && (!parent || !current.has(parent))) {
+        return current;
+      }
+      const next = new Set(current);
+      next.delete(scope);
+      if (parent) next.delete(parent);
+      return next;
+    });
+    setExpandedId(task.id);
+    setActiveNavKey(taskNavKey(task.id));
+    setRevealId(null);
+    setFocusRequest(task.id);
+  }, [revealId, tasks, options, setOptions]);
+
+  // Focus a row once it has rendered (reveal, leaving the phone detail).
+  useLayoutEffect(() => {
+    if (focusRequest === null) return;
+    const element = listRef.current?.querySelector<HTMLElement>(
+      `[data-tasks-nav="${CSS.escape(taskNavKey(focusRequest))}"]`,
+    );
+    if (!element) return;
+    element.focus({ preventScroll: true });
+    element.closest(".tasks-row")?.scrollIntoView({ block: "nearest" });
+    setFocusRequest(null);
+  });
+
+  // Android Back and Escape close the phone detail before the sheet.
+  useEffect(() => {
+    if (!active || !sheet) return undefined;
+    const closeDetail = () => {
+      setExpandedId((current) => {
+        if (current !== null) setFocusRequest(current);
+        return null;
+      });
+    };
+    window.addEventListener(CLOSE_TASK_DETAIL_EVENT, closeDetail);
+    return () => window.removeEventListener(CLOSE_TASK_DETAIL_EVENT, closeDetail);
+  }, [active, sheet]);
+
+  // The phone detail replaces the list: focus starts on its back button.
+  useEffect(() => {
+    if (!sheetDetail) return;
+    lastFocused.current = null;
+    rootRef.current
+      ?.querySelector<HTMLElement>(".tasks-header[data-detail] .tasks-back")
+      ?.focus();
+  }, [sheetDetail]);
+
+  // An expanded row scrolls into view so its detail is never off-screen.
+  useEffect(() => {
+    if (sheet || expandedId === null) return;
+    listRef.current
+      ?.querySelector(`.tasks-row[data-task-id="${CSS.escape(expandedId)}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [expandedId, sheet]);
+
+  // ── Actions ──────────────────────────────────────────────────────────────
+  const setCompleted = useCallback(
+    async (task: AssociatedTask, completed: boolean) => {
+      const result = await runTask(
+        task,
+        "complete",
+        () => store.updateTask(task, { completed }),
+        completed ? "Couldn't complete" : "Couldn't reopen",
+      );
+      if (!result.ok) return;
+      announce(completed ? `Completed “${task.title}”.` : `Reopened “${task.title}”.`);
+    },
+    [announce, runTask, store],
+  );
+
+  const moveNow = useCallback(
+    async (task: AssociatedTask, scope: TaskScope) => {
+      markPending(task.id, "move", true);
+      try {
+        await store.moveTask(task, scope);
+      } finally {
+        markPending(task.id, "move", false);
+      }
+      setError(null);
+      announce(`Moved “${task.title}” to ${destinations.label(scope)}.`);
+    },
+    [announce, destinations, markPending, store],
+  );
+
+  const moveTo = useCallback(
+    (task: AssociatedTask, scope: TaskScope) => {
+      if (sameScope(task.scope, scope)) return;
+      if (pendingRef.current.get(task.id)?.has("move")) return;
+      const targetProject =
+        scope.kind === "global"
+          ? null
+          : scope.kind === "workspace"
+            ? scope.workspaceId
+            : (snapshot?.threads.find(({ id }) => id === scope.threadId)
+                ?.workspaceId ?? null);
+      if (
+        task.files.length > 0 &&
+        task.associatedWorkspaceId !== null &&
+        task.associatedWorkspaceId !== targetProject
+      ) {
+        setPendingMove({ task, scope });
+        return;
+      }
+      void moveNow(task, scope).catch((cause: unknown) =>
+        setError(`Couldn't move “${task.title}”: ${errorMessage(cause)}`),
+      );
+    },
+    [moveNow, snapshot?.threads],
+  );
+
+  const addToPrompt = useCallback(
+    (task: AssociatedTask) => {
+      if (threadId === undefined) return;
+      const result = composerDraft?.stageTaskReference({
+        taskId: task.id,
+        titleSnapshot: task.title,
+      }) ?? {
+        ok: false as const,
+        reason: "This thread has no prompt input to receive the task.",
+      };
+      if (!result.ok) {
+        setError(result.reason);
+        return;
+      }
+      setError(null);
+      const message = `Added “${task.title}” to the prompt.`;
+      // On a phone the sheet closes, so the chip arriving is visible.
+      if (sheet) onRequestClose(message);
+      else announce(message);
+    },
+    [announce, composerDraft, onRequestClose, sheet, threadId],
+  );
+
+  const openFile = useCallback(
+    async (absolutePath: string, event: ReactMouseEvent) => {
+      if (!workspace?.available) return;
+      const presentationMode = resolvePanelPresentation(
+        getPanelPresentation(),
+        event.shiftKey,
+      );
+      if (!workspaceFileAbsolutePathSchema.safeParse(absolutePath).success) {
         setError("That file isn't available in Files.");
         return;
       }
-      const opened = panelLayoutStore.openPanel("workspace-files", {
-        presentation,
-        intent: createWorkspaceFilesOpenIntent({
-          workspaceId: workspace.id,
-          rootId: resolved.rootId,
-          path: resolved.path,
-          rootVisibility: resolved.rootVisibility,
-          target: { kind: "file" },
-        }),
-      });
-      if (mobile && opened) setTasksPanelOpen(false);
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+      try {
+        const resolved = await store.api.resolveWorkspaceFileLink(workspace.id, {
+          kind: "absolute",
+          path: absolutePath,
+        });
+        if (resolved.status === "not_found") {
+          setError("That file isn't available in Files.");
+          return;
+        }
+        setError(null);
+        const opened = panelLayoutStore.openPanel("workspace-files", {
+          presentation: presentationMode,
+          intent: createWorkspaceFilesOpenIntent({
+            workspaceId: workspace.id,
+            rootId: resolved.rootId,
+            path: resolved.path,
+            rootVisibility: resolved.rootVisibility,
+            target: { kind: "file" },
+          }),
+        });
+        if (sheet && opened) onRequestClose();
+      } catch (cause) {
+        setError(errorMessage(cause));
+      }
+    },
+    [onRequestClose, panelLayoutStore, sheet, store, workspace],
+  );
+
+  const actions: TaskListActions = useMemo(
+    () => ({
+      toggleComplete: (task) =>
+        void setCompleted(task, task.completedAt === null),
+      togglePin: (task) =>
+        void runTask(
+          task,
+          "pin",
+          () => store.updateTask(task, { pinned: !task.pinned }),
+          task.pinned ? "Couldn't unpin" : "Couldn't pin",
+        ),
+      addToPrompt,
+      edit: (task) => setEditingId(task.id),
+      requestDelete: (task) => setDeletingId(task.id),
+      moveTo,
+      chooseMove: (task) => setChoosingMoveId(task.id),
+      openFile: (path, event) => void openFile(path, event),
+      openThread: (id) => {
+        navigate(threadPath(id));
+        if (sheet) onRequestClose();
+      },
+    }),
+    [addToPrompt, moveTo, onRequestClose, openFile, runTask, setCompleted, sheet, store],
+  );
+
+  const environment: TaskListEnvironment = useMemo(
+    () => ({
+      actions,
+      destinations,
+      touch,
+      surfaceActive: active,
+      ...(threadId === undefined
+        ? { promptUnavailable: "Open a thread to add this task to its prompt." }
+        : {}),
+      filesOpenable: Boolean(workspace?.available),
+      ...(taskDrag ? { taskDrag } : {}),
+      pending: (taskId: string) => pending.get(taskId) ?? NO_PENDING,
+    }),
+    [actions, active, destinations, pending, taskDrag, threadId, touch, workspace?.available],
+  );
+
+  const addTask = (title: string, notes: string) => {
+    if (!destination) return;
+    const key = crypto.randomUUID();
+    setCreating((current) => [...current, { key, title, scope: destination }]);
+    void store.createTask(title, destination, notes || undefined).then(
+      (created) => {
+        setError(null);
+        setCreating((current) =>
+          current.map((entry) =>
+            entry.key === key ? { ...entry, createdId: created.id } : entry,
+          ),
+        );
+        announce(`Added “${title}”.`);
+      },
+      (cause: unknown) => {
+        setCreating((current) => current.filter((entry) => entry.key !== key));
+        setError(`Couldn't add “${title}”: ${errorMessage(cause)}`);
+        // Give the text back unless the next task is already being typed.
+        setAddDraft((draft) =>
+          draft.title.length === 0 && !draft.notesOpen
+            ? { title, notes, notesOpen: notes.length > 0 }
+            : draft,
+        );
+      },
+    );
   };
 
-  const addEditorFile = () => {
-    if (!editor) return;
-    const path = newFilePath.trim();
-    if (!path.startsWith("/")) {
-      setError("Enter an absolute file path beginning with /.");
-      return;
-    }
-    if (!taskFilePathSchema.safeParse(path).success) {
-      setError(
-        `Enter an absolute POSIX path of at most ${TASK_FILE_MAX_PATH_BYTES} bytes.`,
-      );
-      return;
-    }
-    if (editor.files.includes(path)) {
-      setError("That file is already attached to this task.");
-      return;
-    }
-    if (editor.files.length >= TASK_FILES_MAX_COUNT) {
-      setError(`A task can have up to ${TASK_FILES_MAX_COUNT} files.`);
-      return;
-    }
-    setEditor({ ...editor, files: [...editor.files, path] });
-    setNewFilePath("");
+  const toggleExpanded = (task: AssociatedTask) => {
+    setActiveNavKey(taskNavKey(task.id));
+    setMoveMenuId(null);
+    setExpandedId((current) => (current === task.id ? null : task.id));
+  };
+
+  const changeView = (next: TasksView) => {
+    if (viewUnavailableReason(next, context) !== undefined) return;
+    setTasksLastView(next);
     setError(null);
   };
 
+  // The search input focuses itself as it mounts.
+  const openSearch = () => {
+    if (searchInputRef.current) searchInputRef.current.focus();
+    else setSearchOpen(true);
+  };
+  const closeSearch = () => {
+    setSearchOpen(false);
+    setSearchText("");
+    searchButtonRef.current?.focus();
+  };
+
+  const focusAdd = (withNotes = false) => {
+    if (withNotes) setAddDraft((draft) => ({ ...draft, notesOpen: true }));
+    if (addInputRef.current) {
+      addInputRef.current.focus();
+      return;
+    }
+    // The phone detail hides the add bar until the list is back.
+    setExpandedId(null);
+    requestAnimationFrame(() => addInputRef.current?.focus());
+  };
+
+  // ── Keyboard ─────────────────────────────────────────────────────────────
+  const onTitleKeyDown = (
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    task: AssociatedTask,
+  ) => {
+    if (event.nativeEvent.isComposing) return;
+    const primary = event.metaKey || event.ctrlKey;
+    if (event.key === "Enter" && primary) {
+      event.preventDefault();
+      actions.addToPrompt(task);
+      return;
+    }
+    if (primary || event.altKey) return;
+    switch (event.key) {
+      case " ":
+        event.preventDefault();
+        actions.toggleComplete(task);
+        return;
+      case "e":
+      case "E":
+        event.preventDefault();
+        actions.edit(task);
+        return;
+      case "p":
+      case "P":
+        event.preventDefault();
+        actions.togglePin(task);
+        return;
+      case "m":
+      case "M":
+        event.preventDefault();
+        if (sheet) {
+          actions.chooseMove(task);
+        } else {
+          setExpandedId(task.id);
+          setMoveMenuId(task.id);
+        }
+        return;
+      case "Delete":
+      case "Backspace":
+        event.preventDefault();
+        actions.requestDelete(task);
+        return;
+      case "ArrowRight":
+        event.preventDefault();
+        event.currentTarget
+          .closest(".tasks-row-main")
+          ?.querySelector<HTMLElement>(".tasks-row-more")
+          ?.focus();
+        return;
+    }
+  };
+
+  const onHeadingKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+      const expanded = event.currentTarget.getAttribute("aria-expanded") === "true";
+      if ((event.key === "ArrowRight") !== expanded) {
+        event.preventDefault();
+        event.currentTarget.click();
+      }
+    }
+  };
+
+  /** ↑/↓/Home/End between the list's focusable items. */
+  const onListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (!event.currentTarget.contains(target) || !target.dataset.tasksNav) return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const items = [
+      ...event.currentTarget.querySelectorAll<HTMLElement>("[data-tasks-nav]"),
+    ];
+    const index = items.indexOf(target);
+    const next =
+      event.key === "ArrowDown"
+        ? items[Math.min(index + 1, items.length - 1)]
+        : event.key === "ArrowUp"
+          ? items[Math.max(index - 1, 0)]
+          : event.key === "Home"
+            ? items[0]
+            : event.key === "End"
+              ? items.at(-1)
+              : undefined;
+    if (!next) return;
+    event.preventDefault();
+    next.focus();
+  };
+
+  const onListFocus = (event: React.FocusEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    const key = target.dataset.tasksNav;
+    if (key) {
+      lastFocused.current = { key, element: target };
+      setActiveNavKey(key);
+    }
+  };
+  // Focus that leaves on its own (to another control, or a click elsewhere)
+  // is not restored; only a row removed from under it is.
+  const onListBlur = (event: React.FocusEvent<HTMLDivElement>) => {
+    const element = event.target as HTMLElement;
+    const next = event.relatedTarget as Node | null;
+    if (next && event.currentTarget.contains(next)) return;
+    requestAnimationFrame(() => {
+      if (element.isConnected && lastFocused.current?.element === element) {
+        lastFocused.current = null;
+      }
+    });
+  };
+
+  /**
+   * Escape inside the content closes one layer at a time: the expanded row
+   * (or the phone detail), then search, then a popover or sheet. Fields
+   * that use Escape themselves (search, the add row) stop it first. The
+   * host leaves Escape from inside the content to this handler.
+   */
+  const onRootKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    // Menus and dialogs portal elsewhere but bubble here through React.
+    if (!event.currentTarget.contains(event.target as Node)) return;
+    if (event.nativeEvent.isComposing) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      if (expandedId !== null) {
+        setFocusRequest(expandedId);
+        setExpandedId(null);
+        setMoveMenuId(null);
+      } else if (searchOpen) {
+        closeSearch();
+      } else if (presentation !== "panel") {
+        onRequestClose();
+      }
+      return;
+    }
+    if (event.defaultPrevented || isTypingTarget(event.target)) return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.key === "n" || event.key === "N") {
+      event.preventDefault();
+      focusAdd();
+    } else if (event.key === "/") {
+      event.preventDefault();
+      openSearch();
+    }
+  };
+
+  // ── Drag onto a scope segment, or the list, moves the task there ────────
+  // The drag controller confirms a move across projects for a task with
+  // files, as for every other drop.
+  const draggedTask = taskDrag?.activeTaskId
+    ? tasks.find(({ id }) => id === taskDrag.activeTaskId)
+    : undefined;
+  const scopeDrop = useTaskScopeDropTargets<TasksView>();
+  /** Where a drop on a view's segment moves the dragged task; All has no one place. */
   const scopeDropTarget = (
-    targetView: TasksView,
+    candidate: TasksView,
   ): TaskScopeDropTarget | undefined => {
-    const targetContext = targetView === "thread" ? threadContext : projectContext;
-    if (!viewAvailable(targetView, targetContext)) return undefined;
-    if (targetView === "global") {
-      return {
-        scope: { kind: "global" },
-        label: "Global tasks",
-        workspaceId: null,
-        workspaceLabel: "Global tasks",
-      };
-    }
-    if (targetView === "project") {
-      return {
-        scope: { kind: "workspace", workspaceId: targetContext.workspaceId! },
-        label: targetContext.workspaceLabel ?? "this project",
-        workspaceId: targetContext.workspaceId!,
-        workspaceLabel: targetContext.workspaceLabel ?? "this project",
-      };
-    }
+    if (candidate === "all" || !draggedTask) return undefined;
+    const scope = destinationScope(candidate, context);
+    if (!scope || sameScope(draggedTask.scope, scope)) return undefined;
+    const workspaceId =
+      scope.kind === "global"
+        ? null
+        : scope.kind === "workspace"
+          ? scope.workspaceId
+          : (context.thread?.workspaceId ?? null);
     return {
-      scope: { kind: "thread", threadId: targetContext.threadId! },
-      label: targetContext.threadTitle ?? "this thread",
-      workspaceId: targetContext.workspaceId!,
-      workspaceLabel: targetContext.workspaceLabel ?? "this project",
+      scope,
+      label: destinations.label(scope),
+      workspaceId,
+      workspaceLabel:
+        workspaceId === null
+          ? destinations.label({ kind: "global" })
+          : destinations.label({ kind: "workspace", workspaceId }),
     };
   };
 
-  const dragTargetsScope = (event: ReactDragEvent): boolean =>
-    taskDrag?.isTaskDrag(event.dataTransfer) === true;
-
-  const markScopeDrop = (targetView: TasksView, event: ReactDragEvent) => {
-    if (!dragTargetsScope(event) || !scopeDropTarget(targetView)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    event.dataTransfer.dropEffect = "move";
-    setScopeDropView(targetView);
+  // ── Rendering ────────────────────────────────────────────────────────────
+  const searchFiltering = query.length > 0;
+  // Lists that mix scopes without group headings say where each task
+  // belongs: All ungrouped, and Project with its threads' tasks.
+  const showLocation =
+    (view === "all" && !options.groupByProject) ||
+    (view === "project" && options.includeThreadTasks);
+  const locationOf = (task: AssociatedTask) => {
+    const label = destinations.label(task.scope);
+    const project =
+      view === "all" &&
+      task.scope.kind === "thread" &&
+      task.associatedWorkspaceId !== null
+        ? destinations.workspaceLabels.get(task.associatedWorkspaceId)
+        : undefined;
+    return {
+      kind: task.scope.kind,
+      label: project ? `${label} · ${project}` : label,
+    };
   };
-
-  const leaveScopeDrop = (targetView: TasksView, event: ReactDragEvent) => {
-    if (!dragTargetsScope(event)) return;
-    event.stopPropagation();
-    if (
-      !event.currentTarget.contains(event.relatedTarget as Node | null) &&
-      scopeDropView === targetView
-    ) {
-      setScopeDropView(undefined);
-    }
-  };
-
-  const dropOnScope = (targetView: TasksView, event: ReactDragEvent) => {
-    if (!dragTargetsScope(event)) return;
-    const target = scopeDropTarget(targetView);
-    if (!target) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const task = taskDrag?.resolveDraggedTask(event.dataTransfer);
-    taskDrag?.endTaskDrag();
-    setScopeDropView(undefined);
-    if (!task) {
-      taskDrag?.announce(
-        "That task changed before it could be moved. Review it and try again.",
-        true,
-      );
-      return;
-    }
-    void taskDrag?.requestScopeMove(task, target);
-  };
-
-  const viewOptions = VIEW_ORDER.map((candidate) => ({
-    value: candidate,
-    label: VIEW_LABEL[candidate],
-    disabled: !availableViews[candidate],
-    ...(availableViews[candidate]
-      ? {}
-      : { title: disabledReason(candidate) }),
-    dropActive: scopeDropView === candidate,
-    onDragEnter: (event: ReactDragEvent<HTMLButtonElement>) =>
-      markScopeDrop(candidate, event),
-    onDragOver: (event: ReactDragEvent<HTMLButtonElement>) =>
-      markScopeDrop(candidate, event),
-    onDragLeave: (event: ReactDragEvent<HTMLButtonElement>) =>
-      leaveScopeDrop(candidate, event),
-    onDrop: (event: ReactDragEvent<HTMLButtonElement>) =>
-      dropOnScope(candidate, event),
-  }));
-
-  return (
-    <div
-      className="tasks-panel-body"
-      data-task-detail-open={
-        selectedTask !== undefined || editor !== null || undefined
-      }
-      data-task-scope-drop-target={scopeDropView === view || undefined}
-      onDragEnter={(event) => markScopeDrop(view, event)}
-      onDragOver={(event) => markScopeDrop(view, event)}
-      onDragLeave={(event) => leaveScopeDrop(view, event)}
-      onDrop={(event) => dropOnScope(view, event)}
-    >
-      <header className="tasks-panel-header">
-        <h2 className="tasks-panel-title">Tasks</h2>
-        <div className="tasks-panel-header-actions">
-          {!mobile && (
-            <Button
-              variant={preferences.pinned ? "secondary" : "ghost"}
-              size="icon-sm"
-              aria-label={
-                preferences.pinned ? "Unpin Tasks panel" : "Pin Tasks panel"
-              }
-              aria-pressed={preferences.pinned}
-              title={
-                preferences.pinned
-                  ? "Keep Tasks open when clicking elsewhere"
-                  : "Close Tasks when clicking elsewhere"
-              }
-              onClick={() => setTasksPanelPinned(!preferences.pinned)}
-            >
-              <Pin
-                size={15}
-                strokeWidth={1.8}
-                fill={preferences.pinned ? "currentColor" : "none"}
-                aria-hidden="true"
-              />
-            </Button>
-          )}
-          <DropdownMenu open={active && optionsOpen} onOpenChange={setOptionsOpen}>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Tasks panel options"
-              >
-                <MoreHorizontal size={16} strokeWidth={1.8} />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Default view</DropdownMenuLabel>
-              <DropdownMenuRadioGroup
-                aria-label="Default view"
-                value={preferences.defaultView}
-                onValueChange={(value) => {
-                  const next = VIEW_ORDER.find((candidate) => candidate === value);
-                  if (next) setTasksPanelDefaultView(next);
-                }}
-              >
-                {VIEW_ORDER.map((candidate) => (
-                  <DropdownMenuRadioItem key={candidate} value={candidate}>
-                    {VIEW_LABEL[candidate]}
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem
-                checked={preferences.searchContent}
-                onCheckedChange={setTasksPanelSearchContent}
-              >
-                Search task content
-              </DropdownMenuCheckboxItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="New task"
-            onClick={() => {
-              beginNewTask();
-              document
-                .querySelector<HTMLInputElement>(".tasks-new-input input")
-                ?.focus();
-            }}
-          >
-            <Plus size={16} strokeWidth={1.8} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="tasks-panel-close"
-            aria-label="Close Tasks panel"
-            onClick={onClose}
-          >
-            <X size={16} strokeWidth={1.8} />
-          </Button>
-        </div>
-      </header>
-
-      <SegmentedControl
-        ariaLabel="Task scope view"
-        value={view}
-        options={viewOptions}
-        onChange={(value) => setChosenView(value as TasksView)}
-      />
-
-      {view === "project" && (
-        <SearchableSelect
-          presentation={mobile ? "dialog" : "popover"}
-          label="Task project"
-          searchLabel="Search projects"
-          emptyLabel="No matching projects."
-          selectedLabel={chosenProjectId === null && workspace
-            ? `Current project · ${workspace.label.text}`
-            : selectedProject?.label.text}
-          value={chosenProjectId ?? (workspace ? CURRENT_SCOPE : "")}
-          placeholder="Select…"
-          options={[
-            ...(workspace ? [{
-              value: CURRENT_SCOPE,
-              label: `Current project · ${workspace.label.text}`,
-              pinned: true,
-            }] : []),
-            ...projectOptions,
-          ]}
-          onValueChange={(value) => setChosenProjectId(value === CURRENT_SCOPE ? null : value)}
+  const filters = viewFilters(options);
+  const filtering = filters.length > 0;
+  const renderRow = (task: AssociatedTask) => (
+    <TaskRow
+      key={task.id}
+      task={task}
+      expanded={expandedId === task.id}
+      {...(showLocation ? { location: locationOf(task) } : {})}
+      focusable={rovingKey === taskNavKey(task.id)}
+      inlineDetail={!sheet}
+      moveOpen={moveMenuId === task.id}
+      onMoveOpenChange={(open) => setMoveMenuId(open ? task.id : null)}
+      onToggle={toggleExpanded}
+      onTitleKeyDown={onTitleKeyDown}
+    />
+  );
+  const toggleGroup = (key: string) =>
+    setCollapsedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const renderGroup = (group: TaskGroup): React.JSX.Element => {
+    const collapsed = collapsedGroups.has(group.key);
+    const navKey = `group:${group.key}`;
+    return (
+      <li key={group.key} className="tasks-group" data-kind={group.kind}>
+        <TaskListHeading
+          variant="group"
+          navKey={navKey}
+          focusable={rovingKey === navKey}
+          expanded={!collapsed}
+          onToggle={() => toggleGroup(group.key)}
+          onKeyDown={onHeadingKeyDown}
+          icon={<ScopeIcon kind={group.kind} className="tasks-heading-icon" />}
+          label={group.label}
+          count={group.count}
         />
-      )}
-      {view === "thread" && (
-        <SearchableSelect
-          presentation={mobile ? "dialog" : "popover"}
-          label="Task thread"
-          searchLabel="Search threads"
-          emptyLabel="No matching threads."
-          selectedLabel={chosenThreadId === null && currentTaskThread
-            ? `Current thread · ${currentTaskThread.title.text}`
-            : selectedThread?.title.text}
-          value={chosenThreadId ?? (currentTaskThread ? CURRENT_SCOPE : "")}
-          placeholder="Select…"
-          options={[
-            ...(currentTaskThread ? [{
-              value: CURRENT_SCOPE,
-              label: `Current thread · ${currentTaskThread.title.text}`,
-              pinned: true,
-            }] : []),
-            ...threadOptions,
-          ]}
-          onValueChange={(value) => setChosenThreadId(value === CURRENT_SCOPE ? null : value)}
-        />
-      )}
-
-      {view !== "thread" && (
-        <label className="tasks-nested-scopes-toggle">
-          <input
-            type="checkbox"
-            checked={preferences.includeNestedScopes}
-            onChange={(event) =>
-              setTasksPanelIncludeNestedScopes(event.target.checked)
-            }
-          />
-          Include nested scopes
-        </label>
-      )}
-
-      <div className="tasks-new-input">
-        <Input
-          type="search"
-          value={newTitle}
-          aria-label="Search or add task"
-          placeholder="Search or add task"
-          maxLength={240}
-          disabled={busy}
-          onChange={(event) => setNewTitle(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              void submitNewTask();
-            }
-          }}
-        />
-        <Button
-          variant="secondary"
-          size="icon-sm"
-          aria-label="Add task"
-          disabled={busy || !currentScope || newTitle.trim().length === 0}
-          onClick={() => void submitNewTask()}
-        >
-          <Check size={16} strokeWidth={1.8} />
-        </Button>
-      </div>
-
-      {error && (
-        <p className="tasks-panel-error" role="alert">
-          {error}
-        </p>
-      )}
-
-      <ul className="tasks-list" aria-label={`${VIEW_LABEL[view]} tasks`}>
-        {visible.length === 0 && (
-          <li className="tasks-empty">
-            {!currentScope
-              ? `Choose a ${view} to view or add tasks.`
-              : normalizedSearchQuery.length > 0
-              ? "No matching tasks."
-              : `No ${VIEW_LABEL[view].toLowerCase()} tasks yet.`}
-          </li>
+        {!collapsed && (
+          <ul className="tasks-list" aria-label={group.label}>
+            {group.tasks.map(renderRow)}
+            {group.children.map(renderGroup)}
+          </ul>
         )}
-        {visible.map((task) => (
-          <li
-            key={task.id}
-            className="tasks-row"
-            data-completed={task.completedAt !== null || undefined}
-            data-selected={expandedTaskId === task.id || undefined}
-            data-editing={editor?.taskId === task.id || undefined}
-            onClick={() => {
-              if (busy) return;
-              setEditor(null);
-              setConfirmingDelete(false);
-              setExpandedTaskId((current) =>
-                current === task.id ? null : task.id,
-              );
-            }}
-          >
-            {!mobile && (
-              <button
-                type="button"
-                className="tasks-row-drag"
-                draggable={!busy}
-                aria-label={`Drag “${task.title}” to a thread or prompt`}
-                title="Drag to a thread to move, or to the prompt to attach"
-                disabled={busy}
-                onClick={(event) => event.stopPropagation()}
-                onDragStart={(event) => {
-                  event.stopPropagation();
-                  handleTaskDragStart(taskDrag, task, event);
-                }}
-                onDragEnd={() => taskDrag?.endTaskDrag()}
-              >
-                <GripVertical size={15} strokeWidth={1.8} aria-hidden="true" />
-              </button>
-            )}
-            <button
-              type="button"
-              className="tasks-row-checkbox"
-              role="checkbox"
-              aria-checked={task.completedAt !== null}
-              aria-label={
-                task.completedAt !== null
-                  ? `Mark "${task.title}" as open`
-                  : `Mark "${task.title}" as done`
-              }
-              disabled={busy}
-              onClick={(event) => {
-                event.stopPropagation();
-                void run(() =>
-                  store.updateTask(task, {
-                    completed: task.completedAt === null,
-                  }),
-                );
-              }}
-            >
-              {task.completedAt !== null ? (
-                <CheckCircle2 size={18} strokeWidth={1.8} aria-hidden="true" />
-              ) : (
-                <Circle size={18} strokeWidth={1.8} aria-hidden="true" />
-              )}
-            </button>
-            <button
-              type="button"
-              className="tasks-row-title"
-              aria-label={`View "${task.title}"`}
-              aria-expanded={expandedTaskId === task.id}
-              disabled={busy}
-              onClick={(event) => {
-                event.stopPropagation();
-                setEditor(null);
-                setConfirmingDelete(false);
-                setExpandedTaskId((current) =>
-                  current === task.id ? null : task.id,
-                );
-              }}
-            >
-              {task.title}
-            </button>
-            {includeNestedScopes && (
-              <TaskLocation
-                task={task}
-                view={view}
-                threadTitles={threadTitles}
-                workspaceLabels={workspaceLabels}
-              />
-            )}
-            {task.details.length > 0 && (
-              <span className="tasks-row-notes" title="Has notes">
-                <AlignLeft size={13} strokeWidth={1.8} aria-label="Has notes" />
-              </span>
-            )}
-            {task.files.length > 0 && (
-              <span
-                className="tasks-row-files"
-                title={`${task.files.length} linked file${task.files.length === 1 ? "" : "s"}`}
-              >
-                <Files
-                  size={13}
-                  strokeWidth={1.8}
-                  aria-label={`${task.files.length} linked file${task.files.length === 1 ? "" : "s"}`}
-                />
-              </span>
-            )}
-            <button
-              type="button"
-              className="tasks-row-pin"
-              data-pinned={task.pinned || undefined}
-              aria-label={
-                task.pinned ? `Unpin "${task.title}"` : `Pin "${task.title}"`
-              }
-              aria-pressed={task.pinned}
-              disabled={busy}
-              onClick={(event) => {
-                event.stopPropagation();
-                void togglePinned(task);
-              }}
-            >
-              <Pin size={14} strokeWidth={1.8} aria-hidden="true" />
-            </button>
-          </li>
-        ))}
-      </ul>
+      </li>
+    );
+  };
 
-      {selectedTask && !editor && (
-        <div className="tasks-detail-area">
-          <div className="tasks-detail-heading">
-            <strong className="tasks-detail-title">{selectedTask.title}</strong>
-            <div className="tasks-detail-heading-actions">
-              <Button
-                variant="ghost"
-                size="xs"
-                disabled={busy}
-                onClick={() => openEditor(selectedTask)}
-              >
-                Edit
-              </Button>
-            </div>
-          </div>
-          <p className="tasks-detail-description">
-            {selectedTask.details || "No description."}
-          </p>
-          {selectedTask.files.length > 0 && (
-            <div className="tasks-files" aria-label="Linked files">
-              <span className="tasks-files-label">Files</span>
-              {selectedTask.files.map((absolutePath) => {
-                const fetchable = Boolean(workspace?.available);
-                const content = (
-                  <>
-                    <File size={15} strokeWidth={1.8} aria-hidden="true" />
-                    <span className="tasks-file-text">
-                      <span className="tasks-file-name">
-                        {taskFileName(absolutePath)}
-                      </span>
-                      <span className="tasks-file-path">{absolutePath}</span>
-                    </span>
-                  </>
-                );
-                return fetchable ? (
-                  <button
-                    type="button"
-                    className="tasks-file-row"
-                    key={absolutePath}
-                    disabled={busy}
-                    aria-label={`Open ${absolutePath} in Files`}
-                    onClick={(event) => {
-                      const presentation = resolvePanelPresentation(
-                        getPanelPresentation(),
-                        event.shiftKey,
-                      );
-                      void openTaskFile(absolutePath, presentation);
-                    }}
-                  >
-                    {content}
-                  </button>
-                ) : (
-                  <div className="tasks-file-row" key={absolutePath}>
-                    {content}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          <div className="tasks-detail-actions">
-            <Button
-              variant="secondary"
-              size="xs"
-              disabled={threadId === undefined}
-              title={
-                threadId === undefined
-                  ? "Open a thread to add this task to its prompt."
-                  : composerDraft?.getSnapshot().available === false
-                    ? composerDraft.getSnapshot().reason
-                    : undefined
-              }
-              onClick={() => addTaskToPrompt(selectedTask)}
-            >
-              <Plus size={14} aria-hidden="true" /> Add to prompt
+  const emptyState = (() => {
+    if (mainTasks.length > 0 || visibleCreating.length > 0) return null;
+    if (searchFiltering) {
+      return (
+        <EmptyState
+          variant="inline"
+          className="tasks-empty"
+          title={`No tasks match “${searchText.trim()}”.`}
+          action={
+            <Button variant="ghost" size="sm" onClick={closeSearch}>
+              Clear search
             </Button>
-          </div>
-        </div>
-      )}
-
-      {editor && editingTask && (
-        <div
-          className="tasks-editor"
-          onKeyDownCapture={(event) => {
-            if (
-              event.key === "Enter" &&
-              (event.metaKey || event.ctrlKey) &&
-              !event.nativeEvent.isComposing
-            ) {
-              event.preventDefault();
-              event.stopPropagation();
-              void saveEditor();
-            }
-          }}
-        >
-          <div className="tasks-editor-heading">
-            {confirmingDelete ? (
-              <>
-                <span className="tasks-editor-delete-prompt">
-                  Delete this task?
-                </span>
-                <div className="tasks-editor-actions-main">
-                  <Button
-                    variant="destructive"
-                    size="xs"
-                    disabled={busy}
-                    onClick={() => void deleteEditingTask()}
-                  >
-                    Delete
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    disabled={busy}
-                    onClick={() => setConfirmingDelete(false)}
-                  >
-                    Keep editing
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <>
-                <span className="tasks-editor-title">Edit task</span>
-                <div className="tasks-editor-actions">
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="text-destructive hover:text-destructive"
-                    aria-label="Delete task"
-                    disabled={busy}
-                    onClick={() => setConfirmingDelete(true)}
-                  >
-                    <Trash2 size={16} strokeWidth={1.8} />
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="icon-sm"
-                    aria-label="Save task"
-                    disabled={busy || !editorScopeAvailable}
-                    onClick={() => void saveEditor()}
-                  >
-                    <Check size={16} strokeWidth={1.8} />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label="Cancel editing"
-                    disabled={busy}
-                    onClick={() => {
-                      setEditor(null);
-                      setConfirmingDelete(false);
-                    }}
-                  >
-                    <X size={16} strokeWidth={1.8} />
-                  </Button>
-                </div>
-              </>
-            )}
-          </div>
-          <div className="tasks-editor-scope">
-            <span className="tasks-editor-label">Scope</span>
-            <SegmentedControl
-              ariaLabel="Task scope"
-              size="small"
-              value={scopeView(editor.scope)}
-              options={VIEW_ORDER.map((candidate) => ({
-                value: candidate,
-                label: VIEW_LABEL[candidate],
-                disabled: busy || (!availableViews[candidate] &&
-                  (savedEditorScope === undefined || scopeView(savedEditorScope) !== candidate)),
-              }))}
-              onChange={(value) =>
-                setEditor({
-                  ...editor,
-                  scope: savedEditorScope !== undefined && scopeView(savedEditorScope) === value
-                    ? savedEditorScope
-                    : viewScope(value as TasksView, value === "thread" ? threadContext : projectContext),
+          }
+        />
+      );
+    }
+    if (filtering) {
+      const nothing = options.show === "completed" && !options.onlyPinned && !options.onlyWithNotes && !options.onlyWithFiles;
+      return (
+        <EmptyState
+          variant="inline"
+          className="tasks-empty"
+          title={nothing ? "No completed tasks." : "No tasks match the view options."}
+          action={
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                setOptions({
+                  show: "open",
+                  onlyPinned: false,
+                  onlyWithNotes: false,
+                  onlyWithFiles: false,
                 })
               }
-            />
-          </div>
-          {editor.scope.kind === "workspace" && (
-            <SearchableSelect
-          presentation={mobile ? "dialog" : "popover"}
-              label="Assign task to project"
-              searchLabel="Search projects"
-              emptyLabel="No matching projects."
-              value={editor.scope.workspaceId ?? ""}
-              selectedLabel={editor.scope.workspaceId ? workspaceLabels.get(editor.scope.workspaceId) ?? "Unavailable project" : undefined}
-              placeholder="Select…"
-              options={projectOptions}
-              disabled={busy}
-              onValueChange={(workspaceId) => setEditor({ ...editor, scope: { kind: "workspace", workspaceId } })}
-            />
-          )}
-          {editor.scope.kind === "thread" && (
-            <SearchableSelect
-          presentation={mobile ? "dialog" : "popover"}
-              label="Assign task to thread"
-              searchLabel="Search threads"
-              emptyLabel="No matching threads."
-              value={editor.scope.threadId ?? ""}
-              selectedLabel={editor.scope.threadId ? threadTitles.get(editor.scope.threadId) ?? "Unavailable thread" : undefined}
-              placeholder="Select…"
-              options={threadOptions}
-              disabled={busy}
-              onValueChange={(threadId) => setEditor({ ...editor, scope: { kind: "thread", threadId } })}
-            />
-          )}
-          <Input
-            value={editor.title}
-            aria-label="Task title"
-            maxLength={240}
-            disabled={busy}
-            onChange={(event) =>
-              setEditor({ ...editor, title: event.target.value })
-            }
-          />
-          <div className="tasks-editor-files">
-            <span className="tasks-editor-label">Files</span>
-            {editor.files.map((path) => (
-              <div className="tasks-editor-file-row" key={path}>
-                <File size={15} strokeWidth={1.8} aria-hidden="true" />
-                <span className="tasks-editor-file-path" title={path}>
-                  {path}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label={`Remove ${path}`}
-                  disabled={busy}
-                  onClick={() =>
-                    setEditor({
-                      ...editor,
-                      files: editor.files.filter(
-                        (candidate) => candidate !== path,
-                      ),
-                    })
-                  }
-                >
-                  <X size={14} strokeWidth={1.8} />
-                </Button>
-              </div>
-            ))}
-            <div className="tasks-editor-file-add">
-              <Input
-                value={newFilePath}
-                aria-label="Absolute file path"
-                placeholder="/absolute/path/to/file"
-                maxLength={TASK_FILE_MAX_PATH_BYTES}
-                disabled={busy || editor.files.length >= TASK_FILES_MAX_COUNT}
-                onChange={(event) => setNewFilePath(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    addEditorFile();
-                  }
-                }}
-              />
-              <Button
-                variant="secondary"
-                size="icon-sm"
-                aria-label="Add file"
-                disabled={
-                  busy ||
-                  newFilePath.trim().length === 0 ||
-                  editor.files.length >= TASK_FILES_MAX_COUNT
-                }
-                onClick={addEditorFile}
-              >
-                <Plus size={15} strokeWidth={1.8} />
-              </Button>
-            </div>
-          </div>
-          <span className="tasks-editor-label">Notes</span>
-          <Textarea
-            value={editor.details}
-            aria-label="Task notes"
-            placeholder="Add notes, links, or follow-up steps"
-            maxLength={TASK_DETAILS_MAX_CHARACTERS}
-            disabled={busy}
-            onChange={(event) =>
-              setEditor({ ...editor, details: event.target.value })
-            }
-          />
+            >
+              {nothing ? "Show open tasks" : "Reset view options"}
+            </Button>
+          }
+        />
+      );
+    }
+    if (completedSection.length > 0) {
+      return (
+        <EmptyState
+          variant="inline"
+          className="tasks-empty"
+          title="All done."
+          description="Every task here is completed."
+        />
+      );
+    }
+    return (
+      <EmptyState
+        variant="inline"
+        className="tasks-empty"
+        title={EMPTY_TITLE[view]}
+        description={EMPTY_DESCRIPTION[view]}
+      />
+    );
+  })();
+
+  const scopeControl = (
+    <SegmentedControl
+      aria-label="Task scope view"
+      aria-describedby={scopeHintId}
+      className="tasks-scope"
+      value={view}
+      onValueChange={(value) => {
+        const next = TASKS_VIEWS.find((candidate) => candidate === value);
+        if (next) changeView(next);
+      }}
+    >
+      {TASKS_VIEWS.map((candidate) => {
+        const reason = viewUnavailableReason(candidate, context);
+        const segment = (
+          <SegmentedControlItem
+            value={candidate}
+            disabled={reason !== undefined}
+            className="tasks-scope-item"
+            // A phone sheet opens on the view, not the add bar, so the
+            // soft keyboard does not cover the list on every open.
+            data-autofocus={sheet && candidate === view ? "" : undefined}
+            aria-describedby={`${scopeHintId}-${candidate}`}
+            {...scopeDrop.props(candidate, scopeDropTarget(candidate))}
+          >
+            {TASKS_VIEW_LABEL[candidate]}
+            {reason === undefined && (
+              <span className="tasks-scope-count" aria-hidden="true">
+                {viewCount(candidate)}
+              </span>
+            )}
+          </SegmentedControlItem>
+        );
+        const description = (
+          <span id={`${scopeHintId}-${candidate}`} className="sr-only">
+            {reason ?? `${viewCount(candidate)} open`}
+          </span>
+        );
+        return reason === undefined ? (
+          <span key={candidate} className="tasks-scope-slot">
+            {segment}
+            {description}
+          </span>
+        ) : (
+          <UnavailableScopeSlot key={candidate} reason={reason}>
+            {segment}
+            {description}
+          </UnavailableScopeSlot>
+        );
+      })}
+    </SegmentedControl>
+  );
+  const scopeHint = TASKS_VIEWS.map((candidate) => {
+    const reason = viewUnavailableReason(candidate, context);
+    return reason ? `${TASKS_VIEW_LABEL[candidate]}: ${reason}` : undefined;
+  })
+    .filter(Boolean)
+    .join(" ");
+
+  // ⋯: the docked panel folds these into its actions menu instead.
+  const moreItems = (
+    <>
+      <DropdownMenuItem onSelect={() => focusAdd(true)}>
+        <AlignLeft />
+        <span>Add a task with notes</span>
+      </DropdownMenuItem>
+      {groups && groups.length > 0 && (
+        <DropdownMenuItem
+          onSelect={() =>
+            setCollapsedGroups(
+              collapsedGroups.size > 0
+                ? new Set()
+                : new Set(
+                    groups.flatMap((group) => [
+                      group.key,
+                      ...group.children.map(({ key }) => key),
+                    ]),
+                  ),
+            )
+          }
+        >
+          {collapsedGroups.size > 0 ? <ChevronsUpDown /> : <ChevronsDownUp />}
+          <span>
+            {collapsedGroups.size > 0 ? "Expand all groups" : "Collapse all groups"}
+          </span>
+        </DropdownMenuItem>
+      )}
+      {!touch && (
+        <DropdownMenuItem onSelect={() => setShortcutsOpen(true)}>
+          <Keyboard />
+          <span>Keyboard shortcuts</span>
+        </DropdownMenuItem>
+      )}
+    </>
+  );
+
+  const searchButton = (
+    <Button
+      ref={searchButtonRef}
+      variant="ghost"
+      size="icon-sm"
+      className="tasks-header-button"
+      aria-label="Search tasks"
+      aria-pressed={searchOpen}
+      title="Search (/)"
+      onClick={() => (searchOpen ? closeSearch() : openSearch())}
+    >
+      <Search aria-hidden="true" />
+    </Button>
+  );
+
+  // Phones have no room for it: the sheet's ⋯ carries the View options.
+  const viewOptionsMenu = !sheet && (
+    <DropdownMenu open={active && viewMenuOpen} onOpenChange={setViewMenuOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="tasks-header-button"
+          aria-label="View options"
+          title="View options"
+          data-filtering={filtering || undefined}
+        >
+          <ListFilter aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" aria-label="View options">
+        <TaskViewOptionsItems view={view} options={options} onChange={setOptions} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+
+  const closeButton = (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      className="tasks-header-button"
+      aria-label="Close Tasks panel"
+      title="Close"
+      onClick={() => onRequestClose()}
+    >
+      <X aria-hidden="true" />
+    </Button>
+  );
+
+  // The header counts what the list shows, like the segments when nothing
+  // narrows it; search or an Only option makes it "1 of 3", out of the
+  // segment's count. Show › Completed counts completed tasks.
+  const listedKind = options.show === "completed" ? "completed" : "open";
+  const listedTotal =
+    options.show === "completed"
+      ? tasks.filter(
+          (task) =>
+            task.completedAt !== null &&
+            inViewScope(task, view, context, options.includeThreadTasks),
+        ).length
+      : viewCount(view);
+  const countBadge =
+    mainTasks.length === listedTotal ? (
+      <CountBadge
+        count={listedTotal}
+        className="tasks-title-count"
+        aria-label={`${listedTotal} ${listedKind}`}
+      />
+    ) : (
+      <span
+        data-slot="count-badge"
+        data-tone="neutral"
+        className={cn(countBadgeVariants(), "tasks-title-count")}
+        aria-label={`${mainTasks.length} of ${listedTotal} ${listedKind} shown`}
+      >
+        {mainTasks.length} of {listedTotal}
+      </span>
+    );
+
+  // Removing a chip moves focus to its neighbour, else to the scope.
+  const filtersRef = useRef<HTMLDivElement>(null);
+  const removeFilter = (index: number) => {
+    const filter = filters[index];
+    if (!filter) return;
+    setOptions(filter.clear);
+    const keys = filters.map(({ key }) => key);
+    const next = keys[index + 1] ?? keys[index - 1];
+    requestAnimationFrame(() => {
+      const target = next
+        ? filtersRef.current?.querySelector<HTMLElement>(`[data-filter="${next}"]`)
+        : rootRef.current?.querySelector<HTMLElement>(
+            '.tasks-scope-item[data-state="on"]',
+          );
+      target?.focus();
+    });
+  };
+  const filterChips = filtering && (
+    <div
+      ref={filtersRef}
+      className="tasks-filters"
+      role="group"
+      aria-label="View filters"
+    >
+      {filters.map((filter, index) => (
+        <Button
+          key={filter.key}
+          variant="outline"
+          size="sm"
+          className="tasks-filter-chip"
+          data-filter={filter.key}
+          aria-label={`Remove filter: ${filter.label}`}
+          onClick={() => removeFilter(index)}
+        >
+          {filter.label}
+          <X data-icon="inline-end" aria-hidden="true" />
+        </Button>
+      ))}
+    </div>
+  );
+
+  const header = sheetDetail ? (
+    <header className="tasks-header" data-detail="true">
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="tasks-header-button tasks-back"
+        aria-label="Back to tasks"
+        onClick={() => {
+          setFocusRequest(expandedTask.id);
+          setExpandedId(null);
+        }}
+      >
+        <ChevronLeft aria-hidden="true" />
+      </Button>
+      <h2 className="tasks-title">Task</h2>
+      <div className="tasks-header-actions">
+        <TaskRowMenu
+          task={expandedTask}
+          focusable
+          trigger={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="tasks-header-button"
+              aria-label={`Actions for "${expandedTask.title}"`}
+            >
+              <Ellipsis aria-hidden="true" />
+            </Button>
+          }
+        />
+        {closeButton}
+      </div>
+    </header>
+  ) : presentation === "panel" && panelControls ? (
+    // Docked: the panel family's header, with the layout's collapse, dock
+    // and close controls and one actions menu.
+    <PanelChrome
+      className="tasks-header-chrome"
+      panelTitle="Tasks"
+      leading={
+        <div className="workspace-panel-title">
+          <span>Tasks</span>
+          {countBadge}
         </div>
+      }
+      panelActions={
+        <>
+          {searchButton}
+          {viewOptionsMenu}
+        </>
+      }
+      controls={{ ...panelControls, renderMenuItems: moreItems }}
+    />
+  ) : (
+    <header className="tasks-header">
+      <h2 className="tasks-title">
+        Tasks
+        {countBadge}
+      </h2>
+      <div className="tasks-header-actions">
+        {searchButton}
+        {viewOptionsMenu}
+        <DropdownMenu
+          presentation={touch ? "sheet" : "menu"}
+          open={active && headerMenuOpen}
+          onOpenChange={setHeaderMenuOpen}
+        >
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="tasks-header-button"
+              aria-label="Tasks panel options"
+              title="More"
+            >
+              <Ellipsis aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" sheetTitle="Tasks">
+            {sheet && (
+              <>
+                <TaskViewOptionsItems view={view} options={options} onChange={setOptions} />
+                <DropdownMenuSeparator />
+              </>
+            )}
+            {moreItems}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {closeButton}
+      </div>
+    </header>
+  );
+
+  const addRow = (
+    <TaskAddRow
+      variant={sheet ? "bar" : "row"}
+      placeholder={ADD_PLACEHOLDER[view]}
+      draft={addDraft}
+      inputRef={addInputRef}
+      onDraftChange={setAddDraft}
+      onAdd={addTask}
+      onPasteMany={setPasteTitles}
+    />
+  );
+
+  const list = (
+    <div
+      ref={listRef}
+      className="tasks-scroll"
+      {...scopeDrop.props(view, scopeDropTarget(view))}
+      onKeyDown={onListKeyDown}
+      onFocus={onListFocus}
+      onBlur={onListBlur}
+    >
+      {groups ? (
+        <ul className="tasks-list" aria-label={`${TASKS_VIEW_LABEL[view]} tasks`}>
+          {visibleCreating.map((entry) => (
+            <PendingTaskRow key={entry.key} title={entry.title} />
+          ))}
+          {groups.map(renderGroup)}
+        </ul>
+      ) : (
+        <ul className="tasks-list" aria-label={`${TASKS_VIEW_LABEL[view]} tasks`}>
+          {visibleCreating.map((entry) => (
+            <PendingTaskRow key={entry.key} title={entry.title} />
+          ))}
+          {mainTasks.map(renderRow)}
+        </ul>
+      )}
+      {emptyState}
+      {completedSection.length > 0 && (
+        <section className="tasks-section" aria-label="Completed tasks">
+          <TaskListHeading
+            variant="section"
+            navKey="completed"
+            focusable={rovingKey === "completed"}
+            expanded={completedOpen}
+            onToggle={() => setCompletedOpen((open) => !open)}
+            onKeyDown={onHeadingKeyDown}
+            label="Completed"
+            count={completedSection.length}
+          />
+          {completedOpen && (
+            <ul className="tasks-list" aria-label="Completed tasks">
+              {completedSection.map(renderRow)}
+            </ul>
+          )}
+        </section>
       )}
     </div>
   );
+
+  const errorCallout = error && (
+    <div className="tasks-alert">
+      <Callout tone="danger" role="alert">
+        {error}
+      </Callout>
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        className="tasks-alert-dismiss"
+        aria-label="Dismiss error"
+        onClick={() => setError(null)}
+      >
+        <X aria-hidden="true" />
+      </Button>
+    </div>
+  );
+
+  const searchRow = searchOpen && !sheetDetail && (
+    <div className="tasks-search">
+      <Search className="tasks-search-icon" aria-hidden="true" />
+      <input
+        ref={searchInputRef}
+        autoFocus
+        type="text"
+        className="tasks-search-input"
+        aria-label="Search tasks"
+        placeholder={options.searchNotes ? "Search titles and notes" : "Search titles"}
+        autoComplete="off"
+        maxLength={240}
+        value={searchText}
+        onChange={(event) => setSearchText(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
+            closeSearch();
+          }
+        }}
+      />
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        aria-label="Close search"
+        onClick={closeSearch}
+      >
+        <X aria-hidden="true" />
+      </Button>
+    </div>
+  );
+
+  const deletingTask = deletingId ? tasks.find(({ id }) => id === deletingId) : undefined;
+  const editingTask = editingId ? tasks.find(({ id }) => id === editingId) : undefined;
+  const choosingTask = choosingMoveId
+    ? tasks.find(({ id }) => id === choosingMoveId)
+    : undefined;
+  const neighbourFocus = (taskId: string) => () => {
+    const index = navKeys.indexOf(taskNavKey(taskId));
+    const key = navKeys[index + 1] ?? navKeys[index - 1];
+    return key
+      ? listRef.current?.querySelector<HTMLElement>(
+          `[data-tasks-nav="${CSS.escape(key)}"]`,
+        )
+      : addInputRef.current;
+  };
+
+  return (
+    <TaskListProvider value={environment}>
+      <div
+        ref={rootRef}
+        className="tasks-content"
+        data-presentation={presentation}
+        data-touch={touch || undefined}
+        data-task-detail-open={sheetDetail || undefined}
+        onKeyDown={onRootKeyDown}
+      >
+        {header}
+        {sheetDetail ? (
+          <>
+            <div className="tasks-sheet-detail">
+              <div className="tasks-sheet-detail-title">
+                <TaskCheck task={expandedTask} className="tasks-check" />
+                <h3>{expandedTask.title}</h3>
+              </div>
+              <TaskNotes task={expandedTask} />
+              <TaskFileChips task={expandedTask} />
+              <TaskFacts task={expandedTask} />
+            </div>
+            {errorCallout}
+            <div className="tasks-sheet-actions">
+              <Button
+                variant="outline"
+                size="lg"
+                onClick={() => actions.edit(expandedTask)}
+              >
+                <Pencil aria-hidden="true" />
+                Edit
+              </Button>
+              <Button
+                size="lg"
+                disabled={threadId === undefined}
+                onClick={() => actions.addToPrompt(expandedTask)}
+              >
+                <CornerDownLeft aria-hidden="true" />
+                Add to prompt
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            {searchRow}
+            <div className="tasks-toolbar">
+              {scopeControl}
+              <span id={scopeHintId} className="sr-only">
+                {scopeHint}
+              </span>
+              {filterChips}
+              {!sheet && addRow}
+            </div>
+            {errorCallout}
+            {list}
+            {sheet && addRow}
+          </>
+        )}
+        <div className="sr-only" role="status" aria-live="polite">
+          {announcement}
+        </div>
+      </div>
+
+      {editingId !== null && (
+        <TaskEditDialog
+          key={editingId}
+          task={editingTask}
+          open={active}
+          surface={presentation}
+          store={store}
+          destinations={destinations}
+          onClose={() => setEditingId(null)}
+        />
+      )}
+      <ConfirmDialog
+        open={active && deletingTask !== undefined}
+        tone="danger"
+        title="Delete task?"
+        description={`“${deletingTask?.title ?? ""}” will be deleted permanently. Prompts that already carry it keep their copy.`}
+        confirmLabel="Delete task"
+        pendingLabel="Deleting…"
+        fallbackFocus={deletingTask ? neighbourFocus(deletingTask.id) : undefined}
+        onOpenChange={(open) => {
+          if (!open) setDeletingId(null);
+        }}
+        onConfirm={async () => {
+          if (!deletingTask) return;
+          markPending(deletingTask.id, "delete", true);
+          try {
+            await store.deleteTask(deletingTask.id);
+          } finally {
+            markPending(deletingTask.id, "delete", false);
+          }
+          if (expandedId === deletingTask.id) setExpandedId(null);
+          announce(`Deleted “${deletingTask.title}”.`);
+        }}
+      />
+      <ConfirmDialog
+        open={active && pendingMove !== undefined}
+        title="Move task with project files?"
+        description={`This task links to project files. Moving it to ${pendingMove ? destinations.label(pendingMove.scope) : "another place"} keeps those absolute file paths unchanged.`}
+        confirmLabel="Move task"
+        pendingLabel="Moving…"
+        onOpenChange={(open) => {
+          if (!open) setPendingMove(undefined);
+        }}
+        onConfirm={async () => {
+          if (!pendingMove) return;
+          await moveNow(pendingMove.task, pendingMove.scope);
+        }}
+      />
+      <ConfirmDialog
+        open={active && pasteTitles !== null}
+        title={`Create ${pasteTitles?.length ?? 0} tasks?`}
+        description={`Each pasted line becomes a task${destination ? ` in ${destinations.label(destination)}` : ""}.`}
+        confirmLabel={`Create ${pasteTitles?.length ?? 0} tasks`}
+        pendingLabel="Creating…"
+        blockers={
+          (pasteTitles?.length ?? 0) > TASK_PASTE_MAX_TITLES
+            ? [`Paste at most ${TASK_PASTE_MAX_TITLES} lines at a time.`]
+            : []
+        }
+        onOpenChange={(open) => {
+          if (!open) setPasteTitles(null);
+        }}
+        onConfirm={async () => {
+          if (!pasteTitles || !destination) return;
+          // Created last-first, so the newest-first list reads in pasted order.
+          const remaining = [...pasteTitles];
+          while (remaining.length > 0) {
+            const title = remaining.at(-1)!;
+            try {
+              await store.createTask(title, destination);
+            } catch (cause) {
+              setPasteTitles([...remaining]);
+              throw cause;
+            }
+            remaining.pop();
+          }
+          announce(`Added ${pasteTitles.length} tasks.`);
+          setError(null);
+        }}
+      >
+        <ul className="tasks-paste-preview">
+          {(pasteTitles ?? []).slice(0, 6).map((title, index) => (
+            <li key={index}>{title}</li>
+          ))}
+          {(pasteTitles?.length ?? 0) > 6 && (
+            <li className="tasks-paste-more">
+              and {(pasteTitles?.length ?? 0) - 6} more
+            </li>
+          )}
+        </ul>
+      </ConfirmDialog>
+      <Dialog
+        open={active && choosingTask !== undefined}
+        onOpenChange={(open) => {
+          if (!open) setChoosingMoveId(null);
+        }}
+      >
+        <DialogContent
+          size="sm"
+            mobile="sheet"
+          className="searchable-select-sheet tasks-move-dialog"
+          aria-describedby={undefined}
+        >
+          <DialogHeader>
+            <DialogTitle>Move task</DialogTitle>
+          </DialogHeader>
+          {choosingTask && (
+            <SearchableSelectList
+              label="Destination"
+              searchLabel="Search threads and projects"
+              emptyLabel="No matching threads or projects."
+              value={scopeKey(choosingTask.scope)}
+              options={destinations.options(choosingTask.scope)}
+              initialDirection="first"
+              onValueChange={(value) => {
+                const scope = parseScopeKey(value);
+                setChoosingMoveId(null);
+                if (scope) moveTo(choosingTask, scope);
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={active && shortcutsOpen} onOpenChange={setShortcutsOpen}>
+        <DialogContent size="sm" aria-describedby={undefined}>
+          <DialogHeader>
+            <DialogTitle>Tasks keyboard shortcuts</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <p className="tasks-shortcuts-note">
+              They work while focus is in Tasks and not in a text field.
+            </p>
+            <KeyValueList
+              items={KEYBOARD_SHORTCUTS.map(({ key, action }) => ({
+                key,
+                label: <kbd className="tasks-kbd">{key}</kbd>,
+                value: action,
+              }))}
+            />
+          </DialogBody>
+        </DialogContent>
+      </Dialog>
+    </TaskListProvider>
+  );
 }
 
+/**
+ * The slot of a scope segment that does not apply. A disabled segment takes
+ * neither focus nor pointer events, so its slot shows the reason: a tooltip
+ * on hover, and on a tap or click, which is all touch has. Keyboard and
+ * screen-reader users have it in the control's description.
+ */
+function UnavailableScopeSlot({
+  reason,
+  children,
+}: {
+  readonly reason: string;
+  readonly children: ReactNode;
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  return (
+    <Tooltip.Provider delayDuration={300}>
+      <Tooltip.Root open={open} onOpenChange={setOpen}>
+        <Tooltip.Trigger asChild>
+          <span
+            className="tasks-scope-slot"
+            data-unavailable=""
+            onClick={(event) => {
+              // The trigger would close the tooltip on a click.
+              event.preventDefault();
+              setOpen(true);
+            }}
+          >
+            {children}
+          </span>
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content
+            className="lineage-tooltip"
+            side="bottom"
+            sideOffset={6}
+            collisionPadding={8}
+          >
+            {reason}
+            <Tooltip.Arrow className="lineage-tooltip-arrow" />
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+    </Tooltip.Provider>
+  );
+}
+
+function createBodyTarget(): HTMLElement {
+  const target = document.createElement("div");
+  target.style.display = "contents";
+  return target;
+}
+
+/** Interaction inside a menu, picker or dialog layered above the popover. */
+function insideOtherLayer(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    target.closest(
+      '[role="menu"], [role="listbox"], [role="dialog"], [role="alertdialog"], [data-slot="popover-content"], [data-slot="dropdown-menu-content"]',
+    ) !== null
+  );
+}
+
+/**
+ * The Tasks host: one retained body, shown docked beside Chat in a thread
+ * workspace, as a popover on pages without panels, and as a sheet on phones.
+ * It wraps the workbench so its toggles and the `tasks` panel tenant reach
+ * it through context.
+ */
 export function TasksPanel({
   active = true,
   route: retainedRoute,
   store,
   panelLayoutStore,
+  children,
 }: {
   store: ApplicationClientStore;
   panelLayoutStore: PanelLayoutStore;
   active?: boolean;
   route?: Route;
-}): React.JSX.Element | null {
-  const preferences = useTasksPanelPreferences();
-  const mobile = useMediaQuery(MOBILE_QUERY);
-  const close = useCallback(() => setTasksPanelOpen(false), []);
-  const activeRef = useRef(active);
-  activeRef.current = active;
-  const [bodyTarget] = useState(() => {
-    const target = document.createElement("div");
-    target.style.display = "contents";
-    return target;
-  });
+  children?: ReactNode;
+}): React.JSX.Element {
+  const mobile = useMediaQuery(TASKS_SHEET_QUERY);
   const currentRoute = useRoute();
   const route = retainedRoute ?? currentRoute;
-  const rightOffset = usePrimaryRightAnchor(
-    active && preferences.open && !mobile,
-    route.name === "thread" ? `thread:${route.threadId}` : route.name,
+  const threadWorkspace = route.name === "thread";
+  const routeKey = threadWorkspace ? `thread:${route.threadId}` : route.name;
+  const [overlayOpen, setOverlayOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [announcement, setAnnouncement] = useState("");
+  const [dock, publishDock] = useState<TasksDock>();
+  const [bodyTarget] = useState(createBodyTarget);
+  const popoverAnchor = useRef<HTMLElement | null>(null);
+  const dismissedOutside = useRef(false);
+  // Settings unmounts the popover and the sheet; their focus restoration
+  // must not pull focus back into the hidden workspace.
+  const activeRef = useRef(active);
+  activeRef.current = active;
+
+  const placement: TasksPresentation | undefined = mobile
+    ? overlayOpen
+      ? "sheet"
+      : undefined
+    : threadWorkspace
+      ? dock?.present
+        ? "panel"
+        : undefined
+      : overlayOpen
+        ? "popover"
+        : undefined;
+
+  const latest = useRef({ mobile, threadWorkspace, dock, placement, editing });
+  latest.current = { mobile, threadWorkspace, dock, placement, editing };
+  // The presentation the content keeps while retained without a surface.
+  const lastPlacement = useRef<TasksPresentation>("popover");
+  if (placement) lastPlacement.current = placement;
+
+  // The popover and the sheet are transient: navigating or crossing the
+  // phone breakpoint closes them. The docked panel's open state is the
+  // panel layout's. An open editor is the exception at the breakpoint: so
+  // its unsaved edits survive, Tasks shows in the new presentation instead
+  // (the sheet, the popover, or the dock opened for it). While no surface
+  // shows an open editor, the content stays mounted, hidden, until one does.
+  const crossed = useRef({ routeKey, mobile });
+  useEffect(() => {
+    const before = crossed.current;
+    crossed.current = { routeKey, mobile };
+    if (before.routeKey === routeKey && before.mobile === mobile) return;
+    const { editing, dock } = latest.current;
+    if (before.routeKey !== routeKey || !editing) {
+      setOverlayOpen(false);
+      return;
+    }
+    if (mobile) {
+      setOverlayOpen(true);
+    } else if (threadWorkspace) {
+      setOverlayOpen(false);
+      if (dock && !dock.visible) dock.open({ focus: false });
+    }
+  }, [routeKey, mobile, threadWorkspace]);
+
+  const toggleOverlay = useCallback(
+    () => setOverlayOpen((open) => !open),
+    [],
   );
-  const widthRef = useRef(0);
-  if (widthRef.current === 0) widthRef.current = getTasksPanelWidth();
+  const requestClose = useCallback((message?: string) => {
+    if (latest.current.placement === "panel") latest.current.dock?.close();
+    else setOverlayOpen(false);
+    if (message === undefined) return;
+    setAnnouncement("");
+    window.setTimeout(() => setAnnouncement(message), 0);
+  }, []);
+  const toggle = useCallback(() => {
+    const { mobile, threadWorkspace, dock } = latest.current;
+    if (!mobile && threadWorkspace) dock?.toggle();
+    else toggleOverlay();
+  }, [toggleOverlay]);
+
+  useEffect(
+    () =>
+      subscribeReveal(() => {
+        const { mobile, threadWorkspace, dock } = latest.current;
+        // The content switches view and expands the task itself.
+        if (!mobile && threadWorkspace) dock?.open({ focus: false });
+        else setOverlayOpen(true);
+      }),
+    [],
+  );
 
   useEffect(() => {
-    if (!active || !preferences.open || mobile) return undefined;
+    if (!active) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      if (document.querySelector(OTHER_OVERLAY_SELECTOR) !== null) return;
-      close();
+      if (event.defaultPrevented || event.isComposing || event.repeat) return;
+      if (!matchesKeyboardShortcut(event, TASKS_TOGGLE_COMMAND.defaultBinding))
+        return;
+      // A dialog above the workbench keeps its keys, unless it is Tasks.
+      const dialog =
+        event.target instanceof Element
+          ? event.target.closest('[role="dialog"], [role="alertdialog"]')
+          : null;
+      if (dialog && !dialog.querySelector('[data-slot="tasks-panel"]')) return;
+      event.preventDefault();
+      toggle();
     };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [active, preferences.open, mobile, close]);
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active, toggle]);
 
-  if (!preferences.open) return null;
+  const host = useMemo<TasksHost>(
+    () => ({
+      bodyTarget,
+      placement,
+      overlayOpen,
+      toggleOverlay,
+      setPopoverAnchor: (element) => {
+        popoverAnchor.current = element;
+      },
+      publishDock,
+    }),
+    [bodyTarget, placement, overlayOpen, toggleOverlay],
+  );
 
-  const surface = mobile ? (
+  // The anchor is the corner controls; its button is the toggle.
+  const focusToggle = () =>
+    popoverAnchor.current?.querySelector("button")?.focus();
+
+  const surface =
+    placement === "popover" ? (
+      <Popover
+        open
+        onOpenChange={(open) => {
+          if (!open) setOverlayOpen(false);
+        }}
+      >
+        <PopoverAnchor virtualRef={popoverAnchor as RefObject<HTMLElement>} />
+        <PopoverContent
+          side="bottom"
+          align="end"
+          aria-label="Tasks"
+          className="max-h-[min(var(--radix-popover-content-available-height),680px)] w-[min(400px,calc(100vw-16px))] gap-0 overflow-hidden p-0"
+          onEscapeKeyDown={(event) => {
+            // Escape from inside the content closes one of its own layers
+            // first (an expanded row, search), then asks to close.
+            if (bodyTarget.contains(event.target as Node)) event.preventDefault();
+          }}
+          onOpenAutoFocus={(event) => {
+            dismissedOutside.current = false;
+            // The content marks its add row as the docked panel's focus
+            // target; the popover honours the same marker.
+            const preferred = (
+              event.currentTarget as HTMLElement
+            ).querySelector<HTMLElement>("[data-panel-autofocus]");
+            if (!preferred) return;
+            event.preventDefault();
+            preferred.focus();
+          }}
+          onInteractOutside={(event) => {
+            const target = event.detail.originalEvent.target;
+            // The toggle closes the popover itself, and menus or pickers
+            // opened from the retained body live outside this layer.
+            if (
+              (target instanceof Node &&
+                popoverAnchor.current?.contains(target)) ||
+              insideOtherLayer(target)
+            ) {
+              event.preventDefault();
+              return;
+            }
+            dismissedOutside.current = true;
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            if (activeRef.current && !dismissedOutside.current) focusToggle();
+          }}
+        >
+          <TasksSurface presentation="popover" target={bodyTarget} />
+        </PopoverContent>
+      </Popover>
+    ) : placement === "sheet" ? (
       <Dialog
         open
         onOpenChange={(open) => {
-          if (!open) close();
+          if (!open) setOverlayOpen(false);
         }}
       >
         <DialogContent
@@ -1486,10 +2042,17 @@ export function TasksPanel({
           onInteractOutside={(event) => {
             // The retained body is portaled into this surface. Its React
             // event ancestry differs from its physical DOM ancestry.
-            if (bodyTarget.contains(event.detail.originalEvent.target as Node)) event.preventDefault();
+            if (bodyTarget.contains(event.detail.originalEvent.target as Node))
+              event.preventDefault();
           }}
           aria-describedby={undefined}
           onEscapeKeyDown={(event) => {
+            // Escape from inside the content closes one of its own layers
+            // first (the detail, search), then asks to close.
+            if (bodyTarget.contains(event.target as Node)) {
+              event.preventDefault();
+              return;
+            }
             if (
               document.querySelector(
                 '.tasks-sheet [data-task-detail-open="true"]',
@@ -1504,59 +2067,53 @@ export function TasksPanel({
           }}
         >
           <DialogTitle className="sr-only">Tasks</DialogTitle>
-          <StablePaneSlot target={bodyTarget} style={{ display: "contents" }} />
+          <TasksSurface presentation="sheet" target={bodyTarget} />
         </DialogContent>
       </Dialog>
-    ) : (
-    <DismissableLayer
-      asChild
-      disableOutsidePointerEvents={false}
-      onFocusOutside={(event) => event.preventDefault()}
-      onPointerDownOutside={(event) => {
-        if (preferences.pinned || bodyTarget.contains(event.detail.originalEvent.target as Node)) event.preventDefault();
-      }}
-      onEscapeKeyDown={(event) => {
-        event.preventDefault();
-        close();
-      }}
-      onDismiss={() => {
-        if (!preferences.pinned) close();
-      }}
-    >
-      <section
-        id="tasks-panel"
-        className="tasks-panel"
-        data-slot="tasks-panel"
-        data-state="open"
-        role="region"
-        aria-label="Tasks"
-        style={{ right: rightOffset }}
+    ) : null;
+
+  return (
+    <TasksHostContext.Provider value={host}>
+      {children}
+      {/* Settings suspends the popover and the sheet but keeps the body
+          (and any unsaved edit in it) mounted; the docked panel stays in
+          the retained workbench. */}
+      {active ? (
+        surface
+      ) : surface ? (
+        <div hidden aria-hidden="true" inert>
+          <StablePaneSlot target={bodyTarget} />
+        </div>
+      ) : null}
+      {/* Outlives the popover and the sheet, for what is announced as
+          they close. Mounted on every page, so it takes the status role only
+          while it has something to say. */}
+      <div
+        className="sr-only"
+        role={announcement.length > 0 ? "status" : undefined}
+        aria-live="polite"
       >
-        <PaneResizeHandle
-          className="tasks-panel-resize-handle"
-          orientation="row"
-          reverse
-          value={widthRef.current}
-          min={tasksPanelWidthMin}
-          max={tasksPanelWidthMax}
-          resetValue={tasksPanelWidthDefault}
-          ariaLabel="Resize Tasks panel"
-          normalizeValue={clampTasksPanelWidth}
-          onPreview={(width) => {
-            widthRef.current = width;
-            applyTasksPanelWidth(width);
-          }}
-          onCommit={(width) => {
-            widthRef.current = setTasksPanelWidth(width);
-          }}
-        />
-        <StablePaneSlot target={bodyTarget} style={{ display: "contents" }} />
-      </section>
-    </DismissableLayer>
+        {announcement}
+      </div>
+      {placement || editing
+        ? createPortal(
+            <TasksPanelContent
+              store={store}
+              panelLayoutStore={panelLayoutStore}
+              route={route}
+              active={
+                active &&
+                placement !== undefined &&
+                (placement !== "panel" || dock?.visible === true)
+              }
+              presentation={placement ?? lastPlacement.current}
+              onRequestClose={requestClose}
+              panelControls={placement === "panel" ? dock?.controls : undefined}
+              onEditingChange={setEditing}
+            />,
+            bodyTarget,
+          )
+        : null}
+    </TasksHostContext.Provider>
   );
-  return <>
-    {active ? surface : <div hidden aria-hidden="true" inert><StablePaneSlot target={bodyTarget} /></div>}
-    {createPortal(<TasksPanelBody store={store} panelLayoutStore={panelLayoutStore}
-      route={route} active={active} onClose={close} mobile={mobile} />, bodyTarget)}
-  </>;
 }

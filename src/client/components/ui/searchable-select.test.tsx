@@ -203,6 +203,35 @@ describe("SearchableSelect", () => {
     expect(legacy).not.toHaveAttribute("aria-disabled");
   });
 
+  it("lets a path description give way from its start, keeping it whole in the tooltip", async () => {
+    const user = userEvent.setup();
+    const path = "/home/kevin/worktrees/run-fX8l/workspaces/billing-service";
+    render(
+      <SearchableSelect
+        label="Belongs to"
+        searchLabel="Search threads and projects"
+        emptyLabel="No matches"
+        value="note"
+        options={[
+          { value: "note", label: "Notes", description: "Build host · Codex" },
+          { value: "billing", label: "billing-service", description: path, descriptionIsPath: true },
+        ]}
+        onValueChange={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("combobox", { name: "Belongs to" }));
+    const billing = screen.getByRole("option", { name: `billing-service ${path}` });
+    expect(billing).toHaveAttribute("title", `billing-service\n${path}`);
+    const description = billing.querySelector('[data-slot="searchable-select-item-description"]')!;
+    expect(description).toHaveAttribute("data-path");
+    expect(description.querySelector("bdi")).toHaveTextContent(path);
+    const plain = screen
+      .getByRole("option", { name: "Notes Build host · Codex" })
+      .querySelector('[data-slot="searchable-select-item-description"]')!;
+    expect(plain).not.toHaveAttribute("data-path");
+    expect(plain.querySelector("bdi")).toBeNull();
+  });
+
   it("selects an unavailable option but never a disabled one", async () => {
     const user = userEvent.setup();
     const onValueChange = vi.fn();

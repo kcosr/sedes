@@ -232,7 +232,7 @@ test.describe("panel-instance workbench", () => {
     await expect(chat).toBeVisible();
   });
 
-  test("Tasks stays open with Chat collapsed and any sidebar thread selection restores and focuses Chat", async ({
+  test("docked Tasks stays open with Chat collapsed, follows thread switches, and selection restores and focuses Chat", async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -242,10 +242,14 @@ test.describe("panel-instance workbench", () => {
     const firstThreadId = firstThreadPath.split("/").at(-1)!;
     const secondThreadId = secondThreadPath.split("/").at(-1)!;
 
+    const tasks = page.locator('[data-slot="tasks-panel"]');
+    const tasksLeaf = page.locator('[data-panel-id="tasks"]');
     await page.getByTestId("tasks-panel-toggle").click();
-    await expect(page.locator('[data-slot="tasks-panel"]')).toBeVisible();
+    await expect(tasks).toBeVisible();
+    await expect(tasks).toHaveAttribute("data-presentation", "panel");
+    await expect(tasksLeaf).toBeVisible();
     await page.getByRole("button", { name: "Collapse Chat panel" }).click();
-    await expect(page.locator('[data-slot="tasks-panel"]')).toBeVisible();
+    await expect(tasks).toBeVisible();
 
     await page
       .getByTestId("desktop-sidebar")
@@ -257,6 +261,12 @@ test.describe("panel-instance workbench", () => {
       page.getByRole("textbox", { name: "Message Scripted agent" }),
     ).toBeFocused();
     await expect(page.locator('[data-panel-id="chat"]')).toHaveCount(1);
+    // Tasks stays docked in the next thread's layout, beside its Chat.
+    await expect(tasksLeaf).toBeVisible();
+    await expect(tasks).toHaveAttribute("data-presentation", "panel");
+    const chatBox = await page.locator('[data-panel-id="chat"]').boundingBox();
+    const tasksBox = await tasksLeaf.boundingBox();
+    expect(tasksBox!.x).toBeGreaterThanOrEqual(chatBox!.x + chatBox!.width);
 
     await page.getByRole("button", { name: "Collapse Chat panel" }).click();
     await page
@@ -269,6 +279,42 @@ test.describe("panel-instance workbench", () => {
       page.getByRole("textbox", { name: "Message Scripted agent" }),
     ).toBeFocused();
     await expect(page.locator('[data-panel-id="chat"]')).toHaveCount(1);
+  });
+
+  test("composer shrinks back to its empty height under reduced motion after Chat is collapsed beside Files", async ({
+    page,
+  }) => {
+    // A collapsed Chat keeps the composer laid out with no content width, so the
+    // placeholder wraps and the textarea measures at its 220px maximum. Reduced
+    // motion gives every element a 0.01ms transition, which must not hold the
+    // old height while the textarea measures itself back down.
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openSedesWorkspace(page);
+    await createDraftThread(page);
+    const textarea = page.getByRole("textbox", {
+      name: "Message Scripted agent",
+    });
+    const height = () =>
+      textarea.evaluate((element) => element.getBoundingClientRect().height);
+    const empty = await height();
+
+    await openPanelsTrigger(page).click();
+    await page.getByRole("menuitem", { name: /^Files(?: —|$)/ }).click();
+    await expect(
+      page.getByRole("region", { name: "Workspace files" }),
+    ).toBeVisible({ timeout: 15_000 });
+    await expect.poll(height).toBe(empty);
+    await page.getByRole("button", { name: "Collapse Chat panel" }).click();
+    await expect(page.getByTestId("thread-view")).toBeHidden();
+    await restoreCollapsed(page, "Chat");
+    await expect(textarea).toBeVisible();
+    await expect.poll(height).toBe(empty);
+
+    await textarea.fill("one\ntwo\nthree\nfour\nfive");
+    await expect.poll(height).toBeGreaterThan(empty);
+    await textarea.fill("");
+    await expect.poll(height).toBe(empty);
   });
 
   test("narrow Files panel collapses without unmounting and can become the base surface", async ({

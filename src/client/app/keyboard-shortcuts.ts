@@ -15,7 +15,7 @@ export interface KeyboardShortcutBinding {
 
 export interface KeyboardShortcutCommand {
   readonly id: string;
-  readonly scope: "sidebar";
+  readonly scope: "sidebar" | "global";
   readonly defaultBinding: KeyboardShortcutBinding;
 }
 
@@ -52,6 +52,18 @@ export const SIDEBAR_ADJACENT_THREAD_COMMANDS = {
     },
   },
 } as const satisfies Record<"previous" | "next", KeyboardShortcutCommand>;
+
+/**
+ * Opens or closes Tasks in the current presentation: the docked panel in a
+ * thread workspace, the popover on other pages, the sheet on phones.
+ * Ctrl+Shift+L (⌘⇧L): no browser or app binding uses it, while T and K are
+ * taken (reopen tab, web console) and Ctrl+Shift+F opens thread find.
+ */
+export const TASKS_TOGGLE_COMMAND = {
+  id: "tasks.toggle",
+  scope: "global",
+  defaultBinding: { key: "L", modifiers: ["primary", "shift"] },
+} as const satisfies KeyboardShortcutCommand;
 
 export function activePrimaryShortcutModifier(
   event: Pick<KeyboardEvent, "metaKey" | "ctrlKey">,

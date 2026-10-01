@@ -18,7 +18,9 @@ vi.mock("./SidebarNavTrigger.js", () => ({
   SidebarNavTrigger: () => null,
 }));
 vi.mock("./tasks/TasksPanelToggle.js", () => ({
-  TasksPanelToggle: () => null,
+  TasksPanelToggle: ({ count }: { readonly count?: number }) => (
+    <output aria-label="Tasks toggle count">{count ?? "none"}</output>
+  ),
 }));
 vi.mock("../workspace-panels/PanelLayout.js", () => ({
   PanelLayout: () => <div data-testid="panel-layout" />,
@@ -317,4 +319,43 @@ describe("Workbench new-thread creation scope", () => {
       "thread-after-navigation",
     );
   });
+
+  it.each(["home", "archived", "usage"] as const)(
+    "counts open global tasks on the %s corner toggle",
+    (name) => {
+      const task = (id: string, scope: unknown, completedAt: string | null = null) => ({ id, scope, completedAt });
+      const state = {
+        experimentalUsageEnabled: false,
+        snapshot: {
+          environments: [],
+          workspaces: [],
+          executionTargets: [],
+          tasks: [
+            task("global-open", { kind: "global" }),
+            task("global-open-2", { kind: "global" }),
+            task("global-done", { kind: "global" }, "2026-08-01T10:00:00.000Z"),
+            task("project-open", { kind: "workspace", workspaceId: "workspace-1" }),
+            task("thread-open", { kind: "thread", threadId: "thread-1" }),
+          ],
+        },
+        visibleThreads: [],
+      };
+      const applicationStore = {
+        api: { getUsageAnalytics: vi.fn() },
+        subscribe: () => () => undefined,
+        getSnapshot: () => state,
+        workspaceIdForThread: () => undefined,
+      };
+      render(
+        <Workbench
+          route={{ name }}
+          applicationStore={applicationStore as never}
+          threadRegistry={{} as never}
+          panelLayoutStore={{} as never}
+          panelTenants={{} as never}
+        />,
+      );
+      expect(screen.getByRole("status", { name: "Tasks toggle count" })).toHaveTextContent("2");
+    },
+  );
 });

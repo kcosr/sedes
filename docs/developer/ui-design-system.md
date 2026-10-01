@@ -39,6 +39,19 @@ match them, not the reverse.
   header's action glyphs are one step quieter (`--bar-icon` − 2px) on the same
   hit areas.
 
+**Workspace panels** have minimum widths: Chat 360px, a tenant its
+`size.minWidth` (Tasks 300px, Files and Workpads 320px), and Terminals and
+panels without a declared minimum the divider's 160px floor. A split gives each
+pane its fraction but never less than its minimum; when it cannot hold both,
+the minimums shrink together in proportion. A panel that arrives on the desktop
+stage collapses the least recently used side panels when the visible minimums
+no longer fit; resizing the window or switching threads never collapses one.
+A tenant first opens at its `size.preferredWidth`; with `size.preferredShare`
+it takes that share of the stage instead, kept between its minimum and
+preferred width (Tasks takes 35%: 300px at 1024px, 380px at 1440px). The rules
+are in `workspace-panels/layout-fit.ts`; declare a new tenant's minimum in its
+`size`.
+
 ## Tokens
 
 `:root` holds the light values and `:root[data-theme="dark"]` overrides only
@@ -184,6 +197,9 @@ subject's name and a meta line), and submenus drill in with a back row.
 wide as its trigger, with a plain search row over a divider. Options carry
 `label`, `description`, `icon`, `searchTerms`, `group`, `pinned` (always
 shown), `disabled`, or `unavailable` (dimmed with a note, still selectable).
+Set `descriptionIsPath` when the description is a path: a long one gives way
+from its start, so its last segments stay visible, and the row's tooltip keeps
+it whole.
 `presentation="dialog"` shows the shared bottom sheet; `trigger` takes a custom
 trigger such as a composer pill. Custom pickers reuse `SearchableSelectSearch`.
 
@@ -230,12 +246,11 @@ their stacking context. Within a band, use `calc(var(--z-x) + n)`.
 | Layer | Value | Holds |
 | --- | --- | --- |
 | `--z-sticky` | 1 | In-page sticky and raised chrome |
-| `--z-floating` | 50 | In-page popovers, the Tasks panel |
+| `--z-floating` | 50 | In-page popovers |
 | `--z-dialog` | 80 | Dialogs; floating surfaces portalled to the body sit at +10 |
 | `--z-drawer` | 81 | The mobile drawer |
 | `--z-over-dialog` | 100 | Sheets and dialogs over the drawer or a dialog, menu sheets, tooltips |
 | `--z-blocking` | 110 | The operation overlay, dialogs over it, confirmations and pickers over sheets |
-| `--z-toast` | 120 | Toasts |
 
 ## Style guardrails
 

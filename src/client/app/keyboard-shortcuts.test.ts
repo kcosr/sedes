@@ -6,6 +6,7 @@ import {
   matchesKeyboardShortcut,
   SIDEBAR_ADJACENT_THREAD_COMMANDS,
   SIDEBAR_QUICK_SWITCH_COMMANDS,
+  TASKS_TOGGLE_COMMAND,
 } from "./keyboard-shortcuts.js";
 
 describe("keyboard shortcut definitions", () => {
@@ -122,5 +123,38 @@ describe("keyboard shortcut definitions", () => {
     expect(keyboardShortcutAriaKey(binding, "meta")).toBe("Meta+3");
     expect(keyboardShortcutLabel(binding, "control")).toBe("Ctrl+3");
     expect(keyboardShortcutAriaKey(binding, "control")).toBe("Control+3");
+  });
+
+  it("toggles Tasks with primary+Shift+L, free of every other binding", () => {
+    const binding = TASKS_TOGGLE_COMMAND.defaultBinding;
+    expect(TASKS_TOGGLE_COMMAND).toMatchObject({
+      id: "tasks.toggle",
+      scope: "global",
+    });
+    const press = (init: Partial<KeyboardEvent>) => ({
+      key: "L",
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: true,
+      ...init,
+    });
+    expect(matchesKeyboardShortcut(press({ ctrlKey: true }), binding)).toBe(true);
+    expect(matchesKeyboardShortcut(press({ metaKey: true, key: "l" }), binding)).toBe(true);
+    expect(matchesKeyboardShortcut(press({ ctrlKey: true, shiftKey: false }), binding)).toBe(false);
+    expect(matchesKeyboardShortcut(press({ ctrlKey: true, altKey: true }), binding)).toBe(false);
+    expect(keyboardShortcutLabel(binding, "meta")).toBe("⌘+Shift+L");
+    expect(keyboardShortcutLabel(binding, "control")).toBe("Ctrl+Shift+L");
+
+    const others = [
+      ...SIDEBAR_QUICK_SWITCH_COMMANDS,
+      ...Object.values(SIDEBAR_ADJACENT_THREAD_COMMANDS),
+    ];
+    for (const command of others) {
+      expect(command.id).not.toBe(TASKS_TOGGLE_COMMAND.id);
+      expect(
+        matchesKeyboardShortcut(press({ ctrlKey: true }), command.defaultBinding),
+      ).toBe(false);
+    }
   });
 });

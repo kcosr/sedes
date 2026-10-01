@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendConversationEvent } from "../../src/shared/protocol/backend.js";
 import type { SessionMessageInfo } from "@opencode/client";
+import { RuntimeBackedQueuedInputConversationGateway } from "../../src/server/conversations/queued-input-conversation-gateway.js";
 import type { ConversationActorEvent } from "../../src/server/conversations/conversation-actor.js";
+import { OpenCodeNativeApi } from "../../src/server/backends/opencode/opencode-native-api.js";
+import { createOpenCodeExecutionFixture } from "../support/opencode-execution-fixture.js";
 import { createOpenCodeConversationFixture, scope, threadID } from "../support/opencode-conversation-fixture.js";
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -22,6 +25,100 @@ function completedMessages(turns: number): SessionMessageInfo[] {
 }
 
 describe("OpenCode driver through the shared conversation actor", () => {
+  it("releases next-Send admission when one finite refresh observes an entire fast turn", async () => {
+    const current = createOpenCodeExecutionFixture(); cleanup.push(current.dispose);
+    current.wire.messages.push(...completedMessages(1));
+    const acquired = await current.acquire();
+    const readActivity = OpenCodeNativeApi.prototype.getActivity;
+    const activity = vi.spyOn(OpenCodeNativeApi.prototype, "getActivity").mockImplementation(async function (this: OpenCodeNativeApi, ...args) {
+      const last = current.wire.messages.at(-1);
+      if (last?.type === "user") {
+        // Native completion lands after the finite cut contains only the user.
+        // The confirmation read gets the full terminal without a running cut.
+        const index = current.posts("/prompt").length;
+        current.wire.messages.push({ id: `msg_fast_answer_${index}`, type: "assistant", agent: "build",
+          model: { providerID: "provider", id: "model-a" }, content: [{ type: "text", text: `Answer ${index}` }],
+          time: { created: 11 + index * 3, completed: 12 + index * 3 } },
+        { id: `msg_fast_idle_${index}`, type: "idle", outcome: "succeeded", time: { created: 13 + index * 3 } });
+      }
+      return readActivity.apply(this, args);
+    });
+    try {
+      const generation = acquired.actor.timeline.generation;
+      const events: BackendConversationEvent[] = [];
+      (await current.handle()).subscribe(event => events.push(event));
+      for (let index = 1; index <= 2; index++) {
+        expect(acquired.actor.authoritativelySettled).toBe(true);
+        await acquired.actor.submit(current.submit(`fast-send-${index}`, `Question ${index}`));
+        await vi.waitFor(() => {
+          expect(acquired.actor.timeline.orderedTurnIds).toHaveLength(index + 1);
+          const latest = acquired.actor.timeline.orderedTurnIds.at(-1)!;
+          expect(acquired.actor.timeline.turnsById[latest]?.status).toBe("completed");
+        });
+        expect(acquired.actor.timeline.runState).toBe("idle");
+        await vi.waitFor(() => expect(acquired.actor.authoritativelySettled).toBe(true));
+        const nextAdmission = vi.fn(() => "ready");
+        expect(await acquired.actor.runIfIdle(nextAdmission)).toEqual({ executed: true, value: "ready" });
+        expect(nextAdmission).toHaveBeenCalledOnce();
+      }
+      expect(current.posts("/prompt")).toHaveLength(2);
+      expect(events.filter(event => event.type === "run_state_changed").map(event => event.state)).toEqual(["idle", "idle"]);
+      expect(events.filter(event => event.type === "turn_completed")).toHaveLength(2);
+      expect(events.some(event => event.type === "resnapshot_required")).toBe(false);
+      expect(acquired.actor.timeline.generation).toBe(generation);
+      expect(current.attached).toHaveBeenCalledOnce();
+    } finally { activity.mockRestore(); acquired.release(); }
+  });
+
+  it("keeps admitted input starting and action-safe until native history catches up without replacing the owner", async () => {
+    const current = fixture({ messages: completedMessages(1) });
+    const inboxPath = `/api/session/${current.wire.sessionID}/inbox`;
+    current.wire.setResponse(inboxPath, 200, { data: [{ id: "msg_pending", sessionID: current.wire.sessionID,
+      type: "user", delivery: "queue", payload: { text: "Next question" }, time: { created: 4 } }] });
+    const acquired = await current.acquire();
+    try {
+      const initial = await acquired.actor.captureSnapshotState();
+      expect(initial.timeline.runState).toBe("starting");
+      expect(initial.timeline.activeTurnId).toBeUndefined();
+      expect(initial.timeline.orderedTurnIds).toHaveLength(1);
+      expect(acquired.actor.authoritativelySettled).toBe(false);
+      expect(acquired.actor.canEvict).toBe(false);
+      expect(acquired.actor.canAutomaticallyEvict).toBe(false);
+      const idleWork = vi.fn();
+      expect(await acquired.actor.runIfIdle(idleWork)).toEqual({ executed: false });
+      expect(idleWork).not.toHaveBeenCalled();
+      const gateway = new RuntimeBackedQueuedInputConversationGateway({
+        runtimes: { acquire: () => current.acquire() },
+        targets: { resolve: async () => { throw new Error("unexpected target resolution"); } },
+      });
+      await gateway.withConversation(scope, threadID, async conversation => {
+        // These are the admission gates used by automatic Queue and Steer.
+        expect(conversation.authoritativelySettled).toBe(false);
+        expect(await conversation.steerTarget!()).toBeNull();
+        expect(await conversation.steerTarget!({ allowSettledConversation: true })).toBeNull();
+        await expect(conversation.captureSubmissionRetryAnchor()).rejects.toMatchObject({ backendCode: "opencode_retry_anchor_requires_settled" });
+      });
+      const raw: BackendConversationEvent[] = [];
+      (await current.handle()).subscribe(event => raw.push(event));
+      const states = [initial.timeline.runState];
+      acquired.actor.subscribe(() => states.push(acquired.actor.timeline.runState));
+      current.wire.clearResponse(inboxPath);
+      current.wire.messages.push({ id: "msg_pending", type: "user", text: "Next question", time: { created: 4 } });
+      current.wire.setResponse("/api/session/active", 200, { data: { [current.wire.sessionID]: { type: "running" } } });
+      current.wire.send({ id: "evt_execution_started", type: "session.execution.started", created: 5,
+        durable: { aggregateID: current.wire.sessionID, seq: 1, version: 1 }, data: { sessionID: current.wire.sessionID } });
+      await vi.waitFor(() => expect(acquired.actor.timeline.runState).toBe("running"));
+      expect(acquired.actor.timeline.activeTurnId).toBeDefined();
+      expect(acquired.actor.timeline.orderedTurnIds).toHaveLength(2);
+      expect(acquired.actor.timeline.generation).toBe(initial.timeline.generation);
+      expect(states).not.toContain("disconnected"); expect(states).not.toContain("reconciling");
+      expect(raw.some(event => event.type === "resnapshot_required")).toBe(false);
+      expect(current.attached).toHaveBeenCalledOnce();
+      expect(current.runtime.snapshot()).toMatchObject({ state: "ready", generation: "native-generation", references: 2 });
+      expect(current.client.lifetime.aborted).toBe(false);
+    } finally { acquired.release(); }
+  });
+
   it("publishes native control before slow initial history and admits Stop before releasing that read", async () => {
     const current = fixture({ messages: completedMessages(1) });
     const gate = current.wire.hold(`/api/session/${current.wire.sessionID}/message`);

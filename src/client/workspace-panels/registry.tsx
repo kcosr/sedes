@@ -7,6 +7,7 @@ import type {
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry.js";
 import { workpadsTenant } from "../workpads/workpads-tenant.js";
+import { tasksTenant } from "../tasks/tasks-tenant.js";
 import { workspaceFilesTenant } from "../workspace-files/workspace-files-tenant.js";
 import type { ComposerDraftStagingTarget } from "../context-excerpts/coordinator.js";
 
@@ -57,11 +58,24 @@ export interface WorkspacePanelTenant {
   readonly title: string;
   readonly icon: ComponentType<{ readonly size?: number }>;
   readonly scope: WorkspacePanelScope;
+  /**
+   * Who renders the panel header. `chrome` (the default): the layout's
+   * shared `PanelChrome`. `tenant`: the content renders its own header and
+   * shows the layout's collapse, dock and close controls in it, so the
+   * surface never carries two headers.
+   */
+  readonly header?: "chrome" | "tenant";
   readonly size: {
     readonly minWidth: number;
     readonly minHeight: number;
     readonly preferredWidth: number;
     readonly preferredHeight: number;
+    /**
+     * The share of the stage a first open takes along its edge's axis,
+     * between the minimum and the preferred size; without one, it takes
+     * the preferred size. A narrow stage then keeps room for Chat.
+     */
+    readonly preferredShare?: number;
   };
   readonly preferredPlacement: {
     readonly edge: "right" | "bottom";
@@ -122,4 +136,5 @@ function freezeTenant(tenant: WorkspacePanelTenant): WorkspacePanelTenant {
 export const workspacePanelTenants = new WorkspacePanelTenantRegistry([
   workspaceFilesTenant,
   workpadsTenant,
+  tasksTenant,
 ]);

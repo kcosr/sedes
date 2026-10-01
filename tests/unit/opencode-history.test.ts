@@ -387,6 +387,16 @@ describe("OpenCode normalized retained history", () => {
     expect(result.itemsById[openCodeHistoryItemId("msg_b", 0)]).toMatchObject({ status: "streaming", markdown: { text: "" } });
   });
 
+  it("projects confirmed startup without inventing a current turn or reopening completed history", () => {
+    const result = projection([user("msg_a"), idle("msg_end")], { activity: "starting" });
+    expect(result.runState).toBe("starting");
+    expect(result.activeBackendTurnId).toBeUndefined();
+    expect(result.orderedBackendTurnIds).toHaveLength(1);
+    expect(result.turnsById[result.orderedBackendTurnIds[0]!]!.status).toBe("completed");
+    result.updateRuntimeState({ activity: "unknown" });
+    expect(result.runState).toBe("disconnected");
+  });
+
   it("replaces observed deltas with full final values including an authoritative empty result", () => {
     const key = openCodeHistoryItemId("msg_answer", 0);
     const partKey = openCodeHistoryPartKey("msg_answer", "text", 0);

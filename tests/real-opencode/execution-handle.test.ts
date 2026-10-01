@@ -20,6 +20,11 @@ it.runIf(RUN_REAL_OPENCODE)("qualifies production handle input, steering, Stop, 
   const holds: ReturnType<typeof model.holdNextStream>[] = [];
   const calls: { path: string; method: string }[] = [];
   const events: BackendConversationEvent[] = []; const consumed = vi.fn();
+  const expectNoRecovery = (since: number) => {
+    expect(events.slice(since).filter(event => event.type === "run_state_changed" &&
+      (event.state === "disconnected" || event.state === "reconciling"))).toEqual([]);
+    expect(events.slice(since).filter(event => event.type === "resnapshot_required")).toEqual([]);
+  };
   let dropPromptAck = true;
   const submit = (id: string, text: string): SubmitTurnInput => ({ applicationOperationId: id, mutationId: id,
     reconciliationToken: id, source: { kind: "user" }, text, contextExcerpts: [], taskContexts: [], attachments: [] });
@@ -56,9 +61,13 @@ it.runIf(RUN_REAL_OPENCODE)("qualifies production handle input, steering, Stop, 
 
     const held = model.holdNextStream("held production handle prompt"); holds.push(held);
     const first = submit("native-handle-first", "held production handle prompt");
+    const firstStartup = events.length;
     await expect(handle.submit(first)).resolves.toMatchObject({ accepted: true, reconciliationToken: first.applicationOperationId });
     await held.started;
     await vi.waitFor(() => expect(consumed).toHaveBeenCalledWith({ backendCorrelation: first.applicationOperationId }), { timeout: 10_000, interval: 25 });
+    await vi.waitFor(() => expect(events.slice(firstStartup).some(event => event.type === "run_state_changed" && event.state === "running"))
+      .toBe(true), { timeout: 10_000, interval: 25 });
+    expectNoRecovery(firstStartup);
     // The model remains held: native consumption, not its final response, is the acceptance boundary.
     await expect(handle.submit(first)).resolves.toMatchObject({ accepted: true });
     expect(calls.filter(call => call.path.endsWith("/prompt") && call.method === "POST")).toHaveLength(1);
@@ -84,6 +93,25 @@ it.runIf(RUN_REAL_OPENCODE)("qualifies production handle input, steering, Stop, 
     }
     const interrupts = calls.filter(call => call.path.endsWith("/interrupt") && call.method === "POST").length;
     await handle.interrupt(stop); expect(calls.filter(call => call.path.endsWith("/interrupt") && call.method === "POST")).toHaveLength(interrupts);
+
+    await vi.waitFor(async () => expect((await handle!.establishProjection({ signal: new AbortController().signal })).snapshot.runState)
+      .toBe("idle"), { timeout: 10_000, interval: 25 });
+    const completedHold = model.holdNextStream("normally acknowledged production handle prompt"); holds.push(completedHold);
+    const second = submit("native-handle-second", "normally acknowledged production handle prompt");
+    const secondStartup = events.length;
+    await expect(handle.submit(second)).resolves.toMatchObject({ accepted: true });
+    await completedHold.started;
+    await vi.waitFor(() => {
+      expect(consumed).toHaveBeenCalledWith({ backendCorrelation: second.applicationOperationId });
+      expect(events.slice(secondStartup).some(event => event.type === "run_state_changed" && event.state === "running")).toBe(true);
+    }, { timeout: 10_000, interval: 25 });
+    completedHold.release();
+    await vi.waitFor(() => {
+      expect(events.slice(secondStartup).some(event => event.type === "turn_completed" && event.turn.status === "completed" &&
+        event.turn.completionCorrelations?.includes(second.applicationOperationId))).toBe(true);
+      expect(events.slice(secondStartup).filter(event => event.type === "run_state_changed").at(-1)).toMatchObject({ state: "idle" });
+    }, { timeout: 10_000, interval: 25 });
+    expectNoRecovery(secondStartup);
 
     const rename = { applicationOperationId: "native-handle-rename", action: "rename" as const, title: "Renamed by production handle" };
     await expect(handle.perform(rename)).resolves.toEqual({ accepted: true }); await expect(handle.reconcileAction(rename)).resolves.toEqual({ outcome: "accepted" });
@@ -121,8 +149,8 @@ it.runIf(RUN_REAL_OPENCODE)("qualifies production handle input, steering, Stop, 
     await handle.close(); handle = undefined;
     expect(await current.driver.reconcileSubmission({ ...current.target, applicationOperationId: first.applicationOperationId,
       reconciliationToken: first.applicationOperationId })).toEqual({ status: "accepted" });
-    expect(calls.filter(call => call.path.endsWith("/prompt") && call.method === "POST")).toHaveLength(3);
-    expect(model.requestCount).toBe(1);
+    expect(calls.filter(call => call.path.endsWith("/prompt") && call.method === "POST")).toHaveLength(4);
+    expect(model.requestCount).toBe(2);
   } finally {
     holds.forEach(hold => hold.release()); await handle?.close();
     try { await current?.dispose(); } finally {
