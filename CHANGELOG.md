@@ -400,6 +400,10 @@
 
 ### Fixed
 
+- With reduced motion turned on, the composer shrinks back after its text is
+  cleared or Chat is collapsed and restored. Before, it stayed at its tallest
+  height, up to 220px of empty text area.
+
 - Opening the Task editor no longer collapses the Task list to nothing or
   scrolls the Tasks header away; the editor is a dialog with the list visible
   behind it.

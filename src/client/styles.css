@@ -8379,6 +8379,11 @@ tr.diff-hunk td {
   color: var(--foreground);
   font-size: 14.5px;
   line-height: 1.55;
+  /* Composer sizes the textarea by setting height 0 and reading scrollHeight.
+     Any height transition, including the 0.01ms one the reduced-motion rule
+     gives every element, holds the old height during that read, so the
+     textarea could grow but never shrink back. */
+  transition: none;
 }
 
 .composer textarea::placeholder {
