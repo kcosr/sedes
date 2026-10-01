@@ -696,7 +696,7 @@ test("archived threads honor the shared sidebar scope and search", async ({
   );
   await expect(status).toContainText("Scope: Alternate scripted agent");
   await expect(page.getByTestId("archive-count")).toHaveText(
-    String(archivedTotal.length),
+    `${archivedTotal.length} archived threads`,
   );
   await capture(page, testInfo, "archive-scope-desktop.png");
 
