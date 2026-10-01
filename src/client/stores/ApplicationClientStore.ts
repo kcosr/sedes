@@ -888,9 +888,13 @@ export class ApplicationClientStore {
           this.#queueInventoryReplacement(result.reason);
           return;
         }
+        // Any inventory change was published as the envelope applied. Publish
+        // here only to change the status or clear an error: a value-identical
+        // state would re-render every subscriber for nothing.
         if (
           this.normalized.state.authoritative &&
-          !this.#terminalSessionFailure
+          !this.#terminalSessionFailure &&
+          (this.#state.status !== "ready" || this.#state.error !== undefined)
         ) {
           this.#replaceState({
             ...this.#state,
