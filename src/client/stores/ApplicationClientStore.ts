@@ -987,6 +987,16 @@ export function useApplicationStore(
   );
 }
 
+const INVENTORY_STATE_ORDER = {
+  active: 0,
+  snoozed: 1,
+  settled: 2,
+  archived: 3,
+} as const satisfies Record<
+  NormalizedApplicationThreadSummary["inventoryState"],
+  number
+>;
+
 /**
  * Filter matching summaries, then append non-matching nested ancestors so the
  * Projects tree keeps lineage context. Flat views apply the shared indexed
@@ -1025,20 +1035,20 @@ function filterAndSortThreads(
         currentId = sourceId;
       }
     }
+    // Membership by identity, as `includes` would test, without rescanning
+    // the matches for every summary.
+    const matchedThreads = new Set(matched);
     for (const thread of threads) {
-      if (includedIds.has(thread.id) && !matched.includes(thread))
+      if (includedIds.has(thread.id) && !matchedThreads.has(thread)) {
         matched.push(thread);
+        matchedThreads.add(thread);
+      }
     }
   }
   return matched.sort((left, right) => {
-    const stateOrder = {
-      active: 0,
-      snoozed: 1,
-      settled: 2,
-      archived: 3,
-    } as const;
     const byState =
-      stateOrder[left.inventoryState] - stateOrder[right.inventoryState];
+      INVENTORY_STATE_ORDER[left.inventoryState] -
+      INVENTORY_STATE_ORDER[right.inventoryState];
     if (byState !== 0) return byState;
     if (left.inventoryState === "snoozed") {
       return (
