@@ -2,7 +2,7 @@
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
 import type { PanelLayoutStore } from "../../workspace-panels/panel-state.js";
@@ -12,7 +12,9 @@ import {
   consumeReveal,
   getPendingReveal,
   revealTask,
+  subscribeReveal,
 } from "../../app/tasks-panel-store.js";
+import { MessageTaskCard } from "../conversation/renderers/MessageTaskCard.js";
 import { TasksPanel } from "./TasksPanel.js";
 import {
   TasksCornerControls,
@@ -155,13 +157,21 @@ function renderHost({
   thread = false,
   active = true,
   spy = dockSpy(),
-}: { readonly thread?: boolean; readonly active?: boolean; readonly spy?: DockSpy } = {}) {
+  extra,
+}: {
+  readonly thread?: boolean;
+  readonly active?: boolean;
+  readonly spy?: DockSpy;
+  /** More workbench content, such as a transcript task card. */
+  readonly extra?: ReactNode;
+} = {}) {
   if (thread) act(() => navigate(threadPath("thread-1")));
   let host: ReturnType<typeof useTasksHost>;
   const content = (isActive: boolean) => (
     <TasksPanel store={makeStore()} panelLayoutStore={panelLayoutStore} active={isActive}>
       <Probe onHost={(value) => (host = value)} />
       {thread ? <Workspace spy={spy} /> : <TasksCornerControls />}
+      {extra}
     </TasksPanel>
   );
   const view = render(content(active));
@@ -324,6 +334,53 @@ describe("revealTask", () => {
     renderHost({ thread: true });
     act(() => revealTask("task-1"));
     expect(screen.getByRole("dialog", { name: "Tasks" })).toBeInTheDocument();
+  });
+
+  it("is what the transcript card's Open task asks for in a thread workspace", async () => {
+    const user = userEvent.setup();
+    const spy = dockSpy();
+    renderHost({
+      thread: true,
+      spy,
+      extra: <MessageTaskCard taskId="task-1" title="Audit error states" />,
+    });
+    // Start with the panel closed, so opening it is the card's doing.
+    await user.click(screen.getByRole("button", { name: "Close Tasks panel" }));
+    expect(tasksSurface()).toBeNull();
+    const requests = vi.fn();
+    const unsubscribe = subscribeReveal(requests);
+
+    await user.click(
+      screen.getByRole("button", { name: "Open task: Audit error states" }),
+    );
+    unsubscribe();
+
+    expect(spy.open).toHaveBeenCalledWith({ focus: false });
+    expect(tasksSurface()).toHaveAttribute("data-presentation", "panel");
+    expect(requests).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: "task-1" }),
+    );
+  });
+
+  it("is what the transcript card's Open task asks for on a page without panels", async () => {
+    const user = userEvent.setup();
+    renderHost({
+      extra: <MessageTaskCard taskId="task-1" title="Audit error states" />,
+    });
+    expect(tasksSurface()).toBeNull();
+    const requests = vi.fn();
+    const unsubscribe = subscribeReveal(requests);
+
+    await user.click(
+      screen.getByRole("button", { name: "Open task: Audit error states" }),
+    );
+    unsubscribe();
+
+    expect(tasksSurface()).toHaveAttribute("data-presentation", "popover");
+    expect(toggle()).toHaveAttribute("aria-expanded", "true");
+    expect(requests).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: "task-1" }),
+    );
   });
 });
 
