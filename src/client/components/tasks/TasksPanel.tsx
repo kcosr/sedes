@@ -1352,6 +1352,10 @@ export function TasksPanel({
   const [bodyTarget] = useState(createBodyTarget);
   const popoverAnchor = useRef<HTMLElement | null>(null);
   const dismissedOutside = useRef(false);
+  // Settings unmounts the popover and the sheet; their focus restoration
+  // must not pull focus back into the hidden workspace.
+  const activeRef = useRef(active);
+  activeRef.current = active;
 
   // The popover and the sheet are transient: navigating or crossing the
   // phone breakpoint closes them. The docked panel's open state is the
@@ -1431,10 +1435,9 @@ export function TasksPanel({
     [bodyTarget, placement, overlayOpen, toggleOverlay],
   );
 
+  // The anchor is the corner controls; its button is the toggle.
   const focusToggle = () =>
-    popoverAnchor.current
-      ?.querySelector<HTMLElement>('[data-testid="tasks-panel-toggle"]')
-      ?.focus();
+    popoverAnchor.current?.querySelector("button")?.focus();
 
   const surface =
     placement === "popover" ? (
@@ -1449,7 +1452,7 @@ export function TasksPanel({
           side="bottom"
           align="end"
           aria-label="Tasks"
-          className="tasks-popover max-h-[min(var(--radix-popover-content-available-height),680px)] w-[min(400px,calc(100vw-16px))] gap-0 overflow-hidden p-0"
+          className="max-h-[min(var(--radix-popover-content-available-height),680px)] w-[min(400px,calc(100vw-16px))] gap-0 overflow-hidden p-0"
           onOpenAutoFocus={(event) => {
             dismissedOutside.current = false;
             // The content marks its add row as the docked panel's focus
@@ -1477,7 +1480,7 @@ export function TasksPanel({
           }}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
-            if (!dismissedOutside.current) focusToggle();
+            if (activeRef.current && !dismissedOutside.current) focusToggle();
           }}
         >
           <TasksSurface presentation="popover" target={bodyTarget} />
@@ -1494,6 +1497,9 @@ export function TasksPanel({
           layout="sheet"
           showClose={false}
           className="tasks-sheet"
+          onCloseAutoFocus={(event) => {
+            if (!activeRef.current) event.preventDefault();
+          }}
           onInteractOutside={(event) => {
             // The retained body is portaled into this surface. Its React
             // event ancestry differs from its physical DOM ancestry.

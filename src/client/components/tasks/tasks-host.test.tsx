@@ -244,17 +244,26 @@ describe("Tasks host on pages without panels", () => {
     expect(screen.queryByRole("dialog", { name: "Tasks" })).toBeNull();
   });
 
-  it("suspends the popover under Settings and keeps the same body", async () => {
-    const user = userEvent.setup();
-    const view = renderHost();
-    await user.click(toggle());
-    const body = document.querySelector(".tasks-panel-body");
-    view.setActive(false);
-    expect(tasksSurface()).toBeNull();
-    expect(body).toBeInTheDocument();
-    view.setActive(true);
-    expect(document.querySelector(".tasks-panel-body")).toBe(body);
-  });
+  it.each([false, true])(
+    "suspends the overlay under Settings, keeps the same body and leaves focus (phone: %s)",
+    async (isPhone) => {
+      phone = isPhone;
+      const user = userEvent.setup();
+      const view = renderHost();
+      await user.click(toggle());
+      const body = document.querySelector(".tasks-panel-body");
+      expect(body).toBeInTheDocument();
+      view.setActive(false);
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+      expect(tasksSurface()).toBeNull();
+      expect(screen.queryByRole("dialog", { name: "Tasks" })).toBeNull();
+      expect(body).toBeInTheDocument();
+      // Closing must not pull focus back to the hidden workspace's toggle.
+      expect(screen.getByTestId("tasks-panel-toggle")).not.toHaveFocus();
+      view.setActive(true);
+      expect(document.querySelector(".tasks-panel-body")).toBe(body);
+    },
+  );
 });
 
 describe("Tasks host in a thread workspace", () => {
