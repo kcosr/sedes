@@ -419,10 +419,6 @@
   fit collapses the least recently used side panels instead, with an
   announcement.
 
-- Escape closes an open menu, popover, or sheet, or goes up a level in
-  Settings, while a notice is showing. A notice takes Escape only while it has
-  focus.
-
 - **New group…** now leads the **Move to group** picker, under the search,
   instead of sitting below every group.
 
