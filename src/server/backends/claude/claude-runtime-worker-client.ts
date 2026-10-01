@@ -45,6 +45,7 @@ import {
   claudeRuntimeQuerySendOperation,
   claudeRuntimeQuerySetEffortOperation,
   claudeRuntimeQuerySetModelOperation,
+  claudeRuntimeQueryContextUsageOperation,
   claudeRuntimeQuerySetPermissionModeOperation,
   claudeRuntimeInitializeOperation,
   claudeRuntimeProbeOperation,
@@ -546,6 +547,11 @@ class WorkerSession implements ClaudeOwnedRuntimeSession {
       queryId: this.#queryId,
       model: model ?? null,
     });
+  }
+
+  async contextUsage(signal?: AbortSignal) {
+    this.#assertReady();
+    return this.#client.call(claudeRuntimeQueryContextUsageOperation, { queryId: this.#queryId }, { signal });
   }
 
   async setEffort(

@@ -30,6 +30,7 @@ export const claudePersistentCommandSchema = z.discriminatedUnion("action", [
   command("interrupt", worker.claudeRuntimeQueryInterruptRequestSchema.extend({ startupProbeUuid: z.string().uuid() })),
   command("interrupt_disposition", worker.claudeRuntimeQueryInterruptDispositionRequestSchema.extend({ startupProbeUuid: z.string().uuid() })),
   command("set_model", worker.claudeRuntimeQuerySetModelRequestSchema),
+  command("context_usage", worker.claudeRuntimeQueryContextUsageRequestSchema.extend({ startupProbeUuid: z.string().uuid() })),
   command("set_effort", worker.claudeRuntimeQuerySetEffortRequestSchema),
   command("set_permission_mode", worker.claudeRuntimeQuerySetPermissionModeRequestSchema),
   command("attach", session).extend({ replay: z.enum(["full", "unacknowledged"]) }), command("detach", session), command("evict", session),

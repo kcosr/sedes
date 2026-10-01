@@ -15,7 +15,7 @@ import type {
   SDKResultMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import Database from "better-sqlite3";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type {
   AgentBackendInstance,
   AgentConnectionProfile,
@@ -522,6 +522,12 @@ describe.sequential("real Claude subscription driver", () => {
       expect(finalAssistantText(history.itemsById)).toBe(
         finalAssistantText(settled.snapshot.itemsById),
       );
+      await vi.waitFor(async () => {
+        const { context } = await firstHandle!.usage();
+        expect(context?.usedTokens).toBeGreaterThan(0);
+        expect(context?.windowTokens).toBeGreaterThan(0);
+        expect(context?.percent).toBe(context!.usedTokens! / context!.windowTokens * 100);
+      }, { timeout: 10_000 });
       const usage = await firstHandle.usage();
       expect(usageObservations.some((observation) => observation.facts.some((fact) => BigInt(fact.tokens.input ?? "0") > 0n))).toBe(true);
       expect(usageObservations.some((observation) => observation.facts.some((fact) => BigInt(fact.tokens.output ?? "0") > 0n))).toBe(true);

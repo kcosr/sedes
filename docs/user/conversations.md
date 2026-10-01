@@ -28,6 +28,20 @@ stopping or unloading the runtime, or restarting the server, discards them.
 Refreshing the browser can retain them while the same session is loaded.
 Codex, Claude, and Grok do not currently provide this measurement.
 
+## Context and Session stats
+
+The composer context meter and **Thread actions → Session stats** show the
+provider's available context estimate and transcript counters without enabling
+experimental usage accounting. Pi, Claude and OpenCode provide both; Codex
+provides context, and Grok does not provide these statistics.
+
+Claude reports estimated current occupancy against its effective auto-compaction
+window. OpenCode reports the latest measured assistant request against that
+model's context window, so new prompts and tool results may not appear until the
+next measurement. OpenCode counters cover the full retained active branch,
+including turns outside the loaded history page. Compaction or a model change
+can lower the estimate or leave it unknown until fresh evidence arrives.
+
 ## View recorded usage
 
 Recorded usage is **Experimental**. The views below require the server

@@ -490,6 +490,13 @@ export class ClaudePersistentRuntimeHost {
         });
         return { receipt: receipt ?? null };
       }
+      case "context_usage": {
+        const session = this.#session(command.request.queryId);
+        if (session.runtime.startupProbeUuid !== command.request.startupProbeUuid || session.runtime.closed || session.failureCode) {
+          throw new Error("claude_context_usage_unavailable");
+        }
+        return session.runtime.contextUsage();
+      }
       case "set_model": { const session = this.#session(command.request.queryId); await session.runtime.setModel(command.request.model ?? undefined); session.model = command.request.model; return { updated: true }; }
       case "set_effort": { const session = this.#session(command.request.queryId); await session.runtime.setEffort(command.request.effort ?? undefined); session.confirmedEffort = command.request.effort; return { updated: true }; }
       case "set_permission_mode": { const session = this.#session(command.request.queryId); await session.runtime.setPermissionMode(command.request.permissionMode); session.permissionMode = command.request.permissionMode; return { updated: true }; }

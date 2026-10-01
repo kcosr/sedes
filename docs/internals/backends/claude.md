@@ -9,6 +9,7 @@ operator-visible capabilities, and troubleshooting, use the
 ## On this page
 
 - [Runtime and session ownership](#runtime-and-session-ownership)
+- [Current context telemetry](#current-context-telemetry)
 - [Authoritative history and paging](#authoritative-history-and-paging)
 - [Semantic projection and terminal receipts](#semantic-projection-and-terminal-receipts)
 - [Collaboration and authenticated evidence](#collaboration-and-authenticated-evidence)
@@ -38,7 +39,7 @@ enabled. One
 principal/backend runtime owns the SDK queries admitted by the shared Sedes
 conversation-runtime budget for that execution environment. A live Sedes thread
 has at most one warm query. The strict worker and persistent sidecar capabilities
-are `claude_runtime@2` and `claude_persistent_runtime@2`. Worker operations are
+are `claude_runtime@2` and `claude_persistent_runtime@3`. Worker operations are
 defined in `src/server/backends/claude/worker/claude-runtime-v2.ts`; older majors
 are not accepted.
 Closing a handle does not delete its Claude session, and attaching the same
@@ -238,6 +239,31 @@ generation, rejects pending permission requests, and fails active handles
 closed. A replacement local generation reconstructs from Claude's authoritative
 store rather than replaying uncertain writes. Persistent remote workers retain
 the separate service-owned lifetime and reattachment contract described above.
+
+## Current context telemetry
+
+The handle owns a volatile context estimate for its admitted query generation.
+After hydration, main assistant completion, and compaction summary, it requests
+`getContextUsage({ detail: "summary" })` through the worker or persistent owner.
+Summary mode avoids the full report's token-count API call. Only validated
+`usedTokens`, `windowTokens`, and `percent` cross the private runtime boundary.
+The denominator is Claude's `rawMaxTokens` effective auto-compaction window;
+percentage is recomputed from that same denominator.
+
+Reads coalesce, have a five-second deadline, and never occupy send/Stop admission.
+Cancelling a read does not close the query. A timed-out native request remains
+reserved until it settles because the SDK cannot cancel that individual request.
+Compaction, model changes, authority loss and teardown invalidate old estimates;
+late responses cannot restore them. Missing telemetry leaves context unknown
+without failing the conversation. Persistent reads bind the current service,
+controller and startup identity and never launch or reconnect a runtime for the
+meter. The worker requires `query.context_usage` in its exact operation inventory;
+the persistent closed command union requires major 3.
+
+Counters continue to come from the transcript projection. Every `usage_changed`
+event replaces the complete context-and-counters snapshot. Neither the context
+read nor those counters depend on experimental recorded accounting, and nothing
+from this telemetry is persisted as historical usage.
 
 ## Authoritative history and paging
 

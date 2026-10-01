@@ -134,6 +134,7 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/backends/codex/runtime/codex-runtime-wire.ts",
   "src/server/backends/codex/runtime/codex-sidecar-runtime.ts",
   "src/server/backends/claude/claude-release-guard.ts",
+  "src/server/backends/claude/claude-context-usage.ts",
   "src/server/backends/claude/claude-interrupt-operation.ts",
   "src/server/backends/claude/claude-background-activity.ts",
   "src/server/backends/claude/claude-result-lifecycle.ts",

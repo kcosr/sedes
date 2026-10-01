@@ -544,6 +544,7 @@ class DeferredManagedClaudeSession implements ClaudeOwnedRuntimeSession {
   setModel(model?: string): Promise<void> { return this.#ready().setModel(model); }
   setEffort(effort?: EffortLevel): Promise<void> { return this.#ready().setEffort(effort); }
   setPermissionMode(mode: PermissionMode): Promise<void> { return this.#ready().setPermissionMode(mode); }
+  contextUsage(signal?: AbortSignal) { return this.#ready().contextUsage(signal); }
   close(): Promise<void> {
     this.#closePromise ??= this.#performClose();
     return this.#closePromise;

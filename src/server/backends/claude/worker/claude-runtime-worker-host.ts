@@ -160,6 +160,7 @@ export class ClaudeRuntimeWorkerHost {
         await this.#query(queryId).session.setModel(model ?? undefined);
         return { updated: true as const };
       },
+      contextUsage: async ({ queryId }, context) => this.#query(queryId).session.contextUsage(context.signal),
       setQueryEffort: async ({ queryId, effort }) => {
         await this.#query(queryId).session.setEffort(effort ?? undefined);
         return { updated: true as const };

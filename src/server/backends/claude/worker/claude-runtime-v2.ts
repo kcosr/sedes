@@ -12,6 +12,7 @@ import {
 } from "../../../../internal/sidecar-protocol/operation-registry.js";
 
 import { CLAUDE_HISTORY_PAGE_MESSAGES } from "../claude-session-history.js";
+import { CLAUDE_CONTEXT_USAGE_TIMEOUT_MS, claudeContextUsageSchema } from "../claude-context-usage.js";
 
 export const CLAUDE_RUNTIME_CAPABILITY_ID = "claude_runtime" as const;
 export const CLAUDE_RUNTIME_MAJOR_VERSION = 2 as const;
@@ -362,6 +363,7 @@ export const claudeRuntimeQuerySendResponseSchema = z.strictObject({
   accepted: z.literal(true),
 });
 const queryIdRequestSchema = z.strictObject({ queryId: uuidSchema });
+export const claudeRuntimeQueryContextUsageRequestSchema = queryIdRequestSchema;
 /** Withdraws one input Claude admitted but has not started (Stop). */
 export const claudeRuntimeQueryCancelInputRequestSchema = z.strictObject({
   queryId: uuidSchema,
@@ -595,6 +597,13 @@ export const claudeRuntimeQuerySetModelOperation = operation({
   maximumDeadlineMilliseconds: 30_000,
   lane: "control",
 });
+export const claudeRuntimeQueryContextUsageOperation = operation({
+  operation: "query.context_usage",
+  requestSchema: claudeRuntimeQueryContextUsageRequestSchema,
+  responseSchema: claudeContextUsageSchema,
+  maximumDeadlineMilliseconds: CLAUDE_CONTEXT_USAGE_TIMEOUT_MS,
+  lane: "operation",
+});
 export const claudeRuntimeQuerySetEffortOperation = operation({
   operation: "query.set_effort",
   requestSchema: claudeRuntimeQuerySetEffortRequestSchema,
@@ -645,6 +654,7 @@ export const claudeRuntimeWorkerOperations = Object.freeze([
   claudeRuntimeQueryInterruptDispositionOperation,
   claudeRuntimeQueryCancelInputOperation,
   claudeRuntimeQuerySetModelOperation,
+  claudeRuntimeQueryContextUsageOperation,
   claudeRuntimeQuerySetEffortOperation,
   claudeRuntimeQuerySetPermissionModeOperation,
   claudeRuntimeQueryCloseOperation,
@@ -687,6 +697,7 @@ export interface ClaudeRuntimeV2WorkerHandlers {
   readonly setQueryModel: HandlerFor<
     typeof claudeRuntimeQuerySetModelOperation
   >;
+  readonly contextUsage: HandlerFor<typeof claudeRuntimeQueryContextUsageOperation>;
   readonly setQueryEffort: HandlerFor<
     typeof claudeRuntimeQuerySetEffortOperation
   >;
@@ -718,6 +729,7 @@ export function registerClaudeRuntimeV2WorkerOperations(
   );
   registry.register(claudeRuntimeQueryOpenOperation, handlers.openQuery);
   registry.register(claudeRuntimeQuerySendOperation, handlers.sendQuery);
+  registry.register(claudeRuntimeQueryContextUsageOperation, handlers.contextUsage);
   registry.register(
     claudeRuntimeQueryInterruptOperation,
     handlers.interruptQuery,

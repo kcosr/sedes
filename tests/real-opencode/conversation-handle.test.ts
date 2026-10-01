@@ -64,6 +64,9 @@ it.runIf(RUN_REAL_OPENCODE)("projects stock native history and live replacement 
     expect(initial.timeline.runState).toBe("idle");
     expect(initial.timeline.orderedTurnIds).toHaveLength(10);
     expect(initial.history?.previousCursor).toBeDefined();
+    expect(initial.usage).toMatchObject({ context: { windowTokens: 100_000 },
+      counters: { userMessages: 12, assistantMessages: 12, totalMessages: 24 } });
+    expect(initial.usage.context?.usedTokens).toBeUndefined();
     const older = await actor.history({ cursor: initial.history!.previousCursor!, limit: 10 });
     expect(older.page.orderedTurnIds).toHaveLength(2);
     expect(older.page.previousCursor).toBeUndefined();
@@ -93,6 +96,14 @@ it.runIf(RUN_REAL_OPENCODE)("projects stock native history and live replacement 
       ]));
     }, { timeout: 15_000, interval: 25 });
     expectNoRecovery(firstStartup);
+    await vi.waitFor(async () => {
+      const { usage } = await actor.captureSnapshotState();
+      expect(usage.context?.usedTokens).toBeGreaterThan(0);
+      expect(usage.context?.windowTokens).toBe(100_000);
+      expect(usage.context?.percent).toBe(usage.context!.usedTokens! / 100_000 * 100);
+      expect(usage.counters).toMatchObject({ userMessages: 13, assistantMessages: 13, totalMessages: 26 });
+    });
+    expect(observed.some(event => event.type === "usage_changed" && event.usage.context?.usedTokens !== undefined)).toBe(true);
     expect(assistantItems(actor).some(item => item.markdown.text.includes("PREFIXPREFIX"))).toBe(false);
     expect((await actor.history({ cursor: initial.history!.previousCursor!, limit: 10 })).page.orderedTurnIds).toEqual(older.page.orderedTurnIds);
 

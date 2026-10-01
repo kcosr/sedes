@@ -1295,6 +1295,23 @@ recovery, report routes, and browser query subscriptions obey the same setting;
 existing accounting remains persisted. No provider or sidecar protocol flag is
 needed, and native provider recording is outside this policy's authority.
 
+Live context and transcript counters are volatile thread-owned observations.
+Use the provider's current context measurement or a qualified latest-request
+estimate with the matching model window; never substitute cumulative billing
+counts. Clear invalidated values on compaction, model/authority changes, and
+failed reads, and fence late responses from older query/observation generations.
+A `usage_changed` event replaces the whole snapshot, so preserve valid counters
+when changing or removing context. Telemetry cannot block send or Stop, launch a
+runtime solely for the meter, or depend on the recorded-accounting opt-in.
+
+| Backend | Current context and ordinary Session stats |
+| --- | --- |
+| Pi | Native current context and transcript counters. |
+| Codex | Native context occupancy; transcript counters intentionally absent. |
+| Claude | Bounded, coalesced summary reads against the current query plus transcript counters. |
+| OpenCode | Latest measured assistant occupancy and matching catalog window; counters cover the full retained active branch. |
+| Grok | Intentionally unsupported; no invented values. |
+
 Provider-billed work outside an assistant response must enter the normalized
 [`UsageSink`](../../src/server/usage/contracts.ts) without fabricating a message
 or changing run state. Capture native evidence before lossy presentation, under
@@ -2380,7 +2397,7 @@ exact-target interrupt. An authoritative idle observation accepts a no-op.
 A stale native target is nonapplication; old-turn disappearance alone never
 proves command acceptance. Drivers record operation/generation evidence before
 effects. Persistent Claude owner evidence survives main-client replacement;
-worker and persistent capability major 2 are required, without a version-1 parser.
+worker capability major 2 and persistent capability major 3 are required, without older-contract parsers.
 
 The deadline includes pending-input withdrawal and carrier/SDK acknowledgement.
 An uncertain receipt is reconciled read-only; no internal retry can resend Stop

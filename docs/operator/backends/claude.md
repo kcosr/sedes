@@ -509,6 +509,16 @@ For implementation ownership, history projection, terminal receipts, input
 correlation, agent-tool injection, forks, and recovery, continue with the
 [Claude integration contract](../../internals/backends/claude.md).
 
+## Current context
+
+The composer and ordinary Session stats use Claude's lightweight context summary
+and transcript counters even when recorded accounting is disabled. Context is
+an estimate against Claude's effective auto-compaction window. Read failures or
+query/model/compaction changes clear old estimates without interrupting work.
+Rebuild local workers and upgrade remote Claude sidecars with this server:
+the worker requires `query.context_usage`, and the persistent runtime requires
+capability major 3. No browser protocol or database migration is needed.
+
 ## Recorded usage
 
 Claude records direct main-loop turn usage separately from cumulative usage and

@@ -2,6 +2,7 @@ import type {
   Options,
   Query,
   SDKControlInitializeResponse,
+  SDKControlGetContextUsageResponse,
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -50,6 +51,7 @@ function fakeQuery(
     readonly applyFlagSettings: ReturnType<typeof vi.fn>;
     readonly close: ReturnType<typeof vi.fn>;
     readonly initializationResult: ReturnType<typeof vi.fn>;
+    readonly getContextUsage: ReturnType<typeof vi.fn>;
   };
   readonly abortSignal: () => AbortSignal;
 } {
@@ -59,6 +61,7 @@ function fakeQuery(
     releaseConsumer = resolve;
   });
   const controls = {
+    getContextUsage: vi.fn(async (): Promise<SDKControlGetContextUsageResponse> => ({ totalTokens: 123, rawMaxTokens: 1_000 } as SDKControlGetContextUsageResponse)),
     interrupt: vi.fn(async () => ({ still_queued: [] })),
     setModel: vi.fn(async () => undefined),
     setPermissionMode: vi.fn(async () => undefined),
@@ -138,6 +141,7 @@ function fakeQuery(
       })();
       return Object.assign(stream, {
         initializationResult: controls.initializationResult,
+        getContextUsage: controls.getContextUsage,
         interrupt: controls.interrupt,
         setModel: controls.setModel,
         setPermissionMode: controls.setPermissionMode,
@@ -189,6 +193,34 @@ function systemInitMessage(release: string): SDKMessage {
 }
 
 describe("ClaudeSdkSession", () => {
+  it("reads summary-only context and keeps Stop independent of a cancelled native read", async () => {
+    const fixture = fakeQuery();
+    const session = new ClaudeSdkSession({ sdk: fixture.sdk, executablePath: "/usr/local/bin/claude", initializationTimeoutMs: 1_000,
+      sessionId: "11111111-1111-4111-8111-111111111111", cwd: "/workspace", launch: "new", environment: {}, onMessage: () => undefined });
+    await session.start();
+    try {
+      expect(await session.contextUsage()).toEqual({ usedTokens: 123, windowTokens: 1_000, percent: 12.3 });
+      expect(fixture.controls.getContextUsage).toHaveBeenCalledExactlyOnceWith({ detail: "summary" });
+      let resolve!: (value: SDKControlGetContextUsageResponse) => void;
+      fixture.controls.getContextUsage.mockReturnValueOnce(new Promise(r => { resolve = r; }));
+      const controller = new AbortController();
+      const waiting = session.contextUsage(controller.signal);
+      const cancelled = expect(waiting).rejects.toThrow("cancelled");
+      controller.abort(); await cancelled;
+      await expect(session.contextUsage()).rejects.toThrow("busy");
+      await session.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000 });
+      expect(fixture.controls.interrupt).toHaveBeenCalledOnce();
+      expect(fixture.controls.close).not.toHaveBeenCalled();
+      expect(fixture.abortSignal().aborted).toBe(false);
+      resolve({ totalTokens: 900, rawMaxTokens: 1_000 } as SDKControlGetContextUsageResponse);
+      await new Promise(r => setTimeout(r, 0));
+      expect(await session.contextUsage()).toEqual({ usedTokens: 123, windowTokens: 1_000, percent: 12.3 });
+      fixture.controls.getContextUsage.mockResolvedValueOnce({ totalTokens: 1, rawMaxTokens: 0 });
+      await expect(session.contextUsage()).rejects.toThrow();
+      expect(session.closed).toBe(false);
+    } finally { await session.close(); }
+  });
+
   it.each(["acknowledged", "rejected", "wedged"])("attempts bounded protocol interruption before owned CLI close: %s", async outcome => {
     const fixture = fakeQuery();
     const session = new ClaudeSdkSession({ sdk: fixture.sdk, executablePath: "/usr/local/bin/claude", initializationTimeoutMs: 1_000,

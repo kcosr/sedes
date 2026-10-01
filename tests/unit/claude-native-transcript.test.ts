@@ -84,7 +84,7 @@ describe("Claude native transcript reader", () => {
     expect(uuids(messages)).toEqual(expect.arrayContaining(deadEnds));
     expect(messages.some((message) => message.type === "user" && typeof message.message === "object" &&
       JSON.stringify(message.message).includes("NON-USER SOURCE"))).toBe(false);
-    expect(JSON.stringify(messages)).not.toContain(CLAUDE_STARTUP_MARKER_TEXT);
+    expect(JSON.stringify(messages)).not.toContain(JSON.stringify(CLAUDE_STARTUP_MARKER_TEXT).slice(1, -1));
     // SDK 0.3.274 skipped the meta tip and stopped at the file-latest dead end;
     // 0.3.283 walks from the meta tip too.
     expect(messages).toEqual(await sdk(fixture));

@@ -179,6 +179,10 @@ describe.sequential("real Claude persistent runtime with local SSH carrier stand
       expect(results.filter(message => claudeResultUserMessageIds(message).includes(steerId))).toHaveLength(1);
       expect(results.some(message => claudeResultUserMessageIds(message).includes(operationId))).toBe(true);
       expect(restored.reattached).toBe(true);
+      const context = await restored.contextUsage();
+      expect(context.usedTokens).toBeGreaterThan(0);
+      expect(context.windowTokens).toBeGreaterThan(0);
+      expect(context.percent).toBe(context.usedTokens / context.windowTokens * 100);
       expect(restored.startupProbeUuid).toBe(firstSession.startupProbeUuid);
       expect(services.status().resources[0]!.resourceId).toBe(runtimeId);
       expect(restoredMessages.some(message => message.type === "stream_event")).toBe(true);

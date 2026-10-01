@@ -253,6 +253,16 @@ Staged revert, foreign pending compaction, and custom compaction instructions
 are rejected. Stop attempts withdrawal of exact pending Sedes-owned controls
 and preserves the ordinary Sedes Queue.
 
+## Current context
+
+The composer and ordinary Session stats show the latest measured assistant
+request's context occupancy and its model's native context limit, plus message,
+tool and compaction counters for the full retained active branch. New inputs
+remain unmeasured until the next assistant usage report. Successful compaction
+or a model switch clears the old occupancy; an unavailable catalog or estimate
+shows unknown context. These statistics work with recorded accounting disabled
+on local, SSH and outbound runtimes.
+
 ## Recorded usage
 
 With the main-server `SEDES_EXPERIMENTAL_USAGE=1` setting, OpenCode reports native

@@ -1,4 +1,5 @@
 import { ClaudeUsageAccounting } from "./claude-usage-accounting.js";
+import { ClaudeContextUsageTracker } from "./claude-context-usage.js";
 import type { UsageSink } from "../../usage/contracts.js";
 import { turnFailure } from "../turn-failure.js";
 import type { ResolvedEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
@@ -341,6 +342,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   #projectionUserMessageOrdinalBase = 0;
   #historyCursorNonce = randomBytes(16).toString("base64url");
   #usage: UsageSnapshot;
+  readonly #contextUsage: ClaudeContextUsageTracker;
   #runState: BackendConversationSnapshot["runState"];
   #effectiveModel: string | undefined;
   #effectiveEffort: EffortLevel | null | undefined;
@@ -427,6 +429,14 @@ export class ClaudeConversationHandle implements ConversationHandle {
     this.#projectionMessages = [];
     this.#projection = this.#projectLatest(this.#messages);
     this.#usage = this.#projection.usage ?? {};
+    this.#contextUsage = new ClaudeContextUsageTracker({
+      read: signal => this.#session.contextUsage(signal),
+      publish: context => {
+        const { context: _previous, ...usage } = this.#usage;
+        this.#usage = context ? { ...usage, context } : usage;
+        this.#emit({ type: "usage_changed", usage: this.#usage });
+      },
+    });
     this.#runState = this.#projection.snapshot.runState;
     this.#operationalNotices = new ClaudeOperationalNoticeProjector(
       input.binding.backendConversationId,
@@ -545,8 +555,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
         return this.#usageAccounting?.deliveryCommitted === false ? false : undefined;
       },
       onControlAuthorityChanged: () => {
+        this.#contextUsage.invalidate();
         this.#controlLifetime.abort();
-        void this.#ready.then(publishControl).catch(() => undefined);
+        void this.#ready.then(() => { publishControl(); this.#refreshContextUsage(); }).catch(() => undefined);
       },
       onFailure: (error) => {
         if (
@@ -604,6 +615,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       this.#assertOpen();
       if (this.#session.reattached !== true) this.#watchProcessLostTurn();
       this.#initialProjectionReady = true;
+      this.#refreshContextUsage();
     };
     void this.#ready.then(publishControl).catch(() => undefined);
     // A persistent runtime owns the stable CLI ingress as well as the query.
@@ -895,9 +907,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
             reason: boundDisplayText(branchingReadiness.available ? forkBlocker!.reason : branchingReadiness.reason),
           },
       interactionKinds: ["confirmation", "decision", "questionnaire"],
-      // The SDK's dollar estimate is API-equivalent telemetry, not a charge
-      // against the externally authenticated subscription plan.
-      usageSections: ["counters"],
+      usageSections: ["context", "counters"],
       usageAccounting: "supported",
       turnThroughput: "unsupported",
       effectiveSettings: {
@@ -1070,11 +1080,13 @@ export class ClaudeConversationHandle implements ConversationHandle {
         if (!(this.#effectiveModel === desired.model && applied.effectiveModelState === "confirmed" &&
             applied.effectiveModel === desired.model && applied.effectiveModelGeneration === generation)) {
           try {
+            this.#contextUsage.invalidate();
             await this.#session.setModel(desired.model);
             this.#effectiveModel = desired.model;
             if (this.#effectiveModel && !this.#closed) {
               this.#recordModelEvidence(this.#effectiveModel, "setter");
             }
+            this.#refreshContextUsage();
             this.#emit({
               type: "capabilities_changed",
               capabilities: this.#capabilities(),
@@ -1445,6 +1457,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   async close(options?: { readonly reason: "evicted" }): Promise<void> {
     if (this.#closed) return this.#closePromise;
     this.#closed = true;
+    this.#contextUsage.close();
     this.#controlLifetime.abort();
     this.#viewedImages.close();
     this.#usageAccounting?.close();
@@ -1480,6 +1493,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     }
     if (message.type === "system" && message.session_id === this.binding.backendConversationId) {
       if (message.subtype === "compact_boundary") {
+        this.#contextUsage.invalidate();
         this.#liveCompaction = liveCompaction(message.compact_metadata);
         return;
       }
@@ -1595,12 +1609,14 @@ export class ClaudeConversationHandle implements ConversationHandle {
     }
     if (message.type === "result") {
       this.#consumeResult(message);
+      this.#refreshContextUsage();
       // Claude's running turn ended here, whatever turn Sedes settled.
       if (!claudeResultIsNotificationDrain(message)) this.#nativeTurnRoot = undefined;
       return;
     }
     if (message.type === "stream_event") {
       this.#consumePartial(message);
+      if (message.event.type === "message_stop") this.#refreshContextUsage();
       return;
     }
     if (message.type !== "user" && message.type !== "assistant") return;
@@ -1681,6 +1697,11 @@ export class ClaudeConversationHandle implements ConversationHandle {
         submission.accept();
       }
     }
+    if (compactSummary) this.#refreshContextUsage();
+  }
+
+  #refreshContextUsage(): void {
+    if (this.#initialProjectionReady && !this.#closed && !this.#projectionInvalidated && !this.#session.closed) this.#contextUsage.refresh();
   }
 
   /** On resume Claude stops or fails background work the previous process
@@ -1717,6 +1738,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       { readonly type: "system"; readonly subtype: "model_refusal_fallback" }
     >,
   ): void {
+    this.#contextUsage.invalidate();
     this.#rewriteProjection(message.retracted_message_uuids ?? []);
     if (message.scope !== "local") {
       this.#effectiveModel =
@@ -1859,6 +1881,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       backendCode: code,
     });
     if (this.#projectionInvalidated) return error;
+    this.#contextUsage.close();
     this.#viewedImages.close();
     this.#partialItems.clear();
     this.#partialMessageId = undefined;
@@ -2810,6 +2833,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
 
   #markEffectiveAxisUnknown(axis: "model" | "effort" | "permission"): void {
     if (axis === "model") {
+      this.#contextUsage.invalidate();
       this.#effectiveModel = undefined;
       this.#lastModelEvidence = undefined;
     } else if (axis === "effort") {
@@ -2828,6 +2852,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
   }
 
   #markEffectiveUnknown(): void {
+    this.#contextUsage.invalidate();
     this.#effectiveModel = undefined;
     this.#effectiveEffort = undefined;
     this.#effectivePermissionMode = undefined;
@@ -2968,6 +2993,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
 
   #fail(error: unknown): void {
     if (this.#closed || this.#projectionInvalidated) return;
+    this.#contextUsage.close();
     this.#usageAccounting?.close();
     this.#invalidateBackgroundActivity();
     this.#setRunState("disconnected");

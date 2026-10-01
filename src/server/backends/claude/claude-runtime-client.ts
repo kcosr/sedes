@@ -1,6 +1,7 @@
 import type { InterruptConversationInput } from "../contracts.js";
 import type { ResolvedEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import type { BackgroundActivity } from "../../../shared/protocol/background-activity.js";
+import type { ClaudeContextUsage } from "./claude-context-usage.js";
 import { ClaudeHistoryPager, readClaudeSessionHistory, type ClaudeHistoryPage, type ClaudeHistoryPageOptions } from "./claude-session-history.js";
 import type {
   EffortLevel,
@@ -155,6 +156,7 @@ export interface ClaudeRuntimeSession {
   setModel(model?: string): Promise<void>;
   setEffort(effort?: EffortLevel): Promise<void>;
   setPermissionMode(mode: PermissionMode): Promise<void>;
+  contextUsage(signal?: AbortSignal): Promise<ClaudeContextUsage>;
   close(options?: { readonly reason: "evicted" }): Promise<void>;
 }
 

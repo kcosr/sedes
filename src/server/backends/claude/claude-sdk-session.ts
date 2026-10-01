@@ -29,6 +29,7 @@ import {
 } from "./claude-skills.js";
 import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v2.js";
 import { CLAUDE_FORK_LAUNCH_PERMISSION_MODE } from "./claude-fork-launch.js";
+import { CLAUDE_CONTEXT_USAGE_TIMEOUT_MS, projectClaudeContextUsage, waitClaudeContextUsage, type ClaudeContextUsage } from "./claude-context-usage.js";
 
 const CLAUDE_SETTING_SOURCES = ["user", "project", "local"] as const;
 
@@ -200,6 +201,7 @@ export class ClaudeSdkSession {
   readonly #input = new ClaudeInputQueue<SDKUserMessage>(16);
   readonly #abortController = new AbortController();
   #query: Query | undefined;
+  #contextUsageRequest: Promise<ClaudeContextUsage> | undefined;
   #launched = false;
   #consumer: Promise<void> | undefined;
   #closed = false;
@@ -500,6 +502,20 @@ export class ClaudeSdkSession {
       throw new Error("claude_sdk_session_not_ready");
     }
     await this.#query.setModel(model);
+  }
+
+  async contextUsage(signal?: AbortSignal): Promise<ClaudeContextUsage> {
+    if (!this.#query || !this.#initialization || this.closed) throw new Error("claude_sdk_session_not_ready");
+    signal?.throwIfAborted();
+    // The SDK has no per-request cancellation. Keep the native request reserved
+    // until it actually settles, even when a caller stops waiting. A later read
+    // must neither pile up requests nor adopt an old request after compaction.
+    if (this.#contextUsageRequest) throw new Error("claude_context_usage_busy");
+    const request = this.#query.getContextUsage({ detail: "summary" }).then(projectClaudeContextUsage);
+    this.#contextUsageRequest = request;
+    const settled = () => { if (this.#contextUsageRequest === request) this.#contextUsageRequest = undefined; };
+    void request.then(settled, settled);
+    return waitClaudeContextUsage(request, AbortSignal.any([AbortSignal.timeout(CLAUDE_CONTEXT_USAGE_TIMEOUT_MS), ...(signal ? [signal] : [])]));
   }
 
   async setEffort(effort?: EffortLevel): Promise<void> {
