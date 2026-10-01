@@ -23,14 +23,26 @@ export const TASK_TITLE_MAX_CHARACTERS = 240;
 /** A multi-line paste creates at most this many tasks at once. */
 export const TASK_PASTE_MAX_TITLES = 50;
 
-/** Whether options narrow the list beyond the view's default (an indicator on the trigger). */
-export function viewOptionsFilter(options: TasksViewOptions): boolean {
-  return (
-    options.show !== "open" ||
-    options.onlyPinned ||
-    options.onlyWithNotes ||
-    options.onlyWithFiles
-  );
+/** A View option that narrows the list, shown as a removable chip. */
+export interface TasksViewFilter {
+  readonly key: "completed" | "pinned" | "notes" | "files";
+  readonly label: string;
+  /** The change that removes it. */
+  readonly clear: Partial<TasksViewOptions>;
+}
+
+/** The options that narrow the list beyond the view's default, in menu order. */
+export function viewFilters(options: TasksViewOptions): readonly TasksViewFilter[] {
+  const filters: TasksViewFilter[] = [];
+  if (options.show === "completed")
+    filters.push({ key: "completed", label: "Completed", clear: { show: "open" } });
+  if (options.onlyPinned)
+    filters.push({ key: "pinned", label: "Pinned only", clear: { onlyPinned: false } });
+  if (options.onlyWithNotes)
+    filters.push({ key: "notes", label: "With notes", clear: { onlyWithNotes: false } });
+  if (options.onlyWithFiles)
+    filters.push({ key: "files", label: "With files", clear: { onlyWithFiles: false } });
+  return filters;
 }
 
 /** The chat the panel follows. */

@@ -48,8 +48,10 @@ On phones and other narrow screens, Tasks opens as a bottom sheet on every
 page.
 
 The button's badge counts open Tasks: the current thread's Tasks in a thread,
-and Global Tasks on the other pages. The Tasks header shows the open count of
-the current view.
+and Global Tasks on the other pages. The Tasks header counts what the list
+shows: the view's open Tasks, like its scope segment, or "1 of 3" while a
+search or **Only** narrows them, and completed Tasks under **Show** ›
+**Completed**.
 
 Only open Tasks directly scoped to a thread contribute to that sidebar row's
 Task count. Project and global Tasks, and Tasks on fork descendants, are not
@@ -115,9 +117,11 @@ clears the search and closes it.
 | **Include thread tasks** | Project only; off by default |
 | **Search notes** | Off by default |
 
-Each view remembers its own options on this device. The filter icon shows a
-dot while **Show** or **Only** hides Tasks; when nothing matches, the list
-offers to reset them. On phones, View options are in the sheet's **⋯** menu.
+Each view remembers its own options on this device. While **Show** or **Only**
+hides Tasks, a chip for each one, such as **Pinned only**, sits under the
+scope control, and the filter icon shows a dot; select a chip's **×** to
+remove it. When nothing matches, the list offers to reset them. On phones,
+View options are in the sheet's **⋯** menu.
 
 With the default sort, pinned Tasks come first, then the most recently created.
 Editing or moving a Task does not change its creation order.

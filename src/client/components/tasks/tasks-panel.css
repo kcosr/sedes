@@ -197,6 +197,30 @@
   }
 }
 
+/* Active View option filters, under the scope control: one removable chip
+   each ("Pinned only ×"). */
+.tasks-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.tasks-filter-chip {
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  font-weight: var(--weight-medium);
+}
+
+.tasks-filter-chip:hover {
+  color: var(--foreground);
+}
+
+@media (max-width: 819px), (pointer: coarse) {
+  .tasks-filter-chip {
+    height: var(--control-md);
+  }
+}
+
 /* ── Add row: a dashed slot that becomes a focused field. */
 .tasks-add {
   display: flex;

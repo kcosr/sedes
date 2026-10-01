@@ -72,7 +72,8 @@ import { ApiError } from "../../api/ApiClient.js";
 import { Button } from "@client/components/ui/button";
 import { Callout } from "@client/components/ui/callout";
 import { ConfirmDialog } from "@client/components/ui/confirm-dialog";
-import { CountBadge } from "@client/components/ui/count-badge";
+import { CountBadge, countBadgeVariants } from "@client/components/ui/count-badge";
+import { cn } from "@client/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -136,7 +137,7 @@ import {
   scopeKey,
   TASK_PASTE_MAX_TITLES,
   TASKS_VIEW_LABEL,
-  viewOptionsFilter,
+  viewFilters,
   viewUnavailableReason,
   type TaskGroup,
 } from "./task-view-model.js";
@@ -989,7 +990,8 @@ export function TasksPanelContent({
 
   // ── Rendering ────────────────────────────────────────────────────────────
   const searchFiltering = query.length > 0;
-  const filtering = viewOptionsFilter(options);
+  const filters = viewFilters(options);
+  const filtering = filters.length > 0;
   const renderRow = (task: AssociatedTask) => (
     <TaskRow
       key={task.id}
@@ -1242,12 +1244,75 @@ export function TasksPanelContent({
     </Button>
   );
 
-  const countBadge = (
-    <CountBadge
-      count={viewCount(view)}
-      className="tasks-title-count"
-      aria-label={`${viewCount(view)} open`}
-    />
+  // The header counts what the list shows, like the segments when nothing
+  // narrows it; search or an Only option makes it "1 of 3", out of the
+  // segment's count. Show › Completed counts completed tasks.
+  const listedKind = options.show === "completed" ? "completed" : "open";
+  const listedTotal =
+    options.show === "completed"
+      ? tasks.filter(
+          (task) =>
+            task.completedAt !== null &&
+            inViewScope(task, view, context, options.includeThreadTasks),
+        ).length
+      : viewCount(view);
+  const countBadge =
+    mainTasks.length === listedTotal ? (
+      <CountBadge
+        count={listedTotal}
+        className="tasks-title-count"
+        aria-label={`${listedTotal} ${listedKind}`}
+      />
+    ) : (
+      <span
+        data-slot="count-badge"
+        data-tone="neutral"
+        className={cn(countBadgeVariants(), "tasks-title-count")}
+        aria-label={`${mainTasks.length} of ${listedTotal} ${listedKind} shown`}
+      >
+        {mainTasks.length} of {listedTotal}
+      </span>
+    );
+
+  // Removing a chip moves focus to its neighbour, else to the scope.
+  const filtersRef = useRef<HTMLDivElement>(null);
+  const removeFilter = (index: number) => {
+    const filter = filters[index];
+    if (!filter) return;
+    setOptions(filter.clear);
+    const keys = filters.map(({ key }) => key);
+    const next = keys[index + 1] ?? keys[index - 1];
+    requestAnimationFrame(() => {
+      const target = next
+        ? filtersRef.current?.querySelector<HTMLElement>(`[data-filter="${next}"]`)
+        : rootRef.current?.querySelector<HTMLElement>(
+            '.tasks-scope-item[data-state="on"]',
+          );
+      target?.focus();
+    });
+  };
+  const filterChips = filtering && (
+    <div
+      ref={filtersRef}
+      className="tasks-filters"
+      role="group"
+      aria-label="View filters"
+    >
+      {filters.map((filter, index) => (
+        <Button
+          key={filter.key}
+          variant="outline"
+          size="sm"
+          className="tasks-filter-chip"
+          data-filter={filter.key}
+          aria-label={`Remove filter: ${filter.label}`}
+          onClick={() => removeFilter(index)}
+        >
+          {filter.label}
+          <X data-icon="inline-end" aria-hidden="true" />
+        </Button>
+      ))}
+    </div>
   );
 
   const header = sheetDetail ? (
@@ -1517,6 +1582,7 @@ export function TasksPanelContent({
               <span id={scopeHintId} className="sr-only">
                 {scopeHint}
               </span>
+              {filterChips}
               {!sheet && addRow}
             </div>
             {errorCallout}

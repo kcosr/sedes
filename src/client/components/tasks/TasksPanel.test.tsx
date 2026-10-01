@@ -1127,6 +1127,43 @@ describe("TasksPanel view options and search", () => {
     expect(screen.queryByRole("button", { name: /^Completed/ })).not.toBeInTheDocument();
   });
 
+  it("shows narrowing options as removable chips and counts what is listed", async () => {
+    const user = userEvent.setup();
+    renderPanel(seededStore());
+    const count = () => panel().querySelector(".tasks-title-count")!;
+    const filters = () => screen.queryByRole("group", { name: "View filters" });
+    // Nothing narrows the list: the header counts like the Thread segment.
+    expect(filters()).not.toBeInTheDocument();
+    expect(count()).toHaveTextContent("2");
+    expect(count()).toHaveAttribute("aria-label", "2 open");
+    expect(segment("Thread")).toHaveAccessibleDescription("2 open");
+
+    await user.click(screen.getByRole("button", { name: "View options" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Pinned" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Completed" }));
+    await user.keyboard("{Escape}");
+    expect(within(filters()!).getAllByRole("button").map((chip) => chip.textContent)).toEqual([
+      "Completed",
+      "Pinned only",
+    ]);
+    // Completed counts completed tasks; none of them is pinned.
+    expect(count()).toHaveTextContent("0 of 1");
+    expect(count()).toHaveAttribute("aria-label", "0 of 1 completed shown");
+
+    await user.click(screen.getByRole("button", { name: "Remove filter: Completed" }));
+    expect(titles()).toEqual(["Audit checkout error states"]);
+    expect(count()).toHaveTextContent("1 of 2");
+    // Focus moves to the chip that remains, then back to the scope.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Remove filter: Pinned only" })).toHaveFocus(),
+    );
+    await user.keyboard("{Enter}");
+    expect(filters()).not.toBeInTheDocument();
+    expect(count()).toHaveTextContent("2");
+    expect(screen.getByRole("button", { name: "View options" })).not.toHaveAttribute("data-filtering");
+    await waitFor(() => expect(segment("Thread")).toHaveFocus());
+  });
+
   it("searches titles, and notes when asked, without blocking the add row", async () => {
     const user = userEvent.setup();
     renderPanel(seededStore());
