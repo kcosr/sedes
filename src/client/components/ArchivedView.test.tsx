@@ -378,6 +378,9 @@ describe("ArchivedView scope and search", () => {
       JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!)
         .projectFilterName,
     ).toBeNull();
+    expect(
+      screen.getByRole("searchbox", { name: "Search archived threads" }),
+    ).toHaveFocus();
     expect(status).toHaveTextContent("All threads");
   });
 

@@ -360,6 +360,11 @@ export const ArchivedView = memo(function ArchivedView({
     store.setSearch("");
     searchRef.current?.focus();
   };
+  // The control that cleared the scope disappears with it; keep focus nearby.
+  const clearScopeAndFocus = () => {
+    clearScope();
+    searchRef.current?.focus();
+  };
 
   let empty: React.ReactNode = null;
   if (projection.total === 0) {
@@ -372,7 +377,7 @@ export const ArchivedView = memo(function ArchivedView({
     );
   } else if (projection.matchCount === 0) {
     const scopeAction = scopeActive ? (
-      <Button variant="outline" size="sm" onClick={clearScope}>
+      <Button variant="outline" size="sm" onClick={clearScopeAndFocus}>
         Clear scope
       </Button>
     ) : null;
@@ -455,7 +460,7 @@ export const ArchivedView = memo(function ArchivedView({
                 <button
                   type="button"
                   className="archive-status-action"
-                  onClick={clearScope}
+                  onClick={clearScopeAndFocus}
                 >
                   Clear scope
                 </button>

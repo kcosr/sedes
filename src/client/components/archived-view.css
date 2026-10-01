@@ -86,8 +86,9 @@
   line-height: var(--leading-normal);
 }
 
-.archive-status > * + *::before {
-  margin-right: var(--space-1-5);
+/* The dot trails its item, so a wrapped line never starts with one. */
+.archive-status > :not(:last-child)::after {
+  margin-left: var(--space-1-5);
   content: "·";
 }
 
