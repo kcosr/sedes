@@ -522,14 +522,33 @@ describe("ThreadView backend interaction modes", () => {
       </TaskDragProvider>,
     );
 
+    const bounds = vi
+      .spyOn(Element.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: Element) {
+        const rect = (top: number, bottom: number) =>
+          ({ top, bottom, left: 0, right: 800, x: 0, y: top, width: 800, height: bottom - top, toJSON: () => ({}) }) as DOMRect;
+        if (this.matches('[data-testid="thread-view"]')) return rect(0, 800);
+        if (this.matches(".thread-header")) return rect(0, 72);
+        if (this.matches('[data-task-drop-surface="composer"]')) return rect(640, 780);
+        return rect(0, 0);
+      });
     fireEvent.dragStart(screen.getByRole("button", { name: "Drag task" }), {
       dataTransfer,
     });
     const threadView = screen.getByTestId("thread-view");
     fireEvent.dragEnter(threadView, { dataTransfer });
-    expect(
-      screen.getByText(`Move task to ${snapshot.thread.title.text}`),
-    ).toBeInTheDocument();
+    const moveLabel = screen.getByText(
+      `Move task to ${snapshot.thread.title.text}`,
+    );
+    // The move zone ends above the composer, whose attach zone stays visible.
+    const zone = moveLabel.parentElement!;
+    expect(zone).toHaveClass("thread-task-drop-indicator");
+    expect([zone.style.top, zone.style.bottom]).toEqual([
+      "calc(72px + var(--space-2))",
+      "calc(160px + var(--space-2))",
+    ]);
+    expect(threadView).toHaveAttribute("data-task-drop-active", "true");
+    bounds.mockRestore();
 
     const composer = screen.getByTestId("composer");
     fireEvent.dragEnter(composer, { dataTransfer });

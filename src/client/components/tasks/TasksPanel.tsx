@@ -16,7 +16,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type DragEvent as ReactDragEvent,
   type ReactNode,
   type RefObject,
 } from "react";
@@ -88,6 +87,7 @@ import { createWorkspaceFilesOpenIntent } from "../../workspace-files/open-inten
 import {
   handleTaskDragStart,
   useTaskDrag,
+  useTaskScopeDropTargets,
   type TaskScopeDropTarget,
 } from "../../tasks/task-drag.js";
 import {
@@ -351,10 +351,7 @@ function TasksPanelBody({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [newFilePath, setNewFilePath] = useState("");
-  const [scopeDropView, setScopeDropView] = useState<TasksView>();
-  useEffect(() => {
-    if (taskDrag?.activeTaskId === undefined) setScopeDropView(undefined);
-  }, [taskDrag?.activeTaskId]);
+  const scopeDrop = useTaskScopeDropTargets<TasksView>();
 
   const tasks = application.snapshot?.tasks ?? [];
   const workspaceLabels = useMemo(
@@ -688,64 +685,22 @@ function TasksPanelBody({
     };
   };
 
-  const dragTargetsScope = (event: ReactDragEvent): boolean =>
-    taskDrag?.isTaskDrag(event.dataTransfer) === true;
-
-  const markScopeDrop = (targetView: TasksView, event: ReactDragEvent) => {
-    if (!dragTargetsScope(event) || !scopeDropTarget(targetView)) return;
-    event.preventDefault();
-    event.stopPropagation();
-    event.dataTransfer.dropEffect = "move";
-    setScopeDropView(targetView);
-  };
-
-  const leaveScopeDrop = (targetView: TasksView, event: ReactDragEvent) => {
-    if (!dragTargetsScope(event)) return;
-    event.stopPropagation();
-    if (
-      !event.currentTarget.contains(event.relatedTarget as Node | null) &&
-      scopeDropView === targetView
-    ) {
-      setScopeDropView(undefined);
-    }
-  };
-
-  const dropOnScope = (targetView: TasksView, event: ReactDragEvent) => {
-    if (!dragTargetsScope(event)) return;
-    const target = scopeDropTarget(targetView);
-    if (!target) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const task = taskDrag?.resolveDraggedTask(event.dataTransfer);
-    taskDrag?.endTaskDrag();
-    setScopeDropView(undefined);
-    if (!task) {
-      taskDrag?.announce(
-        "That task changed before it could be moved. Review it and try again.",
-        true,
-      );
-      return;
-    }
-    void taskDrag?.requestScopeMove(task, target);
-  };
-
-  const viewOptions = VIEW_ORDER.map((candidate) => ({
-    value: candidate,
-    label: VIEW_LABEL[candidate],
-    disabled: !availableViews[candidate],
-    ...(availableViews[candidate]
-      ? {}
-      : { title: disabledReason(candidate) }),
-    dropActive: scopeDropView === candidate,
-    onDragEnter: (event: ReactDragEvent<HTMLButtonElement>) =>
-      markScopeDrop(candidate, event),
-    onDragOver: (event: ReactDragEvent<HTMLButtonElement>) =>
-      markScopeDrop(candidate, event),
-    onDragLeave: (event: ReactDragEvent<HTMLButtonElement>) =>
-      leaveScopeDrop(candidate, event),
-    onDrop: (event: ReactDragEvent<HTMLButtonElement>) =>
-      dropOnScope(candidate, event),
-  }));
+  const viewOptions = VIEW_ORDER.map((candidate) => {
+    const drop = scopeDrop.props(candidate, scopeDropTarget(candidate));
+    return {
+      value: candidate,
+      label: VIEW_LABEL[candidate],
+      disabled: !availableViews[candidate],
+      ...(availableViews[candidate]
+        ? {}
+        : { title: disabledReason(candidate) }),
+      dropActive: scopeDrop.over === candidate,
+      onDragEnter: drop.onDragEnter,
+      onDragOver: drop.onDragOver,
+      onDragLeave: drop.onDragLeave,
+      onDrop: drop.onDrop,
+    };
+  });
 
   const headerActions = (
     <>
@@ -805,11 +760,7 @@ function TasksPanelBody({
       data-task-detail-open={
         selectedTask !== undefined || editor !== null || undefined
       }
-      data-task-scope-drop-target={scopeDropView === view || undefined}
-      onDragEnter={(event) => markScopeDrop(view, event)}
-      onDragOver={(event) => markScopeDrop(view, event)}
-      onDragLeave={(event) => leaveScopeDrop(view, event)}
-      onDrop={(event) => dropOnScope(view, event)}
+      {...scopeDrop.props(view, scopeDropTarget(view))}
     >
       {presentation === "panel" ? null : (
         <header className="tasks-panel-header">

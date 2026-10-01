@@ -91,6 +91,27 @@ export function ThreadView({
     // parent move overlay from that authoritative transition.
     if (taskDrag?.activeTaskId === undefined) setTaskDropActive(false);
   }, [taskDrag?.activeTaskId]);
+  // The move zone spans the conversation between the header and the
+  // composer, so the composer's own "add to prompt" zone stays in view.
+  const [taskDropZone, setTaskDropZone] = useState<{
+    readonly top: number;
+    readonly bottom: number;
+  }>();
+  useLayoutEffect(() => {
+    const view = threadView.current;
+    if (!taskDropActive || !view) return;
+    const bounds = view.getBoundingClientRect();
+    const header = view.querySelector(".thread-header");
+    const composer = view.querySelector('[data-task-drop-surface="composer"]');
+    setTaskDropZone({
+      top: header
+        ? Math.max(0, header.getBoundingClientRect().bottom - bounds.top)
+        : 0,
+      bottom: composer
+        ? Math.max(0, bounds.bottom - composer.getBoundingClientRect().top)
+        : 0,
+    });
+  }, [taskDropActive]);
   // Seek-on-submit signal from the composer to the transcript. A ref (not
   // state): arming it must not re-render, and the transcript consumes it
   // imperatively when the sent message shows up.
@@ -423,8 +444,19 @@ export function ThreadView({
         }}
       >
         {taskDropActive && (
-          <div className="thread-task-drop-indicator" aria-hidden="true">
-            Move task to {snapshot.thread.title.text}
+          <div
+            className="thread-task-drop-indicator"
+            aria-hidden="true"
+            style={
+              taskDropZone && {
+                top: `calc(${taskDropZone.top}px + var(--space-2))`,
+                bottom: `calc(${taskDropZone.bottom}px + var(--space-2))`,
+              }
+            }
+          >
+            <span className="thread-task-drop-label">
+              Move task to {snapshot.thread.title.text}
+            </span>
           </div>
         )}
         <ThreadHeader

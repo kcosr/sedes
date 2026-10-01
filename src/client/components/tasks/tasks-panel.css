@@ -47,11 +47,6 @@
   overflow-y: auto;
 }
 
-.tasks-panel-body[data-task-scope-drop-target="true"] {
-  box-shadow: inset 0 0 0 2px var(--accent, var(--primary));
-  border-radius: var(--radius-card);
-}
-
 .tasks-panel-header {
   display: flex;
   align-items: center;

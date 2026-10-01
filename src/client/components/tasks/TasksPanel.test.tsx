@@ -1198,8 +1198,9 @@ describe("TasksPanel", () => {
       { dataTransfer },
     );
     const card = document.querySelector<HTMLElement>(".tasks-panel-body")!;
+    expect(card).toHaveAttribute("data-task-drop-armed", "true");
     fireEvent.dragOver(card, { dataTransfer });
-    expect(card).toHaveAttribute("data-task-scope-drop-target", "true");
+    expect(card).toHaveAttribute("data-task-drop-target", "true");
     fireEvent.drop(card, { dataTransfer });
 
     await vi.waitFor(() =>
