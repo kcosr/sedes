@@ -70,10 +70,10 @@ function keepsKey(event: KeyboardEvent<HTMLInputElement>): boolean {
  * "Move to group": a searchable submenu on desktop and a searchable drill-in
  * in the touch sheet. A plain search row filters the groups (the current one
  * carries the trailing check); when nothing matches, a "Create group" row
- * creates it and moves the thread in one step. "New group…" is always
- * present at the end, with "Remove from group" while the thread has one.
- * Typing goes to the search; the arrow keys move into the results and Enter
- * picks (from the search, the first result).
+ * creates it and moves the thread in one step. "New group…" always leads,
+ * under the search, and "Remove from group" closes the list while the thread
+ * has one. Typing goes to the search; the arrow keys follow the rows in order,
+ * and Enter from the search picks the first result (a group, or Create).
  */
 export function MoveToGroupSubmenu({
   groups,
@@ -131,6 +131,9 @@ function GroupPicker({
   const matching = groups.filter((group) => matchesSearchQuery(query, [group.name]));
   const firstRow = () => pickerRows(search.current)[0];
   const lastRow = () => pickerRows(search.current).at(-1);
+  // New group… leads the rows, so Enter skips to the first actual result.
+  const firstResult = () =>
+    pickerRows(search.current).find((row) => row.hasAttribute("data-group-result"));
   const typeIntoSearch = (text: string) => {
     setQuery((current) => current + text);
     search.current?.focus();
@@ -163,43 +166,48 @@ function GroupPicker({
             (event.key === "ArrowDown" ? firstRow() : lastRow())?.focus();
           } else if (event.key === "Enter") {
             event.preventDefault();
-            if (name) firstRow()?.click();
+            if (name) firstResult()?.click();
           }
           if (keepsKey(event)) event.stopPropagation();
         }}
       />
       {name && matching.length === 0 ? (
-        <ContextMenuItem onSelect={() => onCreate(name)}>
+        <ContextMenuItem data-group-result="" onSelect={() => onCreate(name)}>
           <Plus aria-hidden="true" />
           <span className="thread-action-label">Create group “{name}”</span>
         </ContextMenuItem>
       ) : null}
-      {matching.length > 0 ? (
-        <ContextMenuRadioGroup
-          aria-label="Groups"
-          value={currentGroupId ?? ""}
-          onValueChange={(groupId) => {
-            if (groupId !== currentGroupId) onAssign(groupId);
-          }}
-        >
-          {matching.map((group) => (
-            <ContextMenuRadioItem key={group.id} value={group.id}>
-              <Layers3 aria-hidden="true" />
-              <span className="thread-action-label">{group.name}</span>
-            </ContextMenuRadioItem>
-          ))}
-        </ContextMenuRadioGroup>
-      ) : null}
-      {name || matching.length > 0 ? <ContextMenuSeparator /> : null}
       <ContextMenuItem onSelect={() => onNewGroup(name)}>
         <Plus aria-hidden="true" />
         New group…
       </ContextMenuItem>
+      {matching.length > 0 ? (
+        <>
+          <ContextMenuSeparator />
+          <ContextMenuRadioGroup
+            aria-label="Groups"
+            value={currentGroupId ?? ""}
+            onValueChange={(groupId) => {
+              if (groupId !== currentGroupId) onAssign(groupId);
+            }}
+          >
+            {matching.map((group) => (
+              <ContextMenuRadioItem key={group.id} value={group.id} data-group-result="">
+                <Layers3 aria-hidden="true" />
+                <span className="thread-action-label">{group.name}</span>
+              </ContextMenuRadioItem>
+            ))}
+          </ContextMenuRadioGroup>
+        </>
+      ) : null}
       {currentGroupId !== null && (
-        <ContextMenuItem onSelect={onRemove}>
-          <Ungroup aria-hidden="true" />
-          Remove from group
-        </ContextMenuItem>
+        <>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={onRemove}>
+            <Ungroup aria-hidden="true" />
+            Remove from group
+          </ContextMenuItem>
+        </>
       )}
     </ContextMenuSubContent>
   );
