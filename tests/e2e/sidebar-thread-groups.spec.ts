@@ -757,8 +757,8 @@ test("move to group searches destinations on desktop and mobile", async ({
   const sidebar = page.getByTestId("desktop-sidebar");
   const row = sidebar.locator(`[data-thread-id="${targetId}"]`);
   const rowLink = row.getByTestId("thread-row-link");
-  // "Move to group" is a searchable submenu: a search row over the groups,
-  // then "New group…" (and "Remove from group" while grouped).
+  // "Move to group" is a searchable submenu: a search row, "New group…",
+  // the groups, and "Remove from group" while grouped.
   const submenu = page.getByRole("menu", { name: "Move to group", exact: true });
   const search = submenu.getByRole("searchbox", { name: "Search groups", exact: true });
   const groupRows = submenu.getByRole("menuitemradio");
@@ -811,11 +811,15 @@ test("move to group searches destinations on desktop and mobile", async ({
   await expect(submenu).toBeHidden();
   await expect.poll(groupAssignment).toBe(betaId);
 
-  // The arrow keys move into the results; the current group carries the check.
+  // The arrow keys follow the rows: New group… leads, then the groups; the
+  // current group carries the check.
   await openDesktopMove();
   await search.press("ArrowDown");
+  await expect(submenu.getByRole("menuitem", { name: "New group…", exact: true })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
   await expect(submenu.getByRole("menuitemradio", { name: "Alpha planning" })).toBeFocused();
   await expect(submenu.getByRole("menuitemradio", { name: "Beta delivery" })).toBeChecked();
+  await page.keyboard.press("ArrowUp");
   await page.keyboard.press("ArrowUp");
   await expect(search).toBeFocused();
 
