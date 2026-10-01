@@ -79,7 +79,8 @@ export function TaskAddRow({
           ref={setInput}
           type="text"
           className="tasks-add-input"
-          data-tasks-add-input=""
+          // The docked panel and the popover focus the add row on open.
+          data-panel-autofocus=""
           aria-label="Add a task"
           placeholder={placeholder}
           autoComplete="off"

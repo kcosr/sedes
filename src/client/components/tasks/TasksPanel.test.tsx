@@ -25,7 +25,7 @@ import {
   useComposerDraftCoordinator,
 } from "../../context-excerpts/coordinator.js";
 import { setTasksPanelOpen, setTasksPanelPinned } from "../../app/tasks-panel-store.js";
-import { TasksPanel } from "./TasksPanel.js";
+import { TasksPanel, TasksPanelContent } from "./TasksPanel.js";
 import { revealTask } from "./task-reveal.js";
 import type { PanelLayoutStore } from "../../workspace-panels/panel-state.js";
 import { setPanelPresentation } from "../../app/settings.js";
@@ -967,15 +967,20 @@ describe("TasksPanel view options and search", () => {
     await user.click(screen.getByRole("button", { name: "Search tasks" }));
     const search = screen.getByRole("textbox", { name: "Search tasks" });
     expect(search).toHaveFocus();
-    await user.type(search, "error branch");
-    expect(titles()).toEqual(["Audit checkout error states"]);
+    expect(search).toHaveAttribute("placeholder", "Search titles");
+    await user.type(search, "retry");
+    expect(titles()).toEqual(["Add retry to the payment call"]);
     expect(addInput()).toBeEnabled();
+    await user.clear(search);
+    await user.type(search, "error branch");
+    expect(titles()).toEqual([]);
+    expect(screen.getByText("No tasks match “error branch”.")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "View options" }));
     await user.click(screen.getByRole("menuitemcheckbox", { name: "Search notes" }));
     await user.keyboard("{Escape}");
-    expect(titles()).toEqual([]);
-    expect(screen.getByText("No tasks match “error branch”.")).toBeInTheDocument();
+    expect(search).toHaveAttribute("placeholder", "Search titles and notes");
+    expect(titles()).toEqual(["Audit checkout error states"]);
 
     await user.click(search);
     await user.keyboard("{Escape}");
@@ -1215,6 +1220,48 @@ describe("TasksPanel phone sheet", () => {
     const sheet = screen.getByRole("dialog", { name: "Tasks" });
     expect(sheet).toHaveAttribute("data-layout", "sheet");
     expect(sheet.style.getPropertyValue("--keyboard-inset")).toBe("280px");
+  });
+});
+
+describe("TasksPanelContent docked", () => {
+  it("draws the panel family's header with one actions menu and the layout's controls", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    const panelControls = { onCollapse: vi.fn(), onClose: vi.fn(), onDock: vi.fn(), dockEdge: "right" as const };
+    const onRequestClose = vi.fn();
+    render(
+      <TasksPanelContent
+        presentation="panel"
+        store={store}
+        panelLayoutStore={makePanelLayoutStore()}
+        route={{ name: "thread", threadId: "thread-9", automationOpen: false }}
+        active
+        onRequestClose={onRequestClose}
+        panelControls={panelControls}
+      />,
+    );
+
+    const header = screen.getByRole("banner", { name: "Tasks panel header" });
+    expect(header).toHaveClass("workspace-panel-chrome");
+    expect(within(header).getByText("Tasks")).toBeInTheDocument();
+    expect(within(header).getByLabelText("2 open")).toBeInTheDocument();
+    expect(within(header).getByRole("button", { name: "Search tasks" })).toBeInTheDocument();
+    expect(within(header).getByRole("button", { name: "View options" })).toBeInTheDocument();
+    // One overflow menu: the panel's, carrying the Tasks items too.
+    expect(within(header).queryByRole("button", { name: "Tasks panel options" })).not.toBeInTheDocument();
+    await user.click(within(header).getByRole("button", { name: "Tasks panel actions" }));
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitemradio", { name: "Right" })).toBeChecked();
+    expect(within(menu).getByRole("menuitem", { name: "Add a task with notes" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitem", { name: "Keyboard shortcuts" })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    // The layout's own close, not the content's.
+    expect(within(header).getAllByRole("button", { name: "Close Tasks panel" })).toHaveLength(1);
+    await user.click(within(header).getByRole("button", { name: "Close Tasks panel" }));
+    expect(panelControls.onClose).toHaveBeenCalled();
+    expect(onRequestClose).not.toHaveBeenCalled();
+    expect(addInput()).toHaveAttribute("data-panel-autofocus");
   });
 });
 

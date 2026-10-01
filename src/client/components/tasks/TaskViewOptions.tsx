@@ -22,10 +22,10 @@ import type {
   TasksSort,
   TasksView,
   TasksViewOptions,
-} from "./task-view-model.js";
+} from "./tasks-view-options.js";
 
 const SORTS: readonly { value: TasksSort; label: string; icon: typeof Pin }[] = [
-  { value: "pinned", label: "Pinned, then newest", icon: Pin },
+  { value: "pinned-newest", label: "Pinned, then newest", icon: Pin },
   { value: "updated", label: "Recently updated", icon: Clock },
   { value: "title", label: "Title", icon: ArrowDownAZ },
 ];
@@ -97,16 +97,16 @@ export function TaskViewOptionsItems({
         Pinned
       </DropdownMenuCheckboxItem>
       <DropdownMenuCheckboxItem
-        checked={options.onlyNotes}
-        onCheckedChange={(onlyNotes) => onChange({ onlyNotes })}
+        checked={options.onlyWithNotes}
+        onCheckedChange={(onlyWithNotes) => onChange({ onlyWithNotes })}
         onSelect={keepOpen}
       >
         <AlignLeft />
         With notes
       </DropdownMenuCheckboxItem>
       <DropdownMenuCheckboxItem
-        checked={options.onlyFiles}
-        onCheckedChange={(onlyFiles) => onChange({ onlyFiles })}
+        checked={options.onlyWithFiles}
+        onCheckedChange={(onlyWithFiles) => onChange({ onlyWithFiles })}
         onSelect={keepOpen}
       >
         <FileText />

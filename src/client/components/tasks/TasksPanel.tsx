@@ -74,6 +74,10 @@ import {
   SegmentedControlItem,
 } from "@client/components/ui/segmented-control";
 import type { PanelLayoutStore } from "../../workspace-panels/panel-state.js";
+import {
+  PanelChrome,
+  type PanelChromeControls,
+} from "../../workspace-panels/PanelChrome.js";
 import { resolvePanelPresentation } from "../../workspace-panels/panel-presentation.js";
 import { getPanelPresentation } from "../../app/settings.js";
 import { createWorkspaceFilesOpenIntent } from "../../workspace-files/open-intent.js";
@@ -107,7 +111,7 @@ import {
 } from "./TaskList.js";
 import { TaskViewOptionsItems } from "./TaskViewOptions.js";
 import { ScopeIcon, useTaskDestinations } from "./task-destinations.js";
-import { subscribeReveal } from "./task-reveal.js";
+import { useTaskReveal } from "./task-reveal.js";
 import { useTaskToast } from "./task-toast.js";
 import {
   clampView,
@@ -126,13 +130,19 @@ import {
   scopeKey,
   TASK_PASTE_MAX_TITLES,
   TASKS_VIEW_LABEL,
-  TASKS_VIEWS,
   viewOptionsFilter,
   viewUnavailableReason,
   type TaskGroup,
-  type TasksView,
 } from "./task-view-model.js";
-import { useTasksLastView, useTasksViewOptions } from "./tasks-view-options.js";
+import {
+  setTasksLastView,
+  setTasksViewOptions,
+  TASKS_VIEWS,
+  useTasksLastView,
+  useTasksViewOptions,
+  type TasksView,
+  type TasksViewOptions,
+} from "./tasks-view-options.js";
 import "./tasks-panel.css";
 
 const MOBILE_QUERY = "(max-width: 819px)";
@@ -226,13 +236,17 @@ export interface TasksPanelContentProps {
    * and dialogs close and come back, with unsaved edits, when shown again.
    */
   readonly active: boolean;
-  /** The header's ×. */
-  readonly onClose: () => void;
   /**
-   * Hands the screen back after an action that continues elsewhere: on a
-   * phone, Add to prompt, opening a file and opening a thread close the sheet.
+   * Closes a popover or sheet: its ×, Escape, and on a phone the actions
+   * that continue elsewhere (Add to prompt, opening a file or a thread).
    */
   readonly onRequestClose: () => void;
+  /**
+   * Docked only: the layout's collapse, dock and close controls. The
+   * content then draws its header as the panel's `PanelChrome`, with its
+   * own ⋯ items folded into the panel's actions menu.
+   */
+  readonly panelControls?: PanelChromeControls;
 }
 
 type PendingActions = ReadonlyMap<string, ReadonlySet<TaskAction>>;
@@ -318,8 +332,8 @@ export function TasksPanelContent({
   panelLayoutStore,
   route,
   active,
-  onClose,
   onRequestClose,
+  panelControls,
 }: TasksPanelContentProps): React.JSX.Element {
   const sheet = presentation === "sheet";
   const application = useApplicationStore(store);
@@ -339,10 +353,13 @@ export function TasksPanelContent({
     ? snapshot?.workspaces.find(({ id }) => id === routeThread.workspaceId)
     : undefined;
 
-  const [storedView, setStoredView] = useTasksLastView();
-  const view = clampView(storedView, context);
-  const [options, setOptions] = useTasksViewOptions(view);
-  const [projectOptions] = useTasksViewOptions("project");
+  const view = clampView(useTasksLastView(), context);
+  const options = useTasksViewOptions(view);
+  const setOptions = useCallback(
+    (patch: Partial<TasksViewOptions>) => setTasksViewOptions(view, patch),
+    [view],
+  );
+  const projectOptions = useTasksViewOptions("project");
 
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchText, setSearchText] = useState("");
@@ -560,18 +577,14 @@ export function TasksPanelContent({
 
   // Reveal requests (transcript "Open task"): switch to a view that holds
   // the task, make it visible, expand it and move focus to it.
-  useEffect(
-    () =>
-      subscribeReveal((taskId) => {
-        const task = store.getTasks().find(({ id }) => id === taskId);
-        if (!task) return;
-        setStoredView(revealView(task, context));
-        setSearchOpen(false);
-        setSearchText("");
-        setRevealId(taskId);
-      }),
-    [store, context, setStoredView],
-  );
+  useTaskReveal(({ taskId }) => {
+    const task = store.getTasks().find(({ id }) => id === taskId);
+    if (!task) return;
+    setTasksLastView(revealView(task, context));
+    setSearchOpen(false);
+    setSearchText("");
+    setRevealId(taskId);
+  });
   useEffect(() => {
     if (revealId === null) return;
     const task = tasks.find(({ id }) => id === revealId);
@@ -586,8 +599,8 @@ export function TasksPanelContent({
       setOptions({
         show: "open",
         onlyPinned: false,
-        onlyNotes: false,
-        onlyFiles: false,
+        onlyWithNotes: false,
+        onlyWithFiles: false,
       });
       return;
     }
@@ -877,7 +890,7 @@ export function TasksPanelContent({
 
   const changeView = (next: TasksView) => {
     if (viewUnavailableReason(next, context) !== undefined) return;
-    setStoredView(next);
+    setTasksLastView(next);
     setError(null);
   };
 
@@ -1030,7 +1043,7 @@ export function TasksPanelContent({
       } else if (searchOpen) {
         closeSearch();
       } else if (presentation !== "panel") {
-        onClose();
+        onRequestClose();
       }
       return;
     }
@@ -1153,7 +1166,7 @@ export function TasksPanelContent({
       );
     }
     if (filtering) {
-      const nothing = options.show === "completed" && !options.onlyPinned && !options.onlyNotes && !options.onlyFiles;
+      const nothing = options.show === "completed" && !options.onlyPinned && !options.onlyWithNotes && !options.onlyWithFiles;
       return (
         <EmptyState
           variant="inline"
@@ -1167,8 +1180,8 @@ export function TasksPanelContent({
                 setOptions({
                   show: "open",
                   onlyPinned: false,
-                  onlyNotes: false,
-                  onlyFiles: false,
+                  onlyWithNotes: false,
+                  onlyWithFiles: false,
                 })
               }
             >
@@ -1268,63 +1281,98 @@ export function TasksPanelContent({
     .filter(Boolean)
     .join(" ");
 
-  const headerMenu = (
-    <DropdownMenu
-      presentation={touch ? "sheet" : "menu"}
-      open={active && headerMenuOpen}
-      onOpenChange={setHeaderMenuOpen}
+  // ⋯: the docked panel folds these into its actions menu instead.
+  const moreItems = (
+    <>
+      <DropdownMenuItem onSelect={() => focusAdd(true)}>
+        <AlignLeft />
+        <span>Add a task with notes</span>
+      </DropdownMenuItem>
+      {groups && groups.length > 0 && (
+        <DropdownMenuItem
+          onSelect={() =>
+            setCollapsedGroups(
+              collapsedGroups.size > 0
+                ? new Set()
+                : new Set(
+                    groups.flatMap((group) => [
+                      group.key,
+                      ...group.children.map(({ key }) => key),
+                    ]),
+                  ),
+            )
+          }
+        >
+          {collapsedGroups.size > 0 ? <ChevronsUpDown /> : <ChevronsDownUp />}
+          <span>
+            {collapsedGroups.size > 0 ? "Expand all groups" : "Collapse all groups"}
+          </span>
+        </DropdownMenuItem>
+      )}
+      {!touch && (
+        <DropdownMenuItem onSelect={() => setShortcutsOpen(true)}>
+          <Keyboard />
+          <span>Keyboard shortcuts</span>
+        </DropdownMenuItem>
+      )}
+    </>
+  );
+
+  const searchButton = (
+    <Button
+      ref={searchButtonRef}
+      variant="ghost"
+      size="icon-sm"
+      className="tasks-header-button"
+      aria-label="Search tasks"
+      aria-pressed={searchOpen}
+      title="Search (/)"
+      onClick={() => (searchOpen ? closeSearch() : openSearch())}
     >
+      <Search aria-hidden="true" />
+    </Button>
+  );
+
+  // Phones have no room for it: the sheet's ⋯ carries the View options.
+  const viewOptionsMenu = !sheet && (
+    <DropdownMenu open={active && viewMenuOpen} onOpenChange={setViewMenuOpen}>
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
           size="icon-sm"
           className="tasks-header-button"
-          aria-label="Tasks panel options"
-          title="More"
+          aria-label="View options"
+          title="View options"
+          data-filtering={filtering || undefined}
         >
-          <Ellipsis aria-hidden="true" />
+          <ListFilter aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" sheetTitle="Tasks">
-        {sheet && (
-          <>
-            <TaskViewOptionsItems view={view} options={options} onChange={setOptions} />
-            <DropdownMenuSeparator />
-          </>
-        )}
-        <DropdownMenuItem onSelect={() => focusAdd(true)}>
-          <AlignLeft />
-          <span>Add a task with notes</span>
-        </DropdownMenuItem>
-        {groups && groups.length > 0 && (
-          <DropdownMenuItem
-            onSelect={() =>
-              setCollapsedGroups(
-                collapsedGroups.size > 0
-                  ? new Set()
-                  : new Set(
-                      groups.flatMap((group) => [
-                        group.key,
-                        ...group.children.map(({ key }) => key),
-                      ]),
-                    ),
-              )
-            }
-          >
-            {collapsedGroups.size > 0 ? <ChevronsUpDown /> : <ChevronsDownUp />}
-            <span>
-              {collapsedGroups.size > 0 ? "Expand all groups" : "Collapse all groups"}
-            </span>
-          </DropdownMenuItem>
-        )}
-        {!touch && (
-          <DropdownMenuItem onSelect={() => setShortcutsOpen(true)}>
-            <Keyboard />
-            <span>Keyboard shortcuts</span>
-          </DropdownMenuItem>
-        )}
+      <DropdownMenuContent align="end" aria-label="View options">
+        <TaskViewOptionsItems view={view} options={options} onChange={setOptions} />
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+
+  const closeButton = (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      className="tasks-header-button"
+      aria-label="Close Tasks panel"
+      title="Close"
+      onClick={onRequestClose}
+    >
+      <X aria-hidden="true" />
+    </Button>
+  );
+
+  const countBadge = (
+    <CountBadge
+      count={viewCount(view)}
+      className="tasks-title-count"
+      aria-label={`${viewCount(view)} open`}
+    />
   );
 
   const header = sheetDetail ? (
@@ -1357,73 +1405,65 @@ export function TasksPanelContent({
             </Button>
           }
         />
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="tasks-header-button"
-          aria-label="Close Tasks panel"
-          onClick={onClose}
-        >
-          <X aria-hidden="true" />
-        </Button>
+        {closeButton}
       </div>
     </header>
+  ) : presentation === "panel" && panelControls ? (
+    // Docked: the panel family's header, with the layout's collapse, dock
+    // and close controls and one actions menu.
+    <PanelChrome
+      className="tasks-header-chrome"
+      panelTitle="Tasks"
+      leading={
+        <div className="workspace-panel-title">
+          <span>Tasks</span>
+          {countBadge}
+        </div>
+      }
+      panelActions={
+        <>
+          {searchButton}
+          {viewOptionsMenu}
+        </>
+      }
+      controls={{ ...panelControls, renderMenuItems: moreItems }}
+    />
   ) : (
     <header className="tasks-header">
       <h2 className="tasks-title">
         Tasks
-        <CountBadge
-          count={viewCount(view)}
-          className="tasks-title-count"
-          aria-label={`${viewCount(view)} open`}
-        />
+        {countBadge}
       </h2>
       <div className="tasks-header-actions">
-        <Button
-          ref={searchButtonRef}
-          variant="ghost"
-          size="icon-sm"
-          className="tasks-header-button"
-          aria-label="Search tasks"
-          aria-pressed={searchOpen}
-          title="Search (/)"
-          onClick={() => (searchOpen ? closeSearch() : openSearch())}
+        {searchButton}
+        {viewOptionsMenu}
+        <DropdownMenu
+          presentation={touch ? "sheet" : "menu"}
+          open={active && headerMenuOpen}
+          onOpenChange={setHeaderMenuOpen}
         >
-          <Search aria-hidden="true" />
-        </Button>
-        {!sheet && (
-          <DropdownMenu
-            open={active && viewMenuOpen}
-            onOpenChange={setViewMenuOpen}
-          >
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="tasks-header-button"
-                aria-label="View options"
-                title="View options"
-                data-filtering={filtering || undefined}
-              >
-                <ListFilter aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" aria-label="View options">
-              <TaskViewOptionsItems view={view} options={options} onChange={setOptions} />
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-        {headerMenu}
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="tasks-header-button"
-          aria-label="Close Tasks panel"
-          title="Close"
-          onClick={onClose}
-        >
-          <X aria-hidden="true" />
-        </Button>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="tasks-header-button"
+              aria-label="Tasks panel options"
+              title="More"
+            >
+              <Ellipsis aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" sheetTitle="Tasks">
+            {sheet && (
+              <>
+                <TaskViewOptionsItems view={view} options={options} onChange={setOptions} />
+                <DropdownMenuSeparator />
+              </>
+            )}
+            {moreItems}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {closeButton}
       </div>
     </header>
   );
@@ -1900,6 +1940,6 @@ export function TasksPanel({
   return <>
     {active ? surface : <div hidden aria-hidden="true" inert><StablePaneSlot target={bodyTarget} /></div>}
     {createPortal(<TasksPanelContent presentation={mobile ? "sheet" : "popover"} store={store} panelLayoutStore={panelLayoutStore}
-      route={route} active={active} onClose={close} onRequestClose={close} />, bodyTarget)}
+      route={route} active={active} onRequestClose={close} />, bodyTarget)}
   </>;
 }

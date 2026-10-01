@@ -4,7 +4,6 @@ import {
   clampView,
   compareCompleted,
   compareOpen,
-  DEFAULT_TASKS_VIEW_OPTIONS,
   destinationScope,
   groupTasks,
   inViewScope,
@@ -21,6 +20,7 @@ import {
   viewUnavailableReason,
   type TasksContext,
 } from "./task-view-model.js";
+import { TASKS_VIEW_OPTIONS_DEFAULTS } from "./tasks-view-options.js";
 
 function task(overrides: Partial<AssociatedTask> = {}): AssociatedTask {
   return {
@@ -126,13 +126,13 @@ describe("search, filters and order", () => {
   });
 
   it("combines the Only filters and flags narrowing options", () => {
-    const options = { ...DEFAULT_TASKS_VIEW_OPTIONS, onlyPinned: true, onlyFiles: true };
+    const options = { ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, onlyPinned: true, onlyWithFiles: true };
     expect(matchesOnly(task({ pinned: true, files: ["/a"] }), options)).toBe(true);
     expect(matchesOnly(task({ pinned: true }), options)).toBe(false);
-    expect(matchesOnly(task({ details: "   " }), { ...DEFAULT_TASKS_VIEW_OPTIONS, onlyNotes: true })).toBe(false);
-    expect(viewOptionsFilter(DEFAULT_TASKS_VIEW_OPTIONS)).toBe(false);
-    expect(viewOptionsFilter({ ...DEFAULT_TASKS_VIEW_OPTIONS, sort: "title", searchNotes: false })).toBe(false);
-    expect(viewOptionsFilter({ ...DEFAULT_TASKS_VIEW_OPTIONS, show: "completed" })).toBe(true);
+    expect(matchesOnly(task({ details: "   " }), { ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, onlyWithNotes: true })).toBe(false);
+    expect(viewOptionsFilter(TASKS_VIEW_OPTIONS_DEFAULTS.thread)).toBe(false);
+    expect(viewOptionsFilter({ ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, sort: "title", searchNotes: true })).toBe(false);
+    expect(viewOptionsFilter({ ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, show: "completed" })).toBe(true);
   });
 
   it("orders pinned first then newest, and never reorders on edit", () => {
@@ -141,7 +141,7 @@ describe("search, filters and order", () => {
     const pinned = task({ id: "pinned", pinned: true, createdAt: "2026-07-01T00:00:00.000Z", title: "Alpha" });
     const ids = (sort: Parameters<typeof compareOpen>[0]) =>
       [old, recent, pinned].sort(compareOpen(sort)).map(({ id }) => id);
-    expect(ids("pinned")).toEqual(["pinned", "recent", "old"]);
+    expect(ids("pinned-newest")).toEqual(["pinned", "recent", "old"]);
     // Equal update times fall back to the id.
     expect(ids("updated")).toEqual(["old", "pinned", "recent"]);
     expect(ids("title")).toEqual(["pinned", "old", "recent"]);
@@ -150,7 +150,7 @@ describe("search, filters and order", () => {
   it("orders completed tasks by completion, without lifting pinned ones", () => {
     const first = task({ id: "first", pinned: true, completedAt: "2026-08-01T00:00:00.000Z" });
     const last = task({ id: "last", completedAt: "2026-08-03T00:00:00.000Z" });
-    expect([first, last].sort(compareCompleted("pinned")).map(({ id }) => id)).toEqual(["last", "first"]);
+    expect([first, last].sort(compareCompleted("pinned-newest")).map(({ id }) => id)).toEqual(["last", "first"]);
   });
 });
 

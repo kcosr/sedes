@@ -1,4 +1,9 @@
 import type { AssociatedTask, TaskScope } from "../../../shared/index.js";
+import type {
+  TasksSort,
+  TasksView,
+  TasksViewOptions,
+} from "./tasks-view-options.js";
 
 /**
  * Pure presentation logic for the Tasks panel: which tasks a view shows, in
@@ -6,15 +11,6 @@ import type { AssociatedTask, TaskScope } from "../../../shared/index.js";
  * and the application snapshot carries every task the principal owns, so
  * filtering, grouping and counting happen here on the client.
  */
-
-export type TasksView = "thread" | "project" | "global" | "all";
-
-export const TASKS_VIEWS: readonly TasksView[] = [
-  "thread",
-  "project",
-  "global",
-  "all",
-];
 
 export const TASKS_VIEW_LABEL: Record<TasksView, string> = {
   thread: "Thread",
@@ -27,41 +23,13 @@ export const TASK_TITLE_MAX_CHARACTERS = 240;
 /** A multi-line paste creates at most this many tasks at once. */
 export const TASK_PASTE_MAX_TITLES = 50;
 
-export type TasksSort = "pinned" | "updated" | "title";
-export type TasksShow = "open" | "completed";
-
-/** View options, remembered per view. */
-export interface TasksViewOptions {
-  readonly sort: TasksSort;
-  readonly show: TasksShow;
-  readonly onlyPinned: boolean;
-  readonly onlyNotes: boolean;
-  readonly onlyFiles: boolean;
-  /** All only. */
-  readonly groupByProject: boolean;
-  /** Project only: also show the tasks of the project's threads. */
-  readonly includeThreadTasks: boolean;
-  readonly searchNotes: boolean;
-}
-
-export const DEFAULT_TASKS_VIEW_OPTIONS: TasksViewOptions = {
-  sort: "pinned",
-  show: "open",
-  onlyPinned: false,
-  onlyNotes: false,
-  onlyFiles: false,
-  groupByProject: true,
-  includeThreadTasks: false,
-  searchNotes: true,
-};
-
 /** Whether options narrow the list beyond the view's default (an indicator on the trigger). */
 export function viewOptionsFilter(options: TasksViewOptions): boolean {
   return (
     options.show !== "open" ||
     options.onlyPinned ||
-    options.onlyNotes ||
-    options.onlyFiles
+    options.onlyWithNotes ||
+    options.onlyWithFiles
   );
 }
 
@@ -197,8 +165,8 @@ export function matchesOnly(
 ): boolean {
   return (
     (!options.onlyPinned || task.pinned) &&
-    (!options.onlyNotes || task.details.trim().length > 0) &&
-    (!options.onlyFiles || task.files.length > 0)
+    (!options.onlyWithNotes || task.details.trim().length > 0) &&
+    (!options.onlyWithFiles || task.files.length > 0)
   );
 }
 
@@ -239,7 +207,7 @@ export function compareOpen(
 export function compareCompleted(
   sort: TasksSort,
 ): (left: AssociatedTask, right: AssociatedTask) => number {
-  if (sort !== "pinned") return compareOpen(sort);
+  if (sort !== "pinned-newest") return compareOpen(sort);
   return (left, right) =>
     time(right.completedAt) - time(left.completedAt) ||
     time(right.createdAt) - time(left.createdAt) ||

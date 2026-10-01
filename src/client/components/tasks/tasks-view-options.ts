@@ -1,87 +1,142 @@
-import { useCallback, useSyncExternalStore } from "react";
-import {
-  DEFAULT_TASKS_VIEW_OPTIONS,
-  TASKS_VIEWS,
-  type TasksView,
-  type TasksViewOptions,
-} from "./task-view-model.js";
+import { useSyncExternalStore } from "react";
 
 /**
  * The Tasks panel's remembered view and per-view View options.
  *
- * Integration adapter: the viewer-local `app/tasks-panel-store.ts` owns
- * this preference (its new shape carries the last view and the View
- * options per view). Until that lands, the two hooks below keep the same
- * shape over a small localStorage-backed module; point them at the store
- * and delete the rest of this file when integrating.
+ * Integration adapter: these names, types and defaults mirror the version 2
+ * viewer-local store in `app/tasks-panel-store.ts` (track H). When
+ * integrating, import them from the store instead (`useTasksLastView()`
+ * becomes `useTasksPanelPreferences().lastView`) and delete this file.
  */
+
+export type TasksView = "thread" | "project" | "global" | "all";
+
+export const TASKS_VIEWS: readonly TasksView[] = [
+  "thread",
+  "project",
+  "global",
+  "all",
+];
+
+/** Pinned then newest (the default), most recently updated, or by title. */
+export type TasksSort = "pinned-newest" | "updated" | "title";
+
+/** Open tasks (Completed collapsed at the end) or completed tasks only. */
+export type TasksShow = "open" | "completed";
+
+/** The View options of one view, remembered per view. */
+export interface TasksViewOptions {
+  readonly sort: TasksSort;
+  readonly show: TasksShow;
+  readonly onlyPinned: boolean;
+  readonly onlyWithNotes: boolean;
+  readonly onlyWithFiles: boolean;
+  /** Applies to All. */
+  readonly groupByProject: boolean;
+  /** Applies to Project: its threads' tasks join the project's own. */
+  readonly includeThreadTasks: boolean;
+  /** Search matches notes as well as titles. */
+  readonly searchNotes: boolean;
+}
+
+const BASE_VIEW_OPTIONS: TasksViewOptions = Object.freeze({
+  sort: "pinned-newest",
+  show: "open",
+  onlyPinned: false,
+  onlyWithNotes: false,
+  onlyWithFiles: false,
+  groupByProject: true,
+  includeThreadTasks: false,
+  searchNotes: false,
+});
+
+export const TASKS_VIEW_OPTIONS_DEFAULTS: Readonly<
+  Record<TasksView, TasksViewOptions>
+> = Object.freeze({
+  thread: BASE_VIEW_OPTIONS,
+  project: BASE_VIEW_OPTIONS,
+  global: BASE_VIEW_OPTIONS,
+  all: BASE_VIEW_OPTIONS,
+});
+
+interface ViewPreferences {
+  readonly lastView: TasksView;
+  readonly views: Readonly<Record<TasksView, TasksViewOptions>>;
+}
+
+const DEFAULTS: ViewPreferences = Object.freeze({
+  lastView: "thread",
+  views: TASKS_VIEW_OPTIONS_DEFAULTS,
+});
 
 const STORAGE_KEY = "sedes.tasks.view";
 const CHANGED_EVENT = "sedes-tasks-view-changed";
+const SORTS: readonly TasksSort[] = ["pinned-newest", "updated", "title"];
+let cached: ViewPreferences | null = null;
 
-interface StoredViewPreferences {
-  readonly view: TasksView;
-  readonly options: Readonly<Partial<Record<TasksView, TasksViewOptions>>>;
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (event) => {
+    if (event.key === null || event.key === STORAGE_KEY) cached = null;
+  });
 }
 
-const DEFAULTS: StoredViewPreferences = { view: "thread", options: {} };
-let cached: StoredViewPreferences | null = null;
-
-function isView(value: unknown): value is TasksView {
-  return (
-    typeof value === "string" && (TASKS_VIEWS as readonly string[]).includes(value)
-  );
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseOptions(value: unknown): TasksViewOptions | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const blob = value as Record<string, unknown>;
+function parseOptions(value: unknown): TasksViewOptions {
+  if (!isRecord(value)) return BASE_VIEW_OPTIONS;
   const flag = (key: keyof TasksViewOptions) =>
-    typeof blob[key] === "boolean"
-      ? (blob[key] as boolean)
-      : (DEFAULT_TASKS_VIEW_OPTIONS[key] as boolean);
+    typeof value[key] === "boolean"
+      ? (value[key] as boolean)
+      : (BASE_VIEW_OPTIONS[key] as boolean);
   return {
-    sort:
-      blob.sort === "updated" || blob.sort === "title" ? blob.sort : "pinned",
-    show: blob.show === "completed" ? "completed" : "open",
+    sort: SORTS.find((sort) => sort === value.sort) ?? BASE_VIEW_OPTIONS.sort,
+    show: value.show === "completed" ? "completed" : "open",
     onlyPinned: flag("onlyPinned"),
-    onlyNotes: flag("onlyNotes"),
-    onlyFiles: flag("onlyFiles"),
+    onlyWithNotes: flag("onlyWithNotes"),
+    onlyWithFiles: flag("onlyWithFiles"),
     groupByProject: flag("groupByProject"),
     includeThreadTasks: flag("includeThreadTasks"),
     searchNotes: flag("searchNotes"),
   };
 }
 
-function read(): StoredViewPreferences {
-  let raw: string | null = null;
+function read(): ViewPreferences {
+  let raw: string | null;
   try {
     raw = window.localStorage.getItem(STORAGE_KEY);
   } catch {
     return DEFAULTS;
   }
   if (raw === null) return DEFAULTS;
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const options: Partial<Record<TasksView, TasksViewOptions>> = {};
-    const stored = (parsed.options ?? {}) as Record<string, unknown>;
-    for (const view of TASKS_VIEWS) {
-      const parsedOptions = parseOptions(stored[view]);
-      if (parsedOptions) options[view] = parsedOptions;
-    }
-    return { view: isView(parsed.view) ? parsed.view : DEFAULTS.view, options };
+    parsed = JSON.parse(raw);
   } catch {
     return DEFAULTS;
   }
+  if (!isRecord(parsed)) return DEFAULTS;
+  const views = isRecord(parsed.views) ? parsed.views : {};
+  return {
+    lastView:
+      TASKS_VIEWS.find((view) => view === parsed.lastView) ?? DEFAULTS.lastView,
+    views: {
+      thread: parseOptions(views.thread),
+      project: parseOptions(views.project),
+      global: parseOptions(views.global),
+      all: parseOptions(views.all),
+    },
+  };
 }
 
-function snapshot(): StoredViewPreferences {
+function snapshot(): ViewPreferences {
   if (typeof window === "undefined") return DEFAULTS;
   cached ??= read();
   return cached;
 }
 
-function persist(next: StoredViewPreferences): void {
+function persist(next: ViewPreferences): void {
   cached = next;
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
@@ -92,7 +147,7 @@ function persist(next: StoredViewPreferences): void {
 }
 
 function subscribe(listener: () => void): () => void {
-  // The module-level storage listener below has already dropped the cache.
+  // The module-level storage listener has already dropped the cache.
   const onStorage = (event: StorageEvent) => {
     if (event.key === null || event.key === STORAGE_KEY) listener();
   };
@@ -104,50 +159,38 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-function usePreferences(): StoredViewPreferences {
+function usePreferences(): ViewPreferences {
   return useSyncExternalStore(subscribe, snapshot, () => DEFAULTS);
 }
 
-/** The last chosen view (Thread, Project, Global or All). */
-export function useTasksLastView(): readonly [
-  TasksView,
-  (view: TasksView) => void,
-] {
-  const preferences = usePreferences();
-  const setView = useCallback((view: TasksView) => {
-    const current = snapshot();
-    if (current.view !== view) persist({ ...current, view });
-  }, []);
-  return [preferences.view, setView];
+/** The view Tasks opens on: the one last chosen. */
+export function useTasksLastView(): TasksView {
+  return usePreferences().lastView;
 }
 
-/** One view's View options and a setter that merges a change into them. */
-export function useTasksViewOptions(
+/** Remembers the view Tasks opens on next time. */
+export function setTasksLastView(lastView: TasksView): void {
+  const current = snapshot();
+  if (current.lastView !== lastView) persist({ ...current, lastView });
+}
+
+export function getTasksViewOptions(view: TasksView): TasksViewOptions {
+  return snapshot().views[view];
+}
+
+/** One view's options, live. */
+export function useTasksViewOptions(view: TasksView): TasksViewOptions {
+  return usePreferences().views[view];
+}
+
+/** Changes some of one view's options; the other views keep theirs. */
+export function setTasksViewOptions(
   view: TasksView,
-): readonly [TasksViewOptions, (change: Partial<TasksViewOptions>) => void] {
-  const preferences = usePreferences();
-  const options = preferences.options[view] ?? DEFAULT_TASKS_VIEW_OPTIONS;
-  const update = useCallback(
-    (change: Partial<TasksViewOptions>) => {
-      const current = snapshot();
-      persist({
-        ...current,
-        options: {
-          ...current.options,
-          [view]: {
-            ...(current.options[view] ?? DEFAULT_TASKS_VIEW_OPTIONS),
-            ...change,
-          },
-        },
-      });
-    },
-    [view],
-  );
-  return [options, update];
-}
-
-if (typeof window !== "undefined") {
-  window.addEventListener("storage", (event) => {
-    if (event.key === null || event.key === STORAGE_KEY) cached = null;
+  patch: Partial<TasksViewOptions>,
+): void {
+  const current = snapshot();
+  persist({
+    ...current,
+    views: { ...current.views, [view]: { ...current.views[view], ...patch } },
   });
 }

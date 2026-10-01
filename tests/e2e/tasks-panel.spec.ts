@@ -124,12 +124,13 @@ test.describe.serial("Tasks panel", () => {
     await expect(scopes.getByRole("radio", { name: "Project" })).toBeDisabled();
     await expect(scopes.getByRole("radio", { name: "Global" })).toHaveAttribute("aria-checked", "true");
     await tasks.getByRole("button", { name: "View options" }).click();
-    // Search notes is on by default; choices keep the menu open.
+    // Search matches titles until Search notes is on; choices keep the menu open.
     const searchNotes = page.getByRole("menuitemcheckbox", { name: "Search notes" });
+    await expect(searchNotes).not.toBeChecked();
+    await searchNotes.click();
     await expect(searchNotes).toBeChecked();
     await searchNotes.click();
     await expect(searchNotes).not.toBeChecked();
-    await searchNotes.click();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("menu")).toHaveCount(0);
     await expect(tasks.getByRole("textbox", { name: "Add a task" })).toHaveAttribute(
