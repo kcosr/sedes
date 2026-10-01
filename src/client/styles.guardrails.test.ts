@@ -29,6 +29,10 @@ const RUNTIME_SET_PROPERTIES: readonly string[] = [
   "--environment-hue",
   // components/ui/dialog.tsx: the soft keyboard's height over the layout viewport
   "--keyboard-inset",
+  // components/ui/toast.tsx: the measured toast placement in the workspace
+  "--toast-bottom",
+  "--toast-region-width",
+  "--toast-x",
 ];
 
 /** Custom properties that a library sets on its own elements at runtime. */

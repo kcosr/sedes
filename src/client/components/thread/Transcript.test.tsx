@@ -786,13 +786,15 @@ describe("Transcript history positioning", () => {
       <Transcript store={fake as unknown as ThreadClientStore} />,
     );
 
-    const card = container.querySelector(
+    const card = container.querySelector<HTMLElement>(
       '[data-task-id="84f9a3b0-9c14-456d-b08d-58d325d869d0"]',
-    );
+    )!;
     expect(card).toHaveTextContent("Title captured at send");
     expect(card).toHaveTextContent("Details captured at send");
+    expect(card).not.toHaveTextContent("84f9a3b0-9c14-456d-b08d-58d325d869d0");
+    fireEvent.click(within(card).getByRole("button", { name: "Details" }));
     expect(card).toHaveTextContent("84f9a3b0-9c14-456d-b08d-58d325d869d0");
-    expect(card).toHaveTextContent("4");
+    expect(card).toHaveTextContent("Revision4");
   });
 
   it("jumps from a rail preview to the matching user message", () => {

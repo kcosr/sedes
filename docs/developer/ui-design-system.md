@@ -115,6 +115,21 @@ an action with `variant="destructive"` instead.
 | `EmptyState` | Nothing to show: `panel` for a page or pane, `inline` inside a list |
 | `KeyValueList` | Labelled facts in a `max-content 1fr` grid; `mono` for identifiers |
 
+**Toast.** Brief confirmation of something the user just did, with at most one
+action, such as Undo (`components/ui/toast.tsx`, CSS in `toast.css` beside it).
+`ToastProvider` is mounted once at the root of the connected app (`app/App.tsx`);
+call `useToast().show({ message, action?: { label, onAction }, duration? })`.
+There is one toast at a time, and a new one replaces it. It closes after about
+five seconds, pausing while hovered or focused, and it has a dismiss control;
+choosing the action also closes it. It is announced through a polite live
+region, and F8 moves focus to it. It sits on the inverse surface (`--primary`) at
+`--z-toast`, centred at the bottom of the element marked `data-toast-region` (the
+workspace). It rises above the soft keyboard and above every visible
+`data-toast-avoid` element across that region, such as the composer; elements
+behind a modal dialog or sheet do not count. Mark a bottom-docked bar the toast
+must not cover, such as a sheet's add bar, with `data-toast-avoid`. A toast is
+never the only record of an error: use a `Callout` for those.
+
 ## Dialogs
 
 | `DialogContent` prop | Values and use |

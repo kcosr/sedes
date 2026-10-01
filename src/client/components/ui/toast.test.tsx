@@ -1,0 +1,232 @@
+// @vitest-environment jsdom
+
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ToastProvider, useToast, type ToastOptions } from "./toast.js";
+
+let show: (options: ToastOptions) => void;
+
+function Harness() {
+  show = useToast().show;
+  return null;
+}
+
+function renderToasts(children?: React.ReactNode) {
+  return render(
+    <ToastProvider>
+      <Harness />
+      {children}
+    </ToastProvider>,
+  );
+}
+
+function toast(): HTMLElement | null {
+  return document.querySelector('[data-slot="toast"]');
+}
+
+function viewport(): HTMLElement {
+  return document.querySelector<HTMLElement>('[data-slot="toast-viewport"]')!;
+}
+
+function box(rect: Partial<DOMRect>): () => DOMRect {
+  const { left = 0, top = 0, width = 0, height = 0 } = rect;
+  return () =>
+    ({
+      left,
+      top,
+      width,
+      height,
+      right: left + width,
+      bottom: top + height,
+      x: left,
+      y: top,
+      toJSON: () => ({}),
+    }) as DOMRect;
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
+
+describe("Toast", () => {
+  it("shows a message with its action and a dismiss control in a labelled region", () => {
+    renderToasts();
+    act(() =>
+      show({ message: "Task completed", action: { label: "Undo", onAction: () => undefined } }),
+    );
+
+    expect(toast()).toHaveTextContent("Task completed");
+    expect(toast()).toHaveAttribute("data-state", "open");
+    expect(screen.getByRole("button", { name: "Undo" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Notifications (F8)" })).toContainElement(toast());
+  });
+
+  it("announces politely through a status live region", () => {
+    renderToasts();
+    act(() => show({ message: "Moved to Project" }));
+    act(() => vi.advanceTimersByTime(50));
+
+    const status = screen
+      .getAllByRole("status")
+      .find((element) => element.textContent?.includes("Moved to Project"));
+    expect(status).toHaveAttribute("aria-live", "polite");
+  });
+
+  it("keeps one toast at a time: a new toast replaces the current one", () => {
+    renderToasts();
+    act(() => show({ message: "Task completed" }));
+    act(() => show({ message: "Task reopened" }));
+
+    expect(document.querySelectorAll('[data-slot="toast"]')).toHaveLength(1);
+    expect(toast()).toHaveTextContent("Task reopened");
+    expect(screen.queryByText("Task completed")).not.toBeInTheDocument();
+  });
+
+  it("runs the action and closes", () => {
+    const onAction = vi.fn();
+    renderToasts();
+    act(() => show({ message: "Task completed", action: { label: "Undo", onAction } }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+    expect(onAction).toHaveBeenCalledOnce();
+    expect(toast()).toBeNull();
+  });
+
+  it("lets the action show the next toast", () => {
+    renderToasts();
+    act(() =>
+      show({
+        message: "Task completed",
+        action: { label: "Undo", onAction: () => show({ message: "Task reopened" }) },
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+
+    expect(toast()).toHaveTextContent("Task reopened");
+  });
+
+  it("closes from its dismiss control and from Escape", () => {
+    renderToasts();
+    act(() => show({ message: "Task completed" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(toast()).toBeNull();
+
+    act(() => show({ message: "Task reopened" }));
+    fireEvent.keyDown(toast()!, { key: "Escape" });
+    expect(toast()).toBeNull();
+  });
+
+  it("closes after about five seconds, or after its own duration", () => {
+    renderToasts();
+    act(() => show({ message: "Task completed" }));
+    act(() => vi.advanceTimersByTime(4_900));
+    expect(toast()).not.toBeNull();
+    act(() => vi.advanceTimersByTime(200));
+    expect(toast()).toBeNull();
+
+    act(() => show({ message: "Saved", duration: 1_000 }));
+    act(() => vi.advanceTimersByTime(1_100));
+    expect(toast()).toBeNull();
+  });
+
+  it("pauses while the pointer is over it and resumes when it leaves", () => {
+    renderToasts();
+    act(() => show({ message: "Task completed" }));
+    const region = screen.getByRole("region", { name: "Notifications (F8)" });
+
+    act(() => vi.advanceTimersByTime(3_000));
+    fireEvent.pointerMove(region);
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(toast()).not.toBeNull();
+
+    fireEvent.pointerLeave(region);
+    act(() => vi.advanceTimersByTime(1_900));
+    expect(toast()).not.toBeNull();
+    act(() => vi.advanceTimersByTime(200));
+    expect(toast()).toBeNull();
+  });
+
+  it("pauses while focus is inside it", () => {
+    renderToasts(<button type="button">Outside</button>);
+    act(() => show({ message: "Task completed", action: { label: "Undo", onAction: () => undefined } }));
+
+    act(() => screen.getByRole("button", { name: "Undo" }).focus());
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(toast()).not.toBeNull();
+
+    act(() => screen.getByRole("button", { name: "Outside" }).focus());
+    act(() => vi.advanceTimersByTime(5_100));
+    expect(toast()).toBeNull();
+  });
+
+  it("centres on the toast region and clears the composer in it", () => {
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(900);
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(1440);
+    renderToasts(
+      <>
+        <div data-toast-region data-testid="region">
+          <div data-toast-avoid data-testid="composer" />
+          <div data-toast-avoid data-testid="collapsed-composer" />
+          <div aria-hidden="true">
+            <div data-toast-avoid data-testid="covered-bar" />
+          </div>
+        </div>
+        <div data-toast-avoid data-testid="sidebar-footer" />
+      </>,
+    );
+    screen.getByTestId("region").getBoundingClientRect = box({ left: 260, top: 0, width: 1180, height: 900 });
+    screen.getByTestId("composer").getBoundingClientRect = box({ left: 300, top: 760, width: 768, height: 120 });
+    screen.getByTestId("collapsed-composer").getBoundingClientRect = box({});
+    screen.getByTestId("covered-bar").getBoundingClientRect = box({ left: 260, top: 500, width: 1180, height: 400 });
+    screen.getByTestId("sidebar-footer").getBoundingClientRect = box({ left: 0, top: 600, width: 260, height: 300 });
+
+    act(() => show({ message: "Task completed" }));
+
+    expect(viewport().style.getPropertyValue("--toast-x")).toBe("850px");
+    expect(viewport().style.getPropertyValue("--toast-bottom")).toBe("140px");
+    expect(viewport().style.getPropertyValue("--toast-region-width")).toBe("1180px");
+  });
+
+  it("clears a bottom bar outside the region, such as a sheet's", () => {
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(844);
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(390);
+    renderToasts(
+      <>
+        <div data-toast-region data-testid="region" />
+        <div data-toast-avoid data-testid="sheet-bar" />
+      </>,
+    );
+    screen.getByTestId("region").getBoundingClientRect = box({ left: 0, top: 0, width: 390, height: 844 });
+    screen.getByTestId("sheet-bar").getBoundingClientRect = box({ left: 0, top: 772, width: 390, height: 72 });
+
+    act(() => show({ message: "Task completed" }));
+
+    expect(viewport().style.getPropertyValue("--toast-x")).toBe("195px");
+    expect(viewport().style.getPropertyValue("--toast-bottom")).toBe("72px");
+  });
+
+  it("falls back to the whole viewport without a toast region", () => {
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(844);
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(390);
+    renderToasts();
+
+    act(() => show({ message: "Task completed" }));
+
+    expect(viewport().style.getPropertyValue("--toast-x")).toBe("195px");
+    expect(viewport().style.getPropertyValue("--toast-bottom")).toBe("0px");
+    expect(viewport().style.getPropertyValue("--toast-region-width")).toBe("390px");
+  });
+
+  it("requires its provider", () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    expect(() => render(<Harness />)).toThrow("useToast must be used inside ToastProvider");
+  });
+});

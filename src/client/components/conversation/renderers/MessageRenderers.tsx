@@ -1,6 +1,6 @@
 import { QuestionTranscriptDisclosure } from "../../thread/QuestionInbox.js";
 import { useCallback, useState } from "react";
-import { ChevronRight, CircleCheck, ListTodo, MessageCircleQuestion, Sparkles } from "lucide-react";
+import { ChevronRight, MessageCircleQuestion, Sparkles } from "lucide-react";
 import type {
   AssistantMessageItem,
   ComposerTaskReference,
@@ -16,6 +16,7 @@ import {
   conversationMessageSelectableTextProps,
 } from "../../../context-excerpts/ConversationMessageSelectionSurface.js";
 import { DurableAttachmentCard } from "../../../attachments/AttachmentCards.js";
+import { MessageTaskCard } from "./MessageTaskCard.js";
 
 export const userMessageRenderer: ConversationItemRenderer<UserMessageItem> = {
   kind: "user_message",
@@ -140,44 +141,20 @@ export function UserMessagePresentation({
             loadContent={context.loadAttachmentContent}
           />
         ) : part.kind === "task_context" ? (
-          <details
-            className="message-task-card"
-            data-task-id={part.task.id}
+          <MessageTaskCard
             key={index}
-          >
-            <summary>
-              {part.task.completedAt ? (
-                <CircleCheck size={14} aria-hidden="true" />
-              ) : (
-                <ListTodo size={14} aria-hidden="true" />
-              )}
-              <strong>{part.task.title}</strong>
-              <span>{part.task.completedAt ? "Completed" : "Task"}</span>
-            </summary>
-            {part.task.details && <p>{part.task.details}</p>}
-            <dl>
-              <dt>Task ID</dt>
-              <dd>{part.task.id}</dd>
-              <dt>Revision</dt>
-              <dd>{part.task.revision}</dd>
-            </dl>
-          </details>
+            taskId={part.task.id}
+            title={part.task.title}
+            notes={part.task.details}
+            completed={part.task.completedAt !== null}
+            revision={part.task.revision}
+          />
         ) : part.kind === "task_reference" ? (
-          <details
-            className="message-task-card"
-            data-task-id={part.reference.taskId}
+          <MessageTaskCard
             key={index}
-          >
-            <summary>
-              <ListTodo size={14} aria-hidden="true" />
-              <strong>{part.reference.titleSnapshot}</strong>
-              <span>Task</span>
-            </summary>
-            <dl>
-              <dt>Task ID</dt>
-              <dd>{part.reference.taskId}</dd>
-            </dl>
-          </details>
+            taskId={part.reference.taskId}
+            title={part.reference.titleSnapshot}
+          />
         ) : (
           <div className="attachment-note" key={index}>
             {part.fileName?.text ?? part.alt?.text ?? "Image attachment"}

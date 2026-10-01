@@ -4663,9 +4663,16 @@ textarea:disabled {
   flex: 0 0 auto;
 }
 
-.thread-bookmarks-trigger[data-has-items="true"],
-.tasks-panel-toggle[data-has-items="true"] {
+.thread-bookmarks-trigger[data-has-items="true"] {
   color: var(--info);
+}
+
+/* With open tasks, the Tasks toggle widens to show their count beside the
+   icon (the badge carries the signal; the icon is not tinted). */
+.tasks-panel-toggle:has(> [data-slot="count-badge"]) {
+  width: auto;
+  gap: var(--space-1);
+  padding-inline: var(--space-1-5);
 }
 
 .thread-find-bar {
@@ -8408,61 +8415,109 @@ tr.diff-hunk td {
   background: color-mix(in oklch, var(--primary) 15%, transparent);
 }
 
+/* Attached tasks: compact pills that wrap above the message box, aligned
+   with the skill chip and the message text. Only a completed (muted) or a
+   missing (warning) task changes a pill's look; its tooltip explains why. */
 .composer-task-list {
-  display: grid;
-  gap: 6px;
-  margin: 9px 10px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  margin: 10px 15px 0;
 }
 
 .composer-task-chip {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  min-height: 34px;
+  display: inline-flex;
+  min-width: 0;
+  max-width: min(100%, 320px);
+  height: 26px;
   align-items: center;
-  gap: 7px;
-  padding: 5px 7px 5px 9px;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-ctl);
-  background: color-mix(in oklch, var(--card) 76%, transparent);
+  gap: 5px;
+  padding: 0 3px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--background);
   color: var(--muted-foreground);
-}
-
-.composer-task-chip[data-state="missing"] {
-  border-color: color-mix(in oklch, var(--destructive) 48%, var(--border));
-  color: var(--destructive);
-}
-
-.composer-task-chip[data-state="completed"] {
-  color: var(--success, var(--primary));
+  font-size: var(--text-meta);
 }
 
 .composer-task-title {
+  min-width: 0;
   overflow: hidden;
   color: var(--foreground);
-  font-size: 12.5px;
-  font-weight: 550;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.composer-task-state {
-  font-size: 11px;
+.composer-task-chip[data-state="completed"] .composer-task-title,
+.composer-task-chip[data-state="checking"] .composer-task-title {
+  color: var(--muted-foreground);
+}
+
+.composer-task-chip[data-state="missing"] {
+  border-color: var(--destructive-border);
+  background: var(--destructive-soft);
+  color: var(--destructive);
+}
+
+.composer-task-chip[data-state="missing"] .composer-task-title {
+  color: var(--destructive);
+}
+
+.composer-task-chip > svg {
+  flex: 0 0 auto;
 }
 
 .composer-task-chip button {
+  position: relative;
   display: grid;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
   place-items: center;
   border-radius: 999px;
+  color: var(--muted-foreground);
 }
 
 .composer-task-chip button:hover {
-  background: color-mix(in oklch, currentColor 10%, transparent);
+  background: var(--hover);
+  color: var(--foreground);
+}
+
+.composer-task-chip[data-state="missing"] button {
+  color: inherit;
+}
+
+.composer-task-chip[data-state="missing"] button:hover {
+  background: color-mix(in oklab, var(--destructive) 12%, transparent);
+  color: inherit;
+}
+
+.composer-task-chip button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .composer-task-chip[data-state="checking"] > svg {
   animation: attachment-spin 900ms linear infinite;
+}
+
+/* Touch: a taller pill whose × reaches a 44px-tall target. */
+@media (max-width: 819px), (pointer: coarse) {
+  .composer-task-chip {
+    height: var(--control-md);
+    padding-inline-end: 0;
+  }
+
+  .composer-task-chip button {
+    width: var(--control-md);
+    height: var(--control-md);
+  }
+
+  .composer-task-chip button::after {
+    position: absolute;
+    inset: calc((var(--control-md) - var(--control-touch)) / 2) 0;
+    content: "";
+  }
 }
 
 .composer-task-error {
@@ -8477,50 +8532,91 @@ tr.diff-hunk td {
   padding-top: 8px;
 }
 
+/* A task carried by a user message: title, a two-line notes preview, then
+   Open task and a Details disclosure (the full notes and the identifiers). */
 .message-task-card {
   margin-block: 6px;
-  padding: 8px 10px;
+  padding: 8px 10px 4px;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-ctl);
   background: color-mix(in oklch, var(--card) 74%, transparent);
 }
 
-.message-task-card summary {
+.message-task-card-head {
   display: flex;
   align-items: center;
   gap: 7px;
-  cursor: pointer;
 }
 
-.message-task-card summary strong {
+.message-task-card-head > svg {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+}
+
+.message-task-card-head strong {
   min-width: 0;
   flex: 1;
+  overflow-wrap: anywhere;
 }
 
-.message-task-card summary span,
-.message-task-card dt {
+.message-task-card-head span {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
-.message-task-card p {
-  margin: 8px 0;
+.message-task-card-notes {
+  display: -webkit-box;
+  margin: 4px 0 0 21px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  color: var(--muted-foreground);
+  font-size: var(--text-ui);
+  -webkit-line-clamp: 2;
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
+/* Details shows the full notes with their line breaks. */
+.message-task-card[data-state="open"] .message-task-card-notes {
+  display: block;
   white-space: pre-wrap;
 }
 
-.message-task-card dl {
+/* The ghost buttons' padding hangs into the card's inset, so their labels
+   line up with the title and notes. */
+.message-task-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin: 4px 0 0 13px;
+}
+
+.message-task-card-details svg {
+  transition: transform var(--motion-fast);
+}
+
+.message-task-card-details[data-state="open"] svg {
+  transform: rotate(90deg);
+}
+
+.message-task-card-facts {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 3px 8px;
-  margin: 8px 0 0;
+  margin: 4px 0 6px 21px;
 }
 
-.message-task-card dd {
+.message-task-card-facts dt {
+  color: var(--muted-foreground);
+  font-size: var(--text-label);
+}
+
+.message-task-card-facts dd {
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 
 .composer > .context-excerpt-list {
