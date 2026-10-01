@@ -180,7 +180,7 @@ describe("Toast", () => {
     vi.spyOn(window, "innerWidth", "get").mockReturnValue(1440);
     renderToasts(
       <>
-        <div data-toast-region data-testid="region">
+        <div data-toast-region="default" data-testid="region">
           <div data-toast-avoid data-testid="composer" />
           <div data-toast-avoid data-testid="collapsed-composer" />
           <div aria-hidden="true">
@@ -208,7 +208,7 @@ describe("Toast", () => {
     vi.spyOn(window, "innerWidth", "get").mockReturnValue(390);
     renderToasts(
       <>
-        <div data-toast-region data-testid="region" />
+        <div data-toast-region="default" data-testid="region" />
         <div data-toast-avoid data-testid="sheet-bar" />
       </>,
     );
@@ -238,7 +238,7 @@ describe("Toast", () => {
     vi.spyOn(window, "innerWidth", "get").mockReturnValue(390);
     renderToasts(
       <div data-testid="workspace">
-        <div data-toast-region data-testid="region">
+        <div data-toast-region="default" data-testid="region">
           <div data-toast-avoid data-testid="composer" />
         </div>
       </div>,
@@ -265,6 +265,53 @@ describe("Toast", () => {
     });
     act(() => vi.advanceTimersByTime(20));
     expect(viewport().style.getPropertyValue("--toast-bottom")).toBe("120px");
+  });
+
+  it("sits on the region of the surface that raised it, clear of its bottom bar", () => {
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(768);
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(1024);
+    renderToasts(
+      <div data-toast-region="default" data-testid="workspace">
+        <div data-toast-avoid data-testid="composer" />
+        <section data-toast-region data-testid="panel">
+          <button type="button">Complete</button>
+          <div data-toast-avoid data-testid="panel-bar" />
+        </section>
+      </div>,
+    );
+    screen.getByTestId("workspace").getBoundingClientRect = box({ left: 260, top: 52, width: 764, height: 716 });
+    screen.getByTestId("composer").getBoundingClientRect = box({ left: 300, top: 560, width: 300, height: 200 });
+    screen.getByTestId("panel").getBoundingClientRect = box({ left: 644, top: 52, width: 380, height: 716 });
+    screen.getByTestId("panel-bar").getBoundingClientRect = box({ left: 644, top: 720, width: 380, height: 48 });
+
+    act(() =>
+      show({ message: "Task completed", anchor: screen.getByRole("button", { name: "Complete" }) }),
+    );
+
+    // The panel's centre and bar, not the workspace's or the composer's.
+    expect(viewport().style.getPropertyValue("--toast-x")).toBe("834px");
+    expect(viewport().style.getPropertyValue("--toast-bottom")).toBe("48px");
+    expect(viewport().style.getPropertyValue("--toast-region-width")).toBe("380px");
+  });
+
+  it("falls back to the default region once the anchor's surface has gone", async () => {
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(768);
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(1024);
+    renderToasts(
+      <div data-toast-region="default" data-testid="workspace">
+        <section data-toast-region data-testid="panel" />
+      </div>,
+    );
+    screen.getByTestId("workspace").getBoundingClientRect = box({ left: 260, top: 0, width: 764, height: 768 });
+    screen.getByTestId("panel").getBoundingClientRect = box({ left: 644, top: 0, width: 380, height: 768 });
+    act(() => show({ message: "Moved to Global", anchor: screen.getByTestId("panel") }));
+    expect(viewport().style.getPropertyValue("--toast-x")).toBe("834px");
+
+    await act(async () => screen.getByTestId("panel").remove());
+    act(() => vi.advanceTimersByTime(20));
+
+    expect(viewport().style.getPropertyValue("--toast-x")).toBe("642px");
+    expect(viewport().style.getPropertyValue("--toast-region-width")).toBe("764px");
   });
 
   it("dismisses on a downward swipe and springs back from a short one", () => {

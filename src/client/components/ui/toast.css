@@ -2,13 +2,14 @@
    Toast (ui/toast.tsx): one transient message at a time, with an optional
    action such as Undo, on the inverse surface.
 
-   The viewport is fixed at the bottom centre of the active workspace. The
-   provider measures the workspace and anything the toast must clear (the
-   composer, the soft keyboard) and sets:
-   - --toast-x: the workspace's horizontal centre;
+   The viewport is fixed at the bottom centre of its region: the surface
+   that raised the toast (a side panel, a popover, a sheet), else the
+   workspace. The provider measures the region and anything the toast must
+   clear (the composer, a sheet's bar, the soft keyboard) and sets:
+   - --toast-x: the region's horizontal centre;
    - --toast-bottom: the distance from the viewport bottom to the lowest
      clear edge;
-   - --toast-region-width: the workspace width, less the side insets.
+   - --toast-region-width: the region's width, less the side insets.
    A downward swipe sets --toast-swipe-move-y while it moves and
    --toast-swipe-end-y when it dismisses.
    ─────────────────────────────────────────────────────────────────────── */

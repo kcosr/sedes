@@ -612,6 +612,7 @@ export function TasksPanelContent({
       if (!offerUndo) return;
       toast.show({
         message: completed ? "Task completed" : "Task reopened",
+        anchor: rootRef.current,
         action: {
           label: "Undo",
           onAction: () => {
@@ -639,6 +640,7 @@ export function TasksPanelContent({
       if (!offerUndo) return;
       toast.show({
         message: `Moved to ${label}`,
+        anchor: rootRef.current,
         action: {
           label: "Undo",
           onAction: () => {
@@ -697,6 +699,8 @@ export function TasksPanelContent({
       setError(null);
       announce(`Added “${task.title}” to the prompt.`);
       if (sheet) {
+        // The sheet closes, so the toast sits over the composer, where the
+        // chip arrives.
         onRequestClose();
         toast.show({ message: "Added to prompt" });
       }

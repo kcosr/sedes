@@ -49,7 +49,15 @@ type PendingMove = {
 export interface TaskDragController {
   readonly activeTaskId?: string;
   isTaskDrag(dataTransfer: DataTransfer): boolean;
-  beginTaskDrag(task: AssociatedTask, dataTransfer: DataTransfer): void;
+  /**
+   * Starts dragging a task from `source`; a move it ends in shows its Undo
+   * toast on the surface it came from.
+   */
+  beginTaskDrag(
+    task: AssociatedTask,
+    dataTransfer: DataTransfer,
+    source?: Element,
+  ): void;
   endTaskDrag(): void;
   resolveDraggedTask(dataTransfer: DataTransfer): AssociatedTask | undefined;
   requestMove(
@@ -125,6 +133,9 @@ export function TaskDragProvider({
   const [announcementError, setAnnouncementError] = useState(false);
   const activePayloadRef = useRef<TaskDragPayload | undefined>(undefined);
   const highlightedTargetRef = useRef<HTMLElement | undefined>(undefined);
+  // The toast region of the surface the last drag began in (the dragged row
+  // may be gone by the time the move lands).
+  const sourceRegionRef = useRef<Element | null>(null);
   const moveMutationIds = useRef(new Map<string, string>());
   const toast = useToast();
 
@@ -142,7 +153,8 @@ export function TaskDragProvider({
   }, []);
 
   const beginTaskDrag = useCallback(
-    (task: AssociatedTask, dataTransfer: DataTransfer) => {
+    (task: AssociatedTask, dataTransfer: DataTransfer, source?: Element) => {
+      sourceRegionRef.current = source?.closest("[data-toast-region]") ?? null;
       const payload: TaskDragPayload = {
         version: 1,
         taskId: task.id,
@@ -229,6 +241,7 @@ export function TaskDragProvider({
         const previous = current.scope;
         toast.show({
           message: `Moved to ${target.label}`,
+          anchor: sourceRegionRef.current,
           action: {
             label: "Undo",
             onAction: () => void undoMove(current.id, previous),
@@ -522,5 +535,5 @@ export function handleTaskDragStart(
   task: AssociatedTask,
   event: ReactDragEvent,
 ): void {
-  controller?.beginTaskDrag(task, event.dataTransfer);
+  controller?.beginTaskDrag(task, event.dataTransfer, event.currentTarget);
 }

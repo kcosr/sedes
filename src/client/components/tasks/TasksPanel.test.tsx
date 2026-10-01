@@ -639,8 +639,11 @@ describe("TasksPanel rows", () => {
     await user.click(screen.getByRole("checkbox", { name: 'Mark "Add retry to the payment call" as done' }));
     expect(toast.show).toHaveBeenCalledWith({
       message: "Task completed",
+      anchor: expect.any(HTMLElement),
       action: { label: "Undo", onAction: expect.any(Function) },
     });
+    // The toast sits on the Tasks surface it came from.
+    expect(toast.show.mock.calls[0]![0].anchor.closest("[data-toast-region]")).toBe(panel());
     store.publish(
       store.getTasks().map((task) =>
         task.id === "t-retry" ? { ...task, completedAt: "2026-08-05T10:00:00.000Z", revision: 1 } : task,
@@ -744,9 +747,11 @@ describe("TasksPanel rows", () => {
     await waitFor(() =>
       expect(toast.show).toHaveBeenCalledWith({
         message: "Moved to acme-web",
+        anchor: expect.any(HTMLElement),
         action: { label: "Undo", onAction: expect.any(Function) },
       }),
     );
+    expect(toast.show.mock.calls[0]![0].anchor.closest("[data-toast-region]")).toBe(panel());
     await act(async () => toast.show.mock.calls[0]![0].action.onAction());
     expect(store.moveTask).toHaveBeenLastCalledWith(
       expect.objectContaining({ id: "t-retry" }),
@@ -887,9 +892,11 @@ describe("TasksPanel rows", () => {
     await waitFor(() =>
       expect(toast.show).toHaveBeenCalledWith({
         message: "Moved to acme-web",
+        anchor: expect.any(HTMLElement),
         action: { label: "Undo", onAction: expect.any(Function) },
       }),
     );
+    expect(toast.show.mock.calls[0]![0].anchor.closest("[data-toast-region]")).toBe(panel());
     // Undo moves it back where it came from.
     await act(async () => toast.show.mock.calls[0]![0].action.onAction());
     expect(store.moveTask).toHaveBeenLastCalledWith(

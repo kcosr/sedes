@@ -18,6 +18,13 @@ type ToastOptions = {
   readonly action?: ToastAction
   /** Milliseconds before the toast closes; about five seconds by default. */
   readonly duration?: number
+  /**
+   * An element in the surface that raised the toast, such as a side panel
+   * or a popover (or that surface itself). The toast sits at the bottom
+   * centre of the anchor's nearest `data-toast-region`, and at the app's
+   * default region without one, or once that surface has gone.
+   */
+  readonly anchor?: Element | null
 }
 
 type ToastControls = {
@@ -39,7 +46,12 @@ type ToastEntry = {
   readonly id: number
   readonly options: ToastOptions
   readonly open: boolean
+  /** The anchor's region, found as the toast is shown. */
+  readonly region: HTMLElement | null
 }
+
+/** The app's default region: the workspace. */
+const DEFAULT_REGION_SELECTOR = '[data-toast-region="default"]'
 
 /**
  * The app's one toast region, mounted once at the root. It holds one toast
@@ -60,7 +72,12 @@ function ToastProvider({ children }: { readonly children: React.ReactNode }) {
     () => ({
       show(options) {
         nextId.current += 1
-        setToast({ id: nextId.current, options, open: true })
+        setToast({
+          id: nextId.current,
+          options,
+          open: true,
+          region: options.anchor?.closest<HTMLElement>("[data-toast-region]") ?? null,
+        })
       },
     }),
     []
@@ -94,7 +111,7 @@ function ToastRegion({
   const [hovered, setHovered] = React.useState(false)
   const [focused, setFocused] = React.useState(false)
   const [windowBlurred, setWindowBlurred] = React.useState(false)
-  const placement = useToastPlacement(open)
+  const placement = useToastPlacement(open, toast?.region ?? null)
   const toastId = toast?.id
   const closeCurrent = React.useCallback(() => {
     if (toastId !== undefined) onClose(toastId)
@@ -398,14 +415,26 @@ function toastAvoidElements(): HTMLElement[] {
 }
 
 /**
- * Centres the toast on the element marked `data-toast-region` (the active
- * workspace; the whole viewport without one) and lifts it above every
- * visible `data-toast-avoid` element across it, such as the composer or a
- * sheet's bottom bar, and above the soft keyboard.
+ * The region the toast sits on: the anchor's while it is still shown, else
+ * the app's default region (the whole viewport without one).
  */
-function measureToastPlacement(keyboardInset: number): ToastPlacement {
+function toastRegion(anchored: HTMLElement | null): HTMLElement | null {
+  if (anchored?.isConnected && anchored.getBoundingClientRect().width > 0)
+    return anchored
+  return document.querySelector<HTMLElement>(DEFAULT_REGION_SELECTOR)
+}
+
+/**
+ * Centres the toast on its region and lifts it above every visible
+ * `data-toast-avoid` element across it, such as the composer or a sheet's
+ * bottom bar, and above the soft keyboard.
+ */
+function measureToastPlacement(
+  keyboardInset: number,
+  anchored: HTMLElement | null
+): ToastPlacement {
   const viewportBottom = window.innerHeight - keyboardInset
-  const region = document.querySelector<HTMLElement>("[data-toast-region]")
+  const region = toastRegion(anchored)
   const regionBox = region?.getBoundingClientRect()
   const measured = regionBox !== undefined && regionBox.width > 0
   const left = measured ? regionBox.left : 0
@@ -443,7 +472,10 @@ const PLACEMENT_ATTRIBUTES = [
  * transition ends (a sheet sliding into place). Changes are coalesced to one
  * measurement per frame.
  */
-function useToastPlacement(active: boolean): ToastPlacement | undefined {
+function useToastPlacement(
+  active: boolean,
+  anchored: HTMLElement | null
+): ToastPlacement | undefined {
   const touch = useTouchDensity()
   const keyboardInset = useKeyboardInset(touch && active)
   const [placement, setPlacement] = React.useState<ToastPlacement>()
@@ -458,7 +490,7 @@ function useToastPlacement(active: boolean): ToastPlacement | undefined {
         : new ResizeObserver(() => schedule())
     const update = () => {
       frame = 0
-      const next = measureToastPlacement(keyboardInset)
+      const next = measureToastPlacement(keyboardInset, anchored)
       setPlacement((current) =>
         current?.x === next.x &&
         current.bottom === next.bottom &&
@@ -467,7 +499,7 @@ function useToastPlacement(active: boolean): ToastPlacement | undefined {
           : next
       )
       if (!resizeObserver) return
-      const region = document.querySelector("[data-toast-region]")
+      const region = toastRegion(anchored)
       const targets = new Set<Element>(toastAvoidElements())
       if (region) targets.add(region)
       for (const element of observed) {
@@ -503,7 +535,7 @@ function useToastPlacement(active: boolean): ToastPlacement | undefined {
       document.removeEventListener("animationend", schedule, true)
       document.removeEventListener("transitionend", schedule, true)
     }
-  }, [active, keyboardInset])
+  }, [active, anchored, keyboardInset])
 
   return placement
 }
