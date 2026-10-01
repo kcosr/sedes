@@ -20,11 +20,11 @@ export const opencodePasswordReferenceSchema = z.discriminatedUnion("source", [
 ]);
 
 export const opencodeModuleConfigurationSchema = z.strictObject({
-  nativeStorePath: absolutePath.refine(value => value !== "/", "Select the native SQLite database file."),
+  nativeStorePath: absolutePath.refine(value => value !== "/", "Select the native SQLite database file.").optional(),
   configDirectory: absolutePath.optional(),
   connection: z.discriminatedUnion("ownership", [
     z.strictObject({ ownership: z.literal("owned"), channel: z.strictObject({
-      type: z.literal("process_stdio"), executablePath: absolutePath, workingDirectory: absolutePath,
+      type: z.literal("process_stdio"), executablePath: absolutePath.optional(), workingDirectory: absolutePath.optional(),
     }) }),
     z.strictObject({ ownership: z.literal("external"), channel: z.strictObject({
       type: z.literal("http"), url: opencodeHttpUrlSchema,

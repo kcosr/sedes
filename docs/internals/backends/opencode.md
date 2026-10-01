@@ -9,8 +9,9 @@ viewed images, Sedes MCP/CLI tools, owned thread execution variables, and manual
 compaction. Native forks, commands, generated images, and managed TUI are
 unavailable.
 The normalized backend identity is `opencode`, its connection kind is
-`opencode_http`, and the browser brand is `opencode`. Client protocol 130
-includes these closed-enum additions and terminal Stop diagnostics.
+`opencode_http`, and the browser brand is `opencode`. Client protocol 131
+includes these closed-enum additions, terminal Stop diagnostics and optional
+OpenCode path overrides.
 
 Conversation, catalog and tool consumers use the provider-private
 `OpenCodeNativePort`. Its closed read/mutation catalog carries validated JSON
@@ -73,7 +74,7 @@ the most queued data must resnapshot. Retention exhaustion for unacknowledged
 critical evidence prevents new ordinary work while preserving the independent
 control path.
 
-The persistent sidecar advertises the private `opencode_runtime` capability on
+The persistent sidecar advertises major 2 of the private `opencode_runtime` capability on
 Linux. Its registry owns the same runtime/host used locally; SSH and outbound
 carriers share typed operations and the bounded runtime body channel. Carrier
 detach releases ports and subscribers, preserving the native owner and evidence.
@@ -106,9 +107,9 @@ Pi, Codex, Claude and Grok retain their existing backend contracts.
 The exact admitted release is OpenCode **2.0.18**, with the generated
 `@opencode/client` package pinned to that same release. Qualification uses
 upstream source revision `cd9a14a6b688d4021bee381dfd39d2cef9c0f862`. An owned
-backend requires an explicit absolute executable path. On the reference host
-that executable is `opencode2`; Sedes never searches for the older `opencode`
-executable as an alternative.
+backend resolves `opencode2` from its execution environment’s PATH unless an
+absolute executable override is supplied. Sedes never searches for the older
+`opencode` executable as an alternative.
 
 | Mode | Connection | Lifetime |
 | --- | --- | --- |
@@ -118,33 +119,33 @@ executable as an alternative.
 Both modes require a Linux execution host and the same OS account as the Sedes
 runtime on that host (main for Local, the sidecar for SSH/outbound). Admission records PID, process start time, executable identity and
 canonical database identity. Subsequent identity changes revoke the connection;
-an endpoint alone never proves continuity. The configured database path is an
-operator declaration where the native API cannot prove which store it opened.
-An observed `OPENCODE_DB` must resolve to the declared store. Without that
-variable, an open database named `opencode.db` or `opencode-<channel>.db` in the
-native HOME/XDG data directory must have the declared store's inode. Conflicting
-evidence rejects admission conservatively. The server API omits its compiled
-channel; absent such an open file or explicit override, Sedes retains the
-operator declaration instead of guessing the default filename.
+an endpoint alone never proves continuity. The database path is discovered from
+the native process’s `OPENCODE_DB` selector or its unique open native database
+descriptor under the HOME/XDG data directory. An explicit database path must
+match the observed store. Ambiguous or conflicting evidence rejects admission;
+Sedes does not guess a channel-specific filename.
 An unlinked native descriptor still counts as conflicting evidence after a
 replacement file appears at the selected pathname. Literal filenames ending
 in Linux's ` (deleted)` suffix are distinguished using descriptor/file identity.
-Symlink and hardlink store aliases are rejected. Other operating systems and
-remote execution environments have no qualified identity/cleanup path here.
+Symlink and hardlink store aliases are rejected. Non-Linux execution hosts have no qualified identity/cleanup path; local,
+SSH and outbound Linux hosts use this same process observation.
 
-The adjacent, private store lease excludes another Sedes runtime using the same
-store. It does not lock out independent native OpenCode processes. The operator
-must select external mode for an existing owner. Unconfirmed cleanup retains the
-lease; Sedes does not steal it or launch a replacement over it.
-The versioned lease records the hosting incarnation, ownership kind, exact
-owner-process identity and the owned descendant marker. A dead external owner
-can release only its proved exact lease. A dead owned owner requires proof that
-its marked descendants are gone; uncertain or malformed records retain the
-fence. Explicit host recovery reinspects the exact record and process identities
-before signaling positively identified descendants or releasing the lease.
-Failure while first writing the lease record removes only the proved newly
-created directory and partial record. Unknown directory/file identity, changed
-ownership or unexpected remnants retain the fence for operator inspection.
+A private runtime ownership lease is keyed by tenant, principal, backend and
+execution environment, independently of the database. Multiple configured
+runtimes and ordinary native clients may share a database. The lease lives in
+the execution account’s Sedes state directory and fences duplicate startup or
+unproved cleanup of that exact configured runtime. The native database namespace
+still identifies sessions and prevents duplicate application binding of a native
+session within its principal scope.
+
+The versioned record identifies the hosting incarnation, ownership kind, exact
+owner process and owned descendant marker. A dead external owner can release
+only its proved exact lease. A dead owned owner requires proof that its marked
+descendants are gone; uncertain or malformed records retain the fence. Explicit
+host recovery reinspects the record and process identities before signaling
+positively identified descendants or releasing the lease. Failure while first
+writing the record removes only the proved newly created directory and partial
+record. Unexpected remnants retain the fence for inspection.
 
 Owned shutdown first tries bounded native session interrupts, then closes stdin,
 then escalates through TERM/KILL and verifies descendants. Process identity and
@@ -165,11 +166,27 @@ its owned descendants; otherwise operator inspection remains required.
 
 ## Configuration and authority
 
-Backend configuration requires `nativeStorePath` and one closed `connection`
-shape. Owned connections contain `process_stdio`, `executablePath` and
-`workingDirectory`; external connections contain `http`, `url` and a Basic
-authentication secret reference with the fixed username `opencode`. Connection
-defaults contain separate model and variant selections. Variants are not
+Backend configuration requires one closed `connection` shape. Owned connections
+contain `process_stdio` with optional absolute `executablePath` and
+`workingDirectory` overrides. `nativeStorePath` and `configDirectory` are also
+optional. External connections contain `http`, `url` and a Basic
+authentication secret reference with the fixed username `opencode`; an explicit
+`nativeStorePath` asserts that daemon’s database identity. Runtime startup learns
+the effective namespace on the execution host before publishing the module’s
+repositories and drivers. Production begins this connection after its HTTP and
+carrier listeners are ready. Startup runs outside configuration serialization,
+so an unavailable provider does not block Settings saves or outbound attachment.
+Only a still-current configuration can publish a completed connection; repeated
+automatic failures have a retry delay, while explicit Connect/Start retries
+admission after cleanup is proved. Local native startup and remote attachment each have a 45-second total budget;
+production has a 90-second startup budget covering provider acquisition.
+The startup timer stops at readiness; queueing before publication does not expire
+a healthy connection. Explicit cancellation and configuration checks still apply.
+Cleanup drains separately before ownership is released.
+Shutdown cancels pending startup and drains cleanup. A retained failed startup
+can be inspected and stopped before its database namespace is known; private
+administration reports a null namespace until identity is established.
+Connection defaults contain separate model and variant selections. Variants are not
 implicitly reasoning-effort values.
 
 External credentials resolve in the execution environment from an approved
@@ -182,13 +199,12 @@ remain separate. Protected-file resolution preserves canonical-path, owner,
 mode, inode and replacement checks. Password values remain private to the native
 client and never enter browser configuration, fingerprints or diagnostics.
 
-Owned startup generates a password and preserves the account's HOME, native
-authentication and configuration. An explicit configuration directory overrides
-the default `${XDG_CONFIG_HOME:-$HOME/.config}/opencode`. It derives
-`OPENCODE_DB` from the admitted store and rejects a conflicting override, forces
-`OPENCODE_DISABLE_AUTOUPDATE=1`, and removes inherited process-mode/password
-controls. The selected configuration directory replaces inherited
-`OPENCODE_CONFIG_DIR`. Both ownership modes reject simulation and incompatible
+Owned startup generates a password and preserves the account’s HOME, native
+authentication and configuration. Without overrides it leaves `OPENCODE_DB`,
+`OPENCODE_CONFIG_DIR` and the child working directory unchanged. Explicit database
+and configuration overrides replace the corresponding native selectors. It
+forces `OPENCODE_DISABLE_AUTOUPDATE=1` and removes inherited process-mode/password
+controls. Both ownership modes reject simulation and incompatible
 config/client/model-URL profiles during admission.
 Owned launch removes all ambient `SEDES_*` variables before installing its
 private runtime ownership marker. Native tools therefore cannot inherit another
@@ -293,7 +309,7 @@ history never proves native idle state. See the
 reconciliation, queue and automatic-detachment rules.
 
 Deterministic tests cover schema/authentication boundaries, release mismatch,
-HTTP response limits, runtime identity replacement, native store leases and
+HTTP response limits, runtime identity replacement, runtime ownership leases and
 scoped operation evidence. Opt-in isolated native tests use stock `opencode2`
 2.0.18 with fixture-owned state. They verify owned startup, malformed/expired
 readiness, background-shell survival after reference release, external

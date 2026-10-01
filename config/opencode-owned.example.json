@@ -1,11 +1,8 @@
 {
-  "nativeStorePath": "/home/sedes/.local/share/opencode/opencode.db",
   "connection": {
     "ownership": "owned",
     "channel": {
-      "type": "process_stdio",
-      "executablePath": "/home/sedes/.local/bin/opencode2",
-      "workingDirectory": "/home/sedes/projects"
+      "type": "process_stdio"
     }
   }
 }

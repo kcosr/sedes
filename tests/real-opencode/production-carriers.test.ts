@@ -1,4 +1,5 @@
-import { createOpenCodeNativeStoreLifecycle, inspectOpenCodeNativeStoreOwner, type OpenCodeNativeStoreLease } from "../../src/server/backends/opencode/opencode-native-store.js";
+import path from "node:path";
+import { createOpenCodeRuntimeOwnershipLifecycle, inspectOpenCodeRuntimeOwner, type OpenCodeRuntimeOwnerTarget, type OpenCodeRuntimeOwnershipLease } from "../../src/server/backends/opencode/opencode-runtime-ownership.js";
 import { shellQuote } from "../support/production-carrier-fixture.js";
 import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
 import * as nativeIdentity from "../../src/server/backends/opencode/opencode-native-identity.js";
@@ -46,6 +47,7 @@ describe.skipIf(!RUN_REAL_OPENCODE || process.platform !== "linux")("stock OpenC
         await fixture.openStream(threadId);
         expect(JSON.stringify((await fixture.thread(threadId)).itemsById)).toContain(`first-${topology}-${ownership}`);
       }
+      if (topology === "outbound") await qualifyPersistedOutboundStartup(fixture, threadId, pid);
       await qualifyTools(fixture, threadId);
       await assertBackendApplied(fixture);
       if (topology === "outbound") {
@@ -64,43 +66,52 @@ describe.skipIf(!RUN_REAL_OPENCODE || process.platform !== "linux")("stock OpenC
     }, 180_000);
   }
 
-  it("outbound/external: a fenced native store reports safe recovery guidance without replacing its owner or daemon", async () => {
-    let held: OpenCodeNativeStoreLease | undefined;
-    let original: Awaited<ReturnType<typeof inspectOpenCodeNativeStoreOwner>> | undefined;
+  it("outbound/external: a fenced runtime authority reports safe recovery guidance without replacing its owner or daemon", async () => {
+    let held: OpenCodeRuntimeOwnershipLease | undefined;
+    let ownerTarget: OpenCodeRuntimeOwnerTarget;
+    let original: Awaited<ReturnType<typeof inspectOpenCodeRuntimeOwner>> | undefined;
     try {
       const fixture = await OpenCodeProductionFixture.create("outbound", "external", {
         waitReady: false,
         beforeBackend: async value => {
-          held = await createOpenCodeNativeStoreLifecycle({ canonicalStorePath: value.account.nativeStorePath,
-            label: "Fixture-held external store", ownership: "external", hostIncarnation: "fixture-held-owner" }).acquire();
-          original = await inspectOpenCodeNativeStoreOwner(value.account.nativeStorePath);
+          const lifecycle = createOpenCodeRuntimeOwnershipLifecycle({
+            authority: { tenantId: value.serviceScope!.tenantId, principalId: value.serviceScope!.principalId,
+              executionEnvironmentId: value.environmentId, backendInstanceId: value.backendId },
+            // The artifact installer admits HOME but not the connector's
+            // provider-specific XDG overrides into the persistent host.
+            ownershipDirectory: path.join(value.hostHome, ".local", "state", "sedes", "opencode-owners"),
+            label: "Fixture-held external authority", ownership: "external", hostIncarnation: "fixture-held-owner" });
+          ownerTarget = { authorityKey: lifecycle.authorityKey, ownershipDirectory: lifecycle.ownershipDirectory };
+          held = await lifecycle.acquire();
+          original = await inspectOpenCodeRuntimeOwner(ownerTarget);
         },
       });
       fixtures.push(fixture);
-      // Saving configuration only prepares a lazy module. The normal target
-      // health projection attempts startup; administrative inspection must not.
+      // Saving configuration eagerly attempts startup and publishes the owner
+      // fence. Administrative inspection must not replace its retained owner.
       await fixture.snapshot();
       await fixture.waitFor(async () => (await fixture.configuration()).runtimes.some(runtime =>
         runtime.resourceKind === "backend" && runtime.resourceId === fixture.backendId && runtime.connectionState === "recovery_required"));
       const configuration = await fixture.configuration();
       const runtime = configuration.runtimes.find(item => item.resourceKind === "backend" && item.resourceId === fixture.backendId)!;
       expect(runtime).toMatchObject({ connectionState: "recovery_required", applyState: "unavailable" });
-      expect(runtime.lastError).toContain("sedes opencode-owner inspect --store PATH");
+      expect(runtime.lastError).toContain("sedes opencode-owner inspect --authority-key KEY");
       expect(runtime.lastError).toContain("leave external OpenCode daemons running");
       expect(runtime.lastError!.length).toBeLessThan(1_024);
       expect(JSON.stringify(configuration)).not.toContain(fixture.account.password);
       expect(JSON.stringify(configuration)).not.toContain(original!.record.token);
-      expect(await inspectOpenCodeNativeStoreOwner(fixture.account.nativeStorePath)).toEqual(original);
+      expect(await inspectOpenCodeRuntimeOwner(ownerTarget!)).toEqual(original);
       expect(await fixtureProcessAlive(fixture.native!.pid)).toBe(true);
       expect((await fixture.native!.api("GET", "/api/info")).status).toBe(200);
       expect(fixture.model.requests).toHaveLength(0);
       // Legitimate release by the fixture owner models completed host repair.
-      // A new application snapshot retries target health, as a Sedes reload
-      // does; the Settings inspection itself never acquires the native store.
+      // Explicit Connect retries startup after repair. A Settings inspection
+      // does not acquire an owner or register a failed backend module.
       await held!.release(); held = undefined;
+      await fixture.lifecycle("connect");
       await fixture.waitReady();
       const recovered = (await fixture.configuration()).runtimes.find(item => item.resourceKind === "backend" && item.resourceId === fixture.backendId)!;
-      expect(recovered.connectionState).not.toBe("recovery_required");
+      expect(recovered).toMatchObject({ connectionState: "connected", applyState: "applied" });
       expect(recovered.lastError).toBeNull();
       expect(await fixture.nativePid()).toBe(fixture.native!.pid);
       expect(await fixtureProcessAlive(fixture.native!.pid)).toBe(true);
@@ -159,6 +170,29 @@ async function qualifyRetainedCarrier(fixture: OpenCodeProductionFixture, thread
   expect(JSON.stringify((await fixture.thread(threadId)).itemsById)).toContain("PREFIXSUFFIX");
   expect((await fixture.serviceStatus())?.serviceIncarnation).toBe(service?.serviceIncarnation);
   expect(fixture.model.requests.filter(request => request.lastText === marker && request.lastRole === "user")).toHaveLength(1);
+}
+
+async function qualifyPersistedOutboundStartup(fixture: OpenCodeProductionFixture, threadId: string, pid: number) {
+  const service = await fixture.serviceStatus();
+  const previousLifecycleAttempts = fixture.lifecycleAttempts.slice();
+  await fixture.stopConnector();
+  await fixture.stopMain();
+  expect(await fixtureProcessAlive(pid)).toBe(true);
+  // The persisted backend is enabled, but its connector cannot reconnect until
+  // main is listening. Startup must expose HTTP without awaiting that backend.
+  await fixture.startMain();
+  expect(fixture.connector).toBeUndefined();
+  const configuration = await fixture.configuration();
+  expect(configuration.configuration.backends.find(backend => backend.id === fixture.backendId))
+    .toMatchObject({ kind: "opencode", enabled: true });
+  fixture.startConnector();
+  await fixture.waitReady();
+  await assertBackendApplied(fixture);
+  expect(fixture.lifecycleAttempts).toEqual(previousLifecycleAttempts);
+  expect(await fixture.nativePid()).toBe(pid);
+  expect((await fixture.serviceStatus())?.serviceIncarnation).toBe(service?.serviceIncarnation);
+  await fixture.closeStreams(); await fixture.openStream(threadId);
+  expect(JSON.stringify((await fixture.thread(threadId)).itemsById)).toContain("PREFIXSUFFIX");
 }
 
 async function qualifyTools(fixture: OpenCodeProductionFixture, threadId: string) {

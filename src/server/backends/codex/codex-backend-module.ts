@@ -1305,6 +1305,7 @@ function externalDiscoveryNamespaceKey(
 }
 
 export class CodexBackendModule implements BackendModule {
+  readonly startupPolicy = "composition_only" as const;
   readonly remoteRuntimeCapabilities = Object.freeze([{ capabilityId: "codex_runtime", majorVersion: 1, operations: ["runtime.ensure", "runtime.lookup", "runtime.execute"] }, codexManagedTuiCapability]);
   readonly backendKind = "codex_app_server" as const;
   readonly connectionKinds = ["codex_app_server"] as const;

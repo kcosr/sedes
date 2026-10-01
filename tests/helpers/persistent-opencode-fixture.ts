@@ -1,3 +1,4 @@
+import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
 import { randomUUID } from "node:crypto";
 import { vi } from "vitest";
 import { OpenCodeRuntimeHostRegistry } from "../../src/server/backends/opencode/opencode-runtime-host-registry.js";
@@ -18,6 +19,7 @@ import { createSidecarFramedCarrier } from "./persistent-sidecar-framed-fixture.
 export function createPersistentOpenCodeFixture(ownership: "owned" | "external" = "owned") {
   const scope = { tenantId: "tenant", principalId: "principal" }, executionEnvironmentId = "remote-environment";
   const wire = createOpenCodeApiFixture();
+  const actualNativeStorePath = "/native/opencode.db";
   const configuration: OpenCodeRuntimeConfiguration = {
     instance: { id: "opencode", tenantId: scope.tenantId, kind: "opencode", label: "OpenCode", enabled: true, configurationRevision: 1, protocolRelease: "2.0.18" },
     connections: [{ id: "profile", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "template",
@@ -47,10 +49,11 @@ export function createPersistentOpenCodeFixture(ownership: "owned" | "external" 
   } });
   const adapter = new OpenCodeHttpNativeAdapter(nativeClient);
   const owners: FakeRuntime[] = [];
+  const controls = { startupFailure: false, cleanupFailure: false };
   class FakeRuntime {
     readonly runtimeId = randomUUID();
     readonly generation = randomUUID();
-    readonly nativeNamespaceKey = openCodeRuntimeNamespaceKey(executionEnvironmentId, configuration.nativeStorePath);
+    readonly nativeNamespaceKey = openCodeRuntimeNamespaceKey(executionEnvironmentId, actualNativeStorePath);
     readonly nativeHost: OpenCodeNativeHost;
     state: OpenCodeRuntimeSnapshot["state"] = "stopped";
     constructor(readonly input: OpenCodeRuntimeInput) {
@@ -58,13 +61,19 @@ export function createPersistentOpenCodeFixture(ownership: "owned" | "external" 
         { assertCurrent: async () => {}, installSessionEnvironment: async () => {}, ensureMcpRegistration: async () => {} }, nativeClient.lifetime);
       owners.push(this);
     }
-    readonly start = vi.fn(async () => { this.input.assertLaunchAdmission?.(); this.state = "ready"; });
-    readonly close = vi.fn(async () => { this.nativeHost.close(); this.state = "stopped";
+    readonly start = vi.fn(async () => {
+      this.input.assertLaunchAdmission?.();
+      if (controls.startupFailure) { this.state = controls.cleanupFailure ? "cleanup_unproved" : "stopped"; throw new OpenCodeRuntimeError("opencode_owned_cleanup_unproved"); }
+      this.state = "ready";
+    });
+    readonly close = vi.fn(async () => {
+      if (controls.cleanupFailure) { this.state = "cleanup_unproved"; throw new OpenCodeRuntimeError("opencode_owned_cleanup_unproved"); }
+      this.nativeHost.close(); this.state = "stopped";
       return { cleanup: "proved", nativeInterrupts: ownership === "owned" ? "complete" : "not_owned" }; });
     async assertCurrent() { if (this.state !== "ready") throw new Error("not ready"); }
     snapshot(): OpenCodeRuntimeSnapshot { return { state: this.state, ownership, generation: this.generation, references: 0,
       identity: { pid: process.pid, startTime: "1", uid: process.getuid!(), executablePath: "/native/opencode2", executable: { device: "1", inode: "2" },
-        nativeStorePath: configuration.nativeStorePath, store: { device: "1", inode: "3" }, storeObservation: "open_file" } }; }
+        nativeStorePath: actualNativeStorePath, store: { device: "1", inode: "3" }, storeObservation: "open_file" } }; }
   }
   const hosts = new OpenCodeRuntimeHostRegistry({ scope, executionEnvironmentId, environment: { HOME: "/native" }, services,
     environmentChannel: { scope, executionEnvironmentId, resolveSecret: async () => ({ value: "host-secret", discard() {} }) } as unknown as ExecutionEnvironmentChannelProvider,
@@ -95,7 +104,7 @@ export function createPersistentOpenCodeFixture(ownership: "owned" | "external" 
     } };
     carriers.push(attached); return attached;
   }
-  return { scope, configuration, services, hosts, wire, adapter, archive, owners, provider, acquireRecovery, acquireExisting, attach,
+  return { scope, configuration, services, hosts, wire, adapter, archive, owners, controls, provider, acquireRecovery, acquireExisting, attach,
     setNormalError(error?: Error) { normalError = error; },
     holdPromptResponse() {
       let release!: () => void, entered!: () => void;

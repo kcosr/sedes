@@ -5,12 +5,12 @@
 ### Breaking Changes
 
 - Remote OpenCode requires a matching sidecar build with private OpenCode
-  runtime and tool capabilities. Upgrade existing execution sidecars before
+  runtime capability major 2 and tool capabilities. Upgrade existing execution sidecars before
   connecting this backend. (#17)
 
-- Browser and packaged clients now require client protocol 130 for the OpenCode
+- Browser and packaged clients now require client protocol 131 for the OpenCode
   v2 backend identity and terminal Stop diagnostics alongside runtime-only
-  turn-throughput measurements. (#17, #20)
+  turn-throughput measurements and optional OpenCode path overrides. (#17, #20)
 
 - Claude worker and persistent runtime capabilities now require major 2 for
   bounded, recoverable conversation Stop. Rebuild local helpers and upgrade
@@ -29,7 +29,7 @@
   browser protocol change is required for this fix. (#15)
 
 - Codex viewed images use a new `viewed_image` transcript item, introduced
-  in client protocol 123. This build requires client protocol 130; see the
+  in client protocol 123. This build requires client protocol 131; see the
   client protocol entries below. (#11, #13, #14)
 
 - Claude backends require Claude Code 2.1.281 or newer and are tested through
@@ -174,6 +174,11 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- OpenCode uses native execution-host defaults with optional Advanced path
+  overrides. Multiple runtimes can share a database; ownership and recovery
+  now track each scoped runtime independently. Provider connection runs after
+  HTTP startup so Settings stays available during connection failures. (#17)
 
 - Live Pi qualification uses the local AW Qwen model. OpenCode live
   qualification can explicitly send Qwen chat-template low-reasoning settings

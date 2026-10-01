@@ -79,15 +79,17 @@ export class OpenCodeHttpClient {
   }
 
   /** Reject an unauthenticated deployment instead of inferring protection from a successful request. */
-  async requireAuthentication(): Promise<void> {
-    const signal = AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(this.#requestMilliseconds)]);
+  async requireAuthentication(callerSignal?: AbortSignal): Promise<void> {
+    const signal = AbortSignal.any([this.#lifetime.signal, AbortSignal.timeout(this.#requestMilliseconds), ...(callerSignal ? [callerSignal] : [])]);
     try {
+      if (signal.aborted) throw new OpenCodeRuntimeError("opencode_request_aborted");
       const response = await this.#fetch(`${this.endpoint}/api/info`, { redirect: "error", signal });
       await response.body?.cancel();
+      if (signal.aborted) throw new OpenCodeRuntimeError("opencode_request_aborted");
       if (response.status !== 401) throw new OpenCodeRuntimeError("opencode_authentication_required");
     } catch (error) {
       if (error instanceof OpenCodeRuntimeError) throw error;
-      throw new OpenCodeRuntimeError("opencode_authentication_probe_failed");
+      throw new OpenCodeRuntimeError(signal.aborted ? "opencode_request_aborted" : "opencode_authentication_probe_failed");
     }
   }
 

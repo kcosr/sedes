@@ -17,6 +17,7 @@ function fakeModule(
   onPrepare?: (input: BackendModuleConfigurationInput) => PreparedBackendModule,
 ): BackendModule {
   const module: BackendModule = {
+    startupPolicy: "composition_only",
     backendKind: backend,
     connectionKinds: [connection],
     protocolRelease: "v1",

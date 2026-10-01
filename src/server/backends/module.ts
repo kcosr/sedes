@@ -198,7 +198,8 @@ export interface BackendModuleRuntime {
    * support from backend kind or optional methods.
    */
   readonly managedProviderTerminals: ManagedTerminalResourceAuthority;
-  start(): Promise<void>;
+  /** Provider connection startup must honor cancellation before publication. */
+  start(signal?: AbortSignal): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -289,6 +290,8 @@ export interface BackendRuntimeDiagnostic {
   readonly connectionState: "recovery_required" | "unknown";
   /** Provider-authored bounded operator guidance; never raw exception text. */
   readonly message: string;
+  /** Server-only recovery prerequisite; never grants execution-host authority. */
+  readonly recoveryAction?: "stop";
 }
 
 /**
@@ -296,6 +299,8 @@ export interface BackendRuntimeDiagnostic {
  * they are not discovered or downloaded at runtime.
  */
 export interface BackendModule {
+  /** Provider I/O starts only after HTTP and host carriers are ready. */
+  readonly startupPolicy: "composition_only" | "connect_provider";
   /** Map only known private failures to safe Settings diagnostics. */
   runtimeDiagnostic?(error: unknown): BackendRuntimeDiagnostic | undefined;
   /** Compiled remote host grants, independently authorized from workspace operations. */

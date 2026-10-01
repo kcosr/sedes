@@ -144,7 +144,7 @@ describe("OpenCode recovery through the production sidecar owner", () => {
     await narrow.client.read("getSession", { sessionID: f.wire.sessionID });
     const retainedEpoch = f.carriers.at(-1)!.lease.controllerEpoch;
     const first = recovered.start(), second = recovered.start();
-    expect(second).toBe(first); await first;
+    await Promise.all([first, second]);
     expect(f.carriers.at(-1)!.lease.controllerEpoch).toBeGreaterThan(retainedEpoch);
     expect(f.attachExisting).toHaveBeenCalledOnce(); expect(f.launch).toHaveBeenCalledTimes(2);
     expect(f.owners).toHaveLength(1); expect(f.owners[0]!.start).toHaveBeenCalledOnce();

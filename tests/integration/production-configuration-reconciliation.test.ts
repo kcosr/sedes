@@ -1,6 +1,8 @@
 import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
 import { authenticatedProductionFetch } from "../helpers/authenticated-production-client.js";
 import { randomUUID } from "node:crypto";
+import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
+import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -11,7 +13,7 @@ import { DatabaseExecutionTargetReader } from "../../src/server/application/exec
 import { ThreadRuntimeCoordinator } from "../../src/server/events/thread-runtime-coordinator.js";
 import { PrincipalBackendRuntimeCollection } from "../../src/server/runtime/principal-backend-runtime-collection.js";
 import { startProductionApplication, type RunningApplication } from "../../src/server/production-application.js";
-import { configurationDocumentSchema } from "../../src/shared/protocol/configuration-admin.js";
+import { configurationDocumentSchema, type ConfigurationDocument } from "../../src/shared/protocol/configuration-admin.js";
 import { SidecarRuntimeOwner, SidecarUnavailableError } from "../../src/server/sidecar/sidecar-runtime.js";
 import { SidecarServiceManagementError, SidecarServiceStagingError } from "../../src/server/sidecar/sidecar-provisioner.js";
 import { SIDECAR_WIRE_VERSION } from "../../src/internal/sidecar-protocol/envelopes.js";
@@ -20,7 +22,10 @@ import { compiledBackendModuleCatalog } from "../../src/server/backends/compiled
 import { BackendRuntimeControlRejectedError } from "../../src/server/backends/runtime-control.js";
 import { configurationFingerprint } from "../../src/server/config/configuration-fingerprint.js";
 import * as retainedWork from "../../src/server/runtime/retained-provider-work.js";
-import type { BackendModuleRuntime } from "../../src/server/backends/module.js";
+import type { BackendModuleRuntime, BackendModuleRuntimeContext } from "../../src/server/backends/module.js";
+import { OpenCodeBackendModule } from "../../src/server/backends/opencode/opencode-backend-module.js";
+import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
+import { openCodeRuntimeNamespaceKey } from "../../src/server/backends/opencode/opencode-runtime.js";
 
 let application: RunningApplication | undefined;
 let directory: string | undefined;
@@ -77,6 +82,48 @@ async function fixture() {
   return { service, scope, environmentId, snapshot };
 }
 
+function installOpenCodeFixture(observedStorePath: string, start: (signal?: AbortSignal) => Promise<void> = async () => {}, close = async () => {}) {
+  const created: { runtime: BackendModuleRuntime; context: BackendModuleRuntimeContext }[] = [];
+  const module = new OpenCodeBackendModule(input => {
+    let ready = false;
+    return {
+      get nativeNamespaceKey() {
+        if (!ready) throw new Error("fixture_opencode_not_started");
+        return openCodeRuntimeNamespaceKey(input.authority.executionEnvironmentId, observedStorePath);
+      },
+      start: async (signal?: AbortSignal) => { await start(signal); ready = true; },
+      health: async () => ({ available: ready, checkedAt: new Date().toISOString() }),
+      snapshot: () => ({ state: ready ? "ready" : "stopped", ownership: "owned", references: 0,
+        ...(ready ? { generation: "fixture-opencode" } : {}) }),
+      acquire: (): never => { throw new Error("unexpected_conversation_acquisition"); },
+      assertCurrent: async () => { if (!ready) throw new Error("fixture_opencode_not_started"); },
+      admitToolSession: async (): Promise<never> => { throw new Error("unexpected_tool_admission"); },
+      releaseToolSession: () => {},
+      stop: async () => { ready = false; return { cleanup: "proved", nativeInterrupts: "not_owned" }; },
+      close: async () => { ready = false; return { cleanup: "proved", nativeInterrupts: "not_owned" }; },
+    };
+  });
+  vi.spyOn(compiledBackendModuleCatalog.requireModule("opencode"), "prepare").mockImplementation(input => {
+    const prepared = module.prepare(input);
+    return { ...prepared, createRuntime(context) {
+      const runtime = prepared.createRuntime(context);
+      created.push({ runtime, context });
+      const runtimeClose = runtime.close.bind(runtime);
+      runtime.close = async () => { await close(); await runtimeClose(); };
+      return runtime;
+    } };
+  });
+  return created;
+}
+
+function addBackgroundOpenCode(configuration: ConfigurationDocument, environmentId: string) {
+  configuration.backends.push({ id: "background-opencode", kind: "opencode", label: "Background", enabled: true, modelPolicy: { type: "catalog" },
+    moduleConfiguration: { connection: { ownership: "owned", channel: { type: "process_stdio" } } } });
+  configuration.targets.push({ id: "background-opencode-target", kind: "opencode_http", backendInstanceId: "background-opencode",
+    executionEnvironmentId: environmentId, label: "Background", enabled: true,
+    moduleConfiguration: { defaults: { model: { type: "catalogDefault" }, variant: { type: "modelDefault" } } } });
+}
+
 describe("production configuration reconciliation", () => {
   it("attaches a replacement module's retained work before the old pass settles", async () => {
     const modules: BackendModuleRuntime[] = [];
@@ -130,6 +177,296 @@ describe("production configuration reconciliation", () => {
     } finally { for (const release of releases) release(); }
   });
 
+  it("keeps unrelated saves and lifecycle commands available during provider startup", async () => {
+    const { service, scope, snapshot, environmentId } = await fixture();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    let startupSignal: AbortSignal | undefined;
+    const start = vi.fn(async (signal?: AbortSignal) => { startupSignal = signal; await held; });
+    installOpenCodeFixture(path.join(directory!, "background-opencode.db"), start);
+    try {
+      const configuration = structuredClone(snapshot.configuration);
+      addBackgroundOpenCode(configuration, environmentId);
+      await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+      await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+      expect((await service.get(scope)).runtimes.find(runtime => runtime.resourceId === "background-opencode"))
+        .toMatchObject({ applyState: "pending", connectionState: "reconciling", effectiveRevision: null });
+      configuration.backends.find(backend => backend.id === "idle-pi")!.label = "Unrelated edit";
+      await service.save(scope, { mutationId: randomUUID(), expectedRevision: (await service.get(scope)).revision, configuration });
+      const impact = await service.impact(scope, { resourceKind: "backend", resourceId: "idle-pi", action: "stop",
+        expectedRevision: (await service.get(scope)).revision });
+      const stopped = await service.lifecycle(scope, { mutationId: randomUUID(), resourceKind: "backend", resourceId: "idle-pi", action: "stop",
+        expectedRevision: impact.configurationRevision, expectedIncarnation: impact.incarnation, impactToken: impact.token });
+      expect(stopped.state).toBe("applied");
+      expect(startupSignal?.aborted).toBe(false);
+      expect(start).toHaveBeenCalledOnce();
+      release();
+      await vi.waitFor(async () => expect((await service.get(scope)).runtimes.find(runtime => runtime.resourceId === "background-opencode"))
+        .toMatchObject({ applyState: "applied", connectionState: "connected" }));
+    } finally { release(); }
+  });
+
+  it("cancels a superseded startup and publishes only the current configuration", async () => {
+    const { service, scope, snapshot, environmentId } = await fixture();
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    const signals: AbortSignal[] = [];
+    const start = vi.fn(async (signal?: AbortSignal) => { signals.push(signal!); if (signals.length === 1) await held; });
+    installOpenCodeFixture(path.join(directory!, "background-opencode.db"), start);
+    try {
+      const configuration = structuredClone(snapshot.configuration);
+      addBackgroundOpenCode(configuration, environmentId);
+      await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+      await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+      configuration.backends.find(backend => backend.id === "background-opencode")!.environmentVariables = {
+        startup: { FIXTURE_REVISION: { kind: "literal", value: "second" } }, execution: {},
+      };
+      await service.save(scope, { mutationId: randomUUID(), expectedRevision: (await service.get(scope)).revision, configuration });
+      expect(signals[0]!.aborted).toBe(true);
+      const pending = (await service.get(scope)).runtimes.find(runtime => runtime.resourceId === "background-opencode")!;
+      expect(pending).toMatchObject({ applyState: "pending", effectiveRevision: null });
+      release();
+      await vi.waitFor(async () => expect((await service.get(scope)).runtimes.find(runtime => runtime.resourceId === "background-opencode"))
+        .toMatchObject({ applyState: "applied", effectiveRevision: pending.desiredRevision }));
+      expect(start).toHaveBeenCalledTimes(2);
+      expect(signals[1]!.aborted).toBe(false);
+    } finally { release(); }
+  });
+
+  it.each(["backend", "environment"] as const)("keeps a pending %s definition when cancellation cannot prove cleanup", async resource => {
+    const { service, scope, snapshot, environmentId } = await fixture();
+    let cleanupPending = true;
+    const start = vi.fn(async (signal?: AbortSignal) => new Promise<never>((_resolve, reject) => {
+      const abort = () => reject(signal?.reason ?? new Error("fixture_cancelled"));
+      if (signal?.aborted) abort(); else signal?.addEventListener("abort", abort, { once: true });
+    }));
+    installOpenCodeFixture(path.join(directory!, "background-opencode.db"), start,
+      async () => { if (cleanupPending) throw new OpenCodeRuntimeError("opencode_owned_cleanup_unproved"); });
+    try {
+      const configuration = structuredClone(snapshot.configuration);
+      const backgroundEnvironmentId = environmentId;
+      addBackgroundOpenCode(configuration, backgroundEnvironmentId);
+      await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+      await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+      if (resource === "backend") {
+        configuration.backends = configuration.backends.filter(backend => backend.id !== "background-opencode");
+        configuration.targets = configuration.targets.filter(target => target.backendInstanceId !== "background-opencode");
+      } else {
+        const replacementEnvironmentId = randomUUID();
+        configuration.executionEnvironments = [{ id: replacementEnvironmentId, kind: "ssh", label: "Replacement host",
+          hostAlias: "test-target", workspaceRoots: ["/workspace"], operations: { kind: "sidecar", enabledCapabilities: ["workspace_tools", "workspace_context"] } }];
+        configuration.targets = configuration.targets.map(target => ({ ...target, executionEnvironmentId: replacementEnvironmentId }));
+      }
+      await expect(service.save(scope, { mutationId: randomUUID(), expectedRevision: (await service.get(scope)).revision, configuration }))
+        .rejects.toThrow(resource === "backend" ? "Backend shutdown could not be confirmed" : "Execution host shutdown could not be confirmed");
+      expect((await service.get(scope)).configuration.backends.some(backend => backend.id === "background-opencode")).toBe(true);
+      expect((await service.get(scope)).configuration.executionEnvironments.some(host => host.id === backgroundEnvironmentId)).toBe(true);
+      await vi.waitFor(async () => expect((await service.get(scope)).runtimes.find(runtime => runtime.resourceId === "background-opencode")?.lastError)
+        .toContain("Use backend Stop to retry cleanup before using Start"));
+      // Once the in-flight attempt has settled, the retained collection entry
+      // still owns its original host and must keep both definitions available.
+      await expect(service.save(scope, { mutationId: randomUUID(), expectedRevision: (await service.get(scope)).revision, configuration }))
+        .rejects.toThrow(resource === "backend" ? "Backend shutdown could not be confirmed" : "Execution host shutdown could not be confirmed");
+      expect((await service.get(scope)).configuration.executionEnvironments.some(host => host.id === backgroundEnvironmentId)).toBe(true);
+    } finally { cleanupPending = false; }
+  });
+
+  it.each(["opencode_executable_unavailable", "opencode_owned_cleanup_unproved"])("backs off %s startup failures while permitting initial attachment and explicit retries after proved cleanup", async code => {
+    const { service, scope, snapshot, environmentId } = await fixture();
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    let unavailable = true;
+    const start = vi.fn(async () => { if (unavailable) throw new OpenCodeRuntimeError(code); });
+    installOpenCodeFixture(path.join(directory!, "background-opencode.db"), start);
+    const configuration = structuredClone(snapshot.configuration);
+    addBackgroundOpenCode(configuration, environmentId);
+    const save = async () => service.save(scope, { mutationId: randomUUID(), expectedRevision: (await service.get(scope)).revision, configuration });
+    await save();
+    await vi.waitFor(async () => expect((await service.get(scope)).runtimes.find(runtime => runtime.resourceId === "background-opencode")?.applyState).toBe("unavailable"));
+    expect(start).toHaveBeenCalledOnce();
+    if (code === "opencode_owned_cleanup_unproved") {
+      expect((await service.get(scope)).runtimes.find(runtime => runtime.resourceId === "background-opencode"))
+        .toMatchObject({ connectionState: "unknown", lastError: expect.stringContaining("cleanup of its local owned resources completed") });
+    }
+    // A retained main-side observation is not authority to block initial
+    // attachment when this collection has no published runtime to replace.
+    const database = service.repository.database;
+    const workspace = new InventoryRepository(database).upsertWorkspace(scope, { environmentId, canonicalPath: directory!,
+      displayName: "Retained", available: true, trustState: "trusted", environmentConfigurationRevision: 1, now });
+    const connection = database.prepare("SELECT id FROM agent_connection_profiles WHERE tenant_id = ? AND owner_principal_id = ? AND template_id = ?")
+      .get(scope.tenantId, scope.principalId, "background-opencode-target") as { id: string };
+    const thread = new ConversationBindingRepository(database).createUnboundThread(scope, { workspaceId: workspace.id,
+      connectionProfileId: connection.id, title: "Retained", now });
+    const capture = ThreadRuntimeCoordinator.prototype.captureLoadedRuntime;
+    vi.spyOn(ThreadRuntimeCoordinator.prototype, "captureLoadedRuntime").mockImplementation(function(this: ThreadRuntimeCoordinator, candidate, id) {
+      return id === thread.id ? Promise.resolve({ kind: "conversation_runtime", threadId: id, generation: "retained", runState: "starting" })
+        : capture.call(this, candidate, id);
+    });
+    for (const label of ["Edit one", "Edit two"]) {
+      configuration.backends.find(backend => backend.id === "idle-pi")!.label = label;
+      await save();
+    }
+    expect(start).toHaveBeenCalledOnce();
+    now += 5_000;
+    await save();
+    await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(2));
+    await vi.waitFor(async () => expect((await service.get(scope)).runtimes.find(runtime => runtime.resourceId === "background-opencode")?.applyState).toBe("unavailable"));
+    unavailable = false;
+    const impact = await service.impact(scope, { resourceKind: "backend", resourceId: "background-opencode", action: "start",
+      expectedRevision: (await service.get(scope)).revision });
+    const result = await service.lifecycle(scope, { mutationId: randomUUID(), resourceKind: "backend", resourceId: "background-opencode", action: "start",
+      expectedRevision: impact.configurationRevision, expectedIncarnation: impact.incarnation, impactToken: impact.token });
+    expect(result).toMatchObject({ state: "applied", runtime: { applyState: "applied", connectionState: "connected" } });
+    expect(start).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["connect", "start"] as const)("retries a repaired failed backend immediately on explicit %s", async action => {
+    const { service, scope, snapshot, environmentId } = await fixture();
+    let fenced = true;
+    const start = vi.fn(async () => { if (fenced) throw new OpenCodeRuntimeError("opencode_runtime_owner_already_owned"); });
+    installOpenCodeFixture(path.join(directory!, "observed-opencode.db"), start);
+    const configuration = structuredClone(snapshot.configuration);
+    configuration.backends.push({ id: "repair-opencode", kind: "opencode", label: "Repair", enabled: true, modelPolicy: { type: "catalog" },
+      moduleConfiguration: { connection: { ownership: "owned", channel: { type: "process_stdio" } } } });
+    configuration.targets.push({ id: "repair-opencode-target", kind: "opencode_http", backendInstanceId: "repair-opencode",
+      executionEnvironmentId: environmentId, label: "Repair", enabled: true,
+      moduleConfiguration: { defaults: { model: { type: "catalogDefault" }, variant: { type: "modelDefault" } } } });
+    await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    const current = () => service.get(scope);
+    await vi.waitFor(async () => expect((await current()).runtimes.find(runtime => runtime.resourceId === "repair-opencode"))
+      .toMatchObject({ applyState: "unavailable", connectionState: "recovery_required" }));
+    const retry = async () => {
+      const impact = await service.impact(scope, { resourceKind: "backend", resourceId: "repair-opencode", action,
+        expectedRevision: (await current()).revision });
+      return service.lifecycle(scope, { mutationId: randomUUID(), resourceKind: "backend", resourceId: "repair-opencode", action,
+        expectedRevision: impact.configurationRevision, expectedIncarnation: impact.incarnation, impactToken: impact.token });
+    };
+    const failedStarts = start.mock.calls.length;
+    expect((await retry()).state).toBe("unavailable");
+    expect(start.mock.calls.length).toBeGreaterThan(failedStarts);
+    fenced = false;
+    const repairedStarts = start.mock.calls.length;
+    const result = await retry();
+    expect(result).toMatchObject({ state: "applied", runtime: { applyState: "applied", connectionState: "connected", lastError: null } });
+    expect(start.mock.calls.length).toBeGreaterThan(repairedStarts);
+    expect(result.runtime.effectiveRevision).toBe(result.runtime.desiredRevision);
+  });
+
+  it("allows Stop for a published backend whose health reports unproved cleanup", async () => {
+    const { service, scope, snapshot, environmentId } = await fixture();
+    let cleanupRequired = false;
+    const created = installOpenCodeFixture(path.join(directory!, "published-cleanup.db"), async () => {
+      if (cleanupRequired) throw new OpenCodeRuntimeError("opencode_owned_cleanup_unproved");
+    });
+    const configuration = structuredClone(snapshot.configuration);
+    addBackgroundOpenCode(configuration, environmentId);
+    await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    await vi.waitFor(async () => expect((await service.get(scope)).runtimes.find(item => item.resourceId === "background-opencode"))
+      .toMatchObject({ connectionState: "connected", applyState: "applied" }));
+    cleanupRequired = true;
+    expect(await created[0]!.runtime.driverFactory.create(created[0]!.context.connections[0]!).health()).toMatchObject({ available: false });
+    expect((await service.get(scope)).runtimes.find(item => item.resourceId === "background-opencode"))
+      .toMatchObject({ connectionState: "recovery_required", lastError: expect.stringContaining("Use backend Stop") });
+    for (const action of ["connect", "start", "stop"] as const) {
+      const impact = await service.impact(scope, { resourceKind: "backend", resourceId: "background-opencode", action,
+        expectedRevision: (await service.get(scope)).revision });
+      const result = await service.lifecycle(scope, { mutationId: randomUUID(), resourceKind: "backend", resourceId: "background-opencode", action,
+        expectedRevision: impact.configurationRevision, expectedIncarnation: impact.incarnation, impactToken: impact.token });
+      expect(result).toMatchObject(action === "stop" ? { state: "applied", runtime: { connectionState: "stopped" } } :
+        { state: "unavailable", runtime: { connectionState: "recovery_required" } });
+    }
+  });
+
+  it("retries remote native cleanup with Stop after the failed main runtime has closed", async () => {
+    const { service, scope, snapshot } = await fixture();
+    const environmentId = randomUUID();
+    const configuration = structuredClone(snapshot.configuration);
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Cleanup host", hostAlias: "test-target",
+      workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    addBackgroundOpenCode(configuration, environmentId);
+    const status: SidecarServiceStatus = { scope: { ...scope, installationId: "installation", executionEnvironmentId: environmentId },
+      serviceIncarnation: "retained-service", buildId: "test-build", artifactSha256: "a".repeat(64), runtimeWireVersion: SIDECAR_WIRE_VERSION,
+      controllerEpoch: 1, attached: true, attachmentMode: "recovery", state: "ready", configurationState: "applied",
+      desiredConfiguration: { environmentRevision: 0, operationsRevision: 0 }, effectiveConfiguration: { environmentRevision: 0, operationsRevision: 0 },
+      resources: [], resourcesFingerprint: "b".repeat(64) };
+    const inspectService = vi.spyOn(SidecarRuntimeOwner.prototype, "inspectService").mockResolvedValue(status);
+    const acquire = vi.spyOn(SidecarRuntimeOwner.prototype, "acquireOperation")
+      .mockRejectedValue(new OpenCodeRuntimeError("opencode_owned_cleanup_unproved"));
+    let stopped = false;
+    const stop = vi.fn(async () => { stopped = true; });
+    const control = { inspect: async () => ({ state: "active" as const, incarnation: "retained-provider", revision: "retained-revision", blockers: ["cleanup_unproven" as const] }),
+      stop, restart: stop };
+    const prepare = compiledBackendModuleCatalog.prepare.bind(compiledBackendModuleCatalog);
+    vi.spyOn(compiledBackendModuleCatalog, "prepare").mockImplementation(input => prepare(input).map(prepared => {
+      if (prepared.backendInstanceId === "background-opencode") prepared.recoverAdministration = async () => stopped ? undefined : control;
+      return prepared;
+    }));
+    const reserve = vi.spyOn(PrincipalBackendRuntimeCollection.prototype, "reserveStartup");
+    await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    await vi.waitFor(async () => expect((await service.get(scope)).runtimes.find(item => item.resourceId === "background-opencode"))
+      .toMatchObject({ connectionState: "recovery_required", lastError: expect.stringContaining("Use backend Stop") }));
+    const collection = reserve.mock.contexts[0] as PrincipalBackendRuntimeCollection;
+    expect(collection.failures.get("background-opencode")).toMatchObject({ cleanupPending: false });
+    const lifecycle = async (action: "start" | "stop") => {
+      const impact = await service.impact(scope, { resourceKind: "backend", resourceId: "background-opencode", action,
+        expectedRevision: (await service.get(scope)).revision });
+      return service.lifecycle(scope, { mutationId: randomUUID(), resourceKind: "backend", resourceId: "background-opencode", action,
+        expectedRevision: impact.configurationRevision, expectedIncarnation: impact.incarnation, impactToken: impact.token });
+    };
+    const starts = acquire.mock.calls.length;
+    expect((await lifecycle("start")).state).toBe("unavailable");
+    expect(acquire).toHaveBeenCalledTimes(starts);
+    inspectService.mockRejectedValue(new Error("fixture_host_unreachable"));
+    expect((await lifecycle("stop")).state).toBe("unavailable");
+    expect(stop).not.toHaveBeenCalled();
+    inspectService.mockResolvedValue(status);
+    expect(await lifecycle("stop")).toMatchObject({ state: "applied", runtime: { connectionState: "stopped" } });
+    expect(stop).toHaveBeenCalledOnce();
+    expect(acquire).toHaveBeenCalledTimes(starts);
+  });
+
+  it("keeps explicit backend retry blocked while startup cleanup remains unproved", async () => {
+    const { service, scope, snapshot, environmentId } = await fixture();
+    let cleanupPending = true;
+    let fenced = true;
+    const start = vi.fn(async () => { if (fenced) throw new OpenCodeRuntimeError("opencode_runtime_owner_already_owned"); });
+    installOpenCodeFixture(path.join(directory!, "observed-opencode.db"), start,
+      async () => { if (cleanupPending) throw new OpenCodeRuntimeError("opencode_owned_cleanup_unproved"); });
+    try {
+      const configuration = structuredClone(snapshot.configuration);
+      configuration.backends.push({ id: "repair-opencode", kind: "opencode", label: "Repair", enabled: true, modelPolicy: { type: "catalog" },
+        moduleConfiguration: { connection: { ownership: "owned", channel: { type: "process_stdio" } } } });
+      configuration.targets.push({ id: "repair-opencode-target", kind: "opencode_http", backendInstanceId: "repair-opencode",
+        executionEnvironmentId: environmentId, label: "Repair", enabled: true,
+        moduleConfiguration: { defaults: { model: { type: "catalogDefault" }, variant: { type: "modelDefault" } } } });
+      await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+      await vi.waitFor(async () => expect((await service.get(scope)).runtimes.find(runtime => runtime.resourceId === "repair-opencode"))
+        .toMatchObject({ connectionState: "recovery_required", lastError: expect.stringContaining("Use backend Stop to retry cleanup before using Start") }));
+      configuration.backends.find(backend => backend.id === "idle-pi")!.label = "Unrelated cleanup edit";
+      await service.save(scope, { mutationId: randomUUID(), expectedRevision: (await service.get(scope)).revision, configuration });
+      expect((await service.get(scope)).runtimes.find(runtime => runtime.resourceId === "repair-opencode")?.lastError)
+        .toContain("Use backend Stop to retry cleanup before using Start");
+      const failedStarts = start.mock.calls.length;
+      expect(failedStarts).toBeGreaterThan(0);
+      const impact = await service.impact(scope, { resourceKind: "backend", resourceId: "repair-opencode", action: "connect",
+        expectedRevision: (await service.get(scope)).revision });
+      const result = await service.lifecycle(scope, { mutationId: randomUUID(), resourceKind: "backend", resourceId: "repair-opencode", action: "connect",
+        expectedRevision: impact.configurationRevision, expectedIncarnation: impact.incarnation, impactToken: impact.token });
+      expect(result).toMatchObject({ state: "unavailable", runtime: { applyState: "unavailable", connectionState: "recovery_required" } });
+      expect(start).toHaveBeenCalledTimes(failedStarts);
+      cleanupPending = false;
+      fenced = false;
+      for (const action of ["stop", "start"] as const) {
+        const retryImpact = await service.impact(scope, { resourceKind: "backend", resourceId: "repair-opencode", action,
+          expectedRevision: (await service.get(scope)).revision });
+        const retry = await service.lifecycle(scope, { mutationId: randomUUID(), resourceKind: "backend", resourceId: "repair-opencode", action,
+          expectedRevision: retryImpact.configurationRevision, expectedIncarnation: retryImpact.incarnation, impactToken: retryImpact.token });
+        expect(retry.state).toBe("applied");
+      }
+      expect(start.mock.calls.length).toBeGreaterThan(failedStarts);
+    } finally { cleanupPending = false; }
+  });
+
   it.each(["pi", "claude", "codex", "opencode"])("restarts %s after removing a connection without reusing its historical profile", async kind => {
     const { service, scope, environmentId, snapshot } = await fixture();
     const configuration = structuredClone(snapshot.configuration);
@@ -146,13 +483,12 @@ describe("production configuration reconciliation", () => {
         moduleConfiguration: { defaults: { sandboxMode: "read-only", networkAccess: "disabled", approvalPolicy: "on-request", approvalReviewer: "user", model: { type: "catalogDefault" } } } });
     }
     if (kind === "opencode") {
-      // Module construction and Start stay lazy; no native provider is launched.
+      // Exercise production profile reconciliation with an observed native
+      // identity; this configuration test does not launch a provider binary.
+      const observedStorePath = path.join(directory!, "native-default-opencode.db");
+      installOpenCodeFixture(observedStorePath);
       configuration.backends.push({ id: backendId, kind: "opencode", label: "OpenCode", enabled: true, modelPolicy: { type: "catalog" },
-        moduleConfiguration: {
-          nativeStorePath: path.join(directory!, "removed-target-opencode.db"),
-          connection: { ownership: "owned", channel: { type: "process_stdio",
-            executablePath: path.join(directory!, "uninstalled-opencode"), workingDirectory: directory! } },
-        } });
+        moduleConfiguration: { connection: { ownership: "owned", channel: { type: "process_stdio" } } } });
       configuration.targets.push({ id: `${backendId}-target`, kind: "opencode_http", label: "OpenCode", enabled: true,
         backendInstanceId: backendId, executionEnvironmentId: environmentId,
         moduleConfiguration: { defaults: { model: { type: "catalogDefault" }, variant: { type: "modelDefault" } } } });
@@ -172,7 +508,7 @@ describe("production configuration reconciliation", () => {
     expect((await lifecycle("stop")).state).toBe("applied");
     configuration.targets = configuration.targets.filter(target => target.id !== removedId);
     await service.save(scope, { mutationId: randomUUID(), expectedRevision: (await service.get(scope)).revision, configuration });
-    const applied = vi.spyOn(PrincipalBackendRuntimeCollection.prototype, "apply");
+    const applied = vi.spyOn(PrincipalBackendRuntimeCollection.prototype, kind === "opencode" ? "reserveStartup" : "apply");
     expect((await lifecycle("start")).state).toBe("applied");
     const assertConnections = () => {
       const plan = applied.mock.calls.filter(([value]) => value.context.instance.id === backendId).at(-1)![0];
@@ -185,10 +521,45 @@ describe("production configuration reconciliation", () => {
     await application!.close(); application = undefined;
     applied.mockClear();
     const reopened = await openApplication();
-    expect((await reopened.service.get(reopened.scope)).runtimes.find(runtime => runtime.resourceId === backendId)?.applyState).toBe("applied");
+    await vi.waitFor(async () => expect((await reopened.service.get(reopened.scope)).runtimes.find(runtime => runtime.resourceId === backendId)?.applyState).toBe("applied"));
     assertConnections();
     // Two full production boots plus configuration saves and runtime stop/start
     // need headroom when this integration test shares the suite's workers.
+  }, 15_000);
+
+  it("serves HTTP and Settings while an initial SSH provider connection is pending and cancels it on close", async () => {
+    const { service, scope, snapshot } = await fixture();
+    const environmentId = randomUUID();
+    const configuration = structuredClone(snapshot.configuration);
+    configuration.executionEnvironments.push({ id: environmentId, kind: "ssh", label: "Held host", hostAlias: "held-test-target", workspaceRoots: ["/workspace"], operations: { kind: "none" } });
+    configuration.backends.push({ id: "held-opencode", kind: "opencode", label: "Held", enabled: true, modelPolicy: { type: "catalog" },
+      moduleConfiguration: { connection: { ownership: "owned", channel: { type: "process_stdio" } } } });
+    configuration.targets.push({ id: "held-opencode-target", kind: "opencode_http", backendInstanceId: "held-opencode",
+      executionEnvironmentId: environmentId, label: "Held", enabled: true,
+      moduleConfiguration: { defaults: { model: { type: "catalogDefault" }, variant: { type: "modelDefault" } } } });
+    const acquire = vi.spyOn(SidecarRuntimeOwner.prototype, "acquireOperation").mockRejectedValue(new Error("fixture_host_offline"));
+    await service.save(scope, { mutationId: randomUUID(), expectedRevision: snapshot.revision, configuration });
+    await application!.close(); application = undefined;
+    let pendingSignal: AbortSignal | undefined;
+    let cancelPending: (() => void) | undefined;
+    acquire.mockImplementation(async (_scope, _id, signal) => {
+      pendingSignal = signal;
+      await new Promise<never>((_resolve, reject) => {
+        cancelPending = () => reject(signal?.reason ?? new Error("fixture_cancelled"));
+        if (signal?.aborted) cancelPending();
+        else signal?.addEventListener("abort", cancelPending, { once: true });
+      });
+      throw new Error("unreachable");
+    });
+    try {
+      const reopened = await openApplication();
+      await vi.waitFor(() => expect(pendingSignal).toBeDefined());
+      expect(pendingSignal!.aborted).toBe(false);
+      expect((await reopened.service.get(reopened.scope)).runtimes.find(runtime => runtime.resourceId === "held-opencode"))
+        .toMatchObject({ applyState: "pending", effectiveRevision: null });
+      await application!.close(); application = undefined;
+      expect(pendingSignal!.aborted).toBe(true);
+    } finally { cancelPending?.(); }
   }, 15_000);
 
   it.each([false, true])("recovers retained startup settings after main restarts (transient inspection failure: %s)", async failFirstInspection => {

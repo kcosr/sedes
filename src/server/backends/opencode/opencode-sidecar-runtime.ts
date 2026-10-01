@@ -215,7 +215,9 @@ export function registerOpenCodeRuntimeHost(input: {
   };
 }
 function runtimeInfo(runtime: OpenCodeRuntime): OpenCodeRuntimeInfo {
-  return { runtimeId: runtime.runtimeId, nativeNamespaceKey: runtime.nativeNamespaceKey, snapshot: runtime.snapshot() };
+  const snapshot = runtime.snapshot();
+  // Retained failed launches remain administrable before database admission.
+  return { runtimeId: runtime.runtimeId, nativeNamespaceKey: snapshot.state === "ready" ? runtime.nativeNamespaceKey : null, snapshot };
 }
 const stopRefusals = new Map<string, "confirmation_stale" | "blocked" | "cleanup_unproven">([
   ["opencode_runtime_confirmation_stale", "confirmation_stale"],

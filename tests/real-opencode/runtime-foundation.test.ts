@@ -107,7 +107,7 @@ it.skipIf(!enabled)("owned opencode2 preserves native configuration, remains res
     await writeFile(environment.OPENCODE_MODELS_PATH!, "{}");
     const config = JSON.stringify({ update: "disable", permission: { shell: "allow" } });
     await writeFile(path.join(configDirectory, "opencode.json"), config);
-    runtime = new OpenCodeRuntime({ hostIncarnation: "fixture-host",
+    runtime = new OpenCodeRuntime({ ownershipDirectory: path.join(root, "owners"), hostIncarnation: "fixture-host",
       authority: { tenantId: "qualification", principalId: "qualification", backendInstanceId: "fixture", executionEnvironmentId: "local" },
       nativeStorePath, environment,
       connection: { ownership: "owned", channel: { type: "process_stdio",
@@ -206,7 +206,7 @@ it.skipIf(!enabled)("external stock opencode2 keeps its daemon and background sh
     if (!password) throw new Error("isolated fixture password unavailable");
     const wrongStorePath = path.join(root, "wrong.db");
     await writeFile(wrongStorePath, "unrelated database canary");
-    const mismatched = new OpenCodeRuntime({ hostIncarnation: "fixture-host",
+    const mismatched = new OpenCodeRuntime({ ownershipDirectory: path.join(root, "owners"), hostIncarnation: "fixture-host",
       authority: { tenantId: "qualification", principalId: "qualification", backendInstanceId: "mismatch", executionEnvironmentId: "local" },
       nativeStorePath: wrongStorePath, environment: {}, externalPassword: async () => password,
       connection: { ownership: "external", channel: { type: "http", url: native.endpoint } },
@@ -216,7 +216,7 @@ it.skipIf(!enabled)("external stock opencode2 keeps its daemon and background sh
     expect(await readFile(wrongStorePath, "utf8")).toBe("unrelated database canary");
     expect((await readdir(root)).some(name => name.endsWith(".lock"))).toBe(false);
     expect(await alive(native.pid)).toBe(true);
-    runtime = new OpenCodeRuntime({ hostIncarnation: "fixture-host",
+    runtime = new OpenCodeRuntime({ ownershipDirectory: path.join(root, "owners"), hostIncarnation: "fixture-host",
       authority: { tenantId: "qualification", principalId: "qualification", backendInstanceId: "external", executionEnvironmentId: "local" },
       nativeStorePath, environment: {}, externalPassword: async () => password,
       connection: { ownership: "external", channel: { type: "http", url: native.endpoint } },

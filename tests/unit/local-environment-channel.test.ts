@@ -99,6 +99,10 @@ describe("LocalEnvironmentChannelProvider", () => {
       executablePath: process.execPath,
       workingDirectory: directory,
     });
+    // Resolve metadata before launching the short-lived child. Awaiting file
+    // operations after launch can let Node flush its pipe before consumption.
+    const executablePath = await realpath(process.execPath);
+    const workingDirectory = await realpath(directory);
     const channel = await provider.openOwnedProcess(
       scope,
       {
@@ -113,8 +117,8 @@ describe("LocalEnvironmentChannelProvider", () => {
     expect(prepared).toMatchObject({
       kind: "owned_process",
       scope,
-      executable: { canonicalPath: await realpath(process.execPath) },
-      workingDirectory: { canonicalPath: await realpath(directory) },
+      executable: { canonicalPath: executablePath },
+      workingDirectory: { canonicalPath: workingDirectory },
     });
     expect(channel.identity.scope).toEqual(scope);
     expect(channel).not.toHaveProperty("child");

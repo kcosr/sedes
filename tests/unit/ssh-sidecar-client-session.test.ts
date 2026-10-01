@@ -98,7 +98,7 @@ const workspaceContextEvidence = Object.freeze({
 describe("SidecarClientSession", () => {
   it.each(["ssh_stdio", "outbound_websocket"].flatMap(transportKind => [true, false].map(privateSupported => ({ transportKind, privateSupported }))))("negotiates exact OpenCode tools over $transportKind (private support $privateSupported)", async ({ transportKind, privateSupported }) => {
     const streams = byteStreamPair(), registry = new SidecarOperationRegistry();
-    const runtime = { capabilityId: "opencode_runtime", majorVersion: 1, operations: openCodeRuntimeOperations.map(operation => operation.operation) };
+    const runtime = { capabilityId: "opencode_runtime", majorVersion: 2, operations: openCodeRuntimeOperations.map(operation => operation.operation) };
     const body = { capabilityId: sidecarRuntimeBodyOffer.capabilityId, majorVersion: 1, operations: [sidecarRuntimeBodyOffer.operation] };
     const privateTools = { capabilityId: openCodeToolInvokeOperation.capabilityId, majorVersion: 1, operations: [openCodeToolInvokeOperation.operation] };
     for (const operation of openCodeRuntimeOperations) registry.register(operation, () => { throw new Error("unexpected native invocation"); });
@@ -149,7 +149,7 @@ describe("SidecarClientSession", () => {
     try {
       await expect(SidecarClientSession.start({ stream: streams.left, transportKind: "ssh_stdio", carrierGeneration: 1, sessionNonce, artifact, installation,
         signal: new AbortController().signal, authorizedCapabilities: cli ? [agentToolsCapability] : [],
-        authorizedRuntimeCapabilities: runtime ? [{ capabilityId: runtime, majorVersion: 1, operations: openCodeRuntimeOperations.map(operation => operation.operation) }] : [], sedesOperations }))
+        authorizedRuntimeCapabilities: runtime ? [{ capabilityId: runtime, majorVersion: runtime === "opencode_runtime" ? 2 : 1, operations: openCodeRuntimeOperations.map(operation => operation.operation) }] : [], sedesOperations }))
         .rejects.toThrow("sidecar_sedes_capabilities_invalid");
     } finally { await streams.right.close("test_complete"); }
   });
@@ -327,7 +327,7 @@ describe("SidecarClientSession", () => {
         majorVersion: 1,
         operations: ["claude.open"],
       };
-      const opencode = { capabilityId: "opencode_runtime", majorVersion: 1, operations: ["opencode.execute", "opencode.control"] };
+      const opencode = { capabilityId: "opencode_runtime", majorVersion: 2, operations: ["opencode.execute", "opencode.control"] };
       for (const capability of [
         opencode, { ...opencode, operations: ["opencode.wrong"] },
         provider,

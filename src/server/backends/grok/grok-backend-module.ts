@@ -277,6 +277,7 @@ class PreparedGrokBackendModule implements PreparedBackendModule {
 }
 
 export class GrokBackendModule implements BackendModule {
+  readonly startupPolicy = "composition_only" as const;
   readonly backendKind = "grok_build" as const;
   readonly connectionKinds = ["grok_acp"] as const;
   readonly protocolRelease = GROK_ACP_COMPATIBILITY_RELEASE;

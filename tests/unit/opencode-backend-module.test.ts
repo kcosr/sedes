@@ -20,6 +20,7 @@ import { OpenCodeInputEvidenceRepository } from "../../src/server/backends/openc
 import { runWithOpenCodeInvocation } from "../../src/server/backends/opencode/opencode-tool-invocation.js";
 import { OpenCodeThreadRepository } from "../../src/server/backends/opencode/opencode-thread-repository.js";
 import { OpenCodeConversationBackendDriver } from "../../src/server/backends/opencode/opencode-conversation-driver.js";
+import { planBackendNativeStores } from "../../src/server/runtime/backend-module-startup.js";
 
 const databases: Database.Database[] = [];
 const cleanups: (() => Promise<unknown> | void)[] = [];
@@ -59,7 +60,7 @@ function nativeFactory() {
   function native(input: OpenCodeRuntimeInput) {
     let state: OpenCodeRuntimeSnapshot["state"] = "stopped";
     const result = {
-      nativeNamespaceKey: openCodeRuntimeNamespaceKey(input.authority.executionEnvironmentId, input.nativeStorePath),
+      nativeNamespaceKey: openCodeRuntimeNamespaceKey(input.authority.executionEnvironmentId, input.nativeStorePath ?? "/native/opencode.db"),
       start: vi.fn(async () => { if (input.connection.ownership === "external") await input.externalPassword!(); state = "ready"; }),
       health: vi.fn(async () => ({ available: state === "ready", checkedAt: new Date().toISOString() })),
       acquire: vi.fn((): never => { throw new Error("unexpected conversation acquisition in module fixture"); }),
@@ -129,6 +130,7 @@ async function persistedInvocationFixture() {
   };
   const factory = vi.fn(() => owner);
   const runtime = new OpenCodeBackendModule(factory).prepare(configured).createRuntime(runtimeContext);
+  await runtime.start();
   cleanups.push(() => runtime.close());
   const driver = runtime.driverFactory.create(connection);
   if (!(driver instanceof OpenCodeConversationBackendDriver)) throw new Error("unexpected backend driver");
@@ -156,7 +158,6 @@ async function persistedInvocationFixture() {
     VALUES (?,?,?,'creation-attempt','creation',?,?,?,'first_input','composer','initial input',1,?,'bound',?,?,100,101,102,103)`)
     .run(scope.tenantId, scope.principalId, thread.id, instance.id, connection.id, environmentId, wire.sessionID, wire.sessionID, target.opaqueBindingDetail);
   expect(repository.hasCreatedRoot(scope, thread.id, wire.sessionID)).toBe(true);
-  await driver.health();
   const lease = owner.acquire(openCodeRuntimeTarget(target));
   const observer = new OpenCodeInputObserver(driver.input, target, owner, lease, client.lifetime);
   cleanups.push(() => { observer.close(); lease.release(); });
@@ -179,6 +180,27 @@ async function persistedInvocationFixture() {
 }
 
 describe("OpenCode compiled module", () => {
+  it("permits independently configured runtimes to share a native database", () => {
+    const first = configuration(), second = { ...first, backend: { ...first.backend, id: "second-opencode" },
+      connections: first.connections.map(connection => ({ ...connection, id: "second-profile", backendInstanceId: "second-opencode" })) };
+    const module = new OpenCodeBackendModule();
+    expect(planBackendNativeStores([module.prepare(first), module.prepare(second)])).toEqual([]);
+  });
+
+  it("composes the native default namespace only after observing runtime identity", async () => {
+    const configured = configuration();
+    const factory = nativeFactory(), fixture = context();
+    const prepared = new OpenCodeBackendModule(factory.create).prepare({ ...configured,
+      backend: { ...configured.backend, moduleConfiguration: { connection: { ownership: "owned", channel: { type: "process_stdio" } } } } });
+    const runtime = prepared.createRuntime(fixture.value);
+    expect(() => runtime.driverFactory).toThrow("opencode_module_not_started");
+    expect(factory.create).not.toHaveBeenCalled();
+    await runtime.start();
+    expect(factory.create.mock.calls[0]![0].nativeStorePath).toBeUndefined();
+    expect(runtime.discovery.nativeNamespaceKey(fixture.connection)).toBe(openCodeRuntimeNamespaceKey("local", "/native/opencode.db"));
+    await runtime.close();
+  });
+
   it("recovers exact invocation authority from persisted inventory and native binding without bootstrap effects", async () => {
     const f = await persistedInvocationFixture();
     const before = f.wire.requests.length;
@@ -218,6 +240,18 @@ describe("OpenCode compiled module", () => {
     expect(factory.create).not.toHaveBeenCalled();
   });
 
+  it("rejects retained invocation authority when the runtime namespace differs from its composed binding", async () => {
+    const f = await persistedInvocationFixture();
+    Object.defineProperty(f.owner, "nativeNamespaceKey", { value: "different-native-namespace" });
+    const requests = f.wire.requests.length;
+    const assertions = vi.mocked(f.owner.assertCurrent).mock.calls.length;
+    const authority = runWithOpenCodeInvocation(f.stamp, () => f.runtime.agentToolAccessDecisionAuthority!(f.source));
+    await expect(authority.acquire(new AbortController().signal)).rejects.toMatchObject({ toolError: { code: "permission_denied" } });
+    expect(f.wire.requests).toHaveLength(requests);
+    expect(f.owner.assertCurrent).toHaveBeenCalledTimes(assertions);
+    expect(f.owner.admitToolSession).not.toHaveBeenCalled();
+  });
+
   it("is registered in production and does not start during preparation", async () => {
     expect(compiledBackendModuleCatalog.moduleForBackendKind("opencode")).toBeInstanceOf(OpenCodeBackendModule);
     expect(compiledBackendModuleCatalog.moduleForConnectionKind("opencode_http")).toBe(compiledBackendModuleCatalog.moduleForBackendKind("opencode"));
@@ -225,18 +259,19 @@ describe("OpenCode compiled module", () => {
     expect(new BackendModuleCatalog([module]).moduleForBackendKind("opencode")).toBe(module);
     const prepared = module.prepare(configuration());
     expect(prepared.nativeStores).toEqual([]);
-    expect(prepared.nativeNamespaces).toEqual([{ sortKey: `opencode:${openCodeRuntimeNamespaceKey("local", "/native/opencode.db")}`,
-      namespaceKey: openCodeRuntimeNamespaceKey("local", "/native/opencode.db") }]);
+    expect(prepared.nativeNamespaces).toEqual([]);
     const fixture = context(); const runtime = prepared.createRuntime(fixture.value);
-    await runtime.start();
     expect(factory.create).not.toHaveBeenCalled();
     expect(await runtime.startupEnvironmentState!()).toBe("not_started");
+    await runtime.start();
+    expect(factory.create).toHaveBeenCalledOnce();
+    expect(await runtime.startupEnvironmentState!()).toBe("started");
     expect(runtime.driverFactory.supportsConversationCreation).toBe(true);
     expect(runtime.driverFactory.creationIdentity).toMatchObject({ assignment: "application", createReplay: "idempotent" });
     expect(runtime.savedAgents.presentation).toMatchObject({ brand: "opencode", typeId: "opencode" });
     expect(runtime.bindingDetails).toBe(runtime.threadPersistence);
     expect(runtime.discoveryPersistence).toBe(runtime.threadPersistence);
-    expect(runtime.discovery.nativeNamespaceKey(fixture.connection)).toBe(prepared.nativeNamespaces[0]!.namespaceKey);
+    expect(runtime.discovery.nativeNamespaceKey(fixture.connection)).toBe(openCodeRuntimeNamespaceKey("local", "/native/opencode.db"));
     expect(runtime.installationAdvisories.active()).toEqual([]);
     const driver = runtime.driverFactory.create(fixture.connection);
     await expect(driver.catalog({} as never)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
@@ -245,7 +280,7 @@ describe("OpenCode compiled module", () => {
     expect(runtime.savedAgents.validateOverrides({ overrides: [] })).toMatchObject({ backendTypeId: "opencode", overrides: [] });
     expect(() => runtime.automationExecutionPolicy.assertCanAutomate(scope, "thread")).toThrow();
     await expect(runtime.managedProviderTerminals.authorizeAdmission({} as never)).rejects.toMatchObject({ code: "terminal_unavailable" });
-    expect(factory.create).not.toHaveBeenCalled();
+    expect(factory.create).toHaveBeenCalledOnce();
     await runtime.close();
   });
 
@@ -254,24 +289,26 @@ describe("OpenCode compiled module", () => {
     const prepared = module.prepare(configuration()); const fixture = context();
     expect(() => prepared.createRuntime({ ...fixture.value, scope: { ...scope, principalId: "other" } })).toThrow();
     const runtime = prepared.createRuntime(fixture.value);
+    await runtime.start();
     expect(() => prepared.createRuntime(fixture.value)).toThrow();
     for (const change of [{ ownerPrincipalId: "other" }, { tenantId: "other" }, { executionEnvironmentId: "other" },
       { backendInstanceId: "other" }, { configurationRevision: 2 }, { enabled: false }]) {
       expect(() => runtime.driverFactory.create({ ...fixture.connection, ...change })).toThrow();
     }
-    expect(factory.create).not.toHaveBeenCalled();
+    expect(factory.create).toHaveBeenCalledOnce();
     await runtime.close();
   });
 
-  it("retains bounded lazy health diagnostics, clears them on success, and ignores older completions", async () => {
+  it("retains bounded runtime health diagnostics, clears them on success, and ignores older completions", async () => {
     const fixture = context(), factory = nativeFactory();
     const runtime = new OpenCodeBackendModule(factory.create).prepare(configuration()).createRuntime(fixture.value);
     expect(runtime.runtimeDiagnostic?.()).toBeUndefined();
     expect(factory.create).not.toHaveBeenCalled();
+    await runtime.start();
     const driver = runtime.driverFactory.create(fixture.connection);
     await driver.health();
     const owner = factory.instances[0]!;
-    owner.start.mockRejectedValueOnce(new OpenCodeRuntimeError("opencode_native_store_already_owned"));
+    owner.start.mockRejectedValueOnce(new OpenCodeRuntimeError("opencode_runtime_owner_already_owned"));
     const failed = await driver.health();
     expect(failed).toMatchObject({ available: false, diagnostic: { text: expect.stringContaining("opencode-owner inspect") } });
     expect(runtime.runtimeDiagnostic?.()).toMatchObject({ connectionState: "recovery_required" });
@@ -282,14 +319,15 @@ describe("OpenCode compiled module", () => {
     owner.start.mockImplementationOnce(() => { entered(); return new Promise<void>((_resolve, fail) => { reject = fail; }); });
     const old = driver.health(); await started;
     await driver.health();
-    reject(new OpenCodeRuntimeError("opencode_native_store_already_owned")); await old;
+    reject(new OpenCodeRuntimeError("opencode_runtime_owner_already_owned")); await old;
     expect(runtime.runtimeDiagnostic?.()).toBeUndefined();
     await runtime.close();
   });
 
-  it("starts the owner lazily and requires explicit confirmation for unknown activity", async () => {
+  it("starts the owner before publishing its namespace and requires explicit confirmation for unknown activity", async () => {
     const factory = nativeFactory(); const fixture = context();
     const runtime = new OpenCodeBackendModule(factory.create).prepare(configuration()).createRuntime(fixture.value);
+    await runtime.start();
     const driver = runtime.driverFactory.create(fixture.connection);
     expect(await driver.health()).toMatchObject({ available: true });
     expect(await runtime.startupEnvironmentState!()).toBe("started");
@@ -312,16 +350,31 @@ describe("OpenCode compiled module", () => {
     expect(factory.instances[0]!.close).toHaveBeenCalledOnce();
   });
 
-  it("resolves external Basic credentials lazily and closes only the client", async () => {
+  it("retries native cleanup after a failed close without reopening the module", async () => {
+    const factory = nativeFactory(); const fixture = context();
+    const runtime = new OpenCodeBackendModule(factory.create).prepare(configuration()).createRuntime(fixture.value);
+    await runtime.start();
+    const owner = factory.instances[0]!;
+    owner.close.mockRejectedValueOnce(new OpenCodeRuntimeError("opencode_owned_cleanup_unproved"));
+    await expect(runtime.close()).rejects.toMatchObject({ code: "opencode_owned_cleanup_unproved" });
+    await expect(runtime.start()).rejects.toThrow();
+    await runtime.close();
+    await runtime.close();
+    expect(owner.close).toHaveBeenCalledTimes(2);
+    expect(factory.create).toHaveBeenCalledOnce();
+  });
+
+  it("resolves external Basic credentials at startup and closes only the client", async () => {
     const factory = nativeFactory(); const fixture = context();
     const runtime = new OpenCodeBackendModule(factory.create).prepare(configuration("external")).createRuntime(fixture.value);
     expect(runtime.administration).toBeUndefined();
     expect(runtime.stopBeforeConversationCleanup).toBeUndefined();
     expect(fixture.resolveSecret).not.toHaveBeenCalled();
+    await runtime.start();
     const driver = runtime.driverFactory.create(fixture.connection);
     expect(await driver.health()).toMatchObject({ available: true });
     expect(fixture.resolveSecret).toHaveBeenCalledWith(authority, { source: "environment", variable: "SEDES_OPENCODE_PASSWORD" }, 1, expect.any(AbortSignal), "http_basic_password");
-    expect(fixture.discard).toHaveBeenCalledOnce();
+    expect(fixture.discard).toHaveBeenCalledTimes(fixture.resolveSecret.mock.calls.length);
     await runtime.close();
     expect(factory.instances[0]!.close).toHaveBeenCalledOnce();
     expect(factory.instances[0]!.stop).not.toHaveBeenCalled();
@@ -330,9 +383,10 @@ describe("OpenCode compiled module", () => {
   it("reports an unverified partial store lease as a typed Restart rejection", async () => {
     const factory = nativeFactory(); const fixture = context();
     const runtime = new OpenCodeBackendModule(factory.create).prepare(configuration()).createRuntime(fixture.value);
+    await runtime.start();
     await runtime.driverFactory.create(fixture.connection).health();
     const owner = factory.instances[0]!;
-    owner.start.mockRejectedValueOnce(new OpenCodeRuntimeError("opencode_native_store_initialization_unproved"));
+    owner.start.mockRejectedValueOnce(new OpenCodeRuntimeError("opencode_runtime_owner_initialization_unproved"));
     const state = await runtime.administration!.inspect();
     await expect(runtime.administration!.restart({ expectedRevision: state.revision, force: true }))
       .rejects.toMatchObject({ name: "BackendRuntimeControlRejectedError", reason: "cleanup_unproven" });
@@ -342,15 +396,17 @@ describe("OpenCode compiled module", () => {
   it("reports unproved owned cleanup as a typed administration rejection", async () => {
     const factory = nativeFactory(); const fixture = context();
     const runtime = new OpenCodeBackendModule(factory.create).prepare(configuration()).createRuntime(fixture.value);
+    await runtime.start();
     await runtime.driverFactory.create(fixture.connection).health();
     const owner = factory.instances[0]!;
+    const starts = owner.start.mock.calls.length;
     for (const action of ["stop", "restart"] as const) {
       owner.stop.mockRejectedValueOnce(new OpenCodeRuntimeError("opencode_owned_cleanup_unproved"));
       const state = await runtime.administration!.inspect();
       await expect(runtime.administration![action]({ expectedRevision: state.revision, force: true }))
         .rejects.toMatchObject({ reason: "cleanup_unproven" });
     }
-    expect(owner.start).toHaveBeenCalledOnce();
+    expect(owner.start).toHaveBeenCalledTimes(starts);
     await runtime.close();
   });
 

@@ -42,6 +42,7 @@ it.skipIf(!enabled)("cleans confirmed detached native children despite an unrela
   const root = await mkdtemp(path.join(os.tmpdir(), "sedes-opencode-uncertain-cleanup-"));
   const configDirectory = path.join(root, "config");
   const nativeStorePath = path.join(root, "opencode.db");
+  const ownershipDirectory = path.join(root, "owners");
   const childEvidence = path.join(root, "child");
   const termEvidence = path.join(root, "term");
   const unrelatedEvidence = path.join(root, "unrelated");
@@ -56,7 +57,7 @@ it.skipIf(!enabled)("cleans confirmed detached native children despite an unrela
     await writeFile(path.join(configDirectory, "opencode.json"), JSON.stringify({ update: "disable" }));
     runtime = new OpenCodeRuntime({ hostIncarnation: "fixture-host",
       authority: { tenantId: "qualification", principalId: "qualification", backendInstanceId: "uncertainty", executionEnvironmentId: "local" },
-      nativeStorePath, configDirectory,
+      nativeStorePath, configDirectory, ownershipDirectory,
       environment: { HOME: root, PATH: process.env.PATH, SHELL: "/bin/sh",
         XDG_DATA_HOME: path.join(root, "data"), XDG_STATE_HOME: path.join(root, "state"), XDG_CACHE_HOME: path.join(root, "cache"),
         OPENCODE_DISABLE_MODELS_FETCH: "1", OPENCODE_MODELS_PATH: path.join(root, "models.json"), OPENCODE_DISABLE_FFF: "1", OPENCODE_FILEWATCHER_DISABLE: "1" },
@@ -96,14 +97,14 @@ it.skipIf(!enabled)("cleans confirmed detached native children despite an unrela
     expect((await state(childPid)).live).toBe(false);
     expect((await state(unrelatedPid)).live).toBe(true);
     expect(runtime.snapshot().state).toBe("cleanup_unproved");
-    expect((await readdir(root)).some(name => name.endsWith(".lock"))).toBe(true);
+    expect((await readdir(ownershipDirectory)).some(name => name.endsWith(".lock"))).toBe(true);
     await expect(runtime.start()).rejects.toThrow("opencode_runtime_requires_explicit_cleanup");
 
     process.kill(unrelatedPid, "SIGKILL");
     await until(async () => !(await state(unrelatedPid!)).live);
     await expect(runtime.stop()).resolves.toEqual({ cleanup: "proved", nativeInterrupts: "incomplete" });
     proved = true;
-    expect((await readdir(root)).some(name => name.endsWith(".lock"))).toBe(false);
+    expect((await readdir(ownershipDirectory)).some(name => name.endsWith(".lock"))).toBe(false);
     await runtime.start(); proved = false;
     await expect(runtime.stop()).resolves.toEqual({ cleanup: "proved", nativeInterrupts: "complete" });
     proved = true;

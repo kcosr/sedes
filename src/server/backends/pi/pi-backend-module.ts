@@ -314,6 +314,7 @@ class PreparedPiBackendModule implements PreparedBackendModule {
 }
 
 export class PiBackendModule implements BackendModule {
+  readonly startupPolicy = "composition_only" as const;
   readonly backendKind = "pi" as const;
   readonly connectionKinds = ["pi_sdk"] as const;
   readonly protocolRelease = PI_PROTOCOL_RELEASE;

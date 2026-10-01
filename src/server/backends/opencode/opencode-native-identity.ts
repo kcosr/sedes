@@ -1,5 +1,6 @@
 import { open, readdir, readlink, realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { userInfo } from "node:os";
 import { parseLinuxProcessStat } from "../../runtime/process-table.js";
 import { OpenCodeRuntimeError } from "./opencode-release.js";
 
@@ -60,7 +61,7 @@ export async function openCodeFileIdentity(file: string): Promise<OpenCodeFileId
 
 export async function readOpenCodeNativeIdentity(input: {
   readonly pid: number;
-  readonly nativeStorePath: string;
+  readonly nativeStorePath?: string;
   readonly expectedExecutablePath?: string;
 }): Promise<OpenCodeNativeIdentity> {
   if (process.platform !== "linux" || !process.getuid || !Number.isSafeInteger(input.pid) || input.pid <= 1) {
@@ -74,66 +75,67 @@ export async function readOpenCodeNativeIdentity(input: {
     const executablePath = await readlink(`${proc}/exe`);
     if (!path.isAbsolute(executablePath) || (input.expectedExecutablePath && executablePath !== input.expectedExecutablePath)) throw new Error();
     const executable = await openCodeFileIdentity(`${proc}/exe`);
-    const nativeStorePath = await canonicalOpenCodeStore(input.nativeStorePath, false);
-    const store = await openCodeFileIdentity(nativeStorePath);
-    // OPENCODE_DB is concrete native configuration evidence, not an operator
-    // declaration. Its relative-path rule is pinned in CLI database-path.ts
-    // and util/global-roots.ts. Never admit a known different store namespace.
+    // Read the process's own launch environment, not the Sedes account's
+    // selected defaults. OPENCODE_DB's relative-path rule is pinned in CLI
+    // database-path.ts and util/global-roots.ts.
     const environment = new Map((await boundedOpenCodeProcessFile(`${proc}/environ`, 1_048_576))
-      .toString("utf8").split("\0").map(entry => {
+      .toString("utf8").split("\0").filter(entry => entry.includes("=")).map(entry => {
         const equals = entry.indexOf("=");
         return [entry.slice(0, equals), entry.slice(equals + 1)] as const;
       }));
     const database = environment.get("OPENCODE_DB");
-    const home = environment.get("HOME");
-    const data = environment.get("XDG_DATA_HOME") || (home && path.join(home, ".local", "share"));
-    if (database !== undefined) {
-      if (database === ":memory:") throw new Error();
-      let selected = database;
-      if (!path.isAbsolute(selected)) {
-        if (!data || !path.isAbsolute(data)) throw new Error();
-        selected = path.resolve(data, "opencode", selected);
-      }
-      if (await realpath(selected) !== nativeStorePath) throw new Error();
-    }
+    if (database === ":memory:") throw new Error();
+    const home = environment.get("HOME") || userInfo().homedir;
+    const data = environment.get("XDG_DATA_HOME") || path.join(home, ".local", "share");
+    const nativeDataDirectory = path.resolve(await readlink(`${proc}/cwd`), data, "opencode");
+    const configuredStore = database === undefined ? undefined
+      : await realpath(path.resolve(nativeDataDirectory, database));
     let nativeDefaultDirectory: string | undefined;
-    if (database === undefined && data && path.isAbsolute(data)) {
-      try { nativeDefaultDirectory = await realpath(path.join(data, "opencode")); }
+    if (database === undefined) {
+      try { nativeDefaultDirectory = await realpath(nativeDataDirectory); }
       catch (cause) { if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause; }
     }
-    let storeObservation: OpenCodeNativeIdentity["storeObservation"] = "operator_declared";
     const descriptors = await readdir(`${proc}/fd`);
     if (descriptors.length > 16_384) throw new Error();
+    const openFiles: { readonly path: string; readonly identity: OpenCodeFileIdentity }[] = [];
     for (const descriptor of descriptors) {
       try {
         const file = await stat(`${proc}/fd/${descriptor}`, { bigint: true });
         if (!file.isFile()) continue;
-        const matches = String(file.dev) === store.device && String(file.ino) === store.inode;
-        if (database !== undefined || nativeDefaultDirectory) {
-          let opened = await readlink(`${proc}/fd/${descriptor}`);
-          if (opened.endsWith(" (deleted)")) {
-            // Linux appends this suffix to unlinked descriptors, but it can
-            // also be a literal filename. An exact current inode match proves
-            // the literal case; never discard that concrete file identity.
-            let literal: Awaited<ReturnType<typeof openCodeFileIdentity>> | undefined;
-            try {
-              const candidate = await stat(opened, { bigint: true });
-              literal = { device: String(candidate.dev), inode: String(candidate.ino) };
-            } catch (cause) { if (!["ENOENT", "ENOTDIR"].includes((cause as NodeJS.ErrnoException).code ?? "")) throw cause; }
-            if (!literal || literal.device !== String(file.dev) || literal.inode !== String(file.ino)) {
-              opened = opened.slice(0, -" (deleted)".length);
-            }
-          }
-          if (database !== undefined && opened === nativeStorePath && !matches) throw new Error();
-          // The server API omits the compile-time channel. Observe the actual
-          // default filename instead of guessing one from the release number.
-          if (nativeDefaultDirectory && path.dirname(opened) === nativeDefaultDirectory && /^opencode(?:-[a-zA-Z0-9._-]+)?\.db$/u.test(path.basename(opened)) && !matches) {
-            throw new Error();
+        let opened = await readlink(`${proc}/fd/${descriptor}`);
+        if (opened.endsWith(" (deleted)")) {
+          // The suffix can also be a literal filename. Only a matching inode
+          // proves that case; otherwise retain the pre-unlink path as evidence
+          // so a replaced database cannot be admitted as the still-open file.
+          let literal: OpenCodeFileIdentity | undefined;
+          try {
+            const candidate = await stat(opened, { bigint: true });
+            literal = { device: String(candidate.dev), inode: String(candidate.ino) };
+          } catch (cause) { if (!["ENOENT", "ENOTDIR"].includes((cause as NodeJS.ErrnoException).code ?? "")) throw cause; }
+          if (!literal || literal.device !== String(file.dev) || literal.inode !== String(file.ino)) {
+            opened = opened.slice(0, -" (deleted)".length);
           }
         }
-        if (matches) storeObservation = "open_file";
+        openFiles.push({ path: opened, identity: { device: String(file.dev), inode: String(file.ino) } });
       } catch (cause) { if (!["ENOENT", "ESRCH"].includes((cause as NodeJS.ErrnoException).code ?? "")) throw cause; }
     }
+    const defaults = openFiles.filter(file => nativeDefaultDirectory && path.dirname(file.path) === nativeDefaultDirectory &&
+      /^opencode(?:-[a-zA-Z0-9._-]+)?\.db$/u.test(path.basename(file.path)));
+    // A selected path is an assertion, never a substitute for contradictory
+    // native evidence. Without it, discover the native process's configured
+    // store or its one open default database (including compile-time channels).
+    const discovered = configuredStore ?? (new Set(defaults.map(file => file.path)).size === 1 ? defaults[0]?.path : undefined);
+    if (input.nativeStorePath === undefined && !discovered) throw new Error();
+    const nativeStorePath = await canonicalOpenCodeStore(input.nativeStorePath ?? discovered!, false);
+    if (configuredStore && configuredStore !== nativeStorePath) throw new Error();
+    const store = await openCodeFileIdentity(nativeStorePath);
+    let storeObservation: OpenCodeNativeIdentity["storeObservation"] = "operator_declared";
+    for (const file of openFiles) {
+      const matches = sameOpenCodeFileIdentity(file.identity, store);
+      if ((file.path === nativeStorePath || defaults.includes(file)) && !matches) throw new Error();
+      if (matches) storeObservation = "open_file";
+    }
+    if (input.nativeStorePath === undefined && storeObservation !== "open_file") throw new Error();
     const after = parseLinuxProcessStat(input.pid, (await boundedOpenCodeProcessFile(`${proc}/stat`, 4_096)).toString("utf8"));
     if (!after || after.exited || before.startTime !== after.startTime ||
         (await readlink(`${proc}/exe`)) !== executablePath || !sameOpenCodeFileIdentity(executable, await openCodeFileIdentity(`${proc}/exe`))) throw new Error();

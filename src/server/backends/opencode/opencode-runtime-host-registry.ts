@@ -120,7 +120,7 @@ export class OpenCodeRuntimeHostRegistry {
     return admitOpenCodeRuntimeConfiguration(configuration, this.input.scope, this.input.executionEnvironmentId);
   }
   #fingerprint(configuration: OpenCodeRuntimeConfiguration): string {
-    return configurationFingerprint({ nativeStorePath: configuration.nativeStorePath,
+    return configurationFingerprint({ nativeStorePath: configuration.nativeStorePath ?? null,
       configDirectory: configuration.configDirectory ?? null, connection: configuration.connection });
   }
   #sameConfiguration(resident: Resident, configuration: OpenCodeRuntimeConfiguration): void {

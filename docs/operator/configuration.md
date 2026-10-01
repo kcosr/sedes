@@ -253,7 +253,7 @@ no sidecar protocol update or remote environment setting. Re-enabling resumes
 accounting; backend history or cumulative counters may recover some earlier
 usage, but there is no automatic comprehensive reconciliation of the disabled
 period. Existing browser and packaged clients must be updated to client
-protocol 130 when installing this version.
+protocol 131 when installing this version.
 
 Provider Pulse is installation-owned, not tied to one environment, workspace,
 or thread. Sedes contacts it server-to-server on loopback and exposes only
@@ -622,8 +622,10 @@ The strict module-configuration examples are
 [`opencode-owned.example.json`](../../config/opencode-owned.example.json) and
 [`opencode-external.example.json`](../../config/opencode-external.example.json).
 They illustrate the backend's `moduleConfiguration` value in principal-owned
-Settings; they are not installation bootstrap files. Replace absolute paths
-for the selected account and set the actual native database path. External
+Settings; they are not installation bootstrap files. Path settings are optional:
+Sedes resolves `opencode2` on the execution host’s PATH and lets OpenCode use
+its native database, configuration and inherited working directory. Advanced
+overrides apply only when supplied. External
 passwords use an owner-protected file on a remote execution host. Local
 connections also accept approved environment references. All native paths and
 loopback endpoints are host-relative.
