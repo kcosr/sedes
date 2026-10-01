@@ -64,7 +64,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  getBlockingOperation()?.cancel();
+  getBlockingOperation()?.dismiss();
   cleanup();
   localStorage.clear();
   window.dispatchEvent(new StorageEvent("storage", { key: null }));
@@ -2407,49 +2407,26 @@ describe("sidebar row archive control", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("cancels a direct archive preflight without archiving or opening choices", async () => {
+  it("continues a dismissed archive check and still requests required choices", async () => {
     const thread = makeThread();
     const { state, store } = sidebarFixture(thread, { descendantCount: 2 });
     const impact = await store.getThreadArchiveImpact(thread.id);
     const pending = deferred<typeof impact>();
+    store.getThreadArchiveImpact.mockClear();
     store.getThreadArchiveImpact.mockReturnValueOnce(pending.promise);
     render(<InventorySidebar state={state} store={store}
       onNavigate={() => undefined} onOpenSettings={() => undefined} />);
     await userEvent.click(screen.getByTestId("thread-row-archive"));
-    expect(await screen.findByRole("status")).toHaveTextContent("Checking thread activity…");
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Archiving thread…");
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await userEvent.click(screen.getByTestId("thread-row-archive"));
+    expect(store.getThreadArchiveImpact).toHaveBeenCalledTimes(1);
     await act(async () => { pending.resolve(impact); });
+    expect(await screen.findByRole("dialog", { name: "Archive this thread" })).toBeVisible();
     expect(store.mutateInventory).not.toHaveBeenCalled();
     expect(store.archiveThreadFamily).not.toHaveBeenCalled();
-    expect(screen.queryByRole("dialog")).toBeNull();
-  });
-
-  it("keeps a reopened archive check visible until its own read finishes", async () => {
-    const thread = makeThread();
-    const { state, store } = sidebarFixture(thread, { descendantCount: 2 });
-    const impact = await store.getThreadArchiveImpact(thread.id);
-    const cancelled = deferred<typeof impact>();
-    const reopened = deferred<typeof impact>();
-    store.getThreadArchiveImpact.mockClear();
-    store.getThreadArchiveImpact
-      .mockReturnValueOnce(cancelled.promise)
-      .mockReturnValueOnce(reopened.promise);
-    render(<InventorySidebar state={state} store={store}
-      onNavigate={() => undefined} onOpenSettings={() => undefined} />);
-    await userEvent.click(screen.getByTestId("thread-row-archive"));
-    expect(await screen.findByRole("status")).toHaveTextContent("Checking thread activity…");
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await userEvent.click(screen.getByTestId("thread-row-archive"));
-    expect(await screen.findByRole("status")).toHaveTextContent("Checking thread activity…");
-    // The cancelled check's late answer neither ends the reopened check nor
-    // offers choices.
-    await act(async () => { cancelled.resolve(impact); });
-    expect(screen.getByRole("status")).toHaveTextContent("Checking thread activity…");
-    expect(screen.queryByRole("dialog", { name: "Archive this thread" })).toBeNull();
-    await act(async () => { reopened.resolve(impact); });
-    expect(await screen.findByRole("dialog", { name: "Archive this thread" })).toBeVisible();
-    expect(store.getThreadArchiveImpact).toHaveBeenCalledTimes(2);
-    expect(store.mutateInventory).not.toHaveBeenCalled();
   });
 
   it("disables family archive when the authoritative impact reports a blocked descendant", async () => {
@@ -2788,7 +2765,7 @@ describe("sidebar row archive control", () => {
     // Reopening shows the check, never the earlier (possibly stale) choices.
     await userEvent.click(trigger);
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Checking thread activity…",
+      "Archiving thread…",
     );
     expect(
       screen.queryByRole("dialog", { name: "Archive this thread" }),

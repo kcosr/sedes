@@ -79,7 +79,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  getBlockingOperation()?.cancel();
+  getBlockingOperation()?.dismiss();
   cleanup();
   localStorage.clear();
   // Same-window storage writes never fire "storage", so the view store's

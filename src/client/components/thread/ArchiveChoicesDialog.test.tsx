@@ -19,7 +19,7 @@ import {
 } from "./ArchiveChoicesDialog.js";
 
 afterEach(() => {
-  getBlockingOperation()?.cancel();
+  getBlockingOperation()?.dismiss();
   cleanup();
 });
 
@@ -774,7 +774,7 @@ describe("useArchiveThreadAction", () => {
     ).not.toBeChecked();
   });
 
-  it("opens nothing when the check is canceled before it answers", async () => {
+  it("keeps the check pending after dismissal and opens required choices", async () => {
     const store = makeStore();
     const impact = await store.getThreadArchiveImpact("thread-1");
     let answer!: (value: typeof impact) => void;
@@ -793,12 +793,29 @@ describe("useArchiveThreadAction", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
     expect(onPendingChange).toHaveBeenLastCalledWith(true);
-    expect(getBlockingOperation()?.message).toBe("Checking thread activity…");
-    act(() => getBlockingOperation()!.cancel());
-    await waitFor(() => expect(onPendingChange).toHaveBeenLastCalledWith(false));
+    expect(getBlockingOperation()?.message).toBe("Archiving thread…");
+    act(() => getBlockingOperation()!.dismiss());
+    expect(onPendingChange).toHaveBeenLastCalledWith(true);
+    await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
+    expect(store.getThreadArchiveImpact).toHaveBeenCalledTimes(2);
     answer(impact);
     await act(async () => {});
-    expect(screen.queryByRole("dialog", { name: "Archive this thread" })).toBeNull();
-    expect(screen.getByRole("status", { name: "Choices open" })).toHaveTextContent("false");
+    expect(await screen.findByRole("dialog", { name: "Archive this thread" })).toBeVisible();
+    expect(onPendingChange).toHaveBeenLastCalledWith(false);
+    expect(screen.getByLabelText("Choices open")).toHaveTextContent("true");
   });
+  it("shows an archive failure after progress was dismissed", async () => {
+    const store = makeStore();
+    let fail!: (error: Error) => void;
+    store.getThreadArchiveImpact.mockReturnValueOnce(new Promise((_, reject) => { fail = reject; }));
+    render(<ArchiveAction store={store} onArchived={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
+    act(() => getBlockingOperation()!.dismiss());
+    await act(async () => { fail(new Error("The server is unavailable.")); });
+    const dialog = await screen.findByRole("dialog", { name: "Could not archive thread" });
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("The server is unavailable.");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
 });

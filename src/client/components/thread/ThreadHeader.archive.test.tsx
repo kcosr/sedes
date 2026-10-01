@@ -54,7 +54,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  getBlockingOperation()?.cancel();
+  getBlockingOperation()?.dismiss();
   cleanup();
   vi.unstubAllGlobals();
   window.history.replaceState(null, "", "/");

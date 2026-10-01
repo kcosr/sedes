@@ -38,7 +38,7 @@ function fixture() {
   };
 }
 afterEach(() => {
-  getBlockingOperation()?.cancel();
+  getBlockingOperation()?.dismiss();
   setOperationThreadRegistry(undefined);
   vi.useRealTimers();
 });
@@ -48,7 +48,6 @@ describe("destination readiness", () => {
     const f = fixture();
     const waiting = waitForOperationThreadReady("child", {
       isActive: () => true,
-      setMessage: vi.fn(),
     });
     expect(f.registry.release).not.toHaveBeenCalled();
     f.update({ status: "ready", snapshot: {} });
@@ -61,7 +60,6 @@ describe("destination readiness", () => {
     const f = fixture();
     const waiting = waitForOperationThreadReady("child", {
       isActive: () => true,
-      setMessage: vi.fn(),
     });
     const rejected = expect(waiting).rejects.toThrow(
       "loading it took too long",
@@ -70,7 +68,7 @@ describe("destination readiness", () => {
     await rejected;
     expect(f.registry.release).toHaveBeenCalledWith("child");
   });
-  it("releases immediately when waiting is canceled and never navigates", async () => {
+  it("releases immediately when progress is dismissed and never navigates", async () => {
     const f = fixture();
     const navigate = vi.fn();
     const completion = runBlockingOperation({
@@ -82,7 +80,7 @@ describe("destination readiness", () => {
       },
     });
     await Promise.resolve();
-    getBlockingOperation()!.cancel();
+    getBlockingOperation()!.dismiss();
     await completion;
     await Promise.resolve();
     expect(f.registry.release).toHaveBeenCalledWith("child");

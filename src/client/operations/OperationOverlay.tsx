@@ -50,13 +50,11 @@ if (typeof window !== "undefined") {
 
 function OperationLoading({
   message,
-  onCancel,
-  cancelLabel = "Cancel",
+  onDismiss,
   deferred = false,
 }: {
   readonly message: string;
-  readonly onCancel?: () => void;
-  readonly cancelLabel?: string;
+  readonly onDismiss?: () => void;
   readonly deferred?: boolean;
 }): React.JSX.Element {
   return (
@@ -65,9 +63,9 @@ function OperationLoading({
         <LoaderCircle className="operation-spinner" aria-hidden="true" />
         <span>{message}</span>
       </div>
-      {onCancel && (
-        <Button variant="outline" onClick={onCancel}>
-          {cancelLabel}
+      {onDismiss && (
+        <Button variant="outline" onClick={onDismiss}>
+          Dismiss
         </Button>
       )}
     </div>
@@ -76,7 +74,7 @@ function OperationLoading({
 
 /**
  * Moves focus after a phase change while the dialog stays open: into the
- * progress (its Cancel, else the surface), then into the settled dialog by
+ * progress (its Dismiss button, else the surface), then into the settled dialog by
  * the dialog focus rule (first field, else the primary action).
  */
 function useOperationContentFocus(
@@ -119,7 +117,7 @@ export function OperationOverlayHost({
   const errorId = useId();
   useEffect(
     () => () => {
-      getBlockingOperation()?.cancel();
+      getBlockingOperation()?.dismiss();
     },
     [],
   );
@@ -165,7 +163,7 @@ export function OperationOverlayHost({
                         key={action.label}
                         variant="outline"
                         onClick={() => {
-                          operation.cancel();
+                          operation.dismiss();
                           void action.onClick();
                         }}
                       >
@@ -175,14 +173,14 @@ export function OperationOverlayHost({
                   : undefined
               }
             >
-              <Button variant="outline" onClick={operation.cancel}>
+              <Button variant="outline" onClick={operation.dismiss}>
                 Close
               </Button>
               {retry && <Button onClick={retry}>{operation.retryLabel}</Button>}
               {primaryAction && (
                 <Button
                   onClick={() => {
-                    operation.cancel();
+                    operation.dismiss();
                     void primaryAction.onClick();
                   }}
                 >
@@ -197,8 +195,7 @@ export function OperationOverlayHost({
             <OperationLoading
               message={operation.message}
               deferred={operation.deferProgress}
-              onCancel={operation.allowCancel ? operation.cancel : undefined}
-              cancelLabel={operation.cancelLabel}
+              onDismiss={operation.allowDismiss ? operation.dismiss : undefined}
             />
           </>
         )}

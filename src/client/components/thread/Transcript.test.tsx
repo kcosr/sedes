@@ -281,7 +281,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  getBlockingOperation()?.cancel();
+  getBlockingOperation()?.dismiss();
   cleanup();
   clearDiagnostics();
   localStorage.clear();

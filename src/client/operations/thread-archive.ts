@@ -21,30 +21,41 @@ export function archiveNeedsChoices(impact: ThreadArchiveImpact): boolean {
   );
 }
 
-/** Direct archive waits visibly and hands a complete impact to choices. */
-export function runThreadArchiveCheck(options: {
+/** Dismissing progress leaves the check, required choices, and archive running. */
+export async function runThreadArchiveCheck(options: {
   thread: NormalizedApplicationThreadSummary;
   store: ApplicationClientStore;
   onChoices: (impact: ThreadArchiveImpact) => void;
   onArchived: () => void;
+  onDismissedError: (error: unknown) => void;
 }): Promise<void> {
   let archiveStarted = false;
-  return runBlockingOperation({
-    message: "Checking thread activity…",
+  let work: Promise<boolean> | undefined;
+  await runBlockingOperation({
+    message: "Archiving thread…",
     deferProgress: true,
-    run: () => options.store.getThreadArchiveImpact(options.thread.id),
+    onDismissedError: options.onDismissedError,
+    run: () => {
+      work = (async () => {
+        const impact = await options.store.getThreadArchiveImpact(options.thread.id);
+        if (archiveNeedsChoices(impact)) {
+          options.onChoices(impact);
+          return false;
+        }
+        archiveStarted = true;
+        await options.store.mutateInventory(options.thread, "archive", {
+          expectedStashedPromptCount: impact.stashedPrompts.root,
+        });
+        return true;
+      })();
+      return work;
+    },
     retry: () => !archiveStarted,
-    onSuccess: async (impact, context) => {
-      if (archiveNeedsChoices(impact)) {
-        options.onChoices(impact);
-        return;
-      }
-      archiveStarted = true;
-      context.setMessage("Archiving thread…");
-      await options.store.mutateInventory(options.thread, "archive", {
-        expectedStashedPromptCount: impact.stashedPrompts.root,
-      });
-      if (context.isActive()) options.onArchived();
+    onSuccess: (archived) => {
+      if (archived) options.onArchived();
     },
   });
+  // Prevent another archive from starting while dismissed work is still pending.
+  // The operation runner reports failures, including those after dismissal.
+  await work?.catch(() => undefined);
 }

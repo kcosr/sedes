@@ -21,7 +21,7 @@ import { TurnForkDivider } from "./TurnForkDivider.js";
 beforeEach(() => { render(<OperationOverlayHost />); });
 
 afterEach(() => {
-  getBlockingOperation()?.cancel();
+  getBlockingOperation()?.dismiss();
   cleanup();
   vi.restoreAllMocks();
   window.history.replaceState(null, "", "/");

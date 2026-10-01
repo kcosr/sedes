@@ -595,7 +595,7 @@ test.describe.serial("normalized target and mobile navigation", () => {
       .getByRole("menuitem", { name: "Archive", exact: true })
       .click();
     const checkingArchive = page.getByRole("dialog", {
-      name: "Checking thread activity…",
+      name: "Archiving thread…",
       exact: true,
     });
     await expect(checkingArchive).toBeVisible();
@@ -604,7 +604,7 @@ test.describe.serial("normalized target and mobile navigation", () => {
     ).toHaveCSS("z-index", "110");
     // The overlay's visible message (its title repeats it for assistive tech).
     await expect(
-      checkingArchive.locator("span", { hasText: /^Checking thread activity…$/ }),
+      checkingArchive.locator("span", { hasText: /^Archiving thread…$/ }),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Archive", exact: true }),
@@ -612,12 +612,20 @@ test.describe.serial("normalized target and mobile navigation", () => {
     await page.keyboard.press("Escape");
     await page.mouse.click(5, 5);
     await expect(checkingArchive).toBeVisible();
-    await capture(page, testInfo, "archive-checking-mobile.png");
+    await capture(page, testInfo, "archive-progress-mobile.png");
+    const sourceUrl = page.url();
+    await checkingArchive.getByRole("button", { name: "Dismiss", exact: true }).click();
+    await expect(checkingArchive).toBeHidden();
+    const archiveResponse = page.waitForResponse((response) =>
+      response.request().method() === "PATCH" && response.url().endsWith("/inventory"),
+    );
     releaseArchiveCheck();
+    expect((await archiveResponse).ok()).toBe(true);
     await expect(rowSheet).toBeHidden();
     // Nothing needs a choice for this childless thread, so the check archives
     // it directly instead of opening the archive choices dialog.
-    await expect(page).toHaveURL("/");
+    await expect(page).toHaveURL(sourceUrl);
+    await expect(selectedRow).toBeHidden();
     await expect(checkingArchive).toBeHidden();
     await expect(
       page.getByRole("dialog", { name: "Archive this thread" }),

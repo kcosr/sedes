@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { ThreadArchiveImpact } from "../../../shared/index.js";
 import { runThreadArchiveCheck } from "../../operations/thread-archive.js";
 import { Button } from "@client/components/ui/button";
@@ -58,21 +58,52 @@ export function useArchiveThreadAction({
 } {
   // The checked impact; the choices dialog is open while one is held.
   const [impact, setImpact] = useState<ThreadArchiveImpact>();
+  const [backgroundError, setBackgroundError] = useState<string>();
+  const errorId = useId();
+  const pending = useRef(false);
   const { thread, store, disabled, onArchived, onPendingChange } = choiceProps;
   const start = () => {
-    if (disabled) return;
+    if (disabled || pending.current) return;
+    pending.current = true;
+    setBackgroundError(undefined);
     onPendingChange?.(true);
     void runThreadArchiveCheck({
       thread,
       store,
       onChoices: setImpact,
+      onDismissedError: (error) =>
+        setBackgroundError(
+          error instanceof Error ? error.message : "The thread could not be archived.",
+        ),
       onArchived: () => onArchived?.("only", [thread.id]),
-    }).finally(() => onPendingChange?.(false));
+    }).finally(() => {
+      pending.current = false;
+      onPendingChange?.(false);
+    });
   };
   return {
     start,
-    open: impact !== undefined,
-    dialog: impact && (
+    open: impact !== undefined || backgroundError !== undefined,
+    dialog: backgroundError !== undefined ? (
+      <Dialog open onOpenChange={() => setBackgroundError(undefined)}>
+        <DialogContent
+          layer="blocking"
+          showClose={false}
+          returnFocusRef={returnFocusRef}
+          aria-describedby={errorId}
+        >
+          <DialogHeader>
+            <DialogTitle>Could not archive thread</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <DialogAlert id={errorId} tone="danger">{backgroundError}</DialogAlert>
+          </DialogBody>
+          <DialogFooter>
+            <Button onClick={() => setBackgroundError(undefined)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    ) : impact && (
       <ArchiveChoicesDialog
         {...choiceProps}
         initialImpact={impact}

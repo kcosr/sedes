@@ -11,7 +11,7 @@ vi.mock("../workspace-panels/thread-panel-navigation.js", () => ({
 }));
 
 afterEach(() => {
-  getBlockingOperation()?.cancel();
+  getBlockingOperation()?.dismiss();
   vi.clearAllMocks();
 });
 
@@ -28,8 +28,8 @@ describe("thread creation operations", () => {
       create: () => pending,
       presentation,
     });
-    expect(getBlockingOperation()?.allowCancel).toBe(false);
-    getBlockingOperation()!.cancel();
+    expect(getBlockingOperation()?.allowDismiss).toBe(false);
+    getBlockingOperation()!.dismiss();
     await operation;
     finish("created-child");
     await pending;
@@ -56,8 +56,8 @@ describe("thread creation operations", () => {
       presentation,
     });
     expect(releases).toHaveLength(2);
-    expect(getBlockingOperation()?.allowCancel).toBe(false);
-    getBlockingOperation()!.cancel();
+    expect(getBlockingOperation()?.allowDismiss).toBe(false);
+    getBlockingOperation()!.dismiss();
     await operation;
     expect(releases[0]).toHaveBeenCalledOnce();
     expect(releases[1]).not.toHaveBeenCalled();
@@ -109,8 +109,8 @@ describe("thread creation operations", () => {
     );
     expect(getBlockingOperation()?.retry).toBeUndefined();
     expect(openThreadRoute).not.toHaveBeenCalled();
-    expect(getBlockingOperation()?.allowCancel).toBe(false);
-    getBlockingOperation()!.cancel();
+    expect(getBlockingOperation()?.allowDismiss).toBe(false);
+    getBlockingOperation()!.dismiss();
     await operation;
   });
 
@@ -132,8 +132,8 @@ describe("thread creation operations", () => {
     expect(getBlockingOperation()?.retry).toBeUndefined();
     expect(getBlockingOperation()?.actions[0]?.label).toBe("Start a new fork");
     expect(openThreadRoute).not.toHaveBeenCalled();
-    expect(getBlockingOperation()?.allowCancel).toBe(false);
-    getBlockingOperation()!.cancel();
+    expect(getBlockingOperation()?.allowDismiss).toBe(false);
+    getBlockingOperation()!.dismiss();
     await operation;
   });
 
@@ -154,7 +154,7 @@ describe("thread creation operations", () => {
     );
     expect(getBlockingOperation()?.retry).toBeUndefined();
     expect(getBlockingOperation()?.actions).toEqual([]);
-    getBlockingOperation()!.cancel();
+    getBlockingOperation()!.dismiss();
     await operation;
   });
 });
