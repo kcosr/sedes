@@ -680,14 +680,15 @@ test.describe.serial("normalized composer state", () => {
     await expect(textarea).toHaveValue("");
     await sendCurrentDraft(page);
     const deliveredTask = page.locator(
-      `details.message-task-card[data-task-id="${createdTask.id}"]`,
+      `.message-task-card[data-task-id="${createdTask.id}"]`,
     );
     await expect(deliveredTask).toContainText("Ship durable task context");
     await expect(deliveredTask).toContainText("Completed");
-    await deliveredTask.locator("summary").click();
     await expect(deliveredTask).toContainText(
       "This is the body captured at send time.",
     );
+    await expect(deliveredTask).not.toContainText(createdTask.id);
+    await deliveredTask.getByRole("button", { name: "Details" }).click();
     await expect(deliveredTask).toContainText(createdTask.id);
     await expect(deliveredTask).toContainText(
       String(acceptedTaskSnapshot.revision),
@@ -726,6 +727,7 @@ test.describe.serial("normalized composer state", () => {
     await expect(deliveredTask).toContainText(
       "This is the body captured at send time.",
     );
+    await deliveredTask.getByRole("button", { name: "Details" }).click();
     await expect(deliveredTask).toContainText(createdTask.id);
     await expect(textarea).toHaveValue("");
   });
