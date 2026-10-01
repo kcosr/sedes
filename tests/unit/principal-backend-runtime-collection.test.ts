@@ -139,6 +139,27 @@ function plan(
 }
 
 describe("principal backend runtime reconciliation", () => {
+  it.each([false, true])("validates a startup-composed driver before publication (wrong scope: %s)", async wrongScope => {
+    const { collection, registry } = fixture();
+    let started = false;
+    const configured = plan("deferred", { start: async () => { started = true; } });
+    const factory = configured.runtime.driverFactory;
+    Object.defineProperty(configured.runtime, "driverFactory", { get: () => {
+      if (!started) throw new Error("driver_not_composed");
+      return wrongScope ? { ...factory, scope: { ...scope, principalId: "other" } } : factory;
+    } });
+    const result = await collection.apply(configured, retire);
+    if (wrongScope) {
+      expect(result.status).toBe("failed");
+      expect(() => registry.driver(configured.context.connections[0]!)).toThrow();
+      expect(configured.runtime.close).toHaveBeenCalledOnce();
+    } else {
+      expect(result.status).toBe("applied");
+      expect(() => registry.driver(configured.context.connections[0]!)).not.toThrow();
+    }
+    await collection.close();
+  });
+
   it("denies new drivers when only the desired backend configuration revision changes", async () => {
     let desiredRevision = 1;
     const {collection, registry} = fixture(() => desiredRevision);
@@ -284,6 +305,26 @@ describe("principal backend runtime reconciliation", () => {
     await collection.close();
   });
 
+  it("drains a cancelled startup without publishing its runtime contributions", async () => {
+    const { collection, registry } = fixture();
+    const controller = new AbortController();
+    let completeStart!: () => void;
+    const started = new Promise<void>(resolve => { completeStart = resolve; });
+    const candidate = plan("cancelled", { start: () => started });
+    const applying = collection.apply(candidate, retire, controller.signal);
+    await vi.waitFor(() => expect(candidate.runtime.start).toHaveBeenCalledWith(controller.signal));
+    expect(collection.runtimes.size).toBe(0);
+    expect(registry.instances(scope)).toEqual([]);
+    controller.abort();
+    completeStart();
+    expect(await applying).toMatchObject({ status: "failed", cleanupPending: false });
+    expect(candidate.runtime.close).toHaveBeenCalledOnce();
+    expect(candidate.release).toHaveBeenCalledOnce();
+    expect(collection.runtimes.size).toBe(0);
+    expect(registry.instances(scope)).toEqual([]);
+    await collection.close();
+  });
+
   it("retains a failing startup's namespace when its cleanup also fails", async () => {
     const { collection } = fixture();
     const failed = plan("one", {
@@ -303,8 +344,13 @@ describe("principal backend runtime reconciliation", () => {
     await expect(
       collection.apply(plan("other", { namespace: "one" }), retire),
     ).rejects.toThrow("backend_native_namespace_reused");
-    await collection.close();
+    await expect(collection.apply(plan("one"), retire)).rejects.toThrow("backend_runtime_cleanup_pending");
+    await collection.remove("one", retire);
+    expect(failed.runtime.close).toHaveBeenCalledTimes(2);
     expect(failed.release).toHaveBeenCalledOnce();
+    expect(collection.failures.has("one")).toBe(false);
+    expect((await collection.apply(plan("one"), retire)).status).toBe("applied");
+    await collection.close();
   });
 
   it("validates namespace and principal ownership before touching a healthy runtime", async () => {

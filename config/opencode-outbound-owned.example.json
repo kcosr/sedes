@@ -33,14 +33,10 @@
         "type": "catalog"
       },
       "moduleConfiguration": {
-        "nativeStorePath": "/home/agent/.local/share/opencode/opencode.db",
-        "configDirectory": "/home/agent/.config/opencode",
         "connection": {
           "ownership": "owned",
           "channel": {
-            "type": "process_stdio",
-            "executablePath": "/home/agent/.local/bin/opencode2",
-            "workingDirectory": "/srv/workspaces"
+            "type": "process_stdio"
           }
         }
       }

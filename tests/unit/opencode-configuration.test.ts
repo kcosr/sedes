@@ -60,14 +60,29 @@ describe("OpenCode v2 operator configuration", () => {
     expect(opencodeHttpUrlSchema.safeParse(url).success).toBe(false);
   });
 
-  it("rejects an implicit executable, aliases, embedded passwords, and noncanonical stores", () => {
+  it.each([false, true])("preserves omitted native path overrides without resolving host defaults, external=%s", external => {
+    const document = configuration(external), backend = document.backends[0]!;
+    if (backend.kind !== "opencode") throw new Error();
+    const value = { connection: external ? backend.moduleConfiguration.connection : { ownership: "owned", channel: { type: "process_stdio" } } };
+    backend.moduleConfiguration = opencodeModuleConfigurationSchema.parse(value);
+    expect(backend.moduleConfiguration).toEqual(value);
+    expect(configurationIdentities(document).find(identity => identity.kind === "backend")?.fingerprint).toMatch(/^[a-f0-9]{64}$/u);
+    expect(runtimeConfigurationFingerprint(document, "backend", backend.id)).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("rejects aliases, embedded passwords, and invalid explicit path overrides", () => {
     const owned = configuration().backends[0]!;
     if (owned.kind !== "opencode" || owned.moduleConfiguration.connection.ownership !== "owned") throw new Error();
     const module = owned.moduleConfiguration;
-    for (const nativeStorePath of ["relative.db", "/native/../other.db", "/native//db", "/native/db/", "/"]) {
+    for (const nativeStorePath of ["", "relative.db", "/native/../other.db", "/native//db", "/native/db/", "/"]) {
       expect(opencodeModuleConfigurationSchema.safeParse({ ...module, nativeStorePath }).success).toBe(false);
     }
-    expect(opencodeModuleConfigurationSchema.safeParse({ ...module, connection: { ownership: "owned", channel: { type: "process_stdio", workingDirectory: "/workspace" } } }).success).toBe(false);
+    for (const field of ["executablePath", "workingDirectory"] as const) {
+      for (const path of ["", "relative", "/path/../other", "/path//other"]) {
+        expect(opencodeModuleConfigurationSchema.safeParse({ connection: { ownership: "owned", channel: { type: "process_stdio", [field]: path } } }).success).toBe(false);
+      }
+    }
+    expect(opencodeModuleConfigurationSchema.safeParse({ configDirectory: "", connection: { ownership: "owned", channel: { type: "process_stdio" } } }).success).toBe(false);
     expect(opencodeModuleConfigurationSchema.safeParse({ ...module, databasePath: module.nativeStorePath }).success).toBe(false);
     const external = configuration(true).backends[0]!;
     if (external.kind !== "opencode" || external.moduleConfiguration.connection.ownership !== "external") throw new Error();

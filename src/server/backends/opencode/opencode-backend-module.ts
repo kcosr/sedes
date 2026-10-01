@@ -11,7 +11,7 @@ import { ManagedTerminalCarrierError } from "../../terminal/managed-terminal-car
 import type { AgentConnectionProfile } from "../contracts.js";
 import { NO_ACTIVE_BACKEND_INSTALLATION_ADVISORIES, type BackendModule, type BackendModuleConfigurationInput, type BackendModuleRuntime, type BackendModuleRuntimeContext, type BackendRuntimeAdministration, type BackendRuntimeInspection, type PreparedBackendModule } from "../module.js";
 import { parseOpenCodeBackendConfiguration, type PreparedOpenCodeBackendConfiguration } from "./opencode-backend-configuration.js";
-import { OpenCodeRuntime, openCodeRuntimeNamespaceKey, type OpenCodeRuntimeInput } from "./opencode-runtime.js";
+import { OpenCodeRuntime, type OpenCodeRuntimeInput } from "./opencode-runtime.js";
 import { openCodeRuntimeConfigurationSchema, resolveOpenCodeRuntimeInput } from "./opencode-runtime-configuration.js";
 import { OPENCODE_RELEASE, OpenCodeRuntimeError } from "./opencode-release.js";
 import { openCodeRuntimeDiagnostic } from "./opencode-runtime-diagnostic.js";
@@ -43,11 +43,12 @@ const managedTerminals = Object.freeze({
 
 /** Stock OpenCode v2 with private HTTP/SSE protocol and resident runtime ownership. */
 export class OpenCodeBackendModule implements BackendModule {
+  readonly startupPolicy = "connect_provider" as const;
   readonly runtimeDiagnostic = openCodeRuntimeDiagnostic;
   readonly backendKind = "opencode" as const;
   readonly connectionKinds = ["opencode_http"] as const;
   readonly protocolRelease = OPENCODE_RELEASE;
-  readonly remoteRuntimeCapabilities = Object.freeze([{ capabilityId: "opencode_runtime", majorVersion: 1,
+  readonly remoteRuntimeCapabilities = Object.freeze([{ capabilityId: "opencode_runtime", majorVersion: 2,
     operations: Object.freeze(openCodeRuntimeOperations.map(operation => operation.operation)) }]);
   constructor(readonly createNativeRuntime: NativeRuntimeFactory = input => new OpenCodeRuntime(input)) {}
 
@@ -57,20 +58,19 @@ export class OpenCodeBackendModule implements BackendModule {
     const environments = new Set(input.connections.filter(connection => connection.enabled).map(connection => connection.executionEnvironmentId));
     if (configuration.enabled && environments.size !== 1) throw new Error("opencode_execution_environment_invalid");
     const environmentId = configuration.enabled ? [...environments][0]! : undefined;
-    const namespace = environmentId ? openCodeRuntimeNamespaceKey(environmentId, configuration.nativeStorePath) : undefined;
     let created = false;
     return {
       backendInstanceId: configuration.backendInstanceId,
       module: this,
-      nativeNamespaces: namespace ? Object.freeze([{ sortKey: `opencode:${namespace}`, namespaceKey: namespace }]) : Object.freeze([]),
+      nativeNamespaces: Object.freeze([]),
       recoverAdministration: context => {
         if (context.instance.id !== configuration.backendInstanceId) throw new Error("opencode_runtime_context_invalid");
         return recoverOpenCodeRuntimeAdministration(context);
       },
-      // The lazy resident runtime acquires its physical store lease before HTTP or process admission.
+      // Runtime authority is leased independently; the provider database may be shared.
       nativeStores: Object.freeze([]),
       createRuntime: context => {
-        if (created || !configuration.enabled || !environmentId || !namespace ||
+        if (created || !configuration.enabled || !environmentId ||
             (context.environmentOperations.environmentKind === "local") === !!context.sidecarRuntime || context.instance.kind !== "opencode" ||
             context.instance.id !== configuration.backendInstanceId || context.instance.protocolRelease !== OPENCODE_RELEASE ||
             !context.instance.enabled || context.instance.tenantId !== context.scope.tenantId ||
@@ -91,7 +91,7 @@ export class OpenCodeBackendModule implements BackendModule {
           }
         }
         created = true;
-        return new OpenCodeModuleRuntime(context, configuration, input, namespace, this.createNativeRuntime);
+        return new OpenCodeModuleRuntime(context, configuration, input, this.createNativeRuntime);
       },
     };
   }
@@ -100,15 +100,29 @@ export class OpenCodeBackendModule implements BackendModule {
 class OpenCodeModuleRuntime implements BackendModuleRuntime {
   readonly scope;
   readonly instance;
-  readonly driverFactory;
-  readonly threadPersistence;
-  readonly bindingDetails;
-  readonly discoveryPersistence;
-  readonly discovery;
-  readonly presentation;
-  readonly actionPersistence;
-  readonly savedAgents;
-  readonly automationExecutionPolicy;
+  #namespace?: string;
+  #composition?: {
+    driverFactory: OpenCodeBackendDriverFactory;
+    persistence: OpenCodeBackendThreadPersistenceAdapter;
+    discovery: BackendModuleRuntime["discovery"];
+    presentation: OpenCodeThreadPresentationProvider;
+    actionPersistence: OpenCodeThreadActionPersistence;
+    savedAgents: OpenCodeSavedAgentBackendAdapter;
+    automationExecutionPolicy: OpenCodeAutomationExecutionPolicy;
+  };
+  #composed() {
+    if (!this.#composition) throw new Error("opencode_module_not_started");
+    return this.#composition;
+  }
+  get driverFactory() { return this.#composed().driverFactory; }
+  get threadPersistence() { return this.#composed().persistence; }
+  get bindingDetails() { return this.#composed().persistence; }
+  get discoveryPersistence() { return this.#composed().persistence; }
+  get discovery() { return this.#composed().discovery; }
+  get presentation() { return this.#composed().presentation; }
+  get actionPersistence() { return this.#composed().actionPersistence; }
+  get savedAgents() { return this.#composed().savedAgents; }
+  get automationExecutionPolicy() { return this.#composed().automationExecutionPolicy; }
   readonly installationAdvisories = NO_ACTIVE_BACKEND_INSTALLATION_ADVISORIES;
   readonly managedProviderTerminals = managedTerminals;
   readonly administration: BackendRuntimeAdministration | undefined;
@@ -129,7 +143,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
   readonly #tools: OpenCodeAgentTools;
 
   constructor(readonly context: BackendModuleRuntimeContext, readonly configuration: PreparedOpenCodeBackendConfiguration,
-    readonly input: BackendModuleConfigurationInput, readonly namespace: string, readonly createNativeRuntime: NativeRuntimeFactory) {
+    readonly input: BackendModuleConfigurationInput, readonly createNativeRuntime: NativeRuntimeFactory) {
     this.scope = context.scope; this.instance = context.instance;
     this.#usage = new OpenCodeUsageAccounting(context.usage);
     this.#tools = new OpenCodeAgentTools({ facade: context.agentTools, sourceCapabilities: context.agentToolSourceCapabilities,
@@ -140,11 +154,13 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
       },
       recoverInvocation: async (source, stamp, signal) => {
         assertOpenCodeInvocationSource(stamp, source);
+        if (!this.#composition) throw openCodeToolInvocationDenied();
         const target = this.#invocationTarget(source);
         const runtime = context.sidecarRuntime ? await this.#native() : this.#owner;
         if (!runtime) throw openCodeToolInvocationDenied();
         if (runtime instanceof OpenCodeRemoteRuntime) await runtime.startRetained();
         else if (runtime.snapshot().state !== "ready") throw openCodeToolInvocationDenied();
+        if (runtime.nativeNamespaceKey !== this.#namespace) throw openCodeToolInvocationDenied();
         await runtime.assertCurrent(signal); this.#assertOpen();
         return { ...target, runtime };
       },
@@ -156,63 +172,6 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
         return context.executionEnvironmentVariables(threadId);
       }, cli: new OpenCodeCliEnvironment({ ownership: configuration.connection.ownership, availability: context.agentToolCli,
         tools: context.agentTools }) });
-    const repository = new OpenCodeThreadRepository({ database: context.database, scope: context.scope,
-      backendInstanceId: context.instance.id, nativeNamespaceKey: namespace });
-    const settings = new OpenCodeThreadSettingsRepository({ database: context.database, scope: context.scope, backendInstanceId: context.instance.id });
-    const resolveConnectionDefaults = (connection: AgentConnectionProfile) => {
-      const admitted = context.connections.find(candidate => candidate.id === connection.id);
-      if (!admitted || (["tenantId", "ownerPrincipalId", "backendInstanceId", "executionEnvironmentId", "templateId", "kind", "configurationRevision", "enabled"] as const)
-        .some(key => admitted[key] !== connection[key])) return undefined;
-      return configuration.defaultsByConnectionId.get(admitted.templateId);
-    };
-    const adapterInput = { database: context.database, scope: context.scope, backendInstanceId: context.instance.id,
-      settings, modelPolicy: configuration.modelPolicy, resolveConnectionDefaults };
-    const persistence = new OpenCodeBackendThreadPersistenceAdapter({ ...adapterInput, repository });
-    this.threadPersistence = this.bindingDetails = this.discoveryPersistence = persistence;
-    this.presentation = new OpenCodeThreadPresentationProvider(adapterInput);
-    this.actionPersistence = new OpenCodeThreadActionPersistence(adapterInput);
-    this.savedAgents = new OpenCodeSavedAgentBackendAdapter({ ...adapterInput, persistence });
-    this.automationExecutionPolicy = new OpenCodeAutomationExecutionPolicy(adapterInput);
-    const catalog = new OpenCodeModelCatalog({ modelPolicy: configuration.modelPolicy, readNative: async (directory, signal) => {
-      const runtime = await this.#native(); await runtime.start(); this.#assertOpen(); signal?.throwIfAborted();
-      const lease = runtime.acquire({ directory });
-      try {
-        const native = new OpenCodeNativeMutations(lease.client);
-        const [models, defaultModel] = await Promise.all([native.listModels(directory, signal), native.getDefaultModel(directory, signal)]);
-        await runtime.assertCurrent(signal); this.#assertOpen();
-        return { models, ...(defaultModel ? { defaultModel } : {}) };
-      } finally { lease.release(); }
-    } });
-    const skills = new OpenCodeSkillCatalog({ scope: context.scope, backendInstanceId: context.instance.id, nativeNamespaceKey: namespace,
-      readNative: async (directory, signal) => {
-        const runtime = await this.#native(); await runtime.start(); this.#assertOpen(); signal?.throwIfAborted();
-        const lease = runtime.acquire({ directory });
-        try {
-          const result = await new OpenCodeNativeMutations(lease.client).listSkills(directory, signal);
-          await runtime.assertCurrent(signal); this.#assertOpen();
-          return result;
-        } finally { lease.release(); }
-      } });
-    const connections = new Map(context.connections.map(connection => [connection.id, connection]));
-    this.discovery = { nativeNamespaceKey: (connection: AgentConnectionProfile) => {
-      const admitted = connections.get(connection.id);
-      if (!admitted || connection.tenantId !== context.scope.tenantId || connection.ownerPrincipalId !== context.scope.principalId ||
-          connection.backendInstanceId !== context.instance.id || connection.kind !== "opencode_http" ||
-          connection.executionEnvironmentId !== admitted.executionEnvironmentId || connection.templateId !== admitted.templateId) {
-        throw new Error("opencode_discovery_authority_invalid");
-      }
-      return namespace;
-    } };
-    this.driverFactory = new OpenCodeBackendDriverFactory({ scope: context.scope, instance: context.instance, connections: context.connections,
-      nativeNamespaceKey: namespace, repository, settings, catalog, skills, tools: this.#tools, usage: this.#usage,
-      attachmentProvenanceKey: context.toolProvenanceKey, outputArtifacts: context.outputArtifacts, executionEnvironment: this.#executionEnvironment, modelPolicy: configuration.modelPolicy,
-      observeHealth: () => {
-        const sequence = ++this.#healthSequence;
-        return failure => {
-          if (!this.#closed && sequence === this.#healthSequence) this.#healthDiagnostic = openCodeRuntimeDiagnostic(failure);
-        };
-      },
-      runtime: async () => { const owner = await this.#native(); this.#assertOpen(); return owner; } });
     if (context.sidecarRuntime) {
       const recoveryContext = { ...context, sidecarRuntime: { acquireRecovery: (signal?: AbortSignal) => context.sidecarRuntime!.acquire(signal, { existingOnly: true }) } };
       const getAdministration = () => recoverOpenCodeRuntimeAdministration(recoveryContext);
@@ -229,7 +188,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
           if (administration) await administration.stop(request);
           else if ((await inspect()).revision !== request.expectedRevision) throw new BackendRuntimeControlRejectedError("confirmation_stale");
           await this.#owner?.close(); this.#owner = undefined;
-          if (restart) { const owner = await this.#native(); await owner.start(); }
+          if (restart) await this.#startedNative();
         } finally { this.#administrating = false; }
       };
       this.administration = { inspect, stop: request => administer(request, false), restart: request => administer(request, true) };
@@ -241,6 +200,67 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
       };
       this.stopBeforeConversationCleanup = async () => { await this.#stop(); };
     }
+  }
+
+  #compose(namespace: string) {
+    const { context, configuration } = this;
+    const repository = new OpenCodeThreadRepository({ database: context.database, scope: context.scope,
+      backendInstanceId: context.instance.id, nativeNamespaceKey: namespace });
+    const settings = new OpenCodeThreadSettingsRepository({ database: context.database, scope: context.scope, backendInstanceId: context.instance.id });
+    const resolveConnectionDefaults = (connection: AgentConnectionProfile) => {
+      const admitted = context.connections.find(candidate => candidate.id === connection.id);
+      if (!admitted || (["tenantId", "ownerPrincipalId", "backendInstanceId", "executionEnvironmentId", "templateId", "kind", "configurationRevision", "enabled"] as const)
+        .some(key => admitted[key] !== connection[key])) return undefined;
+      return configuration.defaultsByConnectionId.get(admitted.templateId);
+    };
+    const adapterInput = { database: context.database, scope: context.scope, backendInstanceId: context.instance.id,
+      settings, modelPolicy: configuration.modelPolicy, resolveConnectionDefaults };
+    const persistence = new OpenCodeBackendThreadPersistenceAdapter({ ...adapterInput, repository });
+    const presentation = new OpenCodeThreadPresentationProvider(adapterInput);
+    const actionPersistence = new OpenCodeThreadActionPersistence(adapterInput);
+    const savedAgents = new OpenCodeSavedAgentBackendAdapter({ ...adapterInput, persistence });
+    const automationExecutionPolicy = new OpenCodeAutomationExecutionPolicy(adapterInput);
+    const catalog = new OpenCodeModelCatalog({ modelPolicy: configuration.modelPolicy, readNative: async (directory, signal) => {
+      const runtime = await this.#startedNative(); this.#assertOpen(); signal?.throwIfAborted();
+      const lease = runtime.acquire({ directory });
+      try {
+        const native = new OpenCodeNativeMutations(lease.client);
+        const [models, defaultModel] = await Promise.all([native.listModels(directory, signal), native.getDefaultModel(directory, signal)]);
+        await runtime.assertCurrent(signal); this.#assertOpen();
+        return { models, ...(defaultModel ? { defaultModel } : {}) };
+      } finally { lease.release(); }
+    } });
+    const skills = new OpenCodeSkillCatalog({ scope: context.scope, backendInstanceId: context.instance.id, nativeNamespaceKey: namespace,
+      readNative: async (directory, signal) => {
+        const runtime = await this.#startedNative(); this.#assertOpen(); signal?.throwIfAborted();
+        const lease = runtime.acquire({ directory });
+        try {
+          const result = await new OpenCodeNativeMutations(lease.client).listSkills(directory, signal);
+          await runtime.assertCurrent(signal); this.#assertOpen();
+          return result;
+        } finally { lease.release(); }
+      } });
+    const connections = new Map(context.connections.map(connection => [connection.id, connection]));
+    const discovery = { nativeNamespaceKey: (connection: AgentConnectionProfile) => {
+      const admitted = connections.get(connection.id);
+      if (!admitted || connection.tenantId !== context.scope.tenantId || connection.ownerPrincipalId !== context.scope.principalId ||
+          connection.backendInstanceId !== context.instance.id || connection.kind !== "opencode_http" ||
+          connection.executionEnvironmentId !== admitted.executionEnvironmentId || connection.templateId !== admitted.templateId) {
+        throw new Error("opencode_discovery_authority_invalid");
+      }
+      return namespace;
+    } };
+    const driverFactory = new OpenCodeBackendDriverFactory({ scope: context.scope, instance: context.instance, connections: context.connections,
+      nativeNamespaceKey: namespace, repository, settings, catalog, skills, tools: this.#tools, usage: this.#usage,
+      attachmentProvenanceKey: context.toolProvenanceKey, outputArtifacts: context.outputArtifacts, executionEnvironment: this.#executionEnvironment, modelPolicy: configuration.modelPolicy,
+      observeHealth: () => {
+        const sequence = ++this.#healthSequence;
+        return failure => {
+          if (!this.#closed && sequence === this.#healthSequence) this.#healthDiagnostic = openCodeRuntimeDiagnostic(failure);
+        };
+      },
+      runtime: async () => await this.#startedNative() });
+    return { driverFactory, persistence, discovery, presentation, actionPersistence, savedAgents, automationExecutionPolicy };
   }
 
   agentToolAccessDecisionAuthority(source: TrustedAgentToolSource) { return this.#tools.accessDecisionAuthority(source); }
@@ -267,7 +287,26 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
     return { context, input };
   }
 
-  async start(): Promise<void> { this.#assertOpen(); }
+  async start(signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    this.#assertOpen();
+    if (this.#composition) return;
+    const owner = await this.#startedNative(signal);
+    signal?.throwIfAborted();
+    this.#namespace = owner.nativeNamespaceKey;
+    this.#composition = this.#compose(this.#namespace);
+  }
+
+  async #startedNative(signal?: AbortSignal): Promise<NativeRuntime> {
+    const owner = await this.#native();
+    await owner.start(signal);
+    signal?.throwIfAborted();
+    this.#assertOpen();
+    if (this.#namespace !== undefined && owner.nativeNamespaceKey !== this.#namespace) {
+      throw new OpenCodeRuntimeError("opencode_runtime_namespace_changed");
+    }
+    return owner;
+  }
   async startupEnvironmentState(): Promise<"not_started" | "started" | "unknown"> {
     const state = this.#owner?.snapshot().state;
     return !this.#opening && (!state || state === "stopped") ? "not_started" : state === "ready" ? "started" : "unknown";
@@ -280,7 +319,7 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
       await this.#tools.close();
       await this.#opening?.catch(() => undefined);
       await this.#owner?.close();
-    })();
+    })().catch(error => { this.#closePromise = undefined; throw error; });
   }
 
   async #native(): Promise<NativeRuntime> {
@@ -310,7 +349,6 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
       });
       this.#assertOpen();
       const owner = this.createNativeRuntime({ ...resolved, assertLaunchAdmission: () => this.#assertOpen() });
-      if (owner.nativeNamespaceKey !== this.namespace) throw new Error("opencode_runtime_namespace_changed");
       return this.#owner = owner;
     })().finally(() => { this.#opening = undefined; });
     return this.#opening;
@@ -339,10 +377,10 @@ class OpenCodeModuleRuntime implements BackendModuleRuntime {
     this.#administrating = true; this.#revision++;
     try {
       await this.#stop();
-      if (restart) { const owner = await this.#native(); await owner.start(); this.#lastShutdownIncomplete = false; }
+      if (restart) { await this.#startedNative(); this.#lastShutdownIncomplete = false; }
     } catch (error) {
       if (error instanceof OpenCodeRuntimeError &&
-          ["opencode_owned_cleanup_unproved", "opencode_native_store_initialization_unproved"].includes(error.code)) {
+          ["opencode_owned_cleanup_unproved", "opencode_runtime_owner_initialization_unproved"].includes(error.code)) {
         throw new BackendRuntimeControlRejectedError("cleanup_unproven", { cause: error });
       }
       throw error;

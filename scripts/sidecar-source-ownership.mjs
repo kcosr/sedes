@@ -25,6 +25,7 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/backends/opencode/opencode-native-identity.ts",
   "src/server/backends/opencode/opencode-process-cleanup.ts",
   "src/server/backends/opencode/opencode-native-store.ts",
+  "src/server/backends/opencode/opencode-runtime-ownership.ts",
   "src/server/backends/opencode/opencode-owned-process.ts",
   "src/server/backends/opencode/opencode-native-base64.ts",
   "src/server/backends/opencode/opencode-native-codecs.ts",

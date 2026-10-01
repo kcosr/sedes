@@ -213,7 +213,7 @@ import {
 import { ConversationLifecycleAutomationFirstInput } from "./runtime/conversation-lifecycle-automation.js";
 import { AutomationDispatcher } from "./runtime/automation-dispatcher.js";
 import { AutomationPrecheckExecutor } from "./runtime/automation-precheck-executor.js";
-import { PrincipalBackendRuntimeCollection, type BackendRuntimeRetirementAuthority } from "./runtime/principal-backend-runtime-collection.js";
+import { PrincipalBackendRuntimeCollection, type BackendRuntimeRetirementAuthority, type BackendRuntimePlan, type BackendRuntimeStartup } from "./runtime/principal-backend-runtime-collection.js";
 import { createExecutionEnvironmentRuntime, type ExecutionEnvironmentRuntime } from "./runtime/execution-environment-runtime.js";
 import {
   managedSshAgentToolCliAvailability,
@@ -728,6 +728,7 @@ export async function startProductionApplication(
               },
       ]),
     );
+    const backendStartupAbort = new AbortController();
     const runtimeModules = new PrincipalBackendRuntimeCollection({scope, registry,
       desiredInstanceRevision: id => backendConfiguration.getBackend(scope, id).configurationRevision,
     });
@@ -738,6 +739,20 @@ export async function startProductionApplication(
       async run() { throw new Error("backend_retirement_authority_unavailable"); },
     };
     const backendPreparationFailures = new Map<string, unknown>();
+    const localBackendCleanupProofs = new Map<string, unknown>();
+    const clearBackendPreparationFailure = (id: string): void => {
+      backendPreparationFailures.delete(id); localBackendCleanupProofs.delete(id);
+    };
+    const backendDiagnostic = (backendId: string, error: unknown): BackendRuntimeDiagnostic | undefined => {
+      const definition = backendConfigurationFile.backends.find(item => item.id === backendId);
+      const diagnostic = definition ? compiledBackendModuleCatalog.requireModule(definition.kind).runtimeDiagnostic?.(error) : undefined;
+      if (diagnostic?.recoveryAction === "stop" && localBackendCleanupProofs.has(backendId) &&
+          localBackendCleanupProofs.get(backendId) === error && !runtimeModules.runtimes.has(backendId) &&
+          runtimeModules.failures.get(backendId)?.cleanupPending === false) {
+        return { connectionState: "unknown", message: "Backend startup failed, but cleanup of its local owned resources completed. Use backend Connect or Start to retry startup; automatic retries remain enabled." };
+      }
+      return diagnostic;
+    };
     const appliedBackendRevisions = new Map<string, number>();
     const appliedBackendFingerprints = new Map<string, string>();
     const backendIncarnations = new Map<string, string>();
@@ -759,15 +774,114 @@ export async function startProductionApplication(
     const startupEnvironmentPending = (id: string): boolean => appliedStartupEnvironmentFingerprints.has(id) &&
       appliedStartupEnvironmentFingerprints.get(id) !== startupEnvironmentFingerprint(id);
 
-    const applyBackendRuntime = async (backendId: string): Promise<void> => {
+    type BackendStartupOutcome = "applied" | "failed" | "superseded";
+    type BackendStartupAttempt = {
+      readonly handle: BackendRuntimeStartup;
+      readonly fingerprint: string;
+      readonly revision: number;
+      readonly environmentId: string;
+      readonly environmentRuntime: ExecutionEnvironmentRuntime;
+      readonly localProvider: boolean;
+      readonly startupFingerprint: string;
+      completion: Promise<BackendStartupOutcome>;
+      cancelled: boolean;
+    };
+    const backendStartups = new Map<string, BackendStartupAttempt>();
+    const backendStartupTasks = new Set<Promise<BackendStartupOutcome>>();
+    const backendStartupBackoff = new Map<string, { fingerprint: string; failures: number; retryAt: number }>();
+    const recordBackendStartupFailure = (id: string, fingerprint: string, error: unknown, localProvider = false): void => {
+      // The collection retains the original startup/cleanup evidence. A later
+      // admission refusal cannot replace it with a generic cleanup-pending error.
+      const retained = runtimeModules.failures.get(id);
+      backendPreparationFailures.set(id, retained?.cleanupPending || error instanceof Error && error.message === "backend_runtime_cleanup_pending"
+        ? retained?.error ?? error : error);
+      localBackendCleanupProofs.delete(id);
+      // A remote module close only releases the carrier. Only the original
+      // local startup authority can prove provider cleanup after launch failed.
+      if (localProvider && retained?.cleanupPending === false && !runtimeModules.runtimes.has(id)) {
+        localBackendCleanupProofs.set(id, backendPreparationFailures.get(id));
+      }
+      const previous = backendStartupBackoff.get(id);
+      const failures = previous?.fingerprint === fingerprint ? previous.failures + 1 : 1;
+      backendStartupBackoff.set(id, { fingerprint, failures,
+        retryAt: Date.now() + Math.min(60_000, 5_000 * 2 ** Math.min(failures - 1, 4)) });
+    };
+    const recordBackendApplied = (id: string, revision: number, fingerprint: string, startupFingerprint: string): void => {
+      clearBackendPreparationFailure(id); backendStartupBackoff.delete(id);
+      appliedBackendRevisions.set(id, revision); appliedBackendFingerprints.set(id, fingerprint);
+      appliedStartupEnvironmentFingerprints.set(id, startupFingerprint); backendIncarnations.set(id, randomUUID());
+    };
+    const cancelBackendStartup = (id: string): void => {
+      const attempt = backendStartups.get(id);
+      if (attempt) { attempt.cancelled = true; attempt.handle.cancel(); }
+    };
+    const backendStartupIsCurrent = (id: string, attempt: BackendStartupAttempt): boolean => {
+      const snapshot = configurationRepository.get(scope);
+      const definition = snapshot.configuration.backends.find(item => item.id === id);
+      const record = snapshot.runtimes.find(item => item.resourceKind === "backend" && item.resourceId === id);
+      return !attempt.cancelled && !backendStartupAbort.signal.aborted && definition?.enabled === true &&
+        record?.preference === "automatic" && record.desiredRevision === attempt.revision &&
+        backendRuntimeFingerprint(id) === attempt.fingerprint &&
+        environmentRuntimes.get(attempt.environmentId) === attempt.environmentRuntime;
+    };
+    const finishBackendStartup = async (id: string, attempt: BackendStartupAttempt): Promise<BackendStartupOutcome> => {
+      const started = await attempt.handle.completion;
+      let outcome: BackendStartupOutcome = "superseded";
+      let discard = false;
+      let publicationError: unknown;
+      let publishSnapshot = false;
+      try {
+        await serializeConfiguration(async () => {
+          if (backendStartups.get(id) !== attempt || !backendStartupIsCurrent(id, attempt)) { discard = true; return; }
+          if (started.status === "failed") {
+            recordBackendStartupFailure(id, attempt.fingerprint, started.error, attempt.localProvider); outcome = "failed";
+          } else {
+            await attempt.handle.publish();
+            recordBackendApplied(id, attempt.revision, attempt.fingerprint, attempt.startupFingerprint);
+            observationFailures.delete(`backend:${id}`); outcome = "applied";
+          }
+          backendStartups.delete(id);
+          publishSnapshot = !refreshBackendContributions();
+        });
+      } catch (error) {
+        discard = true;
+        publicationError = error;
+        outcome = "failed";
+      }
+      if (discard) {
+        let cleanupError: unknown;
+        try { await attempt.handle.discard(); } catch (error) { cleanupError = error; }
+        await serializeConfiguration(async () => {
+          const current = backendStartups.get(id) === attempt;
+          if (publicationError !== undefined && current && backendStartupIsCurrent(id, attempt)) {
+            recordBackendStartupFailure(id, attempt.fingerprint, publicationError, attempt.localProvider);
+          }
+          if (current) backendStartups.delete(id);
+          if (cleanupError !== undefined) recordBackendStartupFailure(id, attempt.fingerprint, cleanupError, attempt.localProvider);
+          if (!backendStartupAbort.signal.aborted) await reconcileLiveConfiguration();
+        });
+      }
+      if (publishSnapshot && !drain.isDraining) await activeApplicationSnapshots.publishAuthoritativeReplacement(scope)
+        .catch(reportBackgroundError(`Backend ${id} startup publication`));
+      return outcome;
+    };
+    const applyBackendRuntime = async (backendId: string, explicit = false): Promise<void> => {
       const configured = backendConfigurationFile.backends.find(item => item.id === backendId);
       if (!configured || !configured.enabled) {
+        cancelBackendStartup(backendId);
         await runtimeModules.remove(backendId, retireBackendRuntime);
-        appliedBackendRevisions.delete(backendId);
-        appliedBackendFingerprints.delete(backendId);
-        backendIncarnations.delete(backendId);
+        backendStartups.delete(backendId); backendStartupBackoff.delete(backendId);
+        appliedBackendRevisions.delete(backendId); appliedBackendFingerprints.delete(backendId); backendIncarnations.delete(backendId);
         return;
       }
+      const fingerprint = backendRuntimeFingerprint(backendId);
+      const pending = backendStartups.get(backendId);
+      if (pending) { if (!backendStartupIsCurrent(backendId, pending)) cancelBackendStartup(backendId); return; }
+      if (runtimeModules.failures.get(backendId)?.cleanupPending ||
+          backendDiagnostic(backendId, backendPreparationFailures.get(backendId))?.recoveryAction === "stop") return;
+      const backoff = backendStartupBackoff.get(backendId);
+      if (!explicit && backoff?.fingerprint === fingerprint && backoff.retryAt > Date.now()) return;
+      if (explicit) backendStartupBackoff.delete(backendId);
       try {
         const connections = profiles.filter(profile => profile.backendInstanceId === backendId);
         const environmentIds = new Set(connections.filter(profile => profile.enabled).map(profile => profile.executionEnvironmentId));
@@ -785,7 +899,8 @@ export async function startProductionApplication(
         })[0];
         if (!prepared) throw new Error("backend_runtime_preparation_missing");
         const workspaceIsolation = workspaceIsolations.get(backendId);
-        const result = await runtimeModules.apply({
+        const owner = environmentRuntimes.get(environmentId)?.sidecarRuntime;
+        const plan: BackendRuntimePlan = {
           prepared,
           context: {
             database: database!, scope, usage,
@@ -795,10 +910,9 @@ export async function startProductionApplication(
             ...(workspaceIsolation ? { workspaceIsolation } : {}),
             toolProvenanceKey, agentTools, outputArtifacts, viewedImageCapture,
             agentToolSourceCapabilities: agentToolSources, agentToolCli: cli,
-            ...(environmentRuntimes.get(environmentId)?.sidecarRuntime ? {
+            ...(owner ? {
               sidecarRuntime: {
                 async acquireExisting(signal = new AbortController().signal) {
-                  const owner = environmentRuntimes.get(environmentId)!.sidecarRuntime!;
                   const lease = await owner.acquireExisting(scope, environmentId, signal);
                   return {channel: lease.session.runtimeChannel,
                     controllerEpoch: lease.serviceStatus.controllerEpoch,
@@ -806,7 +920,6 @@ export async function startProductionApplication(
                     closed: lease.session.closed, release: () => lease.release()};
                 },
                 async acquire(signal = new AbortController().signal, options = {}) {
-                  const owner = environmentRuntimes.get(environmentId)!.sidecarRuntime!;
                   const lease = options.existingOnly
                     ? await owner.acquireRetainedRecovery(scope, environmentId, signal)
                     : await owner.acquireOperation(scope, environmentId, signal);
@@ -818,21 +931,38 @@ export async function startProductionApplication(
               },
             } : {}),
           },
-        }, retireBackendRuntime);
+        };
+        const revision = configurationRepository.runtime(scope, "backend", backendId).desiredRevision;
+        const startupFingerprint = startupEnvironmentFingerprint(backendId);
+        if (prepared.module.startupPolicy === "connect_provider") {
+          const handle = await runtimeModules.reserveStartup(plan, retireBackendRuntime,
+            { signal: backendStartupAbort.signal, startupTimeoutMs: 90_000 });
+          const attempt: BackendStartupAttempt = { handle, fingerprint, revision, environmentId,
+            environmentRuntime: environmentRuntimes.get(environmentId)!, startupFingerprint,
+            localProvider: inventoryRepository.getEnvironment(scope, environmentId).kind === "local",
+            completion: Promise.resolve("superseded"), cancelled: false };
+          backendStartups.set(backendId, attempt); clearBackendPreparationFailure(backendId);
+          attempt.completion = finishBackendStartup(backendId, attempt);
+          backendStartupTasks.add(attempt.completion);
+          void attempt.completion.catch(reportBackgroundError(`Backend ${backendId} startup`))
+            .finally(() => backendStartupTasks.delete(attempt.completion));
+          return;
+        }
+        const result = await runtimeModules.apply(plan, retireBackendRuntime);
         if (result.status === "failed") throw result.error;
-        backendPreparationFailures.delete(backendId);
-        appliedBackendRevisions.set(backendId, configurationRepository.runtime(scope, "backend", backendId).desiredRevision);
-        appliedBackendFingerprints.set(backendId, backendRuntimeFingerprint(backendId));
-        appliedStartupEnvironmentFingerprints.set(backendId, startupEnvironmentFingerprint(backendId));
-        backendIncarnations.set(backendId, randomUUID());
+        recordBackendApplied(backendId, revision, fingerprint, startupFingerprint);
       } catch (error) {
-        if (error instanceof ThreadRuntimeNotIdleError) { backendPreparationFailures.delete(backendId); return; }
-        backendPreparationFailures.set(backendId, error);
+        if (error instanceof ThreadRuntimeNotIdleError) { clearBackendPreparationFailure(backendId); return; }
+        recordBackendStartupFailure(backendId, fingerprint, error);
       }
     };
+    let hasDeferredBackendStartup = false;
     for (const configured of backendConfigurationFile.backends) {
       const preference = desiredConfiguration.runtimes.find(item => item.resourceKind === "backend" && item.resourceId === configured.id)?.preference;
-      if (!preference || preference === "automatic") await applyBackendRuntime(configured.id);
+      if (!preference || preference === "automatic") {
+        if (compiledBackendModuleCatalog.requireModule(configured.kind).startupPolicy === "connect_provider") hasDeferredBackendStartup = true;
+        else await applyBackendRuntime(configured.id);
+      }
     }
     const moduleRuntimes = runtimeModules.runtimes;
     resolveSourceAccessDecisionAuthority = source => {
@@ -1878,10 +2008,6 @@ export async function startProductionApplication(
     const observedBackends = new Map<string, Awaited<ReturnType<NonNullable<BackendModuleRuntime["administration"]>["inspect"]>>>();
     const remoteBackendObservations = new WeakMap<BackendModuleRuntime, { serviceIdentity: string; pending: Promise<void> }>();
     const observationFailures = new Map<string, "unreachable" | SidecarOwnershipRecoveryCode | BackendRuntimeDiagnostic>();
-    const backendDiagnostic = (backendId: string, error: unknown): BackendRuntimeDiagnostic | undefined => {
-      const definition = backendConfigurationFile.backends.find(item => item.id === backendId);
-      return definition ? compiledBackendModuleCatalog.requireModule(definition.kind).runtimeDiagnostic?.(error) : undefined;
-    };
     const requiresOwnershipRecovery = (error: unknown): boolean => sidecarOwnershipRecoveryCode(error) !== undefined;
     const observationFailure = (error: unknown, backendId?: string) => sidecarOwnershipRecoveryCode(error) ??
       (backendId ? backendDiagnostic(backendId, error) : undefined) ?? "unreachable" as const;
@@ -2018,6 +2144,7 @@ export async function startProductionApplication(
       let runtime: ConfigurationRuntimeState;
       let service: SidecarServiceStatus | undefined;
       let administration: BackendModuleRuntime["administration"];
+      let recoveryAction: "stop" | undefined;
       let backendObservation: Awaited<ReturnType<NonNullable<BackendModuleRuntime["administration"]>["inspect"]>> | undefined;
       if (record.resourceKind === "environment") {
         const definition = current.configuration.executionEnvironments.find(item => item.id === id);
@@ -2123,22 +2250,24 @@ export async function startProductionApplication(
         const observedFailure = observationFailures.get(key);
         const diagnostic = owned?.runtimeDiagnostic?.() ?? backendDiagnostic(id, backendPreparationFailures.get(id)) ??
           (typeof observedFailure === "object" ? observedFailure : undefined);
+        recoveryAction = diagnostic?.recoveryAction;
         const applied = intentionallyAbsent ? !owned && (record.preference !== "stopped" || !remote || backendPresence.get(id) === false) : appliedBackendRevisions.get(id) === record.desiredRevision && Boolean(owned) && !startupEnvironmentPending(id) &&
           !diagnostic && !observationFailures.has(key) && (!owned?.administration || Boolean(backendObservation && backendObservation.state !== "unknown"));
+        const starting = backendStartups.has(id);
         runtime = {...record,
           effectiveRevision: applied ? record.desiredRevision : record.effectiveRevision,
-          applyState: diagnostic || backendPreparationFailures.has(id) || observationFailures.has(key) ? "unavailable" : applied ? "applied" : "pending",
+          applyState: starting ? "pending" : diagnostic || backendPreparationFailures.has(id) || observationFailures.has(key) ? "unavailable" : applied ? "applied" : "pending",
           startupEnvironmentPending: (Boolean(owned) || Boolean(backendObservation)) && startupEnvironmentPending(id),
-          connectionState: recoveryRequired ? "recovery_required" : diagnostic?.connectionState ?? (observationFailures.has(key) ? "unreachable" : record.preference === "disconnected" && !owned ? "disconnected" : !owned ? remote && backendPresence.get(id) !== false ? backendPresence.get(id) === true ? "disconnected" : "unknown" : "stopped" : owned.administration && !backendObservation ? "unknown" : "connected"),
+          connectionState: starting ? "reconciling" : recoveryRequired ? "recovery_required" : diagnostic?.connectionState ?? (observationFailures.has(key) ? "unreachable" : record.preference === "disconnected" && !owned ? "disconnected" : !owned ? remote && backendPresence.get(id) !== false ? backendPresence.get(id) === true ? "disconnected" : "unknown" : "stopped" : owned.administration && !backendObservation ? "unknown" : "connected"),
           incarnation: backendObservation?.incarnation ?? backendIncarnations.get(id) ?? null,
           softwareVersion: null,
           upgradeState: "current",
           activeResources: Math.max(active.length, backendObservation?.state === "active" || backendObservation?.state === "unknown" ? 1 : 0),
           supportedActions: backendLifecycleActions(definition, remote),
-          lastError: recoveryRequired ? sidecarOwnershipRecoveryMessage(recoveryRequired) : diagnostic?.message ?? (backendPreparationFailures.has(id) ? "This backend could not apply its configuration. Check its settings and execution environment." : observationFailures.has(key) ? "Provider state is unavailable; active work and retained outcomes may still exist." : null),
+          lastError: starting ? null : recoveryRequired ? sidecarOwnershipRecoveryMessage(recoveryRequired) : diagnostic?.message ?? (backendPreparationFailures.has(id) ? "This backend could not apply its configuration. Check its settings and execution environment." : observationFailures.has(key) ? "Provider state is unavailable; active work and retained outcomes may still exist." : null),
         };
       }
-      return {runtime, service, backendObservation, administration, interruptions: interruptions.length > 128 ? [...interruptions.slice(0, 127), `${interruptions.length - 127} additional affected resources.`] : interruptions,
+      return {runtime, service, backendObservation, administration, recoveryAction, interruptions: interruptions.length > 128 ? [...interruptions.slice(0, 127), `${interruptions.length - 127} additional affected resources.`] : interruptions,
         fence: configurationFingerprint({resourceKind: record.resourceKind, id, incarnation: runtime.incarnation,
           // Main reattaching advances the controller epoch without changing any
           // resource; the sidecar still validates the epoch it is finally given.
@@ -2170,7 +2299,20 @@ export async function startProductionApplication(
       backends: [...appliedBackendRevisions],
       environmentFailures: [...environmentPreparationFailures.keys()],
       backendFailures: [...backendPreparationFailures.keys()],
+      backendStartups: [...backendStartups].map(([id, attempt]) => [id, attempt.fingerprint, attempt.cancelled]),
     });
+    const refreshBackendContributions = (): boolean => {
+      backendAdvisoryEnvironments.clear();
+      for (const [id] of moduleRuntimes) {
+        const profile = profiles.find(profile => profile.enabled && profile.backendInstanceId === id);
+        if (profile) {
+          const record = inventoryRepository.getEnvironment(scope, profile.executionEnvironmentId);
+          backendAdvisoryEnvironments.set(id, { id: record.id, kind: record.kind, label: record.label });
+        }
+      }
+      executionTargets.invalidateHealth(); discoveryServices = createDiscoveryServices();
+      return installationAdvisories.replaceRuntimes(scope, moduleRuntimes);
+    };
     const reconcileLiveConfiguration = async (): Promise<void> => {
       const before = reconciliationFingerprint();
       const previousEnvironments = new Map(environmentRuntimes);
@@ -2178,6 +2320,7 @@ export async function startProductionApplication(
       desiredConfiguration = configurationRepository.get(scope);
       backendConfigurationFile = resolveDatabaseBackendConfiguration(desiredConfiguration.configuration, compiledBackendModuleCatalog);
       profiles = configuredProfiles();
+      for (const [id, attempt] of backendStartups) if (!backendStartupIsCurrent(id, attempt)) cancelBackendStartup(id);
       const environmentIds = new Set([...environmentRuntimes.keys(), ...desiredConfiguration.configuration.executionEnvironments.map(item => item.id)]);
       for (const id of environmentIds) {
         const definition = desiredConfiguration.configuration.executionEnvironments.find(item => item.id === id);
@@ -2195,7 +2338,9 @@ export async function startProductionApplication(
             const evidence = await captureAdministrativeResource(record, true);
             if (evidence.runtime.activeResources > 0 || evidence.service?.resources.some(item => item.blockers.length > 0) || observationFailures.has(`environment:${id}`)) continue;
           }
-          const boundBackends = [...moduleRuntimes.keys()].filter(backendId => profiles.some(profile => profile.backendInstanceId === backendId && profile.executionEnvironmentId === id));
+          const boundBackends = [...new Set([...moduleRuntimes.keys(), ...backendStartups.keys()])].filter(backendId =>
+            profiles.some(profile => profile.backendInstanceId === backendId && profile.executionEnvironmentId === id) ||
+            backendStartups.get(backendId)?.environmentId === id);
           // Check every main-side actor before withdrawing any sibling runtime.
           const loaded = await Promise.all(boundBackends.map(backendThreads));
           if (loaded.some(threads => threads.some(thread => thread.runState !== "idle"))) {
@@ -2203,7 +2348,9 @@ export async function startProductionApplication(
             continue;
           }
           for (const backendId of boundBackends) {
+            cancelBackendStartup(backendId);
             await runtimeModules.remove(backendId, retireBackendRuntime);
+            backendStartups.delete(backendId);
             appliedBackendFingerprints.delete(backendId); appliedBackendRevisions.delete(backendId);
           }
           await withdrawEnvironmentRuntime(id);
@@ -2220,13 +2367,14 @@ export async function startProductionApplication(
           else environmentPreparationFailures.set(id, error);
         }
       }
-      for (const id of new Set([...moduleRuntimes.keys(), ...desiredConfiguration.configuration.backends.map(item => item.id)])) {
+      for (const id of new Set([...moduleRuntimes.keys(), ...backendStartups.keys(), ...desiredConfiguration.configuration.backends.map(item => item.id)])) {
         const definition = desiredConfiguration.configuration.backends.find(item => item.id === id);
         const record = configurationRepository.runtime(scope, "backend", id);
         if (!definition?.enabled || record.preference !== "automatic") {
-          try { await runtimeModules.remove(id, retireBackendRuntime); appliedBackendFingerprints.delete(id); appliedBackendRevisions.delete(id); }
+          cancelBackendStartup(id);
+          try { await runtimeModules.remove(id, retireBackendRuntime); backendStartups.delete(id); appliedBackendFingerprints.delete(id); appliedBackendRevisions.delete(id); }
           catch (error) {
-            if (error instanceof ThreadRuntimeNotIdleError) backendPreparationFailures.delete(id);
+            if (error instanceof ThreadRuntimeNotIdleError) clearBackendPreparationFailure(id);
             else backendPreparationFailures.set(id, error);
           }
           continue;
@@ -2242,8 +2390,10 @@ export async function startProductionApplication(
         // running process, even when it currently has no active thread.
         const existing = moduleRuntimes.get(id);
         if (existing && startupEnvironmentPending(id) && await existing.startupEnvironmentState?.() !== "not_started") continue;
-        const observed = await captureAdministrativeResource(record, Boolean(moduleRuntimes.get(id)?.administration));
-        if (observed.runtime.activeResources > 0 || observed.backendObservation?.blockers.length || observationFailures.has(`backend:${id}`)) continue;
+        if (existing) {
+          const observed = await captureAdministrativeResource(record, Boolean(existing.administration));
+          if (observed.runtime.activeResources > 0 || observed.backendObservation?.blockers.length || observationFailures.has(`backend:${id}`)) continue;
+        }
         await applyBackendRuntime(id);
       }
       backendAdvisoryEnvironments.clear();
@@ -2279,6 +2429,7 @@ export async function startProductionApplication(
       if (changed && !advisoryRuntimesChanged) await activeApplicationSnapshots.publishAuthoritativeReplacement(scope);
     };
     const detachBackend = async (id: string, effect?: () => Promise<void>): Promise<void> => {
+      cancelBackendStartup(id);
       const rows = database!.prepare(`SELECT id FROM application_threads WHERE tenant_id = ? AND owner_principal_id = ? AND backend_instance_id = ? ORDER BY id`)
         .all(scope.tenantId, scope.principalId, id) as {id: string}[];
       const previews = await Promise.all(rows.map(async row => ({id: row.id, evidence: await runtimes!.captureLoadedRuntime(scope, row.id)})));
@@ -2298,8 +2449,9 @@ export async function startProductionApplication(
           } finally { admission.release(); executionTargets.invalidateHealth(); }
         },
       };
-      if (moduleRuntimes.has(id)) await runtimeModules.remove(id, retirement);
+      if (moduleRuntimes.has(id) || backendStartups.has(id) || runtimeModules.failures.has(id)) await runtimeModules.remove(id, retirement);
       else await effect?.();
+      backendStartups.delete(id); clearBackendPreparationFailure(id); backendStartupBackoff.delete(id);
       appliedBackendFingerprints.delete(id); appliedBackendRevisions.delete(id); backendIncarnations.delete(id); observedBackends.delete(id);
     };
     // Explicit Stop fences every selected backend before closing actors. Remote
@@ -2307,6 +2459,7 @@ export async function startProductionApplication(
     // call cannot make its own shutdown wait forever for a borrowed connection.
     const stopBackends = async <Result>(ids: readonly string[], effect: () => Promise<Result>): Promise<Result> => {
       const selected = [...new Set(ids)];
+      for (const id of selected) cancelBackendStartup(id);
       const admissions = selected.map(id => registry.suspend(scope, id));
       executionTargets.invalidateHealth();
       try {
@@ -2337,10 +2490,12 @@ export async function startProductionApplication(
           await Promise.all(admissions.map(admission => admission.drained));
           for (const id of selected) {
             await runtimeModules.remove(id, {run: (_runtime, change) => change()});
+            backendStartups.delete(id); clearBackendPreparationFailure(id);
             appliedBackendFingerprints.delete(id); appliedBackendRevisions.delete(id);
             // A rejected remote command still retires the now-closed local
             // module, but does not prove the provider host stopped.
             if (effectSucceeded) {
+              backendStartupBackoff.delete(id);
               backendIncarnations.delete(id); observedBackends.delete(id); backendPresence.set(id, false);
             }
           }
@@ -2453,9 +2608,16 @@ export async function startProductionApplication(
             const admission = registry.suspend(scope, id);
             try {
               await admission.drained;
+              if (backendStartups.has(id) || runtimeModules.failures.get(id)?.cleanupPending) {
+                cancelBackendStartup(id);
+                await runtimeModules.remove(id, retireBackendRuntime);
+                backendStartups.delete(id); clearBackendPreparationFailure(id);
+              }
               if (moduleRuntimes.has(id) || (await backendThreads(id)).length > 0) throw new DomainError("conflict", "Stop the backend and recover retained outcomes before removing its definition or target.");
               if (backendHasRemoteProvider(id) && await recoverBackendAdministration(id)) throw new DomainError("conflict", "The remote backend still owns resources. Stop it and recover retained outcomes before removal.");
-              return await callback();
+              const value = await callback();
+              backendStartupBackoff.delete(id);
+              return value;
             } catch (error) {
               if (error instanceof DomainError) throw error;
               throw new DomainError("conflict", "Backend shutdown could not be confirmed. Keep its definition until the execution host is reachable and retained work is recovered.");
@@ -2464,6 +2626,16 @@ export async function startProductionApplication(
           async withEnvironmentStopped(id, callback) {
             try {
               return await terminalService.runWithEnvironmentRetired(scope, id, async () => {
+                // Attempts retain their original environment even if a target
+                // moves in the candidate document. Drain that ownership before
+                // deleting the host authority needed to administer failures.
+                const retainedBackends = new Set([...backendStartups.keys(), ...runtimeModules.failures.keys()]);
+                for (const backendId of retainedBackends) {
+                  if (runtimeModules.executionEnvironmentId(backendId) !== id) continue;
+                  cancelBackendStartup(backendId);
+                  await runtimeModules.remove(backendId, retireBackendRuntime);
+                  backendStartups.delete(backendId); clearBackendPreparationFailure(backendId);
+                }
                 const owner = environmentRuntimes.get(id)?.sidecarRuntime;
                 const definition = previous.configuration.executionEnvironments.find(item => item.id === id);
                 const revokedOutbound = definition?.kind === "outbound" && hostPairings.getPairing(scope, definition.pairingId).state === "revoked";
@@ -2490,7 +2662,7 @@ export async function startProductionApplication(
       },
       async execute(candidate, input) {
         assertManagementScope(candidate);
-        return serializeConfiguration(async () => {
+        const dispatched = await serializeConfiguration(async () => {
           const {request} = input;
           const evidence = await captureAdministrativeResource(input.runtime, true, false);
           const result = (state: "applied" | "rejected" | "unavailable" | "unknown", runtime = evidence.runtime) => ({mutationId: request.mutationId, state, runtime});
@@ -2500,12 +2672,26 @@ export async function startProductionApplication(
           }
           const id = request.resourceId;
           const key = `${request.resourceKind}:${id}`;
+          let startupCompletion: Promise<BackendStartupOutcome> | undefined;
           // A receipt must describe the command that was admitted even when a
           // later save or command has already advanced the live runtime record.
           const admitted = (): ConfigurationRuntimeState => ({...configurationRepository.runtime(scope, request.resourceKind, id),
             desiredRevision: input.runtime.desiredRevision, preference: input.runtime.preference});
-          if (evidence.runtime.connectionState === "recovery_required" && request.action !== "disconnect") return result("unavailable");
+          // Retry proved-clean startup after host repair, or retry retained
+          // cleanup with Stop. Neither path clears a sidecar ownership fence.
+          const failedBackend = runtimeModules.failures.get(id);
+          const sidecarRecovery = ownershipRecovery(key, backendPreparationFailures.get(id));
+          const cleanupRecovery = request.resourceKind === "backend" && evidence.recoveryAction === "stop";
+          const retryFailedBackend = request.resourceKind === "backend" && sidecarRecovery === undefined &&
+            (cleanupRecovery && request.action === "stop" || !moduleRuntimes.has(id) &&
+              (failedBackend?.cleanupPending === false && !cleanupRecovery && (request.action === "connect" || request.action === "start") ||
+               failedBackend?.cleanupPending === true && request.action === "stop"));
+          if (cleanupRecovery && ["connect", "start", "restart"].includes(request.action)) return result("unavailable");
+          if (evidence.runtime.connectionState === "recovery_required" && request.action !== "disconnect" &&
+              !retryFailedBackend) return result("unavailable");
           if (["stop", "restart", "upgrade"].includes(request.action) && observationFailures.has(key)) return result("unavailable");
+          if (cleanupRecovery && request.action === "stop" && backendHasRemoteProvider(id) &&
+              (!evidence.administration || !evidence.backendObservation) && backendPresence.get(id) !== false) return result("unavailable");
           const receiptOwner = request.resourceKind === "environment" ? environmentRuntimes.get(id)?.sidecarRuntime : undefined;
           const priorFence = await fencePriorLifecycleForStop({
             request, pending: configurationRepository.pendingLifecycle(scope),
@@ -2639,18 +2825,33 @@ export async function startProductionApplication(
               }
               backendPresence.set(id, false);
             }
-            if (["connect", "start", "restart"].includes(request.action)) await applyBackendRuntime(id);
+            if (["connect", "start", "restart"].includes(request.action)) {
+              await applyBackendRuntime(id, true);
+              startupCompletion = backendStartups.get(id)?.completion;
+            }
           }
-          if (request.resourceKind === "environment" && appliedEnvironmentFingerprints.get(id) === environmentRuntimeFingerprint(id)) {
-            appliedEnvironmentRevisions.set(id, configurationRepository.runtime(scope, "environment", id).desiredRevision);
+          const finish = async (superseded = false) => {
+            if (request.resourceKind === "environment" && appliedEnvironmentFingerprints.get(id) === environmentRuntimeFingerprint(id)) {
+              appliedEnvironmentRevisions.set(id, configurationRepository.runtime(scope, "environment", id).desiredRevision);
+            }
+            if (!effectConfirmed) observationFailures.delete(key);
+            const after = await captureAdministrativeResource(admitted(), true);
+            await activeApplicationSnapshots.publishAuthoritativeReplacement(scope);
+            if (superseded) return result("rejected", { ...after.runtime,
+              lastError: "Configuration changed during backend startup. Inspect the current runtime before retrying." });
+            // Confirmed remote effects stay applied even when a later probe fails.
+            return result(!effectConfirmed && after.runtime.applyState === "unavailable" ? "unavailable" : "applied", after.runtime);
+          };
+          if (startupCompletion) {
+            const completion = startupCompletion;
+            return async () => {
+              const outcome = await completion;
+              return serializeConfiguration(() => finish(outcome === "superseded"));
+            };
           }
-          if (!effectConfirmed) observationFailures.delete(key);
-          const after = await captureAdministrativeResource(admitted(), true);
-          await activeApplicationSnapshots.publishAuthoritativeReplacement(scope);
-          // A confirmed remote effect is applied even when a later probe fails;
-          // the runtime projection carries that probe's own outcome.
-          return result(!effectConfirmed && after.runtime.applyState === "unavailable" ? "unavailable" : "applied", after.runtime);
+          return finish();
         });
+        return typeof dispatched === "function" ? dispatched() : dispatched;
       },
     };
     const configurationAdmin = new ConfigurationAdminService(configurationRepository, {
@@ -2699,7 +2900,12 @@ export async function startProductionApplication(
     const unsubscribeOutboundReconciliation = outboundConnections.subscribe(event => {
       if (event.scope.tenantId !== scope.tenantId || event.scope.principalId !== scope.principalId ||
         !event.connected || !event.environmentId || drain.isDraining) return;
-      void serializeConfiguration(reconcileLiveConfiguration).catch(reportBackgroundError("Outbound host connected"));
+      void serializeConfiguration(async () => {
+        for (const profile of profiles.filter(item => item.executionEnvironmentId === event.environmentId)) {
+          backendStartupBackoff.delete(profile.backendInstanceId);
+        }
+        await reconcileLiveConfiguration();
+      }).catch(reportBackgroundError("Outbound host connected"));
     });
     resources.defer("outbound configuration subscription", unsubscribeOutboundReconciliation);
     const configurationOperationRecovery = new ConfigurationOperationRecoveryService({
@@ -2780,6 +2986,10 @@ export async function startProductionApplication(
     resources.defer("execution configuration maintenance", async () => {
       clearInterval(maintenanceTimer); managementAbort.abort(); await configurationTail; await configurationAdmin.settleLifecycleOperations();
     }, {mode: "ownership_critical"});
+    resources.defer("backend startup work", async () => {
+      backendStartupAbort.abort();
+      while (backendStartupTasks.size) await Promise.allSettled([...backendStartupTasks]);
+    }, { mode: "ownership_critical" });
     const terminalAdmissions = new TerminalAdmissionTokens(terminalService);
     // HTTP transport closure can destroy a client socket while its async route
     // handler continues committing durable state. Drain those handler promises
@@ -2909,6 +3119,10 @@ export async function startProductionApplication(
     process.stdout.write(
       `Sedes listening on http://${listening.host}:${listening.port}\n`,
     );
+    // Provider connection startup requires listening host carriers and must not
+    // delay HTTP or Settings. Reconciliation publishes only completed modules.
+    if (hasDeferredBackendStartup) void serializeConfiguration(reconcileLiveConfiguration)
+      .catch(reportBackgroundError("Startup backend connections"));
     // Fork recovery can launch providers; it never delays serving requests.
     void forks
       .recoverInterruptedForks(scope)
@@ -2930,6 +3144,7 @@ export async function startProductionApplication(
         // closed so runtime/channel teardown cannot enqueue into a closed SSE
         // generation.
         drain.beginDrain();
+        backendStartupAbort.abort();
         // Stop detached admission at the same boundary as HTTP mutation
         // admission, rather than waiting for the resource stack to reach it.
         void discoveryOperations.close().catch(() => undefined);

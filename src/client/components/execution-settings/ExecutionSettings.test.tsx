@@ -746,7 +746,6 @@ describe("execution configuration administration", () => {
     fireEvent.change(await screen.findByLabelText("Execution environment"), { target: { value: localId } });
     fireEvent.change(screen.getByLabelText("Backend type"), { target: { value: "opencode" } });
     fireEvent.change(screen.getByLabelText("Backend name"), { target: { value: "OpenCode" } });
-    fireEvent.change(screen.getByLabelText("Native database path"), { target: { value: "/data/opencode.db" } });
     const ownership = screen.getByLabelText("Connection ownership");
     fireEvent.change(ownership, { target: { value: "http" } });
     fireEvent.change(screen.getByLabelText("HTTP endpoint"), { target: { value: "http://127.0.0.1:4096" } });
@@ -791,6 +790,73 @@ describe("execution configuration administration", () => {
     expect(screen.queryByRole("option", { name: "Cursor" })).toBeNull();
   });
 
+  it.each([localId, remoteId, linuxOutboundId].flatMap(environmentId => (["process_stdio", "http"] as const).map(channel => ({ environmentId, channel }))))("saves OpenCode native defaults on $environmentId using $channel without path overrides", async ({ environmentId, channel }) => {
+    const api = renderAt("/settings/backends/~new", controls(configurationWithOutbound()));
+    fireEvent.change(await screen.findByLabelText("Execution environment"), { target: { value: environmentId } });
+    fireEvent.change(screen.getByLabelText("Backend type"), { target: { value: "opencode" } });
+    fireEvent.change(screen.getByLabelText("Backend name"), { target: { value: "Native OpenCode" } });
+    expect(screen.queryByLabelText("Native database path")).toBeNull();
+    expect(screen.queryByLabelText("OpenCode v2 executable path")).toBeNull();
+    if (channel === "http") {
+      fireEvent.change(screen.getByLabelText("Connection ownership"), { target: { value: channel } });
+      fireEvent.change(screen.getByLabelText("HTTP endpoint"), { target: { value: "http://127.0.0.1:4096" } });
+      fireEvent.change(screen.getByLabelText("Password file reference"), { target: { value: "/secrets/opencode" } });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Save backend" }));
+    await waitFor(() => expect(api.saveConfiguration).toHaveBeenCalledOnce());
+    expect(api.saveConfiguration.mock.calls[0]![0].configuration.backends[0].moduleConfiguration).toEqual({ connection: channel === "process_stdio"
+      ? { ownership: "owned", channel: { type: "process_stdio" } }
+      : { ownership: "external", channel: { type: "http", url: "http://127.0.0.1:4096", authentication: {
+        type: "basic", username: "opencode", secret: { source: "protected_file", path: "/secrets/opencode" },
+      } } } });
+  });
+
+  it("clears all OpenCode path overrides instead of saving empty values", async () => {
+    const document = configuration();
+    const backend = backendEditors.opencode.createBackend("custom-opencode");
+    if (backend.kind !== "opencode") throw new Error("Expected OpenCode");
+    backend.label = "Custom OpenCode";
+    backend.moduleConfiguration = { nativeStorePath: "/data/native.db", configDirectory: "/config/opencode",
+      connection: { ownership: "owned", channel: { type: "process_stdio", executablePath: "/opt/opencode2", workingDirectory: "/work" } } };
+    document.backends.push(backend);
+    document.targets.push(backendEditors.opencode.createTarget("custom-target", backend.id, localId));
+    const api = renderAt(`/settings/backends/${backend.id}/edit`, controls(document));
+    await screen.findByLabelText("Native database path");
+    for (const label of ["Native database path", "OpenCode configuration directory", "OpenCode v2 executable path", "Working directory"]) {
+      expect(screen.getByLabelText(label)).not.toBeRequired();
+      fireEvent.change(screen.getByLabelText(label), { target: { value: "" } });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Save backend" }));
+    await waitFor(() => expect(api.saveConfiguration).toHaveBeenCalledOnce());
+    expect(api.saveConfiguration.mock.calls[0]![0].configuration.backends[0].moduleConfiguration).toEqual({ connection: { ownership: "owned", channel: { type: "process_stdio" } } });
+  });
+
+  it("drops OpenCode launch overrides when switching to an external server and keeps only the database assertion", async () => {
+    const api = renderAt("/settings/backends/~new");
+    fireEvent.change(await screen.findByLabelText("Execution environment"), { target: { value: localId } });
+    fireEvent.change(screen.getByLabelText("Backend type"), { target: { value: "opencode" } });
+    fireEvent.change(screen.getByLabelText("Backend name"), { target: { value: "External OpenCode" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Advanced\s*Optional path overrides$/u }));
+    for (const [label, value] of [["Native database path", "/data/native.db"], ["OpenCode configuration directory", "/config/opencode"],
+      ["OpenCode v2 executable path", "/opt/opencode2"], ["Working directory", "/work"]] as const) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    }
+    fireEvent.change(screen.getByLabelText("Connection ownership"), { target: { value: "http" } });
+    for (const label of ["OpenCode configuration directory", "OpenCode v2 executable path", "Working directory", "Native database path"]) {
+      expect(screen.queryByLabelText(label)).toBeNull();
+    }
+    expect(screen.getByLabelText("Expected native database path")).toHaveValue("/data/native.db");
+    expect(screen.getByLabelText("Expected native database path")).toHaveAccessibleDescription(/does not change the external server’s database/u);
+    fireEvent.change(screen.getByLabelText("HTTP endpoint"), { target: { value: "http://127.0.0.1:4096" } });
+    fireEvent.change(screen.getByLabelText("Password file reference"), { target: { value: "/secrets/opencode" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save backend" }));
+    await waitFor(() => expect(api.saveConfiguration).toHaveBeenCalledOnce());
+    expect(api.saveConfiguration.mock.calls[0]![0].configuration.backends[0].moduleConfiguration).toEqual({
+      nativeStorePath: "/data/native.db", connection: { ownership: "external", channel: { type: "http", url: "http://127.0.0.1:4096",
+        authentication: { type: "basic", username: "opencode", secret: { source: "protected_file", path: "/secrets/opencode" } } } },
+    });
+  });
+
   it.each([localId, remoteId, linuxOutboundId].flatMap(environmentId => (["process_stdio", "http"] as const).map(channel => ({ environmentId, channel }))))("creates OpenCode v2 on $environmentId using $channel", async ({ environmentId, channel }) => {
     const api = controls(configurationWithOutbound());
     renderAt("/settings/backends", api);
@@ -800,6 +866,7 @@ describe("execution configuration administration", () => {
     fireEvent.change(screen.getByLabelText("Backend type"), { target: { value: "opencode" } });
     expect(screen.getByRole("option", { name: "OpenCode v2" })).toBeEnabled();
     fireEvent.change(screen.getByLabelText("Backend name"), { target: { value: "Qualified OpenCode" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Advanced\s*Optional path overrides$/u }));
     fireEvent.change(screen.getByLabelText("Native database path"), { target: { value: "/data/opencode/opencode.db" } });
     if (channel === "process_stdio") {
       expect(screen.getByLabelText("Connection ownership")).toHaveValue("process_stdio");
@@ -885,6 +952,7 @@ describe("execution configuration administration", () => {
     expect(screen.queryByRole("combobox", { name: "Backend type" })).toBeNull();
     expect(screen.getByRole("group", { name: "Backend type" })).toHaveTextContent("OpenCode v2");
     expect(screen.getByLabelText("Backend enabled")).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: /^Advanced\s*Optional path overrides$/u }));
     fireEvent.change(screen.getByLabelText("Native database path"), { target: { value: "/data/opencode/opencode.db" } });
     fireEvent.change(screen.getByLabelText("OpenCode v2 executable path"), { target: { value: "/opt/bin/opencode2" } });
     fireEvent.change(screen.getByLabelText("Working directory"), { target: { value: "/work" } });

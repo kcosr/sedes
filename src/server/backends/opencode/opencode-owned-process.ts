@@ -31,17 +31,20 @@ function waitBounded(exit: Promise<void>, milliseconds: number): Promise<void> {
 }
 
 export async function startOpenCodeOwnedProcess(input: {
-  readonly executablePath: string;
-  readonly workingDirectory: string;
-  readonly nativeStorePath: string;
-  readonly configDirectory: string;
+  readonly executablePath?: string;
+  readonly workingDirectory?: string;
+  readonly nativeStorePath?: string;
+  readonly configDirectory?: string;
   readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly processMarker: string;
   readonly assertLaunchAdmission?: () => void;
+  readonly signal?: AbortSignal;
 }): Promise<OpenCodeOwnedProcess> {
-  if (process.platform !== "linux" || !path.isAbsolute(input.workingDirectory)) throw new OpenCodeRuntimeError("opencode_owned_platform_unavailable");
-  const executablePath = await admitOpenCodeExecutable(input.executablePath);
-  const workingDirectory = await realpath(input.workingDirectory);
+  const assertActive = () => { if (input.signal?.aborted) throw new OpenCodeRuntimeError("opencode_request_aborted"); };
+  assertActive();
+  if (process.platform !== "linux" || (input.workingDirectory !== undefined && !path.isAbsolute(input.workingDirectory))) throw new OpenCodeRuntimeError("opencode_owned_platform_unavailable");
+  const workingDirectory = input.workingDirectory === undefined ? undefined : await realpath(input.workingDirectory);
+  const executablePath = await admitOpenCodeExecutable(input.executablePath, input.environment, workingDirectory);
   const marker = input.processMarker;
   if (!/^[a-f0-9]{64}$/u.test(marker)) throw new OpenCodeRuntimeError("opencode_owned_marker_invalid");
   const password = randomBytes(32).toString("base64url");
@@ -68,11 +71,15 @@ export async function startOpenCodeOwnedProcess(input: {
     throw cause;
   });
   try {
+    assertActive();
     input.assertLaunchAdmission?.();
-    await probeOpenCodeRelease(executablePath, environment);
+    await probeOpenCodeRelease(executablePath, environment, input.signal);
+    assertActive();
     input.assertLaunchAdmission?.();
+    assertActive();
     child = spawn(executablePath, ["serve", "--stdio", "--hostname", "127.0.0.1", "--port", "0"], {
-      cwd: workingDirectory, env: environment, detached: true, stdio: ["pipe", "pipe", "pipe"],
+      ...(workingDirectory === undefined ? {} : { cwd: workingDirectory }),
+      env: environment, detached: true, stdio: ["pipe", "pipe", "pipe"],
     });
     const launched = child;
     launched.stderr.resume();
@@ -88,6 +95,7 @@ export async function startOpenCodeOwnedProcess(input: {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        input.signal?.removeEventListener("abort", aborted);
         launched.stdout.off("data", data);
         launched.stdout.off("end", ended);
         launched.off("error", ended);
@@ -97,6 +105,7 @@ export async function startOpenCodeOwnedProcess(input: {
         if (error) reject(error); else resolve(value!);
       };
       const ended = () => finish(new OpenCodeRuntimeError("opencode_startup_exited"));
+      const aborted = () => finish(new OpenCodeRuntimeError("opencode_request_aborted"));
       const data = (chunk: Buffer) => {
         if (buffer.length + chunk.length > 4_096) return finish(new OpenCodeRuntimeError("opencode_startup_frame_too_large"));
         buffer = Buffer.concat([buffer, chunk]);
@@ -115,7 +124,10 @@ export async function startOpenCodeOwnedProcess(input: {
       launched.stdout.once("end", ended);
       launched.once("error", ended);
       launched.once("exit", ended);
+      input.signal?.addEventListener("abort", aborted, { once: true });
+      if (input.signal?.aborted) aborted();
     });
+    assertActive();
     if (!launched.pid || exited) throw new OpenCodeRuntimeError("opencode_startup_exited");
     client = new OpenCodeHttpClient({ endpoint, password });
     return Object.freeze({ pid: launched.pid, executablePath, endpoint, client, exited: exit, shellEnvironment, stop });

@@ -65,7 +65,7 @@ export async function resolveOpenCodeRuntimeInput(input: {
   let secretGeneration = 0;
   return {
     authority, hostIncarnation: input.hostIncarnation,
-    nativeStorePath: configuration.nativeStorePath,
+    ...(configuration.nativeStorePath ? { nativeStorePath: configuration.nativeStorePath } : {}),
     ...(configuration.configDirectory ? { configDirectory: configuration.configDirectory } : {}),
     environment,
     ...(input.agentTools ? { agentTools: input.agentTools } : {}),

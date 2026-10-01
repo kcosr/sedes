@@ -22,13 +22,25 @@ import { openCodeRuntimeExecuteOperation, openCodeRuntimeControlOperation, openC
   openCodePortAdmissionSchema, openCodeRuntimeSuccessSchema, openCodeRuntimeInspectionSchema, openCodeObservationPollTargetSchema,
   type OpenCodeRuntimeCommandInput, type OpenCodeRuntimeInfo } from "./opencode-runtime-wire.js";
 
+interface OpenCodeRemoteStartup {
+  readonly work: Promise<void>;
+  readonly controller: AbortController;
+  readonly signal: AbortSignal;
+  readonly retained: boolean;
+  readonly waiters: Set<() => void>;
+}
+const startupTimeoutMilliseconds = 45_000;
+
 /** Provider-private facade. Carrier choice is entirely in SidecarRuntimeProvider. */
 export class OpenCodeRemoteRuntime {
-  readonly nativeNamespaceKey: string;
+  #nativeNamespaceKey?: string;
+  get nativeNamespaceKey(): string {
+    if (!this.#nativeNamespaceKey) throw unavailable();
+    return this.#nativeNamespaceKey;
+  }
   #attachment?: SidecarRuntimeLease;
   #info?: OpenCodeRuntimeInfo;
-  #starting?: Promise<void>;
-  #startingRetained = false;
+  #starting?: OpenCodeRemoteStartup;
   #closed = false;
   #recovery = false;
   #invocationRecovery = false;
@@ -36,73 +48,133 @@ export class OpenCodeRemoteRuntime {
   #lifetime = new AbortController();
   readonly #ports = new Set<{ release(): Promise<void> }>();
   constructor(readonly input: { readonly configuration: OpenCodeRuntimeConfiguration; readonly provider: SidecarRuntimeProvider;
-    readonly acquireRecovery: (signal?: AbortSignal) => Promise<SidecarRuntimeLease> }) {
-    const environmentId = input.configuration.connections[0]!.executionEnvironmentId;
-    this.nativeNamespaceKey = openCodeRuntimeNamespaceKey(environmentId, input.configuration.nativeStorePath);
-  }
+    readonly acquireRecovery: (signal?: AbortSignal) => Promise<SidecarRuntimeLease> }) {}
   get runtimeId(): string | undefined { return this.#info?.runtimeId; }
   snapshot(): OpenCodeRuntimeSnapshot {
     return this.#info?.snapshot ?? { state: this.#starting ? "starting" : "stopped",
       ownership: this.input.configuration.connection.ownership, references: 0 };
   }
-  start(): Promise<void> {
-    if (this.#closed) return Promise.reject(unavailable());
-    if (this.#starting) return this.#startingRetained
-      ? this.#starting.catch(() => undefined).then(() => this.start()) : this.#starting;
-    if (this.#attachment && this.#info?.snapshot.state === "ready") {
-      if (!this.#invocationRecovery) return this.assertCurrent();
-      return this.#starting = this.#admitCurrentConfiguration().finally(() => { this.#starting = undefined; });
+  async start(signal?: AbortSignal): Promise<void> {
+    signal = AbortSignal.any([AbortSignal.timeout(startupTimeoutMilliseconds), ...(signal ? [signal] : [])]);
+    signal.throwIfAborted();
+    if (this.#closed) throw unavailable();
+    const starting = this.#starting;
+    if (starting) {
+      if (starting.retained || starting.signal.aborted) {
+        // An ordinary caller must finish retained admission before promoting
+        // it, and a fresh caller must not inherit an abandoned attempt.
+        await this.#waitForStartup(starting, signal).catch(() => undefined);
+        signal?.throwIfAborted();
+        return this.start(signal);
+      }
+      return this.#waitForStartup(starting, signal);
     }
-    this.#starting = this.#start().finally(() => { this.#starting = undefined; });
-    return this.#starting;
+    if (this.#attachment && this.#info?.snapshot.state === "ready" && !this.#invocationRecovery) {
+      return this.assertCurrent(AbortSignal.any([this.#lifetime.signal, signal]));
+    }
+    return this.#waitForStartup(this.#beginStartup(false, this.#attachment !== undefined && this.#info?.snapshot.state === "ready"), signal);
   }
   /** A retained tool invocation is never authority to ensure a new daemon. */
-  startRetained(): Promise<void> {
-    if (this.#closed) return Promise.reject(unavailable());
-    if (this.#starting) return this.#starting;
-    if (this.#attachment && this.#info?.snapshot.state === "ready") return this.assertCurrent();
-    this.#startingRetained = true;
-    this.#starting = this.#start(true).finally(() => { this.#starting = undefined; this.#startingRetained = false; });
-    return this.#starting;
+  async startRetained(signal?: AbortSignal): Promise<void> {
+    signal = AbortSignal.any([AbortSignal.timeout(startupTimeoutMilliseconds), ...(signal ? [signal] : [])]);
+    signal.throwIfAborted();
+    if (this.#closed) throw unavailable();
+    const starting = this.#starting;
+    if (starting) {
+      if (starting.signal.aborted) {
+        await this.#waitForStartup(starting, signal).catch(() => undefined);
+        signal?.throwIfAborted();
+        return this.startRetained(signal);
+      }
+      return this.#waitForStartup(starting, signal);
+    }
+    if (this.#attachment && this.#info?.snapshot.state === "ready") {
+      return this.assertCurrent(AbortSignal.any([this.#lifetime.signal, signal]));
+    }
+    return this.#waitForStartup(this.#beginStartup(true), signal);
   }
-  async #start(existingOnly = false): Promise<void> {
+  #beginStartup(retained: boolean, promote = false): OpenCodeRemoteStartup {
+    const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(startupTimeoutMilliseconds)]);
+    const attempt: OpenCodeRemoteStartup = { controller, signal, retained, waiters: new Set(),
+      work: Promise.resolve().then(() => promote ? this.#admitCurrentConfiguration(signal) : this.#start(retained, signal))
+        .finally(() => { if (this.#starting === attempt) this.#starting = undefined; }),
+    };
+    this.#starting = attempt;
+    return attempt;
+  }
+  #waitForStartup(attempt: OpenCodeRemoteStartup, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const finish = () => {
+        if (!attempt.waiters.delete(abort)) return false;
+        signal?.removeEventListener("abort", abort);
+        return true;
+      };
+      const abort = () => {
+        if (!finish()) return;
+        // A cancelled waiter has no authority to stop another caller's
+        // attachment, much less the independent provider daemon.
+        if (!attempt.waiters.size) attempt.controller.abort(signal?.reason);
+        reject(signal?.reason);
+      };
+      attempt.waiters.add(abort);
+      signal?.addEventListener("abort", abort, { once: true });
+      attempt.work.then(() => { if (finish()) resolve(); }, error => { if (finish()) reject(error); });
+      if (signal?.aborted) abort();
+    });
+  }
+  async #start(existingOnly: boolean, signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
     let recovery = existingOnly || !this.input.configuration.instance.enabled || !this.input.configuration.connections.some(connection => connection.enabled);
-    const attachment = existingOnly ? await this.input.provider.acquireExisting()
-      : recovery ? await this.input.acquireRecovery() : await this.input.provider.acquire().catch(async error => {
+    const attachment = existingOnly ? await this.input.provider.acquireExisting(signal)
+      : recovery ? await this.input.acquireRecovery(signal) : await this.input.provider.acquire(signal).catch(async error => {
+      signal.throwIfAborted();
       if (!isSidecarRevisionChanged(error)) throw error;
-      recovery = true; return this.input.acquireRecovery();
+      recovery = true; return this.input.acquireRecovery(signal);
     });
     try {
+      signal.throwIfAborted();
       if (this.#closed) throw unavailable();
-      let value = await call(attachment, { action: recovery ? "lookup_recovery" : "lookup", configuration: this.input.configuration });
-      if (value === null && !recovery && !this.#info) value = await call(attachment, { action: "ensure", configuration: this.input.configuration });
+      let value = await call(attachment, { action: recovery ? "lookup_recovery" : "lookup", configuration: this.input.configuration }, signal);
+      if (value === null && !recovery && !this.#info) value = await call(attachment, { action: "ensure", configuration: this.input.configuration }, signal);
+      signal.throwIfAborted();
       const info = openCodeRuntimeInfoSchema.parse(value);
-      if (info.nativeNamespaceKey !== this.nativeNamespaceKey ||
+      if (info.snapshot.state === "cleanup_unproved") throw new OpenCodeRuntimeError("opencode_owned_cleanup_unproved");
+      const store = info.snapshot.identity?.nativeStorePath;
+      const expectedStore = this.input.configuration.nativeStorePath;
+      if (!store || info.nativeNamespaceKey === null || expectedStore !== undefined && store !== expectedStore ||
+          info.nativeNamespaceKey !== openCodeRuntimeNamespaceKey(this.input.configuration.connections[0]!.executionEnvironmentId, store) ||
+          this.#nativeNamespaceKey !== undefined && info.nativeNamespaceKey !== this.#nativeNamespaceKey ||
           this.#info && (this.#info.runtimeId !== info.runtimeId || this.#info.snapshot.generation !== info.snapshot.generation ||
             configurationFingerprint(this.#info.snapshot.identity ?? null) !== configurationFingerprint(info.snapshot.identity ?? null) ||
             this.#serviceIncarnation !== attachment.serviceIncarnation) ||
           info.snapshot.state !== "ready" || !info.snapshot.generation || !info.snapshot.identity) throw unavailable();
       if (this.#closed) throw unavailable();
+      this.#nativeNamespaceKey = info.nativeNamespaceKey;
       this.#lifetime = new AbortController(); this.#info = info; this.#attachment = attachment;
       this.#recovery = recovery; this.#serviceIncarnation = attachment.serviceIncarnation;
       this.#invocationRecovery = existingOnly;
       void attachment.closed.then(() => this.#disconnected(attachment), () => this.#disconnected(attachment));
     } catch (error) { attachment.release(); throw error; }
   }
-  async #admitCurrentConfiguration(): Promise<void> {
+  async #admitCurrentConfiguration(signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
     const retained = this.#ready();
     let recovery = !this.input.configuration.instance.enabled || !this.input.configuration.connections.some(connection => connection.enabled);
-    const fresh = recovery ? await this.input.acquireRecovery() : await this.input.provider.acquire().catch(error => {
+    const fresh = recovery ? await this.input.acquireRecovery(signal) : await this.input.provider.acquire(signal).catch(error => {
+      signal.throwIfAborted();
       if (!isSidecarRevisionChanged(error)) throw error;
       recovery = true;
-      return this.input.acquireRecovery();
+      return this.input.acquireRecovery(signal);
     });
     let adopted = false;
     try {
+      signal.throwIfAborted();
       if (this.#closed || fresh.serviceIncarnation !== retained.attachment.serviceIncarnation ||
           fresh.controllerEpoch < retained.attachment.controllerEpoch ||
           fresh.channel !== retained.attachment.channel && fresh.controllerEpoch === retained.attachment.controllerEpoch) throw unavailable();
-      const info = openCodeRuntimeInfoSchema.parse(await call(fresh, { action: recovery ? "lookup_recovery" : "lookup", configuration: this.input.configuration }));
+      const info = openCodeRuntimeInfoSchema.parse(await call(fresh, { action: recovery ? "lookup_recovery" : "lookup", configuration: this.input.configuration }, signal));
+      signal.throwIfAborted();
       if (this.#closed || info.nativeNamespaceKey !== this.nativeNamespaceKey || info.runtimeId !== retained.info.runtimeId ||
           info.snapshot.state !== "ready" || info.snapshot.generation !== retained.info.snapshot.generation ||
           configurationFingerprint(info.snapshot.identity ?? null) !== configurationFingerprint(retained.info.snapshot.identity ?? null) ||
@@ -247,7 +319,8 @@ export class OpenCodeRemoteRuntime {
   /** Main teardown detaches. Only explicit administration may stop the owner. */
   async close(): Promise<{ readonly cleanup: "proved"; readonly nativeInterrupts: "not_owned" }> {
     this.#closed = true; this.#lifetime.abort();
-    await this.#starting?.catch(() => undefined);
+    this.#starting?.controller.abort();
+    await this.#starting?.work.catch(() => undefined);
     await Promise.allSettled([...this.#ports].map(port => port.release()));
     this.#attachment?.release(); this.#attachment = undefined;
     return { cleanup: "proved", nativeInterrupts: "not_owned" };

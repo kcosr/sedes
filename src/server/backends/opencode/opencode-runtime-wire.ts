@@ -48,7 +48,7 @@ export type OpenCodeRuntimeCommand = z.infer<typeof openCodeRuntimeCommandSchema
 export type OpenCodeRuntimeCommandInput = OpenCodeRuntimeCommand extends infer Command
   ? Command extends OpenCodeRuntimeCommand ? Omit<Command, "serviceIncarnation" | "controllerEpoch"> : never : never;
 
-const capability = { capabilityId: "opencode_runtime", majorVersion: 1 } as const;
+const capability = { capabilityId: "opencode_runtime", majorVersion: 2 } as const;
 export const openCodeRuntimeExecuteOperation = { ...capability, operation: "runtime.execute",
   requestSchema: sidecarRuntimeBodySchema, responseSchema: sidecarRuntimeBodySchema,
   lane: "operation", maximumDeadlineMilliseconds: 600_000,
@@ -74,7 +74,7 @@ export const openCodeRuntimeResponseSchema = z.discriminatedUnion("status", [
 ]);
 const fileIdentity = z.strictObject({ device: id, inode: id });
 export const openCodeRuntimeInfoSchema = z.strictObject({
-  runtimeId: id, nativeNamespaceKey: z.string().regex(/^[a-f0-9]{64}$/u),
+  runtimeId: id, nativeNamespaceKey: z.string().regex(/^[a-f0-9]{64}$/u).nullable(),
   snapshot: z.strictObject({ state: z.enum(["stopped", "starting", "ready", "disconnected", "cleanup_unproved"]),
     ownership: z.enum(["owned", "external"]), generation: id.optional(), references: position,
     identity: z.strictObject({ pid: z.number().int().positive(), startTime: id, uid: z.number().int().nonnegative(),

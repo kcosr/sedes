@@ -22,6 +22,16 @@ function input(config = configuration) {
 }
 
 describe("OpenCode execution-host configuration", () => {
+  it("keeps omitted native overrides absent until the execution host starts the process", async () => {
+    const { nativeStorePath: _store, configDirectory: _config, ...minimal } = configuration;
+    const f = input({ ...minimal, connection: { ownership: "owned", channel: { type: "process_stdio" } } });
+    const result = await resolveOpenCodeRuntimeInput(f);
+    expect(result).not.toHaveProperty("nativeStorePath");
+    expect(result).not.toHaveProperty("configDirectory");
+    expect(result.connection).toEqual({ ownership: "owned", channel: { type: "process_stdio" } });
+    expect(result.environment).toEqual(f.environment);
+  });
+
   it("resolves startup definitions against a copied host baseline and protected host file", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "sedes-oc-config-")); directories.push(directory);
     const filename = path.join(directory, "secret"); await writeFile(filename, "host-file-value\n", { mode: 0o600 });

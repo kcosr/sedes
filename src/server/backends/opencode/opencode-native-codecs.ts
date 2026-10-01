@@ -459,8 +459,10 @@ export function parseOpenCodeMutationOutput<K extends OpenCodeMutationMethod>(me
 }
 
 const nativeFailureCodes = [
-  "opencode_native_store_recovery_required", "opencode_native_store_already_owned",
-  "opencode_native_store_release_unproved", "opencode_native_store_initialization_unproved",
+  "opencode_runtime_owner_recovery_required", "opencode_runtime_owner_already_owned",
+  "opencode_runtime_owner_release_unproved", "opencode_runtime_owner_initialization_unproved",
+  "opencode_runtime_owner_directory_invalid", "opencode_executable_unavailable",
+  "opencode_owned_cleanup_unproved",
   "opencode_platform_unsupported", "opencode_release_incompatible",
   "opencode_native_mutation_input_invalid", "opencode_native_read_input_invalid", "opencode_native_protocol_invalid",
   "opencode_native_not_found", "opencode_native_cursor_invalid", "opencode_request_aborted", "opencode_request_failed",

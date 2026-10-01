@@ -191,7 +191,7 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
       && value.moduleConfiguration.connection.channel.type === "http" && value.moduleConfiguration.connection.channel.authentication.secret.source === "environment"
       ? "Remote OpenCode requires a protected password file on the execution host. Choose Protected file and enter its path to save this backend." : undefined,
     createBackend: (id) => ({ ...commonBackend(id), kind: "opencode", moduleConfiguration: {
-      nativeStorePath: "", connection: { ownership: "owned", channel: { type: "process_stdio", executablePath: "", workingDirectory: "" } },
+      connection: { ownership: "owned", channel: { type: "process_stdio" } },
     } }),
     createTarget: (id, backend, environment) => ({ ...commonTarget(id, backend, environment), kind: "opencode_http", moduleConfiguration: {
       defaults: { model: { type: "catalogDefault" }, variant: { type: "modelDefault" } },
@@ -210,10 +210,10 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
       const channel = configuration.connection.channel;
       return [
         { label: "Ownership", value: channel.type === "process_stdio" ? "Sedes-managed process" : "External HTTP server" },
-        { label: "Native database", value: <PathText value={configuration.nativeStorePath} /> },
+        { label: channel.type === "http" ? "Expected native database" : "Native database", value: configuration.nativeStorePath ? <PathText value={configuration.nativeStorePath} /> : "Native process default" },
         ...(channel.type === "process_stdio" ? [
-          { label: "Executable", value: <PathText value={channel.executablePath} /> },
-          { label: "Working directory", value: <PathText value={channel.workingDirectory} /> },
+          { label: "Executable", value: channel.executablePath ? <PathText value={channel.executablePath} /> : "opencode2 from the execution host’s PATH" },
+          { label: "Working directory", value: channel.workingDirectory ? <PathText value={channel.workingDirectory} /> : "Inherited from the execution host" },
           ...(configuration.configDirectory ? [{ label: "Configuration directory", value: <PathText value={configuration.configDirectory} /> }] : []),
         ] : [
           { label: "Endpoint", value: <PathText value={channel.url} /> },
@@ -418,24 +418,12 @@ function OpenCodeBackendEditor({ value, environment, onChange, errors, disabled 
   return <>
     <SelectField label="Connection ownership" disabled={disabled} error={errors.get("moduleConfiguration.connection")} value={channel.type} options={[
       { value: "process_stdio", label: "Sedes-managed process" }, { value: "http", label: "External HTTP server" },
-    ]} onChange={(type) => update({ ...configuration, connection: type === "process_stdio"
-      ? { ownership: "owned", channel: { type, executablePath: "", workingDirectory: "" } }
-      : { ownership: "external", channel: { type, url: "", authentication: { type: "basic", username: "opencode", secret: { source: "protected_file", path: "" } } } },
-    })} />
-    <TextField label="Native database path" disabled={disabled} error={error("nativeStorePath")} value={configuration.nativeStorePath} required
-      description="Absolute path to the OpenCode SQLite database on the selected execution host. Each backend must use its own native store."
-      onChange={(nativeStorePath) => update({ ...configuration, nativeStorePath })} />
-    {channel.type === "process_stdio" ? <>
-      <TextField label="OpenCode v2 executable path" disabled={disabled} error={error("connection.channel.executablePath")} value={channel.executablePath} required
-        description="Absolute path to the qualified opencode2 binary on the selected execution host."
-        onChange={(executablePath) => update({ ...configuration, connection: { ownership: "owned", channel: { ...channel, executablePath } } })} />
-      <TextField label="Working directory" disabled={disabled} error={error("connection.channel.workingDirectory")} value={channel.workingDirectory} required
-        description="Absolute directory on the selected execution host."
-        onChange={(workingDirectory) => update({ ...configuration, connection: { ownership: "owned", channel: { ...channel, workingDirectory } } })} />
-      <TextField label="OpenCode configuration directory" disabled={disabled} error={error("configDirectory")} value={configuration.configDirectory ?? ""}
-        description="Optional absolute directory on the selected execution host. Leave blank to use that account's native OpenCode configuration."
-        onChange={(configDirectory) => update({ ...configuration, configDirectory: configDirectory || undefined })} />
-    </> : <>
+    ]} onChange={(type) => {
+      const { configDirectory: _previous, ...externalConfiguration } = configuration;
+      update(type === "process_stdio" ? { ...configuration, connection: { ownership: "owned", channel: { type } } }
+        : { ...externalConfiguration, connection: { ownership: "external", channel: { type, url: "", authentication: { type: "basic", username: "opencode", secret: { source: "protected_file", path: "" } } } } });
+    }} />
+    {channel.type === "http" ? <>
       <TextField label="HTTP endpoint" disabled={disabled} error={error("connection.channel.url")} value={channel.url} required
         description="Loopback address on the selected execution host, including SSH and outbound hosts. Use an explicit port, for example http://127.0.0.1:4096."
         onChange={(url) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, url } } })} />
@@ -452,7 +440,39 @@ function OpenCodeBackendEditor({ value, environment, onChange, errors, disabled 
         : <TextField label="Password environment variable" error={error("connection.channel.authentication.secret.variable")} value={channel.authentication.secret.variable} required disabled={disabled || remote}
           description="Approved SEDES_OPENCODE_…PASSWORD… variable on the selected execution host; enter its name, never the password."
           onChange={(variable) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, authentication: { type: "basic", username: "opencode", secret: { source: "environment", variable } } } } })} />}
-    </>}
+    </> : null}
+    <AdvancedGroup summary={channel.type === "http" ? "Optional database assertion" : "Optional path overrides"}
+      defaultOpen={Boolean(configuration.nativeStorePath || configuration.configDirectory || (channel.type === "process_stdio" && (channel.executablePath || channel.workingDirectory)))}
+      forceOpen={Boolean(error("nativeStorePath") || error("configDirectory") || error("connection.channel.executablePath") || error("connection.channel.workingDirectory"))}>
+      <TextField label={channel.type === "http" ? "Expected native database path" : "Native database path"} path disabled={disabled} error={error("nativeStorePath")} value={configuration.nativeStorePath ?? ""}
+        description={channel.type === "http"
+          ? "Optional absolute path Sedes checks against the running server’s observed database. Leave blank to discover it. This does not change the external server’s database."
+          : "Optional absolute path on the selected execution host. Leave blank to use the native process’s database. Multiple OpenCode processes may share a database."}
+        onChange={(nativeStorePath) => {
+          const { nativeStorePath: _previous, ...remaining } = configuration;
+          update(nativeStorePath ? { ...remaining, nativeStorePath } : remaining);
+        }} />
+      {channel.type === "process_stdio" ? <>
+        <TextField label="OpenCode v2 executable path" path disabled={disabled} error={error("connection.channel.executablePath")} value={channel.executablePath ?? ""}
+          description="Optional absolute path on the selected execution host. Leave blank to use opencode2 from that host’s PATH."
+          onChange={(executablePath) => {
+            const { executablePath: _previous, ...remaining } = channel;
+            update({ ...configuration, connection: { ownership: "owned", channel: executablePath ? { ...remaining, executablePath } : remaining } });
+          }} />
+        <TextField label="Working directory" path disabled={disabled} error={error("connection.channel.workingDirectory")} value={channel.workingDirectory ?? ""}
+          description="Optional absolute directory on the selected execution host. Leave blank to inherit the execution host’s working directory."
+          onChange={(workingDirectory) => {
+            const { workingDirectory: _previous, ...remaining } = channel;
+            update({ ...configuration, connection: { ownership: "owned", channel: workingDirectory ? { ...remaining, workingDirectory } : remaining } });
+          }} />
+        <TextField label="OpenCode configuration directory" path disabled={disabled} error={error("configDirectory")} value={configuration.configDirectory ?? ""}
+          description="Optional absolute directory on the selected execution host. Leave blank to use its native OpenCode configuration environment."
+          onChange={(configDirectory) => {
+            const { configDirectory: _previous, ...remaining } = configuration;
+            update(configDirectory ? { ...remaining, configDirectory } : remaining);
+          }} />
+      </> : null}
+    </AdvancedGroup>
   </>;
 }
 

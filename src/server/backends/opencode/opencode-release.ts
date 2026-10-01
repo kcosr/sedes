@@ -31,31 +31,35 @@ export function admitOpenCodeNativeProfile(environmentEntries: readonly string[]
   }
 }
 
-export async function admitOpenCodeExecutable(executablePath: string): Promise<string> {
-  if (!path.isAbsolute(executablePath)) throw new OpenCodeRuntimeError("opencode_executable_absolute_path_required");
-  try {
-    const canonical = await realpath(executablePath);
-    const metadata = await stat(canonical);
-    if (!metadata.isFile()) throw new Error();
-    await access(canonical, constants.X_OK);
-    return canonical;
-  } catch { throw new OpenCodeRuntimeError("opencode_executable_unavailable"); }
+export async function admitOpenCodeExecutable(executablePath: string | undefined, environment: Readonly<NodeJS.ProcessEnv>, workingDirectory = process.cwd()): Promise<string> {
+  if (executablePath !== undefined && !path.isAbsolute(executablePath)) throw new OpenCodeRuntimeError("opencode_executable_absolute_path_required");
+  const candidates = executablePath === undefined
+    ? (environment.PATH ?? "/usr/bin:/bin").split(path.delimiter).map(directory => path.resolve(workingDirectory, directory, "opencode2"))
+    : [executablePath];
+  for (const candidate of candidates) {
+    try {
+      const canonical = await realpath(candidate);
+      const metadata = await stat(canonical);
+      if (!metadata.isFile()) continue;
+      await access(canonical, constants.X_OK);
+      return canonical;
+    } catch { /* Unusable PATH entries do not shadow later executables. */ }
+  }
+  throw new OpenCodeRuntimeError("opencode_executable_unavailable");
 }
 
 /** Preserve native provider credentials and files; remove process-mode overrides. */
 export function openCodeOwnedEnvironment(input: {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
-  readonly nativeStorePath: string;
-  readonly configDirectory: string;
+  readonly nativeStorePath?: string;
+  readonly configDirectory?: string;
   readonly password: string;
   readonly marker: string;
 }): NodeJS.ProcessEnv {
-  if (!path.isAbsolute(input.nativeStorePath) || !path.isAbsolute(input.configDirectory) ||
+  if ((input.nativeStorePath !== undefined && !path.isAbsolute(input.nativeStorePath)) ||
+      (input.configDirectory !== undefined && !path.isAbsolute(input.configDirectory)) ||
       !input.environment.HOME || !path.isAbsolute(input.environment.HOME) || !input.password || !input.marker) {
     throw new OpenCodeRuntimeError("opencode_launch_environment_invalid");
-  }
-  if (input.environment.OPENCODE_DB !== undefined && input.environment.OPENCODE_DB !== input.nativeStorePath) {
-    throw new OpenCodeRuntimeError("opencode_native_store_override_conflict");
   }
   const environment = { ...input.environment };
   // Native provider authority belongs to this installation. Ambient Sedes
@@ -65,8 +69,8 @@ export function openCodeOwnedEnvironment(input: {
   }
   for (const name of ["OPENCODE_SIMULATE", ...incompatibleProfileInputs,
     "OPENCODE_PASSWORD", "OPENCODE_SERVER_PASSWORD", "OPENCODE_PTY_HANDOFF"]) delete environment[name];
-  environment.OPENCODE_DB = input.nativeStorePath;
-  environment.OPENCODE_CONFIG_DIR = input.configDirectory;
+  if (input.nativeStorePath !== undefined) environment.OPENCODE_DB = input.nativeStorePath;
+  if (input.configDirectory !== undefined) environment.OPENCODE_CONFIG_DIR = input.configDirectory;
   environment.OPENCODE_DISABLE_AUTOUPDATE = "1";
   environment.OPENCODE_PASSWORD = input.password;
   environment[OPENCODE_PROCESS_MARKER] = input.marker;
@@ -74,20 +78,32 @@ export function openCodeOwnedEnvironment(input: {
 }
 
 /** The version probe is bounded and never retains stderr or a child-process error object. */
-export async function probeOpenCodeRelease(executablePath: string, environment: NodeJS.ProcessEnv): Promise<void> {
+export async function probeOpenCodeRelease(executablePath: string, environment: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw new OpenCodeRuntimeError("opencode_request_aborted");
   const version = await new Promise<string>((resolve, reject) => {
     const child = spawn(executablePath, ["--version"], { env: environment, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     let failed = false;
     child.stderr.resume();
-    const timer = setTimeout(() => { failed = true; child.kill("SIGKILL"); }, 10_000);
+    const finishFailure = (code: string) => {
+      failed = true; child.kill("SIGKILL"); clearTimeout(timer);
+      signal?.removeEventListener("abort", aborted);
+      // The owning launcher drains its marked process cleanup before releasing
+      // its lease, including descendants retaining these stdio descriptors.
+      reject(new OpenCodeRuntimeError(code));
+    };
+    const aborted = () => finishFailure("opencode_request_aborted");
+    const timer = setTimeout(() => finishFailure("opencode_version_probe_failed"), 10_000);
+    signal?.addEventListener("abort", aborted, { once: true });
     child.stdout.on("data", (chunk: Buffer) => {
-      if (Buffer.byteLength(output) + chunk.length > 128) { failed = true; child.kill("SIGKILL"); return; }
+      if (failed) return;
+      if (Buffer.byteLength(output) + chunk.length > 128) { finishFailure("opencode_version_probe_failed"); return; }
       output += chunk.toString("utf8");
     });
-    child.once("error", () => { clearTimeout(timer); reject(new OpenCodeRuntimeError("opencode_version_probe_failed")); });
+    child.once("error", () => finishFailure("opencode_version_probe_failed"));
     child.once("close", (code) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", aborted);
       if (failed || code !== 0) reject(new OpenCodeRuntimeError("opencode_version_probe_failed"));
       else resolve(output.trim());
     });

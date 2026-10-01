@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { sidecarRuntimeBodySchema } from "../../src/server/sidecar/runtime-body-channel.js";
+import { openCodeRuntimeDiagnostic } from "../../src/server/backends/opencode/opencode-runtime-diagnostic.js";
 import { recoverOpenCodeRuntimeAdministration } from "../../src/server/backends/opencode/opencode-runtime-administration.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPersistentOpenCodeFixture } from "../helpers/persistent-opencode-fixture.js";
@@ -20,6 +21,59 @@ function nativeEvent(seq: number, type: string, data: Record<string, unknown>) {
 }
 
 describe("OpenCode resident runtime over shared sidecar framing", () => {
+  it.each(["owned", "external"] as const)("learns the %s database namespace on the remote host when paths are omitted", async ownership => {
+    const f = fixture(ownership); await f.attach();
+    const { nativeStorePath: _store, configDirectory: _config, ...defaults } = f.configuration;
+    if (defaults.connection.ownership === "owned") defaults.connection = { ownership: "owned", channel: { type: "process_stdio" } };
+    const client = f.client(defaults);
+    expect(() => client.nativeNamespaceKey).toThrow();
+    await client.start();
+    expect(client.nativeNamespaceKey).toBe(f.owners[0]!.nativeNamespaceKey);
+    expect(client.snapshot().identity?.nativeStorePath).toBe("/native/opencode.db");
+    expect(f.owners[0]!.input.nativeStorePath).toBeUndefined();
+    const lease = client.acquire(f.target);
+    await expect(lease.client.read("getSession", { sessionID: f.wire.sessionID })).resolves.toMatchObject({ id: f.wire.sessionID });
+    lease.release();
+  });
+
+  it("rejects a remote namespace inconsistent with the observed database identity", async () => {
+    const f = fixture(); const carrier = await f.attach();
+    const { nativeStorePath: _store, ...defaults } = f.configuration;
+    await f.hosts.ensure(defaults, carrier.lease.controllerEpoch);
+    const owner = f.owners[0]!, snapshot = owner.snapshot();
+    vi.spyOn(owner, "snapshot").mockReturnValue({ ...snapshot, identity: { ...snapshot.identity!, nativeStorePath: "/other/opencode.db" } });
+    await expect(f.client(defaults).start()).rejects.toThrow("opencode_runtime_unavailable");
+  });
+
+  it("keeps failed startup cleanup administrable before the native namespace is known", async () => {
+    const f = fixture(), carrier = await f.attach();
+    f.controls.startupFailure = f.controls.cleanupFailure = true;
+    await expect(f.client().start()).rejects.toThrow("opencode_owned_cleanup_unproved");
+    const owner = f.owners[0]!;
+    Object.defineProperty(owner, "nativeNamespaceKey", { get() { throw new Error("opencode_runtime_not_started"); } });
+    await carrier.close();
+    const reattached = await f.attach();
+    const failure = await f.client().start().catch(error => error);
+    expect(failure).toMatchObject({ code: "opencode_owned_cleanup_unproved" });
+    expect(openCodeRuntimeDiagnostic(failure)).toMatchObject({ recoveryAction: "stop", connectionState: "recovery_required" });
+    expect(f.owners).toHaveLength(1);
+    const retained = await callOpenCodeRemoteRuntime(reattached.lease, { action: "lookup_retained", backendInstanceId: f.configuration.instance.id });
+    expect(retained).toMatchObject({ runtimeId: owner.runtimeId, nativeNamespaceKey: null, snapshot: { state: "cleanup_unproved" } });
+    const database = new Database(":memory:");
+    try {
+      const administration = await recoverOpenCodeRuntimeAdministration({ database, scope: f.scope, instance: f.configuration.instance,
+        connections: f.configuration.connections, sidecarRuntime: { acquireRecovery: f.acquireRecovery } });
+      const inspection = await administration!.inspect();
+      expect(inspection.blockers).toContain("cleanup_unproven");
+      await expect(administration!.stop({ expectedRevision: inspection.revision, force: true })).rejects.toMatchObject({ reason: "cleanup_unproven" });
+      f.controls.cleanupFailure = false;
+      const retry = await administration!.inspect();
+      await administration!.stop({ expectedRevision: retry.revision, force: true });
+      expect(await f.hosts.lookupRetained(f.configuration.instance.id, reattached.lease.controllerEpoch)).toBeUndefined();
+      expect(owner.close).toHaveBeenCalledTimes(2);
+    } finally { f.controls.cleanupFailure = false; database.close(); }
+  });
+
   it("multiplexes 150 idle presentation subscriptions and keeps control capacity available", async () => {
     const f = fixture(), carrier = await f.attach(), client = f.client(); await client.start();
     const lease = client.acquire(f.target), observations = [];

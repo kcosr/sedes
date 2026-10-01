@@ -688,10 +688,47 @@ to the server-derived backend instance, target, execution environment, tenant,
 and principal. Global singletons must not accidentally combine separate
 targets or principals.
 
+Every compiled module declares a startup policy. `composition_only` startup
+composes Pi, Codex, Claude and Grok without connecting to their providers.
+`connect_provider` startup is used by OpenCode to discover its effective native
+namespace. Production schedules those connections after HTTP and carrier
+listeners are ready, with a 90-second budget and a separate startup shutdown
+signal. Reserve an unpublished runtime and its namespace claims during
+configuration reconciliation, run provider startup outside configuration
+serialization, then re-enter reconciliation to validate the captured revision,
+fingerprint and environment authority before publication. Superseded attempts
+must be disposed; uncertain cleanup retains its reservation and ownership fence.
+Retain the backend definition and execution-host authority until pending startup
+cleanup is proved, so explicit recovery remains administrable.
+Keep one attempt per backend and delay automatic retries after repeated failure;
+explicit Connect/Start may retry after proved cleanup. Saving unrelated settings
+must not wait for provider readiness. A provider waiting for outbound attachment
+must never prevent its own carrier listener from starting. Runtime `start(signal)`
+must propagate cancellation through provider acquisition and native startup.
+Cancel pending startup separately from normal management and lifecycle drain;
+shutdown must preserve the existing ordering for admitted lifecycle operations.
+
+Runtime diagnostics may declare the server-only `recoveryAction: "stop"` when
+proved cleanup is a prerequisite to another Connect/Start. The shared lifecycle
+gate consumes this normalized action without inspecting provider error codes;
+the action never overrides execution-host or sidecar ownership fences and must
+not enter the browser protocol. OpenCode declares it for unproved owned runtime
+cleanup, including retained remote cleanup. Its other diagnostics and the
+compiled Pi, Codex, Claude and Grok modules intentionally omit this action.
+Keep bounded operator guidance consistent with the declared recovery action.
+When failed local startup subsequently proves full cleanup, the application
+replaces that attempt's cleanup prerequisite with safe retry guidance and keeps
+normal retry backoff. This proof must retain the original local authority and
+exact failure identity; remote carrier detachment never proves provider cleanup.
+
 Dynamic configuration publishes one complete runtime bundle after successful
 startup, using stable live contribution maps rather than snapshots retained by
-consumers. The principal-scoped runtime collection owns native-store claims and
-leases. Replacing/removing a runtime requires the caller to fence admission and
+consumers. The principal-scoped runtime collection owns declared native-store
+claims and leases. A provider that supports concurrent processes sharing storage
+must keep process ownership separate from storage identity: scope process
+fencing and recovery to the configured runtime, and keep session binding guards
+keyed by the effective native namespace. OpenCode implements this separation;
+Pi, Codex, Claude and Grok retain their existing namespace claims. Replacing/removing a runtime requires the caller to fence admission and
 retire its existing borrowers through the entire change; the collection does
 not infer idleness. Validate candidate scope and namespace conflicts before
 withdrawing a healthy runtime. Withdrawn driver generations reject new work.

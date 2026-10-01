@@ -10,7 +10,7 @@ import { BackendAgentToolRequestError } from "../../src/server/agent-tools/adapt
 import { OpenCodeMcpIngress } from "../../src/server/backends/opencode/opencode-mcp-ingress.js";
 import { SEDES_VERSION } from "../../src/shared/version.js";
 import { buildSedesToolExecutable } from "../helpers/built-sedes-cli.js";
-import { createOpenCodeNativeStoreLifecycle } from "../../src/server/backends/opencode/opencode-native-store.js";
+import { createOpenCodeRuntimeOwnershipLifecycle } from "../../src/server/backends/opencode/opencode-runtime-ownership.js";
 
 const run = promisify(execFile);
 const roots: string[] = [];
@@ -37,21 +37,21 @@ describe("built OpenCode MCP entrypoints", () => {
   it.each(["local provider", "sidecar"])("dispatches host-local owner inspection and exact recovery through %s", async kind => {
     const executable = executables.get(kind)!;
     const root = await mkdtemp(path.join(os.tmpdir(), "sedes-owner-dispatch-")); roots.push(root);
-    const store = path.join(root, "opencode.db");
+    const authority = { tenantId: "tenant", principalId: "principal", backendInstanceId: "backend", executionEnvironmentId: "local" };
     const environment = { SEDES_AGENT_TOOL_CLI_MODE: "invalid", SEDES_AGENT_TOOL_ENDPOINT: "invalid" };
     const command = (args: string[]) => run(process.execPath, [executable, "opencode-owner", ...args], { env: environment, timeout: 10_000 });
-    await createOpenCodeNativeStoreLifecycle({ canonicalStorePath: store, ownership: "external", label: "built CLI", hostIncarnation: "dispatch" }).acquire();
-    const live = JSON.parse((await command(["inspect", "--store", store])).stdout);
+    const lease = await createOpenCodeRuntimeOwnershipLifecycle({ authority, ownershipDirectory: root, ownership: "external", label: "built CLI", hostIncarnation: "dispatch" }).acquire();
+    const live = JSON.parse((await command(["inspect", "--authority-key", lease.authorityKey, "--ownership-directory", root])).stdout);
     expect(live).toMatchObject({ ownerPid: process.pid, ownership: "external", inspectionFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/u) });
-    await expect(command(["recover", "--store", store, "--expected-inspection", live.inspectionFingerprint]))
+    await expect(command(["recover", "--authority-key", lease.authorityKey, "--ownership-directory", root, "--expected-inspection", live.inspectionFingerprint]))
       .rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("already_owned") });
     const ownerPath = path.join(root, (await readdir(root)).find(name => name.endsWith(".lock"))!, "owner.json");
     const record = JSON.parse(await readFile(ownerPath, "utf8")); record.process.pid = 2_000_000_000;
     await writeFile(ownerPath, JSON.stringify(record));
-    const dead = JSON.parse((await command(["inspect", "--store", store])).stdout);
-    await expect(command(["recover", "--store", store, "--expected-inspection", live.inspectionFingerprint]))
+    const dead = JSON.parse((await command(["inspect", "--authority-key", lease.authorityKey, "--ownership-directory", root])).stdout);
+    await expect(command(["recover", "--authority-key", lease.authorityKey, "--ownership-directory", root, "--expected-inspection", live.inspectionFingerprint]))
       .rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("recovery_changed") });
-    expect(JSON.parse((await command(["recover", "--store", store, "--expected-inspection", dead.inspectionFingerprint])).stdout)).toEqual({ store, recovered: true });
+    expect(JSON.parse((await command(["recover", "--authority-key", lease.authorityKey, "--ownership-directory", root, "--expected-inspection", dead.inspectionFingerprint])).stdout)).toEqual({ authorityKey: lease.authorityKey, recovered: true });
     expect(await readdir(root)).toEqual([]);
   });
   it.each(["local provider", "sidecar"])("runs the shared private bridge through the actual %s executable", async kind => {

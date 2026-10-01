@@ -26,6 +26,10 @@ import { normalizedThreadSnapshotSchema } from "../../src/shared/protocol/conver
 import { acceptHostRegistrationResultSchema, hostPairingListSchema } from "../../src/shared/protocol/host-pairing.js";
 import { prepareOpencodeNativeAccount, startOpencodeNativeFixture, type OpenCodeNativeAccount, type OpenCodeNativeFixture } from "./opencode-native-fixture.js";
 import { startOpencodeModelFixture } from "./opencode-model-fixture.js";
+import { vi } from "vitest";
+import { compiledBackendModuleCatalog } from "../../src/server/backends/compiled-module-catalog.js";
+import type { OpenCodeBackendModule } from "../../src/server/backends/opencode/opencode-backend-module.js";
+import { OpenCodeRuntime } from "../../src/server/backends/opencode/opencode-runtime.js";
 import { buildProductionSidecarArtifact, buildProductionOutboundConnector, startProductionSshServer, terminateChild } from "./production-carrier-fixture.js";
 import { terminateProcessesReferencing } from "./process-cleanup.js";
 
@@ -55,6 +59,7 @@ export class OpenCodeProductionFixture {
   port = 0;
   private connectorEnrolled = false;
   private previousPath: string | undefined;
+  private restoreNativeRuntimeFactory: (() => void) | undefined;
   private constructor(readonly topology: OpenCodeProductionTopology, readonly ownership: OpenCodeProductionOwnership,
     readonly directory: string, readonly account: OpenCodeNativeAccount,
     readonly native: OpenCodeNativeFixture | undefined, readonly model: Awaited<ReturnType<typeof startOpencodeModelFixture>>,
@@ -112,6 +117,16 @@ export class OpenCodeProductionFixture {
   }
 
   async startMain() {
+    if (this.topology === "local" && !this.restoreNativeRuntimeFactory) {
+      // Source production composition runs in the Vitest process. Isolate its
+      // Sedes ownership files independently of the provider HOME without
+      // changing the process environment or replacing the native runtime.
+      const module = compiledBackendModuleCatalog.requireModule("opencode") as OpenCodeBackendModule;
+      const factory = vi.spyOn(module, "createNativeRuntime").mockImplementation(input => new OpenCodeRuntime({
+        ...input, ownershipDirectory: path.join(this.directory, "main-owners"),
+      }));
+      this.restoreNativeRuntimeFactory = () => factory.mockRestore();
+    }
     // Remote fixtures use a distinct main account baseline. The matrix also
     // denies main native identity/secret APIs because the OS UID is shared.
     const environment = this.topology === "local" ? this.hostEnvironment : {
@@ -306,6 +321,7 @@ export class OpenCodeProductionFixture {
     await attempt(() => terminateProcessesReferencing(this.directory));
     await attempt(() => this.native ? this.native.stop() : this.account.close());
     await attempt(() => this.model.stop()); this.authentication.close();
+    this.restoreNativeRuntimeFactory?.(); this.restoreNativeRuntimeFactory = undefined;
     if (this.ssh) { if (this.previousPath === undefined) delete process.env.PATH; else process.env.PATH = this.previousPath; }
     if (scope) await attempt(() => rm(persistentSidecarPaths(this.hostHome, process.getuid!(), scope).socketDirectory, { recursive: true, force: true }));
     if (!failures.length) await rm(this.directory, { recursive: true, force: true });

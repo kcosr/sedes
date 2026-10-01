@@ -79,6 +79,24 @@ describe("OpenCode immutable scoped native evidence", () => {
     expect(() => repository.getBinding(scope, "thread")).toThrow();
   });
 
+  it("allows shared database namespaces across backends but forbids binding the same native session twice", () => {
+    const { database, repository } = fixture();
+    repository.saveBinding(scope, "thread", detail);
+    database.exec(`INSERT INTO agent_backend_instances VALUES ('tenant','second-backend','opencode');
+      INSERT INTO agent_connection_profiles VALUES ('tenant','principal','second-connection','opencode_http');
+      INSERT INTO application_threads (tenant_id,owner_principal_id,id,backend_instance_id,connection_profile_id,environment_id,workspace_id)
+        VALUES ('tenant','principal','shared-thread','second-backend','second-connection','local','workspace');
+      INSERT INTO conversation_bindings VALUES ('tenant','principal','shared-thread','second-backend','second-connection','local','session');`);
+    const second = new OpenCodeThreadRepository({ database, scope, backendInstanceId: "second-backend", nativeNamespaceKey: "native-store" });
+    const secondDetail = { ...detail, backendInstanceId: "second-backend", connectionProfileId: "second-connection" };
+    expect(() => second.saveBinding(scope, "shared-thread", secondDetail)).toThrow();
+    expect(second.getBinding(scope, "shared-thread")).toBeUndefined();
+    database.exec("UPDATE conversation_bindings SET backend_conversation_id='second-session' WHERE application_thread_id='shared-thread'");
+    second.saveBinding(scope, "shared-thread", { ...secondDetail, sessionId: "second-session" });
+    expect(parseOpenCodeBindingDetail(second.getBinding(scope, "shared-thread")!).sessionId).toBe("second-session");
+    expect(repository.getBinding(scope, "thread")).toBe(serializeOpenCodeBindingDetail(detail));
+  });
+
   it("reserves immutable create evidence before one dispatch and preserves it after response loss", () => {
     const { database, repository } = fixture();
     expect(repository.reserveOperation(scope, operation(), 1)).toMatchObject({ disposition: "prepared", createdAt: 1 });

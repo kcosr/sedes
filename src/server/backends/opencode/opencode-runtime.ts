@@ -3,7 +3,8 @@ import path from "node:path";
 import { z } from "zod";
 import { OpenCodeHttpClient } from "./opencode-http-client.js";
 import { boundedOpenCodeProcessFile, canonicalOpenCodeStore, readOpenCodeNativeIdentity, sameOpenCodeNativeIdentity, type OpenCodeNativeIdentity } from "./opencode-native-identity.js";
-import { createOpenCodeNativeStoreLifecycle, openCodeNativeStoreNamespaceKey, type OpenCodeNativeStoreLease } from "./opencode-native-store.js";
+import { openCodeNativeStoreNamespaceKey } from "./opencode-native-store.js";
+import { createOpenCodeRuntimeOwnershipLifecycle, openCodeRuntimeAuthorityKey, type OpenCodeRuntimeOwnershipLease } from "./opencode-runtime-ownership.js";
 import { startOpenCodeOwnedProcess, OpenCodeOwnedCleanupUnprovedError, type OpenCodeOwnedProcess } from "./opencode-owned-process.js";
 import { admitOpenCodeNativeProfile, OpenCodeRuntimeError } from "./opencode-release.js";
 import { mergeResolvedEnvironment, resolveEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
@@ -23,21 +24,23 @@ export interface OpenCodeRuntimeAuthority {
   readonly executionEnvironmentId: string;
 }
 export type OpenCodeRuntimeConnection =
-  | { readonly ownership: "owned"; readonly channel: { readonly type: "process_stdio"; readonly executablePath: string; readonly workingDirectory: string } }
+  | { readonly ownership: "owned"; readonly channel: { readonly type: "process_stdio"; readonly executablePath?: string; readonly workingDirectory?: string } }
   | { readonly ownership: "external"; readonly channel: { readonly type: "http"; readonly url: string } };
 export interface OpenCodeRuntimeInput {
   readonly hostIncarnation: string;
   /** Host admission is checked synchronously immediately before every launch. */
   readonly assertLaunchAdmission?: () => void;
   readonly authority: OpenCodeRuntimeAuthority;
-  readonly nativeStorePath: string;
+  readonly nativeStorePath?: string;
   readonly configDirectory?: string;
   readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly connection: OpenCodeRuntimeConnection;
-  readonly externalPassword?: () => Promise<string>;
+  readonly externalPassword?: (signal?: AbortSignal) => Promise<string>;
   readonly agentTools?: { readonly cli: () => OpenCodeHostToolEndpoint | undefined; readonly invoke: OpenCodeHostToolInvoker };
   /** When supplied, the module startup stack owns release after proved runtime cleanup. */
-  readonly storeLease?: OpenCodeNativeStoreLease;
+  readonly ownershipLease?: OpenCodeRuntimeOwnershipLease;
+  /** Host-owned Sedes lifecycle storage; independent of native provider paths. */
+  readonly ownershipDirectory?: string;
 }
 export interface OpenCodeRuntimeSnapshot {
   readonly state: "stopped" | "starting" | "ready" | "disconnected" | "cleanup_unproved";
@@ -68,7 +71,7 @@ export function openCodeRuntimeNamespaceKey(executionEnvironmentId: string, nati
 /** A resident native owner. Conversation reference release never retires this process. */
 export class OpenCodeRuntime {
   readonly #input: OpenCodeRuntimeInput;
-  readonly nativeNamespaceKey: string;
+  #nativeNamespaceKey?: string;
   #state: OpenCodeRuntimeSnapshot["state"] = "stopped";
   #generation?: string;
   #identity?: OpenCodeNativeIdentity;
@@ -81,9 +84,10 @@ export class OpenCodeRuntime {
   readonly #runtimeId = randomUUID();
   #owned?: OpenCodeOwnedProcess;
   #retryLaunchCleanup?: () => Promise<void>;
-  #lease?: OpenCodeNativeStoreLease;
+  #lease?: OpenCodeRuntimeOwnershipLease;
   #references = 0;
   #starting?: Promise<void>;
+  #startupLifetime?: AbortController;
   #stopping?: Promise<OpenCodeRuntimeStopResult>;
 
   constructor(input: OpenCodeRuntimeInput) {
@@ -93,7 +97,11 @@ export class OpenCodeRuntime {
       connection: input.connection.ownership === "owned"
         ? { ownership: "owned", channel: { ...input.connection.channel } }
         : { ownership: "external", channel: { ...input.connection.channel } } };
-    this.nativeNamespaceKey = openCodeRuntimeNamespaceKey(input.authority.executionEnvironmentId, input.nativeStorePath);
+  }
+
+  get nativeNamespaceKey(): string {
+    if (!this.#nativeNamespaceKey) throw new OpenCodeRuntimeError("opencode_runtime_not_started");
+    return this.#nativeNamespaceKey;
   }
 
   get runtimeId(): string { return this.#runtimeId; }
@@ -182,51 +190,63 @@ export class OpenCodeRuntime {
     await this.assertCurrent(signal);
   }
 
-  start(): Promise<void> {
+  start(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return Promise.reject(new OpenCodeRuntimeError("opencode_request_aborted"));
     if (this.#stopping) return Promise.reject(new OpenCodeRuntimeError("opencode_runtime_stopping"));
-    if (this.#state === "ready") return this.assertCurrent();
+    if (this.#state === "ready") return this.assertCurrent(signal);
     if (this.#state === "cleanup_unproved" || this.#state === "disconnected") return Promise.reject(new OpenCodeRuntimeError("opencode_runtime_requires_explicit_cleanup"));
     if (this.#starting) return this.#starting;
     this.#state = "starting";
-    this.#starting = this.#start().finally(() => { this.#starting = undefined; });
+    this.#startupLifetime = new AbortController();
+    const budget = AbortSignal.any([this.#startupLifetime.signal, AbortSignal.timeout(45_000), ...(signal ? [signal] : [])]);
+    this.#starting = this.#start(budget).finally(() => { this.#starting = undefined; this.#startupLifetime = undefined; });
     return this.#starting;
   }
 
-  async #start(): Promise<void> {
+  async #start(signal: AbortSignal): Promise<void> {
+    const assertActive = () => { if (signal.aborted) throw new OpenCodeRuntimeError("opencode_request_aborted"); };
     try {
+      assertActive();
       if (process.platform !== "linux") throw new OpenCodeRuntimeError("opencode_local_process_identity_unavailable");
-      const store = await canonicalOpenCodeStore(this.#input.nativeStorePath, this.#input.connection.ownership === "owned");
-      if (this.#input.storeLease) {
-        if (this.#input.storeLease.canonicalStorePath !== store || this.#input.storeLease.namespaceKey !== openCodeNativeStoreNamespaceKey(store)) throw new OpenCodeRuntimeError("opencode_native_store_lease_mismatch");
-        this.#lease = this.#input.storeLease;
+      if (this.#input.ownershipLease) {
+        if (this.#input.ownershipLease.authorityKey !== openCodeRuntimeAuthorityKey(this.#input.authority)) throw new OpenCodeRuntimeError("opencode_runtime_owner_lease_mismatch");
+        this.#lease = this.#input.ownershipLease;
       } else {
-        this.#lease = await createOpenCodeNativeStoreLifecycle({ canonicalStorePath: store, label: "OpenCode native store",
-          ownership: this.#input.connection.ownership, hostIncarnation: this.#input.hostIncarnation }).acquire();
+        this.#lease = await createOpenCodeRuntimeOwnershipLifecycle({ authority: this.#input.authority,
+          ...(this.#input.ownershipDirectory ? { ownershipDirectory: this.#input.ownershipDirectory } : {}),
+          label: "OpenCode runtime", ownership: this.#input.connection.ownership, hostIncarnation: this.#input.hostIncarnation }).acquire();
       }
+      assertActive();
+      const store = this.#input.nativeStorePath === undefined ? undefined
+        : await canonicalOpenCodeStore(this.#input.nativeStorePath, this.#input.connection.ownership === "owned");
       let endpoint: string;
       let password: string | undefined;
       const connection = this.#input.connection;
       if (connection.ownership === "owned") {
-        const home = this.#input.environment.HOME;
-        if (!home || !path.isAbsolute(home)) throw new OpenCodeRuntimeError("opencode_native_home_required");
-        const configDirectory = this.#input.configDirectory ?? path.join(this.#input.environment.XDG_CONFIG_HOME ?? path.join(home, ".config"), "opencode");
-        if (!this.#lease.processMarker) throw new OpenCodeRuntimeError("opencode_native_store_lease_mismatch");
+        if (!this.#lease.processMarker) throw new OpenCodeRuntimeError("opencode_runtime_owner_lease_mismatch");
         this.#owned = await startOpenCodeOwnedProcess({ ...connection.channel,
-          nativeStorePath: store, configDirectory, environment: this.#input.environment,
-          processMarker: this.#lease.processMarker, assertLaunchAdmission: this.#input.assertLaunchAdmission });
+          ...(store === undefined ? {} : { nativeStorePath: store }),
+          ...(this.#input.configDirectory === undefined ? {} : { configDirectory: this.#input.configDirectory }),
+          environment: this.#input.environment,
+          processMarker: this.#lease.processMarker, assertLaunchAdmission: this.#input.assertLaunchAdmission, signal });
         endpoint = this.#owned.endpoint;
       } else {
         endpoint = connection.channel.url;
-        password = await this.#input.externalPassword?.() ?? "";
+        password = await this.#readExternalPassword(signal);
       }
+      assertActive();
       if (!this.#owned) this.#input.assertLaunchAdmission?.();
       this.#client = this.#owned?.client ?? new OpenCodeHttpClient({ endpoint, password: password ?? "" });
-      await this.#client.requireAuthentication();
-      const info = await this.#client.info();
+      await this.#client.requireAuthentication(signal);
+      const info = await this.#client.info(signal);
       if (this.#owned && info.pid !== this.#owned.pid) throw new OpenCodeRuntimeError("opencode_owned_pid_mismatch");
-      const identity = await readOpenCodeNativeIdentity({ pid: info.pid, nativeStorePath: store,
+      const identity = await readOpenCodeNativeIdentity({ pid: info.pid, ...(store === undefined ? {} : { nativeStorePath: store }),
         ...(this.#owned ? { expectedExecutablePath: this.#owned.executablePath } : {}) });
       await this.#admitNativeProfile(identity);
+      assertActive();
+      const namespace = openCodeRuntimeNamespaceKey(this.#input.authority.executionEnvironmentId, identity.nativeStorePath);
+      if (this.#nativeNamespaceKey && this.#nativeNamespaceKey !== namespace) throw new OpenCodeRuntimeError("opencode_runtime_namespace_changed");
+      this.#nativeNamespaceKey = namespace;
       this.#identity = identity;
       this.#generation = randomUUID();
       this.#state = "ready";
@@ -266,6 +286,18 @@ export class OpenCodeRuntime {
     }
   }
 
+  async #readExternalPassword(signal: AbortSignal): Promise<string> {
+    if (signal.aborted) throw new OpenCodeRuntimeError("opencode_request_aborted");
+    return new Promise((resolve, reject) => {
+      const aborted = () => reject(new OpenCodeRuntimeError("opencode_request_aborted"));
+      signal.addEventListener("abort", aborted, { once: true });
+      void Promise.resolve().then(() => {
+        if (signal.aborted) throw new OpenCodeRuntimeError("opencode_request_aborted");
+        return this.#input.externalPassword?.(signal) ?? "";
+      }).then(resolve, reject).finally(() => signal.removeEventListener("abort", aborted));
+    });
+  }
+
   async #admitNativeProfile(identity: OpenCodeNativeIdentity): Promise<void> {
     // Read only the launch fields needed for qualification; never expose the
     // native environment or retain credential values in diagnostics/state.
@@ -293,7 +325,7 @@ export class OpenCodeRuntime {
     const identity = this.#identity;
     try {
       const info = await client.info(signal);
-      const observed = await readOpenCodeNativeIdentity({ pid: info.pid, nativeStorePath: this.#input.nativeStorePath,
+      const observed = await readOpenCodeNativeIdentity({ pid: info.pid, nativeStorePath: identity.nativeStorePath,
         ...(this.#owned ? { expectedExecutablePath: this.#owned.executablePath } : {}) });
       if (this.#client !== client || this.#identity !== identity || !sameOpenCodeNativeIdentity(identity, observed)) throw new Error();
       if (signal?.aborted) throw new OpenCodeRuntimeError("opencode_request_aborted");
@@ -318,6 +350,7 @@ export class OpenCodeRuntime {
 
   close(): Promise<OpenCodeRuntimeStopResult> {
     if (this.#stopping) return this.#stopping;
+    this.#startupLifetime?.abort();
     // Fence existing leases synchronously, before native cleanup takes its
     // active-session snapshot. Cleanup alone retains the raw control client.
     this.#host?.close();
@@ -369,7 +402,7 @@ export class OpenCodeRuntime {
   }
 
   async #releaseStore(): Promise<void> {
-    if (this.#lease && !this.#input.storeLease) await this.#lease.release();
+    if (this.#lease && !this.#input.ownershipLease) await this.#lease.release();
     this.#lease = undefined;
   }
 }

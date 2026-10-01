@@ -3,8 +3,13 @@
 Sedes supports stock OpenCode **2.0.18** on a Linux execution host, locally or
 through the persistent SSH or outbound HTTP(S) sidecar. The Sedes server may run
 on another machine or OS. OpenCode and its sidecar use the same host account.
-Select the absolute path to the v2 binary, normally
-`opencode2`. The older `opencode` v1 executable is not an alternative. Provider
+Sedes finds `opencode2` on the execution account’s PATH by default; an
+absolute executable path can be supplied as an override. PATH means the Sedes
+service environment for local execution, the SSH sidecar environment for SSH,
+or the connector/sidecar environment for outbound hosts. These may differ from
+an interactive login shell. Set an absolute **Advanced → OpenCode v2 executable
+path**, or configure a backend startup `PATH`, if the native binary is missing
+from that environment. The older `opencode` v1 executable is not an alternative. Provider
 authentication, native project configuration, plugins, permissions, and model
 definitions remain in the selected native OpenCode environment.
 
@@ -14,8 +19,8 @@ Choose one ownership mode in **Settings → Environments → Backends**:
 
 | Mode | Configuration | Behavior |
 | --- | --- | --- |
-| Sedes-owned | Absolute executable, working directory, and native database path; optional native configuration directory | Starts `serve --stdio --hostname 127.0.0.1 --port 0` as needed and retains the daemon between threads. Stdin controls lifetime; conversation traffic uses HTTP/SSE. Backend Stop and Restart clean up owned work. |
-| External | Explicit loopback HTTP IP/port, native database path, and Basic password reference | Connects to the existing daemon. Backend Disconnect leaves that daemon and its background work running. Conversation Stop still interrupts the selected session. |
+| Sedes-owned | No path settings required; optional Advanced overrides for executable, working directory, database and configuration directory | Starts `serve --stdio --hostname 127.0.0.1 --port 0` when the backend starts and retains the daemon between threads. Stdin controls lifetime; conversation traffic uses HTTP/SSE. Backend Stop and Restart clean up owned work. |
+| External | Explicit loopback HTTP IP/port and Basic password reference; optional database path assertion | Connects to the existing daemon. Backend Disconnect leaves that daemon and its background work running. Conversation Stop still interrupts the selected session. |
 
 The external URL must be an IP literal such as `http://127.0.0.1:4096`, without
 a path, query, URL credentials, or redirects. Loopback means the selected
@@ -63,21 +68,25 @@ standalone server on that execution host:
 
 ```sh
 OPENCODE_PASSWORD="$(cat /home/alice/.config/sedes/opencode-password)" \
-OPENCODE_DB=/home/alice/.local/share/opencode/opencode.db \
   opencode2 serve --hostname 127.0.0.1 --port 4096
 ```
 
-Use those exact native database and password-file paths in Sedes's External
-configuration. Select the SSH or outbound environment for that host. The
+Use that password-file path in Sedes's External configuration. Sedes discovers
+the database opened by the native process. Select the SSH or outbound environment for that host. The
 server runs in the foreground; its supervisor is independent of Sedes.
 
-Use a dedicated database path for each native owner. Sedes verifies the native
-process and store and holds a private adjacent lease. Do not launch another
-owner over a leased store. Unproved cleanup or a crash can leave a retained
-lease. Use the host-local `sedes opencode-owner inspect --store PATH` command
-and the [owner recovery procedure](../operations.md#opencode-native-store-recovery).
-Never delete a lock solely because its recorded PID is gone. Sedes never removes
-native history to resolve a lease conflict.
+Path fields under **Advanced overrides** are optional. Without overrides,
+Sedes preserves the execution account’s native database and configuration
+selectors and leaves the child working directory inherited. An explicit
+database or configuration override replaces the corresponding native environment
+selector. Each conversation still uses its selected project directory.
+
+Multiple native OpenCode processes and Sedes backends can share the same database.
+Sedes tracks each configured runtime separately; Stop and crash recovery target
+only its owned process and proved descendants. An unproved cleanup retains that
+runtime’s recovery record without claiming exclusive ownership of the database.
+See the [runtime recovery procedure](../operations.md#opencode-runtime-recovery).
+Sedes never removes native history to resolve a recovery conflict.
 
 ## Conversations and settings
 

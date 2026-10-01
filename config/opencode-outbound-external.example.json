@@ -33,8 +33,6 @@
         "type": "catalog"
       },
       "moduleConfiguration": {
-        "nativeStorePath": "/home/agent/.local/share/opencode/opencode.db",
-        "configDirectory": "/home/agent/.config/opencode",
         "connection": {
           "ownership": "external",
           "channel": {
