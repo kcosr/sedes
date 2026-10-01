@@ -1627,7 +1627,8 @@ export function TasksPanelContent({
           key={editingId}
           task={editingTask}
           open={active}
-            store={store}
+          surface={presentation}
+          store={store}
           destinations={destinations}
           onClose={() => setEditingId(null)}
         />

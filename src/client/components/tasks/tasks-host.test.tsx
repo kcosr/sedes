@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -341,6 +341,14 @@ describe("Tasks host across the phone breakpoint", () => {
   const editor = () => screen.queryByRole("dialog", { name: "Edit task" });
   // The surface behind the modal editor is hidden from the accessibility tree.
   const surfaceElement = () => document.querySelector('[data-slot="tasks-panel"]');
+  /** The editor is the open dialog on top, with focus inside it. */
+  async function expectEditorOnTop(): Promise<void> {
+    await waitFor(() => {
+      const open = [...document.querySelectorAll('[data-slot="dialog-content"][data-state="open"]')];
+      expect(open.at(-1)).toBe(editor());
+      expect(editor()).toContainElement(document.activeElement as HTMLElement);
+    });
+  }
 
   async function editNotes(user: ReturnType<typeof userEvent.setup>): Promise<void> {
     fireEvent.keyDown(screen.getByRole("button", { name: "Audit error states" }), { key: "e" });
@@ -370,6 +378,7 @@ describe("Tasks host across the phone breakpoint", () => {
     setPhone(false);
 
     expect(surfaceElement()).toHaveAttribute("data-presentation", "popover");
+    await expectEditorOnTop();
     expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved notes");
   });
 
@@ -381,7 +390,9 @@ describe("Tasks host across the phone breakpoint", () => {
     await editNotes(user);
 
     setPhone(true);
-    expect(screen.getByRole("dialog", { name: "Tasks" })).toBeInTheDocument();
+    // The sheet mounts over the editor, which opens again on top of it.
+    expect(document.querySelector(".tasks-sheet")).toBeInTheDocument();
+    await expectEditorOnTop();
     expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved notes");
 
     setPhone(false);
