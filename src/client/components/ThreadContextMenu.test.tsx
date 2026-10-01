@@ -28,7 +28,10 @@ import type {
 } from "../stores/ThreadClientStore.js";
 import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry.js";
 import { SIDEBAR_VIEW_DEFAULTS, SIDEBAR_VIEW_STORAGE_KEY } from "../app/sidebar-view-model.js";
-import { TOUCH_DENSITY_QUERY } from "../app/use-touch-density.js";
+import {
+  TOUCH_DENSITY_QUERY,
+  useTouchDensity,
+} from "../app/use-touch-density.js";
 import { InventorySidebar } from "./InventorySidebar.js";
 import { ThreadContextMenu } from "./ThreadContextMenu.js";
 
@@ -2126,6 +2129,47 @@ describe("ThreadContextMenu actions", () => {
         expect.objectContaining({ snoozedUntil: expect.any(String) }),
       ),
     );
+  });
+
+  it("mounts no dialog roots for a row whose dialogs have never opened", () => {
+    const matchMedia = vi.mocked(window.matchMedia);
+    const densityReads = () =>
+      matchMedia.mock.calls.filter(([query]) => query === TOUCH_DENSITY_QUERY)
+        .length;
+    // A lone density consumer is the floor: the menu's own presentation.
+    function DensityProbe() {
+      useTouchDensity();
+      return null;
+    }
+    const probe = render(<DensityProbe />);
+    const probeReads = densityReads();
+    probe.unmount();
+    matchMedia.mockClear();
+
+    renderMenu(makeThread(), makeStore());
+
+    // Every mounted DialogContent reads the density too.
+    expect(densityReads()).toBe(probeReads);
+  });
+
+  it("keeps a dialog mounted after it closes, as it was before opening", async () => {
+    const store = makeStore();
+    const trigger = renderMenu(makeThread(), store);
+    await userEvent.click(within(await openMenu(trigger)).getByText("Snooze…"));
+    let dialog = await screen.findByRole("dialog", { name: "Snooze this thread" });
+    await userEvent.type(
+      within(dialog).getByPlaceholderText("What should I remember when I return?"),
+      "Check the release notes",
+    );
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+
+    await userEvent.click(within(await openMenu(trigger)).getByText("Snooze…"));
+    dialog = await screen.findByRole("dialog", { name: "Snooze this thread" });
+    expect(
+      within(dialog).getByPlaceholderText("What should I remember when I return?"),
+    ).toHaveValue("Check the release notes");
+    expect(store.mutateInventory).not.toHaveBeenCalled();
   });
 });
 

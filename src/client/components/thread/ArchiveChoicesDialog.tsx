@@ -1,6 +1,14 @@
-import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { ThreadArchiveImpact } from "../../../shared/index.js";
 import { getThreadArchiveOperations } from "../../operations/thread-archive.js";
+import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
 import { Button } from "@client/components/ui/button";
 import { Checkbox } from "@client/components/ui/checkbox";
 import {
@@ -38,7 +46,11 @@ type ArchiveChoicesDialogProps = ArchiveChoiceProps & {
   readonly returnFocusRef?: React.RefObject<HTMLElement | null>;
 };
 
-/** Every entry point starts the same connection-scoped archive workflow. */
+/**
+ * Every entry point starts the same connection-scoped archive workflow. It
+ * does not subscribe to the workflow: rows that only start it must not all
+ * re-render whenever any archive changes phase (see useArchiveChoicesOpen).
+ */
 export function useArchiveThreadAction({
   returnFocusRef,
   ...choiceProps
@@ -46,11 +58,9 @@ export function useArchiveThreadAction({
   readonly returnFocusRef?: React.RefObject<HTMLElement | null>;
 }): {
   readonly start: () => void;
-  readonly open: boolean;
 } {
   const { thread, store, disabled } = choiceProps;
   const operations = getThreadArchiveOperations(store);
-  const state = useSyncExternalStore(operations.subscribe, operations.getSnapshot);
   const current = useRef(choiceProps);
   current.current = choiceProps;
   const mounted = useRef(true);
@@ -78,8 +88,37 @@ export function useArchiveThreadAction({
         },
       });
     },
-    open: state.some((operation) => operation.thread.id === thread.id && operation.result),
   };
+}
+
+const subscribeNever = (): (() => void) => () => undefined;
+
+/**
+ * Whether this thread's archive choices, or a dismissed archive's error, are
+ * showing, whichever surface started the archive. A surface re-renders only
+ * when that answer changes; with `enabled` false it does not subscribe.
+ */
+export function useArchiveChoicesOpen(
+  store: ApplicationClientStore,
+  threadId: string,
+  enabled = true,
+): boolean {
+  const operations = getThreadArchiveOperations(store);
+  const isOpen = useCallback(
+    () =>
+      enabled &&
+      operations
+        .getSnapshot()
+        .some(
+          (operation) =>
+            operation.thread.id === threadId && operation.result !== undefined,
+        ),
+    [enabled, operations, threadId],
+  );
+  return useSyncExternalStore(
+    enabled ? operations.subscribe : subscribeNever,
+    isOpen,
+  );
 }
 
 /** Mounted per opening, so each starts from its impact and default choices. */

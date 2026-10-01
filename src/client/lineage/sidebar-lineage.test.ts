@@ -330,6 +330,127 @@ describe("deriveSidebarLineage", () => {
     },
   );
 
+  it("projects no archived threads but keeps what they contribute to projected ones", () => {
+    const threads = [
+      thread("root"),
+      thread("archived-child", { inventoryState: "archived" }),
+      thread("grandchild"),
+      thread("archived-needle", {
+        inventoryState: "archived",
+        title: { text: "Needle" },
+      }),
+    ];
+    const app = snapshot(
+      threads,
+      [origin("archived-child", "root"), origin("grandchild", "archived-child")],
+      [placement("archived-child"), placement("grandchild")],
+    );
+    const browse = deriveSidebarLineage({
+      snapshot: app,
+      visibleThreads: threads,
+      grouped: true,
+      search: "",
+    });
+
+    expect([...browse.nodesById.keys()].sort()).toEqual(["grandchild", "root"]);
+    expect([...browse.rootsByBucket.keys()]).toEqual(["workspace:workspace-1"]);
+    expect(browse.roots.map(({ thread: { id } }) => id)).toEqual([
+      "root",
+      "grandchild",
+    ]);
+    // Loaded family counts still reach through the archived fork.
+    expect(browse.nodesById.get("root")?.loadedFamilyDescendantCount).toBe(2);
+    expect(browse.nodesById.get("root")?.children).toEqual([]);
+
+    const search = deriveSidebarLineage({
+      snapshot: app,
+      visibleThreads: [threads[3]!],
+      grouped: true,
+      search: "needle",
+    });
+    // An archived match still counts as a match, though it is not projected.
+    expect([...search.matchingIds]).toEqual(["archived-needle"]);
+    expect(search.nodesById.size).toBe(0);
+  });
+
+  it("keeps lineage context reached through an archived source during search", () => {
+    const threads = [
+      thread("ancestor"),
+      thread("archived-source", { inventoryState: "archived" }),
+      thread("match", { title: { text: "Needle" } }),
+    ];
+    const result = deriveSidebarLineage({
+      snapshot: snapshot(
+        threads,
+        [
+          origin("archived-source", "ancestor"),
+          origin("match", "archived-source"),
+        ],
+        [placement("archived-source"), placement("match")],
+      ),
+      visibleThreads: [threads[2]!],
+      grouped: true,
+      search: "needle",
+    });
+
+    expect([...result.nodesById.keys()].sort()).toEqual(["ancestor", "match"]);
+    expect(result.nodesById.get("ancestor")?.matchesSearch).toBe(false);
+    expect(result.nodesById.get("match")?.parentId).toBeUndefined();
+  });
+
+  it("derives the same projected forest with or without archived threads", () => {
+    const active = [
+      thread("a"),
+      thread("a-fork", { runState: "running" }),
+      thread("a-fork-fork", { pendingQuestionCount: 1 }),
+      thread("b", { inventoryState: "settled" }),
+      thread("b-fork", { inventoryState: "settled" }),
+      thread("c", { inventoryState: "snoozed" }),
+    ];
+    const archived = [
+      thread("x", { inventoryState: "archived" }),
+      thread("x-fork", { inventoryState: "archived" }),
+      thread("a-archived-fork", { inventoryState: "archived" }),
+    ];
+    const origins = [
+      origin("a-fork", "a"),
+      origin("a-fork-fork", "a-fork"),
+      origin("b-fork", "b"),
+      origin("x-fork", "x"),
+      origin("a-archived-fork", "a"),
+    ];
+    const placements = origins.map(({ childThreadId }) =>
+      placement(childThreadId),
+    );
+    const shape = (threads: NormalizedApplicationThreadSummary[]) => {
+      const result = deriveSidebarLineage({
+        snapshot: snapshot(threads, origins, placements),
+        visibleThreads: threads,
+        grouped: true,
+        search: "",
+      });
+      return {
+        buckets: [...result.rootsByBucket].map(([bucket, roots]) => [
+          bucket,
+          roots.map(({ thread: { id } }) => id),
+        ]),
+        nodes: [...result.nodesById.values()]
+          .map((node) => ({
+            id: node.thread.id,
+            parentId: node.parentId,
+            children: node.children.map(({ thread: { id } }) => id),
+            bucket: node.bucket,
+            depth: node.depth,
+            maxActivityAt: node.maxActivityAt,
+            aggregate: node.aggregate,
+          }))
+          .sort((left, right) => left.id.localeCompare(right.id)),
+      };
+    };
+
+    expect(shape([...archived, ...active])).toEqual(shape(active));
+  });
+
   it("keeps matching descendants and ancestor context during search", () => {
     const threads = [
       thread("root"),

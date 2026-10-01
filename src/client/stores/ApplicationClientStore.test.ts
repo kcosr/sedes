@@ -362,6 +362,93 @@ describe("ApplicationClientStore session and inventory lifecycle", () => {
     });
   });
 
+  it("publishes each applied envelope once and skips value-identical republication", async () => {
+    const api = {
+      session: vi.fn().mockResolvedValue(applicationSession),
+    } as unknown as ApiClient;
+    const { transport, subscriptions } = applicationTransport();
+    const store = new ApplicationClientStore(api, transport);
+    await store.initialize();
+    const stream = subscriptions[0]!;
+    stream.onEnvelope(applicationSnapshotEnvelope());
+    const listener = vi.fn();
+    store.subscribe(listener);
+    const ready = store.getSnapshot();
+
+    stream.onEnvelope({
+      eventId: `${applicationHubId}.1`,
+      applicationGeneration: "application-1",
+      event: {
+        type: "inventory_counts_changed",
+        generation: "application-1",
+        counts: { active: 1, snoozed: 0, settled: 0, archived: 0 },
+      },
+    });
+    expect(listener).toHaveBeenCalledOnce();
+    expect(store.getSnapshot()).not.toBe(ready);
+    expect(store.getSnapshot()).toMatchObject({
+      status: "ready",
+      error: undefined,
+      snapshot: { counts: { active: 1 } },
+    });
+
+    // An envelope that changes no inventory leaves the state untouched.
+    listener.mockClear();
+    const unchanged = store.getSnapshot();
+    stream.onEnvelope({
+      eventId: `${applicationHubId}.2`,
+      applicationGeneration: "application-1",
+      event: {
+        type: "workpad_changed",
+        generation: "application-1",
+        workpadId: "workpad-1",
+        revision: 1,
+        change: "draft",
+      },
+    });
+    expect(listener).not.toHaveBeenCalled();
+    expect(store.getSnapshot()).toBe(unchanged);
+    expect(stream.getReplayCursor?.()).toBe(`${applicationHubId}.2`);
+    store.dispose();
+  });
+
+  it("clears a stream error on the next applied envelope", async () => {
+    const api = {
+      session: vi.fn().mockResolvedValue(applicationSession),
+    } as unknown as ApiClient;
+    const { transport, subscriptions } = applicationTransport();
+    const store = new ApplicationClientStore(api, transport);
+    await store.initialize();
+    const stream = subscriptions[0]!;
+    stream.onEnvelope(applicationSnapshotEnvelope());
+    stream.onProtocolError?.(new Error("A frame could not be decoded."));
+    expect(store.getSnapshot()).toMatchObject({
+      status: "ready",
+      error: "A frame could not be decoded.",
+    });
+    const listener = vi.fn();
+    store.subscribe(listener);
+
+    stream.onEnvelope({
+      eventId: `${applicationHubId}.1`,
+      applicationGeneration: "application-1",
+      event: {
+        type: "workpad_changed",
+        generation: "application-1",
+        workpadId: "workpad-1",
+        revision: 1,
+        change: "draft",
+      },
+    });
+
+    expect(listener).toHaveBeenCalledOnce();
+    expect(store.getSnapshot()).toMatchObject({
+      status: "ready",
+      error: undefined,
+    });
+    store.dispose();
+  });
+
   it("reloads session metadata when retrying after an initial session failure", async () => {
     const api = {
       session: vi
