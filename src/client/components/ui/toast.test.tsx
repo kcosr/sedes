@@ -233,6 +233,40 @@ describe("Toast", () => {
     expect(viewport().style.getPropertyValue("--toast-region-width")).toBe("390px");
   });
 
+  it("re-measures when a sheet covers the composer and brings its own bar, and again when it closes", async () => {
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(844);
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(390);
+    renderToasts(
+      <div data-testid="workspace">
+        <div data-toast-region data-testid="region">
+          <div data-toast-avoid data-testid="composer" />
+        </div>
+      </div>,
+    );
+    screen.getByTestId("region").getBoundingClientRect = box({ left: 0, top: 0, width: 390, height: 844 });
+    screen.getByTestId("composer").getBoundingClientRect = box({ left: 0, top: 724, width: 390, height: 120 });
+    act(() => show({ message: "Task completed" }));
+    expect(viewport().style.getPropertyValue("--toast-bottom")).toBe("120px");
+
+    // The modal sheet hides the workspace and docks its add bar.
+    const bar = document.createElement("div");
+    bar.setAttribute("data-toast-avoid", "");
+    bar.getBoundingClientRect = box({ left: 0, top: 780, width: 390, height: 64 });
+    await act(async () => {
+      screen.getByTestId("workspace").setAttribute("aria-hidden", "true");
+      document.body.append(bar);
+    });
+    act(() => vi.advanceTimersByTime(20));
+    expect(viewport().style.getPropertyValue("--toast-bottom")).toBe("64px");
+
+    await act(async () => {
+      bar.remove();
+      screen.getByTestId("workspace").removeAttribute("aria-hidden");
+    });
+    act(() => vi.advanceTimersByTime(20));
+    expect(viewport().style.getPropertyValue("--toast-bottom")).toBe("120px");
+  });
+
   it("dismisses on a downward swipe and springs back from a short one", () => {
     const capture = {
       setPointerCapture: HTMLElement.prototype.setPointerCapture,

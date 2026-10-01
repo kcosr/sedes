@@ -427,11 +427,21 @@ function measureToastPlacement(keyboardInset: number): ToastPlacement {
   }
 }
 
+/** Attributes whose change can add, remove, hide or reveal an avoided element. */
+const PLACEMENT_ATTRIBUTES = [
+  "data-toast-avoid",
+  "data-toast-region",
+  "aria-hidden",
+  "inert",
+]
+
 /**
- * The toast's placement while one is up, measured again on resize and when
- * the region or an avoided element changes size: the composer grows and
- * shrinks while a toast is up, for example when the chip a toast announces
- * arrives.
+ * The toast's placement while one is up. It is measured again on resize,
+ * when the region or an avoided element changes size (the composer grows
+ * when the chip a toast announces arrives), when avoided elements come and
+ * go or are covered (a sheet opening or closing), and when an animation or
+ * transition ends (a sheet sliding into place). Changes are coalesced to one
+ * measurement per frame.
  */
 function useToastPlacement(active: boolean): ToastPlacement | undefined {
   const touch = useTouchDensity()
@@ -440,7 +450,14 @@ function useToastPlacement(active: boolean): ToastPlacement | undefined {
 
   React.useLayoutEffect(() => {
     if (!active) return undefined
+    let frame = 0
+    const observed = new Set<Element>()
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(() => schedule())
     const update = () => {
+      frame = 0
       const next = measureToastPlacement(keyboardInset)
       setPlacement((current) =>
         current?.x === next.x &&
@@ -449,19 +466,42 @@ function useToastPlacement(active: boolean): ToastPlacement | undefined {
           ? current
           : next
       )
+      if (!resizeObserver) return
+      const region = document.querySelector("[data-toast-region]")
+      const targets = new Set<Element>(toastAvoidElements())
+      if (region) targets.add(region)
+      for (const element of observed) {
+        if (targets.has(element)) continue
+        resizeObserver.unobserve(element)
+        observed.delete(element)
+      }
+      for (const element of targets) {
+        if (observed.has(element)) continue
+        resizeObserver.observe(element)
+        observed.add(element)
+      }
+    }
+    const schedule = () => {
+      if (frame === 0) frame = window.requestAnimationFrame(update)
     }
     update()
-    window.addEventListener("resize", update)
-    const observer =
-      typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update)
-    const region = document.querySelector<HTMLElement>("[data-toast-region]")
-    if (observer) {
-      if (region) observer.observe(region)
-      for (const element of toastAvoidElements()) observer.observe(element)
-    }
+    const mutationObserver = new MutationObserver(schedule)
+    mutationObserver.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: PLACEMENT_ATTRIBUTES,
+    })
+    window.addEventListener("resize", schedule)
+    document.addEventListener("animationend", schedule, true)
+    document.addEventListener("transitionend", schedule, true)
     return () => {
-      window.removeEventListener("resize", update)
-      observer?.disconnect()
+      if (frame !== 0) window.cancelAnimationFrame(frame)
+      mutationObserver.disconnect()
+      resizeObserver?.disconnect()
+      window.removeEventListener("resize", schedule)
+      document.removeEventListener("animationend", schedule, true)
+      document.removeEventListener("transitionend", schedule, true)
     }
   }, [active, keyboardInset])
 
