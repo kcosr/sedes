@@ -167,8 +167,8 @@
   width: 100%;
 }
 
-/* The slot carries a disabled segment's reason as its tooltip (a disabled
-   segment takes no pointer events itself). */
+/* A disabled segment takes no pointer events itself, so its slot shows the
+   reason (UnavailableScopeSlot): a tooltip on hover, a tap or a click. */
 .tasks-scope-slot {
   display: flex;
   flex: 1 1 0;

@@ -65,9 +65,9 @@ count:
 - **All**: every Task.
 
 The views always follow the current chat. A view that does not apply, such as
-Thread on Home, is unavailable, and its tooltip gives the reason. Tasks opens
-on the view you last chose; when that view is unavailable, it falls back to
-Project, then Global.
+Thread on Home, is unavailable; point at it, or tap it on a phone, to see why.
+Tasks opens on the view you last chose; when that view is unavailable, it falls
+back to Project, then Global.
 
 **All** is grouped by project: Global first, then each project, the current one
 first, with each thread's Tasks in a group under its project. Select a group

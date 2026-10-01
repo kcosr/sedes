@@ -1,4 +1,5 @@
 import { createPortal } from "react-dom";
+import { Tooltip } from "radix-ui";
 import { StablePaneSlot } from "../../workspace-panels/StablePaneSlot.js";
 import {
   Dialog,
@@ -1110,37 +1111,40 @@ export function TasksPanelContent({
     >
       {TASKS_VIEWS.map((candidate) => {
         const reason = viewUnavailableReason(candidate, context);
-        return (
-          <span
-            key={candidate}
-            className="tasks-scope-slot"
-            title={reason}
+        const segment = (
+          <SegmentedControlItem
+            value={candidate}
+            disabled={reason !== undefined}
+            className="tasks-scope-item"
+            // A phone sheet opens on the view, not the add bar, so the
+            // soft keyboard does not cover the list on every open.
+            data-autofocus={sheet && candidate === view ? "" : undefined}
+            aria-describedby={`${scopeHintId}-${candidate}`}
+            {...scopeDrop.props(candidate, scopeDropTarget(candidate))}
           >
-            <SegmentedControlItem
-              value={candidate}
-              disabled={reason !== undefined}
-              className="tasks-scope-item"
-              // A phone sheet opens on the view, not the add bar, so the
-              // soft keyboard does not cover the list on every open.
-              data-autofocus={sheet && candidate === view ? "" : undefined}
-              aria-describedby={
-                reason === undefined ? `${scopeHintId}-${candidate}` : undefined
-              }
-              {...scopeDrop.props(candidate, scopeDropTarget(candidate))}
-            >
-              {TASKS_VIEW_LABEL[candidate]}
-              {reason === undefined && (
-                <span className="tasks-scope-count" aria-hidden="true">
-                  {viewCount(candidate)}
-                </span>
-              )}
-            </SegmentedControlItem>
+            {TASKS_VIEW_LABEL[candidate]}
             {reason === undefined && (
-              <span id={`${scopeHintId}-${candidate}`} className="sr-only">
-                {viewCount(candidate)} open
+              <span className="tasks-scope-count" aria-hidden="true">
+                {viewCount(candidate)}
               </span>
             )}
+          </SegmentedControlItem>
+        );
+        const description = (
+          <span id={`${scopeHintId}-${candidate}`} className="sr-only">
+            {reason ?? `${viewCount(candidate)} open`}
           </span>
+        );
+        return reason === undefined ? (
+          <span key={candidate} className="tasks-scope-slot">
+            {segment}
+            {description}
+          </span>
+        ) : (
+          <UnavailableScopeSlot key={candidate} reason={reason}>
+            {segment}
+            {description}
+          </UnavailableScopeSlot>
         );
       })}
     </SegmentedControl>
@@ -1667,6 +1671,52 @@ export function TasksPanelContent({
         </DialogContent>
       </Dialog>
     </TaskListProvider>
+  );
+}
+
+/**
+ * The slot of a scope segment that does not apply. A disabled segment takes
+ * neither focus nor pointer events, so its slot shows the reason: a tooltip
+ * on hover, and on a tap or click, which is all touch has. Keyboard and
+ * screen-reader users have it in the control's description.
+ */
+function UnavailableScopeSlot({
+  reason,
+  children,
+}: {
+  readonly reason: string;
+  readonly children: ReactNode;
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  return (
+    <Tooltip.Provider delayDuration={300}>
+      <Tooltip.Root open={open} onOpenChange={setOpen}>
+        <Tooltip.Trigger asChild>
+          <span
+            className="tasks-scope-slot"
+            data-unavailable=""
+            onClick={(event) => {
+              // The trigger would close the tooltip on a click.
+              event.preventDefault();
+              setOpen(true);
+            }}
+          >
+            {children}
+          </span>
+        </Tooltip.Trigger>
+        <Tooltip.Portal>
+          <Tooltip.Content
+            className="lineage-tooltip"
+            side="bottom"
+            sideOffset={6}
+            collisionPadding={8}
+          >
+            {reason}
+            <Tooltip.Arrow className="lineage-tooltip-arrow" />
+          </Tooltip.Content>
+        </Tooltip.Portal>
+      </Tooltip.Root>
+    </Tooltip.Provider>
   );
 }
 

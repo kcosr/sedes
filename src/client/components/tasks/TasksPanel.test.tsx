@@ -455,10 +455,27 @@ describe("TasksPanel scope", () => {
     expect(scope()).toHaveAccessibleDescription(
       "Thread: Open a thread to see its tasks. Project: Open a thread in a project to see its project tasks.",
     );
-    expect(segment("Thread").parentElement).toHaveAttribute(
-      "title",
-      "Open a thread to see its tasks.",
+    // Each segment carries its own reason, and nothing relies on a native title.
+    expect(segment("Thread")).toHaveAccessibleDescription("Open a thread to see its tasks.");
+    expect(segment("Project")).toHaveAccessibleDescription(
+      "Open a thread in a project to see its project tasks.",
     );
+    expect(segment("Global")).toHaveAccessibleDescription("1 open");
+    expect(scope().querySelector("[title]")).toBeNull();
+  });
+
+  it("shows a disabled view's reason when its segment is tapped", async () => {
+    const store = makeStore([makeTask()], { threads: THREADS, workspaces: WORKSPACES });
+    // The tooltip's positioning measures its arrow.
+    vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
+    renderPanel(store);
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    // A disabled segment takes no pointer events: the tap lands on its slot.
+    fireEvent.click(segment("Thread").parentElement!);
+
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Open a thread to see its tasks.");
+    expect(segment("Global")).toHaveAttribute("aria-checked", "true");
   });
 
   it("groups All by Global, then projects with their threads, collapsibly", () => {
