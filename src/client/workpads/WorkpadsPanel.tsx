@@ -9,7 +9,7 @@ import { DiscardChangesDialog } from "../components/ui/discard-changes-dialog.js
 import { Button } from "../components/ui/button.js";
 import { Input } from "../components/ui/input.js";
 import { Textarea } from "../components/ui/textarea.js";
-import { SegmentedControl } from "../components/tasks/SegmentedControl.js";
+import { SegmentedControl, SegmentedControlItem } from "../components/ui/segmented-control.js";
 import { WorkpadDocument } from "./WorkpadDocument.js";
 import { useWorkpadDraft } from "./use-workpad-draft.js";
 import "./workpads-panel.css";
@@ -239,7 +239,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const projects = application.snapshot?.workspaces ?? [];
   const threads = application.visibleThreads;
   const renderScopeTargets = (value: WorkpadScope, onChange: (scope: WorkpadScope) => void) => <>
-    <SegmentedControl ariaLabel="Destination scope" value={value.kind} options={[{ value: "global", label: "Global" }, { value: "workspace", label: "Project", disabled: !projects.length }, { value: "thread", label: "Thread", disabled: !threads.length }]} onChange={kind => onChange(kind === "global" ? { kind: "global" } : kind === "workspace" ? { kind: "workspace", workspaceId: workspaceId ?? projects[0]?.id ?? "" } : { kind: "thread", threadId: threadId ?? threads[0]?.id ?? "" })} />
+    <SegmentedControl aria-label="Destination scope" value={value.kind} onValueChange={kind => onChange(kind === "global" ? { kind: "global" } : kind === "workspace" ? { kind: "workspace", workspaceId: workspaceId ?? projects[0]?.id ?? "" } : { kind: "thread", threadId: threadId ?? threads[0]?.id ?? "" })}><SegmentedControlItem value="global">Global</SegmentedControlItem><SegmentedControlItem value="workspace" disabled={!projects.length}>Project</SegmentedControlItem><SegmentedControlItem value="thread" disabled={!threads.length}>Thread</SegmentedControlItem></SegmentedControl>
     {value.kind === "workspace" && <select aria-label="Destination project" value={value.workspaceId} onChange={event => onChange({ kind: "workspace", workspaceId: event.target.value })}>{projects.map(project => <option key={project.id} value={project.id}>{project.label.text}</option>)}</select>}
     {value.kind === "thread" && <select aria-label="Destination thread" value={value.threadId} onChange={event => onChange({ kind: "thread", threadId: event.target.value })}>{threads.map(thread => <option key={thread.id} value={thread.id}>{thread.title.text}</option>)}</select>}
   </>;
@@ -247,7 +247,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     {(error || refreshError) && <div className="workpads-error" role="alert">{error || refreshError}<Button variant="ghost" size="icon-sm" aria-label="Dismiss error" onClick={() => { setError(""); setRefreshError(""); }}><X size={14} /></Button></div>}
     {!selected ? <>
       <div className="workpads-filters">
-        <SegmentedControl ariaLabel="Workpad scope" value={scopeKind} options={[{ value: "global", label: "Global" }, { value: "workspace", label: "Project", disabled: !projects.length }, { value: "thread", label: "Thread", disabled: !threads.length }]} onChange={value => { setScopeKind(value as WorkpadScope["kind"]); if (!projectId) setProjectId(projects[0]?.id ?? ""); if (!selectedThread) setSelectedThread(threads[0]?.id ?? ""); }} />
+        <SegmentedControl aria-label="Workpad scope" className="w-full" value={scopeKind} onValueChange={value => { setScopeKind(value as WorkpadScope["kind"]); if (!projectId) setProjectId(projects[0]?.id ?? ""); if (!selectedThread) setSelectedThread(threads[0]?.id ?? ""); }}><SegmentedControlItem value="global">Global</SegmentedControlItem><SegmentedControlItem value="workspace" disabled={!projects.length}>Project</SegmentedControlItem><SegmentedControlItem value="thread" disabled={!threads.length}>Thread</SegmentedControlItem></SegmentedControl>
         {scopeKind === "workspace" && <select aria-label="Workpad project" value={projectId} onChange={event => setProjectId(event.target.value)}>{projects.map(project => <option key={project.id} value={project.id}>{project.label.text}</option>)}</select>}
         {scopeKind === "thread" && <select aria-label="Workpad thread" value={selectedThread} onChange={event => setSelectedThread(event.target.value)}>{threads.map(thread => <option key={thread.id} value={thread.id}>{thread.title.text}</option>)}</select>}
         <div className="workpads-toolbar"><Input aria-label="Search workpads" placeholder="Search workpads" value={query} maxLength={240} onChange={event => setQuery(event.target.value)} /><Button variant="secondary" size="sm" disabled={!scopeValid} onClick={() => { setCreating(true); setTitle(""); }}><Plus size={15} />New workpad</Button></div>
