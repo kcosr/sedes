@@ -679,6 +679,33 @@ function PanelLayoutReady({
     return () => observer.disconnect();
   }, []);
 
+  // Focusing or pressing inside a panel uses it. The listeners are native,
+  // on the stage element: content portaled into a panel from outside this
+  // React tree (the retained Tasks body) bubbles its React events past the
+  // stage, but its DOM events pass through it.
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return undefined;
+    const noteUse = (event: Event) => {
+      const panelInstanceId =
+        event.target instanceof Element
+          ? event.target.closest<HTMLElement>("[data-panel-instance-id]")
+              ?.dataset.panelInstanceId
+          : undefined;
+      if (!panelInstanceId) return;
+      lastInteractedPanelIdRef.current = panelInstanceId;
+      notePanelUsed(panelInstanceId);
+    };
+    stage.addEventListener("focusin", noteUse, true);
+    stage.addEventListener("pointerdown", noteUse, true);
+    return () => {
+      stage.removeEventListener("focusin", noteUse, true);
+      stage.removeEventListener("pointerdown", noteUse, true);
+    };
+    // notePanelUsed reads and writes refs only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // A panel that arrives on the desktop stage (opened or restored) makes room
   // for itself: when the visible panels' minimum width no longer fits, the
   // least recently used side panels collapse (see layout-fit.ts). What a
@@ -1861,32 +1888,7 @@ function PanelLayoutReady({
 
       <ThreadTerminalMenu active={active} ref={terminalEntryRef} threadId={threadId} triggerVariant="panel" {...terminalControls} />
 
-      <div
-        className="workspace-panel-stage"
-        ref={stageRef}
-        onFocusCapture={(event) => {
-          const panelInstanceId =
-            event.target instanceof Element
-              ? event.target.closest<HTMLElement>("[data-panel-instance-id]")
-                  ?.dataset.panelInstanceId
-              : undefined;
-          if (panelInstanceId) {
-            lastInteractedPanelIdRef.current = panelInstanceId;
-            notePanelUsed(panelInstanceId);
-          }
-        }}
-        onPointerDownCapture={(event) => {
-          const panelInstanceId =
-            event.target instanceof Element
-              ? event.target.closest<HTMLElement>("[data-panel-instance-id]")
-                  ?.dataset.panelInstanceId
-              : undefined;
-          if (panelInstanceId) {
-            lastInteractedPanelIdRef.current = panelInstanceId;
-            notePanelUsed(panelInstanceId);
-          }
-        }}
-      >
+      <div className="workspace-panel-stage" ref={stageRef}>
         {desktop ? (
           soloPanel ? (
             renderStack({

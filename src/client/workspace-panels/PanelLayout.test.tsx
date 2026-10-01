@@ -3080,6 +3080,45 @@ describe("PanelLayout panel minimums", () => {
     expect(tasksToggle()).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("counts using the retained Tasks body as using its panel", () => {
+    applicationState = {
+      ...applicationState,
+      snapshot: {
+        threads: [{ id: "thread-1", workspaceId: "workspace-1", title: { text: "Thread" }, inventoryState: "active" }],
+        workspaces: [{ id: "workspace-1", label: { text: "Workspace" }, displayPath: { text: "/workspace" } }],
+        environments: [],
+        tasks: [makeThreadTask({ id: "open-1" })],
+      },
+    };
+    measureStage(1_000);
+    const store = setup({
+      extraTenants: [tasksTenant, { ...filesTenant(), id: "workpads", title: "Workpads", scope: "thread" }],
+      withTasksPanel: true,
+    });
+    fireEvent.click(tasksToggle());
+    act(() => {
+      store.openPanel("workspace-files", { availableWidth: 1_000, focus: false });
+    });
+    // Chat 360 + Tasks 300 + Files 280 fit.
+    expect(store.isVisible("tasks")).toBe(true);
+    expect(store.isVisible("workspace-files")).toBe(true);
+
+    // The Tasks body is portaled in from the Tasks host, outside the
+    // layout's React tree; pressing in it still uses Tasks.
+    const leaf = screen.getByRole("region", { name: "Tasks panel" });
+    fireEvent.pointerDown(within(leaf).getByRole("textbox", { name: "Add a task" }));
+
+    act(() => {
+      store.openPanel("workpads", { availableWidth: 1_000, focus: false });
+    });
+
+    // Workpads does not fit beside the three: Files, used least recently,
+    // makes room; Tasks stays.
+    expect(store.isVisible("workpads")).toBe(true);
+    expect(store.isVisible("tasks")).toBe(true);
+    expect(store.isCollapsed("workspace-files")).toBe(true);
+  });
+
   it("never collapses a panel when the window narrows; the minimums shrink together", () => {
     measureStage(1_200);
     const store = setup({ extraTenants: [tasksTenant] });
