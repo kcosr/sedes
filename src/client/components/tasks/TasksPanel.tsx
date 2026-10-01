@@ -990,6 +990,24 @@ export function TasksPanelContent({
 
   // ── Rendering ────────────────────────────────────────────────────────────
   const searchFiltering = query.length > 0;
+  // Lists that mix scopes without group headings say where each task
+  // belongs: All ungrouped, and Project with its threads' tasks.
+  const showLocation =
+    (view === "all" && !options.groupByProject) ||
+    (view === "project" && options.includeThreadTasks);
+  const locationOf = (task: AssociatedTask) => {
+    const label = destinations.label(task.scope);
+    const project =
+      view === "all" &&
+      task.scope.kind === "thread" &&
+      task.associatedWorkspaceId !== null
+        ? destinations.workspaceLabels.get(task.associatedWorkspaceId)
+        : undefined;
+    return {
+      kind: task.scope.kind,
+      label: project ? `${label} · ${project}` : label,
+    };
+  };
   const filters = viewFilters(options);
   const filtering = filters.length > 0;
   const renderRow = (task: AssociatedTask) => (
@@ -997,6 +1015,7 @@ export function TasksPanelContent({
       key={task.id}
       task={task}
       expanded={expandedId === task.id}
+      {...(showLocation ? { location: locationOf(task) } : {})}
       focusable={rovingKey === taskNavKey(task.id)}
       inlineDetail={!sheet}
       moveOpen={moveMenuId === task.id}

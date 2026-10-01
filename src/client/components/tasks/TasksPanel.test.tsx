@@ -385,7 +385,9 @@ const segment = (name: string) => within(scope()).getByRole("radio", { name });
 const rowTitle = (title: string) => screen.getByRole("button", { name: title });
 const rowOf = (title: string) => rowTitle(title).closest(".tasks-row") as HTMLElement;
 const titles = () =>
-  [...panel().querySelectorAll(".tasks-row-title")].map((node) => node.textContent);
+  [...panel().querySelectorAll(".tasks-row-title")].map(
+    (node) => (node.querySelector(".tasks-row-title-text") ?? node).textContent,
+  );
 const addInput = () => screen.getByRole("textbox", { name: "Add a task" });
 
 /**
@@ -522,6 +524,30 @@ describe("TasksPanel scope", () => {
     ]);
     expect(segment("Project")).toHaveAccessibleDescription("4 open");
     expect(titles()).not.toContain("Round invoices half-even");
+    // Without group headings, each row says where it belongs on a second
+    // line; its name stays the title.
+    expect(rowTitle("Sibling thread task")).toHaveAccessibleDescription("In Sibling thread");
+    expect(rowTitle("Upgrade the test runner")).toHaveAccessibleDescription("In acme-web");
+    expect(rowOf("Sibling thread task").querySelector(".tasks-row-location")).toHaveTextContent(
+      "Sibling thread",
+    );
+  });
+
+  it("says where each task belongs in All without grouping, and not with it", async () => {
+    const user = userEvent.setup();
+    renderPanel(seededStore());
+    await user.click(segment("All"));
+    expect(panel().querySelector(".tasks-row-location")).toBeNull();
+    expect(rowTitle("Rotate staging credentials")).not.toHaveAttribute("aria-describedby");
+
+    await user.click(screen.getByRole("button", { name: "View options" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Group by project" }));
+    await user.keyboard("{Escape}");
+    expect(rowTitle("Rotate staging credentials")).toHaveAccessibleDescription("In Global");
+    // A thread task names its project too, as the grouped headings do.
+    expect(rowTitle("Add retry to the payment call")).toHaveAccessibleDescription(
+      "In Checkout flow refactor · acme-web",
+    );
   });
 });
 

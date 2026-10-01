@@ -77,7 +77,9 @@ back to Project, then Global.
 first, with each thread's Tasks in a group under its project. Select a group
 heading to collapse or expand it, or use **Collapse all groups** in the Tasks
 menu (**⋯**, or **Tasks panel actions** when docked). Turn off **Group by
-project** in **View options** for one flat list.
+project** in **View options** for one flat list. Without group headings, as in
+that list or in Project with **Include thread tasks**, each row shows where
+its Task belongs on a quiet line under the title.
 
 ## Add Tasks
 
