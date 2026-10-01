@@ -1,0 +1,8 @@
+{
+  "connection": {
+    "ownership": "owned",
+    "channel": {
+      "type": "process_stdio"
+    }
+  }
+}

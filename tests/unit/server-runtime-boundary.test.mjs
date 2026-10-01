@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { assertRuntimeManifest, discoverJavaScriptPackages, discoverRuntimePackages } from "../../scripts/check-server-runtime.mjs";
+import { assertRuntimeManifest, discoverJavaScriptEntrypoints, discoverJavaScriptPackages, discoverRuntimeEntrypoints, discoverRuntimePackages } from "../../scripts/check-server-runtime.mjs";
 
 describe("server runtime dependency boundary", () => {
   it("finds side effects, reexports, dynamic imports, requires, and package resolutions without reading comments or strings", () => {
@@ -31,6 +31,24 @@ describe("server runtime dependency boundary", () => {
     }
   });
 
+  it("preserves exact subpath entrypoints and their import or require export conditions", () => {
+    expect(discoverJavaScriptEntrypoints(`
+      import "@scope/runtime/feature";
+      export * from "@scope/runtime/feature";
+      await import("@scope/runtime/another");
+      require("@scope/runtime/feature");
+      require.resolve("@scope/runtime/package.json");
+      import.meta.resolve("@scope/runtime/assets");
+      import "node:fs";
+    `, "server/example.js")).toEqual([
+      { package: "@scope/runtime", specifier: "@scope/runtime/another", kind: "import" },
+      { package: "@scope/runtime", specifier: "@scope/runtime/assets", kind: "resolve_import" },
+      { package: "@scope/runtime", specifier: "@scope/runtime/feature", kind: "import" },
+      { package: "@scope/runtime", specifier: "@scope/runtime/feature", kind: "require" },
+      { package: "@scope/runtime", specifier: "@scope/runtime/package.json", kind: "resolve_require" },
+    ]);
+  });
+
   it("requires the pinned Pi package anchor and image utility for its computed import", () => {
     const source = `const packageEntry = import.meta.resolve("@earendil-works/pi-coding-agent");
       const moduleUrl = new URL("./utils/image-process.js", packageEntry);
@@ -53,6 +71,12 @@ describe("server runtime dependency boundary", () => {
       await writeFile(path.join(directory, "client/browser.ts"), 'import "browser-only";');
       await writeFile(path.join(directory, "server/example.test.ts"), 'import "test-only";');
       expect(Object.keys(await discoverRuntimePackages(directory, { typescript: true }))).toEqual(["cli-runtime", "internal-runtime", "shared-runtime", "worker-runtime"]);
+      expect(await discoverRuntimeEntrypoints(directory, { typescript: true })).toEqual([
+        { package: "cli-runtime", specifier: "cli-runtime", kind: "import", files: ["cli/cli.ts"] },
+        { package: "internal-runtime", specifier: "internal-runtime", kind: "import", files: ["internal/protocol.ts"] },
+        { package: "shared-runtime", specifier: "shared-runtime", kind: "import", files: ["shared/common.ts"] },
+        { package: "worker-runtime", specifier: "worker-runtime", kind: "import", files: ["server/workers/worker.ts"] },
+      ]);
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 

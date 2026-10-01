@@ -11,7 +11,7 @@ import { KeyValueList, type KeyValueItem } from "../ui/key-value-list.js";
 import { StatusPill } from "../ui/status-pill.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.js";
 import { Tag } from "../ui/tag.js";
-import { allowedEnvironments, backendEditors } from "./backend-editors.js";
+import { allowedEnvironments, backendEditors, backendStopEffect } from "./backend-editors.js";
 import { followLink } from "../settings/SettingsNav.js";
 import { SettingsBackLink } from "../settings/SettingsPage.js";
 import { SettingsDetailHeader } from "../settings/SettingsSplit.js";
@@ -38,8 +38,9 @@ export function BackendDetail({ backend, selected, tab, onTab, headingRef, onRem
   const configuration = snapshot.configuration;
   const environment = backendEnvironment(configuration, backend);
   const unsupported = Boolean(environment && !allowedEnvironments(backend, [environment]).length);
+  const backendRuntime = runtimeFor(snapshot, "backend", backend.id);
   const controller = useRuntimeController({ controls, revision: snapshot.revision, resourceKind: "backend", resourceId: backend.id,
-    label: backend.label, runtime: runtimeFor(snapshot, "backend", backend.id), enabled: backend.enabled,
+    label: backend.label, runtime: backendRuntime, enabled: backend.enabled, stopEffect: backendStopEffect(backend, backendRuntime),
     disabled: runtimeDisabled || unsupported, disabledReason: unsupported ? "Remote execution is unsupported for this backend." : pausedReason,
     onRuntime, onRefresh });
   useHiddenDetailReset(selected, controller);

@@ -230,7 +230,8 @@ describe("Pi tool approval extension ordering", () => {
     const broker = new InteractionBroker();
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
-        acquire: vi.fn(async () => ({ actor, release: actorRelease })),
+        acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),        acquire: vi.fn(async () => ({ actor, release: actorRelease })),
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: async (input) => {
           await input.detachCoordinatorRuntime();

@@ -99,6 +99,10 @@ describe("LocalEnvironmentChannelProvider", () => {
       executablePath: process.execPath,
       workingDirectory: directory,
     });
+    // Resolve metadata before launching the short-lived child. Awaiting file
+    // operations after launch can let Node flush its pipe before consumption.
+    const executablePath = await realpath(process.execPath);
+    const workingDirectory = await realpath(directory);
     const channel = await provider.openOwnedProcess(
       scope,
       {
@@ -113,8 +117,8 @@ describe("LocalEnvironmentChannelProvider", () => {
     expect(prepared).toMatchObject({
       kind: "owned_process",
       scope,
-      executable: { canonicalPath: await realpath(process.execPath) },
-      workingDirectory: { canonicalPath: await realpath(directory) },
+      executable: { canonicalPath: executablePath },
+      workingDirectory: { canonicalPath: workingDirectory },
     });
     expect(channel.identity.scope).toEqual(scope);
     expect(channel).not.toHaveProperty("child");
@@ -664,6 +668,7 @@ describe("LocalEnvironmentChannelProvider", () => {
           { source: "environment", variable },
           1,
           new AbortController().signal,
+          "capability_token",
         );
       } catch (error) {
         failure = error;
@@ -677,6 +682,32 @@ describe("LocalEnvironmentChannelProvider", () => {
     },
   );
 
+  it("separates HTTP Basic passwords from capability tokens and fences their transport identity", async () => {
+    const variable = "SEDES_OPENCODE_PRIMARY_PASSWORD";
+    const provider = providerFor(scope, { [variable]: "páss word:with punctuation!", SEDES_CODEX_PRIMARY_TOKEN: "valid-capability-token-12345" });
+    const signal = new AbortController().signal;
+    const secret = await provider.resolveSecret(scope, { source: "environment", variable }, 1, signal, "http_basic_password");
+    expect(secret.value).toBe("páss word:with punctuation!");
+    expect(secret.identity.purpose).toBe("http_basic_password");
+    await expect(provider.resolveSecret(scope, { source: "environment", variable }, 1, signal, "capability_token"))
+      .rejects.toThrow("environment_secret_reference_invalid");
+    await expect(provider.resolveSecret(scope, { source: "environment", variable: "SEDES_CODEX_PRIMARY_TOKEN" }, 1, signal, "http_basic_password"))
+      .rejects.toThrow("environment_secret_reference_invalid");
+    await expect(provider.openAssuredTcpStream(scope, { host: "127.0.0.1", port: 1, security: "loopback_plaintext" }, 1, secret.identity, signal))
+      .rejects.toThrow("environment_assured_tcp_stream_authentication_invalid");
+    secret.discard();
+    expect(isValidEnvironmentSecretIdentity(secret.identity)).toBe(false);
+    provider.close();
+  });
+
+  it.each(["", "password\nextra", "password\u0000", "password\u0085", "password\ud800", "x".repeat(4097)])("rejects malformed HTTP passwords without disclosing them", async value => {
+    const variable = "SEDES_OPENCODE_PRIMARY_PASSWORD";
+    const provider = providerFor(scope, { [variable]: value });
+    await expect(provider.resolveSecret(scope, { source: "environment", variable }, 1, new AbortController().signal, "http_basic_password"))
+      .rejects.toThrow("environment_secret_malformed");
+    provider.close();
+  });
+
   it("accepts only the approved environment-secret namespace and revokes discarded generations", async () => {
     const token = "valid-capability-token-12345";
     const provider = providerFor(scope, {
@@ -689,6 +720,7 @@ describe("LocalEnvironmentChannelProvider", () => {
         { source: "environment", variable: "OPENAI_API_KEY" },
         1,
         new AbortController().signal,
+        "capability_token",
       ),
     ).rejects.toThrow("environment_secret_reference_invalid");
 
@@ -697,12 +729,14 @@ describe("LocalEnvironmentChannelProvider", () => {
       { source: "environment", variable: "SEDES_CODEX_PRIMARY_TOKEN" },
       1,
       new AbortController().signal,
+      "capability_token",
     );
     const second = await provider.resolveSecret(
       scope,
       { source: "environment", variable: "SEDES_CODEX_PRIMARY_TOKEN" },
       2,
       new AbortController().signal,
+      "capability_token",
     );
     expect(first.value).toBe(token);
     expect(first.identity.scope).toEqual(scope);
@@ -736,6 +770,7 @@ describe("LocalEnvironmentChannelProvider", () => {
         },
         1,
         new AbortController().signal,
+        "capability_token",
       )
       .then((value) => {
         returned = value;
@@ -756,6 +791,7 @@ describe("LocalEnvironmentChannelProvider", () => {
         },
         2,
         new AbortController().signal,
+        "capability_token",
       ),
     ).rejects.toThrow("execution_environment_channel_unavailable");
   });
@@ -774,6 +810,7 @@ describe("LocalEnvironmentChannelProvider", () => {
         { source: "protected_file", path: secretPath },
         7,
         new AbortController().signal,
+        "capability_token",
       );
 
       expect(resolved.value).toBe(token);
@@ -873,6 +910,7 @@ describe("LocalEnvironmentChannelProvider", () => {
       { source: "protected_file", path: fifoPath },
       1,
       new AbortController().signal,
+      "capability_token",
     );
     const outcome = await Promise.race([
       resolution.then(
@@ -943,6 +981,7 @@ describe("LocalEnvironmentChannelProvider", () => {
       { source: "protected_file", path: secretPath },
       1,
       new AbortController().signal,
+      "capability_token",
     );
 
     unlinkSync(secretPath);
@@ -952,6 +991,7 @@ describe("LocalEnvironmentChannelProvider", () => {
       { source: "protected_file", path: secretPath },
       2,
       new AbortController().signal,
+      "capability_token",
     );
 
     expect(first.value).toBe(firstToken);
@@ -1037,6 +1077,7 @@ describe("LocalEnvironmentChannelProvider", () => {
         { source: "protected_file", path: secretPath },
         1,
         new AbortController().signal,
+        "capability_token",
       );
     } catch (error) {
       failure = error;
@@ -1067,6 +1108,7 @@ describe("LocalEnvironmentChannelProvider", () => {
       },
       4,
       new AbortController().signal,
+      "capability_token",
     );
     const channel = await provider.openAssuredTcpStream(
       scope,
@@ -1124,6 +1166,7 @@ describe("LocalEnvironmentChannelProvider", () => {
       },
       5,
       new AbortController().signal,
+      "capability_token",
     );
     const replacementChannel = await provider.openAssuredTcpStream(
       scope,
@@ -1157,6 +1200,7 @@ describe("LocalEnvironmentChannelProvider", () => {
       },
       1,
       new AbortController().signal,
+      "capability_token",
     );
     let returned: EnvironmentAssuredTcpStreamChannel | undefined;
     const opening = provider
@@ -1197,6 +1241,7 @@ describe("LocalEnvironmentChannelProvider", () => {
       },
       1,
       new AbortController().signal,
+      "capability_token",
     );
     const forgedIdentity = Object.freeze({
       ...secret.identity,
@@ -1409,8 +1454,11 @@ describe("LocalEnvironmentChannelProvider", () => {
     privateUnixChannels.push(channel);
     if (change === "target-removed") unlinkSync(fixture.socketPath);
     else {
-      unlinkSync(alias);
-      symlinkSync(change === "retarget" ? replacement.socketPath : fixture.socketPath, alias);
+      // Create while the original inode is still allocated: unlink/recreate can
+      // reuse both its inode and coarse ctime, especially for the same target.
+      const replacementAlias = path.join(aliasParent, "replacement.sock");
+      await symlink(change === "retarget" ? replacement.socketPath : fixture.socketPath, replacementAlias);
+      await rename(replacementAlias, alias);
     }
     await expect(channel.revalidateIdentity()).rejects.toThrow("environment_private_unix_stream_identity_replaced");
     await expect(channel.closed).resolves.toEqual({reason: "client_closed"});
@@ -1539,6 +1587,7 @@ describe("LocalEnvironmentChannelProvider", () => {
         { source: "protected_file", path: secretPath },
         1,
         new AbortController().signal,
+        "capability_token",
       );
     } catch (error) {
       failure = error;

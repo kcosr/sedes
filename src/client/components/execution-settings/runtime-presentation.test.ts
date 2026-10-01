@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ConfigurationRuntimeState } from "../../../shared/protocol/configuration-admin.js";
 import { presentRuntime, worstStatus, type RuntimePresentationOptions } from "./runtime-presentation.js";
+import { backendEditors, backendStopEffect } from "./backend-editors.js";
 
 const environmentActions: ConfigurationRuntimeState["supportedActions"] = ["connect", "disconnect", "start", "stop", "restart", "upgrade"];
 function runtime(overrides: Partial<ConfigurationRuntimeState> = {}): ConfigurationRuntimeState {
@@ -53,6 +54,58 @@ describe("runtime presentation", () => {
     expect(summarize(runtime({ connectionState: "stopped", supportedActions: [] }))).toMatchObject({ primary: undefined, secondary: [] });
     expect(summarize(runtime({ connectionState: "recovery_required", supportedActions: ["connect", "disconnect", "start", "stop", "restart", "upgrade"] })).secondary).not.toContain("Retry connection");
   });
+
+  it("offers Connect after retiring an external attachment without claiming its server stopped", () => {
+    const state = runtime({ resourceKind: "backend", connectionState: "stopped", preference: "stopped", supportedActions: ["connect", "disconnect", "stop"] });
+    const options: RuntimePresentationOptions = { resourceKind: "backend", sidecar: false, stopEffect: "attachment" };
+    expect(presentRuntime(state, options)).toMatchObject({ headline: "Attachment retired", primary: { action: "connect" },
+      detail: "Sedes is not attached to the external server. Connect to establish a new attachment." });
+    expect(presentRuntime(state, { ...options, enabled: false }).primary).toBeUndefined();
+    for (const connectionState of ["unreachable", "recovery_required"] as const) {
+      const presentation = presentRuntime({ ...state, connectionState }, options);
+      expect(presentation.detail).toContain(connectionState === "unreachable" ? "Stop only records" : "Shutdown is unconfirmed");
+      expect(presentation.primary?.action).toBe("connect");
+    }
+  });
+
+  it.each((["codex_app_server", "opencode"] as const).flatMap(kind => (["owned", "external"] as const).map(ownership => ({ kind, ownership }))))(
+    "preserves truthful lifecycle guidance for $kind $ownership through the production effect helper", ({ kind, ownership }) => {
+      const backend = backendEditors[kind].createBackend("backend");
+      if (ownership === "external") {
+        if (backend.kind === "opencode") backend.moduleConfiguration.connection = { ownership, channel: { type: "http", url: "http://127.0.0.1:4096",
+          authentication: { type: "basic", username: "opencode", secret: { source: "protected_file", path: "/secrets/password" } } } };
+        else if (backend.kind === "codex_app_server") backend.moduleConfiguration.connection = { ownership, channel: { type: "unix_websocket", socketPath: "/run/codex.sock" } };
+      }
+      const actions: ConfigurationRuntimeState["supportedActions"] = ownership === "external" && kind === "opencode"
+        ? ["connect", "disconnect", "stop"] : ["connect", "disconnect", "start", "stop", "restart"];
+      const options = { resourceKind: "backend" as const, sidecar: false, enabled: backend.enabled };
+      const stopped = runtime({ resourceKind: "backend", resourceId: backend.id, connectionState: "stopped", preference: "stopped", supportedActions: actions });
+      const stoppedPresentation = presentRuntime(stopped, { ...options, stopEffect: backendStopEffect(backend, stopped) });
+      expect(stoppedPresentation.headline).toBe(ownership === "external" ? "Attachment retired" : "Intentionally stopped");
+      expect(stoppedPresentation.primary?.action).toBe(ownership === "external" ? "connect" : "start");
+      expect(stoppedPresentation.detail).not.toContain("Apply");
+      expect(stoppedPresentation.detail).not.toContain("was left running");
+      if (ownership === "owned") expect(stoppedPresentation.detail).toBe("The provider is stopped and will not start automatically.");
+
+      for (const connectionState of ["unreachable", "recovery_required"] as const) {
+        const unavailable = { ...stopped, preference: "automatic" as const, connectionState, applyState: "unavailable" as const };
+        const presented = presentRuntime(unavailable, { ...options, stopEffect: backendStopEffect(backend, unavailable) });
+        expect(presented.primary?.action).toBe("connect");
+        expect(presented.secondary.map(action => action.action)).toEqual(["stop", "disconnect"]);
+        expect(presented.detail).not.toContain("Stop ends");
+        if (connectionState === "unreachable") {
+          expect(presented.detail).toContain("Stop only records that the provider should not start automatically");
+          expect(presented.detail).toContain("shutdown on the host is unconfirmed");
+        } else {
+          expect(presented.detail).toContain("Shutdown is unconfirmed until ownership can be verified");
+          expect(presented.detail).toContain("Disconnect pauses automatic retries");
+        }
+      }
+      const connected = { ...stopped, connectionState: "connected" as const, preference: "automatic" as const };
+      expect(backendStopEffect(backend, connected)).toBe(ownership === "external" ? "attachment" : "service");
+      expect(backendStopEffect(backend, { ...connected, applyState: "pending", effectiveRevision: 3 })).toBe("unknown");
+      expect(backendStopEffect({ ...backend, enabled: false }, connected)).toBe("unknown");
+    });
 
   it("offers Stop while a runtime is unreachable or awaiting ownership recovery", () => {
     const localBackend: ConfigurationRuntimeState["supportedActions"] = ["connect", "start", "stop", "restart"];

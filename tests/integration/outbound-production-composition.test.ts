@@ -1,3 +1,4 @@
+import { buildProductionSidecarArtifact, buildProductionOutboundConnector } from "../support/production-carrier-fixture.js";
 import { AuthenticationRepository } from "../../src/server/authentication/authentication-repository.js";
 import { once } from "node:events";
 import { execFile as execFileCallback, spawn, type ChildProcess } from "node:child_process";
@@ -6,7 +7,6 @@ import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 
 import { connect } from "node:net";
 import path from "node:path";
 import { promisify } from "node:util";
-import { build } from "esbuild";
 import type { OutboundClaudeFixtureEvent } from "../support/outbound-claude-sdk-fixture.js";
 import { normalizedThreadSnapshotSchema, threadEventEnvelopeSchema } from "../../src/shared/protocol/conversation.js";
 import { OutboundCodexFixture } from "../support/outbound-codex-fixture.js";
@@ -334,14 +334,13 @@ class OutboundFixture {
       const configurationPath = path.join(directory, "server.json");
       await writeFile(configurationPath, JSON.stringify({ schemaVersion: 11, packagedClients: [] }));
       const artifactDirectory = path.join(directory, "artifact");
-      const { NODE_ENV: _nodeEnvironment, ...buildEnvironment } = process.env;
-      await execFile(process.execPath, (offlineClaude ? ["tests/support/build-outbound-claude-sidecar-fixture.mjs", artifactDirectory] : ["scripts/build-sidecar.mjs", "--output-directory", artifactDirectory]), { cwd: process.cwd(), env: buildEnvironment, maxBuffer: 2 * 1024 * 1024 });
-      const artifact = await loadSidecarArtifactRegistration(path.join(artifactDirectory, "manifest.json"));
+      const artifact = offlineClaude ? await (async () => {
+        const { NODE_ENV: _nodeEnvironment, ...buildEnvironment } = process.env;
+        await execFile(process.execPath, ["tests/support/build-outbound-claude-sidecar-fixture.mjs", artifactDirectory], { cwd: process.cwd(), env: buildEnvironment, maxBuffer: 2 * 1024 * 1024 });
+        return loadSidecarArtifactRegistration(path.join(artifactDirectory, "manifest.json"));
+      })() : await buildProductionSidecarArtifact(artifactDirectory);
       const connectorPath = path.join(directory, "connector.mjs");
-      await build({ entryPoints: [path.resolve("src/server/sidecar/outbound-connector-main.ts")], outfile: connectorPath,
-        bundle: true, platform: "node", format: "esm", target: "node22", packages: "bundle", logLevel: "silent",
-        banner: { js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);' },
-        define: { __SEDES_CONNECTOR_VERSION__: JSON.stringify("production-test"), "process.env.WS_NO_BUFFER_UTIL": "true", "process.env.WS_NO_UTF_8_VALIDATE": "true" } });
+      await buildProductionOutboundConnector(connectorPath);
       return new OutboundFixture(directory, hostHome, workspace, configurationPath, path.join(directory, "main"), connectorPath, artifact);
     } catch (error) { await rm(directory, { recursive: true, force: true }); throw error; }
   }

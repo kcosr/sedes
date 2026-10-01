@@ -4,8 +4,18 @@
 
 ### Breaking Changes
 
-- Browser and packaged clients must use client protocol 129, which adds
-  optional, runtime-only throughput measurements to completed turns. (#20)
+- Remote OpenCode requires a matching sidecar build with private OpenCode
+  runtime capability major 2 and tool capabilities. Upgrade existing execution sidecars before
+  connecting this backend. (#17)
+
+- Browser and packaged clients now require client protocol 131 for the OpenCode
+  v2 backend identity and terminal Stop diagnostics alongside runtime-only
+  turn-throughput measurements and optional OpenCode path overrides. (#17, #20)
+
+- Claude worker and persistent runtime capabilities now require major 2 for
+  bounded, recoverable conversation Stop. Rebuild local helpers and upgrade
+  Claude sidecars with this server. Migration 119 closes old unconfirmed Stop
+  receipts without sending a new cancellation. (#17)
 
 - Browser and packaged clients must use client protocol 128, which adds
   reviewed Task snapshots to settle/archive previews and completion requests. (#19)
@@ -19,7 +29,7 @@
   browser protocol change is required for this fix. (#15)
 
 - Codex viewed images use a new `viewed_image` transcript item, introduced
-  in client protocol 123. This build requires client protocol 129; see the
+  in client protocol 123. This build requires client protocol 131; see the
   client protocol entries below. (#11, #13, #14)
 
 - Claude backends require Claude Code 2.1.281 or newer and are tested through
@@ -64,6 +74,20 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- OpenCode v2 can run on Linux execution hosts locally, through SSH, or through
+  outbound HTTP(S) sidecars, using the same owned/external runtime and tools.
+  Remote Disconnect preserves native work; external backend Stop retires only
+  Sedes's attachment. Add host-local `sedes opencode-owner` inspection and exact
+  recovery commands for retained native-store ownership fences. (#17)
+
+- Add stock OpenCode v2 2.0.18 with an owned resident `opencode2` daemon or an
+  existing authenticated local server on Linux. Supports native history,
+  Send, Steer, Queue, Stop, model selection, saved Agents, native
+  approvals/forms, staged files/images, viewed images, skills and manual compact.
+  Native Progressive tools use a bundled per-call MCP bridge; owned roots can
+  use CLI tools and scoped execution variables. Reconnect never automatically
+  resends an uncertain input. (#17)
 
 - Escape in Settings goes up one level, like the **‹** links: from an editor
   to its item, from an item to its list, and from a page to the Settings list
@@ -150,6 +174,19 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- OpenCode uses native execution-host defaults with optional Advanced path
+  overrides. Multiple runtimes can share a database; ownership and recovery
+  now track each scoped runtime independently. Provider connection runs after
+  HTTP startup so Settings stays available during connection failures. (#17)
+
+- Live Pi qualification uses the local AW Qwen model. OpenCode live
+  qualification can explicitly send Qwen chat-template low-reasoning settings
+  while retaining its read-only tools, token budget, and deadline. (#17)
+
+- Stop uses the existing native conversation control independently of history
+  loading, with a fixed 30-second deadline. Unconfirmed Stop requests no longer
+  block the Queue indefinitely, and retrying one does not cancel newer work. (#17)
 
 - Settings has a new navigation. On desktop the sidebar lists its pages in
   five groups while Settings is open, under **Back to chat** or **Back to
@@ -294,6 +331,9 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- OpenCode's bundled MCP helper now launches through both the generated Sedes
+  CLI and the sidecar entry point. (#17)
 
 - Keep terminal output visible after a live theme switch. The terminal now
   recolors in place instead of reattaching, keeps explicit truecolor output,

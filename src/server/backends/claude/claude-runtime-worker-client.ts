@@ -38,6 +38,7 @@ import {
   claudeRuntimeCanUseToolOperation,
   claudeRuntimeQueryFailedEventSchema,
   claudeRuntimeQueryInterruptOperation,
+  claudeRuntimeQueryInterruptDispositionOperation,
   claudeRuntimeQueryCancelInputOperation,
   claudeRuntimeQueryMessageEventSchema,
   claudeRuntimeQueryOpenOperation,
@@ -52,19 +53,19 @@ import {
   claudeRuntimeSessionMessagesOperation,
   claudeRuntimeSessionTranscriptOperation,
   claudeRuntimeSessionRenameOperation,
-  registerClaudeRuntimeV1HostOperations,
+  registerClaudeRuntimeV2HostOperations,
   type ClaudeRuntimeCanUseToolRequest,
   type ClaudeRuntimeCanUseToolResponse,
   type ClaudeRuntimeQueryFailedEvent,
   type ClaudeRuntimeQueryMessageEvent,
   type ClaudeRuntimePermissionResponseAckRequest,
-} from "./worker/claude-runtime-v1.js";
+} from "./worker/claude-runtime-v2.js";
 
 export interface ClaudeRuntimeWorkerClientPeer {
   call<Request, Response>(
     definition: SidecarOperationDefinition<Request, Response>,
     request: Request,
-    options?: { readonly signal?: AbortSignal },
+    options?: { readonly signal?: AbortSignal; readonly deadlineMilliseconds?: number },
   ): Promise<Response>;
   onEvent<Payload>(input: {
     readonly capabilityId: string;
@@ -108,7 +109,7 @@ export class ClaudeRuntimeWorkerClient implements ClaudeOwnedRuntimeClient {
       startupEnvironmentVariables: input.startupEnvironmentVariables,
       initializationTimeoutMs: input.initializationTimeoutMs,
     });
-    registerClaudeRuntimeV1HostOperations(input.hostRegistry, {
+    registerClaudeRuntimeV2HostOperations(input.hostRegistry, {
       canUseTool: async (request, context) =>
         await this.#canUseTool(request, context.signal),
       acknowledgePermissionResponse: async (request) =>
@@ -257,7 +258,7 @@ export class ClaudeRuntimeWorkerClient implements ClaudeOwnedRuntimeClient {
   call<Request, Response>(
     definition: SidecarOperationDefinition<Request, Response>,
     request: Request,
-    options?: { readonly signal?: AbortSignal },
+    options?: { readonly signal?: AbortSignal; readonly deadlineMilliseconds?: number },
   ): Promise<Response> {
     this.#assertOpen();
     return this.#peer.call(definition, request, options);
@@ -511,25 +512,32 @@ class WorkerSession implements ClaudeOwnedRuntimeSession {
       .catch((error) => { this.workerFailed(error); throw error; });
   }
 
-  async interrupt() {
+  async interrupt(input: Parameters<ClaudeRuntimeSession["interrupt"]>[0]) {
     this.#assertReady();
-    return (
-      (
-        await this.#client.call(claudeRuntimeQueryInterruptOperation, {
-          queryId: this.#queryId,
-        })
-      ).receipt ?? undefined
-    );
+    const remaining = input.deadlineAt - Date.now();
+    if (remaining <= 0 || input.signal?.aborted) throw new Error("claude_interrupt_deadline");
+    return (await this.#client.call(claudeRuntimeQueryInterruptOperation, {
+      queryId: this.#queryId, operationId: input.applicationOperationId,
+      timeoutMilliseconds: Math.min(30_000, remaining),
+    }, { signal: input.signal, deadlineMilliseconds: Math.min(30_000, remaining) })).receipt ?? undefined;
   }
 
-  async cancelQueuedInput(operationId: string): Promise<boolean> {
+  async reconcileInterrupt(input: Parameters<ClaudeRuntimeSession["interrupt"]>[0]): Promise<"accepted" | "unknown"> {
     this.#assertReady();
-    return (
-      await this.#client.call(claudeRuntimeQueryCancelInputOperation, {
-        queryId: this.#queryId,
-        operationId,
-      })
-    ).cancelled;
+    const remaining = input.deadlineAt - Date.now();
+    if (remaining <= 0 || input.signal?.aborted) return "unknown";
+    return (await this.#client.call(claudeRuntimeQueryInterruptDispositionOperation, {
+      queryId: this.#queryId, operationId: input.applicationOperationId,
+    }, { signal: input.signal, deadlineMilliseconds: Math.min(30_000, remaining) })).outcome;
+  }
+
+  async cancelQueuedInput(operationId: string, input?: Parameters<NonNullable<ClaudeRuntimeSession["cancelQueuedInput"]>>[1]): Promise<boolean> {
+    this.#assertReady();
+    const remaining = input ? input.deadlineAt - Date.now() : 30_000;
+    if (remaining <= 0 || input?.signal?.aborted) throw new Error("claude_interrupt_deadline");
+    return (await this.#client.call(claudeRuntimeQueryCancelInputOperation, {
+      queryId: this.#queryId, operationId,
+    }, { signal: input?.signal, deadlineMilliseconds: Math.min(30_000, remaining) })).cancelled;
   }
 
   async setModel(model?: string): Promise<void> {

@@ -88,6 +88,10 @@ export class BackendModuleCatalog {
     return this.#protocolReleaseByBackendKind.get(kind)!;
   }
 
+  protocolReleases(): Readonly<Partial<Record<BackendKind, string>>> {
+    return Object.freeze(Object.fromEntries(this.#protocolReleaseByBackendKind));
+  }
+
   resolveConfiguration(
     configuration: BackendConfigurationFile,
   ): ResolvedBackendConfigurationFile {

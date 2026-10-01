@@ -17,13 +17,13 @@
 > clients connected to a long-running Sedes server on Linux, with persistent remote
 > environments reached over SSH or HTTP(S). Most day-to-day use is Codex via
 > an external app-server's Unix-domain socket (UDS), plus Pi SDK for local
-> models. These workflows receive the most everyday use. Claude and Grok are
+> models. These workflows receive the most everyday use. Claude, Grok, and OpenCode are
 > less mature integrations and are used less often. See the
 > [connection guide](docs/operator/connections.md) for how the layers fit together.
 
 Sedes is a self-hosted **agent development environment (ADE)** for running,
 observing, organizing, and controlling coding agents. It brings Pi SDK, Codex,
-Claude, and Grok conversations into one browser interface with durable drafts,
+Claude, Grok, and OpenCode v2 conversations into one browser interface with durable drafts,
 queues, tasks, reusable configurations, file context, automations, and recovery
 when a provider operation has an uncertain outcome. Thread-associated terminal
 resources can keep running without an open panel and can be reopened from
@@ -96,7 +96,7 @@ bounded and is documented in the individual
 
 | Area              | What you can do                                                                                                                                                                              |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Conversations     | Work with Pi SDK, Codex, Claude, and Grok through one interface.                                                                                                                                 |
+| Conversations     | Work with Pi SDK, Codex, Claude, Grok, and OpenCode v2 through one interface.                                                                                                                                 |
 | Active work       | Keep durable drafts, Send or Stop work, and use Steer or Queue when the selected backend supports them.                                                                                      |
 | Organization      | Arrange threads by project, group, pin, state, time, bookmarks, and tasks.                                                                                                                   |
 | Reuse             | Create saved Agents, thread templates, saved prompts, skills, and context excerpts.                                                                                                          |
@@ -114,6 +114,7 @@ bounded and is documented in the individual
 | Codex   | Sedes can own a local process or connect to an operator-managed local, authenticated network, or SSH/outbound sidecar endpoint. | Local or persistent-sidecar execution, depending on the configured topology.                                                             |
 | Claude  | Sedes runs a managed Claude Agent SDK worker with an independently authenticated Claude Code CLI.              | Local worker or persistent-sidecar runtime over SSH or outbound on Linux/macOS.                                  |
 | Grok    | Sedes owns a local Grok ACP process using the native installation account.                                     | Local execution environment.                                                                                              |
+| OpenCode v2 | Sedes owns a resident daemon or connects to an existing server through authenticated HTTP and SSE on the execution host. | Local or persistent SSH/outbound sidecar; Linux host, same host account, stock `opencode2` 2.0.18. |
 
 Remote hosts can also call the server over HTTP or HTTPS through an outbound
 connector. Accept a pending host in Settings, grant roots and operations, then

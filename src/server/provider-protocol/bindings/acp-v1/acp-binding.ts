@@ -263,6 +263,11 @@ export function defineAcpOutboundCapabilityCorrection<
   return correction;
 }
 
+export interface AcpNotificationOptions {
+  readonly cancellationSignal?: AbortSignal;
+  readonly deadlineMilliseconds?: number;
+}
+
 export interface AcpRequestOptions {
   readonly cancellationSignal?: AbortSignal;
   /**
@@ -773,9 +778,17 @@ export class AcpBinding {
   async notify<Params>(
     descriptor: AcpNotificationDescriptor<Params>,
     params: Params,
+    options?: AcpNotificationOptions,
   ): Promise<void> {
     this.#requireInitializedDescriptor(descriptor, "client_to_agent");
     this.#requireActiveAssurance();
+    if (options?.cancellationSignal?.aborted) {
+      throw new AcpDeliveryError("acp_binding_request_cancelled", "not_sent");
+    }
+    const deadlineMilliseconds = validateDeadline(
+      options?.deadlineMilliseconds ?? this.#limits.requestDeadlineMilliseconds,
+      this.#limits.requestDeadlineMilliseconds,
+    );
     const paramsSnapshot = snapshotAcpValue(
       params,
       descriptor.decodeParams,
@@ -805,7 +818,8 @@ export class AcpBinding {
           method: descriptor.method,
           params: paramsSnapshot,
         },
-        this.#limits.requestDeadlineMilliseconds,
+        deadlineMilliseconds,
+        options?.cancellationSignal,
       );
     } catch (error) {
       const delivery = deliveryFrom(error);
@@ -2168,6 +2182,7 @@ export class AcpBinding {
   async #sendWireWithDeadline(
     value: unknown,
     milliseconds: number,
+    cancellationSignal?: AbortSignal,
   ): Promise<void> {
     const controller = new AbortController();
     const timer = setTimeout(() => {
@@ -2175,7 +2190,9 @@ export class AcpBinding {
     }, milliseconds);
     timer.unref?.();
     try {
-      await this.#sendWire(value, controller.signal);
+      await this.#sendWire(value, cancellationSignal
+        ? AbortSignal.any([controller.signal, cancellationSignal])
+        : controller.signal);
     } finally {
       clearTimeout(timer);
     }

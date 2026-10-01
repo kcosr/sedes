@@ -74,6 +74,8 @@ function resettableActor(input: {
   activeTurnId?: string;
   closeFailure?: Error;
   canEvict?: boolean;
+  canAutomaticallyEvict?: boolean;
+  automaticEviction?: "requires_quiescence" | "client_detach";
 }) {
   let closed = false;
   let generation = input.generation;
@@ -101,6 +103,8 @@ function resettableActor(input: {
       return closed && !input.closeFailure;
     },
     canEvict: input.canEvict ?? false,
+    get canAutomaticallyEvict(): boolean { return input.canAutomaticallyEvict ?? input.canEvict ?? false; },
+    automaticEviction: input.automaticEviction ?? "requires_quiescence",
     close,
     closeIfIdle,
     ensureProjectionCurrent: vi.fn(async () => undefined),
@@ -127,8 +131,12 @@ function resetCoordinator(
   let actorIndex = 0;
   const actorsByThreadId = new Map<string, ConversationActor>();
   const replacementPublications: ReturnType<typeof vi.fn>[] = [];
+  const interactionRelease = vi.fn(async () => undefined);
+  const interactionDetach = vi.fn();
   const coordinator = new ThreadRuntimeCoordinator({
     actors: {
+      acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
       acquire: vi.fn(async (input: AcquireConversationActorInput) => {
         const index = actorIndex++;
         const actor = actors[index]!;
@@ -181,14 +189,15 @@ function resetCoordinator(
     interactions: {
       bind: () => ({
         publishPending: vi.fn(),
-        release: vi.fn(async () => undefined),
+        release: interactionRelease,
+        detach: interactionDetach,
       }),
     } as never,
     hubs,
     retentionMilliseconds,
     onThreadChanged,
   });
-  return { coordinator, actorRelease, replacementPublications };
+  return { coordinator, actorRelease, replacementPublications, interactionRelease, interactionDetach };
 }
 
 function deferred<T>() {
@@ -222,6 +231,8 @@ function pendingOverlayFixture() {
   const actor = {
     timeline: actorState.timeline,
     canEvict: true,
+    get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+    automaticEviction: "requires_quiescence",
     closed: false,
     ensureProjectionCurrent,
     peekSnapshotState: vi.fn(() => actorState),
@@ -236,6 +247,8 @@ function pendingOverlayFixture() {
   };
   const coordinator = new ThreadRuntimeCoordinator({
     actors: {
+      acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
       acquire: vi.fn(async () => ({ actor, release: actorRelease })),
       runWithRuntimesStopped: async () => {
         throw new Error("unexpected_explicit_runtime_stop");
@@ -308,6 +321,8 @@ describe("ThreadRuntimeCoordinator", () => {
   it("accepts zero retention and rejects values beyond the timer ceiling", () => {
     const input = {
       actors: {
+        acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         acquire: vi.fn(),
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
@@ -346,6 +361,8 @@ describe("ThreadRuntimeCoordinator", () => {
       const current = resettableActor({
         generation: "generation-1",
         canEvict: true,
+        get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+        automaticEviction: "requires_quiescence",
       });
       const { coordinator, actorRelease } = resetCoordinator(
         [current.actor],
@@ -365,6 +382,22 @@ describe("ThreadRuntimeCoordinator", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("detaches an idle resident-client view without native interaction cancellation", async () => {
+    vi.useFakeTimers();
+    const current = resettableActor({ generation: "resident", canEvict: false,
+      canAutomaticallyEvict: true, automaticEviction: "client_detach" });
+    const fixture = resetCoordinator([current.actor], 10);
+    try {
+      const runtime = await fixture.coordinator.acquire(scope, "thread-resident");
+      runtime.release();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(fixture.actorRelease[0]).toHaveBeenCalledOnce();
+      expect(fixture.interactionDetach).toHaveBeenCalledOnce();
+      expect(fixture.interactionRelease).not.toHaveBeenCalled();
+      expect(current.close).not.toHaveBeenCalled();
+    } finally { await fixture.coordinator.close(); vi.useRealTimers(); }
   });
 
   it("evicts inactive thread hubs and never evicts a subscribed hub", () => {
@@ -505,6 +538,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const actor = {
       timeline: { runState: "idle" },
       canEvict: true,
+      get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+      automaticEviction: "requires_quiescence",
       subscribe: () => () => undefined,
       ensureProjectionCurrent,
     } as unknown as ConversationActor;
@@ -532,6 +567,8 @@ describe("ThreadRuntimeCoordinator", () => {
 
     coordinator = new ThreadRuntimeCoordinator({
       actors: {
+        acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
         acquire: vi.fn(async () => ({
@@ -624,6 +661,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const acquire = vi.fn();
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
+        acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         acquire,
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
@@ -696,6 +735,8 @@ describe("ThreadRuntimeCoordinator", () => {
       .mockImplementation(async (_scope, threadId) => runtimeTarget(threadId));
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
+        acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         acquire: acquireActor,
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
@@ -806,6 +847,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const first = resettableActor({
       generation: "generation-1",
       canEvict: true,
+      get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+      automaticEviction: "requires_quiescence",
     });
     const second = resettableActor({ generation: "generation-2" });
     const { coordinator, actorRelease } = resetCoordinator([
@@ -851,6 +894,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const first = resettableActor({
       generation: "generation-1",
       canEvict: true,
+      get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+      automaticEviction: "requires_quiescence",
     });
     const second = resettableActor({ generation: "generation-2" });
     const { coordinator } = resetCoordinator([first.actor, second.actor]);
@@ -893,6 +938,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const outer = resettableActor({
       generation: "generation-outer",
       canEvict: true,
+      get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+      automaticEviction: "requires_quiescence",
     });
     const busy = resettableActor({
       generation: "generation-busy",
@@ -1104,9 +1151,9 @@ describe("ThreadRuntimeCoordinator", () => {
     });
     const actor = {
       timeline: { runState: "idle" },
-      get canEvict() {
-        return canEvict;
-      },
+      get canEvict() { return canEvict; },
+      get canAutomaticallyEvict() { return canEvict; },
+      automaticEviction: "requires_quiescence",
       closed: false,
       replacementSafe: false,
       close,
@@ -1137,10 +1184,14 @@ describe("ThreadRuntimeCoordinator", () => {
     const environmentBActor = resettableActor({
       generation: "generation-b",
       canEvict: true,
+      get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+      automaticEviction: "requires_quiescence",
     });
     const environmentAActor = resettableActor({
       generation: "generation-a",
       canEvict: true,
+      get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+      automaticEviction: "requires_quiescence",
     });
     const { coordinator, actorRelease } = resetCoordinator(
       [environmentBActor.actor, environmentAActor.actor],
@@ -1190,6 +1241,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const actor = {
       timeline: { runState: "idle" },
       canEvict: true,
+      get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+      automaticEviction: "requires_quiescence",
       get closed() {
         return closed;
       },
@@ -1259,6 +1312,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const acquireActor = vi.fn();
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
+        acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         acquire: acquireActor,
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: async (input) => {
@@ -1293,6 +1348,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const actor = resettableActor({
       generation: "generation-1",
       canEvict: true,
+      get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+      automaticEviction: "requires_quiescence",
     });
     const actorRelease = vi.fn();
     const bridgeReady = deferred<void>();
@@ -1303,6 +1360,8 @@ describe("ThreadRuntimeCoordinator", () => {
     }));
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
+        acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         acquire: vi.fn(async () => ({
           actor: actor.actor,
           release: actorRelease,
@@ -1356,6 +1415,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const first = resettableActor({
       generation: "generation-1",
       canEvict: true,
+      get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+      automaticEviction: "requires_quiescence",
       closeFailure: failure,
     });
     const second = resettableActor({ generation: "generation-2" });
@@ -1394,6 +1455,8 @@ describe("ThreadRuntimeCoordinator", () => {
       const actor = {
         timeline: { runState: "idle" },
         canEvict: true,
+        get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+        automaticEviction: "requires_quiescence",
         ensureProjectionCurrent: vi.fn(async () => undefined),
       } as unknown as ConversationActor;
       const actorRelease = vi.fn();
@@ -1401,6 +1464,8 @@ describe("ThreadRuntimeCoordinator", () => {
       const interactionRelease = vi.fn(async () => undefined);
       const coordinator = new ThreadRuntimeCoordinator({
         actors: {
+          acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
           runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
           runWithRuntimeRetired: passThroughActorRetirement,
           acquire: vi.fn(async () => ({ actor, release: actorRelease })),
@@ -1657,6 +1722,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const actor = {
       timeline: { runState: "running" },
       canEvict: false,
+      get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+      automaticEviction: "requires_quiescence",
       ensureProjectionCurrent,
       peekSnapshotState,
     } as unknown as ConversationActor;
@@ -1689,6 +1756,8 @@ describe("ThreadRuntimeCoordinator", () => {
     };
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
+        acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
         acquire: vi.fn(async () => ({ actor, release: vi.fn() })),
@@ -1784,6 +1853,8 @@ describe("ThreadRuntimeCoordinator", () => {
       const actor = {
         timeline: { runState: "idle" },
         canEvict: true,
+        get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+        automaticEviction: "requires_quiescence",
         subscribe: () => () => undefined,
         ensureProjectionCurrent: vi.fn(async () => {
           throw new Error("projection recovery failed");
@@ -1794,6 +1865,8 @@ describe("ThreadRuntimeCoordinator", () => {
       const interactionRelease = vi.fn(async () => undefined);
       const coordinator = new ThreadRuntimeCoordinator({
         actors: {
+          acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
           runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
           runWithRuntimeRetired: passThroughActorRetirement,
           acquire: vi.fn(async () => ({
@@ -1870,6 +1943,8 @@ describe("ThreadRuntimeCoordinator", () => {
       const actor = {
         timeline: { runState: "idle" },
         canEvict: true,
+        get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+        automaticEviction: "requires_quiescence",
         subscribe: () => () => undefined,
         ensureProjectionCurrent: vi.fn(async () => undefined),
       } as unknown as ConversationActor;
@@ -1878,6 +1953,8 @@ describe("ThreadRuntimeCoordinator", () => {
       const interactionRelease = vi.fn(async () => undefined);
       const coordinator = new ThreadRuntimeCoordinator({
         actors: {
+          acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
           runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
           runWithRuntimeRetired: passThroughActorRetirement,
           acquire: vi.fn(async () => ({
@@ -1956,6 +2033,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const actor = {
       timeline: { runState: "idle" },
       canEvict: true,
+      get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+      automaticEviction: "requires_quiescence",
       subscribe: () => () => undefined,
       ensureProjectionCurrent: vi.fn(async () => undefined),
     } as unknown as ConversationActor;
@@ -1965,6 +2044,8 @@ describe("ThreadRuntimeCoordinator", () => {
     let reportFailure: ((error: unknown) => void | Promise<void>) | undefined;
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
+        acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
         acquire: vi.fn(async () => ({
@@ -2046,9 +2127,9 @@ describe("ThreadRuntimeCoordinator", () => {
       const actorRelease = vi.fn();
       const actor = {
         timeline: { runState: "running" },
-        get canEvict() {
-          return canEvict;
-        },
+        get canEvict() { return canEvict; },
+        get canAutomaticallyEvict() { return canEvict; },
+        automaticEviction: "requires_quiescence",
         subscribe: () => () => undefined,
         ensureProjectionCurrent: vi.fn(async () => undefined),
       } as unknown as ConversationActor;
@@ -2072,6 +2153,8 @@ describe("ThreadRuntimeCoordinator", () => {
       const onAuthoritativeSettled = vi.fn();
       const coordinator = new ThreadRuntimeCoordinator({
         actors: {
+          acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
           runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
           runWithRuntimeRetired: passThroughActorRetirement,
           acquire: vi.fn(async () => ({
@@ -2174,6 +2257,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const target = new Promise<AcquireConversationActorInput>(() => undefined);
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
+        acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         acquire: vi.fn(),
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
@@ -2229,6 +2314,8 @@ describe("ThreadRuntimeCoordinator", () => {
     }));
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
+        acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
         acquire: vi.fn(async () => ({
@@ -2279,6 +2366,8 @@ describe("ThreadRuntimeCoordinator", () => {
       const actor = {
         timeline: { generation: "generation-1", runState: "running" },
         canEvict: true,
+        get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+        automaticEviction: "requires_quiescence",
         closed: false,
         ensureProjectionCurrent: vi.fn(async () => undefined),
         subscribe: vi.fn(() => {
@@ -2288,6 +2377,8 @@ describe("ThreadRuntimeCoordinator", () => {
       } as unknown as ConversationActor;
       const coordinator = new ThreadRuntimeCoordinator({
         actors: {
+          acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
           runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
           runWithRuntimeRetired: passThroughActorRetirement,
           acquire: vi.fn(async () => ({ actor, release: actorRelease })),
@@ -2334,6 +2425,8 @@ describe("ThreadRuntimeCoordinator", () => {
           return { generation, runState: "running" as const };
         },
         canEvict: true,
+        get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+        automaticEviction: "requires_quiescence",
         closed: false,
         ensureProjectionCurrent: vi.fn(async () => undefined),
         subscribe: vi.fn(() => {
@@ -2344,6 +2437,8 @@ describe("ThreadRuntimeCoordinator", () => {
       } as unknown as ConversationActor;
       const coordinator = new ThreadRuntimeCoordinator({
         actors: {
+          acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
           runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
           runWithRuntimeRetired: passThroughActorRetirement,
           acquire: vi.fn(async () => ({ actor, release: actorRelease })),
@@ -2389,6 +2484,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const actor = {
       timeline: { generation: "generation-1", runState: "running" },
       canEvict: false,
+      get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+      automaticEviction: "requires_quiescence",
       get closed() {
         return closed;
       },
@@ -2402,6 +2499,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const replacementActor = {
       timeline: { generation: "generation-2", runState: "idle" },
       canEvict: true,
+      get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+      automaticEviction: "requires_quiescence",
       closed: false,
       ensureProjectionCurrent: vi.fn(async () => undefined),
       onClosed: vi.fn(() => () => undefined),
@@ -2417,6 +2516,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const interactionRelease = vi.fn(async () => undefined);
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
+        acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,
         acquire: acquireActor,
@@ -2473,6 +2574,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const firstActor = {
       timeline: { generation: "generation-1", runState: "running" },
       canEvict: false,
+      get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+      automaticEviction: "requires_quiescence",
       closed: false,
       get replacementRequired() {
         return replacementRequired;
@@ -2487,6 +2590,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const secondActor = {
       timeline: { generation: "generation-2", runState: "idle" },
       canEvict: true,
+      get canAutomaticallyEvict(): boolean { return (this as unknown as { canEvict: boolean }).canEvict; },
+      automaticEviction: "requires_quiescence",
       closed: false,
       replacementRequired: false,
       ensureProjectionCurrent: vi.fn(async () => undefined),
@@ -2502,6 +2607,8 @@ describe("ThreadRuntimeCoordinator", () => {
     const secondInteractionRelease = vi.fn(async () => undefined);
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
+        acquireExistingControl: vi.fn(() => undefined),
+      captureUnprojectedGeneration: vi.fn(() => undefined),
         acquire: acquireActor,
         runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
         runWithRuntimeRetired: passThroughActorRetirement,

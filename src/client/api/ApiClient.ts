@@ -1602,7 +1602,7 @@ export class ApiClient {
     rawOperation: ThreadApplicationOperation,
   ): Promise<ThreadApplicationMutationResult> {
     const operation = threadApplicationOperationSchema.parse(rawOperation);
-    return this.#mutation(
+    return this.#mutation<ThreadApplicationMutationResult>(
       `/api/threads/${encodeURIComponent(threadId)}/operations`,
       operation.kind === "deliver"
         ? threadDeliveryMutationResultSchema

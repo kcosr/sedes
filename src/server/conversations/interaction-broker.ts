@@ -33,11 +33,11 @@ import type {
 export interface InteractionConversation {
   subscribe(listener: ConversationActorListener): Unsubscribe;
   respond(input: InteractionResponseInput): Promise<void>;
-  /** Fail closed rather than leaving a provider parked on an unseen prompt. */
-  interruptForInteractionFailure(applicationOperationId: string): Promise<void>;
 }
 
 export interface InteractionBrokerPublisher {
+  /** Report failed exact cleanup without broadening it into a session Stop. */
+  failed?(scope: RequestScope, applicationThreadId: string, generation: string, message: string): void;
   /**
    * The active runtime supplies this owner. It must serialize interaction
    * incrementals with projection replacement and recover asynchronous
@@ -151,6 +151,7 @@ interface QuestionnaireIdentityMaps {
 interface OwnerBinding {
   readonly token: object;
   readonly publisher: InteractionBrokerPublisher;
+  generation?: string;
   unsubscribe: Unsubscribe;
   unsubscribed: boolean;
   state: "active" | "releasing";
@@ -440,6 +441,8 @@ export class InteractionBroker {
       binding.unsubscribe = conversation.subscribe((event) => {
         const current = this.#bindings.get(key);
         if (current?.token !== token || current.state !== "active") return;
+        if (event.type === "projection_replaced") current.generation = event.state.timeline.generation;
+        else if ("generation" in event) current.generation = event.generation;
         this.#acceptActorEvent(scope, applicationThreadId, conversation, event);
       });
     } catch (error) {
@@ -1230,6 +1233,7 @@ export class InteractionBroker {
         scope,
         applicationThreadId,
         conversation,
+        generation,
         driverInteraction.backendInteractionId,
       );
       return;
@@ -1506,6 +1510,7 @@ export class InteractionBroker {
     scope: RequestScope,
     applicationThreadId: string,
     conversation: InteractionConversation,
+    generation: string,
     backendInteractionId: string,
   ): void {
     const correlation = backendKey(
@@ -1515,6 +1520,7 @@ export class InteractionBroker {
     );
     this.#cancellingBackend.add(correlation);
     const key = ownerKey(scope, applicationThreadId);
+    const binding = this.#bindings.get(key);
     const applicationOperationId = `capacity:${randomUUID()}`;
     const operation = Promise.resolve()
       .then(async () => {
@@ -1525,18 +1531,14 @@ export class InteractionBroker {
             kind: "cancel",
           });
         } catch {
-          try {
-            await conversation.interruptForInteractionFailure(
-              applicationOperationId,
-            );
-          } finally {
-            // Whether or not the backend accepts the interrupt, its owner can
-            // no longer safely present or settle any of these interactions.
+          // An old permission failure must never cancel a replacement turn.
+          // Exact cancellation was attempted; report its unresolved outcome
+          // only to the binding and projection that raised this request.
+          const current = this.#bindings.get(key);
+          if (binding && current === binding && current.generation === generation) {
             this.#abandonedBackend.add(correlation);
-            this.#abandonOwnerAfterInteractionFailure(
-              scope,
-              applicationThreadId,
-            );
+            current.publisher.failed?.(scope, applicationThreadId, generation,
+              "A provider interaction could not be cancelled. Reconnect to recover its state, or use Stop to stop current work.");
           }
         }
       })
@@ -1557,37 +1559,6 @@ export class InteractionBroker {
       );
     } else {
       pending.signal.removeEventListener("abort", pending.abortListener);
-    }
-  }
-
-  #abandonOwnerAfterInteractionFailure(
-    scope: RequestScope,
-    applicationThreadId: string,
-  ): void {
-    for (const pending of [...this.#pending.values()]) {
-      if (
-        !sameScope(pending.scope, scope) ||
-        pending.applicationThreadId !== applicationThreadId
-      ) {
-        continue;
-      }
-      if (pending.owner === "provider") {
-        this.#abandonedBackend.add(
-          backendKey(
-            pending.scope,
-            pending.applicationThreadId,
-            pending.backendInteractionId,
-          ),
-        );
-      }
-      this.#remove(pending);
-      if (pending.owner === "application") pending.reject(abortError());
-      this.#safePublishResolved(
-        pending.scope,
-        pending.applicationThreadId,
-        pending.generation,
-        pending.interaction.id,
-      );
     }
   }
 

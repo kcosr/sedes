@@ -1321,6 +1321,41 @@ describe("ACP V1 binding conformance boundaries", () => {
     release();
   });
 
+  it("bounds a notification by its caller budget and refuses an already cancelled write", async () => {
+    const transport = new ConformanceTransport();
+    const binding = trackedBinding(transport);
+    await initialize(binding, transport);
+    const cancelled = new AbortController();
+    cancelled.abort();
+    await expect(binding.notify(ACP_AGENT_NOTIFICATIONS.cancelSession, { sessionId: "session" }, {
+      cancellationSignal: cancelled.signal, deadlineMilliseconds: 5,
+    })).rejects.toMatchObject({ delivery: "not_sent" });
+    expect(transport.writes).toHaveLength(1);
+    const release = transport.blockNextSend();
+    await expect(binding.notify(ACP_AGENT_NOTIFICATIONS.cancelSession, { sessionId: "session" }, {
+      deadlineMilliseconds: 5,
+    })).rejects.toMatchObject({ delivery: "sent_outcome_unknown" });
+    await expect(binding.closed).resolves.toMatchObject({ reason: "acp_notification_delivery_unknown" });
+    expect(transport.writes).toHaveLength(2);
+    release();
+  });
+
+  it("abandons an in-flight notification when its caller cancels", async () => {
+    const transport = new ConformanceTransport();
+    const binding = trackedBinding(transport);
+    await initialize(binding, transport);
+    const release = transport.blockNextSend();
+    const cancellation = new AbortController();
+    const write = binding.notify(ACP_AGENT_NOTIFICATIONS.cancelSession, { sessionId: "session" }, {
+      cancellationSignal: cancellation.signal,
+    });
+    cancellation.abort();
+    await expect(write).rejects.toMatchObject({ delivery: "sent_outcome_unknown" });
+    await expect(binding.closed).resolves.toMatchObject({ reason: "acp_notification_delivery_unknown" });
+    release();
+    expect(transport.writes).toHaveLength(2);
+  });
+
   it("keeps abort-ignoring reverse work inside the concurrency bound", async () => {
     const transport = new ConformanceTransport();
     let authorityCalls = 0;

@@ -1,27 +1,27 @@
 # Provider features
 
-Sedes gives Pi, Codex, Claude, and Grok a common thread, composer, pending-input,
+Sedes gives Pi, Codex, Claude, Grok, and OpenCode v2 a common thread, composer, pending-input,
 Tasks, Files, and organization experience. Provider capabilities still differ.
 The interface hides an operation when the current backend, model, topology, or
 thread state does not support it.
 
 ## Compare providers
 
-| Capability | Pi | Codex | Claude | Grok |
-| --- | --- | --- | --- | --- |
-| Mid-turn Steer | Yes, aimed at the current turn | Yes, aimed at the current turn | Yes, delivered to the conversation | No; Queue instead |
-| Stop | Yes | Yes | Yes | Yes |
-| Background work indicator above composer | No | No | Subagents and commands | No |
-| Manual compact | Yes | Yes | No | No |
-| Exact completed-turn fork | Yes | Yes | Yes, idle source | No |
-| Latest provider snapshot fork | No | Yes | No | No |
-| Skills | Yes | Yes | Yes, eligible skills | Not currently |
-| Structured questions | No | Questionnaires and MCP forms | Multiple-choice questions | Not exposed |
-| Provider permission interaction | Primitive prompts | Approvals | Permission prompts | Not exposed |
-| Native image input | Model dependent | Model dependent | PNG, JPEG, GIF, WebP | Model dependent |
-| Generated-image display | No native artifact | Completed in-band PNG | No native artifact | Completed local ImageGen/ImageEdit JPEG |
-| Remote (SSH or outbound) workspace | Managed workspace tools/context | Persistent runtime; separately granted Files/CLI | Persistent runtime; separately granted Files/CLI | No |
-| Managed provider terminal | No | Eligible external connections | No | No |
+| Capability | Pi | Codex | Claude | Grok | OpenCode v2 |
+| --- | --- | --- | --- | --- | --- |
+| Mid-turn Steer | Yes, aimed at the current turn | Yes, aimed at the current turn | Yes, delivered to the conversation | No; Queue instead | Yes, delivered to the conversation |
+| Stop | Yes | Yes | Yes | Yes | Yes; pending native inputs may remain unconfirmed |
+| Background work indicator above composer | No | No | Subagents and commands | No | Child sessions and attributed shells |
+| Manual compact | Yes | Yes | No | No | Yes; exact native outcome |
+| Exact completed-turn fork | Yes | Yes | Yes, idle source | No | No |
+| Latest provider snapshot fork | No | Yes | No | No | No |
+| Skills | Yes | Yes | Yes, eligible skills | Not currently | Explicit native skill selection |
+| Structured questions | No | Questionnaires and MCP forms | Multiple-choice questions | Not exposed | Supported forms and questionnaires |
+| Provider permission interaction | Primitive prompts | Approvals | Permission prompts | Not exposed | Allow once or Deny and stop |
+| Native image input | Model dependent | Model dependent | PNG, JPEG, GIF, WebP | Model dependent | Model dependent |
+| Generated-image display | No native artifact | Completed in-band PNG | No native artifact | Completed local ImageGen/ImageEdit JPEG | No native artifact |
+| Remote (SSH or outbound) workspace | Managed workspace tools/context | Persistent runtime; separately granted Files/CLI | Persistent runtime; separately granted Files/CLI | No | No |
+| Managed provider terminal | No | Eligible external connections | No | No | No |
 
 This table is the plain-language summary. The
 [capability matrix](../operator/backends/index.md#capability-differences) in the
@@ -29,7 +29,7 @@ operator guide is authoritative and carries the exact conditions; if the two
 ever appear to disagree, the operator matrix is correct.
 
 Steer means different things per provider. Pi and Codex steer the exact turn
-that is running. Claude's Steer is delivered to the conversation at its next
+that is running. Claude and OpenCode deliver Steer to the conversation at its next
 native opportunity: it may join the running turn or start the next one, and it
 never interrupts work. Grok has no Steer, so active-turn input waits in Queue.
 
@@ -114,7 +114,8 @@ with sensitive values redacted. The JSON response editor is separate: an empty
 `{}` response does not mean the tool was called without arguments.
 
 Codex supports approvals and structured questionnaires. Claude supports its
-permission decisions and eligible questions. Pi uses the decision panel for
+permission decisions and eligible questions. OpenCode supports Allow once,
+Deny and stop, and forms and questionnaires it can represent faithfully. Pi uses the decision panel for
 its supported mutating-tool approval. Grok does not currently expose a
 blocking-interaction UI.
 
@@ -130,7 +131,7 @@ Presentation has two controls:
 
 - **Surface** chooses Native tools or the generated CLI. This selector appears
   only when the target supports more than one surface: eligible local Pi, and
-  Codex and Claude threads.
+  Codex and Claude threads, plus qualified owned-local OpenCode roots.
 - **Mode** chooses Progressive discovery or Individual named tools/commands.
   Progressive keeps the initial surface compact and describes operations on
   demand. Individual presents each granted operation directly with typed
@@ -145,7 +146,11 @@ provider's own permission settings apply to them. New Codex and Claude threads
 start on Native tools with Individual mode; threads created before this change
 keep their CLI setting until you change it. Grok supports both modes on its
 single CLI surface,
-so its surface selector is hidden. An unavailable combination is omitted
+so its surface selector is hidden. OpenCode supports Native Progressive through
+its bundled shared MCP bridge for Sedes-created local root threads, plus both
+CLI modes for qualified owned-local roots. Imported sessions and native
+children cannot use another thread's Sedes tools.
+An unavailable combination is omitted
 rather than silently replaced with another surface or mode.
 
 For CLI presentation, `sedes --help`, group help, and progressive catalog
@@ -437,6 +442,36 @@ A model may reject image input even though completed ImageGen/ImageEdit output
 can still be displayed.
 
 See the [Grok operator guide](../operator/backends/grok.md).
+
+## OpenCode v2
+
+OpenCode uses stock `opencode2` 2.0.18 on local Linux. Sedes can own a resident
+daemon or connect to an existing local server. Closing a thread view does not
+stop that daemon.
+
+OpenCode supports Send, conversation Steer, Queue, Stop, rename, admitted model
+and effort changes, Tasks and context excerpts, native permission decisions,
+and supported forms and questionnaires. It shows observed child sessions and
+shell activity. Imported conversations require an explicit admitted model
+selection before sending when no Sedes selection has been saved.
+
+Stop interrupts current work and attempts exact pending-input withdrawal.
+Unconfirmed withdrawal stays visible and can leave an input pending in
+OpenCode. History recovery uses bounded native reads; a conversation beyond
+those limits reports unavailable history without hiding Stop.
+
+OpenCode also supports staged files, model-dependent image input, qualified
+viewed images, explicit skills, and manual compact. Sedes-created root threads
+can use Native Progressive tools through the bundled MCP bridge; owned roots
+can also use CLI tools. Owned threads support scoped shell environment
+variables, with limits on native child spawning because those variables are
+not inherited by children. Initial MCP discovery may lag the first prompt.
+
+Forks, native commands, managed terminals, native image generation, and remote
+execution are unavailable. See the operator guide for approval provenance,
+registration cleanup, and image proof limits.
+
+See the [OpenCode operator guide](../operator/backends/opencode.md).
 
 ## Why a control can disappear
 

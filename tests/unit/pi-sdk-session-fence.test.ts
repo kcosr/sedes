@@ -321,11 +321,20 @@ describe("Pi SDK session reload fence", () => {
     await wrappedSession.ready();
     expect(reloadAction).toBeDefined();
     expect(retainedTool).not.toBe(customTool);
+    expect(wrappedSession.controlLifetime?.aborted).toBe(false);
+    const cancellation = new AbortController();
+    const cancelledAbort = wrappedSession.abort({ signal: cancellation.signal, deadlineAt: Date.now() + 1_000 });
+    cancellation.abort();
+    await expect(cancelledAbort).rejects.toThrow("pi_interrupt_budget_expired");
+    await expect(wrappedSession.abort({ signal: new AbortController().signal, deadlineAt: Date.now() - 1 })).rejects.toThrow("pi_interrupt_budget_expired");
+    await expect(wrappedSession.abort({ signal: new AbortController().signal, deadlineAt: Date.now() + 1_000, isCurrent: () => false })).rejects.toThrow("pi_interrupt_budget_expired");
+    expect(abort).not.toHaveBeenCalled();
 
     await expect(reloadAction!()).rejects.toThrow(
       "pi_agent_tool_reserved_name_collision",
     );
     expect(dispose).toHaveBeenCalledOnce();
+    expect(wrappedSession.controlLifetime?.aborted).toBe(true);
     expect(resourcesChanged).toHaveBeenCalledOnce();
     await expect(executionDuringDispose).rejects.toThrow(
       "pi_sdk_session_fenced",

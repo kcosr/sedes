@@ -46,6 +46,8 @@ import { ThreadInventoryService } from "../support/schema9/thread-inventory-serv
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
 import { normalizedThreadEventSchema } from "../../src/shared/protocol/conversation.js";
+import { ThreadMutationGateway } from "../../src/server/conversations/thread-mutation-gateway.js";
+import { createOpenCodeExecutionFixture, modelB } from "../support/opencode-execution-fixture.js";
 
 const configuration = parseResolvedBackendConfiguration({
   schemaVersion: 10,
@@ -367,7 +369,8 @@ function enqueueUserWithAttachment(
   });
 }
 
-type SubmitBehavior = SubmitTurnResult | Error | Promise<SubmitTurnResult>;
+type SubmitBehavior = SubmitTurnResult | Error | Promise<SubmitTurnResult> |
+  ((input: Parameters<QueuedInputConversation["submit"]>[0]) => Promise<SubmitTurnResult>);
 type SteerBehavior = SteerTurnResult | Error | Promise<SteerTurnResult>;
 
 class FakeGateway implements QueuedInputConversationGateway {
@@ -441,6 +444,7 @@ class FakeGateway implements QueuedInputConversationGateway {
           reconciliationToken: input.reconciliationToken,
           completionCorrelation: input.applicationOperationId,
         };
+        if (typeof behavior === "function") return behavior(input);
         if (behavior instanceof Error) throw behavior;
         return await behavior;
       },
@@ -615,6 +619,92 @@ function readyCallback(
   return callbacks;
 }
 
+describe("OpenCode failed preparation through Queue", () => {
+  it("fails an admitted preparation immediately with new-Send guidance and no same-ID backoff", async () => {
+    const fixture = createFixture(), native = createOpenCodeExecutionFixture({ native: modelB });
+    const repository = new QueuedInputRepository(fixture.database), gateway = new FakeGateway(), scheduler = new ManualScheduler();
+    const [threadId] = fixture.threadIds;
+    const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 700 }, scheduler });
+    const failedPreparation = vi.spyOn(native.context.executionEnvironment, "prepare").mockRejectedValueOnce(new Error("fixture environment read failed"));
+    try {
+      enqueueUser(fixture, repository, threadId, "opencode-preparation-failed", 500);
+      gateway.submitBehaviors.push(input => native.delivery.submit(input));
+      await dispatcher.recover(fixture.scope);
+      expect(repository.get(fixture.scope, threadId, "opencode-preparation-failed")).toMatchObject({
+        state: "failed", retryCount: 0, invalidStateRequeues: 0, diagnostic: expect.stringContaining("new Send"),
+      });
+      expect(scheduler.scheduled).toEqual([]); expect(gateway.submitted).toHaveLength(1);
+      expect(native.posts("/model")).toHaveLength(1); expect(native.posts("/prompt")).toHaveLength(0);
+      expect(native.host.snapshot().operations).toEqual([]);
+      await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+      expect(gateway.submitted).toHaveLength(1); expect(scheduler.scheduled).toEqual([]);
+    } finally {
+      failedPreparation.mockRestore(); await dispatcher.close(); fixture.database.close(); await native.dispose();
+    }
+  });
+});
+
+describe("queue dispatch and existing conversation Stop control", () => {
+  it("accepts Stop while real queue recovery holds the conversation hydration gate", async () => {
+    const fixture = createFixture();
+    const threadId = fixture.threadIds[0];
+    const repository = new QueuedInputRepository(fixture.database);
+    const nativeGateway = new FakeGateway();
+    let releaseHydration!: () => void;
+    const hydration = new Promise<void>(resolve => { releaseHydration = resolve; });
+    let hydrationEntered!: () => void;
+    const entered = new Promise<void>(resolve => { hydrationEntered = resolve; });
+    nativeGateway.withConversationGates.push(hydration);
+    nativeGateway.onWithConversationBoundary = hydrationEntered;
+    const { dispatcher: queue } = createDispatcher(repository, nativeGateway, { now: { value: 700 } });
+    const operations = new ConversationOperationRepository(fixture.database);
+    const interrupted = vi.fn(async () => undefined);
+    const releaseControl = vi.fn();
+    const acquireProjection = vi.fn(async () => { throw new Error("Stop must not acquire transcript projection"); });
+    const gateway = new ThreadMutationGateway({
+      bindings: new ConversationBindingRepository(fixture.database), inventory: new InventoryRepository(fixture.database),
+      operations, completions: new SubmissionCompletionRepository(fixture.database), queue, queueGateway: nativeGateway,
+      runtimes: { acquire: acquireProjection, acquireExistingControl: () => ({ control: {
+        generation: "existing-native-owner", lifetime: new AbortController().signal,
+        interrupt: async (_input: unknown, onDispatch?: () => void) => { onDispatch?.(); await interrupted(); },
+        reconcileInterrupt: async () => ({ outcome: "unknown" as const }),
+      }, release: releaseControl }) } as never,
+      lifecycle: {} as never, forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("unexpected fork discard"); } },
+      interactions: {} as never, presentation: {} as never,
+      agentToolPolicies: { database: fixture.database, get: () => { throw new Error("unexpected policy read"); }, update: () => { throw new Error("unexpected policy write"); } },
+      actionPersistence: new Map(), publishThreadSnapshot: async () => undefined, now: () => 700,
+    });
+    let recovery: Promise<void> | undefined;
+    try {
+      enqueueUser(fixture, repository, threadId, "queued-before-stop", 650);
+      recovery = queue.recover(fixture.scope);
+      await entered;
+      expect(nativeGateway.submitted).toEqual([]);
+      expect(repository.get(fixture.scope, threadId, "queued-before-stop").state).toBe("pending");
+      let stopped: Awaited<ReturnType<typeof gateway.mutate>> | undefined;
+      const stopping = gateway.mutate(fixture.scope, threadId, { kind: "interrupt", operationId: "stop-during-real-queue-hydration" });
+      void stopping.then(value => { stopped = value; }, () => undefined);
+      // The real dispatcher is still inside withConversation's hydration gate.
+      // A dispatcher-wide Stop fence would deadlock here until the gate opens.
+      await vi.waitFor(() => expect(stopped).toEqual({ status: "accepted", operationId: "stop-during-real-queue-hydration" }));
+      await stopping;
+      expect(interrupted).toHaveBeenCalledOnce();
+      expect(releaseControl).toHaveBeenCalledOnce();
+      expect(acquireProjection).not.toHaveBeenCalled();
+      expect(operations.findInterrupt(fixture.scope, "stop-during-real-queue-hydration")?.state).toBe("accepted");
+      expect(nativeGateway.submitted).toEqual([]);
+      expect(repository.get(fixture.scope, threadId, "queued-before-stop").state).toBe("pending");
+      releaseHydration();
+      await recovery;
+      expect(nativeGateway.submitted).toHaveLength(1);
+    } finally {
+      releaseHydration();
+      await recovery?.catch(() => undefined);
+      await gateway.close(); await queue.close(); fixture.database.close();
+    }
+  });
+});
+
 describe("ConversationOperationRepository interrupt rejection", () => {
   it.each(["prepared", "uncertain"] as const)(
     "deletes a proven-not-applied %s interrupt receipt",
@@ -627,7 +717,6 @@ describe("ConversationOperationRepository interrupt rejection", () => {
         );
         operations.prepareInterrupt(fixture.scope, threadId, {
           operationId: `rejected-${state}-stop`,
-          expectedActiveTurnId: "turn-original",
           now: 500,
         });
         if (state === "uncertain") {
@@ -661,7 +750,6 @@ describe("ConversationOperationRepository interrupt rejection", () => {
       const operations = new ConversationOperationRepository(fixture.database);
       operations.prepareInterrupt(fixture.scope, threadId, {
         operationId: "accepted-stop",
-        expectedActiveTurnId: "turn-original",
         now: 500,
       });
       operations.acceptInterrupt(fixture.scope, "accepted-stop");
@@ -671,7 +759,7 @@ describe("ConversationOperationRepository interrupt rejection", () => {
           fixture.scope,
           "accepted-stop",
         ),
-      ).toThrow(/accepted interrupt cannot be rejected/i);
+      ).toThrow(/terminal interrupt cannot be rejected/i);
       expect(
         operations.getInterrupt(fixture.scope, "accepted-stop"),
       ).toMatchObject({ state: "accepted" });
@@ -687,7 +775,6 @@ describe("ConversationOperationRepository interrupt rejection", () => {
       const operations = new ConversationOperationRepository(fixture.database);
       operations.prepareInterrupt(fixture.scope, threadId, {
         operationId: "principal-scoped-stop",
-        expectedActiveTurnId: "turn-original",
         now: 500,
       });
 
@@ -2531,12 +2618,10 @@ describe("QueuedInputDispatcher", () => {
       expect(
         operations.prepareInterrupt(fixture.scope, threadId, {
           operationId: "durable-stop",
-          expectedActiveTurnId: "turn-original",
           now: 500,
         }),
       ).toMatchObject({
         state: "prepared",
-        expectedActiveTurnId: "turn-original",
       });
       operations.markInterruptStarted(fixture.scope, "durable-stop");
 
@@ -2552,7 +2637,6 @@ describe("QueuedInputDispatcher", () => {
         reopened.getInterrupt(fixture.scope, "durable-stop"),
       ).toMatchObject({
         state: "uncertain",
-        expectedActiveTurnId: "turn-original",
       });
       expect(
         reopened.acceptInterrupt(fixture.scope, "durable-stop"),
@@ -2560,17 +2644,14 @@ describe("QueuedInputDispatcher", () => {
       expect(
         reopened.prepareInterrupt(fixture.scope, threadId, {
           operationId: "durable-stop",
-          expectedActiveTurnId: "ignored-on-replay",
           now: 900,
         }),
       ).toMatchObject({
         state: "accepted",
-        expectedActiveTurnId: "turn-original",
       });
       expect(() =>
         reopened.prepareInterrupt(fixture.scope, otherThreadId, {
           operationId: "durable-stop",
-          expectedActiveTurnId: "turn-other",
           now: 901,
         }),
       ).toThrow(/another operation/i);
@@ -3117,6 +3198,105 @@ describe("QueuedInputDispatcher", () => {
       expect(gateway.reconciled).toHaveLength(1);
     } finally { await dispatcher.close(); fixture.database.close(); }
   });
+
+  it("accepts only the exact uncertain ordinary head without acquiring an actor in its observer", async () => {
+    const fixture = createFixture();
+    const repository = new QueuedInputRepository(fixture.database);
+    const completion = new SubmissionCompletionRepository(fixture.database);
+    const gateway = new FakeGateway();
+    const scheduler = new ManualScheduler();
+    const { dispatcher, events } = createDispatcher(repository, gateway, { now: { value: 600 }, scheduler });
+    const [threadId, otherThreadId] = fixture.threadIds;
+    try {
+      enqueueUser(fixture, repository, threadId, "observed-head", 500);
+      gateway.submitBehaviors.push(new Error("acknowledgment lost"));
+      await dispatcher.recover(fixture.scope);
+      enqueueUser(fixture, repository, threadId, "observed-later", 700);
+      const before = repository.get(fixture.scope, threadId, "observed-head");
+      const eventCount = events.length;
+      const acquire = vi.spyOn(gateway, "withConversation").mockImplementation(async () => {
+        throw new Error("observer_must_not_acquire_actor");
+      });
+      await expect(dispatcher.observeAuthoritativeSubmission(fixture.scope, threadId, "operation-observed-later")).resolves.toBe(false);
+      await expect(dispatcher.observeAuthoritativeSubmission(fixture.scope, otherThreadId, "operation-observed-head")).resolves.toBe(false);
+      expect(repository.get(fixture.scope, threadId, "observed-head")).toEqual(before);
+      expect(events).toHaveLength(eventCount);
+      await expect(dispatcher.observeAuthoritativeSubmission(fixture.scope, threadId, "operation-observed-head")).resolves.toBe(true);
+      expect(repository.get(fixture.scope, threadId, "observed-head")).toMatchObject({ state: "accepted" });
+      expect(completion.get(fixture.scope, threadId, "operation-observed-head")).toMatchObject({
+        backendCorrelation: "operation-observed-head", completionObservedAt: null,
+      });
+      const accepted = repository.get(fixture.scope, threadId, "observed-head");
+      const acceptedEventCount = events.length;
+      await expect(dispatcher.observeAuthoritativeSubmission(fixture.scope, threadId, "operation-observed-head")).resolves.toBe(false);
+      expect(repository.get(fixture.scope, threadId, "observed-head")).toEqual(accepted);
+      expect(events).toHaveLength(acceptedEventCount);
+      expect(repository.get(fixture.scope, threadId, "observed-later").state).toBe("pending");
+      expect(acquire).not.toHaveBeenCalled();
+      expect(gateway.reconciled).toEqual([]);
+      expect(gateway.submitted.map(input => input.applicationOperationId)).toEqual(["operation-observed-head"]);
+      expect(scheduler.scheduled.some(task => !task.cancelled)).toBe(true);
+      acquire.mockRestore();
+      scheduler.runLatest();
+      await vi.waitFor(() => expect(events.length).toBeGreaterThan(acceptedEventCount));
+      expect(gateway.submitted.map(input => input.applicationOperationId)).toEqual(["operation-observed-head"]);
+      await dispatcher.close();
+      expect(scheduler.scheduled.every(task => task.cancelled)).toBe(true);
+    } finally { await dispatcher.close(); fixture.database.close(); }
+  });
+
+  it("waits for an in-flight ordinary submit to persist uncertainty before consuming its notification", async () => {
+    const fixture = createFixture();
+    const repository = new QueuedInputRepository(fixture.database);
+    const gateway = new FakeGateway();
+    const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 600 }, scheduler: new ManualScheduler() });
+    const [threadId] = fixture.threadIds;
+    let rejectSubmit!: (error: Error) => void;
+    try {
+      enqueueUser(fixture, repository, threadId, "early-notification", 500);
+      gateway.submitBehaviors.push(new Promise((_resolve, reject) => { rejectSubmit = reject; }));
+      const dispatch = dispatcher.recover(fixture.scope);
+      await vi.waitFor(() => expect(gateway.submitted).toHaveLength(1));
+      let observed = false;
+      const observation = dispatcher.observeAuthoritativeSubmission(fixture.scope, threadId, "operation-early-notification")
+        .then(value => { observed = true; return value; });
+      await Promise.resolve();
+      expect(observed).toBe(false);
+      rejectSubmit(new Error("acknowledgment lost"));
+      await dispatch;
+      await expect(observation).resolves.toBe(true);
+      expect(repository.get(fixture.scope, threadId, "early-notification").state).toBe("accepted");
+      expect(gateway.submitted).toHaveLength(1);
+      expect(gateway.reconciled).toEqual([]);
+    } finally { await dispatcher.close(); fixture.database.close(); }
+  });
+
+  it.each(["settled", "later-dispatch"] as const)(
+    "automatically records a proved nonretryable ordinary withdrawal as not_sent on %s", async trigger => {
+      const fixture = createFixture();
+      const repository = new QueuedInputRepository(fixture.database);
+      const gateway = new FakeGateway();
+      const { dispatcher } = createDispatcher(repository, gateway, { now: { value: 600 }, scheduler: new ManualScheduler() });
+      const [threadId] = fixture.threadIds;
+      try {
+        enqueueUser(fixture, repository, threadId, "withdrawn-head", 500);
+        gateway.submitBehaviors.push(new Error("acknowledgment lost"));
+        await dispatcher.recover(fixture.scope);
+        enqueueUser(fixture, repository, threadId, "withdrawn-later", 700);
+        gateway.reconciliationBehaviors.push({ status: "not_accepted", retryable: false,
+          diagnostic: { text: "Claude withdrew this input before consumption." } });
+        if (trigger === "settled") await dispatcher.onAuthoritativeSettled(fixture.scope, threadId);
+        else await dispatcher.dispatchAdmitted(fixture.scope, threadId);
+        expect(repository.get(fixture.scope, threadId, "withdrawn-head")).toMatchObject({
+          state: "failed", failureReason: "not_sent",
+        });
+        expect(repository.get(fixture.scope, threadId, "withdrawn-later").state).toBe("pending");
+        expect(gateway.submitted.map(input => input.applicationOperationId)).toEqual(["operation-withdrawn-head"]);
+        expect(gateway.reconciled).toHaveLength(1);
+        expect(new SubmissionCompletionRepository(fixture.database).find(fixture.scope, threadId, "operation-withdrawn-head")).toBeUndefined();
+      } finally { await dispatcher.close(); fixture.database.close(); }
+    },
+  );
 
   it.each(["unresolved", "not_accepted"] as const)("keeps automatic %s reconciliation read-only and blocks later input", async status => {
     const fixture = createFixture();

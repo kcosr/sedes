@@ -1,3 +1,5 @@
+// Shared immutable operation deadline keeps replays identical throughout this local suite.
+const interruptDeadlineAt = Date.now() + 3_600_000;
 import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
 import { UsageService } from "../../src/server/usage/usage-service.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
@@ -94,6 +96,7 @@ import type {
   AgentBackendInstance,
   AgentConnectionProfile,
   ConversationBinding,
+  ConversationControl,
 } from "../../src/server/backends/contracts.js";
 import type { ValidatedWorkspace } from "../../src/server/execution/contracts.js";
 import type {
@@ -3766,7 +3769,7 @@ describe("Pi conversation backend driver", () => {
     await expect(
       handle.interrupt({
         applicationOperationId: "interrupt-unmaterialized-steer-stop",
-        expectedBackendTurnId: activeTurnId,
+        deadlineAt: interruptDeadlineAt,
       }),
     ).resolves.toBeUndefined();
 
@@ -3881,7 +3884,7 @@ describe("Pi conversation backend driver", () => {
     await expect(
       handle.interrupt({
         applicationOperationId: "interrupt-drained-steer-stop",
-        expectedBackendTurnId: activeTurnId,
+        deadlineAt: interruptDeadlineAt,
       }),
     ).resolves.toBeUndefined();
 
@@ -4617,7 +4620,7 @@ describe("Pi conversation backend driver", () => {
 
     await conversation.handle.interrupt({
       applicationOperationId: "stop-all-interrupt",
-      expectedBackendTurnId: conversation.activeTurnId,
+      deadlineAt: interruptDeadlineAt,
     });
 
     expect(order).toEqual(["steer", "steer", "steer", "clear_queue", "abort"]);
@@ -4673,7 +4676,7 @@ describe("Pi conversation backend driver", () => {
 
     await conversation.handle.interrupt({
       applicationOperationId: "stop-mixed-interrupt",
-      expectedBackendTurnId: conversation.activeTurnId,
+      deadlineAt: interruptDeadlineAt,
     });
 
     await expect(conversation.reconcile(steers[0]!)).resolves.toMatchObject({
@@ -5265,7 +5268,7 @@ describe("Pi conversation backend driver", () => {
     await expect(
       handle.interrupt({
         applicationOperationId: "oversized-history-later-stop",
-        expectedBackendTurnId: submitted.backendTurnId!,
+        deadlineAt: interruptDeadlineAt,
       }),
     ).resolves.toBeUndefined();
     expect(abort).toHaveBeenCalledOnce();
@@ -5665,7 +5668,7 @@ describe("Pi conversation backend driver", () => {
     await handle.close();
   });
 
-  it("rejects interrupting an idle Pi handle", async () => {
+  it("accepts Stop as a no-op for an authoritative idle Pi handle", async () => {
     const fixture = await workspace();
     const driver = new PiConversationBackendDriver({
       instance,
@@ -5695,12 +5698,9 @@ describe("Pi conversation backend driver", () => {
     await expect(
       handle.interrupt({
         applicationOperationId: "idle-interrupt",
-        expectedBackendTurnId: "no-active-turn",
+        deadlineAt: interruptDeadlineAt,
       }),
-    ).rejects.toMatchObject({
-      category: "invalid_state",
-      backendCode: "pi_interrupt_requires_active_turn",
-    });
+    ).resolves.toBeUndefined();
     await handle.close();
   });
 
@@ -5890,7 +5890,7 @@ describe("Pi conversation backend driver", () => {
     await expect(
       handle.interrupt({
         applicationOperationId: "interrupt-pending-approval",
-        expectedBackendTurnId: activeTurnId,
+        deadlineAt: interruptDeadlineAt,
       }),
     ).resolves.toBeUndefined();
 
@@ -7334,7 +7334,7 @@ describe("Pi conversation backend driver", () => {
     const submitted = await handle.submit({ applicationOperationId: "send", source: { kind: "user" },
       mutationId: "send", reconciliationToken: "send", contextExcerpts: [], attachments: [], taskContexts: [], text: "hi" });
     await vi.waitFor(() => expect(waitingForRetry).toBe(true));
-    await handle.interrupt({ applicationOperationId: "cancel", expectedBackendTurnId: submitted.backendTurnId! });
+    await handle.interrupt({ applicationOperationId: "cancel", deadlineAt: interruptDeadlineAt});
     const live = await handle.establishProjection({ signal: new AbortController().signal });
     expect(live.snapshot.runState).toBe("idle");
     expect(Object.values(live.snapshot.turnsById).at(-1)).toMatchObject({ status: "interrupted", endedBy: "interrupted" });
@@ -10826,6 +10826,78 @@ describe("Pi conversation backend driver", () => {
       },
     ]);
     unsubscribeProjection();
+    await handle.close();
+  });
+
+  it("keeps native Stop available before a failed projection and revokes control on close", async () => {
+    const fixture = await workspace();
+    const driver = new PiConversationBackendDriver({ instance, connection, usage: NO_USAGE_SINK,
+      nativeDiscoveryNamespaceKey: "pi-test-native-namespace", toolProvenanceKey,
+      agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy,
+      sessionDirectory: fixture.sessions, sessionFactory: fakeSessionFactory() });
+    const created = await driver.create({ scope, workspace: fixture.workspace,
+      applicationThreadId: "control-create", applicationOperationId: "control-create", source: { kind: "user" } });
+    let control: ConversationControl | undefined;
+    const handle = await driver.attach({ scope, workspace: fixture.workspace,
+      binding: binding(created.backendConversationId), opaqueBindingDetail: created.opaqueBindingDetail,
+      onControlReady(value) { control = value; } });
+    const project = vi.spyOn(PiHistoryProjector.prototype, "project").mockImplementationOnce(() => { throw new Error("fixture projection unavailable"); });
+    try {
+      await expect(handle.establishProjection({ signal: new AbortController().signal })).rejects.toBeDefined();
+      await expect(control!.interrupt({ applicationOperationId: "idle-without-history", deadlineAt: Date.now() + 1_000 })).resolves.toBeUndefined();
+      expect(control!.lifetime.aborted).toBe(false);
+      project.mockRestore();
+      await expect(handle.establishProjection({ signal: new AbortController().signal })).resolves.toMatchObject({ snapshot: { runState: "idle" } });
+      await handle.close();
+      expect(control!.lifetime.aborted).toBe(true);
+    } finally { project.mockRestore(); await handle.close(); }
+  });
+
+  it.each(["resolve", "reject"])("fences a late Pi abort %s from the replacement native run", async (outcome) => {
+    const fixture = await workspace();
+    const base = fakeSessionFactory();
+    let emit!: Parameters<PiSdkSession["subscribe"]>[0];
+    let native!: PiSdkSession;
+    let idle = false;
+    let release!: () => void;
+    let fail!: (cause: Error) => void;
+    let started!: () => void;
+    const abortStarted = new Promise<void>((resolve) => { started = resolve; });
+    const abort = new Promise<void>((resolve, reject) => { release = resolve; fail = reject; });
+    const driver = new PiConversationBackendDriver({ instance, connection, usage: NO_USAGE_SINK,
+      nativeDiscoveryNamespaceKey: "pi-test-native-namespace", toolProvenanceKey,
+      agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy,
+      sessionDirectory: fixture.sessions, sessionFactory: { async create(input) {
+        native = await base.create(input);
+        return { ...native, get isIdle() { return idle; },
+          subscribe(listener) { emit = listener; return native.subscribe(listener); },
+          async abort() { started(); await abort; } };
+      } } });
+    const created = await driver.create({ scope, workspace: fixture.workspace,
+      applicationThreadId: "late-abort-create", applicationOperationId: "late-abort-create", source: { kind: "user" } });
+    const handle = await driver.attach({ scope, workspace: fixture.workspace,
+      binding: binding(created.backendConversationId), opaqueBindingDetail: created.opaqueBindingDetail });
+    const events: BackendConversationEvent[] = [];
+    handle.subscribe((event) => events.push(event));
+    const input = { applicationOperationId: "late-stop", deadlineAt: Date.now() + 1_000 };
+    const stopping = handle.interrupt(input);
+    void stopping.catch(() => undefined);
+    await abortStarted;
+    emit({ type: "agent_settled" } as never);
+    const user = { role: "user" as const, content: [{ type: "text" as const, text: "replacement" }], timestamp: Date.now() };
+    native.sessionManager.appendMessage(user);
+    emit({ type: "agent_start" } as never);
+    emit({ type: "message_end", message: user } as never);
+    await Promise.resolve();
+    const beforeLateReply = events.length;
+    if (outcome === "resolve") { release(); await stopping; }
+    else { fail(new Error("late abort failure")); await expect(stopping).rejects.toBeDefined(); }
+    expect(events).toHaveLength(beforeLateReply);
+    emit({ type: "agent_settled" } as never);
+    expect(events.findLast((event) => event.type === "turn_completed")).toMatchObject({
+      type: "turn_completed", turn: { status: "completed", endedBy: "agent_settled" },
+    });
+    idle = true;
     await handle.close();
   });
 

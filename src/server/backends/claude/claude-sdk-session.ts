@@ -1,3 +1,5 @@
+import type { InterruptConversationInput } from "../contracts.js";
+import { assertClaudeInterruptTime, ClaudeInterruptOperations } from "./claude-interrupt-operation.js";
 import type {
   CanUseTool,
   EffortLevel,
@@ -25,7 +27,7 @@ import {
   resolveClaudeSafeSkills,
   type ClaudeSafeSkill,
 } from "./claude-skills.js";
-import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v1.js";
+import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v2.js";
 import { CLAUDE_FORK_LAUNCH_PERMISSION_MODE } from "./claude-fork-launch.js";
 
 const CLAUDE_SETTING_SOURCES = ["user", "project", "local"] as const;
@@ -193,6 +195,7 @@ interface Deferred<T> {
 
 /** Owns one official-SDK query and its Claude Code subprocess. */
 export class ClaudeSdkSession {
+  readonly #interruptOperations = new ClaudeInterruptOperations<SDKControlInterruptResponse | undefined>();
   readonly #options: ClaudeSdkSessionOptions;
   readonly #input = new ClaudeInputQueue<SDKUserMessage>(16);
   readonly #abortController = new AbortController();
@@ -473,17 +476,22 @@ export class ClaudeSdkSession {
     });
   }
 
-  async interrupt(): Promise<SDKControlInterruptResponse | undefined> {
+  async interrupt(input: InterruptConversationInput): Promise<SDKControlInterruptResponse | undefined> {
     if (!this.#query || !this.#initialization || this.closed) {
       throw new Error("claude_sdk_session_not_ready");
     }
-    return this.#query.interrupt();
+    return this.#interruptOperations.run(input, async () => this.#query!.interrupt());
   }
 
-  async cancelQueuedInput(operationId: string): Promise<boolean> {
+  async reconcileInterrupt(input: InterruptConversationInput): Promise<"accepted" | "unknown"> {
+    return this.#interruptOperations.outcome(input.applicationOperationId);
+  }
+
+  async cancelQueuedInput(operationId: string, input?: Pick<InterruptConversationInput, "deadlineAt" | "signal">): Promise<boolean> {
     if (!this.#query || !this.#initialization || this.closed) {
       throw new Error("claude_sdk_session_not_ready");
     }
+    if (input) assertClaudeInterruptTime(input);
     return cancelClaudeQueuedInput(this.#query, operationId);
   }
 

@@ -91,12 +91,10 @@ const CLAUDE_STOPPED_TOOL_RESULTS: ReadonlySet<string> = new Set(
 const UNANSWERED_TURN_NOTICE =
   "Claude Code exited before this turn finished and closed it without a response when the conversation resumed.";
 /**
- * Terminal reasons Sedes writes itself, with no provider result. A fresh
- * launch proves that the process running a trailing unfinished turn is gone.
- * A Stop ends without a result once Claude reports idle or stays silent.
+ * A fresh launch proves that the process running a trailing unfinished turn
+ * is gone. Stop silence or idle status alone never proves a terminal result.
  */
 export const CLAUDE_PROCESS_LOST_REASON = "process_lost";
-export const CLAUDE_INTERRUPT_UNCONFIRMED_REASON = "interrupt_unconfirmed";
 const PROCESS_LOST_NOTICE =
   "Claude Code stopped before this turn finished. Sedes marked it interrupted when the conversation reopened.";
 const OPERATION_ID_PATTERN =

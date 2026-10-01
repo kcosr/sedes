@@ -56,8 +56,8 @@ import { evaluateModelEligibility } from "../support/model-eligibility.js";
 import { compileBackendModelPolicy } from "../../src/server/backends/model-policy.js";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 
-const requiredProvider = "xai";
-const requiredModelId = "grok-4.5";
+const requiredProvider = "aw-qwen-3-8-27b";
+const requiredModelId = "aw-qwen-3-8-27b";
 const requiredThinkingLevel = "low";
 const timeoutMilliseconds = 240_000;
 const describeRealPiCli =

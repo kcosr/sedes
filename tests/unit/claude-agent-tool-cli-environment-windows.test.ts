@@ -1,5 +1,5 @@
 import { createAgentToolCliNamedPipeEndpoint } from "../../src/internal/agent-tool-cli-protocol/local-endpoint.js";
-import { claudeRuntimeQueryEnvironmentSchema } from "../../src/server/backends/claude/worker/claude-runtime-v1.js";
+import { claudeRuntimeQueryEnvironmentSchema } from "../../src/server/backends/claude/worker/claude-runtime-v2.js";
 import { expect, it, vi } from "vitest";
 
 vi.mock("node:path", async (importOriginal) => {

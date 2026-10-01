@@ -270,6 +270,7 @@ function validateStagedSetting(
  */
 export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
   readonly #mailboxes = new Map<string, SerializedMailbox>();
+  readonly #interruptDeadlines = new Map<string, { controller: AbortController; timer: ReturnType<typeof setTimeout> }>();
   readonly #detachedPublications = new Set<Promise<void>>();
   readonly #callbacks: ThreadCompletionCallbackRepository;
   #closing = false;
@@ -333,6 +334,12 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     if (this.#closing) {
       return Promise.reject(new Error("thread_mutation_gateway_closed"));
     }
+    if (operation.kind === "interrupt") {
+      // Stop borrows existing control, even while another caller is hydrating
+      // history. Native effects share the actor owner's fence, never the queue hydration lock.
+      return this.#interrupt(scope, applicationThreadId, operation);
+    }
+    this.#expireInterrupts(scope, this.#now(), applicationThreadId);
     const key = operationKey(scope, applicationThreadId);
     let mailbox = this.#mailboxes.get(key);
     if (!mailbox) {
@@ -406,7 +413,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     });
   }
 
-  observeAuthoritativeSubmission(
+  async observeAuthoritativeSubmission(
     scope: RequestScope,
     applicationThreadId: string,
     backendCorrelation: string,
@@ -414,23 +421,9 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     if (this.#closing) {
       return Promise.reject(new Error("thread_mutation_gateway_closed"));
     }
-    const routedSteer = this.input.operations.findAwaitingSteerSubmission(
-      scope,
-      applicationThreadId,
-      backendCorrelation,
-    );
-    if (routedSteer) {
-      const receipt = routedSteer;
-      if (receipt.source === "queued_input") {
-        return this.input.queue
-          .observeAuthoritativeSubmission(
-            scope,
-            applicationThreadId,
-            backendCorrelation,
-          )
-          .then(() => undefined);
-      }
-    }
+    // Queue serialization waits for an in-flight submit to persist uncertainty.
+    // Keep it outside this mailbox: queue dispatch itself enters the gateway.
+    if (await this.input.queue.observeAuthoritativeSubmission(scope, applicationThreadId, backendCorrelation)) return;
     const key = operationKey(scope, applicationThreadId);
     let mailbox = this.#mailboxes.get(key);
     if (!mailbox) {
@@ -438,6 +431,10 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       this.#mailboxes.set(key, mailbox);
     }
     return mailbox.enqueue(async () => {
+      if (await this.input.lifecycle.observeAuthoritativeSubmission(scope, applicationThreadId, backendCorrelation)) {
+        this.#scheduleSubmissionPublication(scope, applicationThreadId);
+        return;
+      }
       const receipt = this.input.operations.findAwaitingSteerSubmission(
         scope,
         applicationThreadId,
@@ -460,12 +457,22 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           attachmentIds: receipt.attachments.map(({ id }) => id),
         });
       })();
+      this.#scheduleSubmissionPublication(scope, applicationThreadId);
+    });
+  }
+
+  #scheduleSubmissionPublication(scope: RequestScope, applicationThreadId: string): void {
+    this.#ownDetachedPublication(async () => {
+      // Publication may acquire the newly bound actor. Let the authoritative
+      // observer finish before any runtime replacement can wait on its drain.
+      await new Promise<void>(resolve => setTimeout(resolve, 0));
       await this.input.publishThreadSnapshot(scope, applicationThreadId);
       await this.#changed(scope, applicationThreadId);
     });
   }
 
   async recoverUncertain(scope: RequestScope): Promise<void> {
+    this.#expireInterrupts(scope, this.#now());
     for (const operation of this.input.operations.listPreparedDraftSteers(
       scope,
     )) {
@@ -598,6 +605,11 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
   }
 
   async #performClose(): Promise<void> {
+    for (const deadline of this.#interruptDeadlines.values()) {
+      clearTimeout(deadline.timer);
+      deadline.controller.abort();
+    }
+    this.#interruptDeadlines.clear();
     const mailboxes = [...this.#mailboxes.values()];
     this.#mailboxes.clear();
     await Promise.all(mailboxes.map((mailbox) => mailbox.close()));
@@ -1882,151 +1894,137 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     };
   }
 
+  #expireInterrupts(scope: RequestScope, now: number, applicationThreadId?: string): void {
+    const affected = this.input.operations.expireInterrupts(scope, now, applicationThreadId);
+    for (const threadId of affected) {
+      void this.#changed(scope, threadId).catch(() => undefined);
+      void this.input.queue.onAuthoritativeSettled(scope, threadId).catch(() => undefined);
+    }
+  }
+
+  #interruptUnconfirmed(scope: RequestScope, operationId: string): ThreadApplicationMutationResult {
+    const receipt = this.input.operations.findInterrupt(scope, operationId);
+    return { status: "recovery_required", retryable: false,
+      diagnostic: receipt?.failureDiagnostic ?? "Stop expired before it could be sent. You may issue a new Stop." };
+  }
+
   async #interrupt(
     scope: RequestScope,
     applicationThreadId: string,
-    operation: Extract<
-      ThreadApplicationOperation,
-      { readonly kind: "interrupt" }
-    >,
+    operation: Extract<ThreadApplicationOperation, { readonly kind: "interrupt" }>,
   ): Promise<ThreadApplicationMutationResult> {
-    let receipt = this.input.operations.findInterrupt(
-      scope,
-      operation.operationId,
-    );
+    // Scope is resolved before creating a receipt or touching existing control.
+    this.input.inventory.getThread(scope, applicationThreadId);
+    let receipt = this.input.operations.findInterrupt(scope, operation.operationId);
     if (receipt && receipt.threadId !== applicationThreadId) {
-      throw new DomainError(
-        "conflict",
-        "The operation ID is already used by another thread.",
-      );
+      throw new DomainError("conflict", "The operation ID is already used by another thread.");
     }
-    if (receipt?.state === "accepted") {
-      return {
-        status: "accepted",
-        operationId: receipt.applicationOperationId,
-      };
+    if (receipt?.state === "accepted") return { status: "accepted", operationId: receipt.applicationOperationId };
+    if (receipt?.state === "failed_unknown") return this.#interruptUnconfirmed(scope, operation.operationId);
+    receipt ??= this.input.operations.prepareInterrupt(scope, applicationThreadId, {
+      operationId: operation.operationId, now: this.#now(),
+    });
+    const deadlineAt = receipt.deadlineAt;
+    if (deadlineAt <= this.#now()) {
+      this.#expireInterrupts(scope, this.#now(), applicationThreadId);
+      return this.#interruptUnconfirmed(scope, operation.operationId);
     }
-
-    const runtime = await this.input.runtimes.acquire(
-      scope,
-      applicationThreadId,
-    );
-    try {
-      const timeline = runtime.actor.timeline;
-      if (!receipt) {
-        if (
-          (timeline.runState !== "running" &&
-            timeline.runState !== "waiting_for_approval" &&
-            timeline.runState !== "waiting_for_input") ||
-          !timeline.activeTurnId
-        ) {
-          throw new DomainError(
-            "invalid_transition",
-            "There is no active turn to stop.",
-          );
+    const key = operationKey(scope, operation.operationId);
+    let deadline = this.#interruptDeadlines.get(key);
+    if (!deadline) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => {
+        this.#expireInterrupts(scope, Math.max(this.#now(), deadlineAt), applicationThreadId);
+        controller.abort();
+        this.#interruptDeadlines.delete(key);
+        void this.#changed(scope, applicationThreadId).catch(() => undefined);
+        void this.input.queue.onAuthoritativeSettled(scope, applicationThreadId).catch(() => undefined);
+      }, Math.max(1, deadlineAt - this.#now()));
+      timer.unref?.();
+      deadline = { controller, timer };
+      this.#interruptDeadlines.set(key, deadline);
+    }
+    const signal = deadline.controller.signal;
+    const currentBudget = () => !signal.aborted && this.#now() < deadlineAt;
+    const finishDeadline = () => {
+      if (this.#interruptDeadlines.get(key) !== deadline) return;
+      clearTimeout(deadline.timer);
+      this.#interruptDeadlines.delete(key);
+    };
+    const withinBudget = <T>(work: Promise<T>): Promise<T> => new Promise((resolve, reject) => {
+      const aborted = () => reject(new Error("conversation_stop_deadline_reached"));
+      signal.addEventListener("abort", aborted, { once: true });
+      void work.then(resolve, reject).finally(() => signal.removeEventListener("abort", aborted));
+      if (!currentBudget()) aborted();
+    });
+    const dispatch = async (): Promise<ThreadApplicationMutationResult> => {
+      if (!currentBudget()) return this.#interruptUnconfirmed(scope, operation.operationId);
+      const current = this.input.operations.findInterrupt(scope, operation.operationId);
+      if (!current || current.state === "failed_unknown") return this.#interruptUnconfirmed(scope, operation.operationId);
+      if (current.state === "accepted") return { status: "accepted", operationId: current.applicationOperationId };
+      const lease = this.input.runtimes.acquireExistingControl(scope, applicationThreadId);
+      if (!lease) {
+        if (current.state === "prepared") {
+          this.input.operations.rejectInterruptProvenNotApplied(scope, operation.operationId);
+          finishDeadline();
+          throw new DomainError("invalid_transition", "The existing conversation control is unavailable. Reconnect the thread and try Stop again.");
         }
-        receipt = this.input.operations.prepareInterrupt(
-          scope,
-          applicationThreadId,
-          {
-            operationId: operation.operationId,
-            expectedActiveTurnId: timeline.activeTurnId,
-            now: this.#now(),
-          },
-        );
-      }
-
-      const stillTargetsOriginalTurn =
-        (timeline.runState === "running" ||
-          timeline.runState === "waiting_for_approval" ||
-          timeline.runState === "waiting_for_input") &&
-        timeline.activeTurnId === receipt.expectedActiveTurnId;
-      const interruptInput = {
-        applicationOperationId: receipt.applicationOperationId,
-        expectedActiveTurnId: receipt.expectedActiveTurnId,
-      };
-      if (receipt.state === "uncertain") {
-        let reconciliation;
-        try {
-          reconciliation =
-            await runtime.actor.reconcileInterrupt(interruptInput);
-        } catch {
-          return { status: "recovery_required", retryable: true };
-        }
-        if (reconciliation.outcome === "unknown") {
-          return { status: "recovery_required", retryable: true };
-        }
-        if (reconciliation.outcome === "accepted") {
-          this.input.operations.acceptInterrupt(scope, operation.operationId);
-          await this.#afterInterruptAccepted(
-            scope,
-            applicationThreadId,
-            runtime.actor,
-          );
-          await this.input.publishThreadSnapshot(scope, applicationThreadId);
-          await this.#changed(scope, applicationThreadId);
-          return {
-            status: "accepted",
-            operationId: receipt.applicationOperationId,
-          };
-        }
-      }
-      if (
-        timeline.runState === "starting" ||
-        timeline.runState === "disconnected" ||
-        timeline.runState === "reconciling"
-      ) {
         return { status: "recovery_required", retryable: true };
       }
-      if (!stillTargetsOriginalTurn) {
-        this.input.operations.acceptInterrupt(scope, operation.operationId);
-        await this.#afterInterruptAccepted(
-          scope,
-          applicationThreadId,
-          runtime.actor,
-        );
-        await this.input.publishThreadSnapshot(scope, applicationThreadId);
-        await this.#changed(scope, applicationThreadId);
-        return {
-          status: "accepted",
-          operationId: receipt.applicationOperationId,
-        };
-      }
-
-      this.input.operations.markInterruptStarted(scope, operation.operationId);
+      const input = { applicationOperationId: current.applicationOperationId, deadlineAt, signal };
       try {
-        await runtime.actor.interrupt(interruptInput);
+        if (current.state === "uncertain") {
+          // Recovery is read-only. Proven nonapplication fails this invocation;
+          // the established refusal policy may admit a later explicit request,
+          // but never retries or retargets inside this operation.
+          const outcome = await withinBudget(lease.control.reconcileInterrupt(input));
+          if (!currentBudget()) return this.#interruptUnconfirmed(scope, operation.operationId);
+          if (outcome.outcome === "unknown") return { status: "recovery_required", retryable: true };
+          if (outcome.outcome === "not_applied") {
+            this.input.operations.rejectInterruptProvenNotApplied(scope, operation.operationId);
+            finishDeadline();
+            throw new DomainError("invalid_transition", "The previous Stop was not applied. Issue a new Stop to target current work.");
+          }
+        } else {
+          if (!currentBudget()) return this.#interruptUnconfirmed(scope, operation.operationId);
+          await withinBudget(lease.control.interrupt(input, () => {
+            if (!currentBudget()) {
+              throw new BackendError({ category: "unavailable", retryable: false, crossedSubmissionBoundary: false,
+                safeMessage: "The conversation Stop budget expired before dispatch." });
+            }
+            this.input.operations.markInterruptStarted(scope, operation.operationId);
+          }));
+        }
+        if (!currentBudget()) return this.#interruptUnconfirmed(scope, operation.operationId);
+        const accepted = this.input.operations.acceptInterrupt(scope, operation.operationId);
+        if (accepted.state !== "accepted") return this.#interruptUnconfirmed(scope, operation.operationId);
+        // The native ACK is authoritative independently of optional Goal work
+        // or browser publication. Neither can turn a successful Stop unknown.
+        try {
+          const changed = await withinBudget(this.#afterInterruptAccepted(scope, applicationThreadId, lease.control));
+          if (changed && currentBudget()) void this.input.publishThreadSnapshot(scope, applicationThreadId).catch(() => undefined);
+        } catch { /* Best-effort feature lifecycle within the original budget. */ }
+        finishDeadline();
+        void this.input.queue.onAuthoritativeSettled(scope, applicationThreadId).catch(() => undefined);
+        void this.#changed(scope, applicationThreadId).catch(() => undefined);
+        return { status: "accepted", operationId: accepted.applicationOperationId };
       } catch (error) {
-        if (error instanceof BackendError && !error.crossedSubmissionBoundary) {
-          this.input.operations.rejectInterruptProvenNotApplied(
-            scope,
-            operation.operationId,
-          );
+        if (currentBudget() && error instanceof BackendError && !error.crossedSubmissionBoundary) {
+          this.input.operations.rejectInterruptProvenNotApplied(scope, operation.operationId);
+          finishDeadline();
           throw error;
         }
-        return { status: "recovery_required", retryable: true };
-      }
-      this.input.operations.acceptInterrupt(scope, operation.operationId);
-      const featureChanged = await this.#afterInterruptAccepted(
-        scope,
-        applicationThreadId,
-        runtime.actor,
-      );
-      if (featureChanged) {
-        try {
-          await this.input.publishThreadSnapshot(scope, applicationThreadId);
-        } catch {
-          // Publishing a backend-owned feature change is best-effort after an
-          // accepted interrupt.
-        }
-      }
-      await this.#changed(scope, applicationThreadId);
-      return {
-        status: "accepted",
-        operationId: receipt.applicationOperationId,
-      };
-    } finally {
-      runtime.release();
+        if (error instanceof DomainError) throw error;
+        return currentBudget() ? { status: "recovery_required", retryable: true } : this.#interruptUnconfirmed(scope, operation.operationId);
+      } finally { lease.release(); }
+    };
+    try {
+      return await withinBudget(dispatch());
+    } catch (error) {
+      const accepted = this.input.operations.findInterrupt(scope, operation.operationId);
+      if (accepted?.state === "accepted") return { status: "accepted", operationId: accepted.applicationOperationId };
+      if (!currentBudget()) return this.#interruptUnconfirmed(scope, operation.operationId);
+      throw error;
     }
   }
 

@@ -6,7 +6,7 @@ import { windowsSidecarPlatform } from "./sidecar-windows-platform.js";
 
 export interface SidecarAbandonmentRecord {
   readonly resourceId: string;
-  readonly kind: "codex_app_server" | "claude_agent_sdk" | "workspace_files" | "workspace_tools" | "workspace_shell" | "terminal";
+  readonly kind: "codex_app_server" | "claude_agent_sdk" | "opencode" | "workspace_files" | "workspace_tools" | "workspace_shell" | "terminal";
   readonly reason: string;
   /** Provider-owned metadata only: identities and delivery disposition, never
    * credentials, prompts, tool arguments, or a copy of the native transcript.

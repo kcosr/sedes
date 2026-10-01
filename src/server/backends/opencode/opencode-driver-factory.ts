@@ -1,0 +1,35 @@
+import type { BackendDriverFactory } from "../registry.js";
+import { createHash } from "node:crypto";
+import { APPLICATION_ASSIGNED_CREATION_IDENTITY, BackendError, type AgentBackendInstance, type AgentConnectionProfile } from "../contracts.js";
+import type { RequestScope } from "../../identity/identity-provider.js";
+import { OpenCodeConversationBackendDriver } from "./opencode-conversation-driver.js";
+import type { OpenCodeDriverContext } from "./opencode-conversation-context.js";
+
+export class OpenCodeBackendDriverFactory implements BackendDriverFactory {
+  readonly connectionKinds = ["opencode_http"] as const;
+  readonly supportsConversationCreation = true;
+  readonly creationIdentity = Object.freeze({ ...APPLICATION_ASSIGNED_CREATION_IDENTITY,
+    reserveBackendConversationId(seed: string): string {
+      if (!seed || seed.length > 128 || /\p{Cc}/u.test(seed) || Buffer.from(seed).toString("utf8") !== seed) throw new Error("opencode_creation_seed_invalid");
+      return `ses_${createHash("sha256").update(seed).digest("hex")}`;
+    } });
+  readonly scope: RequestScope;
+  readonly instance: AgentBackendInstance;
+  readonly #connections: ReadonlyMap<string, AgentConnectionProfile>;
+  constructor(readonly input: Omit<OpenCodeDriverContext, "connection"> & { connections: readonly AgentConnectionProfile[] }) {
+    this.scope = Object.freeze({ ...input.scope }); this.instance = input.instance;
+    this.#connections = new Map(input.connections.map(connection => [connection.id, Object.freeze({ ...connection })]));
+  }
+  create(connection: AgentConnectionProfile): OpenCodeConversationBackendDriver {
+    const admitted = this.#connections.get(connection.id);
+    if (!admitted || (["tenantId", "ownerPrincipalId", "templateId", "kind", "backendInstanceId", "executionEnvironmentId", "enabled", "configurationRevision"] as const)
+          .some(key => admitted[key] !== connection[key]) || !connection.enabled || !this.instance.enabled ||
+        this.instance.kind !== "opencode" || this.instance.tenantId !== this.scope.tenantId ||
+        connection.kind !== "opencode_http" || connection.backendInstanceId !== this.instance.id ||
+        connection.tenantId !== this.scope.tenantId || connection.ownerPrincipalId !== this.scope.principalId) {
+      throw new BackendError({ category: "permission_denied", retryable: false, crossedSubmissionBoundary: false,
+        backendCode: "opencode_connection_authority_invalid", safeMessage: "The OpenCode connection is unavailable." });
+    }
+    return new OpenCodeConversationBackendDriver({ ...this.input, connection: admitted });
+  }
+}

@@ -57,6 +57,7 @@ function authenticatedTcpTransportFactory(
       const connection = await openConnection(connectionGeneration);
       const authenticationIdentity = createEnvironmentSecretIdentity({
         kind: "environment_secret",
+      purpose: "capability_token",
         scope: expectedScope,
         connectionGeneration,
         secretIdentity: `secret-${connectionGeneration}`,

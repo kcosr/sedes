@@ -775,7 +775,7 @@ export class ConversationLifecycleService {
             }),
         initialInputText: input.prompt,
         initialAttachmentIds: [],
-        backendCreationCorrelation: this.#id(),
+        backendCreationCorrelation: await this.#reserveCreationCorrelation(scope, applicationThreadId),
         now: this.#now(),
       });
     } catch (error) {
@@ -889,7 +889,7 @@ export class ConversationLifecycleService {
         sourceAutomationRunId: input.automationRunId,
         initialInputText: input.prompt,
         initialAttachmentIds: [],
-        backendCreationCorrelation: this.#id(),
+        backendCreationCorrelation: await this.#reserveCreationCorrelation(scope, applicationThreadId),
         now: this.#now(),
       });
     } catch (error) {
@@ -994,7 +994,7 @@ export class ConversationLifecycleService {
           initialAttachmentIds: draft.attachments.map(({ id }) => id),
           initialTaskReferences: draft.taskReferences,
           expectedDraftRevision: input.expectedDraftRevision,
-          backendCreationCorrelation: this.#id(),
+          backendCreationCorrelation: await this.#reserveCreationCorrelation(scope, applicationThreadId),
           now: this.#now(),
         });
       } catch (error) {
@@ -1087,6 +1087,37 @@ export class ConversationLifecycleService {
     );
     if (!attempt || attempt.creationKind !== "first_input") return undefined;
     return this.recoverFirstSend(scope, applicationThreadId, attempt.attemptId);
+  }
+
+  /** Finalize only the exact post-submission attempt; never enter effectful recovery branches. */
+  async observeAuthoritativeSubmission(scope: RequestScope, applicationThreadId: string,
+    backendCorrelation: string): Promise<boolean> {
+    let attempt = this.#creation.findActiveForThread(scope, applicationThreadId);
+    if (!attempt || attempt.creationKind !== "first_input" || attempt.mutationId !== backendCorrelation) return false;
+    // A provider may notify before submit() persists its uncertain outcome.
+    // Wait for that operation, then re-read instead of coalescing with its result.
+    while (true) {
+      const firstSend = this.#inFlightFirstSends.get(operationKey(scope, applicationThreadId, backendCorrelation));
+      const recovery = this.#inFlightAttemptOperations.get(operationKey(scope, applicationThreadId, attempt.attemptId))?.promise;
+      if (!firstSend && !recovery) break;
+      await Promise.allSettled([firstSend, recovery]);
+    }
+    const current = this.#creation.findActiveForThread(scope, applicationThreadId);
+    if (!current || current.attemptId !== attempt.attemptId || current.creationKind !== "first_input" ||
+        current.mutationId !== backendCorrelation || current.phase !== "recovery_required" ||
+        current.forceResetAt !== null || current.provisionalBackendConversationId === null ||
+        current.provisionalOpaqueBindingDetail === null || current.retryAnchor === null ||
+        this.#isPreSubmissionRecovery(scope, applicationThreadId, current)) return false;
+    const reconciliationToken = current.retryMutationId === null ? current.reconciliationToken : current.retryReconciliationToken;
+    if (!reconciliationToken) return false;
+    const acceptedAt = this.#now();
+    this.#bindings.database.transaction(() => {
+      this.#creation.markAcceptedUnpersisted(scope, applicationThreadId, current.attemptId, {
+        expected: "recovery_required", acceptedAt, reconciliationToken, backendCorrelation,
+      });
+      this.#finalizeAccepted(scope, applicationThreadId, current.attemptId, acceptedAt);
+    }).immediate();
+    return true;
   }
 
   async #recoverFirstSend(
@@ -1943,6 +1974,18 @@ export class ConversationLifecycleService {
     );
   }
 
+  async #reserveCreationCorrelation(scope: RequestScope, applicationThreadId: string): Promise<string> {
+    const resolved = await this.#targets.resolve(scope, applicationThreadId);
+    const identity = this.#registry.creationIdentity(resolved.connection);
+    const seed = this.#id();
+    const value = identity.assignment === "application"
+      ? identity.reserveBackendConversationId(seed) : seed;
+    if (typeof value !== "string" || value.length < 1 || value.length > 128 || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) {
+      throw new DomainError("invalid_transition", "The backend reserved an invalid conversation identity.");
+    }
+    return value;
+  }
+
   async #creationIdentityForAttempt(
     scope: RequestScope,
     attempt: ConversationCreationAttemptRecord,
@@ -2509,13 +2552,12 @@ export class ConversationLifecycleService {
 function submissionSource(
   attempt: ConversationCreationAttemptRecord,
 ): ConversationSubmissionSource {
-  return attempt.sourceKind === "composer"
-    ? { kind: "user" }
-    : {
-        kind: "automation",
-        automationId: attempt.sourceAutomationId!,
-        automationRunId: attempt.sourceAutomationRunId!,
-      };
+  if (attempt.sourceKind !== "automation") return { kind: "user" };
+  if (!attempt.sourceAutomationId || !attempt.sourceAutomationRunId) {
+    throw new DomainError("invalid_transition", "The automation submission source is incomplete.");
+  }
+  return { kind: "automation", automationId: attempt.sourceAutomationId,
+    automationRunId: attempt.sourceAutomationRunId };
 }
 
 function operationKey(

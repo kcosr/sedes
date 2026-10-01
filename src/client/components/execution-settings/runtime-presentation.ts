@@ -82,6 +82,7 @@ export interface RuntimePresentationOptions {
   readonly sidecar: boolean;
   /** A backend definition may be disabled while its runtime still exists. */
   readonly enabled?: boolean;
+  readonly stopEffect?: "service" | "attachment" | "unknown";
 }
 
 /**
@@ -91,6 +92,8 @@ export interface RuntimePresentationOptions {
  */
 export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, options: RuntimePresentationOptions): RuntimePresentation {
   const environment = options.resourceKind === "environment";
+  const attachment = !environment && options.stopEffect === "attachment";
+  const unknownOwnership = !environment && options.stopEffect === "unknown";
   const noun = environment ? "sidecar" : "provider";
   if (!runtime) {
     const headline = runtimeConnectionLabel(undefined);
@@ -98,7 +101,8 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
       tone: "neutral", pill: { label: headline, tone: "neutral" }, secondary: [], recoveryEmphasis: false };
   }
   const enabled = options.enabled ?? true;
-  const headline = runtimeConnectionLabel(runtime);
+  const headline = runtime.connectionState === "stopped" && attachment
+    ? "Attachment retired" : runtimeConnectionLabel(runtime);
   const automatic = runtime.preference === "automatic";
   const upgrade = options.sidecar ? runtime.upgradeState : "current";
   const upgradeQualifier = upgrade === "required" ? "Upgrade required" : upgrade === "pending" ? "Upgrade available" : undefined;
@@ -157,15 +161,18 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
         qualifier = "Backend disabled";
         detail = "This backend is disabled in its configuration.";
       } else {
-        detail = runtime.preference === "stopped" ? `The ${noun} is stopped and will not start automatically.` : `The ${noun} is not running.`;
-        primary = act("start");
+        detail = attachment ? "Sedes is not attached to the external server. Connect to establish a new attachment."
+          : runtime.preference === "stopped" ? `The ${noun} is stopped and will not start automatically.` : `The ${noun} is not running.`;
+        primary = act(attachment || !runtime.supportedActions.includes("start") ? "connect" : "start");
       }
       break;
     case "disconnected":
       qualifier = !enabled ? "Backend disabled" : upgradeQualifier;
       qualifierTone = !enabled ? "neutral" : upgrade === "required" ? "warning" : "info";
       if (!enabled) {
-        detail = "This backend is disabled. A provider process may still exist on its host; stop it to release it.";
+        detail = attachment ? "This backend is disabled. Stop retires any retained Sedes attachment and leaves the external server running."
+          : unknownOwnership ? "This backend is disabled. Stop ends retained owned execution or retires an external attachment; external servers are left running."
+          : "This backend is disabled. A provider process may still exist on its host; stop it to release it.";
         secondary = [act("stop", undefined, "destructive")];
       } else if (environment) {
         detail = automatic
@@ -196,7 +203,9 @@ export function presentRuntime(runtime: ConfigurationRuntimeState | undefined, o
       } else if (!enabled) {
         qualifier = "Backend disabled";
         qualifierTone = "warning";
-        detail = "This backend is disabled but its runtime is still running. Stop it to release it.";
+        detail = attachment ? "This backend is disabled but its Sedes attachment remains. Stop retires that attachment and leaves the external server running."
+          : unknownOwnership ? "This backend is disabled but has a retained runtime. Stop ends owned execution or retires an external attachment; external servers are left running."
+          : "This backend is disabled but its runtime is still running. Stop it to release it.";
         primary = act("stop", undefined, "destructive");
         secondary = [act("disconnect")];
       } else if (upgrade === "pending") {

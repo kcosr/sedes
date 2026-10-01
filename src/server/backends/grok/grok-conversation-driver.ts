@@ -1,3 +1,4 @@
+import { ConversationInterruptLedger } from "../conversation-interrupt.js";
 import type { EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
 import type { ThreadEnvironmentResolver } from "../../environment-variables/runtime-environment.js";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
@@ -44,6 +45,7 @@ import {
   type ConversationBackendDriver,
   type ConversationBinding,
   type ConversationHandle,
+  type ConversationControl,
   type ConversationReadResult,
   type CanonicalComposerAttachmentEvidence,
   type CreateConversationInput,
@@ -55,7 +57,7 @@ import {
   type EstablishProjectionInput,
   type HistoryPageInput,
   type InteractionResponseInput,
-  type InterruptTurnInput,
+  type InterruptConversationInput,
   type LocateTurnInput,
   type LocateTurnResult,
   type ReadConversationInput,
@@ -130,6 +132,7 @@ import {
   grokRuntimeIncompatibilityCode,
 } from "./grok-release-guard.js";
 import {
+  GrokInterruptNotSentError,
   GrokPromptOutcomeUnknownError,
   GrokSessionLifecycle,
 } from "./grok-session-lifecycle.js";
@@ -157,12 +160,6 @@ interface GrokSubmissionEntry {
   completion: Promise<void>;
   acceptedByProvider: boolean;
   uncertain: boolean;
-}
-
-interface GrokInterruptEntry {
-  readonly applicationOperationId: string;
-  readonly expectedBackendTurnId: string;
-  readonly outcome: "pending" | "accepted" | "unknown";
 }
 
 interface GrokRenameEntry {
@@ -596,7 +593,7 @@ export class GrokConversationBackendDriver implements ConversationBackendDriver 
           else pendingHistoryChange = true;
         },
       );
-      const loaded = await lifecycle.loadSession(detail.sessionId);
+      const loaded = await lifecycle.loadSession(detail.sessionId, { deferHistory: true });
       this.#assertEffectiveConfiguration(
         lifecycle.modelCatalog,
         loaded.configuration,
@@ -623,28 +620,11 @@ export class GrokConversationBackendDriver implements ConversationBackendDriver 
           sessionId: detail.sessionId,
         },
       };
-      const interruptedPromptId = recoverableInterruptedGrokPromptId(
-        loaded.history,
-        submissionCorrelation,
-      );
-      const attachedHistory = interruptedPromptId
-        ? await lifecycle.recoverInterruptedSedesPrompt(
-            detail.sessionId,
-            interruptedPromptId,
-          )
-        : loaded.history;
-      const initialProjection =
-        await projectGrokLatestHistoryWithGeneratedImages(
-          attachedHistory,
-          submissionCorrelation,
-          generatedImages,
-        );
       handle = new GrokConversationHandle({
         binding: input.binding,
         lifecycle,
         sessionId: detail.sessionId,
         submissionCorrelation,
-        initialSnapshot: initialProjection.snapshot,
         settings: this.#settings,
         modelPolicy: this.#modelPolicy,
         effectiveConfiguration: loaded.configuration,
@@ -657,9 +637,18 @@ export class GrokConversationBackendDriver implements ConversationBackendDriver 
           }
         },
       });
-      if (pendingHistoryChange) await handle.providerHistoryChanged();
+      // History is hydrated by establishProjection after native control admission.
+      void pendingHistoryChange;
       this.#assertOperational();
       this.#handles.set(ownershipKey, handle);
+      input.onControlReady?.(handle.control);
+      try {
+        await handle.establishProjection({ signal: handle.control.lifetime });
+      } catch (cause) {
+        // Native admission remains valid across a request-local history failure.
+        // The actor can retry projection on this same owned handle.
+        if (handle.control.lifetime.aborted) throw cause;
+      }
       return handle;
     } catch (error) {
       this.#handles.delete(ownershipKey);
@@ -1317,6 +1306,7 @@ export class GrokConversationBackendDriver implements ConversationBackendDriver 
 }
 
 class GrokConversationHandle implements ConversationHandle {
+  readonly automaticEviction = "requires_quiescence" as const;
   readonly binding: ConversationBinding;
   readonly #lifecycle: GrokSessionLifecycle;
   readonly #sessionId: string;
@@ -1333,7 +1323,9 @@ class GrokConversationHandle implements ConversationHandle {
   >();
   readonly #journal: SequencedBackendEvent[] = [];
   readonly #submissions = new Map<string, GrokSubmissionEntry>();
-  #interrupt: GrokInterruptEntry | undefined;
+  readonly #interrupts = new ConversationInterruptLedger();
+  readonly #controlLifetime = new AbortController();
+  readonly control: ConversationControl;
   #rename: GrokRenameEntry | undefined;
   readonly #completionContinuations = new Set<Promise<void>>();
   #historyRefreshWork = Promise.resolve();
@@ -1343,7 +1335,7 @@ class GrokConversationHandle implements ConversationHandle {
   readonly #dirtyLiveItemIds = new Set<string>();
   #nextSequence = 0;
   #historyRevision = 0;
-  #projectionSnapshot: BackendConversationSnapshot;
+  #projectionSnapshot: BackendConversationSnapshot | undefined;
   #historyRefreshTimer: NodeJS.Timeout | undefined;
   #authoritativeHistoryRefreshRequired = false;
   #closed = false;
@@ -1356,7 +1348,6 @@ class GrokConversationHandle implements ConversationHandle {
     readonly lifecycle: GrokSessionLifecycle;
     readonly sessionId: string;
     readonly submissionCorrelation: GrokSubmissionCorrelationScope;
-    readonly initialSnapshot: BackendConversationSnapshot;
     readonly settings: GrokThreadSettingsStore;
     readonly modelPolicy: CompiledBackendModelPolicy;
     readonly effectiveConfiguration: GrokEffectiveSessionConfiguration;
@@ -1368,14 +1359,18 @@ class GrokConversationHandle implements ConversationHandle {
     this.#lifecycle = input.lifecycle;
     this.#sessionId = input.sessionId;
     this.#submissionCorrelation = input.submissionCorrelation;
-    this.#projectionSnapshot = input.initialSnapshot;
     this.#settings = input.settings;
     this.#modelPolicy = input.modelPolicy;
     this.#effectiveConfiguration = input.effectiveConfiguration;
     this.#runtimeSupportsImageInput = input.runtimeSupportsImageInput;
     this.#generatedImages = input.generatedImages;
     this.#onClosed = input.onClosed;
-    this.#indexHistoryRecords(this.#lifecycle.history(this.#sessionId));
+    this.control = Object.freeze({
+      generation: randomUUID(),
+      lifetime: AbortSignal.any([this.#controlLifetime.signal, this.#lifecycle.controlLifetime]),
+      interrupt: (input: InterruptConversationInput) => this.interrupt(input),
+      reconcileInterrupt: (input: InterruptConversationInput) => this.reconcileInterrupt(input),
+    });
   }
 
   providerHistoryChanged(): Promise<void> {
@@ -1431,8 +1426,7 @@ class GrokConversationHandle implements ConversationHandle {
       return;
     }
     this.#indexHistoryRecords(records);
-    this.#pruneInterruptEvidence(next.activeBackendTurnId);
-    const events = grokProjectionEvents(this.#projectionSnapshot, next);
+    const events = this.#projectionSnapshot ? grokProjectionEvents(this.#projectionSnapshot, next) : undefined;
     if (events === undefined) {
       this.#historyRevision += 1;
       this.#projectionSnapshot = next;
@@ -1493,7 +1487,7 @@ class GrokConversationHandle implements ConversationHandle {
     }
     const prior =
       this.#provisionalLiveItems.get(backendItemId) ??
-      this.#projectionSnapshot.itemsById[backendItemId];
+      this.#projectionSnapshot?.itemsById[backendItemId];
     const next = appendGrokLiveText(prior, record);
     if (!next) {
       void this.providerHistoryChanged();
@@ -1550,11 +1544,17 @@ class GrokConversationHandle implements ConversationHandle {
   ): Promise<EstablishedBackendProjection> {
     this.#assertOpen();
     throwIfAborted(input.signal);
-    const revision = this.#historyRevision;
-    const page = await this.#lifecycle.historyPage(this.#sessionId, {
+    let revision = this.#historyRevision;
+    let page = await this.#lifecycle.historyPage(this.#sessionId, {
       limit: 10,
       signal: input.signal,
     });
+    const interruptedPromptId = recoverableInterruptedGrokPromptId(page.records, this.#submissionCorrelation);
+    if (interruptedPromptId && !this.#lifecycle.activePromptId(this.#sessionId)) {
+      await this.#lifecycle.recoverInterruptedSedesPrompt(this.#sessionId, interruptedPromptId);
+      page = await this.#lifecycle.historyPage(this.#sessionId, { limit: 10, signal: input.signal });
+      revision = this.#historyRevision;
+    }
     const records = page.records;
     const projectionStartedAt = Date.now();
     const projection =
@@ -1591,7 +1591,6 @@ class GrokConversationHandle implements ConversationHandle {
       );
     }
     this.#projectionSnapshot = projection.snapshot;
-    this.#pruneInterruptEvidence(projection.snapshot.activeBackendTurnId);
     const after = this.#nextSequence - 1;
     return {
       handleSequence: after,
@@ -1748,6 +1747,7 @@ class GrokConversationHandle implements ConversationHandle {
     this.#assertOpen();
     let evidence;
     try {
+      await this.#lifecycle.ensureInitialHistory(this.#sessionId);
       evidence = inspectGrokNormalizedHistory(
         this.#lifecycle.history(this.#sessionId),
         this.#submissionCorrelation,
@@ -1817,6 +1817,7 @@ class GrokConversationHandle implements ConversationHandle {
     let operationEvidence;
     let exactEvidence;
     try {
+      await this.#lifecycle.ensureInitialHistory(this.#sessionId);
       const records = this.#lifecycle.history(this.#sessionId);
       operationEvidence = inspectGrokNormalizedHistory(
         records,
@@ -2029,104 +2030,33 @@ class GrokConversationHandle implements ConversationHandle {
     }
   }
 
-  async interrupt(input: InterruptTurnInput): Promise<void> {
-    validateInterruptInput(input);
+  async interrupt(input: InterruptConversationInput): Promise<void> {
     this.#assertOpen();
-    const prior = this.#interrupt;
-    if (prior?.applicationOperationId === input.applicationOperationId) {
-      this.#assertInterruptReplay(input, prior);
-      if (prior.outcome === "accepted") return;
-      throw interruptOutcomeUnknown();
-    }
-    let projection: BackendConversationSnapshot;
-    try {
-      const records = this.#lifecycle.history(this.#sessionId);
-      projection = (
-        await projectGrokLatestHistoryWithGeneratedImages(
-          records,
-          this.#submissionCorrelation,
-          this.#generatedImages,
-        )
-      ).snapshot;
-    } catch (error) {
-      throw mapReadError(error, "Grok is unavailable before interrupt.");
-    }
-    if (
-      projection.runState !== "running" ||
-      projection.activeBackendTurnId !== input.expectedBackendTurnId
-    ) {
-      throw grokError(
-        "invalid_state",
-        "The active Grok turn changed before interrupt.",
-        "grok_interrupt_target_changed",
-      );
-    }
-    const promptId = this.#lifecycle.activePromptId(this.#sessionId);
-    if (!promptId) {
-      throw grokError(
-        "invalid_state",
-        "The active Grok prompt changed before interrupt.",
-        "grok_interrupt_target_changed",
-      );
-    }
-    this.#reserveInterrupt(input);
-    try {
-      await this.#lifecycle.interruptPrompt(this.#sessionId, promptId);
-      if (this.#closed) {
-        throw interruptOutcomeUnknown(
-          new Error("grok_conversation_closed_after_interrupt"),
-        );
+    await this.#interrupts.execute(input, this.control.lifetime, async (budget) => {
+      try {
+        this.#lifecycle.assertControlAuthority(this.#sessionId);
+      } catch (cause) {
+        throw mapReadError(cause, "Grok native control is unavailable.");
       }
-      this.#rememberInterrupt(input, "accepted");
-      this.#emit({
-        type: "run_state_changed",
-        state: "stopping",
-        activeBackendTurnId: input.expectedBackendTurnId,
-      });
-    } catch (error) {
-      const mapped = mapInterruptError(error);
-      if (mapped.crossedSubmissionBoundary) {
-        this.#rememberInterrupt(input, "unknown");
-      } else if (
-        this.#interrupt?.applicationOperationId === input.applicationOperationId
-      ) {
-        this.#interrupt = undefined;
+      const promptId = this.#lifecycle.activePromptId(this.#sessionId);
+      if (!promptId) return;
+      let dispatched = false;
+      try {
+        await this.#lifecycle.interruptPrompt(this.#sessionId, promptId, {
+          ...budget,
+          dispatch() { budget.dispatch(); dispatched = true; },
+        });
+      } catch (cause) {
+        throw mapInterruptError(cause, dispatched);
       }
-      throw mapped;
-    }
+    });
   }
 
   async reconcileInterrupt(
-    input: InterruptTurnInput,
+    input: InterruptConversationInput,
   ): Promise<BackendMutationReconciliation> {
-    validateInterruptInput(input);
     this.#assertOpen();
-    const prior = this.#interrupt;
-    if (prior?.applicationOperationId === input.applicationOperationId) {
-      this.#assertInterruptReplay(input, prior);
-      if (prior.outcome === "accepted") return { outcome: "accepted" };
-    }
-    try {
-      const records = this.#lifecycle.history(this.#sessionId);
-      const projection = (
-        await projectGrokLatestHistoryWithGeneratedImages(
-          records,
-          this.#submissionCorrelation,
-          this.#generatedImages,
-        )
-      ).snapshot;
-      const outcome: BackendMutationReconciliation =
-        projection.activeBackendTurnId === input.expectedBackendTurnId
-          ? { outcome: "unknown" }
-          : { outcome: "accepted" };
-      this.#pruneInterruptEvidence(projection.activeBackendTurnId);
-      return outcome;
-    } catch (error) {
-      throw mapReadError(
-        error,
-        "Grok interrupt reconciliation is unavailable.",
-      );
-    }
+    return this.#interrupts.reconcile(input);
   }
 
   async perform(
@@ -2225,6 +2155,7 @@ class GrokConversationHandle implements ConversationHandle {
   async close(): Promise<void> {
     if (this.#closePromise) return await this.#closePromise;
     this.#closed = true;
+    this.#controlLifetime.abort();
     this.#closePromise = (async () => {
       const failures: BackendError[] = [];
       await this.#historyRefreshWork;
@@ -2288,48 +2219,6 @@ class GrokConversationHandle implements ConversationHandle {
     return await this.#closePromise;
   }
 
-  #rememberInterrupt(
-    input: InterruptTurnInput,
-    outcome: Exclude<GrokInterruptEntry["outcome"], "pending">,
-  ): void {
-    if (
-      this.#interrupt?.applicationOperationId !== input.applicationOperationId
-    ) {
-      return;
-    }
-    this.#interrupt = {
-      applicationOperationId: input.applicationOperationId,
-      expectedBackendTurnId: input.expectedBackendTurnId,
-      outcome,
-    };
-  }
-
-  #reserveInterrupt(input: InterruptTurnInput): void {
-    this.#interrupt = {
-      applicationOperationId: input.applicationOperationId,
-      expectedBackendTurnId: input.expectedBackendTurnId,
-      outcome: "pending",
-    };
-  }
-
-  #assertInterruptReplay(
-    input: InterruptTurnInput,
-    prior: GrokInterruptEntry,
-  ): void {
-    if (prior.expectedBackendTurnId === input.expectedBackendTurnId) return;
-    throw grokError(
-      "rejected",
-      "The Grok interrupt operation was replayed for another turn.",
-      "grok_interrupt_replay_mismatch",
-    );
-  }
-
-  #pruneInterruptEvidence(activeBackendTurnId: string | undefined): void {
-    if (this.#interrupt?.expectedBackendTurnId !== activeBackendTurnId) {
-      this.#interrupt = undefined;
-    }
-  }
-
   #finishClose(): void {
     if (this.#finishedClose) return;
     this.#finishedClose = true;
@@ -2351,6 +2240,7 @@ class GrokConversationHandle implements ConversationHandle {
         reason: "provider_handle_closed",
       });
       this.#closed = true;
+    this.#controlLifetime.abort();
       this.#fencePromise = this.#lifecycle.close(reason).finally(() => {
         this.#finishClose();
       });
@@ -3242,7 +3132,19 @@ function mapSubmissionError(
   );
 }
 
-function mapInterruptError(error: unknown): BackendError {
+function mapInterruptError(error: unknown, dispatched: boolean): BackendError {
+  if (error instanceof GrokInterruptNotSentError) {
+    return grokError(
+      "unavailable",
+      "Grok was unavailable before the interrupt was sent.",
+      "grok_interrupt_not_sent",
+      true,
+      error,
+    );
+  }
+  // Errors while waiting for prompt completion describe that separate RPC,
+  // not whether the already-dispatched session/cancel took effect.
+  if (dispatched) return interruptOutcomeUnknown(error);
   if (error instanceof BackendError) return error;
   if (
     error instanceof Error &&
@@ -3292,10 +3194,11 @@ function mapInterruptError(error: unknown): BackendError {
   }
   return grokError(
     "unavailable",
-    "Grok is unavailable before interrupt.",
+    "Grok could not confirm the interrupt.",
     "grok_interrupt_unavailable",
-    true,
+    false,
     error,
+    true,
   );
 }
 
@@ -3308,19 +3211,6 @@ function interruptOutcomeUnknown(cause?: unknown): BackendError {
     cause,
     true,
   );
-}
-
-function validateInterruptInput(input: InterruptTurnInput): void {
-  if (
-    !bounded(input.applicationOperationId, 160) ||
-    !bounded(input.expectedBackendTurnId, 512)
-  ) {
-    throw grokError(
-      "rejected",
-      "The Grok interrupt identity is invalid.",
-      "grok_interrupt_identity_invalid",
-    );
-  }
 }
 
 function unresolved(diagnostic: string): SubmissionReconciliation {

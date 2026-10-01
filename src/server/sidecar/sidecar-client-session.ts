@@ -194,6 +194,7 @@ export class SidecarClientSession implements SidecarRuntimeSession {
         registry.capabilities(),
         agentToolCliAuthorized,
         input.authorizedRuntimeCapabilities.length > 0,
+        agentToolCliAuthorized && input.authorizedRuntimeCapabilities.some(capability => capability.capabilityId === "opencode_runtime" && capability.majorVersion === 2),
       );
       const runtimeCapabilities: readonly SidecarCapabilityInventory[] = input.authorizedRuntimeCapabilities.length === 0 ? [] : [
         ...input.authorizedRuntimeCapabilities,
@@ -273,12 +274,17 @@ export class SidecarClientSession implements SidecarRuntimeSession {
       }
       for (const expected of runtimeCapabilities) {
         const actual = hello.sidecarCapabilities.find((capability) => capability.capabilityId === expected.capabilityId && capability.majorVersion === expected.majorVersion);
-        if (!actual && (expected.capabilityId === "codex_managed_tui" || expected.capabilityId === "claude_persistent_runtime")) continue;
+        if (!actual && (expected.capabilityId === "codex_managed_tui" || expected.capabilityId === "claude_persistent_runtime" || expected.capabilityId === "opencode_runtime")) continue;
         if (!actual || JSON.stringify([...actual.operations].sort()) !== JSON.stringify([...expected.operations].sort())) throw new Error("sidecar_runtime_capability_mismatch");
       }
+      // An older sidecar can lack the private tool route while retaining other
+      // useful operations. Keep its actual hello inventory; backend tool
+      // admission checks that exact reverse route before installing anything.
+      const acceptedSedesCapabilities = hello.sedesCapabilities.some(capability => capability.capabilityId === "opencode_tools")
+        ? offeredSedesCapabilities : offeredSedesCapabilities.filter(capability => capability.capabilityId !== "opencode_tools");
       if (
         JSON.stringify(hello.sedesCapabilities) !==
-        JSON.stringify(offeredSedesCapabilities)
+        JSON.stringify(acceptedSedesCapabilities)
       ) {
         throw new Error("sidecar_capability_mismatch");
       }
@@ -550,16 +556,18 @@ function validateSedesCapabilities(
   capabilities: readonly SidecarCapabilityInventory[],
   agentToolCliAuthorized: boolean,
   runtimeAuthorized: boolean,
+  openCodeToolsAuthorized: boolean,
 ): readonly SidecarCapabilityInventory[] {
   const expectedOperations = agentToolsV3Operations
     .map(({ operation }) => operation)
     .sort();
   const selected = capabilities.filter((capability) => capability.capabilityId !== "runtime_bodies" || runtimeAuthorized);
   const valid =
-    selected.length === (agentToolCliAuthorized ? 1 : 0) + (runtimeAuthorized ? 1 : 0) &&
+    selected.length === (agentToolCliAuthorized ? 1 : 0) + (runtimeAuthorized ? 1 : 0) + (openCodeToolsAuthorized ? 1 : 0) &&
     selected.every(
       ({ capabilityId, majorVersion, operations }) =>
         capabilityId === "runtime_bodies" ? runtimeAuthorized && majorVersion === 1 && JSON.stringify(operations) === JSON.stringify([sidecarRuntimeBodyOffer.operation]) :
+        capabilityId === "opencode_tools" ? openCodeToolsAuthorized && majorVersion === 1 && JSON.stringify(operations) === JSON.stringify(["tools.invoke"]) :
         capabilityId === "agent_tools_cli" && agentToolCliAuthorized &&
         majorVersion === 3 &&
         JSON.stringify([...operations].sort()) ===

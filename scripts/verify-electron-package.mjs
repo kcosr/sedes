@@ -394,6 +394,7 @@ async function verifyPackaged() {
   for (const required of [
     "package.json",
     "package-lock.json",
+    "runtime-entrypoints.json",
     "native-modules.json",
     "defaults/server.json",
     `protocol/codex-app-server/${codexVersion}/release.json`,

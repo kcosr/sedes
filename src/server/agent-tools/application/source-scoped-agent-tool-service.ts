@@ -130,6 +130,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
 
   async invoke<Output = unknown>(input: BackendAgentToolInvocationInput) {
     let approvalAuthority: AgentToolApprovalAuthorityLease | undefined;
+    let sourceAuthority: Awaited<ReturnType<NonNullable<BackendAgentToolInvocationInput["accessDecisionAuthority"]>["acquire"]>> | undefined;
     try {
       const source = this.#resolveSource(input.source, input.signal);
       const admitted = this.#admit(input, source);
@@ -141,6 +142,9 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
             (environmentId) => environmentId !== source.sourceEnvironmentId,
           );
       if (needsApproval) {
+        sourceAuthority = await input.accessDecisionAuthority?.acquire(input.signal);
+        if (sourceAuthority && !sourceAuthority.isCurrent()) throw new CanonicalAgentToolRequestError(
+          "cancelled", "The input authority changed before approval could be requested.");
         approvalAuthority =
           await this.approvalAuthority.acquireAgentToolApprovalAuthority(
             source.scope,
@@ -149,6 +153,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
         const signal = AbortSignal.any([
           input.signal,
           approvalAuthority.signal,
+          ...(sourceAuthority ? [sourceAuthority.signal] : []),
         ]);
         signal.throwIfAborted();
         let decision;
@@ -181,7 +186,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
           );
         }
         signal.throwIfAborted();
-        if (!approvalAuthority.isCurrent()) {
+        if (!approvalAuthority.isCurrent() || sourceAuthority && !sourceAuthority.isCurrent()) {
           throw new CanonicalAgentToolRequestError(
             "cancelled",
             "The thread runtime changed while approval was pending.",
@@ -226,7 +231,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
       );
     } catch (error) {
       if (
-        (input.signal.aborted || approvalAuthority?.signal.aborted) &&
+        (input.signal.aborted || approvalAuthority?.signal.aborted || sourceAuthority?.signal.aborted) &&
         !(error instanceof CanonicalAgentToolRequestError)
       ) {
         throw new BackendAgentToolRequestError({
@@ -258,6 +263,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
       throw error;
     } finally {
       approvalAuthority?.release();
+      sourceAuthority?.release();
     }
   }
 

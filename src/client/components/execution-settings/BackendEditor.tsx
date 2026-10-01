@@ -29,11 +29,12 @@ export const backendFields = /^(label|enabled|moduleConfiguration\..+|modelPolic
 export function backendDraftEligibility(draft: BackendDraft, configuration: Configuration) {
   const environmentId = draft.targets[0]?.executionEnvironmentId ?? "";
   const environment = configuration.executionEnvironments.find(entry => entry.id === environmentId);
+  const backendValidationError = backendEditors[draft.backend.kind].validationError?.(draft.backend, environment);
   const eligibleKinds = (Object.keys(backendEditors) as BackendDefinition["kind"][]).filter(kind =>
     environment && allowedEnvironments(backendEditors[kind].createBackend("eligibility"), [environment]).length > 0);
   const unsupported = !eligibleKinds.includes(draft.backend.kind);
-  const invalid = !environment || (unsupported && (draft.creating || draft.backend.enabled || draft.targets.some(target => target.enabled)));
-  return { environmentId, environment, eligibleKinds, unsupported, invalid };
+  const invalid = Boolean(backendValidationError) || !environment || (unsupported && (draft.creating || draft.backend.enabled || draft.targets.some(target => target.enabled)));
+  return { environmentId, environment, eligibleKinds, unsupported, invalid, backendValidationError };
 }
 
 export function BackendEditor({ draft, setDraft, configuration, errors, disabled, saving, dirty, savedAt, saveError, saveDisabled, back, headingRef, onSave, onCancel }: {
@@ -55,7 +56,7 @@ export function BackendEditor({ draft, setDraft, configuration, errors, disabled
   readonly onCancel: () => void;
 }): React.JSX.Element {
   const selectedEditor = backendEditors[draft.backend.kind];
-  const { environmentId, environment, eligibleKinds, unsupported, invalid } = backendDraftEligibility(draft, configuration);
+  const { environmentId, environment, eligibleKinds, unsupported, invalid, backendValidationError } = backendDraftEligibility(draft, configuration);
   const fields = errors.fields;
   const changeKind = (kind: BackendDefinition["kind"]) => {
     if (!eligibleKinds.includes(kind)) return;
@@ -71,7 +72,7 @@ export function BackendEditor({ draft, setDraft, configuration, errors, disabled
     // with saving blocked until the user selects a supported type.
     setDraft({ ...draft, targets: draft.targets.map(entry => ({ ...entry, executionEnvironmentId })) });
   };
-  const policy = selectedEditor.renderPolicy?.({ value: draft.backend, onChange: backend => setDraft({ ...draft, backend }), errors: fields, disabled });
+  const policy = selectedEditor.renderPolicy?.({ value: draft.backend, environment, onChange: backend => setDraft({ ...draft, backend }), errors: fields, disabled });
   const sections: SettingsEditorSection[] = [
     { id: "backend-general", label: "General" }, { id: "backend-connection", label: "Connection" },
     ...(policy ? [{ id: "backend-policy", label: "Policy" }] : []),
@@ -81,7 +82,7 @@ export function BackendEditor({ draft, setDraft, configuration, errors, disabled
   return <SettingsEditor label="Backend editor" back={back} headingRef={headingRef} className="execution-editor-wide"
     title={draft.creating ? "New backend" : `Edit ${draft.backend.label || "backend"}`}
     description="Saving does not start model work. Disruptive changes stay pending until they can apply safely or you restart the backend."
-    sections={sections} errors={<GeneralErrors errors={errors.general} />} onSubmit={onSave}
+    sections={sections} errors={<GeneralErrors errors={errors.general} />} onSubmit={() => { if (!invalid) onSave(); }}
     saveBar={<SaveBar creating={draft.creating} dirty={dirty} saving={saving} savedAt={savedAt} error={saveError} onCancel={onCancel}
       saveLabel="Save backend" saveDisabled={saveDisabled || invalid} />}>
     <SettingsSection id="backend-general" title="General" card>
@@ -107,7 +108,8 @@ export function BackendEditor({ draft, setDraft, configuration, errors, disabled
         }} />
     </SettingsSection>
     <SettingsSection id="backend-connection" title="Connection" description="How Sedes reaches the provider." card>
-      {selectedEditor.renderConnection({ value: draft.backend, onChange: backend => setDraft({ ...draft, backend }), errors: fields, disabled })}
+      {backendValidationError ? <Callout tone="danger" role="alert">{backendValidationError}</Callout> : null}
+      {selectedEditor.renderConnection({ value: draft.backend, environment, onChange: backend => setDraft({ ...draft, backend }), errors: fields, disabled })}
     </SettingsSection>
     {policy ? <SettingsSection id="backend-policy" title="Policy" description="Connection defaults and thread selections must stay within these values." card>{policy}</SettingsSection> : null}
     <SettingsSection id="backend-models" title="Models" card>
@@ -151,7 +153,7 @@ export function BackendEditor({ draft, setDraft, configuration, errors, disabled
       <ConfiguredEnvironmentVariableEditor scope="backend" value={draft.backend.environmentVariables} inherited={environment?.environmentVariables} disabled={disabled}
         error={fields.under("environmentVariables")}
         startupUnavailableReason={draft.backend.kind === "pi" ? "Pi runs in the Sedes process and has no owned backend startup environment."
-          : draft.backend.kind === "codex_app_server" && draft.backend.moduleConfiguration.connection.ownership === "external" ? "Sedes does not start the externally owned Codex process." : undefined}
+          : (draft.backend.kind === "codex_app_server" || draft.backend.kind === "opencode") && draft.backend.moduleConfiguration.connection.ownership === "external" ? "Sedes does not start this externally owned process." : undefined}
         onChange={(environmentVariables) => setDraft({ ...draft, backend: { ...draft.backend, environmentVariables } })} />
     </SettingsSection>
   </SettingsEditor>;

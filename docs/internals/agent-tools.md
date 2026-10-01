@@ -207,14 +207,32 @@ their stored presentation.
 | Local Claude             | Progressive, Individual through MCP on eligible queries  | Progressive, Individual on eligible queries                     |
 | Claude over SSH/outbound | Progressive, Individual through MCP with sidecar support | Progressive, Individual with sidecar capability and admission   |
 | Local Grok               | None                                                     | Progressive, Individual on eligible Sedes-created sessions      |
+| Local OpenCode v2        | Progressive through the shared MCP bridge on Sedes-created roots | Progressive, Individual on owned Sedes-created roots |
 | In-memory conformance    | None                                                     | Intentionally unavailable outside contract tests                |
 
 Codex and Claude Native presentation uses exactly the eligibility and runtime
 admission of their CLI presentation, and is unavailable on Windows execution
 hosts. Grok has no Native surface. Grok SSH targets and Pi remote CLI
 presentation are intentionally unsupported.
+OpenCode v2 Native/Progressive uses a bundled stdio MCP bridge registered once
+per admitted runtime/workspace and shared across exactly admitted Sedes-created
+root sessions. A separate private channel credential authenticates the bridge;
+native session metadata routes calls to the scoped thread and current policy.
+It is never a thread credential and never enters a session shell environment.
+The bridge survives actor eviction and is released with session/runtime
+residency. Imported sessions and native children cannot borrow an admission.
+Native Individual, managed remote CLI and remote execution are unsupported.
+
+OpenCode CLI uses the existing local per-thread source capability and requires
+an owned root with a frozen execution environment. Both surfaces obtain a
+server-owned current-input approval hook at ingress. Access-boundary approvals
+require live consumption of an exact Sedes user input; native-only, automated,
+interrupted or no-longer-observed inputs cannot acquire a decision on behalf of
+an older user input. Calls already within configured access remain available.
+Native operator permission rules still govern gateway invocation independently.
+OpenCode's other configured tools and MCP servers do not grant Sedes authority.
 The shared CLI implements both CLI modes for every supported row: local Pi,
-Codex, Claude, and Grok, plus the admitted Codex and Claude remote relays. It does not
+Codex, Claude, Grok, and OpenCode, plus the admitted Codex and Claude remote relays. It does not
 add a CLI path to the intentionally unsupported Pi-SSH or Grok-SSH topologies.
 The incompatible catalog-summary cutover advances both the owner-only local
 CLI frame and the managed relay capability to `agent_tools_cli@3`; stale peers

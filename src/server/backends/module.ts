@@ -16,7 +16,7 @@ import type {
 } from "./contracts.js";
 import type { BackendDriverFactory } from "./registry.js";
 import type { RequestScope } from "../identity/identity-provider.js";
-import type { BackendAgentToolFacade } from "../agent-tools/adapters/backend-facade.js";
+import type { BackendAgentToolFacade, BackendAgentToolAccessDecisionAuthority, TrustedAgentToolSource } from "../agent-tools/adapters/backend-facade.js";
 import type { ExecutionEnvironmentChannelProvider } from "../execution/environment-channel.js";
 import type { ManagedTerminalResourceAuthority } from "../terminal/managed-terminal-carrier.js";
 import type { SavedAgentBackendAdapter } from "./saved-agent-adapter.js";
@@ -149,6 +149,7 @@ export interface BackendRuntimeInspection {
 }
 
 export interface BackendRuntimeAdministration {
+  /** Read existing runtime state; inspection must not launch provider work. */
   inspect(): Promise<BackendRuntimeInspection>;
   stop(input: { readonly expectedRevision: string; readonly force: boolean }): Promise<void>;
   restart(input: { readonly expectedRevision: string; readonly force: boolean }): Promise<void>;
@@ -167,6 +168,10 @@ export interface BackendRuntimeRecoveryContext {
 }
 
 export interface BackendModuleRuntime {
+  /** Current safe diagnostic from lazy runtime checks; reading must not start work. */
+  runtimeDiagnostic?(): BackendRuntimeDiagnostic | undefined;
+  /** Trusted per-input approval provenance for restart-safe CLI source references. */
+  agentToolAccessDecisionAuthority?(source: TrustedAgentToolSource): BackendAgentToolAccessDecisionAuthority;
   /** Read-only launch evidence; unknown never authorizes replacing a running owner. */
   startupEnvironmentState?(): Promise<"not_started" | "started" | "unknown">;
   readonly administration?: BackendRuntimeAdministration;
@@ -193,7 +198,8 @@ export interface BackendModuleRuntime {
    * support from backend kind or optional methods.
    */
   readonly managedProviderTerminals: ManagedTerminalResourceAuthority;
-  start(): Promise<void>;
+  /** Provider connection startup must honor cancellation before publication. */
+  start(signal?: AbortSignal): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -280,11 +286,23 @@ export interface PreparedBackendModule {
   recoverAdministration?(context: BackendRuntimeRecoveryContext): Promise<BackendRuntimeAdministration | undefined>;
 }
 
+export interface BackendRuntimeDiagnostic {
+  readonly connectionState: "recovery_required" | "unknown";
+  /** Provider-authored bounded operator guidance; never raw exception text. */
+  readonly message: string;
+  /** Server-only recovery prerequisite; never grants execution-host authority. */
+  readonly recoveryAction?: "stop";
+}
+
 /**
  * Build-time provider contribution. Modules are compiled into one catalog;
  * they are not discovered or downloaded at runtime.
  */
 export interface BackendModule {
+  /** Provider I/O starts only after HTTP and host carriers are ready. */
+  readonly startupPolicy: "composition_only" | "connect_provider";
+  /** Map only known private failures to safe Settings diagnostics. */
+  runtimeDiagnostic?(error: unknown): BackendRuntimeDiagnostic | undefined;
   /** Compiled remote host grants, independently authorized from workspace operations. */
   readonly remoteRuntimeCapabilities?: readonly { readonly capabilityId: string; readonly majorVersion: number; readonly operations: readonly string[] }[];
   readonly backendKind: BackendKind;

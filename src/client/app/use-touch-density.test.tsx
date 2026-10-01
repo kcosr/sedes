@@ -36,4 +36,3 @@ describe("useTouchDensity", () => {
     expect(matchesTouchDensity()).toBe(false);
   });
 });
-

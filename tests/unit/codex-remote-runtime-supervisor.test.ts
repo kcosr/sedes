@@ -9,7 +9,7 @@ it("publishes reconciling and returns startup while the remote host is unreachab
   }));
   const supervisor = new CodexRemoteRuntimeSupervisor({
     scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "backend" },
-    provider: { acquire }, configuration: {} as CodexRuntimeConfiguration,
+    provider: { acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); }, acquire }, configuration: {} as CodexRuntimeConfiguration,
     serverRequests: new CodexServerRequestRouter(),
     receipts: { reserve: () => { throw new Error("unused"); }, recordOutcome: () => "untracked", pending: () => [], reconcileRecordedApplicationState: () => 0, compactRetiredRuntime: () => 0, releaseRejected: () => false },
   });
@@ -47,7 +47,7 @@ it("replaces the detached main presentation after a rejected Stop and reattaches
   const serverRequests = new CodexServerRequestRouter();
   const supervisor = new CodexRemoteRuntimeSupervisor({
     scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "backend" },
-    provider: { acquire }, configuration: {} as CodexRuntimeConfiguration, serverRequests,
+    provider: { acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); }, acquire }, configuration: {} as CodexRuntimeConfiguration, serverRequests,
     receipts: { reserve: () => { throw new Error("unused"); }, recordOutcome: () => "untracked", pending: () => [],
       reconcileRecordedApplicationState: () => 0, compactRetiredRuntime: () => 0, releaseRejected: () => false },
   });
@@ -105,7 +105,7 @@ it("logs the first rejected lease cause before discard and preserves the retry s
     controllerEpoch: 9, serviceIncarnation: "private-service-incarnation", closed, release }));
   const supervisor = new CodexRemoteRuntimeSupervisor({
     scope: { tenantId: "private-tenant", principalId: "private-principal", executionEnvironmentId: "remote", backendInstanceId: "backend" },
-    provider: { acquire }, configuration: {} as CodexRuntimeConfiguration, serverRequests: new CodexServerRequestRouter(),
+    provider: { acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); }, acquire }, configuration: {} as CodexRuntimeConfiguration, serverRequests: new CodexServerRequestRouter(),
     receipts: { reserve: () => { throw new Error("unused"); }, recordOutcome: () => "untracked", pending: () => [],
       reconcileRecordedApplicationState: () => 0, compactRetiredRuntime: () => 0, releaseRejected: () => false },
   });
@@ -145,7 +145,7 @@ it("restarts through the same carrier, closes the old client, and retires only c
   const compactRetiredRuntime = vi.fn(() => 0);
   const supervisor = new CodexRemoteRuntimeSupervisor({
     scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "backend" },
-    provider: { acquire }, configuration: {} as CodexRuntimeConfiguration,
+    provider: { acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); }, acquire }, configuration: {} as CodexRuntimeConfiguration,
     serverRequests: new CodexServerRequestRouter(),
     receipts: { reserve: () => { throw new Error("unused"); }, recordOutcome: () => "untracked", pending: () => [],
       reconcileRecordedApplicationState: () => 0, compactRetiredRuntime, releaseRejected: () => false },
@@ -192,7 +192,7 @@ it.each(["retained", "missing", "replaced_service"] as const)("recovers only the
   });
   const supervisor = new CodexRemoteRuntimeSupervisor({
     scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "backend" },
-    provider: { acquire }, configuration: {} as CodexRuntimeConfiguration, serverRequests: new CodexServerRequestRouter(),
+    provider: { acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); }, acquire }, configuration: {} as CodexRuntimeConfiguration, serverRequests: new CodexServerRequestRouter(),
     receipts: { reserve: () => { throw new Error("unused"); }, recordOutcome: () => "untracked", pending: () => [],
       reconcileRecordedApplicationState: () => 0, compactRetiredRuntime: () => 0, releaseRejected: () => false },
   });

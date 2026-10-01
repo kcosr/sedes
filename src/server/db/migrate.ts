@@ -7,6 +7,13 @@ import { nativeMcpAgentToolDefaultsMigration } from "./migrations/115-native-mcp
 import { abortedForkReservationsMigration } from "./migrations/116-aborted-fork-reservations.js";
 import { claudeForkChildrenMigration } from "./migrations/117-claude-fork-children.js";
 import { queuedInputFailureReasonMigration } from "./migrations/118-queued-input-failure-reason.js";
+import { openCodeBackendKindMigration } from "./migrations/120-opencode-backend-kind.js";
+import { openCodeNativeEvidenceMigration } from "./migrations/121-opencode-native-evidence.js";
+import { openCodeAgentToolDefaultsMigration } from "./migrations/122-opencode-agent-tool-defaults.js";
+import { openCodeExecutionSettingsMigration } from "./migrations/123-opencode-execution-settings.js";
+import { openCodeRecoveryRetirementMigration } from "./migrations/124-opencode-recovery-retirement.js";
+import { openCodeObservationCursorsMigration } from "./migrations/125-opencode-observation-cursors.js";
+import { conversationStopReceiptsMigration } from "./migrations/119-conversation-stop-receipts.js";
 import { claudeTurnFailureDetailsMigration } from "./migrations/109-claude-turn-failure-details.js";
 import { forkEnvironmentFingerprintsMigration } from "./migrations/108-fork-environment-fingerprints.js";
 import { scopedEnvironmentVariablesMigration } from "./migrations/107-scoped-environment-variables.js";
@@ -250,6 +257,13 @@ export const backendNormalizedMigrations = [
   abortedForkReservationsMigration,
   claudeForkChildrenMigration,
   queuedInputFailureReasonMigration,
+  conversationStopReceiptsMigration,
+  openCodeBackendKindMigration,
+  openCodeNativeEvidenceMigration,
+  openCodeAgentToolDefaultsMigration,
+  openCodeExecutionSettingsMigration,
+  openCodeRecoveryRetirementMigration,
+  openCodeObservationCursorsMigration,
 ] as const;
 
 export type DatabaseMigration = {

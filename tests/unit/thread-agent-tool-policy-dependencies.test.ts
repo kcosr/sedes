@@ -38,4 +38,11 @@ describe("thread agent tool backend eligibility", () => {
       ).toEqual([{ surface: "cli", modes: ["progressive", "individual"] }]);
     }
   });
+
+  it.each(["local", "ssh", "outbound"] as const)("offers OpenCode native and CLI presentations on %s, subject to runtime ownership", environmentKind => {
+    expect(eligibility.presentationOptions("opencode", environmentKind)).toEqual([
+      { surface: "native", modes: ["progressive"] },
+      { surface: "cli", modes: ["progressive", "individual"] },
+    ]);
+  });
 });

@@ -1,3 +1,5 @@
+// Shared immutable operation deadline keeps replays identical throughout this local suite.
+const interruptDeadlineAt = Date.now() + 3_600_000;
 import { createHash } from "node:crypto";
 import {
   chmod,
@@ -11,12 +13,16 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BackendError,
   type ConversationBinding,
+  type ConversationControl,
 } from "../../src/server/backends/contracts.js";
 import { GrokConversationBackendDriver } from "../../src/server/backends/grok/grok-conversation-driver.js";
+import { GrokSessionLifecycle } from "../../src/server/backends/grok/grok-session-lifecycle.js";
+import { GrokAcpConnection } from "../../src/server/backends/grok/grok-acp-connection.js";
+import { AcpBindingError, AcpDeliveryError } from "../../src/server/provider-protocol/bindings/acp-v1/index.js";
 import {
   parseGrokConversationBindingDetail,
   serializeGrokConversationBindingDetail,
@@ -364,7 +370,7 @@ describe("normalized Grok conversation driver", () => {
       ).resolves.toEqual({ accepted: true });
       await handle.interrupt({
         applicationOperationId: "interrupt-after-rename",
-        expectedBackendTurnId: submitted.backendTurnId!,
+        deadlineAt: interruptDeadlineAt,
       });
       expect(
         (await readState(fixtureState.workspace.canonicalPath)).sessions[0],
@@ -1779,7 +1785,35 @@ describe("normalized Grok conversation driver", () => {
     }
   });
 
-  it("interrupts only the exact active Grok turn and never re-sends against an adjacent turn", async () => {
+  it("publishes native control before failed initial history and retries on the same handle", async () => {
+    const sessionId = "45454545-3434-4343-8343-121212121212";
+    const fixtureState = await openDriver([{ ...session(sessionId, "Unavailable history"), nativeHistoryFailure: true }]);
+    let control: ConversationControl | undefined;
+    let stop: Promise<void> | undefined;
+    const handle = await fixtureState.driver.attach({
+      scope, workspace: fixtureState.workspace, binding: conversationBinding(sessionId),
+      opaqueBindingDetail: fixtureState.bindingDetail(sessionId),
+      onControlReady(value) {
+        control = value;
+        stop = value.interrupt({ applicationOperationId: "idle-before-history", deadlineAt: Date.now() + 1_000 });
+      },
+    });
+    try {
+      expect(control).toBeDefined();
+      await expect(stop).resolves.toBeUndefined();
+      await expect(handle.establishProjection({ signal: new AbortController().signal })).rejects.toBeDefined();
+      expect(control!.lifetime.aborted).toBe(false);
+      const state = await readState(fixtureState.workspace.canonicalPath);
+      state.sessions[0].nativeHistoryFailure = false;
+      await writeState(fixtureState.workspace.canonicalPath, state);
+      await expect(handle.establishProjection({ signal: new AbortController().signal })).resolves.toMatchObject({ snapshot: { runState: "idle" } });
+      expect((await readState(fixtureState.workspace.canonicalPath)).sessions[0].cancelCalls ?? 0).toBe(0);
+      await handle.close();
+      expect(control!.lifetime.aborted).toBe(true);
+    } finally { await handle.close().catch(() => undefined); await fixtureState.close(); }
+  });
+
+  it("stops current native Grok work and never re-sends an operation against an adjacent turn", async () => {
     const sessionId = "45454545-1111-4111-8111-454545454545";
     const fixtureState = await openDriver([
       {
@@ -1811,7 +1845,7 @@ describe("normalized Grok conversation driver", () => {
       const accepted = await handle.submit(submitInput());
       const interrupt = {
         applicationOperationId: "interrupt-operation",
-        expectedBackendTurnId: accepted.backendTurnId!,
+        deadlineAt: interruptDeadlineAt,
       };
       await expect(handle.interrupt(interrupt)).resolves.toBeUndefined();
       await expect(handle.reconcileInterrupt(interrupt)).resolves.toEqual({
@@ -1821,10 +1855,10 @@ describe("normalized Grok conversation driver", () => {
       await expect(
         handle.interrupt({
           ...interrupt,
-          expectedBackendTurnId: "grok-turn:other",
+          deadlineAt: interruptDeadlineAt + 1,
         }),
       ).rejects.toMatchObject({
-        backendCode: "grok_interrupt_replay_mismatch",
+        backendCode: "interrupt_replay_mismatch",
         crossedSubmissionBoundary: false,
       });
       await waitFor(async () => {
@@ -1855,16 +1889,13 @@ describe("normalized Grok conversation driver", () => {
       expect(JSON.stringify(relativeLocationTool)).toContain("src/example.ts");
       expect(events).toContain("run_state_changed");
       expect(events).toContain("turn_completed");
-      expect(runStates).toContain("stopping");
+      expect(runStates).toContain("idle");
       await expect(
         handle.interrupt({
           applicationOperationId: "stale-interrupt-operation",
-          expectedBackendTurnId: accepted.backendTurnId!,
+          deadlineAt: interruptDeadlineAt,
         }),
-      ).rejects.toMatchObject({
-        backendCode: "grok_interrupt_target_changed",
-        crossedSubmissionBoundary: false,
-      });
+      ).resolves.toBeUndefined();
 
       const adjacentInput = {
         ...submitInput(),
@@ -1876,10 +1907,7 @@ describe("normalized Grok conversation driver", () => {
       await expect(handle.submit(adjacentInput)).resolves.toMatchObject({
         accepted: true,
       });
-      await expect(handle.interrupt(interrupt)).rejects.toMatchObject({
-        backendCode: "grok_interrupt_target_changed",
-        crossedSubmissionBoundary: false,
-      });
+      await expect(handle.interrupt(interrupt)).resolves.toBeUndefined();
       await waitFor(async () => {
         const projection = await handle.establishProjection({
           signal: new AbortController().signal,
@@ -1907,7 +1935,26 @@ describe("normalized Grok conversation driver", () => {
     }
   });
 
-  it("prunes current interrupt evidence across more than 128 sequential turns", async () => {
+  it("accepts Stop after a native terminal without cancelling the still-draining prompt reply", async () => {
+    const sessionId = "abababab-1111-4111-8111-454545454545";
+    const fixtureState = await openDriver([{ ...session(sessionId, "Terminal draining"), promptDelayMs: 10, omitPromptResponse: true }]);
+    const handle = await fixtureState.driver.attach({ scope, workspace: fixtureState.workspace,
+      binding: conversationBinding(sessionId), opaqueBindingDetail: fixtureState.bindingDetail(sessionId) });
+    try {
+      const baseline = await handle.establishProjection({ signal: new AbortController().signal });
+      let terminalObserved!: () => void;
+      const terminal = new Promise<void>(resolve => { terminalObserved = resolve; });
+      baseline.subscribeFromNext(event => { if (event.event.type === "turn_completed") terminalObserved(); });
+      await handle.submit(submitInput());
+      await terminal;
+      const input = { applicationOperationId: "stop-terminal-draining", deadlineAt: Date.now() + 500 };
+      await expect(handle.interrupt(input)).resolves.toBeUndefined();
+      await expect(handle.reconcileInterrupt(input)).resolves.toEqual({ outcome: "accepted" });
+      expect((await readState(fixtureState.workspace.canonicalPath)).sessions[0].cancelCalls ?? 0).toBe(0);
+    } finally { await handle.close().catch(() => undefined); await fixtureState.close(); }
+  });
+
+  it("retains immutable interrupt evidence across more than 128 sequential turns", async () => {
     const sessionId = "45454545-3333-4333-8333-454545454545";
     const fixtureState = await openDriver([
       {
@@ -1924,7 +1971,7 @@ describe("normalized Grok conversation driver", () => {
     let firstInterrupt:
       | {
           readonly applicationOperationId: string;
-          readonly expectedBackendTurnId: string;
+          readonly deadlineAt: number;
         }
       | undefined;
     try {
@@ -1938,7 +1985,7 @@ describe("normalized Grok conversation driver", () => {
         });
         const interrupt = {
           applicationOperationId: `interrupt-many-${index}`,
-          expectedBackendTurnId: accepted.backendTurnId!,
+          deadlineAt: interruptDeadlineAt,
         };
         firstInterrupt ??= interrupt;
         await handle.interrupt(interrupt);
@@ -1952,10 +1999,7 @@ describe("normalized Grok conversation driver", () => {
           return projection.snapshot.runState === "idle";
         });
       }
-      await expect(handle.interrupt(firstInterrupt!)).rejects.toMatchObject({
-        backendCode: "grok_interrupt_target_changed",
-        crossedSubmissionBoundary: false,
-      });
+      await expect(handle.interrupt(firstInterrupt!)).resolves.toBeUndefined();
       expect(
         (await readState(fixtureState.workspace.canonicalPath)).sessions[0]
           .cancelCalls,
@@ -1966,68 +2010,70 @@ describe("normalized Grok conversation driver", () => {
     }
   }, 30_000);
 
-  it("retains only the current interrupt operation during one long turn", async () => {
-    const sessionId = "45454545-3434-4343-8343-454545454545";
-    const fixtureState = await openDriver([
-      {
-        ...session(sessionId, "Interrupt one turn many times"),
-        promptDelayMs: 30_000,
-        ignoreCancel: true,
-      },
-    ]);
-    const handle = await fixtureState.driver.attach({
-      scope,
-      workspace: fixtureState.workspace,
-      binding: conversationBinding(sessionId),
-      opaqueBindingDetail: fixtureState.bindingDetail(sessionId),
-    });
+  it("retains proven nonapplication when the actual cancel write is not sent, without replaying it", async () => {
+    const sessionId = "bbbbbbbb-3535-4353-8353-454545454545";
+    const fixtureState = await openDriver([{ ...session(sessionId, "Cancel not sent"), promptDelayMs: 30_000 }]);
+    const handle = await fixtureState.driver.attach({ scope, workspace: fixtureState.workspace,
+      binding: conversationBinding(sessionId), opaqueBindingDetail: fixtureState.bindingDetail(sessionId) });
+    const cancel = vi.spyOn(GrokAcpConnection.prototype, "cancelSession")
+      .mockRejectedValueOnce(new AcpDeliveryError("acp_binding_closed", "not_sent"));
     try {
-      const accepted = await handle.submit({
-        ...submitInput(),
-        applicationOperationId: "interrupt-plateau-submit",
-        mutationId: "interrupt-plateau-mutation",
-        reconciliationToken: "interrupt-plateau-token",
-        text: "remain active while interrupts repeat",
-      });
-      const first = {
-        applicationOperationId: "interrupt-plateau-0",
-        expectedBackendTurnId: accepted.backendTurnId!,
-      };
-      let latest = first;
-      for (let index = 0; index < 129; index += 1) {
-        latest = {
-          applicationOperationId: `interrupt-plateau-${index}`,
-          expectedBackendTurnId: accepted.backendTurnId!,
-        };
-        await expect(handle.interrupt(latest)).resolves.toBeUndefined();
-      }
+      await handle.submit(submitInput());
+      const input = { applicationOperationId: "cancel-not-sent", deadlineAt: Date.now() + 30_000 };
+      await expect(handle.interrupt(input)).rejects.toMatchObject({ category: "unavailable", crossedSubmissionBoundary: false, backendCode: "grok_interrupt_not_sent" });
+      await expect(handle.reconcileInterrupt(input)).resolves.toEqual({ outcome: "not_applied" });
+      await expect(handle.interrupt(input)).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+      expect(cancel).toHaveBeenCalledOnce();
+      expect((await readState(fixtureState.workspace.canonicalPath)).sessions[0].cancelCalls ?? 0).toBe(0);
 
-      await expect(handle.interrupt(latest)).resolves.toBeUndefined();
-      await expect(
-        handle.interrupt({
-          ...latest,
-          expectedBackendTurnId: "grok-turn:mismatch",
-        }),
-      ).rejects.toMatchObject({
-        backendCode: "grok_interrupt_replay_mismatch",
+      cancel.mockRestore();
+      await expect(handle.interrupt({ ...input, applicationOperationId: "fresh-stop" })).resolves.toBeUndefined();
+      expect((await readState(fixtureState.workspace.canonicalPath)).sessions[0].cancelCalls).toBe(1);
+    } finally { cancel.mockRestore(); await handle.close().catch(() => undefined); await fixtureState.close(); }
+  });
+
+  it.each([
+    ...(["acp_binding_protocol_violation", "acp_binding_capability_denied", "acp_binding_overloaded"] as const)
+      .map(code => ({ name: code, failure: new AcpBindingError(code) })),
+    { name: "completion delivery not_sent", failure: new AcpDeliveryError("acp_binding_closed", "not_sent") },
+  ])(
+    "retains uncertain Stop evidence when a post-cancel continuation fails with $name", async ({ failure }) => {
+      const sessionId = "bbbbbbbb-3434-4343-8343-454545454545";
+      const fixtureState = await openDriver([{ ...session(sessionId, "Post-cancel failure"), promptDelayMs: 30_000 }]);
+      const handle = await fixtureState.driver.attach({ scope, workspace: fixtureState.workspace,
+        binding: conversationBinding(sessionId), opaqueBindingDetail: fixtureState.bindingDetail(sessionId) });
+      const interrupt = GrokSessionLifecycle.prototype.interruptPrompt;
+      // Let the real peer receive cancel and settle the prompt, then fail its
+      // caller-facing continuation. The error class is no proof of non-dispatch.
+      const failing = vi.spyOn(GrokSessionLifecycle.prototype, "interruptPrompt").mockImplementation(async function (this: GrokSessionLifecycle, ...arguments_) {
+        await interrupt.apply(this, arguments_);
+        throw failure;
       });
-      await expect(
-        handle.interrupt({
-          ...first,
-          expectedBackendTurnId: "grok-turn:mismatch",
-        }),
-      ).rejects.toMatchObject({
-        backendCode: "grok_interrupt_target_changed",
-      });
-      expect(
-        (await readState(fixtureState.workspace.canonicalPath)).sessions[0]
-          .cancelCalls,
-      ).toBe(1);
-    } finally {
-      await handle.close().catch(() => undefined);
-      await fixtureState.close();
-    }
-  }, 30_000);
+      try {
+        await handle.submit(submitInput());
+        const input = { applicationOperationId: "post-cancel-failure", deadlineAt: Date.now() + 30_000 };
+        await expect(handle.interrupt(input)).rejects.toMatchObject({ category: "submission_unknown", crossedSubmissionBoundary: true });
+        await expect(handle.reconcileInterrupt(input)).resolves.toEqual({ outcome: "unknown" });
+        await expect(handle.interrupt(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+        expect((await readState(fixtureState.workspace.canonicalPath)).sessions[0].cancelCalls).toBe(1);
+      } finally { failing.mockRestore(); await handle.close().catch(() => undefined); await fixtureState.close(); }
+    },
+  );
+
+  it("does not treat a cancel write as acknowledgement or resend an unknown operation", async () => {
+    const sessionId = "45454545-3434-4343-8343-454545454545";
+    const fixtureState = await openDriver([{ ...session(sessionId, "Unacknowledged Stop"), promptDelayMs: 30_000, ignoreCancel: true }]);
+    const handle = await fixtureState.driver.attach({ scope, workspace: fixtureState.workspace,
+      binding: conversationBinding(sessionId), opaqueBindingDetail: fixtureState.bindingDetail(sessionId) });
+    try {
+      await handle.submit(submitInput());
+      const input = { applicationOperationId: "interrupt-unconfirmed", deadlineAt: Date.now() + 100 };
+      await expect(handle.interrupt(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+      await expect(handle.reconcileInterrupt(input)).resolves.toEqual({ outcome: "unknown" });
+      await expect(handle.interrupt(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+      expect((await readState(fixtureState.workspace.canonicalPath)).sessions[0].cancelCalls).toBe(1);
+    } finally { await handle.close().catch(() => undefined); await fixtureState.close(); }
+  });
 
   it("fences a terminal prompt whose RPC response never settles before an adjacent submit", async () => {
     const sessionId = "45454545-1212-4121-8121-454545454545";

@@ -85,7 +85,8 @@ class InProcessTransport implements Transport {
     mode: "progressive" | "individual",
   ) {
     this.server = new SedesMcpServer({
-      client,
+      resolveClient: () => client,
+      listClient: client,
       mode,
       serverVersion: "0.0.0-test",
       requestId: () => "tool-request-1",
@@ -125,7 +126,8 @@ async function connect(
 function raw(client: SedesToolClient = fakeClient(), mode: "progressive" | "individual" = "individual") {
   const replies: unknown[] = [];
   const server = new SedesMcpServer({
-    client,
+    resolveClient: () => client,
+    listClient: client,
     mode,
     serverVersion: "0.0.0-test",
     send: async (message) => {
@@ -542,4 +544,31 @@ describe("sedes mcp server", () => {
       error: { code: -32_603, message: "Sedes tools are unavailable (transport_error)." },
     });
   });
+});
+
+it("resolves immutable per-call clients under interleaved shared-session calls", async () => {
+  const first = fakeClient(catalog(["thread.status"]));
+  const second = fakeClient(catalog(["agent.context"]));
+  const replies: any[] = [];
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const server = new SedesMcpServer({ mode: "progressive", serverVersion: "test", listClient: fakeClient(),
+    resolveClient: async ({ metadata }) => {
+      if (metadata?.session === "a") { await pending; return first; }
+      if (metadata?.session === "b") return second;
+      throw new SedesToolApiError("permission_denied", "Unmapped session.", false);
+    }, send: async message => { replies.push(message); } });
+  const send = (id: number, method: string, params: unknown) => server.receive(JSON.stringify({ jsonrpc: "2.0", id, method, params }));
+  send(1, "initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1" } });
+  await vi.waitFor(() => expect(replies).toHaveLength(1));
+  send(2, "tools/call", { name: "sedes_catalog", arguments: { action: "list" }, _meta: { session: "a" } });
+  send(3, "tools/call", { name: "sedes_catalog", arguments: { action: "list" }, _meta: { session: "b" } });
+  send(4, "tools/call", { name: "sedes_catalog", arguments: { action: "list" } });
+  await vi.waitFor(() => expect(replies).toHaveLength(3)); release();
+  await vi.waitFor(() => expect(replies).toHaveLength(4));
+  expect(JSON.stringify(replies.find(reply => reply.id === 2))).toContain("thread.status");
+  expect(JSON.stringify(replies.find(reply => reply.id === 2))).not.toContain("agent.context");
+  expect(JSON.stringify(replies.find(reply => reply.id === 3))).toContain("agent.context");
+  expect(replies.find(reply => reply.id === 4).result.isError).toBe(true);
+  await server.close();
 });

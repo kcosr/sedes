@@ -1,4 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import { isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,28 +34,28 @@ function walk(node, visit) {
 }
 
 /** Parse executable JS, never strings/comments or erased TypeScript imports. */
-export function discoverJavaScriptPackages(source, relativePath) {
+export function discoverJavaScriptEntrypoints(source, relativePath) {
   const ast = parse(source, { ecmaVersion: "latest", sourceType: "module", allowHashBang: true });
-  const packages = new Set();
+  const entrypoints = new Map();
   const computed = [];
   let piAnchor = false;
   let piImagePath = false;
-  const include = (argument, node) => {
+  const include = (argument, node, kind = "import") => {
     const specifier = literalString(argument);
     if (specifier === undefined) { computed.push({ argument, node }); return; }
     const name = packageName(specifier);
-    if (name) packages.add(name);
+    if (name) entrypoints.set(`${kind}:${specifier}`, { package: name, specifier, kind });
   };
   walk(ast, (node) => {
     if (["ImportDeclaration", "ExportNamedDeclaration", "ExportAllDeclaration"].includes(node.type) && node.source) include(node.source, node);
     if (node.type === "ImportExpression") include(node.source, node);
     if (node.type === "CallExpression") {
       const callee = node.callee;
-      if (callee.type === "Identifier" && callee.name === "require") include(node.arguments[0], node);
+      if (callee.type === "Identifier" && callee.name === "require") include(node.arguments[0], node, "require");
       if (callee.type === "MemberExpression" && !callee.computed && callee.property.name === "resolve") {
         const object = callee.object;
         if ((object.type === "Identifier" && object.name === "require") || object.type === "MetaProperty" && object.meta.name === "import") {
-          include(node.arguments[0], node);
+          include(node.arguments[0], node, object.type === "MetaProperty" ? "resolve_import" : "resolve_require");
           if (object.type === "MetaProperty" && literalString(node.arguments[0]) === piPackage) piAnchor = true;
         }
       }
@@ -72,7 +72,11 @@ export function discoverJavaScriptPackages(source, relativePath) {
       && argument.property.name === "href" && piAnchor && piImagePath && computed.length === 1;
     if (!expectedPiImport) throw new Error(`server_runtime_computed_import_unreviewed:${relativePath}:${node.start}`);
   }
-  return [...packages].sort();
+  return [...entrypoints.values()].sort((a, b) => a.specifier.localeCompare(b.specifier) || a.kind.localeCompare(b.kind));
+}
+
+export function discoverJavaScriptPackages(source, relativePath) {
+  return [...new Set(discoverJavaScriptEntrypoints(source, relativePath).map(entry => entry.package))].sort();
 }
 
 async function filesUnder(directory) {
@@ -85,7 +89,7 @@ async function filesUnder(directory) {
   return files.sort();
 }
 
-export async function discoverRuntimePackages(baseDirectory, { typescript = false } = {}) {
+export async function discoverRuntimeEntrypoints(baseDirectory, { typescript = false } = {}) {
   const found = new Map();
   for (const directory of sourceDirectories) {
     for (const filename of await filesUnder(path.join(baseDirectory, directory))) {
@@ -93,13 +97,30 @@ export async function discoverRuntimePackages(baseDirectory, { typescript = fals
       const relativePath = path.relative(baseDirectory, filename).split(path.sep).join("/");
       let source = await readFile(filename, "utf8");
       if (typescript) source = (await transform(source, { loader: "ts", target: "esnext", format: "esm" })).code;
-      for (const name of discoverJavaScriptPackages(source, relativePath)) {
-        if (!found.has(name)) found.set(name, []);
-        found.get(name).push(relativePath);
+      for (const entry of discoverJavaScriptEntrypoints(source, relativePath)) {
+        const key = `${entry.kind}:${entry.specifier}`;
+        if (!found.has(key)) found.set(key, { ...entry, files: [] });
+        found.get(key).files.push(relativePath);
       }
     }
   }
-  return Object.fromEntries([...found].sort(([a], [b]) => a.localeCompare(b)));
+  return [...found.values()].sort((a, b) => a.specifier.localeCompare(b.specifier) || a.kind.localeCompare(b.kind));
+}
+
+export async function discoverRuntimePackages(baseDirectory, options = {}) {
+  const found = new Map();
+  for (const entry of await discoverRuntimeEntrypoints(baseDirectory, options)) {
+    if (!found.has(entry.package)) found.set(entry.package, new Set());
+    for (const filename of entry.files) found.get(entry.package).add(filename);
+  }
+  return Object.fromEntries([...found].sort(([a], [b]) => a.localeCompare(b)).map(([name, files]) => [name, [...files].sort()]));
+}
+
+/** Generate from the copied payload; installed verification needs no build parser. */
+export async function writeRuntimeEntrypoints(packageRoot) {
+  const entrypoints = (await discoverRuntimeEntrypoints(path.join(packageRoot, "dist")))
+    .map(({ package: name, specifier, kind }) => ({ package: name, specifier, kind }));
+  await writeFile(path.join(packageRoot, "runtime-entrypoints.json"), `${JSON.stringify({ version: 1, entrypoints }, null, 2)}\n`);
 }
 
 export function assertRuntimeManifest({ rootManifest, runtimeManifest, lock, discovered }) {

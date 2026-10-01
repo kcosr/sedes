@@ -43,6 +43,7 @@ const sourceThreadIds: Record<BackendKind, string> = {
   codex_app_server: "019196f7-a0a8-7bc4-a89b-8cf013978411",
   claude_agent_sdk: "019196f7-a0a8-7bc4-a89b-8cf013978412",
   grok_build: "019196f7-a0a8-7bc4-a89b-8cf013978413",
+  opencode: "019196f7-a0a8-7bc4-a89b-8cf013978414",
 };
 const targetThreadId = "019196f7-a0a8-7bc4-a89b-8cf013978420";
 const childThreadId = "019196f7-a0a8-7bc4-a89b-8cf013978421";

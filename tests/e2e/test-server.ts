@@ -3563,6 +3563,11 @@ async function main(): Promise<void> {
   const database = startup.database;
   const usage = new UsageService(database, {enabled: true});
   const configurationFixture = initializeDatabaseConfigurationFixture(database, backendConfiguration, { sourceLabel: "scripted-e2e-configuration" });
+  // Configuration-only OpenCode browser coverage may save this exact approved
+  // reference. No credential value or native runtime is provisioned.
+  configurationFixture.repository.approveSecret(configurationFixture.scope, configuredTarget.executionEnvironmentId, {
+    source: "environment", variable: "SEDES_OPENCODE_QUALIFICATION_PASSWORD",
+  });
   const notifications = new NotificationService({
     repository: new NotificationRepository(database),
   });

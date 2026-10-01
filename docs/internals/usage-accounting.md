@@ -318,6 +318,29 @@ clients; it advances atomically with changed reports.
 | Codex subagents | Each child's cumulative lifetime counter under the root thread | Included once in the root session with a main/subagent breakdown | Never allocated to parent turns | Not reported; no cost | None |
 | Claude | Per-query cumulative `modelUsage` checkpoints and the query cost estimate; per-turn result usage; main-loop assistant messages | Sum of query epochs' latest checkpoints, each counted from its reported baseline | Result `usage` as `main_loop`; messages until the result arrives | Reported per model; SDK cumulative estimate | Applied effort for the confirmed model's row |
 | Grok | None; declares `usageAccounting: "unsupported"` | Unsupported | Unsupported | — | — |
+| OpenCode v2 | Persisted native lifetime checkpoint, plus surviving assistant and terminal compaction history | Latest main-session checkpoint, with explicit child/model coverage limits | Native busy-period message allocations (`main_loop`); no additional session charge | Native message model when available; native catalog USD cost estimate | No inferred model or effort on the lifetime counter |
+
+OpenCode v2 capture is opt-in through the same installation gate. Its persisted
+counter includes native title and compaction work, stays unchanged by revert,
+and excludes child sessions. Sedes keeps one shared capture per admitted native
+client/binding across actor and short-lived read handles. Serialized, coalesced
+counter reads prevent competing publications; reconnect retains one durable
+accounting epoch. Ephemeral `session.usage.updated` events trigger a fresh native
+counter read, including work that creates no ordinary transcript message.
+
+Only a private accepted Sedes creation receipt proves a root's zero baseline.
+Other imports start at the first observed counter with `unknown_baseline` and
+charge later increments. Native fork/child history can contain copied work, so
+Sedes withholds those turn allocations and records inherited attribution limits.
+Ordinary surviving assistant/compaction allocations never add to the session
+checkpoint. Revert can remove historical detail without subtracting recorded
+work. Missing metrics remain absent; explicit native zeros are SDK-normalized
+and do not prove a provider-reported zero. Input combines uncached/cache buckets,
+output combines visible/reasoning buckets, and request counts remain unknown.
+The native lifetime counter has no proved usage timestamp or model breakdown;
+its observations carry neither fabricated timing nor desired-model attribution.
+Costs are native USD estimates, not a bill. Capture errors never retry provider
+work or prevent normal conversation controls.
 
 Epochs: Pi uses its native entry store, Codex a single native counter series
 per thread, and Claude one epoch per actual SDK query (its startup message

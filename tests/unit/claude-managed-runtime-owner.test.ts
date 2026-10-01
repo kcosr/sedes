@@ -17,9 +17,9 @@ import {
   CLAUDE_RUNTIME_CAPABILITY_ID,
   CLAUDE_RUNTIME_MAJOR_VERSION,
   claudeRuntimeHostOperations,
-  registerClaudeRuntimeV1WorkerOperations,
-  type ClaudeRuntimeV1WorkerHandlers,
-} from "../../src/server/backends/claude/worker/claude-runtime-v1.js";
+  registerClaudeRuntimeV2WorkerOperations,
+  type ClaudeRuntimeV2WorkerHandlers,
+} from "../../src/server/backends/claude/worker/claude-runtime-v2.js";
 
 const scope = Object.freeze({
   tenantId: "tenant-1",
@@ -335,7 +335,7 @@ function memoryWorkerGeneration(
     }),
   });
   const registry = new SidecarOperationRegistry();
-  registerClaudeRuntimeV1WorkerOperations(registry, lifecycleHandlers());
+  registerClaudeRuntimeV2WorkerOperations(registry, lifecycleHandlers());
   registerControlV2Operations(registry, {
     buildId: artifact.buildId,
     artifactSha256: artifact.artifactSha256,
@@ -362,7 +362,7 @@ function memoryWorkerGeneration(
   return { stream, finish };
 }
 
-function lifecycleHandlers(): ClaudeRuntimeV1WorkerHandlers {
+function lifecycleHandlers(): ClaudeRuntimeV2WorkerHandlers {
   const unused = () => {
     throw new Error("owner_lifecycle_unexpected_operation");
   };
@@ -380,6 +380,7 @@ function lifecycleHandlers(): ClaudeRuntimeV1WorkerHandlers {
     openQuery: unused,
     sendQuery: unused,
     interruptQuery: unused,
+    interruptDisposition: unused,
     cancelQueryInput: unused,
     setQueryModel: unused,
     setQueryEffort: unused,

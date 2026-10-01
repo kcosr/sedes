@@ -8,7 +8,7 @@ import type { ClaudeRuntimeSessionOptions } from "../../src/server/backends/clau
 import {
   claudeRuntimeCanUseToolOperation,
   claudeRuntimePermissionResponseAckOperation,
-} from "../../src/server/backends/claude/worker/claude-runtime-v1.js";
+} from "../../src/server/backends/claude/worker/claude-runtime-v2.js";
 
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const STARTUP_UUID = "22222222-2222-4222-8222-222222222222";

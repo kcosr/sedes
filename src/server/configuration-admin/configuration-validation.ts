@@ -1,3 +1,4 @@
+import { parseOpenCodeBackendConfiguration } from "../backends/opencode/opencode-backend-configuration.js";
 import { mergeEnvironmentVariableOverrides } from "../../shared/protocol/environment-variables.js";
 import path from "node:path";
 import { configurationDocumentSchema, type ConfigurationDocument } from "../../shared/protocol/configuration-admin.js";
@@ -21,14 +22,14 @@ export function validateConfigurationDocument(value: unknown): ConfigurationDocu
     }
   }
   for (const backend of document.backends) {
-    if (Object.keys(backend.environmentVariables?.startup ?? {}).length > 0 && (backend.kind === "pi" || (backend.kind === "codex_app_server" && backend.moduleConfiguration.connection.ownership === "external"))) {
+    if (Object.keys(backend.environmentVariables?.startup ?? {}).length > 0 && (backend.kind === "pi" || ((backend.kind === "codex_app_server" || backend.kind === "opencode") && backend.moduleConfiguration.connection.ownership === "external"))) {
       throw new DomainError("bad_request", "Startup variables require a provider process launched by Sedes. Configure external provider processes at their owner.");
     }
     const targets = document.targets.filter(target => target.backendInstanceId === backend.id);
     for (const target of targets) {
       const host = document.executionEnvironments.find(item => item.id === target.executionEnvironmentId);
       mergeEnvironmentVariableOverrides(host?.environmentVariables?.execution ?? {}, backend.environmentVariables?.execution ?? {});
-      if (backend.kind !== "pi" && (backend.kind !== "codex_app_server" || backend.moduleConfiguration.connection.ownership === "owned")) {
+      if (backend.kind !== "pi" && ((backend.kind !== "codex_app_server" && backend.kind !== "opencode") || backend.moduleConfiguration.connection.ownership === "owned")) {
         mergeEnvironmentVariableOverrides(host?.environmentVariables?.startup ?? {}, backend.environmentVariables?.startup ?? {});
       }
     }
@@ -44,6 +45,7 @@ export function validateConfigurationDocument(value: unknown): ConfigurationDocu
         case "claude_agent_sdk": parseClaudeBackendConfiguration(input); break;
         case "grok_build": parseGrokBackendConfiguration({ ...input, backend: { ...input.backend, kind: "grok_build" },
           connections: input.connections.map(connection => ({ ...connection, kind: "grok_acp" as const })) }); break;
+        case "opencode": parseOpenCodeBackendConfiguration(input); break;
         case "pi": compileBackendModelPolicy(backend.modelPolicy, "provider_model_effort"); break;
       }
     } catch {

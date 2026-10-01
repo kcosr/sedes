@@ -24,6 +24,7 @@ const canonicalInputs = {
   "src/cli/sedes-cli.ts": {},
   "src/cli/sedes-mcp.ts": {},
   "src/cli/sedes-mcp-server.ts": {},
+  "src/cli/sedes-opencode-mcp.ts": {},
   "src/cli/sedes-tool-local-client.ts": {},
   "src/server/composer-attachments/execution-attachment-staging-engine.ts": {},
   "src/server/workspace-files/workspace-files-engine.ts": {},
@@ -43,6 +44,7 @@ const canonicalOutputInputs = {
   "src/cli/sedes-cli.ts": { bytesInOutput: 1 },
   "src/cli/sedes-mcp.ts": { bytesInOutput: 1 },
   "src/cli/sedes-mcp-server.ts": { bytesInOutput: 1 },
+  "src/cli/sedes-opencode-mcp.ts": { bytesInOutput: 1 },
   "src/cli/sedes-tool-local-client.ts": { bytesInOutput: 1 },
   "src/server/composer-attachments/execution-attachment-staging-engine.ts": {
     bytesInOutput: 1,
@@ -65,6 +67,15 @@ const ownershipMetafile = (inputs, outputInputs = canonicalOutputInputs) => ({
 });
 assertSidecarSourceOwnership(
   ownershipMetafile(canonicalInputs),
+  repositoryRoot,
+  syntheticOutputPath,
+);
+assertSidecarSourceOwnership(
+  ownershipMetafile({
+    ...canonicalInputs,
+    "src/server/backends/contracts.ts": {},
+    "src/server/backends/claude/claude-interrupt-operation.ts": {},
+  }),
   repositoryRoot,
   syntheticOutputPath,
 );
@@ -115,10 +126,14 @@ expectOwnershipFailure(
 );
 for (const forbiddenSource of [
   "src/server/db/repositories/inventory-repository.ts",
+  "src/server/backends/opencode/opencode-backend-module.ts",
+  "src/server/backends/opencode/opencode-thread-repository.ts",
   "src/server/backends/pi/pi-sdk-session.ts",
   "src/client/workspace-files/WorkspaceFilesPanel.tsx",
   "src/server/normalized-app.ts",
   "src/server/runtime/backend-module-startup.ts",
+  "src/server/conversations/conversation-actor-manager.ts",
+  "src/server/backends/backend-runtime-registry.ts",
 ]) {
   expectOwnershipFailure(
     ownershipMetafile({

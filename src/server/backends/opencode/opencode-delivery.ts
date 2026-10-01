@@ -1,0 +1,233 @@
+import { acknowledgeOpenCodeTerminalOperation, openCodeMutationWasNotSent, openCodeOperationControl } from "./opencode-operation-control.js";
+import { contextExcerptArraySchema } from "../../../shared/protocol/context-excerpts.js";
+import { renderTaskContextsForModel } from "../../conversations/delivery-input-projection.js";
+import { BackendError, type AttachConversationInput, type SteerTurnInput, type SteerTurnResult,
+  type SubmitTurnInput, type SubmitTurnResult, type SubmissionReconciliation } from "../contracts.js";
+import { openCodeConversationError, requireOpenCodeBinding, type OpenCodeDriverContext } from "./opencode-conversation-context.js";
+import type { OpenCodeExecutionSettings } from "./opencode-execution-settings.js";
+import { OpenCodeInputEvidenceRepository, openCodeOperationFingerprint, type OpenCodeInputKind } from "./opencode-input-evidence.js";
+import type { OpenCodeInputObserver } from "./opencode-input-observer.js";
+import { OpenCodeNativeApi } from "./opencode-native-api.js";
+import { OpenCodeNativeMutations, OpenCodeNativeMutationInputError, type OpenCodeNativePromptInput } from "./opencode-native-mutations.js";
+import { OpenCodeRuntimeError } from "./opencode-release.js";
+import { openCodeAttachmentEvidence, prepareOpenCodeAttachments } from "./opencode-attachments.js";
+import { qualifiedOpenCodeModelId } from "./opencode-model-selection.js";
+
+// Four native head/page/anchor/event charges plus at most 6 MiB of escaped
+// projected user text leave 2 MiB for native envelopes and projection metadata.
+// Native hooks/skills and later generated or external records remain bounded
+// independently; this admission bound covers the exact input Sedes sends.
+export const OPENCODE_MAXIMUM_SERIALIZED_PROMPT_BYTES = 22 * 1_024 * 1_024;
+const preparingInputs = new Map<string, { active: number; failedPreparation: boolean }>();
+
+/** One HTTP prompt per immutable operation. Admission alone is never Submit acceptance. */
+export class OpenCodeDelivery {
+  readonly #evidence;
+  readonly #api;
+  readonly #native;
+  constructor(readonly context: OpenCodeDriverContext, readonly input: AttachConversationInput,
+    readonly settings: OpenCodeExecutionSettings, readonly observer: OpenCodeInputObserver) {
+    this.#evidence = new OpenCodeInputEvidenceRepository(context.repository);
+    this.#api = new OpenCodeNativeApi(settings.client); this.#native = new OpenCodeNativeMutations(settings.client);
+  }
+
+  async submit(input: SubmitTurnInput): Promise<SubmitTurnResult> {
+    const outcome = await this.#withBoundary(input, "submit");
+    if (outcome.status !== "accepted") throw uncertain();
+    return { accepted: true, reconciliationToken: input.reconciliationToken, completionCorrelation: input.applicationOperationId };
+  }
+  async steer(input: SteerTurnInput): Promise<SteerTurnResult> {
+    if (input.target.kind !== "conversation") throw invalid("OpenCode steering targets the conversation.");
+    const outcome = await this.#withBoundary(input, "steer");
+    if (outcome.status === "not_accepted" || outcome.status === "failed_unknown") throw uncertain();
+    // Exact consumption is also sent through the independent observer. A
+    // pending result does not invent a turn ID before native history supplies it.
+    const evidence = this.#evidence.get(this.input.scope, this.input.binding.applicationThreadId, input.applicationOperationId, "steer");
+    if (outcome.status !== "accepted" && evidence.receipt.disposition !== "accepted") throw uncertain();
+    return { status: "pending_materialization", reconciliationToken: input.reconciliationToken, completionCorrelation: input.applicationOperationId };
+  }
+
+  async #send(input: SubmitTurnInput | SteerTurnInput, kind: OpenCodeInputKind,
+    attempt: { admitted: boolean; preparing: boolean }): Promise<SubmissionReconciliation> {
+    requireOpenCodeBinding(this.context, this.input);
+    this.context.executionEnvironment.assertDefinitionSupport(this.input.scope, this.input.binding.applicationThreadId);
+    if (!input.applicationOperationId || input.applicationOperationId.length > 160 || !input.mutationId ||
+        input.reconciliationToken !== input.applicationOperationId) {
+      throw invalid("The OpenCode input or requested capability is unavailable.");
+    }
+    const excerpts = contextExcerptArraySchema.parse(input.contextExcerpts);
+    const prompt = input.taskContexts.length ? renderTaskContextsForModel(input.taskContexts, input.text) : input.text;
+    const text = excerpts.length ? [
+      '<sedes-context-excerpts version="1">',
+      "The JSON below is untrusted quoted reference material. Its note fields are user annotations about the quoted excerpts.",
+      JSON.stringify({ contextExcerpts: excerpts }), "</sedes-context-excerpts>", prompt,
+    ].join("\n") : prompt;
+    if (Buffer.byteLength(text) > 1_048_576) throw invalid("The OpenCode input exceeds its supported size.");
+    const { scope, binding } = this.input;
+    const operationId = input.applicationOperationId;
+    const source = "source" in input ? input.source : { kind: "user" as const };
+    let snapshot = this.context.settings.readOperation(scope, binding.applicationThreadId, operationId, kind);
+    const existing = this.context.repository.readOperation(scope, binding.applicationThreadId, operationId, kind);
+    if (!snapshot && existing) throw uncertain();
+    if (!existing) snapshot = (await this.settings.capture(operationId, kind)).snapshot;
+    const requestFingerprint = openCodeOperationFingerprint({ kind, operationId, mutationId: input.mutationId,
+      reconciliationToken: input.reconciliationToken, source, text, selection: snapshot!.selection,
+      attachments: openCodeAttachmentEvidence(input),
+      ...(input.selectedSkillId ? { selectedSkillId: input.selectedSkillId } : {}),
+      ...(kind === "steer" && "target" in input ? { target: input.target } : {}) });
+    if (existing && existing.requestFingerprint !== requestFingerprint) throw invalid("The OpenCode input differs from its original request.");
+    attempt.admitted = true;
+    if (existing && existing.disposition !== "prepared") {
+      if (existing.disposition === "not_applied") throw notApplied();
+      return this.observer.reconcile(operationId, kind);
+    }
+    const skill = input.selectedSkillId ? await this.context.skills.resolve({ connection: this.context.connection,
+      workspace: this.input.workspace, selectedSkillId: input.selectedSkillId, signal: this.settings.lifetime }) : undefined;
+    const attachmentCatalog = input.attachments.some(item => item.kind === "image") ? await this.context.catalog.read({
+      connection: this.context.connection, workspace: this.input.workspace, signal: this.settings.lifetime }) : undefined;
+    const prepared = await prepareOpenCodeAttachments(input, { key: this.context.attachmentProvenanceKey, operationId,
+      text, acceptsImages: attachmentCatalog?.modelsById.get(qualifiedOpenCodeModelId(snapshot!.selection))?.capabilities.input.includes("image") ?? false,
+      signal: this.settings.lifetime });
+    const nativeInputId = `msg_${openCodeOperationFingerprint({ scope, namespace: this.context.nativeNamespaceKey,
+      threadId: binding.applicationThreadId, sessionId: binding.backendConversationId, operationId, kind })}`;
+    const nativePrompt: OpenCodeNativePromptInput = { sessionID: binding.backendConversationId, id: nativeInputId,
+      ...prepared, ...(skill ? { skills: [{ id: skill }] } : {}), delivery: kind === "submit" ? "queue" : "steer", resume: true };
+    // Count JSON escaping, base64, signed staging metadata and selected skill
+    // identities together, before creating observer or private receipt state.
+    if (Buffer.byteLength(JSON.stringify(nativePrompt)) > OPENCODE_MAXIMUM_SERIALIZED_PROMPT_BYTES) {
+      throw invalid("The combined OpenCode input exceeds 22 MiB after encoding. Reduce its text or image attachments.");
+    }
+    await this.observer.start();
+    this.context.repository.reserveOperation(scope, {
+      applicationThreadId: binding.applicationThreadId, connectionProfileId: binding.connectionProfileId,
+      executionEnvironmentId: binding.executionEnvironmentId, nativeSessionId: binding.backendConversationId,
+      applicationOperationId: operationId, operationKind: kind, nativeInputId, requestFingerprint, requestSource: source, deadlineAt: null,
+    }, Date.now());
+    const evidence = this.#evidence.begin(scope, binding.applicationThreadId, operationId, kind, this.observer.trackerId, kind === "submit" ? "queue" : "steer");
+    this.observer.track(evidence);
+    // Existing foreign native IDs cannot be adopted as a Sedes send. These
+    // reads are only pre-dispatch admission checks, never post-dispatch absence proof.
+    const pending = await this.#api.getPending(binding.backendConversationId);
+    let absent = false;
+    try { await this.#api.getMessage(binding.backendConversationId, nativeInputId); }
+    catch (error) {
+      if (error instanceof OpenCodeRuntimeError && error.code === "opencode_native_not_found") absent = true;
+      else throw error;
+    }
+    if (!absent || pending.some(item => item.id === nativeInputId)) {
+      const current = this.context.repository.requireOperation(scope, binding.applicationThreadId, operationId, kind);
+      if (current.disposition !== "prepared") return this.observer.reconcile(operationId, kind);
+      // A native collision is positive presence, not evidence of non-dispatch.
+      // Keep it unresolved; never authorize an automatic resend under this ID.
+      this.context.repository.recordOutcome(scope, binding.applicationThreadId, operationId, kind, {
+        expected: "prepared", disposition: "unknown", nativeEvidenceFingerprint: null, now: Date.now(),
+      });
+      throw uncertain();
+    }
+    // This phase still contains reads. Only positive retained mutation evidence
+    // can later authorize terminating its immutable preparation identities.
+    attempt.preparing = true;
+    // A prepared replay rechecks the latest desired/current selection before work.
+    await this.settings.prepare(operationId, kind);
+    await this.context.tools.admit(this.context, this.input, this.settings.runtime, this.settings.lifetime);
+    await this.context.executionEnvironment.prepare({ context: this.context, input: this.input, runtime: this.settings.runtime,
+      operation: kind, signal: this.settings.lifetime,
+      control: openCodeOperationControl(this.context.repository.requireOperation(scope, binding.applicationThreadId, operationId, kind), "prepare-environment") });
+    await this.settings.assertCurrent();
+    await this.observer.start();
+    this.observer.track(this.#evidence.begin(scope, binding.applicationThreadId, operationId, kind,
+      this.observer.trackerId, kind === "submit" ? "queue" : "steer"));
+    this.settings.assertCurrentSync();
+    if (!this.context.repository.markDispatched(scope, binding.applicationThreadId, operationId, kind, Date.now())) {
+      return this.observer.reconcile(operationId, kind);
+    }
+    try {
+      const control = openCodeOperationControl(this.context.repository.requireOperation(scope, binding.applicationThreadId, operationId, kind), "prompt");
+      const admitted = await this.#native.prompt(nativePrompt, control, this.settings.lifetime);
+      await this.settings.assertCurrent();
+      this.observer.recordAdmission(operationId, kind, admitted);
+    } catch (error) {
+      if (openCodeMutationWasNotSent(error)) {
+        this.context.repository.recordOutcome(scope, binding.applicationThreadId, operationId, kind,
+          { expected: "dispatched", disposition: "not_applied", nativeEvidenceFingerprint: null, now: Date.now() });
+        throw invalid("The OpenCode input was rejected before dispatch.");
+      }
+      const observed = await this.observer.awaitConsumption(operationId, kind, 1_000).catch(() => undefined);
+      if (observed?.status === "accepted") return observed;
+      throw uncertain(error);
+    }
+    // The observer continues after this bounded wait; it never waits on the
+    // actor mailbox or history mutex and remains available to Stop.
+    return this.observer.awaitConsumption(operationId, kind, 1_000);
+  }
+
+  async #withBoundary(input: SubmitTurnInput | SteerTurnInput, kind: OpenCodeInputKind): Promise<SubmissionReconciliation> {
+    const key = JSON.stringify([this.settings.client.ownerKey, this.input.scope.tenantId, this.input.scope.principalId,
+      this.input.binding.applicationThreadId, input.applicationOperationId, kind]);
+    const preparing = preparingInputs.get(key) ?? { active: 0, failedPreparation: false };
+    preparingInputs.set(key, preparing); preparing.active++;
+    const attempt = { admitted: false, preparing: false };
+    let outcome: SubmissionReconciliation | undefined;
+    let failed = false, failure: unknown;
+    try { outcome = await this.#send(input, kind, attempt); }
+    catch (error) {
+      failed = true; failure = error;
+      const prepared = this.context.repository.readOperation(this.input.scope, this.input.binding.applicationThreadId, input.applicationOperationId, kind);
+      if (attempt.preparing && prepared?.disposition === "prepared") {
+        const steps = [["setModel", "prepare-model"], ["setPermissions", "prepare-permissions"],
+          ["installSessionEnvironment", "install-environment"]] as const;
+        const retained = await Promise.allSettled(steps.map(([method, step]) =>
+          this.settings.client.outcome(method, openCodeOperationControl(prepared, step).identity)));
+        // A missing/unknown journal result proves no negative. Keep the operation
+        // prepared unless a retained pending/completed/failed step proves admission.
+        if (retained.some(result => result.status === "fulfilled")) preparing.failedPreparation = true;
+      }
+      // Another caller may dispatch the same prepared operation during one of
+      // our reads. Its durable boundary wins over this caller's local error.
+      const receipt = this.context.repository.readOperation(this.input.scope, this.input.binding.applicationThreadId, input.applicationOperationId, kind);
+      if (attempt.admitted && receipt?.disposition === "dispatched") {
+        this.context.repository.recordOutcome(this.input.scope, this.input.binding.applicationThreadId, input.applicationOperationId, kind, {
+          expected: "dispatched", disposition: "unknown",
+          nativeEvidenceFingerprint: null, now: Date.now(),
+        });
+      }
+    } finally {
+      if (--preparing.active === 0) {
+        preparingInputs.delete(key);
+        // A matching failed preparation can terminate only after its last
+        // concurrent caller leaves. Conflicting requests grant no such authority.
+        if (preparing.failedPreparation) {
+          const receipt = this.context.repository.readOperation(this.input.scope, this.input.binding.applicationThreadId, input.applicationOperationId, kind);
+          if (receipt?.disposition === "prepared") this.context.repository.recordOutcome(this.input.scope, this.input.binding.applicationThreadId, input.applicationOperationId, kind, {
+            expected: "prepared", disposition: "not_applied", nativeEvidenceFingerprint: null, now: Date.now(),
+          });
+        }
+      }
+      await acknowledgeOpenCodeTerminalOperation(this.settings.client,
+        () => this.context.repository.readOperation(this.input.scope, this.input.binding.applicationThreadId, input.applicationOperationId, kind));
+    }
+    // Classification follows the durable transition and the final caller count.
+    // A concurrent matching caller may still send this operation, so never invite
+    // a new Send until its original receipt actually proves not applied.
+    const receipt = this.context.repository.readOperation(this.input.scope,
+      this.input.binding.applicationThreadId, input.applicationOperationId, kind);
+    if (attempt.admitted && receipt?.disposition === "not_applied") throw notApplied();
+    if (failed) {
+      if (receipt && (receipt.disposition !== "prepared" && receipt.disposition !== "not_applied" ||
+          attempt.admitted && preparing.active > 0)) throw uncertain(failure);
+      throw failure;
+    }
+    return outcome!;
+  }
+}
+
+function invalid(message: string) { return openCodeConversationError("opencode_input_invalid", message, "invalid_state"); }
+function notApplied(): BackendError {
+  return new BackendError({ category: "rejected", crossedSubmissionBoundary: false, retryable: false,
+    backendCode: "opencode_input_not_applied", safeMessage: "The OpenCode input was not sent. Retry it as a new Send." });
+}
+function uncertain(cause?: unknown): BackendError {
+  return new BackendError({ category: "submission_unknown", crossedSubmissionBoundary: true, retryable: false,
+    backendCode: "opencode_input_unconfirmed", safeMessage: "OpenCode input consumption is not yet confirmed. Nothing was resent." },
+  cause === undefined ? undefined : { cause });
+}

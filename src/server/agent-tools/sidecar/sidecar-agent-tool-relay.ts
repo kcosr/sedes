@@ -12,6 +12,9 @@ import {
 import type { SedesToolError } from "../contracts/agent-tool-contracts.js";
 import { CanonicalAgentToolRequestError } from "../invocation/canonical-inline-agent-tool-service.js";
 import type { EnvironmentScopedAgentToolSourceResolver } from "../application/database-agent-tool-source-authority.js";
+import { openCodeToolInvokeOperation } from "../../backends/opencode/opencode-tool-relay-wire.js";
+import { assertOpenCodeInvocationSource, runWithOpenCodeInvocation } from "../../backends/opencode/opencode-tool-invocation.js";
+import type { z } from "zod";
 
 export interface SidecarAgentToolRelayAuthority {
   readonly scope: RequestScope;
@@ -31,6 +34,7 @@ export function registerSidecarAgentToolRelayOperations(
     readonly authority: SidecarAgentToolRelayAuthority;
     readonly sources: EnvironmentScopedAgentToolSourceResolver;
     readonly tools: BackendAgentToolFacade;
+    readonly openCodeTools?: boolean;
   },
 ): void {
   const scope = Object.freeze({ ...input.authority.scope });
@@ -49,6 +53,7 @@ export function registerSidecarAgentToolRelayOperations(
     return {
       source: caller.source,
       adapter: caller.presentation === "mcp" ? ("mcp" as const) : ("cli" as const),
+      ...(caller.accessDecisionAuthority ? { accessDecisionAuthority: caller.accessDecisionAuthority } : {}),
     };
   };
 
@@ -84,14 +89,14 @@ export function registerSidecarAgentToolRelayOperations(
     },
   );
 
-  registry.register(
-    agentToolsInvokeOperation,
-    async (
-      { sourceCapability, toolId, schemaVersion, requestId, input: toolInput },
-      { signal },
-    ) => {
+  const invoke = async (
+    { sourceCapability, toolId, schemaVersion, requestId, input: toolInput }: z.infer<typeof agentToolsInvokeOperation.requestSchema>,
+    signal: AbortSignal,
+    validateSource?: (source: Awaited<ReturnType<typeof resolve>>["source"]) => void,
+  ) => {
       try {
-        const { source, adapter } = await resolve(sourceCapability, signal);
+        const { source, adapter, accessDecisionAuthority } = await resolve(sourceCapability, signal);
+        validateSource?.(source);
         assertOpen(signal);
         return {
           outcome: "ok" as const,
@@ -105,13 +110,19 @@ export function registerSidecarAgentToolRelayOperations(
               input: toolInput,
             },
             signal,
+            ...(accessDecisionAuthority ? { accessDecisionAuthority } : {}),
           }),
         };
       } catch (error) {
         return relayError(error);
       }
-    },
-  );
+  };
+  registry.register(agentToolsInvokeOperation, (request, { signal }) => invoke(request, signal, source => {
+    if (source.backendKind === "opencode") throw new BackendAgentToolRequestError({ code: "permission_denied", retryable: false,
+      message: "This tool request has no valid OpenCode invocation authority." });
+  }));
+  if (input.openCodeTools) registry.register(openCodeToolInvokeOperation, ({ stamp, request }, { signal }) =>
+    runWithOpenCodeInvocation(stamp, () => invoke(request, signal, source => assertOpenCodeInvocationSource(stamp, source))));
 }
 
 function assertOpen(signal: AbortSignal): void {

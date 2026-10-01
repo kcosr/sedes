@@ -12,7 +12,7 @@ import { EmptyState } from "../ui/empty-state.js";
 import { NativeSelect } from "../ui/native-select.js";
 import { StatusPill } from "../ui/status-pill.js";
 import { useTouchDensity } from "../../app/use-touch-density.js";
-import { backendEditors } from "./backend-editors.js";
+import { backendEditors, backendStopEffect } from "./backend-editors.js";
 import { followLink } from "../settings/SettingsNav.js";
 import { presentRuntime, worstStatus, type StatusPresentation } from "./runtime-presentation.js";
 import type { BackendDefinition, Configuration, ConfigurationSnapshot, EnvironmentDefinition } from "./types.js";
@@ -39,7 +39,7 @@ export function EnvironmentIcon({ kind }: { readonly kind: EnvironmentDefinition
 }
 
 export function backendBrand(kind: BackendDefinition["kind"]) {
-  return ({ pi: "pi", codex_app_server: "codex", claude_agent_sdk: "claude", grok_build: "grok" } as const)[kind];
+  return ({ pi: "pi", codex_app_server: "codex", claude_agent_sdk: "claude", grok_build: "grok", opencode: "opencode" } as const)[kind];
 }
 
 export function hostPlatform(platform: string): string {
@@ -72,7 +72,8 @@ export function environmentStatus(environment: EnvironmentDefinition, snapshot: 
 }
 
 export function backendStatus(backend: BackendDefinition, snapshot: ConfigurationSnapshot): StatusPresentation {
-  return presentRuntime(runtimeFor(snapshot, "backend", backend.id), { resourceKind: "backend", sidecar: false, enabled: backend.enabled }).pill;
+  const runtime = runtimeFor(snapshot, "backend", backend.id);
+  return presentRuntime(runtime, { resourceKind: "backend", sidecar: false, enabled: backend.enabled, stopEffect: backendStopEffect(backend, runtime) }).pill;
 }
 
 export function backendEnvironment(configuration: Configuration, backend: BackendDefinition): EnvironmentDefinition | undefined {

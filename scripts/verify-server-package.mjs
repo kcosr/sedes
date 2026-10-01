@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
 import { execFile, fork } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, open, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -10,23 +10,81 @@ import { verifyServerPayload } from './server-package-payload.mjs';
 import { assertPackageNodeVersion } from './package-node-version.mjs';
 
 const execute = promisify(execFile);
-const nativeProbe = `
+
+export async function readRuntimeEntrypoints(root) {
+  const file = await open(path.join(root, 'runtime-entrypoints.json'), 'r');
+  let encoded;
+  try {
+    assert.ok((await file.stat()).isFile(), 'Runtime entrypoint manifest must be a file');
+    const buffer = Buffer.alloc(1_048_577);
+    let bytes = 0;
+    while (bytes < buffer.length) {
+      const { bytesRead } = await file.read(buffer, bytes, buffer.length - bytes, bytes);
+      if (bytesRead === 0) break;
+      bytes += bytesRead;
+    }
+    assert.ok(bytes <= 1_048_576, 'Runtime entrypoint manifest exceeds its byte limit');
+    encoded = buffer.subarray(0, bytes).toString('utf8');
+  } finally { await file.close(); }
+  const value = JSON.parse(encoded);
+  assert.ok(value && typeof value === 'object' && !Array.isArray(value), 'Invalid runtime entrypoint manifest');
+  assert.deepEqual(Object.keys(value).sort(), ['entrypoints', 'version']);
+  assert.equal(value.version, 1, 'Unsupported runtime entrypoint manifest');
+  assert.ok(Array.isArray(value.entrypoints) && value.entrypoints.length <= 10_000, 'Invalid runtime entrypoint inventory');
+  const seen = new Set();
+  for (const entry of value.entrypoints) {
+    assert.ok(entry && typeof entry === 'object' && !Array.isArray(entry), 'Invalid runtime entrypoint');
+    assert.deepEqual(Object.keys(entry).sort(), ['kind', 'package', 'specifier']);
+    assert.ok(typeof entry.specifier === 'string' && entry.specifier.length <= 1_024 &&
+      /^(?:@[a-z0-9_.-]+\/)?[a-z0-9_.-]+(?:\/[A-Za-z0-9_@.+-]+)*$/u.test(entry.specifier) &&
+      entry.specifier.split('/').every(part => part !== '.' && part !== '..'), 'Invalid runtime package specifier');
+    const name = entry.specifier.startsWith('@') ? entry.specifier.split('/').slice(0, 2).join('/') : entry.specifier.split('/')[0];
+    assert.equal(entry.package, name, 'Runtime entrypoint package does not own its specifier');
+    assert.ok(['import', 'require', 'resolve_import', 'resolve_require'].includes(entry.kind), 'Invalid runtime import kind');
+    const key = `${entry.kind}:${entry.specifier}`;
+    assert.ok(!seen.has(key), 'Duplicate runtime entrypoint'); seen.add(key);
+  }
+  return value.entrypoints;
+}
+
+/** Run inside the selected package/runtime, respecting each actual export condition. */
+export function createRuntimeDependencyProbe(entrypoints) {
+  return `
+  const {createRequire} = await import('node:module');
+  const {realpathSync} = await import('node:fs');
+  const {fileURLToPath} = await import('node:url');
+  const path = await import('node:path');
+  const assert = (await import('node:assert/strict')).default;
+  const root = process.argv[1];
+  const requirePackage = createRequire(path.join(root, 'package.json'));
+  const manifest = requirePackage('./package.json');
+  const packageModules = path.join(realpathSync(root), 'node_modules') + path.sep;
+  const entrypoints = ${JSON.stringify(entrypoints.map(({ package: name, specifier, kind }) => ({ package: name, specifier, kind })))};
+  assert.deepEqual([...new Set(entrypoints.map(entry => entry.package))].sort(), Object.keys(manifest.dependencies).sort(),
+    'Packaged runtime imports do not match declared dependencies');
+  for (const entry of entrypoints) {
+    const commonjs = entry.kind === 'require' || entry.kind === 'resolve_require';
+    const resolved = realpathSync(commonjs ? requirePackage.resolve(entry.specifier) : fileURLToPath(import.meta.resolve(entry.specifier)));
+    assert.ok(resolved.startsWith(packageModules), 'Dependency resolves outside package: ' + entry.specifier);
+    const owner = realpathSync(path.join(packageModules, entry.package)) + path.sep;
+    assert.ok(owner.startsWith(packageModules) && resolved.startsWith(owner), 'Dependency resolves outside package: ' + entry.specifier);
+    if (entry.kind === 'require') requirePackage(entry.specifier);
+    else if (entry.kind === 'import') await import(entry.specifier);
+    else assert.ok(entry.kind === 'resolve_import' || entry.kind === 'resolve_require', 'Unknown runtime import kind');
+  }
+  `;
+}
+
+const nativeProbe = entrypoints => `
 import {createRequire} from 'node:module';
 const require = createRequire(import.meta.url);
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const {pathToFileURL, fileURLToPath} = require('node:url');
-const {realpathSync} = require('node:fs');
+const {pathToFileURL} = require('node:url');
 const root = process.argv[1];
 const requirePackage = require('node:module').createRequire(path.join(root, 'package.json'));
 (async () => {
-  const manifest = requirePackage('./package.json');
-  const packageModules = path.join(realpathSync(root), 'node_modules') + path.sep;
-  const dependencies = Object.keys(manifest.dependencies).map(name => {
-    const resolved = realpathSync(fileURLToPath(import.meta.resolve(name)));
-    assert.ok(resolved.startsWith(packageModules), 'Dependency resolves outside package: ' + name);
-    return resolved;
-  });
+  await (async () => { ${createRuntimeDependencyProbe(entrypoints)} })();
   const {openOverlayDatabaseConnection} = await import(pathToFileURL(path.join(root, 'dist/server/db/database.js')));
   const {initializeEmptyBackendNormalizedDatabase} = await import(pathToFileURL(path.join(root, 'dist/server/db/migrate.js')));
   const db = openOverlayDatabaseConnection(path.join(process.env.APP_STATE_DIR, 'probe.db'));
@@ -36,10 +94,9 @@ const requirePackage = require('node:module').createRequire(path.join(root, 'pac
     assert.ok(db.prepare('SELECT count(*) AS count FROM schema_migrations').get().count > 0);
     assert.equal(db.pragma('integrity_check', {simple:true}), 'ok');
   } finally { db.close(); }
-  for (const name of ['pi', 'codex', 'claude', 'grok']) {
+  for (const name of ['pi', 'codex', 'claude', 'grok', 'opencode']) {
     await import(pathToFileURL(path.join(root, 'dist/server/backends', name, name + '-backend-module.js')));
   }
-  for (const resolved of dependencies) await import(pathToFileURL(resolved));
   const requirePi = require('node:module').createRequire(import.meta.resolve('@earendil-works/pi-coding-agent'));
   const transformed = requirePi('esbuild').transformSync('const answer: number = 42', {loader:'ts'});
   assert.ok(transformed.code.includes('42'), 'Pi esbuild target executable failed');
@@ -61,6 +118,7 @@ export async function verifyRuntime(root, { nodeExecutable = process.execPath, e
   // aliases such as `current` before launching their executable entry points.
   root = await realpath(root);
   await verifyServerPayload(root, { allowRemoteSidecarTargets: electronRunAsNode });
+  const entrypoints = await readRuntimeEntrypoints(root);
   const systemRoot = process.env.SystemRoot ?? process.env.WINDIR;
   if (process.platform === 'win32' && (!systemRoot || !path.isAbsolute(systemRoot))) throw new Error('Windows verification requires SystemRoot');
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'sedes-pkg-'));
@@ -91,7 +149,7 @@ export async function verifyRuntime(root, { nodeExecutable = process.execPath, e
   try {
     await mkdir(env.APP_STATE_DIR);
     await writeFile(env.SEDES_CONFIG_FILE, JSON.stringify({schemaVersion:11, packagedClients:[], listen:{host:'127.0.0.1', port:0}}));
-    await execute(nodeExecutable, ['--input-type=module', '--eval', nativeProbe, root], {cwd:root, env, timeout:30_000, maxBuffer:4*1024*1024});
+    await execute(nodeExecutable, ['--input-type=module', '--eval', nativeProbe(entrypoints), root], {cwd:root, env, timeout:30_000, maxBuffer:4*1024*1024});
     for (const [artifact, args, expected] of [
       ['dist/sidecar/sedes', ['service'], 'sidecar_arguments_invalid'],
       ['dist/pi-sandbox-worker/sedes-pi-sandbox-worker.mjs', [], 'pi_sandbox_worker_arguments_invalid'],

@@ -24,6 +24,8 @@ export default defineConfig({
       "tests/real-codex-agent-tools/**",
       "tests/real-claude/**",
       "tests/real-grok/**",
+      "tests/real-opencode/**",
+      "tests/live-opencode/**",
       "**/node_modules/**",
       "dist/**",
     ],

@@ -891,7 +891,7 @@ describe("CodexBackendModule", () => {
     const acquire = vi.fn(async () => { throw new Error("unexpected_remote_acquisition"); });
     const runtime = prepared.createRuntime({
       ...context([connection("codex-default", executionEnvironmentId), connection("codex-disabled", executionEnvironmentId)], scope, instance(), executionEnvironmentId),
-      sidecarRuntime: { acquire },
+      sidecarRuntime: { acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); }, acquire },
     });
     const close = vi.spyOn(CodexRemoteRuntimeSupervisor.prototype, "close");
     const interrupt = vi.spyOn((runtime.driverFactory as CodexBackendDriverFactory).ownership, "interruptOwnedActiveTurns");

@@ -45,7 +45,7 @@ model ID, transport, or transcript wording.
 | Change class | Required scope |
 | --- | --- |
 | Private provider correction | Keep the code and fixtures inside that backend; confirm normalized output is unchanged or deliberately updated. |
-| Normalized contract change | Update the shared contract and audit all four compiled backends plus every browser/server consumer. |
+| Normalized contract change | Update the shared contract and audit all five compiled backends plus every browser/server consumer. |
 | Provider-feature envelope change | Update the registered server envelope, strict version/schema, client renderer, unknown-version behavior, and only the backend that owns it. |
 | Execution-environment or transport change | Audit local and SSH authority, target compatibility, lifecycle ownership, unavailable behavior, and sidecar implications. |
 | History, projection, or event change | Audit baseline/live handoff, ordering, identity, pagination, replay, resnapshot, cancellation, restart, and byte/count bounds. |

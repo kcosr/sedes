@@ -1,0 +1,66 @@
+{
+  "executionEnvironments": [
+    {
+      "id": "10000000-0000-4000-8000-000000000001",
+      "kind": "ssh",
+      "label": "OpenCode Linux host",
+      "workspaceRoots": [
+        "/srv/workspaces"
+      ],
+      "operations": {
+        "kind": "sidecar",
+        "enabledCapabilities": [
+          "directory_browser",
+          "workspace_files",
+          "workspace_tools",
+          "workspace_context",
+          "workspace_skills",
+          "composer_attachments",
+          "agent_tools_cli"
+        ]
+      },
+      "hostAlias": "opencode-host"
+    }
+  ],
+  "backends": [
+    {
+      "id": "opencode-v2",
+      "kind": "opencode",
+      "label": "OpenCode v2",
+      "enabled": true,
+      "modelPolicy": {
+        "type": "catalog"
+      },
+      "moduleConfiguration": {
+        "connection": {
+          "ownership": "owned",
+          "channel": {
+            "type": "process_stdio"
+          }
+        }
+      }
+    }
+  ],
+  "targets": [
+    {
+      "id": "opencode-target",
+      "kind": "opencode_http",
+      "label": "OpenCode",
+      "backendInstanceId": "opencode-v2",
+      "executionEnvironmentId": "10000000-0000-4000-8000-000000000001",
+      "enabled": true,
+      "moduleConfiguration": {
+        "defaults": {
+          "model": {
+            "type": "catalogDefault"
+          },
+          "variant": {
+            "type": "modelDefault"
+          }
+        }
+      }
+    }
+  ],
+  "defaultTargetId": "opencode-target",
+  "webSearch": null
+}

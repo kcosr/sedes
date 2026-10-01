@@ -85,6 +85,7 @@ export class CodexGoalSessionRegistry {
     readonly signal?: AbortSignal;
   }): Promise<CodexGoalProjectionRecord> {
     try {
+      input.signal?.throwIfAborted();
       const response = await input.client.request(
         codexThreadGoalGetMethod,
         { threadId: input.nativeThreadId },
@@ -93,6 +94,7 @@ export class CodexGoalSessionRegistry {
           ...(input.signal ? { signal: input.signal } : {}),
         },
       );
+      input.signal?.throwIfAborted();
       const state = projectCodexGoalGetResponse({
         response,
         expectedThreadId: input.nativeThreadId,
@@ -105,6 +107,9 @@ export class CodexGoalSessionRegistry {
         now: this.#now(),
       });
     } catch (error) {
+      // Cancelling this read supplies no new native Goal evidence. Keep the
+      // existing projection untouched and let the control caller stop work.
+      if (input.signal?.aborted) throw error;
       return this.store.withdraw(input.scope, {
         applicationThreadId: input.applicationThreadId,
         nativeThreadId: input.nativeThreadId,
@@ -242,6 +247,8 @@ export class CodexGoalSessionRegistry {
     readonly desired: CodexGoalDesiredPostcondition;
     readonly arguments: unknown;
     readonly currentState: CodexGoalStateV1;
+    readonly deadlineAt?: number;
+    readonly signal?: AbortSignal;
   }): Promise<CodexGoalNativeOutcome> {
     const available = availableCodexGoalActionIds(input.currentState);
     if (!available.includes(input.actionId)) {
@@ -270,13 +277,14 @@ export class CodexGoalSessionRegistry {
         const response = await input.client.request(
           codexThreadGoalClearMethod,
           { threadId: input.nativeThreadId },
-          { timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS },
+          goalRequestOptions(input),
         );
         if (response.cleared !== true) {
           return await this.#recoverAfterBoundary({
             client: input.client,
             nativeThreadId: input.nativeThreadId,
             desired: input.desired,
+            deadlineAt: input.deadlineAt, signal: input.signal,
             reason: "goal_clear_not_confirmed",
           });
         }
@@ -292,7 +300,7 @@ export class CodexGoalSessionRegistry {
       const response = await input.client.request(
         codexThreadGoalSetMethod,
         params,
-        { timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS },
+        goalRequestOptions(input),
       );
       const state = projectCodexNativeGoal({
         nativeGoal: response.goal,
@@ -323,6 +331,7 @@ export class CodexGoalSessionRegistry {
         client: input.client,
         nativeThreadId: input.nativeThreadId,
         desired: input.desired,
+        deadlineAt: input.deadlineAt, signal: input.signal,
         reason: withdrawReason(error),
       });
     }
@@ -333,12 +342,14 @@ export class CodexGoalSessionRegistry {
     readonly nativeThreadId: string;
     readonly desired: CodexGoalDesiredPostcondition;
     readonly reason: string;
+    readonly deadlineAt?: number;
+    readonly signal?: AbortSignal;
   }): Promise<CodexGoalNativeOutcome> {
     try {
       const response = await input.client.request(
         codexThreadGoalGetMethod,
         { threadId: input.nativeThreadId },
-        { timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS },
+        goalRequestOptions(input),
       );
       const observed = projectCodexGoalGetResponse({
         response,
@@ -437,4 +448,10 @@ function isPreBoundaryFailure(error: unknown): boolean {
     return error.delivery === "not_sent";
   }
   return false;
+}
+
+function goalRequestOptions(input: { deadlineAt?: number; signal?: AbortSignal }) {
+  const remaining = input.deadlineAt === undefined ? REQUEST_TIMEOUT_MILLISECONDS : input.deadlineAt - Date.now();
+  if (remaining <= 0 || input.signal?.aborted) throw new Error("codex_goal_deadline");
+  return { timeoutMilliseconds: Math.min(REQUEST_TIMEOUT_MILLISECONDS, remaining), signal: input.signal };
 }

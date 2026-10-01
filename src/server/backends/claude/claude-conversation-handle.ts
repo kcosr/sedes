@@ -48,7 +48,8 @@ import type {
   EstablishProjectionInput,
   HistoryPageInput,
   InteractionResponseInput,
-  InterruptTurnInput,
+  InterruptConversationInput,
+  ConversationControl,
   RegisteredBackendActionInput,
   SteerTurnInput,
   SteerTurnResult,
@@ -57,11 +58,11 @@ import type {
   Unsubscribe,
 } from "../contracts.js";
 import { BackendError } from "../contracts.js";
+import { ClaudeInterruptOperations, assertClaudeInterruptTime } from "./claude-interrupt-operation.js";
 import { claudeContextExcerptEnvelope } from "./claude-context-excerpts.js";
 import {
   assertClaudeHistorySession,
   assertClaudeMessageItemPayload,
-  CLAUDE_INTERRUPT_UNCONFIRMED_REASON,
   CLAUDE_PROCESS_LOST_REASON,
   ClaudeHistoryProjectionError,
   projectClaudeHistoryPageAtIndex,
@@ -110,9 +111,7 @@ const MAXIMUM_ACKNOWLEDGEMENT_WAIT_MS = 30_000;
 const MAXIMUM_SUBMISSION_HISTORY_READ_MS = 5_000;
 const MAXIMUM_REPLAY_RECORDS = 1_024;
 /** A Stop Claude acknowledged but never settled with a result ends after this. */
-const STOP_CONFIRMATION_TIMEOUT_MS = 30_000;
 /** Once Claude reports idle, a result it already emitted has this long to land. */
-const STOP_IDLE_GRACE_MS = 1_000;
 const CLAUDE_HANDLE_HISTORY_CURSOR_PREFIX = "claude-handle-history:v1:";
 const EFFORTS = new Set<EffortLevel>(["low", "medium", "high", "xhigh", "max"]);
 
@@ -208,6 +207,7 @@ export interface ClaudeConversationHandleInput {
   readonly onVersionAssessmentFailed?: () => void;
   readonly forkBoundaryAuthentication: ClaudeForkBoundaryAuthentication;
   readonly loadInitialMessages: () => Promise<readonly SessionMessage[]>;
+  readonly onControlReady?: (control: ConversationControl) => void;
   readonly launch?: "new" | "resume";
   readonly resumeSession?: boolean;
   readonly title?: string;
@@ -236,6 +236,7 @@ export interface ClaudeConversationHandleInput {
 
 /** One attached Sedes conversation over one warm official Agent SDK query. */
 export class ClaudeConversationHandle implements ConversationHandle {
+  readonly automaticEviction = "requires_quiescence" as const;
   readonly #usageAccounting: ClaudeUsageAccounting | undefined;
   readonly #usageTurnByMessageUuid = new Map<string, string>();
   readonly #usageTurnByInputUuid = new Map<string, string>();
@@ -292,7 +293,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
   #nativeTurnRoot: string | undefined;
   /** Steers Claude started since the last result, by the native turn root each joined. */
   readonly #steerStartsAwaitingResult = new Map<string, string>();
-  readonly #interrupts = new Map<string, string>();
+  readonly #interrupts = new ClaudeInterruptOperations<void>();
+  #controlLifetime = new AbortController();
+  #controlOwnerIdentity: string | undefined;
   readonly #renames = new Map<string, string>();
   readonly #partialItems = new Map<
     string,
@@ -323,12 +326,6 @@ export class ClaudeConversationHandle implements ConversationHandle {
   #startupSettled = false;
   /** A fresh launch's trailing unfinished turn, until Claude shows it is not running it. */
   #processLostTurnId: string | undefined;
-  /** Bounds a Stop that Claude acknowledged but has not settled with a result. */
-  #stopConfirmation: {
-    readonly backendTurnId: string;
-    readonly deadline: number;
-    readonly timer: ReturnType<typeof setTimeout>;
-  } | undefined;
   /** A live compact boundary; its summary is the next main-thread synthetic user row. */
   #liveCompaction: LiveCompaction | undefined;
   /** A live turn Claude started itself; it carries no Sedes input identity. */
@@ -352,6 +349,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
   #lastModelEvidence: string | undefined;
   #lastEffortEvidence: EffortLevel | null | undefined;
   readonly #ready: Promise<void>;
+  readonly #hydrateInitial: () => Promise<void>;
+  #hydration: Promise<void> | undefined;
+  #initialProjectionReady = false;
   #nextSequence = 0;
   #projectionEpoch = 0;
   #projectionClaimed = false;
@@ -468,6 +468,22 @@ export class ClaudeConversationHandle implements ConversationHandle {
       mode: input.agentToolCliMode,
       parentEnvironment: input.childEnvironment,
     });
+    const publishControl = () => {
+      if (this.#closed) return;
+      const generation = `claude:${this.binding.backendConversationId}:${this.#session.startupProbeUuid ?? this.#sessionGeneration}`;
+      if (this.#controlOwnerIdentity === generation && !this.#controlLifetime.signal.aborted) return;
+      this.#controlLifetime.abort();
+      this.#controlLifetime = new AbortController();
+      this.#controlOwnerIdentity = generation;
+      const lifetime = this.#controlLifetime.signal;
+      input.onControlReady?.({ generation, lifetime,
+        interrupt: async value => {
+          if (lifetime.aborted) throw unavailable("Claude control authority has ended.", "claude_control_closed");
+          return this.interrupt(value);
+        },
+        reconcileInterrupt: value => this.reconcileInterrupt(value),
+      });
+    };
     this.#session = input.runtimeClient.createSession({
       executionEnvironment: input.executionEnvironment,
       executablePath: input.executablePath,
@@ -528,6 +544,10 @@ export class ClaudeConversationHandle implements ConversationHandle {
         }
         return this.#usageAccounting?.deliveryCommitted === false ? false : undefined;
       },
+      onControlAuthorityChanged: () => {
+        this.#controlLifetime.abort();
+        void this.#ready.then(publishControl).catch(() => undefined);
+      },
       onFailure: (error) => {
         if (
           error instanceof Error &&
@@ -546,11 +566,6 @@ export class ClaudeConversationHandle implements ConversationHandle {
         if (this.#session.pendingBackgroundTaskIds === undefined) throw new Error("claude_background_attachment_state_incomplete");
         this.#backgroundActivity.restore(this.#session.backgroundActivity, this.#session.pendingBackgroundTaskIds);
       } else if (!this.#session.reattached && this.#backgroundActivity.snapshot().state === "unknown" && !this.#backgroundActivity.retirementBlocked) this.#backgroundActivity.reset();
-      const initialMessages = await input.loadInitialMessages();
-      this.#installInitialMessages(initialMessages);
-      // The first snapshot shows the newest images of the reads it holds;
-      // the rest follow as live updates.
-      await this.#publishWindowViewedImages();
       this.#effectiveModel =
         initialization.actualModel ?? desired.model ?? undefined;
       if (this.#effectiveModel) {
@@ -562,10 +577,6 @@ export class ClaudeConversationHandle implements ConversationHandle {
           "init",
         );
       }
-      this.#resolveInitialHistory();
-      await this.#session.flushMessages?.();
-      // Held output is applied, so Claude's own state report is current.
-      if (this.#session.reattached !== true) this.#watchProcessLostTurn();
       if (
         this.#session.reattached &&
         this.#session.confirmedEffort !== undefined
@@ -581,6 +592,20 @@ export class ClaudeConversationHandle implements ConversationHandle {
         }
       }
     });
+    this.#hydrateInitial = async () => {
+      await this.#ready;
+      this.#assertOpen();
+      const initialMessages = await input.loadInitialMessages();
+      this.#assertOpen();
+      this.#installInitialMessages(initialMessages);
+      await this.#publishWindowViewedImages();
+      this.#resolveInitialHistory();
+      await this.#session.flushMessages?.();
+      this.#assertOpen();
+      if (this.#session.reattached !== true) this.#watchProcessLostTurn();
+      this.#initialProjectionReady = true;
+    };
+    void this.#ready.then(publishControl).catch(() => undefined);
     // A persistent runtime owns the stable CLI ingress as well as the query.
     // Its failure callback fences service loss; an old SSH lease closing only
     // makes the ingress temporarily unavailable while that runtime reconnects.
@@ -634,6 +659,17 @@ export class ClaudeConversationHandle implements ConversationHandle {
     }
   }
 
+  async #ensureInitialProjection(): Promise<void> {
+    if (this.#initialProjectionReady) return;
+    await this.#ready;
+    const hydration = this.#hydration ??= this.#hydrateInitial();
+    try { await hydration; }
+    catch (error) {
+      if (this.#hydration === hydration) this.#hydration = undefined;
+      throw mapClaudeHistoryRequestError(error);
+    }
+  }
+
   get retirementBlocked(): boolean {
     return this.#backgroundActivity.retirementBlocked ||
       (!this.#closed && !this.#projectionInvalidated &&
@@ -645,7 +681,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     input: EstablishProjectionInput,
   ): Promise<EstablishedBackendProjection> {
     this.#assertOpen();
-    await this.#ready;
+    await this.#ensureInitialProjection();
     this.#assertOpen();
     if (input.signal.aborted) throw cancelled(input.signal.reason);
     this.#projectionEpoch += 1;
@@ -664,7 +700,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
 
   async history(input: HistoryPageInput): Promise<BackendHistoryPage> {
     this.#assertOpen();
-    await this.#ready;
+    await this.#ensureInitialProjection();
     input.signal?.throwIfAborted();
     try {
       const before =
@@ -727,7 +763,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     input: Parameters<ConversationHandle["locateTurn"]>[0],
   ): ReturnType<ConversationHandle["locateTurn"]> {
     this.#assertOpen();
-    await this.#ready;
+    await this.#ensureInitialProjection();
     input.signal?.throwIfAborted();
     try {
       const selectionInput = {
@@ -771,7 +807,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
 
   async backendCapabilities(): Promise<BackendCapabilityDocument> {
     this.#assertOpen();
-    await this.#ready;
+    await this.#ensureInitialProjection();
     return this.#capabilities();
   }
 
@@ -1290,132 +1326,34 @@ export class ClaudeConversationHandle implements ConversationHandle {
     };
   }
 
-  async interrupt(input: InterruptTurnInput): Promise<void> {
+  async interrupt(input: InterruptConversationInput): Promise<void> {
     this.#assertOpen();
-    const prior = this.#interrupts.get(input.applicationOperationId);
-    if (prior) {
-      if (prior !== input.expectedBackendTurnId) {
-        throw claudeError(
-          "rejected",
-          "The Claude interrupt was replayed for another turn.",
-          "claude_interrupt_replay_mismatch",
-        );
+    if (this.#controlLifetime.signal.aborted) throw unavailable("Claude control authority has ended.", "claude_control_closed");
+    const active = this.#activeBackendTurnId();
+    await this.#interrupts.run({ ...input, signal: input.signal ? AbortSignal.any([input.signal, this.#controlLifetime.signal]) : this.#controlLifetime.signal }, async signal => {
+      const bounded = { ...input, signal };
+      const withdraw = this.#session.cancelQueuedInput?.bind(this.#session);
+      if (withdraw) {
+        for (const operationId of this.#submissionsAwaitingStart()) {
+          assertClaudeInterruptTime(bounded);
+          try { await withdraw(operationId, bounded); }
+          catch { /* Only the exact cancelled lifecycle frame proves withdrawal. */ }
+        }
       }
-      return;
-    }
-    if (
-      this.#runState !== "running" ||
-      this.#activeBackendTurnId() !== input.expectedBackendTurnId
-    ) {
-      throw claudeError(
-        "invalid_state",
-        "The active Claude turn changed before interrupt.",
-        "claude_interrupt_target_changed",
-      );
-    }
-    // Stop first withdraws each input Sedes sent that Claude has not started,
-    // so none runs as the next turn. Claude's own queued work is left alone.
-    // A withdrawal is proven only by the input's own `cancelled` lifecycle
-    // frame, never by Claude's answer here or by the interrupt receipt; a
-    // failed request proves nothing. A local query lives exactly as long as
-    // this handle, so its inputs are this handle's to withdraw. A
-    // service-owned query's owner withdraws every unstarted input it holds
-    // when it handles the interrupt, including inputs an earlier attachment
-    // sent, so this handle sends no request of its own for them.
-    const withdraw = this.#session.cancelQueuedInput?.bind(this.#session);
-    if (withdraw) {
-      for (const operationId of this.#submissionsAwaitingStart()) {
-        try { await withdraw(operationId); }
-        catch { /* The input stays tracked; its outcome comes from evidence. */ }
-      }
-    }
-    await this.#session.interrupt();
-    rememberBounded(
-      this.#interrupts,
-      input.applicationOperationId,
-      input.expectedBackendTurnId,
-    );
-    // The native terminal result can arrive before the control response.
-    // Do not resurrect a settled turn (or mark a later turn as stopping).
-    if (this.#runState === "running" &&
-        this.#activeBackendTurnId() === input.expectedBackendTurnId) {
-      this.#setRunState("stopping");
-      // Claude reports every turn it runs; idle now means nothing was left
-      // to stop, so no result will follow. Otherwise bound the wait.
-      const idle = this.#providerState === "idle" && (this.#providerStateReported || this.#session.reattached !== true) &&
-        !this.#hasSubmissionAwaitingStart(true);
-      this.#awaitStopConfirmation(input.expectedBackendTurnId, idle ? STOP_IDLE_GRACE_MS : STOP_CONFIRMATION_TIMEOUT_MS);
-    }
-  }
-
-  /** A Stop ends at its result; this bounds one that never gets one. */
-  #awaitStopConfirmation(backendTurnId: string, delayMs: number): void {
-    this.#clearStopConfirmation();
-    const timer = setTimeout(() => {
-      if (this.#stopConfirmation?.timer !== timer) return;
-      this.#stopConfirmation = undefined;
-      this.#endUnconfirmedStop(backendTurnId);
-    }, delayMs);
-    timer.unref?.();
-    this.#stopConfirmation = { backendTurnId, deadline: Date.now() + delayMs, timer };
-  }
-
-  #clearStopConfirmation(): void {
-    if (!this.#stopConfirmation) return;
-    clearTimeout(this.#stopConfirmation.timer);
-    this.#stopConfirmation = undefined;
-  }
-
-  /**
-   * Ends a stopping turn that got no result. A turn Claude started itself
-   * ends without a receipt, as its result would; a Sedes turn records that
-   * Claude never confirmed the Stop.
-   */
-  #endUnconfirmedStop(backendTurnId: string): void {
-    if (this.#closed || this.#projectionInvalidated || this.#runState !== "stopping" ||
-        this.#activeBackendTurnId() !== backendTurnId) return;
-    this.#terminalResultRevision++;
-    if (this.#providerTurn) {
-      this.#endProviderTurn();
-      return;
-    }
-    const existing = this.#settings.findTerminalReceipt(this.#scope, {
-      applicationThreadId: this.binding.applicationThreadId, backendTurnId,
+      assertClaudeInterruptTime(bounded);
+      await this.#session.interrupt(bounded);
     });
-    if (existing) {
-      this.#setRunState(existing.status === "failed" ? "failed" : "idle");
-      return;
-    }
-    const previous = this.#projection;
-    const terminalAt = this.#now();
-    this.#settings.writeTerminalReceipt(this.#scope, this.binding.applicationThreadId, {
-      backendTurnId, status: "interrupted", providerTerminalReason: CLAUDE_INTERRUPT_UNCONFIRMED_REASON,
-      terminalAt, now: terminalAt,
-    });
-    this.#refreshProjection();
-    this.#emitProjectionDelta(previous.snapshot, this.#projection.snapshot, backendTurnId);
-    this.#setRunState("idle");
+    // Native results remain authoritative; never resurrect replaced/settled work.
+    if (Date.now() < input.deadlineAt && !input.signal?.aborted && !this.#closed &&
+        this.#initialProjectionReady && active !== undefined && this.#runState === "running" &&
+        this.#activeBackendTurnId() === active) this.#setRunState("stopping");
   }
 
-  async reconcileInterrupt(
-    input: InterruptTurnInput,
-  ): Promise<BackendMutationReconciliation> {
+  async reconcileInterrupt(input: InterruptConversationInput): Promise<BackendMutationReconciliation> {
     this.#assertOpen();
-    const prior = this.#interrupts.get(input.applicationOperationId);
-    if (prior) {
-      if (prior !== input.expectedBackendTurnId) {
-        throw claudeError(
-          "rejected",
-          "The Claude interrupt was replayed for another turn.",
-          "claude_interrupt_replay_mismatch",
-        );
-      }
-      return { outcome: "accepted" };
-    }
-    return this.#projection.snapshot.activeBackendTurnId ===
-      input.expectedBackendTurnId
-      ? { outcome: "unknown" }
-      : { outcome: "accepted" };
+    if (this.#interrupts.outcome(input.applicationOperationId) === "accepted") return { outcome: "accepted" };
+    if (Date.now() >= input.deadlineAt || input.signal?.aborted) return { outcome: "unknown" };
+    return { outcome: await this.#session.reconcileInterrupt?.(input) ?? "unknown" };
   }
 
   async perform(
@@ -1507,8 +1445,8 @@ export class ClaudeConversationHandle implements ConversationHandle {
   async close(options?: { readonly reason: "evicted" }): Promise<void> {
     if (this.#closed) return this.#closePromise;
     this.#closed = true;
+    this.#controlLifetime.abort();
     this.#viewedImages.close();
-    this.#clearStopConfirmation();
     this.#usageAccounting?.close();
     // Detaching first fences remote permission callbacks before the local
     // interaction bridge settles its waiters during main-server shutdown.
@@ -1926,6 +1864,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     this.#partialMessageId = undefined;
     this.#partialMessageSourceOrderBase = undefined;
     this.#projectionInvalidated = true;
+    this.#controlLifetime.abort();
     this.#usageAccounting?.close();
     this.#invalidateBackgroundActivity();
     this.#emit({
@@ -2193,13 +2132,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     // The durable steer record stays until reconciliation reports the input
     // not sent, so a lost handle leaves it unknown rather than untracked.
     submission.reject(claudeWithdrawnError());
-    // A Stop that was waiting on this input can settle with Claude's idle.
-    if (this.#stopConfirmation && this.#providerState === "idle" &&
-        (this.#providerStateReported || this.#session.reattached !== true) &&
-        !this.#hasSubmissionAwaitingStart(true) &&
-        this.#stopConfirmation.deadline > Date.now() + STOP_IDLE_GRACE_MS) {
-      this.#awaitStopConfirmation(this.#stopConfirmation.backendTurnId, STOP_IDLE_GRACE_MS);
-    }
+
   }
 
   #hasSubmissionAwaitingStart(includeSteering: boolean): boolean {
@@ -2269,11 +2202,6 @@ export class ClaudeConversationHandle implements ConversationHandle {
       this.#refreshProjection();
       this.#emitProjectionDelta(previous, this.#projection.snapshot);
     }
-    // A Stop of this turn stays in effect, bounded as before, for its own turn.
-    const stop = this.#stopConfirmation;
-    if (this.#runState === "stopping" && stop) {
-      this.#awaitStopConfirmation(this.#activeBackendTurnId() ?? stop.backendTurnId, Math.max(0, stop.deadline - Date.now()));
-    }
     this.#setRunState(this.#runState === "stopping" ? "stopping" : "running", true);
   }
 
@@ -2340,9 +2268,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
         // Claude finished work that produced no result, for example a drain
         // that did not query the model.
         this.#endProviderTurn();
-      } else if (this.#stopConfirmation && !this.#hasSubmissionAwaitingStart(true)) {
-        // Claude went idle after Stop; its result, if any, preceded this.
-        this.#awaitStopConfirmation(this.#stopConfirmation.backendTurnId, STOP_IDLE_GRACE_MS);
+
       }
     }
     if ((previous === "idle") !== (state === "idle")) {
@@ -2625,7 +2551,6 @@ export class ClaudeConversationHandle implements ConversationHandle {
   }
 
   #setRunState(state: BackendConversationSnapshot["runState"], republish = false): void {
-    if (state !== "stopping") this.#clearStopConfirmation();
     if (this.#runState === state && !republish) return;
     this.#runState = state;
     this.#emit({
@@ -3055,6 +2980,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     }
     this.#submissions.clear();
     this.#closed = true;
+    this.#controlLifetime.abort();
     // A failed attachment evicts: a remote owner retires the query once its
     // events are acknowledged and nothing is outstanding, so reopening starts
     // a fresh query instead of requiring a backend restart.

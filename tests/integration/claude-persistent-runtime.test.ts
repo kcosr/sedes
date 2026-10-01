@@ -1,3 +1,4 @@
+import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
 import { ClaudeConversationBackendDriver } from "../../src/server/backends/claude/claude-conversation-driver.js";
 import { ThreadMutationGateway } from "../../src/server/conversations/thread-mutation-gateway.js";
 import { ScopedThreadEventHubRegistry, ThreadRuntimeCoordinator } from "../../src/server/events/thread-runtime-coordinator.js";
@@ -21,7 +22,7 @@ import type { ExecutionEnvironmentChannelProvider } from "../../src/server/execu
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
 import { createSidecarAbandonmentArchive, type SidecarAbandonmentRecord } from "../../src/server/sidecar/sidecar-abandonment-archive.js";
 import type { SidecarRuntimeLease, SidecarRuntimeProvider } from "../../src/server/sidecar/runtime-channel.js";
-import { createClaudeFramedCarrier, createFakePersistentClaudeRuntime, FakePersistentClaudeSession } from "../helpers/persistent-claude-fixture.js";
+import { createFakePersistentClaudeRuntime, FakePersistentClaudeSession } from "../helpers/persistent-claude-fixture.js";
 
 const scope = { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "ssh-environment", backendInstanceId: "claude-remote" };
 const configuration = { ...scope, executablePath: "/provider/claude", configDirectory: "/provider/.claude", initializationTimeoutMs: 5_000 };
@@ -50,6 +51,7 @@ async function fixture(options: {
   });
   let current: SidecarRuntimeLease | undefined;
   const sidecarRuntime: SidecarRuntimeProvider = {
+    acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); },
     acquire: vi.fn(async signal => {
       signal?.throwIfAborted();
       if (!current) throw new Error("test_carrier_unavailable");
@@ -59,7 +61,7 @@ async function fixture(options: {
   const clients: ClaudePersistentRuntimeClient[] = [];
   const carriers: { close(): Promise<void> }[] = [];
   async function attach() {
-    const carrier = await createClaudeFramedCarrier();
+    const carrier = await createSidecarFramedCarrier();
     const controllerEpoch = services.attach(serviceConfiguration);
     const detach = registerClaudePersistentRuntimeHost({
       registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts, controllerEpoch,
@@ -132,7 +134,7 @@ function policyRefreshGateway(client: ClaudePersistentRuntimeClient, sessionId: 
     outputArtifacts: {}, agentToolSourceCapabilities: {}, agentTools: {}, childEnvironment: {},
   } as unknown as ConstructorParameters<typeof ClaudeConversationBackendDriver>[0]);
   const coordinator = new ThreadRuntimeCoordinator({
-    actors: { runWithRuntimeRetired: async (input: Parameters<import("../../src/server/conversations/conversation-actor-manager.js").ConversationActorManager["runWithRuntimeRetired"]>[0]) => { await input.detachCoordinatorRuntime(); return input.operation(); } },
+    actors: { captureUnprojectedGeneration: () => undefined, runWithRuntimeRetired: async (input: Parameters<import("../../src/server/conversations/conversation-actor-manager.js").ConversationActorManager["runWithRuntimeRetired"]>[0]) => { await input.detachCoordinatorRuntime(); return input.operation(); } },
     targets: { resolve: async () => ({ scope, binding, workspace, driver,
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) }) },
     bridge: {}, interactions: {}, hubs: new ScopedThreadEventHubRegistry(), retentionMilliseconds: 60_000,
@@ -149,7 +151,7 @@ function policyRefreshGateway(client: ClaudePersistentRuntimeClient, sessionId: 
     bindings: { database }, inventory: { database, assertWorkspaceActive: () => {},
       getThread: () => ({ thread: { availability: "available", backingState: "bound" }, inventory: { inventoryState: "active" } }) },
     lifecycle: {}, forks: { recoverActive: () => undefined }, queue: {},
-    operations: { database, findUncertainThreadOperation: () => undefined }, completions: { database },
+    operations: { database, findUncertainThreadOperation: () => undefined, expireInterrupts: () => [] }, completions: { database },
     queueGateway: {}, runtimes: coordinator, interactions: {}, presentation: {},
     agentToolPolicies: { database, get: () => policy, update }, actionPersistence: new Map(), publishThreadSnapshot: async () => {},
   } as unknown as ConstructorParameters<typeof ThreadMutationGateway>[0]);
@@ -496,9 +498,9 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
       if (operationId === withdrawn.operationId) await native.emit(lifecycle(sessionId, withdrawn.operationId, "cancelled"));
       return true;
     });
-    await remote.interrupt();
+    await remote.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000 });
     // A failed request does not block the interrupt, which comes last.
-    expect(native.cancelQueuedInput.mock.calls).toEqual([[withdrawn.operationId], [unconfirmed.operationId], [failing.operationId]]);
+    expect(native.cancelQueuedInput.mock.calls.map(([operationId]) => [operationId])).toEqual([[withdrawn.operationId], [unconfirmed.operationId], [failing.operationId]]);
     expect(native.interrupt).toHaveBeenCalledOnce();
     expect(Math.max(...native.cancelQueuedInput.mock.invocationCallOrder)).toBeLessThan(native.interrupt.mock.invocationCallOrder[0]!);
     // The interrupted turn closes the inputs it started with `cancelled` too.
@@ -547,14 +549,83 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
       await native.emit(lifecycle(sessionId, operationId, "cancelled"));
       return true;
     });
-    await replacement.interrupt();
-    expect(native.cancelQueuedInput.mock.calls).toEqual([[steer.operationId]]);
+    await replacement.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000 });
+    expect(native.cancelQueuedInput.mock.calls.map(([operationId]) => [operationId])).toEqual([[steer.operationId]]);
     expect(native.cancelQueuedInput.mock.invocationCallOrder[0]).toBeLessThan(native.interrupt.mock.invocationCallOrder[0]!);
     // It no longer counts as work Claude can still run after the Stop.
     expect(host.abandonmentEvidence().sessions[0]).toMatchObject({ pendingInputIds: [] });
     expect(host.abandonmentEvidence().sessions[0]!.activeOperationIds).not.toContain(steer.operationId);
     await expect(client.submissionDisposition({ sessionId, cwd: "/workspace", operationId: steer.operationId })).resolves.toBe("cancelled");
     await expect(client.submissionDisposition({ sessionId, cwd: "/workspace", operationId: turn.operationId })).resolves.toBe("submitted");
+  });
+
+  it("retains an operation-specific Stop acknowledgement across main replacement without redispatch", async () => {
+    const f = await fixture();
+    const first = await f.attach();
+    const firstClient = f.client();
+    const sessionId = randomUUID();
+    const original = firstClient.createSession(sessionOptions(sessionId));
+    await original.start();
+    const native = f.sessions[0]!;
+    const input = { applicationOperationId: "api-client-stop-operation", deadlineAt: Date.now() + 30_000 };
+    await original.interrupt(input);
+    await firstClient.close();
+    await first.close();
+    await f.attach();
+    const secondClient = f.client();
+    const replacement = secondClient.createSession(sessionOptions(sessionId, { launch: "resume" }));
+    await replacement.start();
+    expect(replacement.reattached).toBe(true);
+    await expect(replacement.reconcileInterrupt!(input)).resolves.toBe("accepted");
+    await replacement.interrupt(input);
+    expect(native.interrupt).toHaveBeenCalledOnce();
+    expect(f.runtime.createSession).toHaveBeenCalledOnce();
+  });
+
+  it("recovers the native Stop acknowledgement lost with the old main carrier", async () => {
+    const f = await fixture();
+    const first = await f.attach();
+    const firstClient = f.client();
+    const sessionId = randomUUID();
+    const original = firstClient.createSession(sessionOptions(sessionId));
+    await original.start();
+    const native = f.sessions[0]!;
+    let acknowledge!: () => void;
+    native.interrupt.mockImplementationOnce(() => new Promise<undefined>(resolve => { acknowledge = () => resolve(undefined); }));
+    const input = { applicationOperationId: randomUUID(), deadlineAt: Date.now() + 30_000 };
+    const failed = expect(original.interrupt(input)).rejects.toBeDefined();
+    await vi.waitFor(() => expect(native.interrupt).toHaveBeenCalledOnce());
+    await first.close();
+    await failed;
+    acknowledge();
+    await firstClient.close();
+    await f.attach();
+    const replacement = f.client().createSession(sessionOptions(sessionId, { launch: "resume" }));
+    await replacement.start();
+    await vi.waitFor(async () => expect(await replacement.reconcileInterrupt!(input)).toBe("accepted"));
+    expect(native.interrupt).toHaveBeenCalledOnce();
+    expect(f.runtime.createSession).toHaveBeenCalledOnce();
+  });
+
+  it("retains a late native Stop acknowledgement as unknown and never redispatches it", async () => {
+    const f = await fixture();
+    await f.attach();
+    const client = f.client();
+    const sessionId = randomUUID();
+    const remote = client.createSession(sessionOptions(sessionId));
+    await remote.start();
+    const native = f.sessions[0]!;
+    let acknowledge!: () => void;
+    native.interrupt.mockImplementationOnce(() => new Promise<undefined>(resolve => { acknowledge = () => resolve(undefined); }));
+    const input = { applicationOperationId: randomUUID(), deadlineAt: Date.now() + 100 };
+    const failed = expect(remote.interrupt(input)).rejects.toBeDefined();
+    await vi.waitFor(() => expect(native.interrupt).toHaveBeenCalledOnce());
+    await failed;
+    acknowledge();
+    // A new translated remote duration must not reopen the retained owner entry.
+    await expect(remote.reconcileInterrupt!({ ...input, deadlineAt: Date.now() + 30_000 })).resolves.toBe("unknown");
+    await expect(remote.interrupt({ ...input, deadlineAt: Date.now() + 30_000 })).rejects.toBeDefined();
+    expect(native.interrupt).toHaveBeenCalledOnce();
   });
 
   it("reattaches the same active native query after main client replacement and replays disconnected output once", async () => {
@@ -1468,7 +1539,7 @@ describe("remote query residency", () => {
         await native.emit(lifecycle(sessionId, operationId, "cancelled"));
         return true;
       });
-      await remote.interrupt();
+      await remote.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000 });
       await native.emit({ type: "result", session_id: sessionId, uuid: randomUUID(), user_message_uuid: turn.operationId } as SDKMessage);
       // Main applied and acknowledged the cancellation, then detached before
       // its queue reconciliation committed.
@@ -2080,4 +2151,40 @@ describe("persistent host shutdown evidence", () => {
     expect(await archived(idle)).toEqual([]);
     expect(await archived(await stopped(true))).toHaveLength(2);
   });
+});
+
+it("a full Claude Stop journal cannot disable other sessions and is retired only with its native owner", async () => {
+  const f = await fixture();
+  const attached = await f.attach();
+  const host = f.hosts.ensure(configuration, attached.lease.controllerEpoch);
+  const authority = { runtimeId: host.runtimeId, controllerEpoch: attached.lease.controllerEpoch };
+  const listener = vi.fn();
+  const first = randomUUID(), second = randomUUID();
+  const open = (sessionId: string, launch: "new" | "resume" = "new") => host.execute({ ...authority,
+    action: "open", replay: "full", request: { queryId: sessionId, sessionId, cwd: "/workspace", launch, enableCanUseTool: false, environment: {} } }, listener);
+  await open(first);
+  const native = f.sessions[0]!;
+  const request = { queryId: first, startupProbeUuid: native.startupProbeUuid, operationId: "stop-0", timeoutMilliseconds: 30_000 };
+  for (let index = 0; index < 16_384; index++) {
+    await host.execute({ ...authority, action: "interrupt", request: { ...request, operationId: `stop-${index}` } }, listener);
+  }
+  await expect(host.execute({ ...authority, action: "interrupt", request: { ...request, operationId: "over-capacity" } }, listener)).rejects.toMatchObject({ backendCode: "claude_interrupt_capacity", crossedSubmissionBoundary: false });
+  // Tombstones are still authoritative in a live owner; no expiration/pruning
+  // lets an old operation acquire a new deadline and dispatch again.
+  await expect(host.execute({ ...authority, action: "interrupt", request }, listener)).resolves.toEqual({ receipt: null });
+  expect(native.interrupt).toHaveBeenCalledTimes(16_384);
+  await open(second);
+  const secondNative = f.sessions[1]!;
+  await expect(host.execute({ ...authority, action: "interrupt", request: { ...request, queryId: second, startupProbeUuid: secondNative.startupProbeUuid } }, listener)).resolves.toEqual({ receipt: null });
+  expect(secondNative.interrupt).toHaveBeenCalledOnce();
+  await host.execute({ ...authority, action: "detach", request: { sessionId: first } }, listener);
+  await expect(host.execute({ ...authority, action: "retire", request: { sessionId: first, cwd: "/workspace" } }, listener)).resolves.toEqual({ outcome: "retired" });
+  expect(native.closed).toBe(true);
+  await open(first, "resume");
+  const replacement = f.sessions[2]!;
+  expect(replacement.startupProbeUuid).not.toBe(native.startupProbeUuid);
+  await expect(host.execute({ ...authority, action: "interrupt", request }, listener)).rejects.toThrow("claude_persistent_interrupt_owner_changed");
+  await expect(host.execute({ ...authority, action: "interrupt_disposition", request: { queryId: first, startupProbeUuid: native.startupProbeUuid, operationId: request.operationId } }, listener)).resolves.toEqual({ outcome: "unknown" });
+  await expect(host.execute({ ...authority, action: "interrupt", request: { ...request, startupProbeUuid: replacement.startupProbeUuid, operationId: "new-owner-stop" } }, listener)).resolves.toEqual({ receipt: null });
+  expect(replacement.interrupt).toHaveBeenCalledOnce();
 });

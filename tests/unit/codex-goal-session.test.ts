@@ -458,3 +458,13 @@ describe("codex.goal idle-gate exemption contract", () => {
     );
   });
 });
+
+it("a cancelled Goal refresh preserves the last authoritative projection", async () => {
+  const registry = new CodexGoalSessionRegistry();
+  const input = { scope, applicationThreadId: "app-1", nativeThreadId: "native-1", connectionGeneration: 1 };
+  const original = await registry.refresh({ ...input, client: mockClient({ get: { goal: nativeGoal() } }) });
+  const controller = new AbortController();
+  const client = mockClient({ get: () => { controller.abort(); throw new Error("read_aborted"); } });
+  await expect(registry.refresh({ ...input, client, signal: controller.signal })).rejects.toThrow("read_aborted");
+  expect(registry.projection(scope, "app-1")).toEqual(original);
+});

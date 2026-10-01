@@ -29,6 +29,10 @@ import {
   AgentToolCliLocalIngress,
   type AgentToolCliIngressRelay,
 } from "../../src/server/sidecar/agent-tool-cli-local-ingress.js";
+import { BackendAgentToolRequestError } from "../../src/server/agent-tools/adapters/backend-facade.js";
+import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
+import { relayAgentToolCliRequest } from "../../src/server/sidecar/agent-tool-request-relay.js";
+import { SidecarRuntimeAttachment } from "../../src/server/sidecar/sidecar-runtime-attachment.js";
 
 const roots = new Set<string>();
 const ENDPOINT_KEY = randomBytes(12).toString("hex");
@@ -56,6 +60,27 @@ describe("agent-tool CLI Unix socket ingress", () => {
       await ingress.close();
       if (!existed) await rmdir(runtimeDirectory).catch(error => { if (error.code !== "ENOTEMPTY" && error.code !== "ENOENT") throw error; });
     }
+  });
+
+  it.each([
+    { error: new BackendAgentToolRequestError({ code: "permission_denied", message: "The source was revoked.", retryable: false }), code: "permission_denied", retryable: false },
+    { error: new OpenCodeRuntimeError("opencode_runtime_configuration_scope_denied"), code: "permission_denied", retryable: false },
+    { error: new OpenCodeRuntimeError("opencode_request_authority_mismatch"), code: "permission_denied", retryable: false },
+    { error: new OpenCodeRuntimeError("opencode_runtime_unavailable"), code: "unavailable", retryable: true },
+  ])("classifies native CLI capture refusal $error.message as $code without relaying", async ({ error, code, retryable }) => {
+    const attachment = new SidecarRuntimeAttachment();
+    const send = vi.spyOn(attachment, "call");
+    const capture = vi.fn(() => { throw error; });
+    const ingress = await AgentToolCliLocalIngress.start({ runtimeDirectory: await privateRuntimeDirectory(), endpointKey: ENDPOINT_KEY,
+      relay: relay((request, signal) => relayAgentToolCliRequest(attachment, request, signal, capture)) });
+    try {
+      const request: AgentToolCliRequest = { ...listRequest(), operation: { type: "invoke", request: {
+        toolId: "agent.context", schemaVersion: 2, requestId: "955ca2ac-254e-45bc-b231-5bd438c460b6", input: {},
+      } } };
+      await expect(call(ingress.socketPath, request)).resolves.toMatchObject({ requestId: request.requestId, error: { code, retryable } });
+      expect(capture).toHaveBeenCalledExactlyOnceWith(request.sourceCapability);
+      expect(send).not.toHaveBeenCalled();
+    } finally { await ingress.close(); }
   });
 
   it("creates an owner-only endpoint directory and socket and relays one request", async () => {

@@ -44,7 +44,7 @@ import {
   claudeRuntimeCanUseToolOperation,
   claudeRuntimeHostOperations,
   claudeRuntimeWorkerOperations,
-} from "./worker/claude-runtime-v1.js";
+} from "./worker/claude-runtime-v2.js";
 import { CLAUDE_RUNTIME_WORKER_CLEANUP_PROVEN_FAILURE_EXIT_CODE } from "./worker/claude-outer-process-supervisor.js";
 
 export interface ClaudeManagedRuntimeOwnerOptions {
@@ -538,8 +538,9 @@ class DeferredManagedClaudeSession implements ClaudeOwnedRuntimeSession {
     }
   }
   send(input: Parameters<ClaudeRuntimeSession["send"]>[0]): void | Promise<void> { return this.#ready().send(input); }
-  interrupt(): Promise<SDKControlInterruptResponse | undefined> { return this.#ready().interrupt(); }
-  cancelQueuedInput(operationId: string): Promise<boolean> { return this.#ready().cancelQueuedInput(operationId); }
+  interrupt(input: Parameters<ClaudeRuntimeSession["interrupt"]>[0]): Promise<SDKControlInterruptResponse | undefined> { return this.#ready().interrupt(input); }
+  async reconcileInterrupt(input: Parameters<ClaudeRuntimeSession["interrupt"]>[0]): Promise<"accepted" | "unknown"> { return await this.#ready().reconcileInterrupt?.(input) ?? "unknown"; }
+  cancelQueuedInput(operationId: string, input?: Parameters<ClaudeOwnedRuntimeSession["cancelQueuedInput"]>[1]): Promise<boolean> { return this.#ready().cancelQueuedInput(operationId, input); }
   setModel(model?: string): Promise<void> { return this.#ready().setModel(model); }
   setEffort(effort?: EffortLevel): Promise<void> { return this.#ready().setEffort(effort); }
   setPermissionMode(mode: PermissionMode): Promise<void> { return this.#ready().setPermissionMode(mode); }

@@ -259,7 +259,7 @@ function prepareRootBlockers(current: Fixture): {
   new ConversationOperationRepository(current.database).prepareInterrupt(
     current.scope,
     current.rootId,
-    { operationId: interruptId, expectedActiveTurnId: "turn-active", now: 550 },
+    { operationId: interruptId, now: 550 },
   );
 
   const featureMutationId = "feature-reset";
@@ -568,7 +568,6 @@ describe("thread force-reset repository", () => {
       const operations = new ConversationOperationRepository(current.database);
       operations.prepareInterrupt(current.scope, current.rootId, {
         operationId: "00000000-0000-4000-8000-000000000201",
-        expectedActiveTurnId: "active-one",
         now: 500,
       });
       const resets = new ThreadForceResetRepository(current.database);
@@ -586,7 +585,6 @@ describe("thread force-reset repository", () => {
 
       operations.prepareInterrupt(current.scope, current.rootId, {
         operationId: "00000000-0000-4000-8000-000000000202",
-        expectedActiveTurnId: "active-two",
         now: 510,
       });
       expect(() =>
@@ -611,7 +609,6 @@ describe("thread force-reset repository", () => {
 
       operations.prepareInterrupt(current.scope, current.rootId, {
         operationId: "00000000-0000-4000-8000-000000000203",
-        expectedActiveTurnId: "active-after-reset",
         now: 620,
       });
       const replay = resets.forceReset(current.scope, current.rootId, {

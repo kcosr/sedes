@@ -14,7 +14,7 @@ import {
 import { CLAUDE_HISTORY_PAGE_MESSAGES } from "../claude-session-history.js";
 
 export const CLAUDE_RUNTIME_CAPABILITY_ID = "claude_runtime" as const;
-export const CLAUDE_RUNTIME_MAJOR_VERSION = 1 as const;
+export const CLAUDE_RUNTIME_MAJOR_VERSION = 2 as const;
 // HSC1's current frame ceiling is a little over 96 MiB. Keep enough room for
 // the request/event envelope and JSON escaping rather than treating the whole
 // transport frame as provider payload authority.
@@ -371,6 +371,16 @@ export const claudeRuntimeQueryCancelInputRequestSchema = z.strictObject({
 export const claudeRuntimeQueryCancelInputResponseSchema = z.strictObject({
   cancelled: z.boolean(),
 });
+export const claudeRuntimeQueryInterruptRequestSchema = z.strictObject({
+  queryId: uuidSchema, operationId: z.string().min(1).max(160),
+  timeoutMilliseconds: z.number().int().min(1).max(30_000),
+});
+export const claudeRuntimeQueryInterruptDispositionRequestSchema = z.strictObject({
+  queryId: uuidSchema, operationId: z.string().min(1).max(160),
+});
+export const claudeRuntimeQueryInterruptDispositionResponseSchema = z.strictObject({
+  outcome: z.enum(["accepted", "unknown"]),
+});
 export const claudeRuntimeQueryInterruptResponseSchema = z.strictObject({
   receipt: z
     .strictObject({
@@ -559,8 +569,15 @@ export const claudeRuntimeQuerySendOperation = operation({
 });
 export const claudeRuntimeQueryInterruptOperation = operation({
   operation: "query.interrupt",
-  requestSchema: queryIdRequestSchema,
+  requestSchema: claudeRuntimeQueryInterruptRequestSchema,
   responseSchema: claudeRuntimeQueryInterruptResponseSchema,
+  maximumDeadlineMilliseconds: 30_000,
+  lane: "control",
+});
+export const claudeRuntimeQueryInterruptDispositionOperation = operation({
+  operation: "query.interrupt_disposition",
+  requestSchema: claudeRuntimeQueryInterruptDispositionRequestSchema,
+  responseSchema: claudeRuntimeQueryInterruptDispositionResponseSchema,
   maximumDeadlineMilliseconds: 30_000,
   lane: "control",
 });
@@ -625,6 +642,7 @@ export const claudeRuntimeWorkerOperations = Object.freeze([
   claudeRuntimeQueryOpenOperation,
   claudeRuntimeQuerySendOperation,
   claudeRuntimeQueryInterruptOperation,
+  claudeRuntimeQueryInterruptDispositionOperation,
   claudeRuntimeQueryCancelInputOperation,
   claudeRuntimeQuerySetModelOperation,
   claudeRuntimeQuerySetEffortOperation,
@@ -643,7 +661,7 @@ type HandlerFor<Definition> = Definition extends {
   ? SidecarOperationHandler<Request, Response>
   : never;
 
-export interface ClaudeRuntimeV1WorkerHandlers {
+export interface ClaudeRuntimeV2WorkerHandlers {
   readonly initialize: HandlerFor<typeof claudeRuntimeInitializeOperation>;
   readonly probe: HandlerFor<typeof claudeRuntimeProbeOperation>;
   readonly listSessions: HandlerFor<typeof claudeRuntimeSessionListOperation>;
@@ -662,6 +680,7 @@ export interface ClaudeRuntimeV1WorkerHandlers {
   readonly interruptQuery: HandlerFor<
     typeof claudeRuntimeQueryInterruptOperation
   >;
+  readonly interruptDisposition: HandlerFor<typeof claudeRuntimeQueryInterruptDispositionOperation>;
   readonly cancelQueryInput: HandlerFor<
     typeof claudeRuntimeQueryCancelInputOperation
   >;
@@ -677,9 +696,9 @@ export interface ClaudeRuntimeV1WorkerHandlers {
   readonly closeQuery: HandlerFor<typeof claudeRuntimeQueryCloseOperation>;
 }
 
-export function registerClaudeRuntimeV1WorkerOperations(
+export function registerClaudeRuntimeV2WorkerOperations(
   registry: SidecarOperationRegistry,
-  handlers: ClaudeRuntimeV1WorkerHandlers,
+  handlers: ClaudeRuntimeV2WorkerHandlers,
 ): void {
   registry.register(claudeRuntimeInitializeOperation, handlers.initialize);
   registry.register(claudeRuntimeProbeOperation, handlers.probe);
@@ -703,6 +722,7 @@ export function registerClaudeRuntimeV1WorkerOperations(
     claudeRuntimeQueryInterruptOperation,
     handlers.interruptQuery,
   );
+  registry.register(claudeRuntimeQueryInterruptDispositionOperation, handlers.interruptDisposition);
   registry.register(
     claudeRuntimeQueryCancelInputOperation,
     handlers.cancelQueryInput,
@@ -722,7 +742,7 @@ export function registerClaudeRuntimeV1WorkerOperations(
   registry.register(claudeRuntimeQueryCloseOperation, handlers.closeQuery);
 }
 
-export function registerClaudeRuntimeV1HostOperations(
+export function registerClaudeRuntimeV2HostOperations(
   registry: SidecarOperationRegistry,
   handlers: {
     readonly canUseTool: HandlerFor<typeof claudeRuntimeCanUseToolOperation>;

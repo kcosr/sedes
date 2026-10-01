@@ -39,7 +39,8 @@ import type {
   EstablishProjectionInput,
   HistoryPageInput,
   InteractionResponseInput,
-  InterruptTurnInput,
+  InterruptConversationInput,
+  ConversationControl,
   LocateTurnInput,
   LocateTurnResult,
   RegisteredBackendActionInput,
@@ -50,6 +51,7 @@ import type {
   Unsubscribe,
 } from "../contracts.js";
 import { BackendError } from "../contracts.js";
+import { ConversationInterruptLedger } from "../conversation-interrupt.js";
 import type { ExecutionScope } from "../../execution/contracts.js";
 import {
   VIEWED_IMAGE_CHILD_RESERVATION_BYTES,
@@ -68,6 +70,7 @@ import {
 import {
   CODEX_C1_MAX_ITEMS_PER_TURN,
   codexThreadReadMethod,
+  codexThreadTurnsListMethod,
   codexThreadResumeMethod,
   codexThreadUnsubscribeMethod,
   type CodexThread,
@@ -135,7 +138,7 @@ import {
   CodexRpcProtocolError,
   CodexRpcRemoteError,
 } from "./rpc/errors.js";
-import { isCodexRpcUndecodableNotification } from "./rpc/codex-rpc-client.js";
+import { type CodexRpcNotification, isCodexRpcUndecodableNotification } from "./rpc/codex-rpc-client.js";
 import {
   CodexInteractionBridge,
   CodexInteractionBridgeError,
@@ -300,6 +303,7 @@ interface CodexHistoryPageCapture {
 }
 
 export interface CodexConversationHandleInput {
+  readonly onControlReady?: (control: ConversationControl) => void;
   readonly usageSink: UsageSink;
   readonly nativeNamespace: string;
   readonly usageProvenZero: boolean;
@@ -349,6 +353,7 @@ export interface CodexConversationHandleInput {
  * history before any replacement snapshot is published.
  */
 export class CodexConversationHandle implements ConversationHandle {
+  readonly automaticEviction = "requires_quiescence" as const;
   readonly #resolveThreadEnvironment: ThreadEnvironmentResolver;
   readonly binding: ConversationBinding;
   readonly #canonicalWorkspacePath: string;
@@ -482,7 +487,13 @@ export class CodexConversationHandle implements ConversationHandle {
     string,
     "accepted" | "outcome_unknown"
   >();
-  readonly #interruptOperations = new Map<string, string>();
+  readonly #interruptOperations = new ConversationInterruptLedger();
+  readonly #onControlReady: CodexConversationHandleInput["onControlReady"];
+  #controlLifetime = new AbortController();
+  #controlGeneration = 0;
+  #controlObservationRevision = 0;
+  #controlTurn: { generation: number; turnId: string | null } | undefined;
+  #acceptedStop: InterruptConversationInput | undefined;
   readonly #submitOperations = new Map<
     string,
     | {
@@ -528,6 +539,7 @@ export class CodexConversationHandle implements ConversationHandle {
 
   constructor(input: CodexConversationHandleInput) {
     this.#resolveThreadEnvironment = input.resolveThreadEnvironment ?? (async () => Object.freeze({}));
+    this.#onControlReady = input.onControlReady;
     this.binding = input.binding;
     this.#canonicalWorkspacePath = input.canonicalWorkspacePath;
     this.#workspaceId = input.workspaceId;
@@ -1383,6 +1395,7 @@ export class CodexConversationHandle implements ConversationHandle {
             ? this.#lastSettingsObservationInboundSequence
             : 0;
         this.#pendingUsageTuple = { model: executionSettings.model, reasoningEffort: executionSettings.reasoningEffort ?? null };
+        const controlObservationBeforeStart = this.#controlObservationRevision;
         const response = await this.#client.requestWithReceipt(
           codexTurnStartMethod,
           {
@@ -1505,6 +1518,11 @@ export class CodexConversationHandle implements ConversationHandle {
           }
         }
         const acceptedTurn = materializeAcceptedTurn(response.result.turn);
+        if (this.#controlGeneration === response.generation && !this.#controlLifetime.signal.aborted &&
+            controlObservationBeforeStart === this.#controlObservationRevision &&
+            !this.#nativeThread?.turns.some(turn => turn.id === acceptedTurn.id && turn.status !== "inProgress")) {
+          this.#controlTurn = { generation: response.generation, turnId: acceptedTurn.id };
+        }
         // turn/start notifications are delivered on the same app-server
         // connection and may precede the request receipt. In particular, the
         // user item can already be present while the stable receipt still
@@ -1856,115 +1874,140 @@ export class CodexConversationHandle implements ConversationHandle {
     );
   }
 
-  async interrupt(input: InterruptTurnInput): Promise<void> {
+  async interrupt(input: InterruptConversationInput): Promise<void> {
     this.#assertOpen();
-    await this.#notificationWork;
-    await this.#withMutation(async () => {
-      const priorTarget = this.#interruptOperations.get(
-        input.applicationOperationId,
-      );
-      if (priorTarget) {
-        if (priorTarget !== input.expectedBackendTurnId) {
-          throw codexError(
-            "rejected",
-            "The Codex interrupt operation was replayed for another turn.",
-            "codex_interrupt_replay_mismatch",
-          );
-        }
-        return;
+    const generation = this.#controlGeneration;
+    const lifetime = this.#controlLifetime.signal;
+    let selected: string | undefined;
+    let dispatched = false;
+    let interrupted = false;
+    await this.#interruptOperations.execute(input, lifetime, async budget => {
+      this.#assertControlGeneration(generation);
+      const known = this.#controlTurn?.generation === generation ? this.#controlTurn : undefined;
+      if (known?.turnId) {
+        selected = known.turnId;
+      } else {
+        const metadata = await budget.wait(this.#client.requestWithReceipt(codexThreadReadMethod,
+          { threadId: this.binding.backendConversationId, includeTurns: false },
+          { timeoutMilliseconds: budget.remainingMilliseconds(), signal: budget.signal }));
+        this.#assertControlGeneration(generation, metadata.generation);
+        this.#validateThread(metadata.result.thread);
+        if (metadata.result.thread.status.type === "idle") return;
+        if (metadata.result.thread.status.type !== "active") throw codexError("unavailable",
+          "Codex has no existing controllable turn.", "codex_control_unavailable", false);
+        const turns = await budget.wait(this.#client.requestWithReceipt(codexThreadTurnsListMethod,
+          { threadId: this.binding.backendConversationId, limit: 1, sortDirection: "desc", itemsView: "notLoaded" },
+          { timeoutMilliseconds: budget.remainingMilliseconds(), signal: budget.signal }));
+        this.#assertControlGeneration(generation, turns.generation);
+        const current = turns.result.data[0];
+        if (!current || current.status !== "inProgress") throw codexError("unavailable",
+          "Codex has not exposed the current turn for Stop.", "codex_control_turn_unavailable", false);
+        selected = current.id;
       }
-      const thread = this.#assertMutableProjection();
-      const turnId = activeNativeTurnId(thread);
-      if (
-        !turnId ||
-        codexBackendTurnId(thread.id, turnId) !== input.expectedBackendTurnId
-      ) {
-        throw codexError(
-          "invalid_state",
-          "The active Codex turn changed before interrupt.",
-          "codex_interrupt_target_changed",
-        );
-      }
+      this.#assertControlGeneration(generation);
+      budget.dispatch();
+      dispatched = true;
+      let response;
       try {
-        const response = await this.#client.requestWithReceipt(
-          codexTurnInterruptMethod,
-          { threadId: thread.id, turnId },
-          { timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS },
-        );
-        this.#assertMutationReceipt(response.generation);
-        this.#interruptOperations.set(
-          input.applicationOperationId,
-          input.expectedBackendTurnId,
-        );
-        // The target may terminalize while the interrupt receipt is in flight.
-        // Do not overwrite that newer projection, or a replacement turn, with
-        // a synthesized stopping state that no later notification will repair.
-        // A received-but-queued completion may still yield stopping -> idle,
-        // which is ordered and convergent.
-        if (
-          !this.#projectionInvalidated &&
-          this.#snapshotWindow?.activeBackendTurnId ===
-            input.expectedBackendTurnId
-        ) {
-          this.#emit({
-            type: "run_state_changed",
-            state: "stopping",
-            activeBackendTurnId: input.expectedBackendTurnId,
-          });
-        }
+        response = await budget.wait(this.#client.requestWithReceipt(codexTurnInterruptMethod,
+          { threadId: this.binding.backendConversationId, turnId: selected! },
+          { timeoutMilliseconds: budget.remainingMilliseconds(), signal: budget.signal }));
       } catch (error) {
-        throw mapCodexMutationError(error, "interrupt");
+        if (error instanceof CodexRpcRemoteError && error.generation === generation &&
+            error.method === codexTurnInterruptMethod.method && error.code === -32600) {
+          // rust-v0.154.0 turn_interrupt_inner emits these before submitting
+          // Op::Interrupt. Match exact native forms, never a general error code.
+          if (error.message === "no active turn to interrupt") return;
+          const prefix = `expected active turn id ${selected!} but found `;
+          if (error.message.startsWith(prefix) && /^[^\s\u0000-\u001f\u007f]{1,160}$/u.test(error.message.slice(prefix.length))) {
+            throw codexError("rejected", "The Codex turn changed before Stop was applied.", "codex_interrupt_target_changed", false, error);
+          }
+        }
+        throw mapCodexMutationError(error, "interrupt", true);
       }
+      if (response.generation !== generation) throw mutationOutcomeUnknown("generation_changed");
+      interrupted = true;
+      // The private target is chosen once. A native stale-target rejection does
+      // not authorize chasing another turn, nor does inactivity prove an ACK.
+    }).catch(error => { throw dispatched || error instanceof BackendError ? mapCodexMutationError(error, "interrupt", dispatched) : mapCodexReadError(error); });
+    this.#acceptedStop = input;
+    if (Date.now() < input.deadlineAt && !input.signal?.aborted && !lifetime.aborted && interrupted && selected &&
+        this.#snapshotWindow?.activeBackendTurnId === codexBackendTurnId(this.binding.backendConversationId, selected) &&
+        !this.#projectionInvalidated) {
+      this.#emit({ type: "run_state_changed", state: "stopping",
+        activeBackendTurnId: codexBackendTurnId(this.binding.backendConversationId, selected) });
+    }
+  }
+
+  async reconcileInterrupt(input: InterruptConversationInput): Promise<BackendMutationReconciliation> {
+    return this.#interruptOperations.reconcile(input);
+  }
+
+  #assertControlGeneration(generation: number, received = generation): void {
+    const current = this.#client.lifecycleSnapshot();
+    if (this.#closing || this.#closed || this.#controlLifetime.signal.aborted || generation === 0 ||
+        current.state !== "ready" || current.generation !== generation || received !== generation) {
+      throw codexError("unavailable", "Codex control authority is unavailable.", "codex_control_generation_changed", false);
+    }
+  }
+
+  #publishControl(thread: CodexThread, generation: number, observationBeforeRead: number): void {
+    if (thread.status.type !== "active" && thread.status.type !== "idle") return;
+    if (this.#controlGeneration === generation && !this.#controlLifetime.signal.aborted) {
+      const active = activeNativeTurnId(thread);
+      if (observationBeforeRead === this.#controlObservationRevision) {
+        this.#controlTurn = thread.status.type === "idle" ? { generation, turnId: null }
+          : active ? { generation, turnId: active } : undefined;
+      }
+      return;
+    }
+    this.#controlLifetime.abort();
+    this.#controlLifetime = new AbortController();
+    this.#controlGeneration = generation;
+    const active = activeNativeTurnId(thread);
+    if (observationBeforeRead === this.#controlObservationRevision) {
+      this.#controlTurn = thread.status.type === "idle" ? { generation, turnId: null }
+        : active ? { generation, turnId: active } : undefined;
+    }
+    this.#acceptedStop = undefined;
+    const lifetime = this.#controlLifetime.signal;
+    this.#onControlReady?.({
+      generation: `codex:${this.binding.backendConversationId}:${generation}`, lifetime,
+      interrupt: async input => { this.#assertControlGeneration(generation); return this.interrupt(input); },
+      reconcileInterrupt: input => this.reconcileInterrupt(input),
+      mutateProviderFeature: async input => {
+        this.#assertControlGeneration(generation);
+        if (!this.#acceptedStop || input.featureId !== CODEX_GOAL_FEATURE_REF.featureId ||
+            input.schemaVersion !== CODEX_GOAL_FEATURE_REF.schemaVersion || input.actionId !== "pause") {
+          return Promise.resolve({ outcome: "rejected" as const });
+        }
+        return this.#mutateGoal(input, generation, this.#acceptedStop);
+      },
     });
   }
 
-  async reconcileInterrupt(
-    input: InterruptTurnInput,
-  ): Promise<BackendMutationReconciliation> {
-    this.#assertOpen();
-    await this.#notificationWork;
-    return await this.#withMutation(async () => {
-      const priorTarget = this.#interruptOperations.get(
-        input.applicationOperationId,
-      );
-      if (priorTarget) {
-        if (priorTarget !== input.expectedBackendTurnId) {
-          throw codexError(
-            "rejected",
-            "The Codex interrupt operation was replayed for another turn.",
-            "codex_interrupt_replay_mismatch",
-          );
-        }
-        return { outcome: "accepted" };
+  #observeControlNotification(notification: CodexRpcNotification): void {
+    if (this.#closing || this.#closed || notification.generation !== this.#client.lifecycleSnapshot().generation) return;
+    if (isCodexRpcUndecodableNotification(notification)) {
+      if (notification.nativeThreadId === this.binding.backendConversationId) { this.#controlObservationRevision++; this.#controlTurn = undefined; }
+      return;
+    }
+    if (notificationThreadId(notification.params) !== this.binding.backendConversationId) return;
+    if (!["turn/started", "turn/completed", "thread/status/changed"].includes(notification.method)) return;
+    this.#controlObservationRevision++;
+    try {
+      if (notification.method === "turn/started") {
+        const parsed = codexC2NotificationSchemas["turn/started"].parse(notification.params);
+        this.#controlTurn = { generation: notification.generation, turnId: parsed.turn.id };
+      } else if (notification.method === "turn/completed") {
+        const parsed = codexC2NotificationSchemas["turn/completed"].parse(notification.params);
+        if (this.#controlTurn?.turnId === parsed.turn.id) this.#controlTurn = undefined;
+      } else if (notification.method === "thread/status/changed") {
+        const parsed = codexC2NotificationSchemas["thread/status/changed"].parse(notification.params);
+        if (parsed.status.type === "idle") this.#controlTurn = { generation: notification.generation, turnId: null };
+        else if (this.#controlTurn?.turnId === null) this.#controlTurn = undefined;
       }
-      const currentThread = this.#assertMutableProjection();
-      try {
-        const response = await this.#client.requestWithReceipt(
-          codexThreadReadMethod,
-          {
-            threadId: this.binding.backendConversationId,
-            includeTurns: false,
-          },
-          { timeoutMilliseconds: REQUEST_TIMEOUT_MILLISECONDS },
-        );
-        this.#assertCurrentReceipt(response.generation);
-        this.#validateThread(response.result.thread);
-        if (response.result.thread.historyMode !== currentThread.historyMode) {
-          throw codexError(
-            "incompatible_protocol",
-            "Codex changed history mode while reconciling the interrupt.",
-            "codex_history_mode_changed",
-          );
-        }
-        return response.result.thread.status.type === "active" &&
-          this.#snapshotWindow?.activeBackendTurnId ===
-            input.expectedBackendTurnId
-          ? { outcome: "unknown" }
-          : { outcome: "accepted" };
-      } catch (error) {
-        throw mapCodexReadError(error);
-      }
-    });
+    } catch { this.#controlTurn = undefined; }
   }
 
   async perform(
@@ -2201,6 +2244,11 @@ export class CodexConversationHandle implements ConversationHandle {
         safeMessage: "The provider feature is not supported by this handle.",
       };
     }
+    return this.#mutateGoal(input, this.#establishedGeneration);
+  }
+
+  async #mutateGoal(input: Parameters<NonNullable<ConversationHandle["mutateProviderFeature"]>>[0],
+    generation: number, stop?: InterruptConversationInput): Promise<Awaited<ReturnType<NonNullable<ConversationHandle["mutateProviderFeature"]>>>> {
     if (!this.#goalSessions) {
       return {
         outcome: "rejected",
@@ -2222,23 +2270,31 @@ export class CodexConversationHandle implements ConversationHandle {
     const lifecycle = this.#client.lifecycleSnapshot();
     if (
       lifecycle.state !== "ready" ||
-      lifecycle.generation !== this.#establishedGeneration ||
-      this.#establishedGeneration === 0
+      lifecycle.generation !== generation ||
+      generation === 0
     ) {
       return {
         outcome: "rejected",
         safeMessage: "Codex must be reconciled before Goal can change.",
       };
     }
+    const stopSignal = stop ? AbortSignal.any([this.#controlLifetime.signal,
+      AbortSignal.timeout(Math.max(1, stop.deadlineAt - Date.now())), ...(stop.signal ? [stop.signal] : [])]) : undefined;
+    const checkBudget = () => {
+      if (stop && (stop.deadlineAt <= Date.now() || stopSignal?.aborted)) throw codexError("unavailable",
+        "The Stop deadline has elapsed.", "codex_interrupt_deadline", false);
+    };
+    checkBudget();
     const scope = this.#scope();
     const current =
-      this.#goalSessions.projection(scope, this.binding.applicationThreadId) ??
+      (!stop ? this.#goalSessions.projection(scope, this.binding.applicationThreadId) : undefined) ??
       (await this.#goalSessions.refresh({
         scope,
         applicationThreadId: this.binding.applicationThreadId,
         nativeThreadId: this.binding.backendConversationId,
-        connectionGeneration: this.#establishedGeneration,
+        connectionGeneration: generation,
         client: this.#client,
+        signal: stopSignal,
       }));
     if (current.availability !== "available") {
       return {
@@ -2266,6 +2322,7 @@ export class CodexConversationHandle implements ConversationHandle {
         safeMessage: "The requested Goal action is not available.",
       };
     }
+    checkBudget();
     const outcome = await this.#goalSessions.mutateNative({
       client: this.#client,
       nativeThreadId: this.binding.backendConversationId,
@@ -2273,13 +2330,17 @@ export class CodexConversationHandle implements ConversationHandle {
       desired,
       arguments: input.arguments,
       currentState: current.state,
+      ...(stop ? { deadlineAt: stop.deadlineAt, signal: stopSignal } : {}),
     });
     if (outcome.kind === "accepted") {
+      // A confirmed Goal response is native state evidence even if this Stop's
+      // budget expired immediately afterwards. Never publish into a new owner.
+      if (stop) this.#assertControlGeneration(generation);
       this.#goalSessions.publishObserved({
         scope,
         applicationThreadId: this.binding.applicationThreadId,
         nativeThreadId: this.binding.backendConversationId,
-        connectionGeneration: this.#establishedGeneration,
+        connectionGeneration: generation,
         state: outcome.state,
       });
       return {
@@ -2288,12 +2349,15 @@ export class CodexConversationHandle implements ConversationHandle {
       };
     }
     if (outcome.kind === "uncertain") {
+      // Uncertainty must replace stale Goal state even after the Stop budget
+      // elapsed. Its evidence belongs only to the captured control generation.
+      if (stop) this.#assertControlGeneration(generation);
       if (outcome.observed) {
         this.#goalSessions.publishObserved({
           scope,
           applicationThreadId: this.binding.applicationThreadId,
           nativeThreadId: this.binding.backendConversationId,
-          connectionGeneration: this.#establishedGeneration,
+          connectionGeneration: generation,
           state: outcome.observed,
         });
       } else {
@@ -2301,7 +2365,7 @@ export class CodexConversationHandle implements ConversationHandle {
           scope,
           applicationThreadId: this.binding.applicationThreadId,
           nativeThreadId: this.binding.backendConversationId,
-          connectionGeneration: this.#establishedGeneration,
+          connectionGeneration: generation,
           reason: outcome.reason,
         });
       }
@@ -2312,6 +2376,7 @@ export class CodexConversationHandle implements ConversationHandle {
           "The Goal mutation could not be confirmed. Refresh the thread.",
       };
     }
+    checkBudget();
     return {
       outcome: "rejected",
       safeMessage: outcome.reason,
@@ -2337,14 +2402,19 @@ export class CodexConversationHandle implements ConversationHandle {
 
   async #refreshGoalProjection(signal?: AbortSignal): Promise<void> {
     if (!this.#goalSessions || this.#establishedGeneration === 0) return;
-    await this.#goalSessions.refresh({
-      scope: this.#scope(),
-      applicationThreadId: this.binding.applicationThreadId,
-      nativeThreadId: this.binding.backendConversationId,
-      connectionGeneration: this.#establishedGeneration,
-      client: this.#client,
-      ...(signal ? { signal } : {}),
-    });
+    try {
+      await this.#goalSessions.refresh({
+        scope: this.#scope(),
+        applicationThreadId: this.binding.applicationThreadId,
+        nativeThreadId: this.binding.backendConversationId,
+        connectionGeneration: this.#establishedGeneration,
+        client: this.#client,
+        ...(signal ? { signal } : {}),
+      });
+    } catch (cause) {
+      if (signal?.aborted) throw projectionCancelled(cause);
+      throw cause;
+    }
   }
 
   /** Replay only Sedes's durable tier; all other resume fields stay native. */
@@ -2662,6 +2732,7 @@ export class CodexConversationHandle implements ConversationHandle {
           );
         }
 
+        const controlObservationBeforeRead = this.#controlObservationRevision;
         const inspected = await this.#client.requestWithReceipt(
           codexThreadReadMethod,
           {
@@ -2676,6 +2747,7 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#assertEstablishmentMayContinue(signal);
         this.#assertCurrentReceipt(inspected.generation);
         this.#validateThread(inspected.result.thread);
+        this.#publishControl(inspected.result.thread, inspected.generation, controlObservationBeforeRead);
         const historyMode = assertCodexHistoryMode(inspected.result.thread);
 
         const desiredBeforeResume = this.#executionSettings.desiredSettings(
@@ -2683,6 +2755,7 @@ export class CodexConversationHandle implements ConversationHandle {
         );
         let resumed;
         let requestedNativeResume = false;
+        const controlObservationBeforeResume = this.#controlObservationRevision;
         try {
           resumed = await this.#client.persistentSessions?.reattachThread(
             this.binding.backendConversationId,
@@ -2882,6 +2955,7 @@ export class CodexConversationHandle implements ConversationHandle {
             "codex_history_mode_changed",
           );
         }
+        this.#publishControl(resumed.result.thread, resumed.generation, controlObservationBeforeResume);
         if (requestedNativeResume) this.#usageCapture?.resumed({ generation: resumed.generation, sequence: resumed.inboundSequence,
           idle: resumed.result.thread.status.type === "idle" });
         let projection: CodexWindowProjection;
@@ -4029,6 +4103,7 @@ export class CodexConversationHandle implements ConversationHandle {
   }
 
   readonly #consumeNotification: CodexNotificationListener = (notification) => {
+    this.#observeControlNotification(notification);
     if (this.#deferPaginatedEstablishmentNotification(notification)) return;
     if (
       this.#pendingNotificationWork === 0 &&
@@ -4804,6 +4879,10 @@ export class CodexConversationHandle implements ConversationHandle {
   }
 
   readonly #consumeLifecycle: CodexLifecycleListener = (lifecycle) => {
+    if (lifecycle.state !== "ready" || lifecycle.generation !== this.#controlGeneration) {
+      this.#controlLifetime.abort();
+      this.#controlTurn = undefined;
+    }
     this.#projectionWorkQueue.enqueue(() => {
       this.#consumeLifecycleNow(lifecycle);
     });
@@ -5448,6 +5527,7 @@ export class CodexConversationHandle implements ConversationHandle {
     }
     this.#usageCapture?.seal();
     this.#closing = true;
+    this.#controlLifetime.abort();
     this.#viewedImageCapture.close();
     this.#projectionWorkQueue.execute(() => {
       this.#projectionInvalidated = true;
@@ -6806,9 +6886,10 @@ function mapCodexInteractionError(error: unknown): BackendError {
 function mapCodexMutationError(
   error: unknown,
   operation: string,
+  dispatched = false,
 ): BackendError {
   if (error instanceof BackendError) return error;
-  if (error instanceof Error && error.message === "codex_skill_unavailable") {
+  if (!dispatched && error instanceof Error && error.message === "codex_skill_unavailable") {
     return codexError(
       "rejected",
       "The selected Codex skill is no longer available in this workspace.",
@@ -6848,6 +6929,7 @@ function mapCodexMutationError(
         true,
       );
     }
+    if (dispatched) return mutationOutcomeUnknown(operation);
     return codexError(
       "internal",
       "Codex could not complete the mutation safely.",
@@ -6869,6 +6951,10 @@ function mapCodexMutationError(
     );
   }
   if (error instanceof CodexRpcRemoteError) {
+    if (operation === "interrupt" && error.disposition !== "rejected_not_accepted") {
+      return codexError("submission_unknown", "Codex did not confirm whether Stop was applied.",
+        "codex_interrupt_outcome_unknown", false, error, true);
+    }
     const staleSteerCode = codexStaleSteerRejectionCode(error, operation);
     if (staleSteerCode) {
       return codexSteerTargetUnavailable(
@@ -6897,7 +6983,7 @@ function mapCodexMutationError(
       true,
     );
   }
-  if (error instanceof Error && error.name === "ZodError") {
+  if (!dispatched && error instanceof Error && error.name === "ZodError") {
     return codexError(
       "rejected",
       "The Codex mutation input is invalid or too large.",
@@ -6906,6 +6992,7 @@ function mapCodexMutationError(
       error,
     );
   }
+  if (dispatched) return mutationOutcomeUnknown(operation);
   return codexError(
     "internal",
     "Codex could not complete the mutation safely.",

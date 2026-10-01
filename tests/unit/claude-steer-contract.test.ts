@@ -352,7 +352,7 @@ describe("Claude conversation-target Steer contract", () => {
     });
     await session.start();
 
-    await expect(session.interrupt()).resolves.toEqual(receipt);
+    await expect(session.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000 })).resolves.toEqual(receipt);
     expect(fake.interrupt).toHaveBeenCalledWith();
     expect(fake.queryInput().options).not.toHaveProperty("expectedTurnId");
     // Stop withdraws one input through the SDK's undeclared `cancelAsyncMessage`.

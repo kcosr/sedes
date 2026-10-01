@@ -6,7 +6,7 @@ accounts, credentials, and failure modes, and none of them implies another:
 1. **Client connection** — how a browser, Electron, or Android client reaches a
    Sedes server.
 2. **Provider runtime connection** — how that Sedes server talks to each
-   provider runtime (Pi, Codex, Claude, Grok).
+   provider runtime (Pi, Codex, Claude, Grok, OpenCode v2).
 3. **Execution environment** — where workspace operations, Files, agent tools,
    and terminals actually run for a thread.
 
@@ -68,6 +68,8 @@ flowchart LR
   S --> SC[Persistent sidecar on an SSH or outbound host<br/>sidecar owns its runtimes]
   SC --> RCX[Codex app-server on that host]
   SC --> RCL[Claude runtime on that host]
+  S --> OCL[OpenCode v2 on local Linux<br/>owned or external HTTP/SSE]
+  SC --> OCR[OpenCode v2 on Linux host<br/>owned or external HTTP/SSE]
 ```
 
 These are alternatives for one backend instance, not consecutive hops. Sedes
@@ -94,6 +96,7 @@ capability still requires the connected host to advertise matching support.
 | [Pi](backends/pi.md) | Always in the Sedes server process (pinned SDK) | In-process; nothing to configure | Local (direct, or Bubblewrap isolated on Linux); SSH sidecar; outbound sidecar | Remote workspaces need the `workspace_tools` and `workspace_context` pair, with `workspace_skills` optional. No Sedes CLI on remote or isolated workspaces: only the Native agent-tool modes. No managed TUI. |
 | [Codex](backends/codex.md) | Sedes host, or the persistent sidecar's host | Owned stdio; external Unix-socket WebSocket; authenticated `ws://` on literal loopback or `wss://`. A sidecar-hosted runtime uses the same three, resolved on the execution host | Local (Linux x64, macOS arm64/x64, or Windows arm64/x64 through Electron Managed Local); SSH sidecar; outbound sidecar | Managed TUI on external UDS/TCP connections with a `catalog` model policy, plus local PTY support or a sidecar that negotiated the managed-TUI operations. Never on owned stdio. Files, attachments, terminals, and agent tools (CLI or Native MCP) are separate grants. |
 | [Claude](backends/claude.md) | Managed worker on the Sedes host, or the persistent sidecar's host | Sedes-owned worker child process locally; the same runtime protocol carried over SSH stdio or the outbound connector | Local and remote on Linux/macOS only; native Windows Claude is unsupported | Provider terminals and managed TUI are unsupported for every route. Files, attachments, and the agent-tool relay (CLI or Native MCP) are separate grants. |
+| [OpenCode v2](backends/opencode.md) | Sedes host or persistent sidecar host; Linux, same native account | Owned stdio lifetime/readiness plus HTTP/SSE, or an external authenticated loopback HTTP/SSE endpoint resolved on that host | Local, SSH sidecar, outbound sidecar; stock `opencode2` 2.0.18 | Shared runtime and evidence recovery. Native Progressive MCP for admitted roots; CLI additionally requires owned mode. Remote tools, Files, and attachments require their own grants. No managed TUI. |
 | [Grok](backends/grok.md) | Always the Sedes host | Sedes-owned ACP stdio | Local only, on Linux x64 or macOS arm64/x64. SSH and outbound environments are rejected | Sedes CLI agent tools on an active local thread. No managed TUI, no remote route, no external or shared daemon. |
 
 The authoritative per-feature comparison stays in
@@ -105,7 +108,7 @@ execution environment grants is the same for every backend that can run there:
 | Directory browsing, Files, Compare | Within the saved local workspace roots | `directory_browser` and `workspace_files` |
 | Composer attachments | Within the saved local workspace roots | `composer_attachments` |
 | Pi workspace tools and context | Built in | `workspace_tools` plus `workspace_context`; `workspace_skills` for remote skills |
-| Sedes agent-tool CLI | Eligible local threads on all four backends | `agent_tools_cli`, for Codex and Claude only |
+| Sedes agent-tool CLI | Eligible local Pi, Codex, Claude, and Grok threads | `agent_tools_cli`, for Codex and Claude only |
 | Application terminals | PTY from the service account | `interactive_terminal` plus native PTY assets on that host; see [Supported environments](terminals.md#supported-environments) |
 | Codex managed TUI | External UDS/TCP connection with PTY support | Negotiated `codex_managed_tui` operations on the sidecar |
 

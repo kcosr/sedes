@@ -341,6 +341,7 @@ Any native output shape other than the exact completed `ImageGen` or
 | Grok | **Supported for owned-local sessions:** exact completed `ImageGen` or `ImageEdit` with a valid JPEG at the scoped session path. |
 | Claude | **Viewed images only:** the single in-band image block returned by a completed built-in `Read` of a PNG, JPEG, GIF, or WebP path, as Claude received it. |
 | Pi | **Viewed images only:** the first in-band image part returned by a completed built-in `read` of a PNG, JPEG, GIF, WebP, or BMP path, as Pi sent it to the model. |
+| OpenCode v2 | **Viewed images only:** retained in-band PNG, JPEG, GIF or WebP from the exact completed native `read`, when subsequent vision work proves inclusion within the qualified context bounds. |
 
 The boundaries outside that table remain important:
 
@@ -358,12 +359,25 @@ The boundaries outside that table remain important:
   blocks from MCP and other non-read tools remain metadata-only entries, and
   subagent reads show no viewed image.
 - Claude and Pi have no provider-generated image path.
+- OpenCode generated images and images from unrelated tools/MCP results are
+  unsupported. Viewed-image capture never rereads a path. It requires the exact
+  built-in `read` contract, retained raster bytes, and a later vision response
+  within native image-context limits. Pruning, opaque checkpoints, missing bytes
+  or absent subsequent vision work can leave capture unavailable. Trusted
+  plugins can alter tool producers or model context; native history does not
+  cryptographically attest that lineage. See the [native qualification and
+  context bounds](backends/opencode.md#images-and-manual-compaction).
 
 Input image support is independent. Pi, Codex, and Grok may accept normalized
 composer images under their own model- and topology-sensitive input
 capabilities without gaining provider-output support. Claude also accepts
 verified native composer image bytes, but that input path likewise says nothing
 about its output contract.
+OpenCode accepts authenticated staged composer files and validated native raster
+input on models advertising vision. Input attachment identity comes from scoped
+Sedes evidence and its byte reader; native paths alone do not grant read
+access or establish a public attachment. This input contract does not imply
+native generated-image support.
 
 ## Related documentation
 

@@ -29,6 +29,7 @@ import {
   defineAcpReverseRequestHandler,
   type AcpRequestDescriptor,
   type AcpRequestOptions,
+  type AcpNotificationOptions,
   type AcpRequestSettlement,
   type AcpSettlementRequestOptions,
 } from "../../provider-protocol/bindings/acp-v1/index.js";
@@ -354,8 +355,8 @@ export class GrokAcpConnection {
     });
   }
 
-  cancelSession(request: CancelNotification): Promise<void> {
-    return this.#binding.notify(ACP_AGENT_NOTIFICATIONS.cancelSession, request);
+  cancelSession(request: CancelNotification, options?: AcpNotificationOptions): Promise<void> {
+    return this.#binding.notify(ACP_AGENT_NOTIFICATIONS.cancelSession, request, options);
   }
 
   renameSession(

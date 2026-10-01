@@ -23,9 +23,9 @@ import type {
 } from "../execution/contracts.js";
 
 export type BackendKind =
-  "pi" | "codex_app_server" | "claude_agent_sdk" | "grok_build";
+  "pi" | "codex_app_server" | "claude_agent_sdk" | "grok_build" | "opencode";
 export type ConnectionKind =
-  "pi_sdk" | "codex_app_server" | "claude_agent_sdk" | "grok_acp";
+  "pi_sdk" | "codex_app_server" | "claude_agent_sdk" | "grok_acp" | "opencode_http";
 
 /**
  * The single server-side mapping from a compiled backend's kind to its
@@ -40,6 +40,7 @@ export const BACKEND_BRANDS: Readonly<Record<BackendKind, BackendBrand>> = {
   codex_app_server: "codex",
   claude_agent_sdk: "claude",
   grok_build: "grok",
+  opencode: "opencode",
 };
 
 export interface AgentBackendInstance {
@@ -248,6 +249,8 @@ export type ConversationCreationIdentity =
       readonly assignment: "application";
       /** Application pre-assigns the backend conversation ID. */
       readonly requestedBackendConversationId: "required";
+      /** Pure native-ID formatting, called once before the durable reservation. */
+      readonly reserveBackendConversationId: (seed: string) => string;
       /** Drivers may safely replay create for the same operation/id. */
       readonly createReplay: "idempotent";
       /** First submission still completes before durable thread binding. */
@@ -268,6 +271,7 @@ export type ConversationCreationIdentity =
 export const APPLICATION_ASSIGNED_CREATION_IDENTITY = Object.freeze({
   assignment: "application",
   requestedBackendConversationId: "required",
+  reserveBackendConversationId: (seed: string) => seed,
   createReplay: "idempotent",
   bindBeforeFirstSubmission: false,
 } as const satisfies ConversationCreationIdentity);
@@ -322,6 +326,19 @@ export interface AttachConversationInput {
   readonly binding: ConversationBinding;
   readonly workspace: ValidatedWorkspace;
   readonly opaqueBindingDetail: string;
+  /**
+   * Publish only after this exact native owner is controllable, independently
+   * of transcript hydration. Revoke the registration when owner authority is
+   * lost; a replacement owner must publish a new generation. This callback
+   * never authorizes launching or resuming work merely to make Stop available.
+   */
+  readonly onControlReady?: (control: ConversationControl) => void;
+  /**
+   * Exact input consumption proved independently of transcript hydration.
+   * This is a notification, never a provider-effect or retry authorization.
+   * The consumer serializes it with projected submission/completion evidence.
+   */
+  readonly onSubmissionObserved?: (input: { readonly backendCorrelation: string }) => void;
 }
 
 export interface ReadConversationInput {
@@ -567,14 +584,26 @@ export type SteerTurnResult =
       readonly backendTurnId?: string;
     });
 
-export interface InterruptTurnInput {
+export interface InterruptConversationInput {
   readonly applicationOperationId: string;
   /**
-   * Exact normalized backend turn identity captured before the interrupt
-   * receipt crossed the backend boundary. Drivers must refuse to interrupt a
-   * different active turn.
+   * Original server admission deadline in epoch milliseconds. A replay must
+   * never extend it. Select any native target once at dispatch; the shared
+   * operation has no earlier projected-turn precondition.
    */
-  readonly expectedBackendTurnId: string;
+  readonly deadlineAt: number;
+  readonly signal?: AbortSignal;
+}
+
+/** Existing native control authority; contains no transcript dependency. */
+export interface ConversationControl {
+  readonly generation: string;
+  /** Aborts when this published control authority is revoked. */
+  readonly lifetime: AbortSignal;
+  interrupt(input: InterruptConversationInput): Promise<void>;
+  reconcileInterrupt(input: InterruptConversationInput): Promise<BackendMutationReconciliation>;
+  /** Best-effort normalized feature cleanup after an accepted Stop. */
+  readonly mutateProviderFeature?: ConversationHandle["mutateProviderFeature"];
 }
 
 export type RegisteredBackendActionId =
@@ -623,6 +652,8 @@ export type BackendEventListener = (event: SequencedBackendEvent) => void;
 
 export interface ConversationHandle {
   readonly binding: ConversationBinding;
+  /** Whether idle client eviction can detach while native background work remains resident. */
+  readonly automaticEviction: "requires_quiescence" | "client_detach";
 
   /** Provider outcomes still settling after live work ends; blocks automatic eviction only. */
   readonly retirementBlocked?: boolean;
@@ -651,9 +682,9 @@ export interface ConversationHandle {
   captureSubmissionRetryAnchor(): Promise<string>;
   submit(input: SubmitTurnInput): Promise<SubmitTurnResult>;
   steer(input: SteerTurnInput): Promise<SteerTurnResult>;
-  interrupt(input: InterruptTurnInput): Promise<void>;
+  interrupt(input: InterruptConversationInput): Promise<void>;
   reconcileInterrupt(
-    input: InterruptTurnInput,
+    input: InterruptConversationInput,
   ): Promise<BackendMutationReconciliation>;
   perform(input: RegisteredBackendActionInput): Promise<BackendActionResult>;
   reconcileAction(
@@ -758,6 +789,8 @@ export interface BackendErrorShape {
    * The application then does not offer to start another fork.
    */
   readonly forkRestart?: "futile";
+  /** Repeating this exact projection acquisition cannot repair a proved fixed failure. */
+  readonly projectionRecovery?: "futile";
 }
 
 export class BackendError extends Error implements BackendErrorShape {
@@ -767,6 +800,7 @@ export class BackendError extends Error implements BackendErrorShape {
   readonly backendCode?: string;
   readonly steerRejectionReason?: BackendErrorShape["steerRejectionReason"];
   readonly forkRestart?: BackendErrorShape["forkRestart"];
+  readonly projectionRecovery?: BackendErrorShape["projectionRecovery"];
   /**
    * Bounded, server-only evidence that an external mutation whose immediate
    * result was uncertain may later become authoritative. The owning mutation
@@ -789,6 +823,7 @@ export class BackendError extends Error implements BackendErrorShape {
     this.backendCode = input.backendCode;
     this.steerRejectionReason = input.steerRejectionReason;
     this.forkRestart = input.forkRestart;
+    this.projectionRecovery = input.projectionRecovery;
     this.lateMutationReconciliation = options?.lateMutationReconciliation;
   }
 

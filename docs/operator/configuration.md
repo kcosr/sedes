@@ -253,7 +253,7 @@ no sidecar protocol update or remote environment setting. Re-enabling resumes
 accounting; backend history or cumulative counters may recover some earlier
 usage, but there is no automatic comprehensive reconciliation of the disabled
 period. Existing browser and packaged clients must be updated to client
-protocol 129 when installing this version.
+protocol 131 when installing this version.
 
 Provider Pulse is installation-owned, not tied to one environment, workspace,
 or thread. Sedes contacts it server-to-server on loopback and exposes only
@@ -471,6 +471,14 @@ creation shows provenance and lets you override, remove, or restore inherited
 values. Thread snapshots remain fixed, and forks inherit them. Ordinary
 terminals use environment-level tool defaults when launched.
 
+OpenCode installs frozen thread execution definitions into owned local root
+session shells before explicit work, using the applied daemon startup baseline
+and generated CLI values last. It does not reconfigure provider credentials,
+MCP children or native helper processes. Native child spawning is denied when
+required thread variables or CLI authority would otherwise be lost. External
+servers reject nonempty Sedes execution definitions; an imported empty snapshot
+preserves the native map. See [OpenCode v2](backends/opencode.md).
+
 A value can be a literal, a reference to an execution-host environment variable,
 a reference to a protected execution-host file, or an explicit removal. Use
 references for secrets: Sedes stores the reference and resolves it on that
@@ -601,6 +609,40 @@ The live catalog and the effective selection returned by every create/load are
 checked against the backend `modelPolicy`; `providerIds` are unsupported.
 Targets are local-only. See [Grok backend](backends/grok.md) for the supported
 conversation lifecycle and fail-closed feature limits.
+
+### OpenCode v2
+
+OpenCode requires a Linux execution host and stock `opencode2` 2.0.18 under
+that host's sidecar account (or the Sedes account for local execution). Select
+a local, SSH, or outbound environment independently of ownership. Choose an
+owned resident process or an existing authenticated loopback HTTP server. Both exchange conversation traffic over HTTP/SSE. The
+owned `process_stdio` channel controls startup and lifetime, not JSON-RPC.
+
+The strict module-configuration examples are
+[`opencode-owned.example.json`](../../config/opencode-owned.example.json) and
+[`opencode-external.example.json`](../../config/opencode-external.example.json).
+They illustrate the backend's `moduleConfiguration` value in principal-owned
+Settings; they are not installation bootstrap files. Path settings are optional:
+Sedes resolves `opencode2` on the execution host’s PATH and lets OpenCode use
+its native database, configuration and inherited working directory. Advanced
+overrides apply only when supplied. External
+passwords use an owner-protected file on a remote execution host. Local
+connections also accept approved environment references. All native paths and
+loopback endpoints are host-relative.
+Do not put password values in configuration JSON. Complete Settings-document
+examples cover [SSH owned](../../config/opencode-ssh-owned.example.json),
+[SSH external](../../config/opencode-ssh-external.example.json),
+[outbound owned](../../config/opencode-outbound-owned.example.json), and
+[outbound external](../../config/opencode-outbound-external.example.json).
+Replace the outbound pairing ID with the accepted host's binding. These are
+principal-owned Settings documents, not installation bootstrap files.
+
+OpenCode currently admits only the `catalog` model policy: native title models,
+plugins and other clients remain outside Sedes's per-session model selection.
+Targets choose a catalog default or exact provider-qualified model and a
+reviewed default/effort variant. Unqualified native variants require explicit
+repair before new work. See [OpenCode v2](backends/opencode.md) for capability
+limits and uncertain-input recovery.
 
 ### Codex
 

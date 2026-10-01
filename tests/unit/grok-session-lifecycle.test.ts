@@ -3,11 +3,12 @@ import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GrokOwnedStdioTransportFactory } from "../../src/server/backends/grok/grok-owned-stdio-transport.js";
 import { projectGrokLatestHistory } from "../../src/server/backends/grok/grok-normalized-history.js";
 import type { ResolvedGrokWorkspaceRuntimeConfiguration } from "../../src/server/backends/grok/grok-runtime-config.js";
-import { GrokSessionLifecycle } from "../../src/server/backends/grok/grok-session-lifecycle.js";
+import { GrokInterruptNotSentError, GrokSessionLifecycle } from "../../src/server/backends/grok/grok-session-lifecycle.js";
+import { AcpDeliveryError } from "../../src/server/provider-protocol/bindings/acp-v1/index.js";
 import { GrokSessionRegistry } from "../../src/server/backends/grok/grok-session-registry.js";
 import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
 import { MAXIMUM_COMPOSER_INPUT_BYTES } from "../../src/shared/protocol/context-excerpts.js";
@@ -51,6 +52,37 @@ afterEach(async () => {
 });
 
 describe("Grok provider-private lifecycle", () => {
+  it.each(["cancel", "completion"] as const)("attributes not_sent to its actual %s stage", async stage => {
+    const { lifecycle } = await openLifecycle("prompt_hang_after_acceptance", 70);
+    let rejectPrompt!: (error: unknown) => void;
+    const promptReply = new Promise<never>((_resolve, reject) => { rejectPrompt = reject; });
+    const prompt = vi.spyOn(lifecycle.connection, "promptWithSettlement").mockReturnValue(promptReply);
+    const failure = new AcpDeliveryError("acp_binding_closed", "not_sent");
+    const cancel = vi.spyOn(lifecycle.connection, "cancelSession").mockImplementation(async () => {
+      if (stage === "cancel") throw failure;
+      rejectPrompt(failure);
+    });
+    try {
+      const created = await lifecycle.newSession({ configuration: sessionConfiguration });
+      const operation = startPromptText(lifecycle, created.state.sessionId, "interrupt-stage", "work");
+      const completed = operation.completed.catch(error => error);
+      await vi.waitFor(() => expect(prompt).toHaveBeenCalledOnce());
+      const stopping = lifecycle.interruptPrompt(created.state.sessionId, operation.promptId);
+      if (stage === "cancel") {
+        await expect(stopping).rejects.toBeInstanceOf(GrokInterruptNotSentError);
+        rejectPrompt(failure);
+      } else {
+        await expect(stopping).rejects.toBe(failure);
+      }
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(await completed).toBe(failure);
+    } finally {
+      rejectPrompt(failure);
+      prompt.mockRestore(); cancel.mockRestore();
+      await lifecycle.close("test_complete");
+    }
+  });
+
   it("exposes source-streamed native history through its owned connection", async () => {
     const { lifecycle, workspace } = await openLifecycle("normal", 10);
     try {

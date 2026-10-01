@@ -1,10 +1,7 @@
+import { startProductionSshServer, unusedLoopbackPort, terminateChild } from "../support/production-carrier-fixture.js";
 import { SEDES_VERSION } from "../../src/shared/version.js";
 import { authenticatedProductionFetch } from "../helpers/authenticated-production-client.js";
-import {
-  execFile as execFileCallback,
-  spawn,
-  type ChildProcess,
-} from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { accessSync, constants as fsConstants } from "node:fs";
 import {
@@ -16,10 +13,9 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { createConnection, createServer } from "node:net";
-import { tmpdir, userInfo } from "node:os";
+import { createConnection } from "node:net";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import Database from "better-sqlite3";
 import { build } from "esbuild";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -71,7 +67,6 @@ import { terminateProcessesReferencing } from "../support/process-cleanup.js";
 const SSH = "/usr/bin/ssh";
 const SSHD = "/usr/sbin/sshd";
 const SSH_KEYGEN = "/usr/bin/ssh-keygen";
-const execFile = promisify(execFileCallback);
 const LOCAL_ENVIRONMENT_ID = "019196f7-a0a8-7bc4-a89b-8cf013978405";
 const SSH_ENVIRONMENT_ID = "019196f7-a0a8-7bc4-a89b-8cf013978406";
 const fixtures: ProductionSshFixture[] = [];
@@ -800,97 +795,12 @@ class ProductionSshFixture {
       await chmod(item, 0o700);
     }
 
-    const hostKey = path.join(directory, "host-key");
-    const clientKey = path.join(directory, "client-key");
-    await generateKey(hostKey);
-    await generateKey(clientKey);
-    const authorizedKeys = path.join(directory, "authorized_keys");
-    await writeFile(authorizedKeys, await readFile(`${clientKey}.pub`));
-    await chmod(authorizedKeys, 0o600);
-
-    const sshPort = await unusedLoopbackPort();
     const httpPort = await unusedLoopbackPort();
-    const hostPublicKey = await readFile(`${hostKey}.pub`, "utf8");
-    const knownHosts = path.join(directory, "known_hosts");
-    await writeKnownHost(knownHosts, sshPort, hostPublicKey);
-    const sshConfig = path.join(directory, "ssh_config");
-    await writeFile(
-      sshConfig,
-      [
-        "Host sedes-production-fixture",
-        "  HostName 127.0.0.1",
-        `  Port ${sshPort}`,
-        `  User ${userInfo().username}`,
-        `  IdentityFile ${clientKey}`,
-        `  UserKnownHostsFile ${knownHosts}`,
-        "  GlobalKnownHostsFile /dev/null",
-        "  StrictHostKeyChecking yes",
-        "  IdentitiesOnly yes",
-        "  IdentityAgent none",
-        "  PasswordAuthentication no",
-        "  KbdInteractiveAuthentication no",
-        "  PubkeyAuthentication yes",
-        "  CheckHostIP no",
-        "  SendEnv -LANG -LC_*",
-        "  LogLevel ERROR",
-        "",
-      ].join("\n"),
-    );
-    await chmod(sshConfig, 0o600);
-    const sshWrapper = path.join(binDirectory, "ssh");
-    const sshInvocationLog = path.join(directory, "ssh-invocations.log");
-    await writeFile(sshInvocationLog, "");
-    await writeFile(
-      sshWrapper,
-      `#!/bin/bash\nprintf '%s\\n' "$*" >> ${shellQuote(sshInvocationLog)}\nargs=("$@")\nlast_index=$((\${#args[@]} - 1))\nlast="\${args[$last_index]}"\nif [[ "$last" == "exec node "* ]]; then\n  args[$last_index]="export PATH=${binDirectory}:/usr/local/bin:/usr/bin:/bin; export HOME=${remoteHome}; $last"\nfi\nexec ${SSH} -F ${shellQuote(sshConfig)} "\${args[@]}"\n`,
-    );
-    await chmod(sshWrapper, 0o700);
-    const nodeWrapper = path.join(binDirectory, "node");
-    await writeFile(
-      nodeWrapper,
-      `#!/bin/sh\nexec ${shellQuote(process.execPath)} "$@"\n`,
-    );
-    await chmod(nodeWrapper, 0o700);
-
-    const sshdConfig = path.join(directory, "sshd_config");
-    await writeFile(
-      sshdConfig,
-      [
-        `Port ${sshPort}`,
-        "ListenAddress 127.0.0.1",
-        `HostKey ${hostKey}`,
-        `AuthorizedKeysFile ${authorizedKeys}`,
-        `PidFile ${path.join(directory, "sshd.pid")}`,
-        "PasswordAuthentication no",
-        "KbdInteractiveAuthentication no",
-        "PubkeyAuthentication yes",
-        "AuthenticationMethods publickey",
-        "UsePAM no",
-        "StrictModes no",
-        `AllowUsers ${userInfo().username}`,
-        "AllowAgentForwarding no",
-        "AllowTcpForwarding yes",
-        "AllowStreamLocalForwarding yes",
-        "GatewayPorts no",
-        "PermitTTY no",
-        "X11Forwarding no",
-        "PermitUserEnvironment no",
-        "LogLevel ERROR",
-        "",
-      ].join("\n"),
-    );
-    const sshd = spawn(SSHD, ["-D", "-e", "-f", sshdConfig], {
-      stdio: ["ignore", "ignore", "pipe"],
-    });
-    let sshdStderr = "";
-    sshd.stderr?.on("data", (chunk: Buffer) => {
-      sshdStderr += chunk.toString("utf8");
-    });
+    const { child: sshd, invocationLog: sshInvocationLog } = await startProductionSshServer({ directory, binDirectory, remoteHome });
 
     const remoteSocket = path.join(remoteParent, "codex.sock");
     const peer = new RawUdsWebSocketServer({ socketPath: remoteSocket });
     try {
-      await waitForLoopbackServer(sshPort, sshd, () => sshdStderr);
       await peer.listen();
       const configurationPath = path.join(directory, "backend.json");
       const legacyConfigurationPath = path.join(directory, "legacy-import.json");
@@ -1202,10 +1112,6 @@ function nestedString(
   return typeof result === "string" ? result : undefined;
 }
 
-async function generateKey(file: string): Promise<void> {
-  await execFile(SSH_KEYGEN, ["-q", "-t", "ed25519", "-N", "", "-f", file]);
-}
-
 async function buildSidecarArtifact(
   directory: string,
 ): Promise<SidecarArtifactRegistration> {
@@ -1238,75 +1144,6 @@ async function buildSidecarArtifact(
     minimumNodeVersion: SIDECAR_MINIMUM_NODE_VERSION,
     nativeAssets: [],
   });
-}
-
-async function writeKnownHost(
-  file: string,
-  port: number,
-  publicKey: string,
-): Promise<void> {
-  const [kind, encoded] = publicKey.trim().split(/\s+/, 3);
-  if (!kind || !encoded) throw new Error("fixture_public_key_invalid");
-  await writeFile(file, `[127.0.0.1]:${port} ${kind} ${encoded}\n`);
-  await chmod(file, 0o600);
-}
-
-async function unusedLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    server.close();
-    throw new Error("fixture_port_unavailable");
-  }
-  await new Promise<void>((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve())),
-  );
-  return address.port;
-}
-
-async function waitForLoopbackServer(
-  port: number,
-  child: ChildProcess,
-  stderr: () => string,
-): Promise<void> {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error(`fixture_sshd_exited:${stderr()}`);
-    }
-    const connected = await new Promise<boolean>((resolve) => {
-      const client = createConnection({ host: "127.0.0.1", port });
-      client.once("connect", () => {
-        client.destroy();
-        resolve(true);
-      });
-      client.once("error", () => resolve(false));
-    });
-    if (connected) return;
-    await delay(20);
-  }
-  throw new Error(`fixture_sshd_start_timeout:${stderr()}`);
-}
-
-async function terminateChild(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  const exited = new Promise<void>((resolve) => child.once("exit", resolve));
-  child.kill("SIGTERM");
-  const graceful = await Promise.race([
-    exited.then(() => true),
-    delay(1_000).then(() => false),
-  ]);
-  if (graceful) return;
-  child.kill("SIGKILL");
-  await Promise.race([exited, delay(1_000)]);
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 async function withTimeout<T>(

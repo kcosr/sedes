@@ -13,7 +13,7 @@ import { SidecarOperationError } from "../../../../internal/sidecar-protocol/ope
 import type { ClaudeSdkSessionInitialization } from "../claude-sdk-session.js";
 import { verifyClaudeRuntimeVersion } from "../claude-release-guard.js";
 import { resolveClaudeSafeSkills, type ClaudeSafeSkill } from "../claude-skills.js";
-import * as worker from "../worker/claude-runtime-v1.js";
+import * as worker from "../worker/claude-runtime-v2.js";
 import { CLAUDE_PERSISTENT_MAXIMUM_SESSIONS, claudePersistentOpenRequestSchema, claudePersistentRetireResponseSchema, claudePersistentSubmissionDispositionResponseSchema, claudePersistentConfigurationSchema, claudePersistentAttachmentSchema, claudePersistentSendResponseSchema, type ClaudePersistentCommand, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
 import { ClaudeSidecarRuntimeConnection, claudePersistentRuntimeOperations } from "./claude-sidecar-runtime.js";
 
@@ -368,7 +368,11 @@ class PersistentSession implements ClaudeRuntimeSession {
     this.#reopenEffort = response.confirmedEffort !== undefined ? response.confirmedEffort : effort;
     this.#confirmedEffort = response.confirmedEffort !== undefined ? response.confirmedEffort : response.reattached ? undefined : effort;
     this.#initialization = response.initialization as ClaudeSdkSessionInitialization;
+    const previousOwner = this.#startupProbeUuid;
     this.#startupProbeUuid = response.startupProbeUuid;
+    if (previousOwner !== undefined && previousOwner !== this.#startupProbeUuid) {
+      this.options.onControlAuthorityChanged?.();
+    }
     this.#safeSkills = resolveClaudeSafeSkills(this.#initialization);
     this.#attached = attachment;
     const snapshotSequence = Math.max(0, ...response.events.map(event => event.sequence));
@@ -411,9 +415,37 @@ class PersistentSession implements ClaudeRuntimeSession {
       });
     }
   }
-  async interrupt() {
+  async interrupt(input: Parameters<ClaudeRuntimeSession["interrupt"]>[0]) {
     this.#assertReady();
-    return worker.claudeRuntimeQueryInterruptOperation.responseSchema.parse(await this.#execute({ action: "interrupt", request: { queryId: this.options.sessionId } })).receipt ?? undefined;
+    const remaining = input.deadlineAt - Date.now();
+    if (remaining <= 0 || input.signal?.aborted) throw new Error("claude_interrupt_deadline");
+    return worker.claudeRuntimeQueryInterruptOperation.responseSchema.parse(await this.#executeControl({
+      action: "interrupt", request: { queryId: this.options.sessionId,
+        startupProbeUuid: this.#startupProbeUuid!, operationId: input.applicationOperationId,
+        timeoutMilliseconds: Math.min(30_000, remaining) },
+    }, input)).receipt ?? undefined;
+  }
+  async reconcileInterrupt(input: Parameters<ClaudeRuntimeSession["interrupt"]>[0]): Promise<"accepted" | "unknown"> {
+    this.#assertReady();
+    if (input.deadlineAt <= Date.now() || input.signal?.aborted) return "unknown";
+    return worker.claudeRuntimeQueryInterruptDispositionResponseSchema.parse(await this.#executeControl({
+      action: "interrupt_disposition", request: { queryId: this.options.sessionId,
+        startupProbeUuid: this.#startupProbeUuid!, operationId: input.applicationOperationId },
+    }, input)).outcome;
+  }
+  async #executeControl(command: Command, input: Parameters<ClaudeRuntimeSession["interrupt"]>[0]) {
+    const attachment = this.client.current();
+    // Stop never creates a carrier, native runtime or query, and never waits
+    // for replay/history. Ordinary reconnect may restore this same authority.
+    if (!attachment || attachment.runtimeId !== this.#runtimeIdentity ||
+        attachment.lease.serviceIncarnation !== this.#serviceIncarnation || !this.#startupProbeUuid) {
+      throw new Error("claude_persistent_control_unavailable");
+    }
+    const remaining = input.deadlineAt - Date.now();
+    if (remaining <= 0 || input.signal?.aborted) throw new Error("claude_interrupt_deadline");
+    return attachment.connection.execute({ ...command, runtimeId: attachment.runtimeId,
+      controllerEpoch: attachment.lease.controllerEpoch } as ClaudePersistentCommand,
+    { signal: input.signal, deadlineMilliseconds: Math.min(30_000, remaining) });
   }
   async setModel(model?: string) {
     this.#assertReady();

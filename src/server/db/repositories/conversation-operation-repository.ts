@@ -85,8 +85,9 @@ export type InterruptOperationRecord = {
   readonly threadId: string;
   readonly operationId: string;
   readonly applicationOperationId: string;
-  readonly expectedActiveTurnId: string;
-  readonly state: "prepared" | "uncertain" | "accepted";
+  readonly deadlineAt: number;
+  readonly state: "prepared" | "uncertain" | "accepted" | "failed_unknown";
+  readonly failureDiagnostic?: string;
   readonly createdAt: number;
 };
 
@@ -182,9 +183,10 @@ type QueuedInputSteerResult = SteerResultBase & {
 type SteerResult = DraftSteerResult | QueuedInputSteerResult;
 
 type InterruptResult = {
-  readonly version: 1;
+  readonly version: 2;
   readonly applicationOperationId: string;
-  readonly expectedActiveTurnId: string;
+  readonly deadlineAt: number;
+  readonly failureDiagnostic?: string;
 };
 
 type BackendActionResult = {
@@ -413,16 +415,20 @@ function parseInterrupt(row: ReceiptRow): InterruptOperationRecord {
     row.operationKind !== "conversation_interrupt" ||
     (row.resultCode !== "prepared" &&
       row.resultCode !== "uncertain" &&
-      row.resultCode !== "accepted")
+      row.resultCode !== "accepted" &&
+      row.resultCode !== "failed_unknown")
   ) {
     throw new Error("conversation_interrupt_receipt_invalid");
   }
   const result = JSON.parse(row.resultJson) as Partial<InterruptResult>;
   if (
-    result.version !== 1 ||
+    result.version !== 2 ||
     typeof result.applicationOperationId !== "string" ||
-    typeof result.expectedActiveTurnId !== "string" ||
-    result.expectedActiveTurnId.length === 0
+    result.applicationOperationId.length === 0 ||
+    !Number.isSafeInteger(result.deadlineAt) ||
+    (row.resultCode === "failed_unknown" &&
+      (typeof result.failureDiagnostic !== "string" ||
+        result.failureDiagnostic.length < 1 || result.failureDiagnostic.length > 500))
   ) {
     throw new Error("conversation_interrupt_receipt_payload_invalid");
   }
@@ -432,7 +438,8 @@ function parseInterrupt(row: ReceiptRow): InterruptOperationRecord {
     threadId: row.threadId,
     operationId: row.mutationId,
     applicationOperationId: result.applicationOperationId,
-    expectedActiveTurnId: result.expectedActiveTurnId,
+    deadlineAt: result.deadlineAt!,
+    ...(row.resultCode === "failed_unknown" ? { failureDiagnostic: result.failureDiagnostic! } : {}),
     state: row.resultCode,
     createdAt: row.createdAt,
   };
@@ -915,7 +922,6 @@ export class ConversationOperationRepository {
     threadId: string,
     input: {
       readonly operationId: string;
-      readonly expectedActiveTurnId: string;
       readonly now: number;
     },
   ): InterruptOperationRecord {
@@ -938,13 +944,13 @@ export class ConversationOperationRepository {
         }
         return parseInterrupt(existing);
       }
-      if (input.expectedActiveTurnId.length === 0) {
-        throw new Error("conversation_interrupt_active_turn_required");
+      if (!Number.isSafeInteger(input.now) || !Number.isSafeInteger(input.now + 30_000)) {
+        throw new Error("conversation_interrupt_admission_time_invalid");
       }
       const result: InterruptResult = {
-        version: 1,
+        version: 2,
         applicationOperationId: input.operationId,
-        expectedActiveTurnId: input.expectedActiveTurnId,
+        deadlineAt: input.now + 30_000,
       };
       this.database
         .prepare(
@@ -1046,10 +1052,10 @@ export class ConversationOperationRepository {
   ): void {
     this.database.transaction(() => {
       const current = this.getInterrupt(scope, operationId);
-      if (current.state === "accepted") {
+      if (current.state === "accepted" || current.state === "failed_unknown") {
         throw new DomainError(
           "conflict",
-          "An accepted interrupt cannot be rejected.",
+          "A terminal interrupt cannot be rejected.",
         );
       }
       this.database
@@ -1062,6 +1068,29 @@ export class ConversationOperationRepository {
           `,
         )
         .run(scope.tenantId, scope.principalId, operationId);
+    })();
+  }
+
+  /** Expiry is durable and independent of a provider or projection becoming available. */
+  expireInterrupts(scope: RequestScope, now: number, threadId?: string): readonly string[] {
+    return this.database.transaction(() => {
+      const parameters = [scope.tenantId, scope.principalId, now, ...(threadId ? [threadId] : [])];
+      const predicate = `tenant_id = ? AND principal_id = ?
+        AND operation_kind = 'conversation_interrupt'
+        AND json_extract(result_json, '$.deadlineAt') <= ?
+        ${threadId ? "AND thread_id = ?" : ""}`;
+      const affected = this.database.prepare(`SELECT DISTINCT thread_id AS threadId FROM mutation_receipts
+        WHERE ${predicate} AND result_code IN ('prepared', 'uncertain')`).all(...parameters) as { threadId: string }[];
+      // Prepared proves that no provider effect was attempted. Its deletion is
+      // the same safe refusal policy used by other undispatched operations.
+      this.database.prepare(`DELETE FROM mutation_receipts
+        WHERE ${predicate} AND result_code = 'prepared'`).run(...parameters);
+      this.database.prepare(`UPDATE mutation_receipts
+        SET result_code = 'failed_unknown', replayable = 1,
+          result_json = json_set(result_json, '$.failureDiagnostic',
+            'Stop reached its deadline without a confirmed outcome. You may issue a new Stop.')
+        WHERE ${predicate} AND result_code = 'uncertain'`).run(...parameters);
+      return affected.map(row => row.threadId);
     })();
   }
 

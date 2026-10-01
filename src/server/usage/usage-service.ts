@@ -1,4 +1,5 @@
 import type { ConversationTurn } from "../../shared/protocol/conversation.js";
+import type { BackendKind } from "../backends/contracts.js";
 import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import { z } from "zod";
@@ -14,6 +15,10 @@ import { UsageAnalyticsService } from "./usage-analytics-service.js";
 import { costSplit, increaseOverBaseline, rebuildUsageTimeline, snapshotFact, snapshotReshaped, timelineInstant, writeUsageIncrement, type TimelineSource, type TimelineTime } from "./usage-timeline.js";
 
 const identifier = z.string().min(1).max(2048);
+const usageSupport: Readonly<Record<BackendKind, UsageReport["support"]>> = {
+  pi: "supported", codex_app_server: "supported", claude_agent_sdk: "supported",
+  grok_build: "unsupported", opencode: "supported",
+};
 const factSchema = z.strictObject({
   id: identifier, kind: z.enum(["operation", "auxiliary", "cumulative", "turn_aggregate"]),
   sessionContribution: z.enum(["additive", "checkpoint", "none"]), coverageDomain: identifier,
@@ -114,7 +119,7 @@ export class UsageService implements UsageSink {
   #authorize(scope:RequestScope, threadId:string) {
     const row = this.database.prepare(`SELECT t.backend_instance_id, t.environment_id, t.workspace_id, b.kind
       FROM application_threads t JOIN agent_backend_instances b ON b.tenant_id=t.tenant_id AND b.id=t.backend_instance_id
-      WHERE t.tenant_id=? AND t.owner_principal_id=? AND t.id=?`).get(scope.tenantId,scope.principalId,threadId) as {backend_instance_id:string;environment_id:string;workspace_id:string;kind:string}|undefined;
+      WHERE t.tenant_id=? AND t.owner_principal_id=? AND t.id=?`).get(scope.tenantId,scope.principalId,threadId) as {backend_instance_id:string;environment_id:string;workspace_id:string;kind:BackendKind}|undefined;
     if (!row) throw new DomainError("not_found", "The thread was not found.");
     return row;
   }
@@ -133,7 +138,7 @@ export class UsageService implements UsageSink {
     if (turnId !== null && !turn) throw new DomainError("not_found", "The turn was not found.");
     const stored = turnId === null ? state?.report_json : turn?.report_json;
     const report:UsageReport = stored ? usageReportSchema.parse(JSON.parse(stored)) : {
-      threadId,turnId,revision:String(state?.revision ?? 0n),support:target.kind === "grok_build" ? "unsupported" : "supported",state:"unavailable",captureState:"idle",measurementScope:turnId === null ? "session":null,turnState:turn?.status ?? null,lastRecordedAt:null,inherited:false,summary:emptyUsageSummary(),breakdown:turnId===null && target.kind==="codex_app_server"?{main:emptyUsageSummary(),subagents:emptyUsageSummary()}:null,legacy:null,legacyRecordedAt:null,
+      threadId,turnId,revision:String(state?.revision ?? 0n),support:usageSupport[target.kind],state:"unavailable",captureState:"idle",measurementScope:turnId === null ? "session":null,turnState:turn?.status ?? null,lastRecordedAt:null,inherited:false,summary:emptyUsageSummary(),breakdown:turnId===null && target.kind==="codex_app_server"?{main:emptyUsageSummary(),subagents:emptyUsageSummary()}:null,legacy:null,legacyRecordedAt:null,
     };
     if (turnId === null && state?.legacy_json) {
       const legacy = emptyUsageSummary();
@@ -568,7 +573,7 @@ export class UsageService implements UsageSink {
       const scopes=uniq(selected.flatMap(({fact})=>fact.turn?[fact.turn.scope]:[]));
       const hasValue=Object.values(summary.metrics).some(m=>m.value!==null)||summary.costs.length>0;
       const complete=hasValue && !hasIncompleteUsage(summary.reasons) && Object.values(summary.metrics).every(m=>m.quality==="complete"||m.quality==="unreported") && (summary.costQuality==="complete"||summary.costQuality==="unreported") && (turnId===null || (turnState==="completed" && scopes.length===1 && (scopes[0]==="whole_turn"||scopes[0]==="main_loop")));
-      return usageReportSchema.parse({threadId,turnId,revision:String(revision),support:this.#authorize(scope,threadId).kind === "grok_build" ? "unsupported" : "supported",state:hasValue?(complete?"complete":"partial"):"unavailable",captureState:reportSources.some(s=>s.capture_state==="active")?"active":reportSources.some(s=>s.capture_state==="disconnected")?"disconnected":"idle",measurementScope:turnId===null?"session":scopes.length===1?scopes[0]:scopes.length?"partial_interval":null,turnState,lastRecordedAt:turnId===null?last.time:selected.map(row=>row.recordedAt).sort().at(-1)??null,inherited:false,summary,breakdown,legacy:null,legacyRecordedAt:null});
+      return usageReportSchema.parse({threadId,turnId,revision:String(revision),support:usageSupport[this.#authorize(scope,threadId).kind],state:hasValue?(complete?"complete":"partial"):"unavailable",captureState:reportSources.some(s=>s.capture_state==="active")?"active":reportSources.some(s=>s.capture_state==="disconnected")?"disconnected":"idle",measurementScope:turnId===null?"session":scopes.length===1?scopes[0]:scopes.length?"partial_interval":null,turnState,lastRecordedAt:turnId===null?last.time:selected.map(row=>row.recordedAt).sort().at(-1)??null,inherited:false,summary,breakdown,legacy:null,legacyRecordedAt:null});
     };
     const report=make(null,null);
     const turns=this.database.prepare("SELECT turn_id,status,report_json,origin_thread_id,origin_turn_id FROM usage_turn_state WHERE tenant_id=? AND principal_id=? AND thread_id=?").all(...args) as {turn_id:string;status:UsageReport["turnState"];report_json:string|null;origin_thread_id:string|null;origin_turn_id:string|null}[];

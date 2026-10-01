@@ -482,7 +482,7 @@ describe("ClaudeSdkSession", () => {
     await session.setModel("sonnet");
     await session.setEffort("medium");
     await session.setPermissionMode("dontAsk");
-    await session.interrupt();
+    await session.interrupt({ applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000 });
     expect(fixture.controls.setModel).toHaveBeenCalledWith("sonnet");
     expect(fixture.controls.setPermissionMode).toHaveBeenCalledWith("dontAsk");
     expect(fixture.controls.applyFlagSettings).toHaveBeenCalledWith({

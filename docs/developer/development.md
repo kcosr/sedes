@@ -196,6 +196,40 @@ shutdown/restart, external UDS/TCP survival, unavailable-target isolation, and
 owned-stdio process-group/native-lock ordering. It currently requires Linux
 x64, procfs, and a compatible operator-installed Codex command.
 
+The OpenCode v2 qualification suite uses an explicitly selected `opencode2`
+2.0.18 binary with disposable configuration/storage and loopback model/MCP
+fixtures. It never uses a native account or external inference. It is excluded
+from ordinary `npm test` and self-gates before launching the binary:
+
+```sh
+SEDES_RUN_REAL_OPENCODE=1 \
+  SEDES_REAL_OPENCODE_EXECUTABLE=/absolute/path/to/opencode2 \
+  env -u NODE_ENV npm run test:real-opencode
+```
+
+The process fixtures require Linux procfs to identify and clean up marked
+descendants, including children in detached process groups. Run this opt-in
+suite on a host with visible process ancestry and without concurrently starting
+non-dumpable same-account processes (such as SSH agents or control masters)
+whose ownership cannot be excluded. Hidden procfs ancestry or an ambiguous
+unreadable process makes cleanup unproved and retains the isolated native
+directory for inspection. The detached-child cleanup regression belongs to this
+same opt-in suite; ordinary `npm test` performs no such machine-wide scan.
+The suite combines native characterization with production adapter qualification.
+Characterization includes reproducing missing idle filtering, MCP catalog
+readiness races, and synthetic credential environment exposure. Production
+checks exercise native codecs, resident ownership, history, delivery, mutation
+recovery, MCP ingress, scoped shell environments, images, compaction and usage. The compiled OpenCode module admits exactly stock 2.0.18;
+these loopback fixtures do not qualify authenticated external model providers.
+The production-carrier job uses built provider/sidecar artifacts and covers
+local, actual OpenSSH and paired outbound connections in both ownership modes.
+Build first; its SSH cells require an executable `/usr/sbin/sshd` plus `ssh`
+and `ssh-keygen`. Fixtures use disposable account homes, host-local password
+files and native stores. Main-side native identity and password resolvers are
+denied during remote cases so sharing a test-machine UID cannot conceal
+incorrect main-side native access.
+See the [OpenCode operator guide](../operator/backends/opencode.md).
+
 After client, Capacitor dependency/configuration, or native Android changes,
 run:
 
@@ -223,15 +257,68 @@ release-artifact contract.
 ## Live-provider suites
 
 Do not run commands matching `test:real-pi*`, `test:real-codex*`,
-`test:real-claude*`, or `test:real-grok*` by default.
+`test:real-claude*`, `test:real-grok*`, or `test:live-opencode` by default.
 They consume live provider capacity or exercise authenticated external state
 and require explicit user authorization for the relevant backend change.
+
+OpenCode's authenticated gate is separate from both `npm test` and the entirely
+local `test:real-opencode` suite. After authorization, select an exact reviewed
+OpenAI-compatible provider endpoint/model and the name of an existing credential
+environment variable. The command below contains no credential value:
+
+```sh
+SEDES_RUN_LIVE_OPENCODE=1 \
+  SEDES_REAL_OPENCODE_EXECUTABLE=/absolute/path/to/opencode2 \
+  SEDES_LIVE_OPENCODE_MODEL_ID=exact-model-id \
+  SEDES_LIVE_OPENCODE_BASE_URL=https://provider.example/v1 \
+  SEDES_LIVE_OPENCODE_API_KEY_ENV=MY_PROVIDER_API_KEY \
+  env -u NODE_ENV npm run test:live-opencode
+```
+
+The endpoint must use HTTPS without embedded credentials, query or fragment.
+The native provider ID is fixed to `sedes-live-gate`, so stock built-in provider
+plugins cannot substitute another transport or reshape the rehearsed request.
+Set `SEDES_LIVE_OPENCODE_TOKEN_FIELD` to `max_completion_tokens` if that endpoint
+requires it; the default is `max_tokens`. For the AW Qwen endpoint, set
+`SEDES_LIVE_OPENCODE_REASONING_FORMAT=chat-template` to send its explicit
+low-reasoning chat-template settings. No provider or model is auto-selected.
+The gate places a 256-token limit in
+the actual request body, with a 16 KiB observed text limit, two logical model
+steps, a 45-second total runner deadline including setup, and native 20-second
+request/10-second chunk timeouts. A synchronous check refuses to submit if
+setup exhausted that deadline. The test harness reserves additional time for
+bounded native startup settlement and independent cleanup after cancellation.
+Stock 2.0.18 has internal transient retries which cannot be
+disabled through configuration; the first observed retry fails the gate and
+requests Stop. The gate checks parsed events before closing its observation and
+settles that monitor before success; the local cutoff cannot prove that every
+server-side retry was observed. These are exposure limits, **not a guaranteed monetary cap**:
+interrupted or retried remote requests can still be billed, and endpoint token
+limit behavior remains provider-specific.
+
+The gate starts an isolated Sedes-owned stock daemon, configuration, HOME/XDG
+directories, native store and session. Only the explicitly referenced credential
+is copied into its process environment; the operator's native account/configuration
+is not used. This has the ordinary same-account process-environment trust boundary.
+Native permissions deny everything except reading one disposable canary file.
+Automatic title/compaction work is suppressed. The gate submits once, reconciles
+that same operation if necessary, and requires exact consumed-input evidence,
+successful canary read, matching completed turn, and stable history after reattach.
+It attempts runtime shutdown even if handle/observation cleanup fails, closes
+SQLite independently, and retains native state if process cleanup is unproved.
+
+`tests/real-opencode/live-gate-rehearsal.test.ts` exercises this same runner with
+a loopback model: it checks exclusive wire token-limit fields, canary content
+in the model's tool result after the allowed read, and a denied
+read outside the canary path without external inference. This rehearsal does
+not qualify a real provider or its billing behavior.
 
 When a backend-specific change affects protocol handling, streaming, history,
 lifecycle, tools, interactions, or provider integration, ask whether to run the
 relevant live suite. The main Pi gate is self-limiting: it refuses to prompt
-until exactly one authenticated `xai/grok-4.5` provider/model pair is available
-at low reasoning with read-only tools. Do not weaken the gate, substitute a
+until exactly one authenticated AW Qwen
+`aw-qwen-3-8-27b/aw-qwen-3-8-27b` provider/model pair is available at low
+reasoning with read-only tools. Do not weaken the gate, substitute a
 model, or point it at an existing session.
 
 ```sh

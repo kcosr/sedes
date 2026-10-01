@@ -41,6 +41,7 @@ import {
   type EnvironmentAssuredTcpStreamIdentity,
   type EnvironmentSecretIdentity,
   type EnvironmentSecretReference,
+  type EnvironmentSecretPurpose,
   type EnvironmentOwnedProcessChannel,
   type EnvironmentOwnedProcessCleanupPolicy,
   type EnvironmentOwnedProcessIdentity,
@@ -454,6 +455,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
       request.authentication,
       connectionGeneration,
       signal,
+      "capability_token",
     );
     if (signal.aborted) {
       authentication.discard();
@@ -675,6 +677,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
     }
     if (
       !this.#activeSecrets.has(authenticationIdentity) ||
+      authenticationIdentity.purpose !== "capability_token" ||
       authenticationIdentity.connectionGeneration !== connectionGeneration ||
       !sameEnvironmentChannelScope(authenticationIdentity.scope, scope)
     ) {
@@ -734,6 +737,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
     reference: EnvironmentSecretReference,
     connectionGeneration: number,
     signal: AbortSignal,
+    purpose: EnvironmentSecretPurpose,
   ): Promise<ResolvedEnvironmentSecret> {
     this.#assertScope(scope);
     throwIfAborted(signal);
@@ -745,7 +749,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
     }
     const value = await Promise.resolve(
       reference.source === "environment"
-        ? resolveEnvironmentSecret(this.#environment, reference.variable)
+        ? resolveEnvironmentSecret(this.#environment, reference.variable, purpose)
         : resolveProtectedFileSecret(reference.path, signal),
     );
     // Secret resolution is an asynchronous capability boundary even for an
@@ -753,8 +757,12 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
     // and prevent a resolved value from escaping a closed provider.
     this.#assertScope(scope);
     throwIfAborted(signal);
-    assertCapabilityToken(value);
+    if (purpose === "capability_token") assertCapabilityToken(value);
+    else if (purpose === "http_basic_password") assertHttpBasicPassword(value);
+    else throw new Error("environment_secret_purpose_invalid");
     const secretIdentity = createHmac("sha256", this.#secretIdentityKey)
+      .update(purpose)
+      .update("\0")
       .update(reference.source)
       .update("\0")
       .update(
@@ -769,6 +777,7 @@ export class LocalEnvironmentChannelProvider implements ExecutionEnvironmentChan
       .digest("base64url");
     const identity = createEnvironmentSecretIdentity({
       kind: "environment_secret",
+      purpose,
       scope: Object.freeze({ ...scope }),
       connectionGeneration,
       secretIdentity,
@@ -1252,8 +1261,12 @@ function assertTcpRoute(route: EnvironmentTcpRoute): void {
 function resolveEnvironmentSecret(
   environment: Readonly<Record<string, string | undefined>>,
   variable: string,
+  purpose: EnvironmentSecretPurpose,
 ): string {
-  if (!/^SEDES_CODEX_[A-Z0-9_]*TOKEN[A-Z0-9_]*$/u.test(variable)) {
+  const pattern = purpose === "capability_token"
+    ? /^SEDES_CODEX_[A-Z0-9_]*TOKEN[A-Z0-9_]*$/u
+    : purpose === "http_basic_password" ? /^SEDES_OPENCODE_[A-Z0-9_]*PASSWORD[A-Z0-9_]*$/u : undefined;
+  if (!pattern?.test(variable)) {
     throw new Error("environment_secret_reference_invalid");
   }
   const value = environment[variable];
@@ -1372,6 +1385,13 @@ async function resolveProtectedFileSecret(
     throw new Error("environment_secret_file_unavailable");
   } finally {
     await handle?.close().catch(() => undefined);
+  }
+}
+
+function assertHttpBasicPassword(value: string): void {
+  if (Buffer.byteLength(value, "utf8") === 0 || Buffer.byteLength(value, "utf8") > MAXIMUM_CAPABILITY_TOKEN_BYTES ||
+    /[\p{Cc}\p{Cs}]/u.test(value)) {
+    throw new Error("environment_secret_malformed");
   }
 }
 

@@ -628,68 +628,47 @@ describe("InteractionBroker", () => {
     expect(closed).toBe(true);
   });
 
-  it("interrupts the owning turn when an over-capacity provider rejection fails", async () => {
+  it("reports failed exact capacity cancellation without interrupting or abandoning unrelated waiters", async () => {
     const conversation = new FakeConversation();
-    conversation.respond = vi.fn(async () => {
-      throw new Error("provider response unavailable");
-    });
-    const broker = new InteractionBroker({
-      publisher: { opened: vi.fn(), resolved: vi.fn() },
-    });
+    conversation.respond = vi.fn(async () => { throw new Error("provider response unavailable"); });
+    const publisher = { opened: vi.fn(), resolved: vi.fn(), failed: vi.fn() };
+    const broker = new InteractionBroker({ publisher });
     broker.bind(scope, "thread-1", conversation);
-    for (let index = 0; index < 32; index += 1) {
-      conversation.emit(opened(`provider-${index}`));
-    }
-
+    const cancellation = new AbortController();
+    const decision = broker.requestApplicationDecision({ scope, applicationThreadId: "thread-1", generation: "generation-1",
+      presentation: { sourceLabel: { text: "Sedes" }, title: { text: "Approval" }, destructive: false }, signal: cancellation.signal,
+    }).catch((error: unknown) => error);
+    for (let index = 0; index < 31; index += 1) conversation.emit(opened(`provider-${index}`));
     conversation.emit(opened("provider-over-capacity"));
-
-    await vi.waitFor(() => {
-      expect(conversation.interactionFailureInterrupts).toHaveLength(1);
-    });
-    expect(conversation.interactionFailureInterrupts[0]).toMatch(/^capacity:/);
-    expect(broker.listPending(scope, "thread-1")).toEqual([]);
+    await vi.waitFor(() => expect(publisher.failed).toHaveBeenCalledOnce());
+    expect(conversation.interactionFailureInterrupts).toHaveLength(0);
+    expect(broker.listPending(scope, "thread-1")).toHaveLength(32);
+    expect(publisher.resolved).not.toHaveBeenCalled();
+    cancellation.abort();
+    expect(await decision).toMatchObject({ name: "AbortError" });
     await broker.close();
   });
 
-  it("abandons every owner waiter when capacity cancellation and interruption fail", async () => {
+  it("does not let a late failed cancellation affect a replacement projection", async () => {
     const conversation = new FakeConversation();
-    conversation.respond = vi.fn(async () => {
-      throw new Error("provider response unavailable");
-    });
-    conversation.interruptForInteractionFailure = vi.fn(async () => {
-      throw new Error("provider interruption unavailable");
-    });
-    const publisher = { opened: vi.fn(), resolved: vi.fn() };
+    let reject!: (error: Error) => void;
+    const failed = new Promise<void>((_, fail) => { reject = fail; });
+    conversation.respond = vi.fn(() => failed);
+    const publisher = { opened: vi.fn(), resolved: vi.fn(), failed: vi.fn() };
     const broker = new InteractionBroker({ publisher });
     broker.bind(scope, "thread-1", conversation);
-    const decision = broker
-      .requestApplicationDecision({
-        scope,
-        applicationThreadId: "thread-1",
-        generation: "generation-1",
-        presentation: {
-          sourceLabel: { text: "Sedes" },
-          title: { text: "Approval" },
-          destructive: false,
-        },
-        signal: new AbortController().signal,
-      })
-      .catch((error: unknown) => error);
-    for (let index = 0; index < 31; index += 1) {
-      conversation.emit(opened(`provider-${index}`));
-    }
-
-    conversation.emit(opened("provider-over-capacity"));
-
-    const settled = await decision;
-    expect(settled).toMatchObject({ name: "AbortError" });
-    expect(conversation.interruptForInteractionFailure).toHaveBeenCalledOnce();
-    expect(broker.listPending(scope, "thread-1")).toEqual([]);
-    expect(publisher.resolved).toHaveBeenCalledTimes(32);
-
-    conversation.emit(opened("provider-over-capacity"));
-    conversation.emit(opened("provider-0"));
-    expect(broker.listPending(scope, "thread-1")).toEqual([]);
+    for (let index = 0; index < 32; index += 1) conversation.emit(opened(`provider-${index}`));
+    conversation.emit(opened("old-over-capacity"));
+    await vi.waitFor(() => expect(conversation.respond).toHaveBeenCalledOnce());
+    const newer = opened("new-over-capacity");
+    if (newer.type !== "backend_event") throw new Error("fixture event mismatch");
+    conversation.emit({ ...newer, generation: "generation-2" });
+    reject(new Error("old response lost"));
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(conversation.interactionFailureInterrupts).toHaveLength(0);
+    expect(publisher.failed.mock.calls.every(call => call[2] === "generation-2")).toBe(true);
+    expect(broker.listPending(scope, "thread-1")).toHaveLength(32);
+    conversation.respond = vi.fn(async () => undefined);
     await broker.close();
   });
 

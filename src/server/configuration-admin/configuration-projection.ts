@@ -10,7 +10,7 @@ import { configurationIdentities } from "./configuration-identities.js";
 /** Existing identity tables are a projection, never a competing config source. */
 export class ConfigurationProjection {
   constructor(readonly database: Database.Database,
-    readonly protocolReleases: Readonly<Record<ConfigurationBackend["kind"], string>>,
+    readonly protocolReleases: Readonly<Partial<Record<ConfigurationBackend["kind"], string>>>,
     readonly now: () => number = Date.now) {}
 
   /** Must run inside ConfigurationRepository.initialize's import transaction. */
@@ -81,7 +81,7 @@ export class ConfigurationProjection {
     for (const backend of document.backends) {
       const fingerprint = configurationFingerprint({ moduleConfiguration: "moduleConfiguration" in backend ? backend.moduleConfiguration : null, modelPolicy: backend.modelPolicy, startupEnvironmentVariables: backend.environmentVariables?.startup ?? {} });
       const release = this.protocolReleases[backend.kind];
-      if (!release) throw new Error("configuration_compiled_backend_release_missing");
+      if (!release) throw new DomainError("bad_request", "The selected backend is not installed in this server.");
       const current = this.database.prepare(`SELECT owner_principal_id AS principalId, kind, label, enabled,
         configuration_fingerprint AS fingerprint, protocol_release AS release FROM agent_backend_instances WHERE tenant_id = ? AND id = ?`)
         .get(scope.tenantId, backend.id) as { principalId: string | null; kind: string; label: string; enabled: number; fingerprint: string; release: string } | undefined;

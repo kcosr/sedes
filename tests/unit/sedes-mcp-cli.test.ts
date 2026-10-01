@@ -1,4 +1,5 @@
 import { PassThrough } from "node:stream";
+import { EventEmitter, getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { runSedesCli } from "../../src/cli/sedes-cli.js";
 import { runSedesMcp, type SedesMcpOutput } from "../../src/cli/sedes-mcp.js";
@@ -244,6 +245,37 @@ describe("sedes mcp command", () => {
     });
     controller.abort(new Error("interrupted"));
     await expect(done).resolves.toBe(0);
+  });
+
+  it("removes blocked-output listeners and skips queued writes when its owner aborts", async () => {
+    const controller = new AbortController(); const input = new PassThrough();
+    const events = new EventEmitter(); const write = vi.fn(() => false);
+    const done = runSedesMcp(["--mode", "progressive"], {
+      environment, input, signal: controller.signal, stderr: stderr().sink,
+      output: { write, once: events.once.bind(events), off: events.off.bind(events) },
+    });
+    try {
+      input.write(initialize + message({ jsonrpc: "2.0", id: 2, method: "ping" }) +
+        message({ jsonrpc: "2.0", id: 3, method: "ping" }));
+      await vi.waitFor(() => expect(events.listenerCount("drain")).toBe(1));
+      expect(write).toHaveBeenCalledTimes(1);
+      controller.abort(new Error("owner stopped"));
+      await expect(done).resolves.toBe(0);
+      expect(events.listenerCount("drain")).toBe(0);
+      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      events.emit("drain");
+      expect(write).toHaveBeenCalledTimes(1);
+    } finally { controller.abort(); input.destroy(); }
+  });
+
+  it("removes its input-stop listener after ordinary EOF", async () => {
+    const controller = new AbortController();
+    await expect(runSedesMcp(["--mode", "progressive"], {
+      environment, input: (async function* () {})(), output: collected().output,
+      stderr: stderr().sink, signal: controller.signal,
+    })).resolves.toBe(0);
+    expect(controller.signal.aborted).toBe(false);
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
   });
 
   it("is dispatched by the shared CLI without a CLI mode hint", async () => {

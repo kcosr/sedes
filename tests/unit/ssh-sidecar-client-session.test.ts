@@ -32,6 +32,9 @@ import {
 } from "../../src/server/sidecar/sidecar-artifact.js";
 import { SidecarClientSession } from "../../src/server/sidecar/sidecar-client-session.js";
 import { SidecarSessionCleanupError } from "../../src/server/sidecar/sidecar-runtime.js";
+import { openCodeToolInvokeOperation } from "../../src/server/backends/opencode/opencode-tool-relay-wire.js";
+import { openCodeRuntimeOperations } from "../../src/server/backends/opencode/opencode-runtime-wire.js";
+import { sidecarRuntimeBodyOffer } from "../../src/server/sidecar/runtime-body-channel.js";
 
 const sessionNonce = "n".repeat(48);
 const artifact = Object.freeze({
@@ -93,6 +96,64 @@ const workspaceContextEvidence = Object.freeze({
 });
 
 describe("SidecarClientSession", () => {
+  it.each(["ssh_stdio", "outbound_websocket"].flatMap(transportKind => [true, false].map(privateSupported => ({ transportKind, privateSupported }))))("negotiates exact OpenCode tools over $transportKind (private support $privateSupported)", async ({ transportKind, privateSupported }) => {
+    const streams = byteStreamPair(), registry = new SidecarOperationRegistry();
+    const runtime = { capabilityId: "opencode_runtime", majorVersion: 2, operations: openCodeRuntimeOperations.map(operation => operation.operation) };
+    const body = { capabilityId: sidecarRuntimeBodyOffer.capabilityId, majorVersion: 1, operations: [sidecarRuntimeBodyOffer.operation] };
+    const privateTools = { capabilityId: openCodeToolInvokeOperation.capabilityId, majorVersion: 1, operations: [openCodeToolInvokeOperation.operation] };
+    for (const operation of openCodeRuntimeOperations) registry.register(operation, () => { throw new Error("unexpected native invocation"); });
+    registry.register(sidecarRuntimeBodyOffer, () => ({ accepted: true }));
+    const prepare = vi.fn(() => ({ endpoint: "unix:///run/user/1000/sedes/agent-tools.sock", executableDirectory: installation.executableDirectory, inheritedPath: "/usr/bin" }));
+    registerControlV2Operations(registry, { buildId: artifact.buildId, artifactSha256: artifact.artifactSha256,
+      enabledSidecarCapabilities: [runtime, body].map(({ capabilityId, majorVersion }) => ({ capabilityId, majorVersion })),
+      enabledSedesCapabilities: [agentToolsInventory, ...(privateSupported ? [privateTools] : []), body], prepareSedesCapabilities: prepare });
+    const host = new SidecarProtocolPeer({ role: "sidecar", sessionNonce, registry,
+      transport: new LengthPrefixedSidecarFrameTransport({ assurance: { kind: "test_server", carrierGeneration: 1 }, stream: streams.right }) });
+    host.start();
+    const sedesOperations = new SidecarOperationRegistry(), invoked = vi.fn(() => ({ outcome: "error" as const,
+      error: { code: "permission_denied" as const, message: "Fixture denied without executing a tool.", retryable: false } }));
+    for (const operation of agentToolsV3Operations) sedesOperations.register(operation as never, (() => ({ outcome: "ok", tools: [] })) as never);
+    sedesOperations.register(openCodeToolInvokeOperation, invoked);
+    const session = await SidecarClientSession.start({ stream: streams.left, transportKind, carrierGeneration: 1, sessionNonce, artifact, installation,
+      signal: new AbortController().signal, authorizedCapabilities: [agentToolsCapability], authorizedRuntimeCapabilities: [runtime], sedesOperations });
+    try {
+      expect(host.supportsOperation(openCodeToolInvokeOperation)).toBe(privateSupported);
+      expect(session.runtimeChannel.supportsIncomingOperation(openCodeToolInvokeOperation)).toBe(privateSupported);
+      expect(session.runtimeChannel.supportsOperation(openCodeRuntimeOperations[0]!)).toBe(true);
+      expect(prepare).toHaveBeenCalledOnce();
+      const stamp = { authority: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "environment", backendInstanceId: "backend",
+        runtimeId: "runtime", nativeGeneration: "generation", directory: "/workspace", session: { applicationThreadId: randomUUID(), nativeSessionID: "ses_source", bindingFingerprint: "binding" } },
+        journalId: "journal", throughSequence: 1, nativeContinuity: "continuity", inputId: "msg_current", authorityEpoch: 1, nativeConnected: true };
+      if (privateSupported) {
+      await expect(host.call(openCodeToolInvokeOperation, { stamp, request: { sourceCapability: "c".repeat(48), toolId: "agent.context", schemaVersion: 1, requestId: "read", input: {} } }, { signal: new AbortController().signal }))
+        .resolves.toMatchObject({ outcome: "error", error: { code: "permission_denied" } });
+      expect(invoked).toHaveBeenCalledWith(expect.objectContaining({ stamp }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+      } else {
+        await expect(host.call(openCodeToolInvokeOperation, { stamp, request: { sourceCapability: "c".repeat(48), toolId: "agent.context", schemaVersion: 1, requestId: "read", input: {} } })).rejects.toThrow("sidecar_operation_not_negotiated");
+        expect(invoked).not.toHaveBeenCalled();
+      }
+      await expect(host.call(agentToolsCatalogOperation, { sourceCapability: "c".repeat(48) })).resolves.toMatchObject({ outcome: "ok", tools: [] });
+    } finally { await session.close("test_complete"); await host.close("test_complete"); }
+  });
+
+  it.each([
+    { name: "neither grant", runtime: undefined, cli: false, registered: true },
+    { name: "only CLI grant", runtime: undefined, cli: true, registered: true },
+    { name: "only OpenCode runtime grant", runtime: "opencode_runtime", cli: false, registered: true },
+    { name: "another backend runtime grant", runtime: "codex_runtime", cli: true, registered: true },
+    { name: "missing private operation", runtime: "opencode_runtime", cli: true, registered: false },
+  ])("rejects private OpenCode relay inventory with $name before hello", async ({ runtime, cli, registered }) => {
+    const streams = byteStreamPair(), sedesOperations = new SidecarOperationRegistry();
+    if (cli) for (const operation of agentToolsV3Operations) sedesOperations.register(operation as never, (() => { throw new Error("unreachable"); }) as never);
+    if (registered) sedesOperations.register(openCodeToolInvokeOperation, () => { throw new Error("unreachable"); });
+    try {
+      await expect(SidecarClientSession.start({ stream: streams.left, transportKind: "ssh_stdio", carrierGeneration: 1, sessionNonce, artifact, installation,
+        signal: new AbortController().signal, authorizedCapabilities: cli ? [agentToolsCapability] : [],
+        authorizedRuntimeCapabilities: runtime ? [{ capabilityId: runtime, majorVersion: runtime === "opencode_runtime" ? 2 : 1, operations: openCodeRuntimeOperations.map(operation => operation.operation) }] : [], sedesOperations }))
+        .rejects.toThrow("sidecar_sedes_capabilities_invalid");
+    } finally { await streams.right.close("test_complete"); }
+  });
+
   it.each([false, true])("observes carrier closure without leaking wire secrets (diagnostics=%s)", async enabled => {
     vi.stubEnv("SEDES_DEBUG_DELIVERY", enabled ? "1" : "");
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -237,6 +298,8 @@ describe("SidecarClientSession", () => {
     "partial_terminal",
     "partial_tui",
     "partial_claude",
+    "partial_opencode",
+    "absent_opencode",
     "missing_files",
     "missing_provider",
   ] as const)(
@@ -264,7 +327,9 @@ describe("SidecarClientSession", () => {
         majorVersion: 1,
         operations: ["claude.open"],
       };
+      const opencode = { capabilityId: "opencode_runtime", majorVersion: 2, operations: ["opencode.execute", "opencode.control"] };
       for (const capability of [
+        opencode, { ...opencode, operations: ["opencode.wrong"] },
         provider,
         tui,
         claude,
@@ -325,7 +390,8 @@ describe("SidecarClientSession", () => {
             : []),
           ...(variant === "partial_claude"
             ? [{ ...claude, operations: ["claude.wrong"] }]
-            : []),
+            : variant === "absent_opencode" ? [claude] : []),
+          ...(variant === "partial_opencode" ? [{ ...opencode, operations: ["opencode.wrong"] }] : []),
         ],
         capabilityEvidence:
           variant === "partial_terminal"
@@ -360,10 +426,10 @@ describe("SidecarClientSession", () => {
           workspaceCapability,
           interactiveTerminalCapability,
         ],
-        authorizedRuntimeCapabilities: [provider, tui, claude],
+        authorizedRuntimeCapabilities: [provider, tui, claude, opencode],
         sedesOperations: new SidecarOperationRegistry(),
       });
-      if (variant !== "absent_native") {
+      if (variant !== "absent_native" && variant !== "absent_opencode") {
         await expect(started).rejects.toThrow(
           /sidecar_(?:runtime_)?capability_mismatch/u,
         );
@@ -373,7 +439,9 @@ describe("SidecarClientSession", () => {
           session.negotiatedCapabilities.map(
             (capability) => capability.capabilityId,
           ),
-        ).toEqual(["workspace_files", "codex_runtime", "runtime_bodies"]);
+        ).toEqual(["workspace_files", "codex_runtime", "runtime_bodies", ...(variant === "absent_opencode" ? ["claude_persistent_runtime"] : [])]);
+        expect(session.runtimeChannel.supportsOperation({ ...opencode, operation: "opencode.execute" })).toBe(false);
+        if (variant === "absent_opencode") expect(session.runtimeChannel.supportsOperation({ ...claude, operation: "claude.open" })).toBe(true);
         await expect(
           session.call(workspaceFilesListOperation, {
             rootHandle: randomUUID(),

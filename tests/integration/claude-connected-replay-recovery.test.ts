@@ -1,3 +1,4 @@
+import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
 import Database from "better-sqlite3";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import { initializeEmptyBackendNormalizedDatabase } from "../../src/server/db/migrate.js";
@@ -19,7 +20,7 @@ import { ClaudeSidecarRuntimeConnection, registerClaudePersistentRuntimeHost } f
 import type { ExecutionEnvironmentChannelProvider } from "../../src/server/execution/environment-channel.js";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
 import type { SidecarRuntimeLease, SidecarRuntimeProvider } from "../../src/server/sidecar/runtime-channel.js";
-import { createClaudeFramedCarrier, createFakePersistentClaudeRuntime } from "../helpers/persistent-claude-fixture.js";
+import { createFakePersistentClaudeRuntime } from "../helpers/persistent-claude-fixture.js";
 
 const scope = { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "ssh-environment", backendInstanceId: "claude-remote" };
 const configuration = { ...scope, executablePath: "/provider/claude", configDirectory: "/provider/.claude", initializationTimeoutMs: 5_000 };
@@ -43,6 +44,7 @@ async function fixture() {
   });
   let current: SidecarRuntimeLease | undefined;
   const sidecarRuntime: SidecarRuntimeProvider = {
+    acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); },
     acquire: vi.fn(async signal => {
       signal?.throwIfAborted();
       if (!current) throw new Error("test_carrier_unavailable");
@@ -52,7 +54,7 @@ async function fixture() {
   const clients: ClaudePersistentRuntimeClient[] = [];
   const carriers: { close(): Promise<void> }[] = [];
   async function attach() {
-    const carrier = await createClaudeFramedCarrier();
+    const carrier = await createSidecarFramedCarrier();
     const controllerEpoch = services.attach(serviceConfiguration);
     const detach = registerClaudePersistentRuntimeHost({
       registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts, controllerEpoch,
@@ -357,9 +359,9 @@ describe("Stop after main replacement", () => {
       await native.emit(lifecycle(sessionId, operationId, "cancelled"));
       return true;
     });
-    await handle.interrupt({ applicationOperationId: randomUUID(), expectedBackendTurnId: restored.snapshot.activeBackendTurnId! });
+    await handle.interrupt({ applicationOperationId: randomUUID(), deadlineAt: Date.now() + 30_000});
     // Claude's owner withdrew it exactly once; this handle never knew it.
-    expect(native.cancelQueuedInput.mock.calls).toEqual([[steer.operationId]]);
+    expect(native.cancelQueuedInput.mock.calls.map(([operationId]) => [operationId])).toEqual([[steer.operationId]]);
     expect(native.interrupt).toHaveBeenCalledOnce();
     expect(native.cancelQueuedInput.mock.invocationCallOrder[0]).toBeLessThan(native.interrupt.mock.invocationCallOrder[0]!);
     expect(handle.withdrewSubmission(steer.operationId)).toBe(false);

@@ -3028,7 +3028,7 @@ describe("passive lifecycle notification sources", () => {
             };
           },
           respond: async () => {},
-          interruptForInteractionFailure: async () => {},
+
         },
         { opened: () => {}, resolved: () => {} },
       );

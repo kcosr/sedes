@@ -566,7 +566,7 @@ plugins = false
       );
       await handle.interrupt({
         applicationOperationId: "sedes-c2-live-interrupt",
-        expectedBackendTurnId: interruptedSubmission.backendTurnId!,
+        deadlineAt: Date.now() + 30_000,
       });
       await waitUntil(
         () =>
@@ -575,19 +575,21 @@ plugins = false
             .some(({ event }) => event.type === "resnapshot_required"),
         5_000,
       );
-      expect(
-        handleEvents
-          .slice(interruptEventStart)
-          .some(
-            ({ event }) =>
-              event.type === "run_state_changed" && event.state === "stopping",
-          ),
-      ).toBe(true);
-      expect(
-        handleEvents
-          .slice(interruptEventStart)
-          .some(({ event }) => event.type === "resnapshot_required"),
-      ).toBe(true);
+      const interruptedEvents = handleEvents.slice(interruptEventStart);
+      const invalidationIndex = interruptedEvents.findIndex(
+        ({ event }) => event.type === "resnapshot_required",
+      );
+      expect(interruptedEvents.filter(({ event }) => event.type === "resnapshot_required")).toEqual([
+        expect.objectContaining({ event: { type: "resnapshot_required", reason: "contradictory_state" } }),
+      ]);
+      // The native terminal summary can invalidate the projection before the
+      // interrupt ACK arrives. In that ordering there is no stopping event;
+      // an ACK that wins may publish it only before the recovery boundary.
+      for (const [index, { event }] of interruptedEvents.entries()) {
+        if (event.type === "run_state_changed" && (event.state === "stopping" || event.state === "reconciling")) {
+          expect(index).toBeLessThan(invalidationIndex);
+        }
+      }
       expect(
         handleEvents
           .slice(interruptEventStart)
@@ -1009,7 +1011,7 @@ plugins = false
         );
         await handle.interrupt({
           applicationOperationId: `steer-live-stop-${randomUUID()}`,
-          expectedBackendTurnId: turnId,
+          deadlineAt: Date.now() + 30_000,
         });
         await interrupted;
         const snapshot = await reestablish();
@@ -2393,7 +2395,7 @@ plugins = false
           );
           await handle.interrupt({
             applicationOperationId: `steer-stop-uds-stop-${randomFixtureId()}`,
-            expectedBackendTurnId: turnId,
+            deadlineAt: Date.now() + 30_000,
           });
           await interrupted;
           unsubscribe();

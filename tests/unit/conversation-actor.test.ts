@@ -151,6 +151,7 @@ function selectedBranchingCapabilities(
 }
 
 class FakeHandle {
+  automaticEviction: ConversationHandle["automaticEviction"] = "requires_quiescence";
   readonly binding = binding;
   retirementBlocked = false;
   readonly close = vi.fn(async () => undefined);
@@ -364,6 +365,8 @@ function fixture(
       input: AcquireConversationActorInput,
       options: AcquireConversationActorOptions = { idleRelease: "retain" },
     ) => actorManager.acquire(input, options),
+    acquireExistingControl: actorManager.acquireExistingControl.bind(actorManager),
+    captureUnprojectedGeneration: actorManager.captureUnprojectedGeneration.bind(actorManager),
     runWithRuntimeRetired:
       actorManager.runWithRuntimeRetired.bind(actorManager),
     runWithRuntimesStopped: actorManager.runWithRuntimesStopped.bind(actorManager),
@@ -529,6 +532,30 @@ describe("turn throughput capability admission", () => {
 });
 
 describe("ConversationActorManager", () => {
+  it.each([
+    { state: "known" as const, agents: 0, commands: 1, other: 0 },
+    { state: "unknown" as const, agents: 0, commands: 0, other: 0 },
+  ])("allows client-only automatic eviction but keeps maintenance strict for $state background work", async activity => {
+    vi.useFakeTimers();
+    const { manager, handle, driver, lease } = fixture();
+    handle.automaticEviction = "client_detach";
+    handle.establishmentSnapshots[0] = { ...snapshot(), backgroundActivity: activity };
+    try {
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+      expect(acquired.actor.authoritativelySettled).toBe(true);
+      expect(acquired.actor.canAutomaticallyEvict).toBe(true);
+      expect(acquired.actor.canEvict).toBe(false);
+      await expect(manager.runWithRuntimeRetired({ scope, applicationThreadId: binding.applicationThreadId,
+        disposition: { kind: "idle" }, detachCoordinatorRuntime: async () => undefined, operation: async () => undefined,
+      })).rejects.toThrow();
+      expect(handle.close).not.toHaveBeenCalled();
+      acquired.release();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(handle.close).toHaveBeenCalledOnce();
+      expect(lease.release).toHaveBeenCalledOnce();
+    } finally { await manager.close(); vi.useRealTimers(); }
+  });
+
   it("keeps idle-input conversations alive until authoritative background work clears", async () => {
     const { manager, handle, driver } = fixture();
     const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
@@ -3680,85 +3707,336 @@ describe("ConversationActorManager", () => {
     await manager.close();
   });
 
-  it("rejects an interrupt when the active turn changed before the actor mailbox executes it", async () => {
-    const { driver, handle, manager } = fixture();
-    handle.establishmentSnapshots.splice(0, 1, snapshot("running"));
-    const acquired = await manager.acquire({
-      scope,
-      binding,
-      workspace,
-      opaqueBindingDetail: "opaque",
-      driver,
-    });
-
-    await expect(
-      acquired.actor.interrupt({
-        applicationOperationId: "stale-interrupt",
-        expectedActiveTurnId: "older-turn",
-      }),
-    ).rejects.toMatchObject({
-      category: "invalid_state",
-      crossedSubmissionBoundary: false,
-    });
-    expect(handle.interrupt).not.toHaveBeenCalled();
-
-    acquired.release();
-    await manager.close();
-  });
-
-  it("translates the exact application turn target to its backend identity", async () => {
-    const { driver, handle, manager } = fixture();
-    handle.establishmentSnapshots.splice(0, 1, snapshot("running"));
-    const acquired = await manager.acquire({
-      scope,
-      binding,
-      workspace,
-      opaqueBindingDetail: "opaque",
-      driver,
-    });
-    const activeTurnId = acquired.actor.timeline.activeTurnId;
-    if (!activeTurnId) throw new Error("missing active turn");
-
-    await acquired.actor.interrupt({
-      applicationOperationId: "translated-interrupt",
-      expectedActiveTurnId: activeTurnId,
-    });
-    expect(handle.interrupt).toHaveBeenCalledWith({
-      applicationOperationId: "translated-interrupt",
-      expectedBackendTurnId: "turn-1",
-    });
-
-    acquired.release();
-    await manager.close();
-  });
-
-  it("closes runtime resources when an interaction-failure interrupt cannot be delivered", async () => {
+  it("keeps existing native control usable during stalled and failed initial history", async () => {
     const { driver, handle, lease, manager } = fixture();
-    handle.establishmentSnapshots.splice(0, 1, snapshot("running"));
-    handle.interrupt.mockRejectedValueOnce(
-      new BackendError({
-        category: "unavailable",
-        retryable: true,
-        crossedSubmissionBoundary: true,
-        safeMessage: "The interrupt outcome is unknown.",
-      }),
-    );
-    const acquired = await manager.acquire({
-      scope,
-      binding,
-      workspace,
-      opaqueBindingDetail: "opaque",
-      driver,
+    const lifetime = new AbortController();
+    const control = { generation: "native-owner-1", lifetime: lifetime.signal,
+      interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt };
+    vi.mocked(driver.attach).mockImplementation(async input => {
+      input.onControlReady?.(control);
+      return handle as unknown as ConversationHandle;
     });
-
-    await acquired.actor.interruptForInteractionFailure(
-      "capacity:interaction-failure",
-    );
-
+    const originalEstablish = handle.establishProjection.bind(handle);
+    let failInitial!: (error: Error) => void;
+    const stalledHistory = new Promise<EstablishedBackendProjection>((_, reject) => { failInitial = reject; });
+    const establish = vi.spyOn(handle, "establishProjection").mockRejectedValue(new Error("history unavailable"));
+    establish.mockImplementationOnce(() => stalledHistory);
+    const input = { scope, binding, workspace, opaqueBindingDetail: "opaque", driver };
+    const acquisition = manager.acquire(input).catch((error: unknown) => error);
+    let borrowed: ReturnType<typeof manager.acquireExistingControl>;
+    await vi.waitFor(() => {
+      borrowed = manager.acquireExistingControl(scope, binding.applicationThreadId);
+      expect(borrowed).toBeDefined();
+    });
+    expect(manager.acquireExistingControl({ ...scope, principalId: "wrong" }, binding.applicationThreadId)).toBeUndefined();
+    await borrowed!.control.interrupt({ applicationOperationId: "stop-during-history", deadlineAt: Date.now() + 30_000 });
     expect(handle.interrupt).toHaveBeenCalledOnce();
+    borrowed!.release();
+    failInitial(new Error("history unavailable"));
+    expect(await acquisition).toBeInstanceOf(Error);
+    expect(handle.close).not.toHaveBeenCalled();
+    expect(lease.release).not.toHaveBeenCalled();
+    const retained = manager.acquireExistingControl(scope, binding.applicationThreadId);
+    expect(retained).toBeDefined();
+    retained!.release();
+    establish.mockImplementation(originalEstablish);
+    const recovered = await manager.acquire(input);
+    expect(driver.attach).toHaveBeenCalledOnce();
+    expect(recovered.actor.projectionRecoveryRequired).toBe(false);
+    lifetime.abort();
+    expect(manager.acquireExistingControl(scope, binding.applicationThreadId)).toBeUndefined();
+    recovered.release();
+    await manager.close();
+  });
+
+  it("observes native consumption during blocked hydration and orders projected completion behind it", async () => {
+    const order: string[] = [];
+    let releaseObservation!: () => void;
+    const observationGate = new Promise<void>(resolve => { releaseObservation = resolve; });
+    const submission = vi.fn<AuthoritativeSubmissionObserver>(async (_scope, _thread, observation) => {
+      order.push(`submission:${observation.backendCorrelation}`);
+      if (submission.mock.calls.length === 1) await observationGate;
+    });
+    const completion = vi.fn<AuthoritativeCompletionObserver>(() => { order.push("completion"); });
+    const { driver, handle, manager } = fixture(completion, submission);
+    let callbacks!: Parameters<ConversationBackendDriver["attach"]>[0];
+    const lifetime = new AbortController();
+    vi.mocked(driver.attach).mockImplementation(async input => {
+      callbacks = input;
+      input.onControlReady?.({ generation: "native-before-history", lifetime: lifetime.signal,
+        interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt });
+      return handle as unknown as ConversationHandle;
+    });
+    const establish = handle.establishProjection.bind(handle);
+    let releaseHistory!: () => void;
+    const historyGate = new Promise<void>(resolve => { releaseHistory = resolve; });
+    vi.spyOn(handle, "establishProjection").mockImplementation(async input => {
+      await historyGate;
+      return establish(input);
+    });
+    handle.establishmentSnapshots[0]!.turnsById["turn-1"]!.completionCorrelations = ["native-consumed"];
+    const acquiring = manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    callbacks.onSubmissionObserved?.({ backendCorrelation: "native-consumed" });
+    await vi.waitFor(() => expect(submission).toHaveBeenCalledOnce());
+    expect(submission).toHaveBeenCalledWith(scope, binding.applicationThreadId, { backendCorrelation: "native-consumed" });
+    expect(completion).not.toHaveBeenCalled();
+    releaseHistory();
+    const acquired = await acquiring;
+    expect(completion).not.toHaveBeenCalled();
+    releaseObservation();
+    await vi.waitFor(() => expect(order).toEqual([
+      "submission:native-consumed", "submission:native-consumed", "completion",
+    ]));
+    acquired.release();
+    await manager.close();
+  });
+
+  it.each(["replaced", "revoked", "closed"] as const)(
+    "fences queued native observations when their exact control is %s", async disposition => {
+      let releaseObservation!: () => void;
+      const gate = new Promise<void>(resolve => { releaseObservation = resolve; });
+      const submission = vi.fn<AuthoritativeSubmissionObserver>(async () => { await gate; });
+      const { driver, handle, manager } = fixture(undefined, submission);
+      let callbacks!: Parameters<ConversationBackendDriver["attach"]>[0];
+      const lifetime = new AbortController();
+      vi.mocked(driver.attach).mockImplementation(async input => {
+        callbacks = input;
+        return handle as unknown as ConversationHandle;
+      });
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+      callbacks.onSubmissionObserved?.({ backendCorrelation: "without-control" });
+      callbacks.onControlReady?.({ generation: "old-owner", lifetime: lifetime.signal,
+        interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt });
+      callbacks.onSubmissionObserved?.({ backendCorrelation: "first" });
+      await vi.waitFor(() => expect(submission).toHaveBeenCalledOnce());
+      callbacks.onSubmissionObserved?.({ backendCorrelation: "queued-old-owner" });
+      let closing: Promise<void> | undefined;
+      if (disposition === "replaced") {
+        callbacks.onControlReady?.({ generation: "new-owner", lifetime: new AbortController().signal,
+          interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt });
+      } else if (disposition === "revoked") {
+        lifetime.abort();
+      } else {
+        acquired.release();
+        closing = manager.close();
+      }
+      releaseObservation();
+      await closing;
+      // A fresh valid notification provides a deterministic drain boundary.
+      if (disposition === "replaced") {
+        callbacks.onSubmissionObserved?.({ backendCorrelation: "new-owner-observed" });
+        await vi.waitFor(() => expect(submission).toHaveBeenCalledTimes(2));
+      }
+      if (disposition !== "closed") {
+        acquired.release();
+        await manager.close();
+      }
+      expect(submission.mock.calls.map(([, , observed]) => observed.backendCorrelation)).toEqual(
+        disposition === "replaced" ? ["first", "new-owner-observed"] : ["first"],
+      );
+    },
+  );
+
+  it("orders Stop after an admitted first native submit, without taking the projection mailbox", async () => {
+    const { driver, handle, manager } = fixture();
+    const lifetime = new AbortController();
+    vi.mocked(driver.attach).mockImplementation(async input => {
+      input.onControlReady?.({ generation: "first-submit-owner", lifetime: lifetime.signal,
+        interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt });
+      return handle as unknown as ConversationHandle;
+    });
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const control = manager.acquireExistingControl(scope, binding.applicationThreadId)!;
+    let accept!: () => void;
+    handle.submit.mockImplementationOnce(() => new Promise(resolve => { accept = () => resolve({ accepted: true, reconciliationToken: "first" }); }));
+    const submitting = acquired.actor.submit({ applicationOperationId: "first", source: { kind: "user" }, mutationId: "first", reconciliationToken: "first",
+      text: "hello", contextExcerpts: [], attachments: [], taskContexts: [] });
+    await vi.waitFor(() => expect(handle.submit).toHaveBeenCalledOnce());
+    const onDispatch = vi.fn(() => expect(handle.interrupt).not.toHaveBeenCalled());
+    const stopping = control.control.interrupt({ applicationOperationId: "stop-first", deadlineAt: Date.now() + 30_000 }, onDispatch);
+    await Promise.resolve();
+    expect(handle.interrupt).not.toHaveBeenCalled();
+    expect(onDispatch).not.toHaveBeenCalled();
+    accept();
+    await Promise.all([submitting, stopping]);
+    expect(handle.interrupt).toHaveBeenCalledOnce();
+    expect(onDispatch).toHaveBeenCalledOnce();
+    control.release(); acquired.release(); await manager.close();
+  });
+
+  it("does not send an expired Stop after a blocked native submission finishes", async () => {
+    vi.useFakeTimers();
+    const { driver, handle, manager } = fixture();
+    const lifetime = new AbortController();
+    vi.mocked(driver.attach).mockImplementation(async input => {
+      input.onControlReady?.({ generation: "delayed-submit-owner", lifetime: lifetime.signal,
+        interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt });
+      return handle as unknown as ConversationHandle;
+    });
+    let accept!: () => void;
+    try {
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+      const control = manager.acquireExistingControl(scope, binding.applicationThreadId)!;
+      handle.submit.mockImplementationOnce(() => new Promise(resolve => { accept = () => resolve({ accepted: true, reconciliationToken: "first" }); }));
+      const submitting = acquired.actor.submit({ applicationOperationId: "first", source: { kind: "user" }, mutationId: "first", reconciliationToken: "first",
+        text: "hello", contextExcerpts: [], attachments: [], taskContexts: [] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handle.submit).toHaveBeenCalledOnce();
+      const onDispatch = vi.fn();
+      const stopping = control.control.interrupt({ applicationOperationId: "expired-stop", deadlineAt: Date.now() + 30_000 }, onDispatch).catch(error => error);
+      await vi.advanceTimersByTimeAsync(30_000);
+      accept(); await submitting;
+      expect(await stopping).toMatchObject({ crossedSubmissionBoundary: false });
+      expect(handle.interrupt).not.toHaveBeenCalled();
+      expect(onDispatch).not.toHaveBeenCalled();
+      control.release(); acquired.release();
+    } finally { accept?.(); await manager.close(); vi.useRealTimers(); }
+  });
+
+  it("bounds failed initial hydration retention while a borrowed control pins the owner", async () => {
+    vi.useFakeTimers();
+    const { driver, handle, manager } = fixture(undefined, undefined, 100);
+    const lifetime = new AbortController();
+    vi.mocked(driver.attach).mockImplementation(async input => {
+      input.onControlReady?.({ generation: "failed-owner", lifetime: lifetime.signal,
+        interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt });
+      return handle as unknown as ConversationHandle;
+    });
+    vi.spyOn(handle, "establishProjection").mockRejectedValue(new Error("permanent history failure"));
+    try {
+      await expect(manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver }, { idleRelease: "evict" })).rejects.toThrow("permanent history failure");
+      const control = manager.acquireExistingControl(scope, binding.applicationThreadId)!;
+      await vi.advanceTimersByTimeAsync(100);
+      expect(handle.close).not.toHaveBeenCalled();
+      control.release();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(handle.close).toHaveBeenCalledOnce();
+      expect(manager.captureUnprojectedGeneration(scope, binding.applicationThreadId)).toBeUndefined();
+    } finally { await manager.close(); vi.useRealTimers(); }
+  });
+
+  it("keeps archive strict but permits exact force reset of a failed initial projection without a coordinator entry", async () => {
+    const current = detachFixture();
+    const lifetime = new AbortController();
+    vi.mocked(current.driver.attach).mockImplementation(async input => {
+      input.onControlReady?.({ generation: "failed-owner", lifetime: lifetime.signal,
+        interrupt: current.handle.interrupt, reconcileInterrupt: current.handle.reconcileInterrupt });
+      return current.handle as unknown as ConversationHandle;
+    });
+    vi.spyOn(current.handle, "establishProjection").mockRejectedValue(new Error("permanent history failure"));
+    await expect(current.coordinator.acquire(scope, binding.applicationThreadId)).rejects.toThrow("permanent history failure");
+    const expected = await current.coordinator.captureLoadedRuntime(scope, binding.applicationThreadId);
+    expect(expected).toMatchObject({ threadId: binding.applicationThreadId, runState: "starting" });
+    const archive = vi.fn(async () => undefined);
+    await expect(current.coordinator.runWithRuntimeRetired(scope, binding.applicationThreadId, archive)).rejects.toBeInstanceOf(ThreadRuntimeNotIdleError);
+    expect(archive).not.toHaveBeenCalled();
+    expect(await current.coordinator.forceResetLoadedRuntime(scope, binding.applicationThreadId, { ...expected!, generation: "stale" })).toBe(false);
+    expect(current.handle.close).not.toHaveBeenCalled();
+    expect(await current.coordinator.forceResetLoadedRuntime(scope, binding.applicationThreadId, expected!)).toBe(true);
+    expect(current.handle.close).toHaveBeenCalledOnce();
+    expect(current.handle.interrupt).not.toHaveBeenCalled();
+    await current.coordinator.close(); await current.manager.close();
+  });
+
+  it("reclaims failed first hydration under budget pressure without accumulating unreachable owners", async () => {
+    const current = fixture(undefined, undefined, 60_000, undefined, 2);
+    const second = new FakeHandle([]);
+    const third = new FakeHandle([]);
+    const lifetime = new AbortController();
+    vi.mocked(current.driver.attach).mockImplementationOnce(async input => {
+      input.onControlReady?.({ generation: "failed-budget-owner", lifetime: lifetime.signal,
+        interrupt: current.handle.interrupt, reconcileInterrupt: current.handle.reconcileInterrupt });
+      return current.handle as unknown as ConversationHandle;
+    }).mockResolvedValueOnce(second as unknown as ConversationHandle).mockResolvedValueOnce(third as unknown as ConversationHandle);
+    vi.spyOn(current.handle, "establishProjection").mockRejectedValue(new Error("permanent history failure"));
+    const target = { scope, binding, workspace, opaqueBindingDetail: "opaque", driver: current.driver };
+    await expect(current.manager.acquire(target)).rejects.toThrow("permanent history failure");
+    const held = await current.manager.acquire({ ...target, binding: { ...binding, applicationThreadId: "healthy-held", backendConversationId: "healthy-held-native" } });
+    const replacement = await current.manager.acquire({ ...target, binding: { ...binding, applicationThreadId: "healthy-other-thread", backendConversationId: "healthy-other-native" } });
+    expect(current.handle.close).toHaveBeenCalledOnce();
+    expect(second.close).not.toHaveBeenCalled();
+    held.release(); replacement.release(); await current.manager.close();
+  });
+
+  it("drains every concurrent shutdown waiter for the same borrowed native control", async () => {
+    const { driver, handle, lease, manager } = fixture();
+    const lifetime = new AbortController();
+    vi.mocked(driver.attach).mockImplementation(async input => {
+      input.onControlReady?.({
+        generation: "shared-drain-owner", lifetime: lifetime.signal,
+        interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt,
+      });
+      return handle as unknown as ConversationHandle;
+    });
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const borrowed = manager.acquireExistingControl(scope, binding.applicationThreadId)!;
+    acquired.release();
+    let observedNativeStop!: () => void;
+    const nativeStopStarted = new Promise<void>(resolve => { observedNativeStop = resolve; });
+    const retireLocalRuntime = vi.fn(async () => "retired");
+    const stopping = manager.runWithRuntimesStopped({
+      scope, applicationThreadIds: [binding.applicationThreadId],
+      stopOwnedResources: async () => { observedNativeStop(); },
+      detachCoordinatorRuntimes: async () => undefined,
+      retireLocalRuntime,
+    });
+    await nativeStopStarted;
+    const closing = manager.close();
+    expect(handle.close).not.toHaveBeenCalled();
+    borrowed.release();
+    await expect(Promise.all([stopping, closing])).resolves.toEqual(["retired", undefined]);
+    expect(retireLocalRuntime).toHaveBeenCalledOnce();
     expect(handle.close).toHaveBeenCalledOnce();
     expect(lease.release).toHaveBeenCalledOnce();
-    expect(acquired.actor.closed).toBe(true);
+  });
+
+  it("pins the owner while a control lease is borrowed and rejects revoked control", async () => {
+    vi.useFakeTimers();
+    const { driver, handle, manager } = fixture();
+    const lifetime = new AbortController();
+    vi.mocked(driver.attach).mockImplementation(async input => {
+      input.onControlReady?.({ generation: "native-owner-1", lifetime: lifetime.signal,
+        interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt });
+      return handle as unknown as ConversationHandle;
+    });
+    try {
+      const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+      const control = manager.acquireExistingControl(scope, binding.applicationThreadId)!;
+      acquired.release();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(handle.close).not.toHaveBeenCalled();
+      lifetime.abort();
+      await expect(control.control.interrupt({ applicationOperationId: "stale-control", deadlineAt: Date.now() + 30_000 }))
+        .rejects.toMatchObject({ crossedSubmissionBoundary: false });
+      control.release();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(handle.close).toHaveBeenCalledOnce();
+    } finally { await manager.close(); vi.useRealTimers(); }
+  });
+
+  it("passes conversation Stop to native control without an application turn precondition", async () => {
+    const { driver, handle, manager } = fixture();
+    handle.establishmentSnapshots.splice(0, 1, snapshot("running"));
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const input = { applicationOperationId: "conversation-stop", deadlineAt: Date.now() + 30_000 };
+    await acquired.actor.interrupt(input);
+    expect(handle.interrupt).toHaveBeenCalledWith(input);
+    acquired.release();
+    await manager.close();
+  });
+
+  it("keeps resources intact when an explicit Stop outcome is unknown", async () => {
+    const { driver, handle, lease, manager } = fixture();
+    handle.establishmentSnapshots.splice(0, 1, snapshot("running"));
+    handle.interrupt.mockRejectedValueOnce(new BackendError({ category: "unavailable", retryable: true,
+      crossedSubmissionBoundary: true, safeMessage: "The Stop outcome is unknown." }));
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    await expect(acquired.actor.interrupt({ applicationOperationId: "stop-unknown", deadlineAt: Date.now() + 30_000 }))
+      .rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    expect(handle.close).not.toHaveBeenCalled();
+    expect(lease.release).not.toHaveBeenCalled();
+    expect(acquired.actor.closed).toBe(false);
     acquired.release();
     await manager.close();
   });
@@ -4165,6 +4443,7 @@ describe("ConversationActorManager", () => {
     await Promise.resolve();
     expect(handle.establishCount).toBe(1);
 
+    await vi.waitFor(() => expect(handle.submit).toHaveBeenCalled());
     releaseSubmit();
     await submitting;
     await vi.waitFor(() => expect(handle.establishCount).toBe(2));
@@ -4178,6 +4457,25 @@ describe("ConversationActorManager", () => {
     );
     acquired.release();
     await manager.close();
+  });
+
+  it.each([
+    { label: "proved fixed history limit", futile: true, attempts: 1 },
+    { label: "legacy non-retryable remote error", futile: false, attempts: 3 },
+  ])("preserves the recovery disposition for $label", async ({ futile, attempts }) => {
+    const { driver, handle, manager } = fixture();
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const failure = new BackendError({ category: "unavailable", retryable: false, crossedSubmissionBoundary: false,
+      safeMessage: "Native history unavailable.", backendCode: futile ? "fixed_limit" : "codex_remote_-32000",
+      ...(futile ? { projectionRecovery: "futile" as const } : {}) });
+    const establishment = vi.spyOn(handle, "establishProjection").mockRejectedValue(failure);
+    const received: ConversationActorEvent[] = [];
+    acquired.actor.subscribe(event => received.push(event));
+    handle.emit(0, { type: "resnapshot_required", reason: "contradictory_state" });
+    await vi.waitFor(() => expect(received.some(event => event.type === "backend_event" && event.event.type === "notice")).toBe(true));
+    expect(establishment).toHaveBeenCalledTimes(attempts);
+    expect(acquired.actor.projectionRecoveryRequired).toBe(true);
+    acquired.release(); await manager.close();
   });
 
   it("retries projection replacement and surfaces a terminal recovery failure", async () => {
@@ -5093,7 +5391,6 @@ describe("ConversationActorManager", () => {
         binding.applicationThreadId,
         {
           backendCorrelation: "uncertain-steer",
-          backendTurnId: "turn-1",
         },
       ),
     );

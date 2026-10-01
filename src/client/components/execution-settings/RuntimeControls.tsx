@@ -34,6 +34,7 @@ export interface RuntimeControllerOptions {
   readonly onRuntime: (runtime: ConfigurationRuntimeState) => void;
   readonly onRefresh: () => Promise<boolean>;
   readonly showSidecar?: boolean;
+  readonly stopEffect?: "service" | "attachment" | "unknown";
 }
 
 export interface RuntimeController {
@@ -41,6 +42,7 @@ export interface RuntimeController {
   readonly runtime?: ConfigurationRuntimeState;
   readonly presentation: RuntimePresentation;
   readonly showSidecar: boolean;
+  readonly stopEffect: "service" | "attachment" | "unknown";
   readonly busy: boolean;
   /** Commands are paused: the page is busy or the caller disabled them. */
   readonly paused: boolean;
@@ -68,7 +70,7 @@ export interface RuntimeController {
  * Keep exactly one mounted per resource, even while its detail is hidden,
  * so receipts keep settling and a command is never repeated.
  */
-export function useRuntimeController({ controls, revision, resourceKind, resourceId, label, runtime, disabled, disabledReason, enabled = true, onRuntime, onRefresh, showSidecar = resourceKind === "environment" }: RuntimeControllerOptions): RuntimeController {
+export function useRuntimeController({ controls, revision, resourceKind, resourceId, label, runtime, disabled, disabledReason, enabled = true, onRuntime, onRefresh, stopEffect = "service", showSidecar = resourceKind === "environment" }: RuntimeControllerOptions): RuntimeController {
   const [busy, setBusy] = useState(false);
   const [impact, setImpact] = useState<ConfigurationLifecycleImpact>();
   const [error, setErrorState] = useState<{ message: string; tone: Tone }>();
@@ -211,10 +213,10 @@ export function useRuntimeController({ controls, revision, resourceKind, resourc
     } catch (cause) { setError(errorMessage(cause, "Could not determine the effect of this operation.")); }
     finally { setBusy(false); }
   };
-  const presentation = presentRuntime(runtime, { resourceKind, sidecar: showSidecar, enabled });
+  const presentation = presentRuntime(runtime, { resourceKind, sidecar: showSidecar, enabled, stopEffect });
   const unsettled = Boolean(unsettledMutationId);
   return {
-    label, runtime, presentation, showSidecar, busy, paused: disabled || busy, disabled, disabledReason, reasonId,
+    label, runtime, presentation, showSidecar, stopEffect, busy, paused: disabled || busy, disabled, disabledReason, reasonId,
     describedBy: disabled && disabledReason ? reasonId : undefined,
     ...(error ? { error } : {}), ...(notice ? { notice } : {}),
     unsettled, awaitingOutcome,
@@ -348,21 +350,36 @@ export function runtimeDiagnostics(controller: RuntimeController): KeyValueItem[
 
 /** Confirms a command that interrupts running work, listing exactly what it affects. */
 export function RuntimeImpactDialog({ controller }: { readonly controller: RuntimeController }): React.JSX.Element {
-  const { impact, label } = controller;
+  const { impact, label, runtime, stopEffect } = controller;
   const focusReturn = useFocusReturn();
   const [shown, setShown] = useState(impact);
   // Keep the last preview on screen while the dialog closes.
   useEffect(() => { if (impact) setShown(impact); }, [impact]);
   const current = impact ?? shown;
   const action = current ? actionLabels[current.action] : "";
+  const retiresAttachment = current?.action === "stop" && stopEffect === "attachment";
+  const unknownStopEffect = current?.action === "stop" && stopEffect === "unknown";
+  const unreachableStop = current?.action === "stop" && runtime?.connectionState === "unreachable";
+  const recoveryStop = current?.action === "stop" && runtime?.connectionState === "recovery_required";
+  const consequence = unreachableStop
+    ? "Stop records that Sedes should not start this runtime automatically. Shutdown or attachment retirement is unconfirmed while the host is unreachable."
+    : recoveryStop ? "Stop checks ownership before ending Sedes-owned execution or retiring an external attachment. Shutdown is unconfirmed until ownership can be verified."
+    : retiresAttachment
+    ? "Sedes retires its connection and retained recovery state. The external server and its running work continue."
+    : unknownStopEffect ? "Stop ends Sedes-owned execution or retires Sedes's attachment to an external server. External servers are left running."
+    : "Running work will be interrupted; interrupted work is not restarted automatically.";
   return <ConfirmDialog open={Boolean(impact)} onOpenChange={(open) => { if (!open) controller.cancelImpact(); }}
     title={`${action} ${label}?`} tone="danger" confirmLabel={`Confirm ${action.toLowerCase()}`}
-    description={current ? `${current.activeResources} affected resource${current.activeResources === 1 ? "" : "s"}. Running work will be interrupted; interrupted work is not restarted automatically.` : undefined}
+    description={current ? `${current.activeResources} affected resource${current.activeResources === 1 ? "" : "s"}. ${consequence}` : undefined}
     onConfirm={controller.confirmImpact} {...focusReturn}>
     {current ? <div className="execution-impact">
-      <p>Some retained work may have an unknown outcome. Unrecovered output or results may be lost when its runtime stops; completed external changes are not undone.</p>
+      <p>{unreachableStop
+        ? "Work on the host may still be running. Reconnect and inspect its status before deciding whether to stop it again."
+        : retiresAttachment
+        ? "Pending Sedes results may remain unknown, and retained output may be lost. Connect again to establish a new Sedes attachment."
+        : "Some retained work may have an unknown outcome. Unrecovered output or results may be lost when its runtime stops; completed external changes are not undone."}</p>
       {current.interruptions.length ? <ul>{current.interruptions.map((interruption, index) => <li key={index}>{interruption}</li>)}</ul> : null}
-      {confirmationNotes[current.action] ? <p>{confirmationNotes[current.action]}</p> : null}
+      {!unreachableStop && !recoveryStop && !retiresAttachment && !unknownStopEffect && confirmationNotes[current.action] ? <p>{confirmationNotes[current.action]}</p> : null}
       <p className="execution-muted">This preview expires in about two minutes.</p>
     </div> : null}
   </ConfirmDialog>;

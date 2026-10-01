@@ -71,7 +71,9 @@ export class AgentBackendRegistry {
       if (
         !factory.creationIdentity ||
         (factory.creationIdentity.assignment !== "application" &&
-          factory.creationIdentity.assignment !== "provider")
+          factory.creationIdentity.assignment !== "provider") ||
+        (factory.creationIdentity.assignment === "application" &&
+          typeof factory.creationIdentity.reserveBackendConversationId !== "function")
       ) {
         throw new Error("Backend factory creation identity is invalid.");
       }

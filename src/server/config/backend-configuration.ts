@@ -171,6 +171,8 @@ const packagedClientsSchema = z
   );
 
 const backendSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ id: configuredIdSchema, kind: z.literal("opencode"), label: z.string().min(1).max(120),
+    enabled: z.boolean(), modelPolicy: backendModelPolicySchema, moduleConfiguration: moduleConfigurationSchema }),
   z
     .object({
       id: configuredIdSchema,
@@ -214,6 +216,9 @@ const backendSchema = z.discriminatedUnion("kind", [
 ]);
 
 const targetSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ id: configuredIdSchema, kind: z.literal("opencode_http"), label: z.string().min(1).max(120),
+    backendInstanceId: configuredIdSchema, executionEnvironmentId: executionEnvironmentIdSchema,
+    enabled: z.boolean(), moduleConfiguration: moduleConfigurationSchema }),
   z
     .object({
       id: configuredIdSchema,
@@ -346,6 +351,9 @@ const backendConfigurationFileSchema = z
         });
         continue;
       }
+      if ((target.kind === "opencode_http") !== (backend.kind === "opencode")) {
+        context.addIssue({ code: "custom", path: ["targets", index], message: "OpenCode requires its HTTP connection kind." });
+      }
       if (target.kind === "grok_acp" && environment.kind !== "local") {
         context.addIssue({
           code: "custom",
@@ -377,6 +385,9 @@ const backendConfigurationFileSchema = z
               path: ["targets", index, "executionEnvironmentId"],
             });
           }
+        } else if (target.kind === "opencode_http" && backend.kind === "opencode") {
+          // Native HTTP/SSE runs on the selected host. The persistent sidecar
+          // carries the same private runtime contract for owned and external.
         } else if (
           target.kind === "claude_agent_sdk" &&
           backend.kind === "claude_agent_sdk"

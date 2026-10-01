@@ -1,9 +1,12 @@
+import { ConversationNativeEffectFence } from "./conversation-native-effect-fence.js";
+import { randomUUID } from "node:crypto";
 import type { ClassifiedAssistantResult } from "../../shared/protocol/completion-result.js";
 import type { NonblockingQuestionsPayload } from "../../shared/protocol/questions.js";
 import {
   BackendError,
   type ConversationBackendDriver,
   type ConversationBinding,
+  type ConversationControl,
 } from "../backends/contracts.js";
 import type {
   ExecutionEnvironmentProvider,
@@ -32,12 +35,21 @@ export interface AcquiredConversationActor {
   release(): void;
 }
 
+export interface AcquiredConversationControl {
+  readonly control: Omit<ConversationControl, "interrupt"> & {
+    /** Runs after the native-effect fence admits dispatch, before calling the driver. */
+    interrupt(input: Parameters<ConversationControl["interrupt"]>[0], onDispatch?: () => void): Promise<void>;
+  };
+  release(): void;
+}
+
 export interface AcquireConversationActorOptions {
   readonly idleRelease: "retain" | "evict";
 }
 
 export type ConversationActorRetirementDisposition =
   | { readonly kind: "idle" }
+  | { readonly kind: "unprojected_detach"; readonly expectedGeneration: string }
   | {
       readonly kind: "explicit_detach";
       readonly expected: Parameters<ConversationActor["closeIfCurrent"]>[0];
@@ -94,16 +106,20 @@ export type AuthoritativeSubmissionObserver = (
   applicationThreadId: string,
   input: {
     readonly backendCorrelation: string;
-    readonly backendTurnId: string;
   },
 ) => void | Promise<void>;
 
 interface ActorEntry {
+  readonly nativeEffects: ConversationNativeEffectFence;
+  readonly unprojectedGeneration: string;
   promise: Promise<ConversationActor>;
   readonly fingerprint: string;
   readonly budgetScope: ConversationRuntimeBudgetScope;
   readonly creationAbort: AbortController;
   references: number;
+  controlReferences: number;
+  control?: ConversationControl;
+  readonly controlsReleased: Set<() => void>;
   onReferencesReleased?: () => void;
   evictionTimer?: ReturnType<typeof setTimeout>;
   eviction?: Promise<boolean>;
@@ -303,10 +319,14 @@ export class ConversationActorManager {
         const admission = this.#reserveRuntimeSlot(budgetScope);
         const creationAbort = new AbortController();
         const createdEntry = {
+          nativeEffects: new ConversationNativeEffectFence(),
+          unprojectedGeneration: randomUUID(),
           fingerprint,
           budgetScope,
           creationAbort,
           references: 0,
+          controlReferences: 0,
+          controlsReleased: new Set<() => void>(),
         } as ActorEntry;
         createdEntry.promise = (async () => {
           if (admission) await this.#awaitPressureReclamation(admission);
@@ -315,7 +335,7 @@ export class ConversationActorManager {
               cause: creationAbort.signal.reason,
             });
           }
-          return this.#createActor(input, creationAbort.signal, () =>
+          return this.#createActor(input, createdEntry, creationAbort.signal, () =>
             this.#reconcileEviction(key, createdEntry),
           );
         })().then((actor) => {
@@ -395,6 +415,75 @@ export class ConversationActorManager {
         },
       };
     }
+  }
+
+  /** Opaque CAS evidence for an owner retained after failed initial hydration. */
+  captureUnprojectedGeneration(scope: Pick<ExecutionScope, "tenantId" | "principalId">, applicationThreadId: string): string | undefined {
+    const entry = this.#entries.get(scopedActorKey(scope, applicationThreadId));
+    return entry && !entry.eviction && !entry.poisoned && entry.actor?.initialProjectionUnavailable
+      ? entry.unprojectedGeneration : undefined;
+  }
+
+  /** Borrow already-published native control without opening or hydrating a conversation. */
+  acquireExistingControl(
+    scope: Pick<ExecutionScope, "tenantId" | "principalId">,
+    applicationThreadId: string,
+  ): AcquiredConversationControl | undefined {
+    const key = scopedActorKey(scope, applicationThreadId);
+    const entry = this.#entries.get(key);
+    const control = entry?.control;
+    if (this.#closing || this.#maintenance.has(key) || !entry || !control ||
+        entry.poisoned || entry.eviction || entry.creationAbort.signal.aborted ||
+        control.lifetime.aborted || entry.actor?.closed || entry.actor?.replacementRequired) return undefined;
+    if (entry.evictionTimer) clearTimeout(entry.evictionTimer);
+    entry.evictionTimer = undefined;
+    entry.references += 1;
+    entry.controlReferences += 1;
+    let released = false;
+    const lifetime = AbortSignal.any([control.lifetime, entry.creationAbort.signal]);
+    const assertCurrent = () => {
+      if (released || lifetime.aborted || this.#entries.get(key) !== entry || entry.control !== control) {
+        throw new BackendError({ category: "unavailable", retryable: true,
+          crossedSubmissionBoundary: false, safeMessage: "The existing conversation control was revoked." });
+      }
+    };
+    return {
+      control: {
+        generation: control.generation, lifetime,
+        interrupt: (input, onDispatch) => entry.nativeEffects.run(async () => {
+          assertCurrent();
+          if (input.signal?.aborted || Date.now() >= input.deadlineAt) {
+            throw new BackendError({ category: "unavailable", retryable: false, crossedSubmissionBoundary: false,
+              safeMessage: "The conversation Stop budget expired before dispatch." });
+          }
+          onDispatch?.();
+          await control.interrupt({ ...input, signal: input.signal ? AbortSignal.any([input.signal, lifetime]) : lifetime });
+        }),
+        reconcileInterrupt: async input => {
+          assertCurrent();
+          return control.reconcileInterrupt({ ...input, signal: input.signal ? AbortSignal.any([input.signal, lifetime]) : lifetime });
+        },
+        ...(control.mutateProviderFeature ? { mutateProviderFeature: async (...args: Parameters<NonNullable<ConversationControl["mutateProviderFeature"]>>) => {
+          assertCurrent();
+          return control.mutateProviderFeature!(...args);
+        } } : {}),
+      },
+      release: () => {
+        if (released) return;
+        released = true;
+        entry.controlReferences -= 1;
+        if (entry.controlReferences === 0) {
+          for (const resolve of entry.controlsReleased) resolve();
+          entry.controlsReleased.clear();
+        }
+        this.#release(key, entry, "retain");
+      },
+    };
+  }
+
+  async #waitForControls(entry: ActorEntry): Promise<void> {
+    if (entry.controlReferences === 0) return;
+    await new Promise<void>(resolve => { entry.controlsReleased.add(resolve); });
   }
 
   /**
@@ -504,6 +593,7 @@ export class ConversationActorManager {
                 return;
               }
             }
+            await this.#waitForControls(entry);
             await actor.close(cleanupGate);
             if (!actor.replacementSafe) throw new Error("conversation_actor_close_unproven");
             if (this.#entries.get(key) === entry) this.#entries.delete(key);
@@ -549,6 +639,7 @@ export class ConversationActorManager {
         if (entry.evictionTimer) clearTimeout(entry.evictionTimer);
         entry.creationAbort.abort();
       }
+      await Promise.all(entries.map(entry => this.#waitForControls(entry)));
       const failures: unknown[] = [];
       failures.push(
         ...entries.flatMap(({ poisoned }) =>
@@ -642,7 +733,7 @@ export class ConversationActorManager {
         !entry.poisoned &&
         entry.references === 0 &&
         entry.pendingIdleRelease !== undefined &&
-        Boolean(entry.actor?.canEvict),
+        Boolean(entry.actor?.canAutomaticallyEvict),
     );
     if (ownVictim) ownVictim[1].idleSince ??= Date.now();
     const reclaimed = this.#pressureReclaimer?.({
@@ -788,7 +879,7 @@ export class ConversationActorManager {
     while (true) {
       const entry = this.#entries.get(key);
       if (!entry) {
-        if (disposition.kind === "explicit_detach") {
+        if (disposition.kind !== "idle") {
           throw new ConversationActorRetirementStaleError();
         }
         return;
@@ -851,6 +942,21 @@ export class ConversationActorManager {
         }
         continue;
       }
+      if (disposition.kind === "unprojected_detach") {
+        if (entry.unprojectedGeneration !== disposition.expectedGeneration || !entry.actor.initialProjectionUnavailable) {
+          throw new ConversationActorRetirementStaleError();
+        }
+        try {
+          if (!await entry.actor.closeIfInitialProjectionUnavailable()) throw new ConversationActorRetirementStaleError();
+          if (!entry.actor.replacementSafe) throw new Error("conversation_actor_close_unproven");
+          if (this.#entries.get(key) === entry) this.#entries.delete(key);
+          return;
+        } catch (error) {
+          if (error instanceof ConversationActorRetirementStaleError) throw error;
+          entry.poisoned = error;
+          throw new ConversationActorRetirementUnprovenError(error);
+        }
+      }
       if (disposition.kind === "explicit_detach") {
         try {
           const closed = await entry.actor.closeIfCurrent(disposition.expected);
@@ -869,7 +975,7 @@ export class ConversationActorManager {
       if (!entry.actor.canEvict) {
         throw new ConversationActorRetirementBusyError();
       }
-      const eviction = this.#beginEntryEviction(key, entry);
+      const eviction = this.#beginEntryEviction(key, entry, true);
       if (!eviction) {
         if (this.#closing)
           throw new Error("conversation_actor_manager_closing");
@@ -896,10 +1002,10 @@ export class ConversationActorManager {
     entry: ActorEntry,
   ): Promise<boolean> {
     if (this.#entries.get(key) !== entry) return true;
-    if (entry.references > 0 || !entry.actor?.canEvict) return false;
+    if (entry.references > 0 || !entry.actor?.canAutomaticallyEvict) return false;
     let closed = false;
     try {
-      closed = await entry.actor.closeIfIdle();
+      closed = await entry.actor.closeIfAutomaticallyIdle();
     } catch (error) {
       entry.poisoned = error;
       throw error;
@@ -920,6 +1026,8 @@ export class ConversationActorManager {
     actor: ConversationActor,
   ): Promise<boolean> {
     if (this.#entries.get(key) !== entry) return true;
+    entry.creationAbort.abort();
+    await this.#waitForControls(entry);
     let failure: unknown;
     try {
       await actor.close();
@@ -947,7 +1055,7 @@ export class ConversationActorManager {
       }
       return;
     }
-    if (!entry.actor?.canEvict || entry.pendingIdleRelease === undefined) {
+    if (!entry.actor?.canAutomaticallyEvict || entry.pendingIdleRelease === undefined) {
       entry.idleSince = undefined;
       if (entry.evictionTimer) {
         clearTimeout(entry.evictionTimer);
@@ -965,7 +1073,7 @@ export class ConversationActorManager {
     if (entry.evictionTimer || entry.eviction || this.#closing) return;
     entry.idleSince ??= Date.now();
     const delay =
-      entry.pendingIdleRelease === "retain"
+      entry.actor?.initialProjectionUnavailable || entry.pendingIdleRelease === "retain"
         ? Math.max(
             0,
             entry.idleSince + this.#retentionMilliseconds - Date.now(),
@@ -987,6 +1095,7 @@ export class ConversationActorManager {
   #beginEntryEviction(
     key: string,
     entry: ActorEntry,
+    strict = false,
   ): Promise<boolean> | undefined {
     const actor = entry.actor;
     if (
@@ -995,7 +1104,7 @@ export class ConversationActorManager {
       this.#entries.get(key) !== entry ||
       entry.references > 0 ||
       entry.eviction ||
-      !actor.canEvict
+      !(strict ? actor.canEvict : actor.canAutomaticallyEvict)
     ) {
       return undefined;
     }
@@ -1004,7 +1113,7 @@ export class ConversationActorManager {
     let eviction!: Promise<boolean>;
     eviction = (async () => {
       try {
-        closed = await actor.closeIfIdle();
+        closed = await (strict ? actor.closeIfIdle() : actor.closeIfAutomaticallyIdle());
         return closed;
       } catch (error) {
         failure = error;
@@ -1030,6 +1139,7 @@ export class ConversationActorManager {
 
   async #createActor(
     input: AcquireConversationActorInput,
+    entry: ActorEntry,
     signal: AbortSignal,
     onStateChanged: () => void,
   ): Promise<ConversationActor> {
@@ -1047,9 +1157,25 @@ export class ConversationActorManager {
         binding: input.binding,
         workspace: lease.workspace,
         opaqueBindingDetail: input.opaqueBindingDetail,
+        onControlReady: control => {
+          if (signal.aborted || control.lifetime.aborted || !control.generation) return;
+          entry.control = control;
+          control.lifetime.addEventListener("abort", () => {
+            if (entry.control === control) entry.control = undefined;
+          }, { once: true });
+        },
+        onSubmissionObserved: observation => {
+          const control = entry.control;
+          if (!this.#onAuthoritativeSubmission || signal.aborted || !control || control.lifetime.aborted) return;
+          observationChain = observationChain.then(async () => {
+            if (signal.aborted || entry.control !== control || control.lifetime.aborted) return;
+            await this.#onAuthoritativeSubmission?.(input.scope, input.binding.applicationThreadId, observation);
+          }).catch(() => undefined);
+        },
       });
       actor = new ConversationActor({
         handle,
+        nativeEffects: entry.nativeEffects,
         environmentLease: lease,
         attachmentDelivery: this.#attachmentDelivery,
         ...(this.#deliveryInputSnapshots
@@ -1071,6 +1197,41 @@ export class ConversationActorManager {
             }
           : {}),
         initialObserver: (event) => {
+
+          onStateChanged();
+          if (
+            (event.type === "authoritative_completion" && this.#onAuthoritativeCompletion) ||
+            (event.type === "authoritative_submission" && this.#onAuthoritativeSubmission)
+          ) {
+            observationChain = observationChain
+              .then(async () => {
+                const observation =
+                  event.type === "authoritative_submission"
+                    ? this.#onAuthoritativeSubmission?.(
+                        input.scope,
+                        input.binding.applicationThreadId,
+                        {
+                          backendCorrelation: event.backendCorrelation,
+                        },
+                      )
+                    : this.#onAuthoritativeCompletion?.(
+                        input.scope,
+                        input.binding.applicationThreadId,
+                        {
+                          backendCorrelation: event.backendCorrelation,
+                          backendTurnId: event.backendTurnId,
+                          applicationTurnId: event.applicationTurnId,
+                          completionIdentity: event.completionIdentity,
+                          outcome: event.outcome,
+                          result: event.result,
+                          classifiedResult: event.classifiedResult,
+                        },
+                      );
+                await observation;
+              })
+              .catch(() => undefined);
+          }
+
           const historyItems =
             event.type === "projection_replaced"
               ? Object.values(event.state.timeline.itemsById)
@@ -1127,54 +1288,16 @@ export class ConversationActorManager {
           }),
       });
       await actor.start({ signal });
-      // A terminal projection can prove a previously uncertain submission and
-      // its completion in the same actor turn. Preserve publication order
-      // across asynchronous durable observers. The same subscription drives
-      // retention eligibility so active actors are never polled for idleness.
-      actor.subscribe((event) => {
-        onStateChanged();
-        if (
-          this.#onAuthoritativeCompletion ||
-          this.#onAuthoritativeSubmission
-        ) {
-          if (
-            event.type !== "authoritative_completion" &&
-            event.type !== "authoritative_submission"
-          ) {
-            return;
-          }
-          observationChain = observationChain
-            .then(async () => {
-              const observation =
-                event.type === "authoritative_submission"
-                  ? this.#onAuthoritativeSubmission?.(
-                      input.scope,
-                      input.binding.applicationThreadId,
-                      {
-                        backendCorrelation: event.backendCorrelation,
-                        backendTurnId: event.backendTurnId,
-                      },
-                    )
-                  : this.#onAuthoritativeCompletion?.(
-                      input.scope,
-                      input.binding.applicationThreadId,
-                      {
-                        backendCorrelation: event.backendCorrelation,
-                        backendTurnId: event.backendTurnId,
-                        applicationTurnId: event.applicationTurnId,
-                        completionIdentity: event.completionIdentity,
-                        outcome: event.outcome,
-                        result: event.result,
-                        classifiedResult: event.classifiedResult,
-                      },
-                    );
-              await observation;
-            })
-            .catch(() => undefined);
-        }
-      });
       return actor;
     } catch (error) {
+      if (actor && !signal.aborted && entry.control && !entry.control.lifetime.aborted && !actor.replacementRequired) {
+        // Keep the exact native owner and its environment lease. A later normal
+        // acquisition retries projection; control remains available immediately.
+        return actor;
+      }
+      const creationWasCancelled = signal.aborted;
+      entry.creationAbort.abort(error);
+      await this.#waitForControls(entry);
       let cleanupError: unknown;
       if (actor) {
         try {
@@ -1192,7 +1315,7 @@ export class ConversationActorManager {
       if (cleanupError) {
         throw new ConversationActorCreationCleanupError([error, cleanupError]);
       }
-      if (signal.aborted) {
+      if (creationWasCancelled) {
         throw new ConversationActorCreationAbortedError({ cause: error });
       }
       throw error;

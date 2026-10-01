@@ -1,3 +1,4 @@
+import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
 import { claudeResultUserMessageIds } from "../../src/server/backends/claude/claude-result-lifecycle.js";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
@@ -17,7 +18,6 @@ import { installClaudeWorkerBundle } from "../../src/server/backends/claude/work
 import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
 import { PersistentSidecarServiceRegistry } from "../../src/server/sidecar/persistent-sidecar-service-registry.js";
 import type { SidecarRuntimeLease, SidecarRuntimeProvider } from "../../src/server/sidecar/runtime-channel.js";
-import { createClaudeFramedCarrier } from "../helpers/persistent-claude-fixture.js";
 import { claudeTranscriptContentFingerprint, verifyClaudeForkChild } from "../../src/server/backends/claude/claude-fork-lineage.js";
 import { claudeResumableHistoryStart } from "../../src/server/backends/claude/claude-history-projector.js";
 
@@ -61,6 +61,7 @@ describe.sequential("real Claude persistent runtime with local SSH carrier stand
     });
     let current: SidecarRuntimeLease | undefined;
     const sidecarRuntime: SidecarRuntimeProvider = {
+    acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); },
       acquire: async signal => {
         signal?.throwIfAborted();
         if (!current) throw new Error("live_carrier_unavailable");
@@ -77,7 +78,7 @@ describe.sequential("real Claude persistent runtime with local SSH carrier stand
       return value;
     };
     async function attach() {
-      const carrier = await createClaudeFramedCarrier();
+      const carrier = await createSidecarFramedCarrier();
       const controllerEpoch = services.attach(serviceConfiguration);
       const detach = registerClaudePersistentRuntimeHost({
         registry: carrier.hostRegistry, channel: carrier.hostChannel, hosts, controllerEpoch,

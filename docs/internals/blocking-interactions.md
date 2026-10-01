@@ -111,21 +111,24 @@ publishes it as a new pending interaction.
 
 ### Force reset cancellation
 
-Force reset is the only path on which Sedes answers a provider interaction the
-user did not answer. After the durable reset commits, the broker removes each
-exact pending interaction the reset listed and sends every provider-owned one
+Force reset abandons provider interactions without a user answer. After the
+durable reset commits, the broker removes each exact pending interaction the
+reset listed and sends every provider-owned one
 the backend-neutral `cancel` response through the runtime that owns it. Sedes
 waits at most 10 seconds in total for these cancellations and then replaces
-the runtime, so a replaced or reattached runtime does not leave the provider
-waiting on a prompt nobody can answer.
+the application runtime. Whether this also releases the native request depends
+on the backend; an independently running provider server can retain it.
 
-The cancellation is not a user response. It records no receipt, is never
-reported as provider success, and never blocks or undoes the committed reset.
+The cancellation is not a user response. It records no shared user-response
+receipt, is never reported as provider success, and never blocks or undoes the
+committed reset. A backend may retain private dispatch evidence to prevent
+repeating a native cancellation.
 Sedes ignores a cancellation that the backend rejects, that fails, or that is
 still unconfirmed at the bound. The request stays abandoned, a replay of it in
-the same generation is dropped, and replacing the runtime releases whatever the
-backend could not cancel. Application-owned decisions are rejected locally and
-reach no provider. Each backend's disposition is listed in the
+the same generation is dropped. Replacing the application runtime does not prove
+that a resident native server released an uncancelled request.
+Application-owned decisions are rejected locally and reach no provider. Each
+backend's disposition is listed in the
 [compiled backend audit](#compiled-backend-audit).
 
 ### Application-owned environment decisions
@@ -265,6 +268,41 @@ turn stop is never required to make the panel appear.
 - **Private boundary:** Grok advertises an empty `interactionKinds` set. Sedes
   does not infer ACP permission or elicitation shapes, emulate them with
   messages, or expose a response route.
+
+### OpenCode v2
+
+- **Decisions:** implemented for exact session-owned native permissions.
+  **Allow once** grants the requested action. **Deny and stop** interrupts the
+  run and rejects every other pending permission in that native session; this
+  wider effect is shown explicitly. Persistent grants are not exposed.
+- **Questionnaires and forms:** implemented for the supported native field
+  shapes. Unsupported session-owned forms receive a bounded notice and at most
+  one exact native cancellation dispatch. Global or differently owned forms are
+  neither answered nor cancelled. Pending permissions/forms in verified direct
+  child sessions produce an inspection notice; Sedes cannot answer or cancel
+  them through the parent. Unrelated sessions are ignored.
+- **Invocation context:** permission action and resources are displayed as
+  bounded read-only arguments.
+- **Force-reset cancellation:** exact form cancellation is implemented only
+  when no earlier response to the request may already have taken effect.
+  Permission cancellation is intentionally unsupported because native reject
+  also affects other pending permissions. Closing or replacing Sedes's actor
+  does not cancel permissions retained by the OpenCode server, in either
+  external or Sedes-owned server mode. Reattach can present them again for an
+  explicit response, subject to that same earlier-response fence; reset does
+  not claim native cleanup.
+- **Recovery:** private response receipts bind the operation, native request
+  fingerprint, session, and generation. A dispatched response is never sent
+  again automatically. Exact terminal form state can confirm a lost response;
+  disappearance of a permission cannot prove which response applied.
+  An earlier dispatched, unknown or accepted response blocks every fresh
+  response to that native request, including force-reset cancellation. Sedes
+  reports that block and requires native inspection rather than risking a
+  duplicate effect. A never-dispatched attempt permits a new response.
+- **Private boundary:** native IDs, field keys, option mappings, permissions,
+  forms, response encoding, and HTTP/SSE interpretation remain under
+  `src/server/backends/opencode`. The shared interaction broker supplies the
+  browser identities and response authority.
 
 ### In-memory conformance backend
 

@@ -1,10 +1,12 @@
 import path from "node:path";
 
 const REQUIRED_SHARED_SOURCES = Object.freeze([
+  "src/cli/opencode-owner-cli.ts",
   "src/cli/sedes-dynamic-tool-command.ts",
   "src/cli/sedes-cli.ts",
   "src/cli/sedes-mcp.ts",
   "src/cli/sedes-mcp-server.ts",
+  "src/cli/sedes-opencode-mcp.ts",
   "src/cli/sedes-tool-local-client.ts",
   "src/server/composer-attachments/execution-attachment-staging-engine.ts",
   "src/server/workspace-files/workspace-files-engine.ts",
@@ -15,6 +17,37 @@ const REQUIRED_SHARED_SOURCES = Object.freeze([
 ]);
 
 const ALLOWED_REPOSITORY_SOURCES = new Set([
+  "src/cli/opencode-owner-cli.ts",
+  // OpenCode execution-host implementation; no main repositories or SQL.
+  "src/server/backends/opencode/opencode-release.ts",
+  "src/server/backends/opencode/opencode-sse.ts",
+  "src/server/backends/opencode/opencode-http-client.ts",
+  "src/server/backends/opencode/opencode-native-identity.ts",
+  "src/server/backends/opencode/opencode-process-cleanup.ts",
+  "src/server/backends/opencode/opencode-native-store.ts",
+  "src/server/backends/opencode/opencode-runtime-ownership.ts",
+  "src/server/backends/opencode/opencode-owned-process.ts",
+  "src/server/backends/opencode/opencode-native-base64.ts",
+  "src/server/backends/opencode/opencode-native-codecs.ts",
+  "src/server/backends/opencode/opencode-http-native-adapter.ts",
+  "src/server/backends/opencode/opencode-native-observation-proof.ts",
+  "src/server/backends/opencode/opencode-observation-hub.ts",
+  "src/server/backends/opencode/opencode-native-port.ts",
+  "src/server/backends/opencode/opencode-mutation-journal.ts",
+  "src/server/backends/opencode/opencode-native-host.ts",
+  "src/server/agent-tools/adapters/backend-facade.ts",
+  "src/server/backends/opencode/opencode-mcp-ingress.ts",
+  "src/server/backends/opencode/opencode-host-agent-tools.ts",
+  "src/server/backends/opencode/opencode-tool-invocation.ts",
+  "src/server/backends/opencode/opencode-tool-relay-wire.ts",
+  "src/server/backends/opencode/opencode-runtime.ts",
+  "src/shared/protocol/opencode-configuration.ts",
+  "src/server/backends/opencode/opencode-runtime-configuration.ts",
+  "src/server/backends/opencode/opencode-runtime-host-registry.ts",
+  "src/server/backends/opencode/opencode-runtime-wire.ts",
+  "src/server/backends/opencode/opencode-sidecar-runtime.ts",
+  // Normalized error/schema primitives used by the provider-owned Stop journal.
+  "src/server/backends/contracts.ts",
   "src/server/environment-variables/runtime-environment.ts",
   "src/server/config/configuration-fingerprint.ts",
   "src/shared/protocol/environment-variables.ts",
@@ -24,6 +57,8 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/cli/sedes-dynamic-tool-command.ts",
   "src/cli/sedes-mcp.ts",
   "src/cli/sedes-mcp-server.ts",
+  "src/cli/sedes-opencode-mcp.ts",
+  "src/internal/opencode-mcp/contracts.ts",
   "src/cli/sedes-tool-api-client.ts",
   "src/cli/sedes-tool-client.ts",
   "src/cli/sedes-tool-local-client.ts",
@@ -99,13 +134,14 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   "src/server/backends/codex/runtime/codex-runtime-wire.ts",
   "src/server/backends/codex/runtime/codex-sidecar-runtime.ts",
   "src/server/backends/claude/claude-release-guard.ts",
+  "src/server/backends/claude/claude-interrupt-operation.ts",
   "src/server/backends/claude/claude-background-activity.ts",
   "src/server/backends/claude/claude-result-lifecycle.ts",
   "src/server/backends/claude/claude-session-history.ts",
   "src/server/backends/claude/claude-message-scope.ts",
   "src/server/backends/claude/claude-skill-name.ts",
   "src/server/backends/claude/claude-skills.ts",
-  "src/server/backends/claude/worker/claude-runtime-v1.ts",
+  "src/server/backends/claude/worker/claude-runtime-v2.ts",
   "src/server/backends/claude/worker/claude-runtime-host-support.ts",
   "src/server/backends/claude/claude-runtime-worker-client.ts",
   "src/server/backends/claude/claude-fork-launch.ts",
@@ -126,6 +162,7 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
 
 
   "src/server/sidecar/agent-tool-cli-local-ingress.ts",
+  "src/server/sidecar/agent-tool-request-relay.ts",
   "src/server/sidecar/composer-attachments-sidecar-host.ts",
   "src/server/sidecar/directory-browser-sidecar-host.ts",
   "src/server/sidecar/workspace-files-sidecar-host.ts",
@@ -184,6 +221,12 @@ const ALLOWED_SOURCE_PREFIXES = Object.freeze([
   "src/internal/agent-tool-cli-protocol/",
   "src/internal/agent-tool-mcp/",
   "src/internal/sidecar-protocol/",
+  // Pinned OpenCode 2.0.18 contracts and Effect schema/HTTP runtime.
+  // Database adapters remain forbidden by the import audit below.
+  "node_modules/@opencode/client/",
+  "node_modules/@opencode/protocol/",
+  "node_modules/@opencode/schema/",
+  "node_modules/effect/",
   "node_modules/ajv/",
   "node_modules/diff/",
   "node_modules/fast-deep-equal/",
@@ -199,6 +242,7 @@ const ALLOWED_SOURCE_PREFIXES = Object.freeze([
 ]);
 
 const ALLOWED_EXTERNAL_IMPORTS = new Set([
+  "node:timers/promises",
   "node:async_hooks",
   "node:child_process",
   "node:crypto",

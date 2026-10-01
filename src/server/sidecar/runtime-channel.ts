@@ -13,6 +13,9 @@ export class SidecarRuntimeChannel {
   supportsOperation(definition: { readonly capabilityId: string; readonly majorVersion: number; readonly operation: string }): boolean {
     return this.peer.supportsOperation(definition);
   }
+  supportsIncomingOperation(definition: { readonly capabilityId: string; readonly majorVersion: number; readonly operation: string }): boolean {
+    return this.peer.supportsIncomingOperation(definition);
+  }
   assertReady(): void { this.peer.assertReady(); }
   call<Request, Response>(definition: SidecarOperationDefinition<Request, Response>, request: Request,
     options?: Parameters<SidecarProtocolPeer["call"]>[2]): Promise<Response> {
@@ -35,6 +38,8 @@ export interface SidecarRuntimeLease {
 }
 export interface SidecarRuntimeProvider {
   acquire(signal?: AbortSignal, options?: { readonly existingOnly?: boolean }): Promise<SidecarRuntimeLease>;
+  /** Borrow existing authority without replacing its carrier or starting a service. */
+  acquireExisting(signal?: AbortSignal): Promise<SidecarRuntimeLease>;
 }
 
 /** Only a configuration mismatch permits the narrower retained-work attachment. */

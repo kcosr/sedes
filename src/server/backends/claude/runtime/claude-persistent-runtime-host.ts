@@ -1,3 +1,5 @@
+import { ClaudeInterruptOperations, assertClaudeInterruptTime } from "../claude-interrupt-operation.js";
+import type { InterruptConversationInput } from "../../contracts.js";
 import { claudeMessageIsChildOwned } from "../claude-message-scope.js";
 import { attachmentDiagnostic } from "../../../diagnostics/attachment-diagnostics.js";
 import { ClaudeBackgroundActivity } from "../claude-background-activity.js";
@@ -7,7 +9,7 @@ import type { CanUseTool, PermissionResult, SDKMessage } from "@anthropic-ai/cla
 import type { ClaudeOwnedRuntimeClient, ClaudeOwnedRuntimeSession, ClaudeRuntimeClient, ClaudeRuntimeForkResult, ClaudeRuntimeSession } from "../claude-runtime-client.js";
 import { claudeForkLaunchFailure } from "../claude-fork-launch.js";
 import { SidecarOperationError } from "../../../../internal/sidecar-protocol/operation-registry.js";
-import type { ClaudeRuntimeAgentToolMcp } from "../worker/claude-runtime-v1.js";
+import type { ClaudeRuntimeAgentToolMcp } from "../worker/claude-runtime-v2.js";
 import type { PersistentSidecarServiceRegistry } from "../../../sidecar/persistent-sidecar-service-registry.js";
 import { SidecarResourceHandoffPendingError } from "../../../sidecar/persistent-sidecar-service-registry.js";
 import type { SidecarUpgradeBlocker } from "../../../../internal/sidecar-protocol/service-management-v1.js";
@@ -17,6 +19,8 @@ import { compactedStreamSequences, historyCandidates, historyCovers, isTransient
 
 type Permission = { event: ClaudePersistentEvent; resolve(value: PermissionResult): void; response?: PermissionResult; cancelled?: boolean };
 type Session = {
+  /** Replay tombstones live exactly as long as this native query incarnation. */
+  interruptOperations: ClaudeInterruptOperations<Awaited<ReturnType<ClaudeRuntimeSession["interrupt"]>>>;
   backgroundActivity: ClaudeBackgroundActivity; backgroundSequence?: number;
   terminalResultSequences: Set<number>; pendingTerminalSequence?: number; model?: string | null; commandsInvalidated: boolean; permissionMode?: import("@anthropic-ai/claude-agent-sdk").PermissionMode; confirmedEffort?: import("@anthropic-ai/claude-agent-sdk").EffortLevel | null;
   id: string; cwd: string; authorityFingerprint: string; runtime: ClaudeOwnedRuntimeSession; starting: Promise<unknown>;
@@ -261,8 +265,8 @@ export class ClaudePersistentRuntimeHost {
       (this.#sessions.get(command.request.sessionId)?.permissionResponses.has(permissionKey(command.request)) ||
         ((!this.#runtimeStopped && !this.#frozen || command.request.response.behavior === "deny") &&
           this.#sessions.get(command.request.sessionId)?.permissions.has(permissionKey(command.request))));
-    if (this.#runtimeStopped && !existingOpen && !permissionSettlement && !["attach", "detach", "evict", "retire", "acknowledge", "submission_disposition", "info", "messages", "transcript", "list", "probe"].includes(command.action)) throw new Error("claude_persistent_runtime_stopped");
-    if (!existingOpen && !retainedProbe && !permissionSettlement && !["attach", "detach", "evict", "retire", "acknowledge", "list", "info", "messages", "transcript", "submission_disposition"].includes(command.action)) {
+    if (this.#runtimeStopped && !existingOpen && !permissionSettlement && !["attach", "detach", "evict", "retire", "acknowledge", "submission_disposition", "interrupt_disposition", "info", "messages", "transcript", "list", "probe"].includes(command.action)) throw new Error("claude_persistent_runtime_stopped");
+    if (!existingOpen && !retainedProbe && !permissionSettlement && !["attach", "detach", "evict", "retire", "acknowledge", "list", "info", "messages", "transcript", "submission_disposition", "interrupt_disposition"].includes(command.action)) {
       if (this.#frozen) throw new Error("claude_persistent_admission_frozen");
       this.input.services.assertAdmission(command.controllerEpoch);
     }
@@ -464,11 +468,27 @@ export class ClaudePersistentRuntimeHost {
         }
         return { accepted: true };
       }
+      case "interrupt_disposition": {
+        const session = this.#sessions.get(command.request.queryId);
+        return { outcome: session?.runtime.startupProbeUuid === command.request.startupProbeUuid
+          ? session.interruptOperations.outcome(command.request.operationId) : "unknown" };
+      }
       case "interrupt": {
-        // Main sends `interrupt` only for Stop.
         const session = this.#session(command.request.queryId);
-        await this.#withdrawUnstartedInputs(session);
-        return { receipt: await session.runtime.interrupt() ?? null };
+        if (session.runtime.startupProbeUuid !== command.request.startupProbeUuid || session.runtime.closed || session.failureCode) {
+          throw new Error("claude_persistent_interrupt_owner_changed");
+        }
+        // The first delivery owns a local deadline; replay cannot extend it.
+        // This is a duration across hosts, never a comparison of their clocks.
+        const input = { applicationOperationId: command.request.operationId,
+          deadlineAt: Date.now() + command.request.timeoutMilliseconds };
+        const receipt = await session.interruptOperations.run(input, async signal => {
+          const bounded = { ...input, signal };
+          await this.#withdrawUnstartedInputs(session, bounded);
+          assertClaudeInterruptTime(bounded);
+          return await session.runtime.interrupt(bounded);
+        });
+        return { receipt: receipt ?? null };
       }
       case "set_model": { const session = this.#session(command.request.queryId); await session.runtime.setModel(command.request.model ?? undefined); session.model = command.request.model; return { updated: true }; }
       case "set_effort": { const session = this.#session(command.request.queryId); await session.runtime.setEffort(command.request.effort ?? undefined); session.confirmedEffort = command.request.effort; return { updated: true }; }
@@ -558,7 +578,7 @@ export class ClaudePersistentRuntimeHost {
       onMessage: message => this.#message(created, message),
       onFailure: () => this.#fail(created, "claude_persistent_query_failed"),
     });
-    created = { backgroundActivity: new ClaudeBackgroundActivity(), id: request.sessionId, cwd: request.cwd, authorityFingerprint: queryAuthorityFingerprint(request), runtime, starting: Promise.resolve(), events: new Map(), replay: new Map(), bytes: 0, replayBytes: 0, sequence: 0,
+    created = { interruptOperations: new ClaudeInterruptOperations(), backgroundActivity: new ClaudeBackgroundActivity(), id: request.sessionId, cwd: request.cwd, authorityFingerprint: queryAuthorityFingerprint(request), runtime, starting: Promise.resolve(), events: new Map(), replay: new Map(), bytes: 0, replayBytes: 0, sequence: 0,
       journalMessageBytes: 0, journalMessageCount: 0, offeredThrough: 0,
       nextHistoryRead: 0, historyBackoff: 0, historyPressure: false, historyCandidatesDirty: true, hasHistoryCandidates: false, rewriteGeneration: 0, streamStopSequence: 0, replayStateSequences: new Map(),
       admissionJournalComplete: request.launch === "new",
@@ -785,11 +805,12 @@ export class ClaudePersistentRuntimeHost {
    * #message, records its withdrawal; Claude's answer here proves nothing, and
    * a failed request neither proves anything nor blocks the interrupt.
    */
-  async #withdrawUnstartedInputs(session: Session): Promise<void> {
+  async #withdrawUnstartedInputs(session: Session, input: InterruptConversationInput): Promise<void> {
     for (const operationId of [...session.pendingInputs.keys()]) {
       // Claude may start or settle an input while an earlier request runs.
       if (!session.pendingInputs.has(operationId)) continue;
-      try { await session.runtime.cancelQueuedInput(operationId); }
+      assertClaudeInterruptTime(input);
+      try { await session.runtime.cancelQueuedInput(operationId, input); }
       catch { /* The input stays pending; its outcome comes from evidence. */ }
     }
   }

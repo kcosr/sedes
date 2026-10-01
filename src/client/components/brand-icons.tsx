@@ -101,6 +101,12 @@ export const GrokBrandIcon = ({
   </svg>
 );
 
+export const OpenCodeBrandIcon = ({ size = 15, ...props }: IconProps): React.JSX.Element => (
+  <svg aria-hidden="true" fill="currentColor" height={size} viewBox="0 0 24 24" width={size} {...props}>
+    <path d="M8.4 17.4H19.2V21H4.8V13.8H8.4ZM15.6 10.2V13.8H8.4V10.2ZM19.2 10.2H15.6V6.6H4.8V3H19.2Z" />
+  </svg>
+);
+
 /**
  * The one place brand→mark selection lives, so call sites never branch on
  * provider-name strings. The record is total over the closed normalized
@@ -116,6 +122,7 @@ const BRAND_MARKS: Readonly<
   codex: CodexBrandIcon,
   claude: ClaudeBrandIcon,
   grok: GrokBrandIcon,
+  opencode: OpenCodeBrandIcon,
 };
 
 export const BackendBrandIcon = ({

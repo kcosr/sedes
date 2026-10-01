@@ -87,8 +87,13 @@ const unnamedRefinement: Record<string, string> = {
   label: "Remove control characters from the name.",
 };
 const formats: Record<string, string> = {
-  variable: "Use an approved name that starts with SEDES_CODEX_ and contains TOKEN, such as SEDES_CODEX_REMOTE_TOKEN.",
   hostAlias: "Use an SSH alias: letters, digits, dots, hyphens and underscores, starting and ending with a letter or digit.",
+};
+
+/** Credential reference formats are distinct even though both schemas call the field `variable`. */
+const credentialFormats: Readonly<Record<string, string>> = {
+  [String(/^SEDES_CODEX_[A-Z0-9_]*TOKEN[A-Z0-9_]*$/)]: "Use an approved name that starts with SEDES_CODEX_ and contains TOKEN, such as SEDES_CODEX_REMOTE_TOKEN.",
+  [String(/^SEDES_OPENCODE_[A-Z0-9_]*PASSWORD[A-Z0-9_]*$/u)]: "Use an approved name that starts with SEDES_OPENCODE_ and contains PASSWORD, such as SEDES_OPENCODE_REMOTE_PASSWORD.",
 };
 
 /** A readable message for one schema issue; Zod's generic wording never reaches the page. */
@@ -111,6 +116,7 @@ export function describeIssue(issue: ZodIssue): string {
       if (issue.origin === "number") return key === "initializationTimeoutMs" ? `Use at most ${issue.maximum} ms.` : `Use at most ${issue.maximum}.`;
       return "This value is too large.";
     case "invalid_format":
+      if (key === "variable" && issue.pattern && credentialFormats[issue.pattern]) return credentialFormats[issue.pattern]!;
       if (key && formats[key]) return formats[key];
       return issue.format === "regex" ? "Use letters, digits and underscores, starting with a letter or underscore." : "Enter a value in the expected format.";
     case "custom":

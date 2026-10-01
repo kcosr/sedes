@@ -31,8 +31,8 @@ import { compileBackendModelPolicy } from "../../src/server/backends/model-polic
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import { createFakeAgentToolSourceCapabilities } from "../helpers/fake-agent-tool-source-capabilities.js";
 
-const requiredProvider = "xai";
-const requiredModelId = "grok-4.5";
+const requiredProvider = "aw-qwen-3-8-27b";
+const requiredModelId = "aw-qwen-3-8-27b";
 const requiredThinkingLevel = "low";
 const timeoutMilliseconds = 240_000;
 const temporaryRoots: string[] = [];
@@ -981,10 +981,7 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
       );
       await conversation.handle.interrupt({
         applicationOperationId: `interrupt-${randomUUID()}`,
-        expectedBackendTurnId: eventOfType(
-          events.slice(stopEventStart),
-          "turn_started",
-        ).at(-1)!.turn.backendTurnId,
+        deadlineAt: Date.now() + 30_000,
       });
       await waitFor(
         () =>
@@ -1129,7 +1126,7 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
       }
       await conversation.handle.interrupt({
         applicationOperationId: `steer-stop-interrupt-${randomUUID()}`,
-        expectedBackendTurnId: turnId,
+        deadlineAt: Date.now() + 30_000,
       });
       await waitFor(
         () =>

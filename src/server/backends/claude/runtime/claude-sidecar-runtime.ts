@@ -8,7 +8,7 @@ import { claudePersistentCommandSchema, claudePersistentConfigurationSchema, cla
   type ClaudePersistentCommand, type ClaudePersistentConfiguration, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
 import type { ClaudePersistentRuntimeRegistry } from "./claude-persistent-runtime-registry.js";
 
-const capability = { capabilityId: "claude_persistent_runtime", majorVersion: 1 } as const;
+const capability = { capabilityId: "claude_persistent_runtime", majorVersion: 2 } as const;
 const stopRefusals = new Map<string, BackendRuntimeControlRejectedError["reason"]>([
   ["claude_persistent_confirmation_stale", "confirmation_stale"],
   ["claude_persistent_restart_blocked", "blocked"],
@@ -88,10 +88,11 @@ export function registerClaudePersistentRuntimeHost(input: {
     if (detached) throw new Error("claude_persistent_attachment_detached");
     return { runtimeId: input.hosts.ensure(configuration, input.controllerEpoch).runtimeId };
   });
-  input.registry.register(claudePersistentRuntimeExecuteOperation, async body => {
+  input.registry.register(claudePersistentRuntimeExecuteOperation, async (body, context) => {
     if (detached) throw new Error("claude_persistent_attachment_detached");
     const command = claudePersistentCommandSchema.parse(await input.channel.decodeBody(body));
     if (command.controllerEpoch !== input.controllerEpoch) throw new Error("claude_persistent_controller_stale");
+    context.signal.throwIfAborted();
     const host = input.hosts.get(command.runtimeId);
     attached.add(host.runtimeId);
     const result = await host.execute(command, event => {
@@ -130,9 +131,9 @@ export class ClaudeSidecarRuntimeConnection {
       throw error;
     }
   }
-  async execute(command: ClaudePersistentCommand): Promise<unknown> {
+  async execute(command: ClaudePersistentCommand, options?: { signal?: AbortSignal; deadlineMilliseconds?: number }): Promise<unknown> {
     const body = await this.channel.encodeBody(claudePersistentCommandSchema.parse(command));
-    return await this.channel.decodeBody(await this.channel.call(claudePersistentRuntimeExecuteOperation, body));
+    return await this.channel.decodeBody(await this.channel.call(claudePersistentRuntimeExecuteOperation, body, options));
   }
   onEvent(runtimeId: string, listener: (event: ClaudePersistentEvent) => void): () => void {
     let chain = Promise.resolve();

@@ -122,7 +122,7 @@ function createCrossEnvironmentApprovalComposition() {
   const conversation = {
     subscribe: () => () => undefined,
     respond: vi.fn(async () => undefined),
-    interruptForInteractionFailure: vi.fn(async () => undefined),
+
   } satisfies InteractionConversation;
   broker.bind(
     crossEnvironmentSource.scope,

@@ -888,6 +888,52 @@ ownership descriptor; an absent socket or missing supervisor PID alone is not
 cleanup evidence. Proven spawn failures and early child exits before daemon
 ownership are recorded as stopped automatically.
 
+### OpenCode runtime recovery
+
+Each configured OpenCode runtime has a separate Sedes ownership record under
+`${XDG_STATE_HOME:-$HOME/.local/state}/sedes/opencode-owners` on its execution
+host. The key identifies its tenant, principal, backend and execution
+environment; it does not claim exclusive ownership of the database. Symlinked
+home/state ancestors are resolved consistently; the ownership directory itself
+must be a private directory owned by the execution account, not a symlink. The record
+tracks the exact host lifetime and Sedes owner. Owned runtimes additionally
+mark their children. A killed owner does not prove those children stopped.
+Keep native history and the record intact when cleanup is ambiguous.
+
+Run the bundled command on the selected Linux execution host as the same
+account and in the same process namespace. Each `<authority-key>.lock/owner.json`
+record names its backend and scope. Select that key; use
+`--ownership-directory /absolute/path` when inspecting a nondefault record directory:
+
+```sh
+sedes opencode-owner inspect --authority-key AUTHORITY_KEY
+```
+
+Inspection is read-only and prints `inspectionFingerprint`, ownership and
+owner identity. If the Sedes owner is positively dead, recover the exact
+inspected record:
+
+```sh
+sedes opencode-owner recover --authority-key AUTHORITY_KEY --expected-inspection FINGERPRINT
+```
+
+For a Sedes-owned daemon whose marked descendants remain, add
+`--terminate-owned-descendants` only when you intend to stop that work.
+Recovery rechecks process lifetime, fingerprint and file identity. A changed,
+malformed, unreadable or live owner is refused. There is no arbitrary PID kill
+option and no automatic lock deletion on an ambiguous record. External mode
+never signals the operator's daemon, even with that flag.
+
+After successful host recovery, use the backend’s **Connect** or **Start**
+action to retry startup and clear the prior recovery diagnostic. Settings
+**Refresh** only inspects existing state and does not retry failed startup.
+
+This command is included in both the local provider CLI and deployed sidecar;
+invoke its installed path if `sedes` is not on the host PATH. No running main
+server, agent-tool credential or MCP setup is needed. Recovering a runtime ownership
+fence does not authorize rewriting the outer sidecar's `service.json` or
+startup lock; follow the separate sidecar recovery instructions for those.
+
 ### SSH target restart recovery
 
 Every SSH execution environment uses the same ownership checks, whether its

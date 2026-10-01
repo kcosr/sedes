@@ -7089,9 +7089,9 @@ describe("CodexConversationHandle", () => {
     await expect(
       handle.reconcileInterrupt({
         applicationOperationId: "paginated-interrupt-reconcile",
-        expectedBackendTurnId: "not-active",
+        deadlineAt: Date.now() + 30_000,
       }),
-    ).resolves.toEqual({ outcome: "accepted" });
+    ).resolves.toEqual({ outcome: "unknown" });
     expect(
       harness.calls.some(
         ({ method, params }) =>
@@ -12132,7 +12132,7 @@ describe("CodexConversationHandle", () => {
     harness.enqueue("turn/interrupt", {});
     await handle.interrupt({
       applicationOperationId: "large-history-stop",
-      expectedBackendTurnId: submitted.backendTurnId!,
+      deadlineAt: Date.now() + 30_000,
     });
 
     expect(
@@ -12420,14 +12420,12 @@ describe("CodexConversationHandle", () => {
       harness.calls.filter(({ method }) => method === "turn/steer"),
     ).toHaveLength(4);
     harness.enqueue("turn/interrupt", {});
-    await handle.interrupt({
+    const interruptInput = {
       applicationOperationId: "interrupt-operation",
-      expectedBackendTurnId: submitted.backendTurnId!,
-    });
-    await handle.interrupt({
-      applicationOperationId: "interrupt-operation",
-      expectedBackendTurnId: submitted.backendTurnId!,
-    });
+      deadlineAt: Date.now() + 30_000,
+    };
+    await handle.interrupt(interruptInput);
+    await handle.interrupt(interruptInput);
     expect(
       harness.calls.filter(({ method }) => method === "turn/interrupt"),
     ).toHaveLength(1);
@@ -12489,7 +12487,7 @@ describe("CodexConversationHandle", () => {
     established.subscribeFromNext(({ event }) => events.push(event));
     const input = {
       applicationOperationId: "interrupt-completion-wins",
-      expectedBackendTurnId: established.snapshot.activeBackendTurnId!,
+      deadlineAt: Date.now() + 30_000,
     };
     harness.enqueue("turn/interrupt", () => {
       harness.notify("turn/completed", {
@@ -12549,7 +12547,7 @@ describe("CodexConversationHandle", () => {
 
     await handle.interrupt({
       applicationOperationId: "interrupt-receipt-wins",
-      expectedBackendTurnId: established.snapshot.activeBackendTurnId!,
+      deadlineAt: Date.now() + 30_000,
     });
 
     expect(events.at(-1)).toEqual({
@@ -12621,6 +12619,10 @@ describe("CodexConversationHandle", () => {
       completedAt: 1_700_000_003,
       durationMs: 2_000,
     };
+    // The hydration snapshot is not current control authority. Stop performs
+    // one fresh metadata/shell read when no live turn notification was seen.
+    harness.enqueue("thread/read", { thread: activeThread });
+    harness.enqueue("thread/turns/list", { data: [activeTurn], nextCursor: null, backwardsCursor: null });
     let releaseRefresh!: (value: unknown) => void;
     harness.enqueue(
       "thread/turns/list",
@@ -12640,7 +12642,7 @@ describe("CodexConversationHandle", () => {
 
     await handle.interrupt({
       applicationOperationId: "interrupt-queued-completion",
-      expectedBackendTurnId: established.snapshot.activeBackendTurnId!,
+      deadlineAt: Date.now() + 30_000,
     });
 
     expect(events.at(-1)).toEqual({
@@ -12651,7 +12653,7 @@ describe("CodexConversationHandle", () => {
     await vi.waitFor(() => {
       expect(
         harness.calls.filter(({ method }) => method === "thread/turns/list"),
-      ).toHaveLength(turnsListCallsBeforeInterrupt + 1);
+      ).toHaveLength(turnsListCallsBeforeInterrupt + 2);
     });
     releaseRefresh({
       data: [completedTurn, notLoadedTurn(0)],
@@ -12715,7 +12717,7 @@ describe("CodexConversationHandle", () => {
     });
     const input = {
       applicationOperationId: "interrupt-replacement-turn",
-      expectedBackendTurnId: established.snapshot.activeBackendTurnId!,
+      deadlineAt: Date.now() + 30_000,
     };
 
     await handle.interrupt(input);
@@ -12781,7 +12783,7 @@ describe("CodexConversationHandle", () => {
     });
     const input = {
       applicationOperationId: "interrupt-invalidated-projection",
-      expectedBackendTurnId: established.snapshot.activeBackendTurnId!,
+      deadlineAt: Date.now() + 30_000,
     };
 
     await expect(handle.interrupt(input)).resolves.toBeUndefined();
@@ -14082,7 +14084,7 @@ describe("CodexConversationHandle", () => {
     const established = await establish(harness, handle, activeThread);
     const input = {
       applicationOperationId: "lost-interrupt",
-      expectedBackendTurnId: established.snapshot.activeBackendTurnId!,
+      deadlineAt: Date.now() + 30_000,
     };
     harness.enqueue(
       "turn/interrupt",
@@ -16972,4 +16974,280 @@ describe("Codex provider residency release for tool changes", () => {
     await expect(selected.releaseConversationResidency(attachInput())).rejects.toBeInstanceOf(BackendError);
     expect(harness.calls.some(call => call.method === "thread/unsubscribe")).toBe(false);
   });
+});
+
+
+describe("Codex existing-owner Stop control", () => {
+  it("reads only a current turn shell and pauses Goal while transcript hydration is stalled", async () => {
+    const harness = new RpcHarness();
+    const goals = new CodexGoalSessionRegistry();
+    const target = driver(harness, connection, new CodexConversationOwnershipRegistry(), catalogModelPolicy, executionSettingsProvider(), goals);
+    let control: import("../../src/server/backends/contracts.js").ConversationControl | undefined;
+    const handle = await target.attach({ ...attachInput(), onControlReady: value => { control = value; } });
+    const metadata = nativeThread({ status: { type: "active", activeFlags: [] }, turns: [] });
+    harness.enqueue("thread/read", { thread: metadata });
+    let rejectHistory!: (reason: Error) => void;
+    harness.enqueue("thread/resume", () => new Promise((_resolve, reject) => { rejectHistory = reject; }));
+    const hydration = handle.establishProjection({ signal: new AbortController().signal });
+    const failed = expect(hydration).rejects.toBeDefined();
+    await vi.waitFor(() => expect(control).toBeDefined());
+    await vi.waitFor(() => expect(rejectHistory).toBeDefined());
+    harness.enqueue("thread/read", { thread: metadata });
+    harness.enqueue("thread/turns/list", { data: [{ ...notLoadedTurn(4), status: "inProgress", completedAt: null, durationMs: null }], nextCursor: null, backwardsCursor: null });
+    harness.enqueue("turn/interrupt", {});
+    const input = { applicationOperationId: "control-stop", deadlineAt: Date.now() + 30_000 };
+    await control!.interrupt(input);
+    expect(harness.calls.find(call => call.method === "thread/turns/list")?.params).toEqual({
+      threadId: "thread-1", limit: 1, sortDirection: "desc", itemsView: "notLoaded",
+    });
+    expect(harness.calls.find(call => call.method === "turn/interrupt")?.params).toEqual({ threadId: "thread-1", turnId: "turn-4" });
+    const goal = { threadId: "thread-1", objective: "Keep working", status: "active", tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 };
+    harness.enqueue("thread/goal/get", { goal });
+    harness.enqueue("thread/goal/set", { goal: { ...goal, status: "paused", updatedAt: 2 } });
+    await expect(control!.mutateProviderFeature!({ featureId: "codex.goal", schemaVersion: 1, actionId: "pause", arguments: {} })).resolves.toMatchObject({ outcome: "accepted" });
+    expect(harness.calls.filter(call => call.method === "thread/resume")).toHaveLength(1);
+    rejectHistory(new Error("history_failed"));
+    await failed;
+    expect(control!.lifetime.aborted).toBe(false);
+    await expect(control!.interrupt(input)).resolves.toBeUndefined();
+    expect(harness.calls.filter(call => call.method === "turn/interrupt")).toHaveLength(1);
+    await handle.close();
+    expect(control!.lifetime.aborted).toBe(true);
+  });
+
+  it("accepts an authoritative idle no-op without sending turn/interrupt", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    await establish(harness, handle);
+    harness.enqueue("thread/read", { thread: nativeThread() });
+    const input = { applicationOperationId: "idle-stop", deadlineAt: Date.now() + 30_000 };
+    await handle.interrupt(input);
+    expect(await handle.reconcileInterrupt(input)).toEqual({ outcome: "accepted" });
+    expect(harness.calls.filter(call => call.method === "turn/interrupt")).toHaveLength(0);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("never accepts a lost interrupt merely because its old turn is gone", async () => {
+    const harness = new RpcHarness();
+    const activeTurn = { ...nativeTurn(1), status: "inProgress" as const, completedAt: null, durationMs: null };
+    const activeThread = nativeThread({ status: { type: "active", activeFlags: [] }, turns: [activeTurn] });
+    const handle = await attachIdle(harness);
+    await establish(harness, handle, activeThread);
+    const input = { applicationOperationId: "lost-stop", deadlineAt: Date.now() + 30_000 };
+    harness.enqueue("turn/interrupt", new CodexRpcDeliveryError({ code: "codex_response_lost", delivery: "sent_outcome_unknown", generation: 1, method: "turn/interrupt" }));
+    await expect(handle.interrupt(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    harness.notify("turn/completed", { threadId: "thread-1", turn: { ...activeTurn, status: "interrupted", completedAt: 1_700_000_003, durationMs: 2_000 } });
+    const count = harness.calls.length;
+    expect(await handle.reconcileInterrupt(input)).toEqual({ outcome: "unknown" });
+    expect(harness.calls).toHaveLength(count);
+    await expect(handle.interrupt(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    expect(harness.calls.filter(call => call.method === "turn/interrupt")).toHaveLength(1);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+});
+
+
+it("Codex Stop never chases a replacement after a native stale-target rejection", async () => {
+  const harness = new RpcHarness();
+  const active = { ...nativeTurn(1), status: "inProgress" as const, completedAt: null, durationMs: null };
+  const handle = await attachIdle(harness);
+  await establish(harness, handle, nativeThread({ status: { type: "active", activeFlags: [] }, turns: [active] }));
+  harness.enqueue("turn/interrupt", () => {
+    harness.notify("turn/started", { threadId: "thread-1", turn: { ...active, id: "replacement" } });
+    throw new CodexRpcRemoteError({ code: -32600, message: "expected active turn id turn-1 but found replacement", generation: 1, method: "turn/interrupt" });
+  });
+  const input = { applicationOperationId: "stale-stop", deadlineAt: Date.now() + 30_000 };
+  await expect(handle.interrupt(input)).rejects.toMatchObject({ category: "rejected" });
+  const calls = harness.calls.filter(call => call.method === "turn/interrupt");
+  expect(calls).toEqual([{ method: "turn/interrupt", params: { threadId: "thread-1", turnId: "turn-1" } }]);
+  expect(await handle.reconcileInterrupt(input)).toEqual({ outcome: "not_applied" });
+  harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+  await handle.close();
+});
+
+it("Codex Stop ignores late acknowledgements and revokes control on connection loss", async () => {
+  const harness = new RpcHarness();
+  let control: import("../../src/server/backends/contracts.js").ConversationControl | undefined;
+  const handle = await driver(harness).attach({ ...attachInput(), onControlReady: value => { control = value; } });
+  const active = { ...nativeTurn(1), status: "inProgress" as const, completedAt: null, durationMs: null };
+  const projection = await establish(harness, handle as CodexConversationHandle, nativeThread({ status: { type: "active", activeFlags: [] }, turns: [active] }));
+  const events: BackendConversationEvent[] = [];
+  projection.subscribeFromNext(({ event }) => events.push(event));
+  let acknowledge!: (value: unknown) => void;
+  harness.enqueue("turn/interrupt", () => new Promise(resolve => { acknowledge = resolve; }));
+  vi.useFakeTimers();
+  try {
+    const input = { applicationOperationId: "late-stop", deadlineAt: Date.now() + 20 };
+    const failed = expect(control!.interrupt(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+    await vi.advanceTimersByTimeAsync(20);
+    await failed;
+    acknowledge({});
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await control!.reconcileInterrupt(input)).toEqual({ outcome: "unknown" });
+    expect(events.some(event => event.type === "run_state_changed" && event.state === "stopping")).toBe(false);
+    harness.lifecycle("unavailable", 1);
+    expect(control!.lifetime.aborted).toBe(true);
+    await expect(control!.interrupt({ applicationOperationId: "new-stop", deadlineAt: Date.now() + 30_000 })).rejects.toMatchObject({ crossedSubmissionBoundary: false });
+    expect(harness.calls.filter(call => call.method === "turn/interrupt")).toHaveLength(1);
+  } finally { vi.useRealTimers(); await handle.close(); }
+});
+
+it.each([
+  { code: -32600, message: "no active turn to interrupt", outcome: "accepted" },
+  { code: -32600, message: "turn is not active", outcome: "unknown" },
+  { code: -32603, message: "internal error after interrupt", outcome: "unknown" },
+])("Codex Stop classifies only proved native outcomes: $message", async ({ code, message, outcome }) => {
+  const harness = new RpcHarness();
+  const handle = await attachIdle(harness);
+  const active = { ...nativeTurn(1), status: "inProgress" as const, completedAt: null, durationMs: null };
+  await establish(harness, handle, nativeThread({ status: { type: "active", activeFlags: [] }, turns: [active] }));
+  harness.enqueue("turn/interrupt", new CodexRpcRemoteError({ code, message, generation: 1, method: "turn/interrupt" }));
+  const input = { applicationOperationId: "classified-stop", deadlineAt: Date.now() + 30_000 };
+  if (outcome === "accepted") await expect(handle.interrupt(input)).resolves.toBeUndefined();
+  else await expect(handle.interrupt(input)).rejects.toMatchObject({ category: "submission_unknown", crossedSubmissionBoundary: true });
+  expect(await handle.reconcileInterrupt(input)).toEqual({ outcome });
+  const calls = harness.calls.length;
+  if (outcome === "accepted") await expect(handle.interrupt(input)).resolves.toBeUndefined();
+  else await expect(handle.interrupt(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+  expect(harness.calls).toHaveLength(calls);
+  harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+  await handle.close();
+});
+
+it("Codex history installation cannot revive a Stop target completed during paginated hydration", async () => {
+  const harness = new RpcHarness();
+  const handle = await attachIdle(harness);
+  const active = { ...notLoadedTurn(1), status: "inProgress" as const, completedAt: null };
+  const activeThread = paginatedThread({ status: { type: "active", activeFlags: [] } });
+  harness.enqueue("thread/read", { thread: activeThread });
+  harness.enqueue("thread/resume", paginatedResumeResult({ thread: activeThread, shells: [active, notLoadedTurn(0)] }));
+  harness.enqueue("thread/turns/list", { data: [active], nextCursor: "after-active", backwardsCursor: "turns-head" });
+  harness.enqueue("thread/items/list", () => {
+    harness.notify("turn/completed", { threadId: "thread-1", turn: notLoadedTurn(1) });
+    harness.notify("thread/status/changed", { threadId: "thread-1", status: { type: "idle" } });
+    return paginatedItems(1);
+  }, paginatedItems(0));
+  await handle.establishProjection({ signal: new AbortController().signal });
+  harness.enqueue("thread/read", { thread: paginatedThread() });
+  const input = { applicationOperationId: "settled-hydration-stop", deadlineAt: Date.now() + 30_000 };
+  await expect(handle.interrupt(input)).resolves.toBeUndefined();
+  expect(harness.calls.filter(call => call.method === "turn/interrupt")).toHaveLength(0);
+  expect(await handle.reconcileInterrupt(input)).toEqual({ outcome: "accepted" });
+  harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+  await handle.close();
+});
+
+it.each([
+  new Error("unclassified interrupt completion failure"),
+  Object.assign(new Error("late schema failure"), { name: "ZodError" }),
+  new CodexAppServerBindingError({ code: "late_binding_failure", direction: "server_notification", method: "turn/completed" }),
+])("Codex keeps unclassified post-dispatch Stop failures uncertain: $message", async failure => {
+  const harness = new RpcHarness();
+  const handle = await attachIdle(harness);
+  const active = { ...nativeTurn(1), status: "inProgress" as const, completedAt: null, durationMs: null };
+  await establish(harness, handle, nativeThread({ status: { type: "active", activeFlags: [] }, turns: [active] }));
+  harness.enqueue("turn/interrupt", failure);
+  const input = { applicationOperationId: "unclassified-stop", deadlineAt: Date.now() + 30_000 };
+  await expect(handle.interrupt(input)).rejects.toMatchObject({ category: "submission_unknown", crossedSubmissionBoundary: true });
+  expect(await handle.reconcileInterrupt(input)).toEqual({ outcome: "unknown" });
+  await expect(handle.interrupt(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
+  expect(harness.calls.filter(call => call.method === "turn/interrupt")).toHaveLength(1);
+  harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+  await handle.close();
+});
+
+it("Codex normalizes cancellation during establishment's Goal refresh and permits a later retry", async () => {
+  const harness = new RpcHarness();
+  const goals = new CodexGoalSessionRegistry();
+  const handle = await attachIdle(harness, driver(harness, connection, new CodexConversationOwnershipRegistry(), catalogModelPolicy, executionSettingsProvider(), goals));
+  const cancellation = new AbortController();
+  harness.enqueue("thread/read", { thread: nativeThread() });
+  harness.enqueue("thread/resume", resumeResult());
+  harness.enqueue("thread/goal/get", () => { cancellation.abort(new Error("caller cancelled history")); throw cancellation.signal.reason; });
+  await expect(handle.establishProjection({ signal: cancellation.signal })).rejects.toMatchObject({
+    category: "unavailable", backendCode: "codex_projection_cancelled", crossedSubmissionBoundary: false,
+  });
+  harness.enqueue("thread/goal/get", { goal: null });
+  await expect(establish(harness, handle)).resolves.toMatchObject({ snapshot: { runState: "idle" } });
+  harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+  await handle.close();
+});
+
+it("Codex publishes a confirmed Goal pause even when the Stop budget ends just after its response", async () => {
+  const harness = new RpcHarness();
+  const goals = new CodexGoalSessionRegistry();
+  const target = driver(harness, connection, new CodexConversationOwnershipRegistry(), catalogModelPolicy, executionSettingsProvider(), goals);
+  let control: import("../../src/server/backends/contracts.js").ConversationControl | undefined;
+  const handle = await target.attach({ ...attachInput(), onControlReady: value => { control = value; } });
+  await establish(harness, handle);
+  harness.enqueue("thread/read", { thread: nativeThread() });
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const input = { applicationOperationId: "goal-stop", deadlineAt: Date.now() + 30_000 };
+    await control!.interrupt(input);
+    const goal = { threadId: "thread-1", objective: "Keep working", status: "active", tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 };
+    harness.enqueue("thread/goal/get", { goal });
+    harness.enqueue("thread/goal/set", () => { vi.setSystemTime(input.deadlineAt + 1); return { goal: { ...goal, status: "paused", updatedAt: 2 } }; });
+    await expect(control!.mutateProviderFeature!({ featureId: "codex.goal", schemaVersion: 1, actionId: "pause", arguments: {} })).resolves.toMatchObject({ outcome: "accepted", projectedState: { status: "paused" } });
+    const identity = binding();
+    expect(goals.projection({ tenantId: identity.tenantId, principalId: identity.ownerPrincipalId }, identity.applicationThreadId)?.state).toMatchObject({ status: "paused" });
+  } finally { vi.useRealTimers(); harness.enqueue("thread/unsubscribe", { status: "unsubscribed" }); await handle.close(); }
+});
+
+it.each([true, false])("Codex replaces stale Goal state after an uncertain pause crosses the Stop deadline (observed=%s)", async observed => {
+  const harness = new RpcHarness();
+  const goals = new CodexGoalSessionRegistry();
+  const target = driver(harness, connection, new CodexConversationOwnershipRegistry(), catalogModelPolicy, executionSettingsProvider(), goals);
+  let control: import("../../src/server/backends/contracts.js").ConversationControl | undefined;
+  const handle = await target.attach({ ...attachInput(), onControlReady: value => { control = value; } });
+  await establish(harness, handle);
+  harness.enqueue("thread/read", { thread: nativeThread() });
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const input = { applicationOperationId: "uncertain-goal-stop", deadlineAt: Date.now() + 30_000 };
+    await control!.interrupt(input);
+    const goal = { threadId: "thread-1", objective: "Keep working", status: "active", tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 };
+    harness.enqueue("thread/goal/get", { goal });
+    harness.enqueue("thread/goal/set", () => {
+      vi.setSystemTime(input.deadlineAt + 1);
+      if (observed) return { goal: { ...goal, objective: "Native objective changed", updatedAt: 2 } };
+      throw new CodexRpcDeliveryError({ code: "goal_response_lost", delivery: "sent_outcome_unknown", generation: 1, method: "thread/goal/set" });
+    });
+    await expect(control!.mutateProviderFeature!({ featureId: "codex.goal", schemaVersion: 1, actionId: "pause", arguments: {} })).resolves.toMatchObject({ outcome: "uncertain" });
+    const identity = binding();
+    const projection = goals.projection({ tenantId: identity.tenantId, principalId: identity.ownerPrincipalId }, identity.applicationThreadId);
+    expect(projection).toMatchObject(observed ? { availability: "available", state: { status: "active", objective: "Native objective changed" } } : { availability: "unavailable" });
+    // The original budget does not authorize a post-deadline recovery RPC.
+    expect(harness.calls.filter(call => call.method === "thread/goal/get")).toHaveLength(2);
+  } finally { vi.useRealTimers(); harness.enqueue("thread/unsubscribe", { status: "unsubscribed" }); await handle.close(); }
+});
+
+it.each([true, false])("Codex uncertain Goal pause cannot replace a newer control generation (observed=%s)", async observed => {
+  const harness = new RpcHarness();
+  const goals = new CodexGoalSessionRegistry();
+  const target = driver(harness, connection, new CodexConversationOwnershipRegistry(), catalogModelPolicy, executionSettingsProvider(), goals);
+  let control: import("../../src/server/backends/contracts.js").ConversationControl | undefined;
+  const handle = await target.attach({ ...attachInput(), onControlReady: value => { control = value; } });
+  await establish(harness, handle);
+  harness.enqueue("thread/read", { thread: nativeThread() });
+  const identity = binding();
+  const goalScope = { tenantId: identity.tenantId, principalId: identity.ownerPrincipalId };
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const input = { applicationOperationId: "replaced-goal-stop", deadlineAt: Date.now() + 30_000 };
+    await control!.interrupt(input);
+    const goal = { threadId: "thread-1", objective: "Keep working", status: "active", tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 };
+    harness.enqueue("thread/goal/get", { goal });
+    harness.enqueue("thread/goal/set", () => {
+      vi.setSystemTime(input.deadlineAt + 1);
+      harness.lifecycle("ready", 2);
+      goals.publishObserved({ scope: goalScope, applicationThreadId: identity.applicationThreadId, nativeThreadId: "thread-1", connectionGeneration: 2, state: { state: "unset" } });
+      if (observed) return { goal: { ...goal, tokensUsed: 7, updatedAt: 2 } };
+      throw new CodexRpcDeliveryError({ code: "goal_response_lost", delivery: "sent_outcome_unknown", generation: 1, method: "thread/goal/set" });
+    });
+    await expect(control!.mutateProviderFeature!({ featureId: "codex.goal", schemaVersion: 1, actionId: "pause", arguments: {} })).rejects.toMatchObject({ category: "unavailable" });
+    expect(goals.projection(goalScope, identity.applicationThreadId)).toMatchObject({ availability: "available", connectionGeneration: 2, state: { state: "unset" } });
+  } finally { vi.useRealTimers(); await handle.close(); }
 });

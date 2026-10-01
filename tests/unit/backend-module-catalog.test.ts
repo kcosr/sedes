@@ -17,6 +17,7 @@ function fakeModule(
   onPrepare?: (input: BackendModuleConfigurationInput) => PreparedBackendModule,
 ): BackendModule {
   const module: BackendModule = {
+    startupPolicy: "composition_only",
     backendKind: backend,
     connectionKinds: [connection],
     protocolRelease: "v1",
@@ -80,6 +81,8 @@ describe("BackendModuleCatalog", () => {
     );
     expect(resolved.backends[0]?.protocolRelease).toBe("v1");
     expect(catalog.protocolReleaseForBackendKind("pi")).toBe("v1");
+    expect(catalog.protocolReleases()).toEqual({ pi: "v1" });
+    expect(Object.isFrozen(catalog.protocolReleases())).toBe(true);
     expect(Object.isFrozen(resolved)).toBe(true);
     expect(Object.isFrozen(resolved.backends)).toBe(true);
     expect(Object.isFrozen(resolved.backends[0])).toBe(true);

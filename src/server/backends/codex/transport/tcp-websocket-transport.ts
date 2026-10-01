@@ -74,6 +74,7 @@ export class TcpWebSocketTransportFactory implements FramedTransportFactory {
             reference,
             connectionGeneration,
             signal,
+            "capability_token",
           ),
       });
     this.#endpoint = parseCodexTcpEndpoint(input.url);

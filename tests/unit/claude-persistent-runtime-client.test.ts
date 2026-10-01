@@ -1,16 +1,16 @@
+import { createSidecarFramedCarrier } from "../helpers/persistent-sidecar-framed-fixture.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { ClaudeInteractionBridge } from "../../src/server/backends/claude/claude-interaction-bridge.js";
 import { ClaudePersistentRuntimeClient } from "../../src/server/backends/claude/runtime/claude-remote-runtime-client.js";
 import type { ClaudePersistentCommand, ClaudePersistentEvent } from "../../src/server/backends/claude/runtime/claude-persistent-runtime-wire.js";
 import type { SidecarRuntimeChannel } from "../../src/server/sidecar/runtime-channel.js";
 import type { ClaudeRuntimeSessionOptions } from "../../src/server/backends/claude/claude-runtime-client.js";
-import { createClaudeFramedCarrier } from "../helpers/persistent-claude-fixture.js";
 
-const connectionState = vi.hoisted(() => ({ instances: [] as { ensureInputs: unknown[]; execute: ReturnType<typeof vi.fn>; listener?: (event: ClaudePersistentEvent) => void }[] }));
+const connectionState = vi.hoisted(() => ({ nextOpen: undefined as unknown, instances: [] as { ensureInputs: unknown[]; execute: ReturnType<typeof vi.fn>; listener?: (event: ClaudePersistentEvent) => void }[] }));
 vi.mock("../../src/server/backends/claude/runtime/claude-sidecar-runtime.js", async (importOriginal) => ({
   ...await importOriginal<typeof import("../../src/server/backends/claude/runtime/claude-sidecar-runtime.js")>(),
   ClaudeSidecarRuntimeConnection: class {
-    readonly execute = vi.fn(async (command: ClaudePersistentCommand): Promise<unknown> => command.action === "open" ? opened([], connectionState.instances.length > 1) : {});
+    readonly execute = vi.fn(async (command: ClaudePersistentCommand): Promise<unknown> => command.action === "open" ? connectionState.nextOpen ?? opened([], connectionState.instances.length > 1) : {});
     listener?: (event: ClaudePersistentEvent) => void;
     constructor() { connectionState.instances.push(this); }
     readonly ensureInputs: unknown[] = [];
@@ -32,11 +32,11 @@ function setup(input: { nativeDefault?: boolean; supportsRuntime?: boolean } = {
     const lost = deferred<void>(); const release = vi.fn(); carriers.push({ lost, release });
     return { channel: { assertReady: vi.fn(), supportsOperation: () => input.supportsRuntime !== false } as unknown as SidecarRuntimeChannel, controllerEpoch: carriers.length, serviceIncarnation: "service", closed: lost.promise, release };
   });
-  const client = new ClaudePersistentRuntimeClient({ scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "claude" }, sidecarRuntime: { acquire }, executablePath: "/bin/claude", ...(input.nativeDefault ? {} : { configDirectory: "/config" }), initializationTimeoutMs: 1000 });
+  const client = new ClaudePersistentRuntimeClient({ scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "claude" }, sidecarRuntime: { acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); }, acquire }, executablePath: "/bin/claude", ...(input.nativeDefault ? {} : { configDirectory: "/config" }), initializationTimeoutMs: 1000 });
   const options: ClaudeRuntimeSessionOptions = { executablePath: "/bin/claude", initializationTimeoutMs: 1000, sessionId: SESSION_ID, cwd: "/work", launch: "new", environment: {}, onMessage: vi.fn() };
   return { client, acquire, carriers, options };
 }
-afterEach(() => { connectionState.instances.length = 0; vi.useRealTimers(); vi.unstubAllEnvs(); });
+afterEach(() => { connectionState.instances.length = 0; connectionState.nextOpen = undefined; vi.useRealTimers(); vi.unstubAllEnvs(); });
 
 it.each([false, true])("gates content-free command diagnostics and preserves the original error (enabled=%s)", async enabled => {
   vi.stubEnv("SEDES_DEBUG_DELIVERY", enabled ? "1" : "");
@@ -138,7 +138,7 @@ it("keeps a local session alive and retries a transient SSH acquisition failure"
 });
 
 it("keeps the session and permission pending when recovery acquires an already closed framed channel", async () => {
-  const closedCarrier = await createClaudeFramedCarrier();
+  const closedCarrier = await createSidecarFramedCarrier();
   try { await closedCarrier.start(); } finally { await closedCarrier.close(); }
   vi.useFakeTimers();
   const { client, acquire, carriers, options } = setup();
@@ -589,5 +589,48 @@ it("retains an exact accounting-failed event without blocking later delivery and
   connection.listener!(original);
   await session.flushMessages?.();
   expect(onMessage).toHaveBeenCalledTimes(3);
+  await client.close();
+});
+
+it("Stop and its read-only reconciliation use only the existing authenticated attachment", async () => {
+  vi.useFakeTimers();
+  const { client, acquire, carriers, options } = setup();
+  const session = client.createSession(options);
+  await session.start();
+  const connection = connectionState.instances[0]!;
+  const input = { applicationOperationId: crypto.randomUUID(), deadlineAt: Date.now() + 30_000 };
+  connection.execute.mockResolvedValueOnce({ receipt: { still_queued: [] } });
+  await session.interrupt(input);
+  expect(connection.execute).toHaveBeenLastCalledWith(expect.objectContaining({ action: "interrupt", request: expect.objectContaining({
+    queryId: SESSION_ID, startupProbeUuid: PROBE_ID, operationId: input.applicationOperationId, timeoutMilliseconds: 30_000,
+  }) }), expect.objectContaining({ deadlineMilliseconds: 30_000 }));
+  connection.execute.mockResolvedValueOnce({ outcome: "accepted" });
+  expect(await session.reconcileInterrupt!(input)).toBe("accepted");
+  expect(acquire).toHaveBeenCalledOnce();
+  carriers[0]!.lost.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  const attempts = acquire.mock.calls.length;
+  await expect(session.interrupt({ ...input, applicationOperationId: crypto.randomUUID() })).rejects.toThrow("claude_persistent_control_unavailable");
+  await expect(session.reconcileInterrupt!(input)).rejects.toThrow("claude_persistent_control_unavailable");
+  expect(acquire).toHaveBeenCalledTimes(attempts);
+  expect(connection.execute.mock.calls.filter(([command]) => command.action === "open")).toHaveLength(1);
+  await client.close();
+});
+
+it("reports native-owner replacement separately from replacement of its carrier", async () => {
+  vi.useFakeTimers();
+  const { client, carriers, options } = setup();
+  const changed = vi.fn();
+  const session = client.createSession({ ...options, onControlAuthorityChanged: changed });
+  await session.start();
+  carriers[0]!.lost.resolve();
+  await vi.advanceTimersByTimeAsync(1001);
+  expect(changed).not.toHaveBeenCalled();
+  const next = crypto.randomUUID();
+  connectionState.nextOpen = { ...opened([], false), startupProbeUuid: next };
+  carriers[1]!.lost.resolve();
+  await vi.advanceTimersByTimeAsync(1001);
+  expect(changed).toHaveBeenCalledOnce();
+  expect(session.startupProbeUuid).toBe(next);
   await client.close();
 });

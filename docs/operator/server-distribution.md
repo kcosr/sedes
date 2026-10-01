@@ -92,7 +92,7 @@ Use the repository's non-live tests for deeper protocol coverage.
 
 The release contains `dist/server`, `dist/client`, CLI entry points, shared
 and internal modules, sidecar/connector bundles, Pi and Claude workers,
-`node_modules`, the dedicated manifest and lockfile, `bin` launchers, sample
+`node_modules`, the dedicated manifest and lockfile, `runtime-entrypoints.json`, `bin` launchers, sample
 configuration, offline installer/verifier, license notices, `BUILD-INFO.json`,
 `FILES.json`, and `SHA256SUMS`. Provenance records the source revision/branch,
 commit and build times, toolchain, exact dependency revisions/integrities,
@@ -104,7 +104,11 @@ compiler intermediates are excluded. The dedicated boundary is
 `packages/server-runtime/package.json` and its independent lockfile. The
 AST-based `npm run check:server-runtime` checks executable imports in server,
 CLI, shared, sidecar, and worker source against exact runtime dependencies;
-packaging additionally checks compiled modules. When imports or versions
+packaging additionally checks compiled modules. The generated entrypoint
+inventory lets the offline verifier load each actual runtime export, including
+packages that expose only subpaths, with no development parser dependency.
+Verification requires exact declared-dependency coverage and resolves every
+entrypoint within its own packaged dependency. When imports or versions
 change, update this manifest and run
 `env -u NODE_ENV npm install --package-lock-only --ignore-scripts --prefix packages/server-runtime`,
 then rerun the check and packaging verification. Full Electron staging consumes this same backend manifest and lock, with

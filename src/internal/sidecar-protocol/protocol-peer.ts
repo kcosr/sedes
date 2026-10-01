@@ -201,6 +201,10 @@ export class SidecarProtocolPeer {
     return this.#helloComplete && !this.#closed && this.#remoteOperations.has(operationKey(definition));
   }
 
+  supportsIncomingOperation(definition: { readonly capabilityId: string; readonly majorVersion: number; readonly operation: string }): boolean {
+    return this.#helloComplete && !this.#closed && this.#localOperations.has(operationKey(definition));
+  }
+
   /** Check immediately before interpreting negotiated capability absence.
    * A false supportsOperation result alone does not prove a live inventory. */
   assertReady(): void {

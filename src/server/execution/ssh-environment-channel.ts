@@ -13,6 +13,7 @@ import type {
   EnvironmentPrivateUnixStreamIdentity,
   EnvironmentSecretIdentity,
   EnvironmentSecretReference,
+  EnvironmentSecretPurpose,
   EnvironmentTcpRoute,
   ExecutionEnvironmentChannelProvider,
   PreparedEnvironmentOwnedProcess,
@@ -183,6 +184,7 @@ export class SshEnvironmentChannelProvider implements ExecutionEnvironmentChanne
     _reference: EnvironmentSecretReference,
     _connectionGeneration: number,
     _signal: AbortSignal,
+    _purpose: EnvironmentSecretPurpose,
   ): Promise<ResolvedEnvironmentSecret> {
     throw unavailable();
   }

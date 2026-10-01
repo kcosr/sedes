@@ -4,6 +4,7 @@ import type { KeyValueItem } from "../ui/key-value-list.js";
 import { PathText } from "./detail-parts.js";
 import { AdvancedGroup, CheckboxGroup, SelectField, TextField, type ChoiceOption } from "./fields.js";
 import type { BackendDefinition, EnvironmentDefinition, TargetDefinition } from "./types.js";
+import type { ConfigurationRuntimeState } from "../../../shared/protocol/configuration-admin.js";
 import { FieldErrors } from "./validation.js";
 
 type BackendKind = BackendDefinition["kind"];
@@ -16,7 +17,7 @@ interface EditorProps<T> {
   readonly errors: FieldErrors;
   readonly disabled: boolean;
 }
-type BackendEditorProps = EditorProps<BackendDefinition>;
+type BackendEditorProps = EditorProps<BackendDefinition> & { readonly environment: EnvironmentDefinition | undefined };
 type TargetEditorProps = EditorProps<TargetDefinition>;
 
 interface BackendEditorRegistration {
@@ -24,6 +25,8 @@ interface BackendEditorRegistration {
   readonly description: string;
   readonly supportsProviderIds: boolean;
   readonly supportsRemoteWorkspace: boolean;
+  readonly stopEffect?: (value: BackendDefinition) => "service" | "attachment";
+  readonly validationError?: (value: BackendDefinition, environment: EnvironmentDefinition | undefined) => string | undefined;
   createBackend(id: string): BackendDefinition;
   createTarget(id: string, backendId: string, environmentId: string): TargetDefinition;
   /** The Connection section: how Sedes reaches the provider. */
@@ -86,6 +89,7 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
   codex_app_server: {
     label: "Codex", description: "Connect to an existing app-server, or let the execution environment manage a stdio process.",
     supportsProviderIds: false, supportsRemoteWorkspace: true,
+    stopEffect: value => value.kind === "codex_app_server" && value.moduleConfiguration.connection.ownership === "external" ? "attachment" : "service",
     createBackend: (id) => ({ ...commonBackend(id), kind: "codex_app_server", moduleConfiguration: {
       connection: { ownership: "owned", channel: { type: "process_stdio", workingDirectory: "" } },
       policy: { allowedSandboxModes: ["read-only"], allowedNetworkAccess: ["disabled"], allowedApprovalPolicies: ["on-request"], allowedApprovalReviewers: ["user"] },
@@ -179,11 +183,62 @@ export const backendEditors: Record<BackendKind, BackendEditorRegistration> = {
     ] : [],
     describePolicy: () => [{ label: "Access", value: "Full access · networking enabled · no sandbox" }],
   },
+  opencode: {
+    label: "OpenCode v2", description: "Use a Sedes-managed OpenCode v2 process or connect to a running authenticated loopback HTTP server on the selected Linux execution host, locally, over SSH, or through an outbound connection.",
+    supportsProviderIds: true, supportsRemoteWorkspace: true,
+    stopEffect: value => value.kind === "opencode" && value.moduleConfiguration.connection.ownership === "external" ? "attachment" : "service",
+    validationError: (value, environment) => value.kind === "opencode" && environment && environment.kind !== "local"
+      && value.moduleConfiguration.connection.channel.type === "http" && value.moduleConfiguration.connection.channel.authentication.secret.source === "environment"
+      ? "Remote OpenCode requires a protected password file on the execution host. Choose Protected file and enter its path to save this backend." : undefined,
+    createBackend: (id) => ({ ...commonBackend(id), kind: "opencode", moduleConfiguration: {
+      connection: { ownership: "owned", channel: { type: "process_stdio" } },
+    } }),
+    createTarget: (id, backend, environment) => ({ ...commonTarget(id, backend, environment), kind: "opencode_http", moduleConfiguration: {
+      defaults: { model: { type: "catalogDefault" }, variant: { type: "modelDefault" } },
+    } }),
+    renderConnection: (props) => props.value.kind === "opencode" ? <OpenCodeBackendEditor {...props} value={props.value} /> : unsupportedEditor(),
+    renderTarget: (props) => props.value.kind === "opencode_http" ? <OpenCodeTargetEditor {...props} value={props.value} /> : unsupportedEditor(),
+    summarizeTarget: (value) => {
+      if (value.kind !== "opencode_http") return "";
+      const defaults = value.moduleConfiguration.defaults;
+      return [defaults.model.type === "fixed" ? defaults.model.modelId || "Specific model" : "Catalog default model",
+        defaults.variant.type === "fixed" ? `Variant ${defaults.variant.variantId}` : "Model default variant"].join(" · ");
+    },
+    describeConnection: (value) => {
+      if (value.kind !== "opencode") return [];
+      const configuration = value.moduleConfiguration;
+      const channel = configuration.connection.channel;
+      return [
+        { label: "Ownership", value: channel.type === "process_stdio" ? "Sedes-managed process" : "External HTTP server" },
+        { label: channel.type === "http" ? "Expected native database" : "Native database", value: configuration.nativeStorePath ? <PathText value={configuration.nativeStorePath} /> : "Native process default" },
+        ...(channel.type === "process_stdio" ? [
+          { label: "Executable", value: channel.executablePath ? <PathText value={channel.executablePath} /> : "opencode2 from the execution host’s PATH" },
+          { label: "Working directory", value: channel.workingDirectory ? <PathText value={channel.workingDirectory} /> : "Inherited from the execution host" },
+          ...(configuration.configDirectory ? [{ label: "Configuration directory", value: <PathText value={configuration.configDirectory} /> }] : []),
+        ] : [
+          { label: "Endpoint", value: <PathText value={channel.url} /> },
+          { label: "Password", value: channel.authentication.secret.source === "environment" ? `Environment variable ${channel.authentication.secret.variable}` : `File ${channel.authentication.secret.path}` },
+        ]),
+      ];
+    },
+  },
 };
 
 export function allowedEnvironments(backend: BackendDefinition, environments: readonly EnvironmentDefinition[]): EnvironmentDefinition[] {
   return environments.filter((environment) => (backendEditors[backend.kind].supportsRemoteWorkspace || environment.kind === "local")
-    && !(backend.kind === "claude_agent_sdk" && environment.kind === "outbound" && environment.platform === "win32"));
+    && !(backend.kind === "claude_agent_sdk" && environment.kind === "outbound" && environment.platform === "win32")
+    && !(backend.kind === "opencode" && environment.kind === "outbound" && environment.platform !== "linux"));
+}
+
+/** A saved ownership edit is not evidence that a retained runtime changed. */
+export function backendStopEffect(backend: BackendDefinition, runtime?: ConfigurationRuntimeState): "service" | "attachment" | "unknown" {
+  const effect = backendEditors[backend.kind].stopEffect;
+  if (!effect) return "service";
+  // Positive retirement leaves no retained owner to describe. The saved
+  // connection mode determines the next Start/Connect, not what was stopped.
+  if (runtime?.connectionState === "stopped") return effect(backend);
+  return backend.enabled && runtime?.connectionState === "connected" && runtime.applyState === "applied" &&
+    runtime.effectiveRevision === runtime.desiredRevision ? effect(backend) : "unknown";
 }
 
 function unsupportedEditor(): React.JSX.Element {
@@ -351,5 +406,85 @@ function DefaultModelEditor({ value, onChange, disabled, error }: {
       onChange={(type) => onChange(type === "catalogDefault" ? { type } : { type, modelId: "" })} />
     {value.type === "fixed" ? <TextField label="Default model identifier" layout="stacked" mono required disabled={disabled} value={value.modelId} error={error}
       onChange={(modelId) => onChange({ type: "fixed", modelId })} /> : null}
+  </>;
+}
+
+function OpenCodeBackendEditor({ value, environment, onChange, errors, disabled }: EditorProps<BackendOf<"opencode">> & { readonly environment: EnvironmentDefinition | undefined; readonly onChange: (value: BackendDefinition) => void }): React.JSX.Element {
+  const configuration = value.moduleConfiguration;
+  const channel = configuration.connection.channel;
+  const remote = environment !== undefined && environment.kind !== "local";
+  const update = (next: typeof configuration) => onChange({ ...value, moduleConfiguration: next });
+  const error = (field: string) => errors.under(`moduleConfiguration.${field}`);
+  return <>
+    <SelectField label="Connection ownership" disabled={disabled} error={errors.get("moduleConfiguration.connection")} value={channel.type} options={[
+      { value: "process_stdio", label: "Sedes-managed process" }, { value: "http", label: "External HTTP server" },
+    ]} onChange={(type) => {
+      const { configDirectory: _previous, ...externalConfiguration } = configuration;
+      update(type === "process_stdio" ? { ...configuration, connection: { ownership: "owned", channel: { type } } }
+        : { ...externalConfiguration, connection: { ownership: "external", channel: { type, url: "", authentication: { type: "basic", username: "opencode", secret: { source: "protected_file", path: "" } } } } });
+    }} />
+    {channel.type === "http" ? <>
+      <TextField label="HTTP endpoint" disabled={disabled} error={error("connection.channel.url")} value={channel.url} required
+        description="Loopback address on the selected execution host, including SSH and outbound hosts. Use an explicit port, for example http://127.0.0.1:4096."
+        onChange={(url) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, url } } })} />
+      <SelectField label="Password source" disabled={disabled} error={error("connection.channel.authentication.secret.source")} value={channel.authentication.secret.source}
+        description={remote ? "Remote connections read the password from a protected file on the execution host." : undefined}
+        options={[{ value: "protected_file", label: "Protected file" }, ...(!remote || channel.authentication.secret.source === "environment"
+          ? [{ value: "environment" as const, label: remote ? "Environment variable (unavailable on remote hosts)" : "Approved environment variable", disabled: remote }] : [])]}
+        onChange={(source) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, authentication: {
+          type: "basic", username: "opencode", secret: source === "environment" ? { source, variable: "" } : { source, path: "" },
+        } } } })} />
+      {channel.authentication.secret.source === "protected_file" ? <TextField label="Password file reference" disabled={disabled} error={error("connection.channel.authentication.secret.path")} value={channel.authentication.secret.path} required
+        description="Approved protected file on the selected execution host; enter its path, never the password."
+        onChange={(path) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, authentication: { type: "basic", username: "opencode", secret: { source: "protected_file", path } } } } })} />
+        : <TextField label="Password environment variable" error={error("connection.channel.authentication.secret.variable")} value={channel.authentication.secret.variable} required disabled={disabled || remote}
+          description="Approved SEDES_OPENCODE_…PASSWORD… variable on the selected execution host; enter its name, never the password."
+          onChange={(variable) => update({ ...configuration, connection: { ownership: "external", channel: { ...channel, authentication: { type: "basic", username: "opencode", secret: { source: "environment", variable } } } } })} />}
+    </> : null}
+    <AdvancedGroup summary={channel.type === "http" ? "Optional database assertion" : "Optional path overrides"}
+      defaultOpen={Boolean(configuration.nativeStorePath || configuration.configDirectory || (channel.type === "process_stdio" && (channel.executablePath || channel.workingDirectory)))}
+      forceOpen={Boolean(error("nativeStorePath") || error("configDirectory") || error("connection.channel.executablePath") || error("connection.channel.workingDirectory"))}>
+      <TextField label={channel.type === "http" ? "Expected native database path" : "Native database path"} path disabled={disabled} error={error("nativeStorePath")} value={configuration.nativeStorePath ?? ""}
+        description={channel.type === "http"
+          ? "Optional absolute path Sedes checks against the running server’s observed database. Leave blank to discover it. This does not change the external server’s database."
+          : "Optional absolute path on the selected execution host. Leave blank to use the native process’s database. Multiple OpenCode processes may share a database."}
+        onChange={(nativeStorePath) => {
+          const { nativeStorePath: _previous, ...remaining } = configuration;
+          update(nativeStorePath ? { ...remaining, nativeStorePath } : remaining);
+        }} />
+      {channel.type === "process_stdio" ? <>
+        <TextField label="OpenCode v2 executable path" path disabled={disabled} error={error("connection.channel.executablePath")} value={channel.executablePath ?? ""}
+          description="Optional absolute path on the selected execution host. Leave blank to use opencode2 from that host’s PATH."
+          onChange={(executablePath) => {
+            const { executablePath: _previous, ...remaining } = channel;
+            update({ ...configuration, connection: { ownership: "owned", channel: executablePath ? { ...remaining, executablePath } : remaining } });
+          }} />
+        <TextField label="Working directory" path disabled={disabled} error={error("connection.channel.workingDirectory")} value={channel.workingDirectory ?? ""}
+          description="Optional absolute directory on the selected execution host. Leave blank to inherit the execution host’s working directory."
+          onChange={(workingDirectory) => {
+            const { workingDirectory: _previous, ...remaining } = channel;
+            update({ ...configuration, connection: { ownership: "owned", channel: workingDirectory ? { ...remaining, workingDirectory } : remaining } });
+          }} />
+        <TextField label="OpenCode configuration directory" path disabled={disabled} error={error("configDirectory")} value={configuration.configDirectory ?? ""}
+          description="Optional absolute directory on the selected execution host. Leave blank to use its native OpenCode configuration environment."
+          onChange={(configDirectory) => {
+            const { configDirectory: _previous, ...remaining } = configuration;
+            update(configDirectory ? { ...remaining, configDirectory } : remaining);
+          }} />
+      </> : null}
+    </AdvancedGroup>
+  </>;
+}
+
+function OpenCodeTargetEditor({ value, onChange, errors, disabled }: EditorProps<TargetOf<"opencode_http">> & { readonly onChange: (value: TargetDefinition) => void }): React.JSX.Element {
+  const defaults = value.moduleConfiguration.defaults;
+  const update = (next: typeof defaults) => onChange({ ...value, moduleConfiguration: { defaults: next } });
+  return <>
+    <DefaultModelEditor value={defaults.model} disabled={disabled} error={errors.under("moduleConfiguration.defaults.model")} onChange={(model) => update({ ...defaults, model })} />
+    <SelectField label="Default model variant" layout="stacked" disabled={disabled} value={defaults.variant.type}
+      options={[{ value: "modelDefault", label: "Model default" }, { value: "fixed", label: "Specific variant" }]}
+      onChange={(type) => update({ ...defaults, variant: type === "modelDefault" ? { type } : { type, variantId: "" } })} />
+    {defaults.variant.type === "fixed" ? <TextField label="Variant identifier" layout="stacked" mono disabled={disabled} error={errors.under("moduleConfiguration.defaults.variant")} value={defaults.variant.variantId} required
+      onChange={(variantId) => update({ ...defaults, variant: { type: "fixed", variantId } })} /> : null}
   </>;
 }

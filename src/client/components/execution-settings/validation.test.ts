@@ -83,6 +83,27 @@ describe("validation path mapping", () => {
     expect(JSON.stringify(errors)).not.toContain("Too small");
   });
 
+  it.each(["codex_app_server", "opencode"] as const)("explains %s credential variable requirements on the matching field", kind => {
+    const value = document();
+    const backend = backendEditors[kind].createBackend("provider");
+    backend.label = "Provider";
+    if (backend.kind === "codex_app_server") {
+      backend.moduleConfiguration.connection = { ownership: "external", channel: { type: "tcp_websocket", url: "wss://provider.internal:9000",
+        authentication: { type: "capability_token", secret: { source: "environment", variable: "BAD_NAME" } } } };
+    } else if (backend.kind === "opencode") {
+      backend.moduleConfiguration.nativeStorePath = "/data/opencode.db";
+      backend.moduleConfiguration.connection = { ownership: "external", channel: { type: "http", url: "http://127.0.0.1:4096",
+        authentication: { type: "basic", username: "opencode", secret: { source: "environment", variable: "BAD_NAME" } } } };
+    }
+    value.backends.push(backend);
+    value.targets.push(backendEditors[kind].createTarget("target", backend.id, localId));
+    const errors = mapConfigurationIssues(issuesOf(value), value, { kind: "backend", id: backend.id }, /^moduleConfiguration\..+$/u);
+    expect(errors.fields.get("moduleConfiguration.connection.channel.authentication.secret.variable")).toBe(kind === "opencode"
+      ? "Use an approved name that starts with SEDES_OPENCODE_ and contains PASSWORD, such as SEDES_OPENCODE_REMOTE_PASSWORD."
+      : "Use an approved name that starts with SEDES_CODEX_ and contains TOKEN, such as SEDES_CODEX_REMOTE_TOKEN.");
+    expect(errors.general).toEqual([]);
+  });
+
   it("explains a managed variable name instead of an invalid record key", () => {
     const parsed = environmentVariableOverridesSchema.safeParse({ HOME: { kind: "literal", value: "/tmp" } });
     if (parsed.success) throw new Error("expected a validation failure");

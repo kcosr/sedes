@@ -11,6 +11,7 @@ export {
   type AcpBindingOptions,
   type AcpOutboundCapabilityCorrection,
   type AcpRequestOptions,
+  type AcpNotificationOptions,
   type AcpRequestSettlement,
   type AcpSettlementRequestOptions,
   type AcpReverseContext,

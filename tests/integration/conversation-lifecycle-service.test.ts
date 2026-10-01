@@ -167,6 +167,7 @@ class NeutralDriver {
 
   #handle(binding: ConversationHandle["binding"]): ConversationHandle {
     return {
+      automaticEviction: "requires_quiescence",
       binding,
       establishProjection: async () => {
         return {
@@ -639,6 +640,138 @@ async function createDraft(fixture: Fixture, id: string) {
 }
 
 describe("ConversationLifecycleService", () => {
+  it.each(["composer", "agent_control", "principal_client"] as const)(
+    "reserves the formatted native ID once and preserves user submission authority for %s", async sourceKind => {
+      const reserveBackendConversationId = vi.fn((seed: string) => `ses_${seed}`);
+      const current = fixture({ creationIdentity: {
+        ...APPLICATION_ASSIGNED_CREATION_IDENTITY, reserveBackendConversationId,
+      } });
+      try {
+        const created = await createDraft(current, "f1f1f1f1-f1f1-41f1-81f1-f1f1f1f1f1f1");
+        const attemptId = "formatted-attempt";
+        const mutationId = "formatted-operation";
+        let send: () => Promise<unknown>;
+        if (sourceKind === "agent_control") {
+          const source = await createDraft(current, "f2f2f2f2-f2f2-42f2-82f2-f2f2f2f2f2f2");
+          send = () => current.service.startAgentControlFirstSend(current.scope, created.applicationThreadId, {
+            attemptId, mutationId, expectedThreadRevision: 0, initiatingAgentThreadId: source.applicationThreadId,
+            prompt: "Send through thread tools",
+          });
+        } else if (sourceKind === "principal_client") {
+          const clientId = "f3f3f3f3-f3f3-43f3-83f3-f3f3f3f3f3f3";
+          const environmentId = current.resolved.workspace.summary.environmentId;
+          new PrincipalAgentToolClientRepository(current.database, createPrincipalAgentToolClientEligibility()).create(current.scope, {
+            id: clientId, creationRequestId: "f4f4f4f4-f4f4-44f4-84f4-f4f4f4f4f4f4", name: "Format fixture",
+            enabled: true, toolIds: ["thread.create"], defaultEnvironmentId: environmentId,
+            allowedEnvironmentIds: [environmentId], credentialGeneration: 1,
+            credentialVerifier: new Uint8Array(32).fill(1), now: 1_100,
+          });
+          send = () => current.service.startPrincipalClientFirstSend(current.scope, created.applicationThreadId, {
+            attemptId, mutationId, expectedThreadRevision: 0, initiatingToolClientId: clientId,
+            prompt: "Send through principal tools",
+          });
+        } else {
+          send = () => current.service.startFirstSend(current.scope, created.applicationThreadId, {
+            attemptId, mutationId, expectedThreadRevision: 0, expectedDraftRevision: 0,
+          });
+        }
+        await expect(send()).resolves.toMatchObject({ status: "bound" });
+        const attempt = current.creation.get(current.scope, created.applicationThreadId, attemptId);
+        expect(reserveBackendConversationId).toHaveBeenCalledOnce();
+        const reserved = `ses_${reserveBackendConversationId.mock.calls[0]![0]}`;
+        expect(attempt).toMatchObject({ sourceKind, backendCreationCorrelation: reserved,
+          provisionalBackendConversationId: reserved, phase: "bound" });
+        expect(current.driver.create).toHaveBeenCalledWith(expect.objectContaining({
+          requestedBackendConversationId: reserved, source: { kind: "user" },
+        }));
+        expect(current.driver.submit).toHaveBeenCalledWith(expect.objectContaining({ source: { kind: "user" } }));
+        await expect(send()).resolves.toMatchObject({ status: "bound" });
+        expect(reserveBackendConversationId).toHaveBeenCalledOnce();
+        expect(current.driver.create).toHaveBeenCalledOnce();
+        expect(current.driver.submit).toHaveBeenCalledOnce();
+      } finally { await current.actors.close(); current.database.close(); }
+    },
+  );
+
+  it("waits for the original first submit before finalizing its early authoritative notification", async () => {
+    const current = fixture();
+    try {
+      const created = await createDraft(current, "f5f5f5f5-f5f5-45f5-85f5-f5f5f5f5f5f5");
+      let rejectSubmission!: (error: Error) => void;
+      current.driver.submit.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectSubmission = reject; }));
+      const firstSend = current.service.startFirstSend(current.scope, created.applicationThreadId, {
+        attemptId: "early-attempt", mutationId: "early-operation", expectedThreadRevision: 0, expectedDraftRevision: 0,
+      });
+      await vi.waitFor(() => expect(current.driver.submit).toHaveBeenCalledOnce());
+      const recover = vi.spyOn(current.service, "recoverFirstSend");
+      const acquire = vi.spyOn(current.actors, "acquire");
+      let observed = false;
+      const observing = current.service.observeAuthoritativeSubmission(current.scope, created.applicationThreadId, "early-operation")
+        .then(result => { observed = true; return result; });
+      await Promise.resolve();
+      expect(observed).toBe(false);
+      expect(current.creation.get(current.scope, created.applicationThreadId, "early-attempt").phase).toBe("first_submission_started");
+      rejectSubmission(new BackendError({ category: "submission_unknown", retryable: false,
+        crossedSubmissionBoundary: true, safeMessage: "Acknowledgment lost after consumption" }));
+      await expect(firstSend).resolves.toMatchObject({ status: "recovery_required" });
+      await expect(observing).resolves.toBe(true);
+      expect(current.creation.get(current.scope, created.applicationThreadId, "early-attempt").phase).toBe("bound");
+      expect(current.completion.get(current.scope, created.applicationThreadId, "early-operation")).toMatchObject({
+        backendCorrelation: "early-operation", completionObservedAt: null,
+      });
+      expect(current.drafts.get(current.scope, created.applicationThreadId)).toMatchObject({ text: "", revision: 1 });
+      await expect(current.service.observeAuthoritativeSubmission(current.scope, created.applicationThreadId, "early-operation")).resolves.toBe(false);
+      expect(recover).not.toHaveBeenCalled();
+      expect(acquire).not.toHaveBeenCalled();
+      expect(current.driver.reconcile).not.toHaveBeenCalled();
+      expect(current.driver.create).toHaveBeenCalledOnce();
+      expect(current.driver.submit).toHaveBeenCalledOnce();
+    } finally { await current.actors.close(); current.database.close(); }
+  });
+
+  it.each(["pre-create", "pre-submit", "other-operation", "stop-operation", "wrong-scope", "force-reset"] as const)(
+    "does not enter effectful first-send recovery for %s submission evidence", async boundary => {
+      const current = fixture();
+      try {
+        const created = await createDraft(current, "f6f6f6f6-f6f6-46f6-86f6-f6f6f6f6f6f6");
+        const unknown = new BackendError({ category: "submission_unknown", retryable: false,
+          crossedSubmissionBoundary: true, safeMessage: "Unknown boundary" });
+        if (boundary === "pre-create") current.driver.create.mockRejectedValueOnce(unknown);
+        else if (boundary === "pre-submit") current.driver.captureAnchor.mockRejectedValueOnce(new Error("History unavailable"));
+        else current.driver.submit.mockRejectedValueOnce(unknown);
+        await expect(current.service.startFirstSend(current.scope, created.applicationThreadId, {
+          attemptId: "guarded-attempt", mutationId: "guarded-operation", expectedThreadRevision: 0, expectedDraftRevision: 0,
+        })).resolves.toMatchObject({ status: "recovery_required" });
+        if (boundary === "force-reset") {
+          current.database.prepare("UPDATE conversation_creation_attempts SET force_reset_at = 2000 WHERE attempt_id = ?")
+            .run("guarded-attempt");
+        }
+        const readAttempt = () => current.database.prepare("SELECT * FROM conversation_creation_attempts WHERE attempt_id = ?")
+          .get("guarded-attempt");
+        const before = readAttempt();
+        const draftBefore = current.drafts.get(current.scope, created.applicationThreadId);
+        const recover = vi.spyOn(current.service, "recoverFirstSend");
+        const acquire = vi.spyOn(current.actors, "acquire");
+        const createCount = current.driver.create.mock.calls.length;
+        const submitCount = current.driver.submit.mock.calls.length;
+        await expect(current.service.observeAuthoritativeSubmission(
+          boundary === "wrong-scope" ? { ...current.scope, principalId: "another-principal" } : current.scope,
+          created.applicationThreadId,
+          boundary === "other-operation" ? "another-operation" : boundary === "stop-operation" ? "stop-operation" : "guarded-operation",
+        )).resolves.toBe(false);
+        expect(readAttempt()).toEqual(before);
+        expect(current.bindings.getBinding(current.scope, created.applicationThreadId)).toBeUndefined();
+        expect(current.completion.find(current.scope, created.applicationThreadId, "guarded-operation")).toBeUndefined();
+        expect(current.drafts.get(current.scope, created.applicationThreadId)).toEqual(draftBefore);
+        expect(recover).not.toHaveBeenCalled();
+        expect(acquire).not.toHaveBeenCalled();
+        expect(current.driver.reconcile).not.toHaveBeenCalled();
+        expect(current.driver.create).toHaveBeenCalledTimes(createCount);
+        expect(current.driver.submit).toHaveBeenCalledTimes(submitCount);
+      } finally { await current.actors.close(); current.database.close(); }
+    },
+  );
+
   it("atomically records immutable Saved Agent thread provenance", async () => {
     const current = fixture();
     try {
@@ -1330,7 +1463,10 @@ describe("ConversationLifecycleService", () => {
   });
 
   it("materializes an unbound automation thread through the creation lifecycle", async () => {
-    const current = fixture();
+    const reserveBackendConversationId = vi.fn((seed: string) => `automation_${seed}`);
+    const current = fixture({ creationIdentity: {
+      ...APPLICATION_ASSIGNED_CREATION_IDENTITY, reserveBackendConversationId,
+    } });
     try {
       const created = await current.service.createServerDraft(current.scope, {
         id: "01919191-9191-4191-8191-919191919191",
@@ -1384,8 +1520,10 @@ describe("ConversationLifecycleService", () => {
       });
       expect(current.driver.create).toHaveBeenCalledTimes(1);
       expect(current.driver.submit).toHaveBeenCalledTimes(1);
+      expect(reserveBackendConversationId).toHaveBeenCalledOnce();
       expect(current.driver.create).toHaveBeenCalledWith(
         expect.objectContaining({
+          requestedBackendConversationId: `automation_${reserveBackendConversationId.mock.calls[0]![0]}`,
           source: {
             kind: "automation",
             automationId: input.automationId,
