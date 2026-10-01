@@ -3943,160 +3943,6 @@ textarea:disabled {
   margin-top: 18px;
 }
 
-.archive-view {
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  /* Same symmetric gutter as the transcript viewport, so the archived
-     column keeps the shared centre once the list grows past a screen. */
-  scrollbar-gutter: stable both-edges;
-  padding: clamp(20px, 5vw, 48px);
-}
-
-.archive-header {
-  display: grid;
-  max-width: var(--measure);
-  grid-template-columns: 1fr auto;
-  gap: 16px;
-  margin: 0 auto 20px;
-}
-
-.archive-header .back-button {
-  grid-column: 1 / -1;
-  justify-self: start;
-}
-
-.back-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 0;
-  background: transparent;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-  transition: color var(--motion-fast);
-}
-
-.back-button:hover {
-  color: var(--foreground);
-}
-
-.back-chevron {
-  transform: rotate(180deg);
-}
-
-.archive-header h1 {
-  margin: 3px 0;
-  font-size: 20px;
-  font-weight: 650;
-  letter-spacing: -0.015em;
-}
-
-.archive-header p {
-  margin: 0;
-  color: var(--muted-foreground-2);
-  font-size: 13px;
-}
-
-.archive-search {
-  width: 250px;
-  align-self: end;
-  margin: 0;
-}
-
-.archive-list {
-  max-width: var(--measure);
-  margin: 0 auto;
-}
-
-.archive-row {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 5px 2px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.archive-row-title {
-  display: flex;
-  min-width: 0;
-  min-height: 36px;
-  flex: 1;
-  align-items: center;
-  gap: 9px;
-  padding: 6px 8px;
-  border-radius: var(--radius-ctl);
-  background: transparent;
-  text-align: left;
-  transition: background var(--motion-fast);
-}
-
-.archive-row-title:hover {
-  background: var(--secondary);
-}
-
-.archive-row-title > svg {
-  flex: 0 0 auto;
-  color: var(--muted-foreground-2);
-}
-
-.archive-row-title strong,
-.archive-row-title small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.archive-row-title strong {
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.archive-row-title small {
-  margin-left: auto;
-  color: var(--muted-foreground-2);
-  font-size: 12px;
-}
-
-.archive-row-target {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: 7px;
-}
-
-.archive-row-target::before {
-  content: "·";
-}
-
-.archive-row-target svg {
-  flex: 0 0 auto;
-}
-
-.large-empty {
-  display: grid;
-  justify-items: center;
-  padding: 72px 20px;
-  color: var(--muted-foreground-2);
-  text-align: center;
-}
-
-.large-empty h2 {
-  margin: 12px 0 3px;
-  color: var(--foreground);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.large-empty p {
-  margin: 0;
-  font-size: 12px;
-}
-
 .launch-state,
 .thread-fatal {
   display: grid;
@@ -11149,8 +10995,6 @@ tr.diff-hunk td {
   .project-filter-shortcut,
   .sidebar-scope-select,
   .sidebar-create-action,
-  .back-button,
-  .archive-row-title,
   .queue-button {
     min-height: 44px;
   }
@@ -11174,22 +11018,6 @@ tr.diff-hunk td {
 
   .materialization-recovery {
     margin: 8px 10px 0;
-  }
-
-  .archive-view {
-    padding: 18px 14px;
-  }
-
-  .archive-header {
-    grid-template-columns: 1fr;
-  }
-
-  .archive-search {
-    width: 100%;
-  }
-
-  .archive-row {
-    align-items: stretch;
   }
 
   .automation-editor-grid {
@@ -11338,21 +11166,6 @@ tr.diff-hunk td {
 
   .message-row.user {
     max-width: 94%;
-  }
-
-  .archive-row {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 4px;
-    padding-block: 8px;
-  }
-
-  .archive-row > [data-slot="button"] {
-    align-self: flex-end;
-  }
-
-  .archive-row-title small {
-    margin-left: 0;
   }
 
   .interval-fields {

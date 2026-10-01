@@ -25,9 +25,13 @@ afterEach(() => {
 describe("archive view preferences", () => {
   it("validates stored values and falls back per field", () => {
     expect(parseArchiveViewPreferences(null)).toBe(ARCHIVE_VIEW_DEFAULTS);
-    expect(parseArchiveViewPreferences("{not json")).toBe(ARCHIVE_VIEW_DEFAULTS);
+    expect(parseArchiveViewPreferences("{not json")).toBe(
+      ARCHIVE_VIEW_DEFAULTS,
+    );
     expect(
-      parseArchiveViewPreferences(JSON.stringify({ version: 2, sort: "title" })),
+      parseArchiveViewPreferences(
+        JSON.stringify({ version: 2, sort: "title" }),
+      ),
     ).toBe(ARCHIVE_VIEW_DEFAULTS);
     expect(
       parseArchiveViewPreferences(
@@ -47,11 +51,13 @@ describe("archive view preferences", () => {
     act(() => setArchiveSort("activity"));
     act(() => setArchiveGroupBy("project"));
     expect(screen.getByTestId("view")).toHaveTextContent("activity/project");
-    expect(JSON.parse(localStorage.getItem(ARCHIVE_VIEW_STORAGE_KEY)!)).toEqual({
-      version: 1,
-      sort: "activity",
-      groupBy: "project",
-    });
+    expect(JSON.parse(localStorage.getItem(ARCHIVE_VIEW_STORAGE_KEY)!)).toEqual(
+      {
+        version: 1,
+        sort: "activity",
+        groupBy: "project",
+      },
+    );
 
     localStorage.setItem(
       ARCHIVE_VIEW_STORAGE_KEY,

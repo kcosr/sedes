@@ -26,7 +26,7 @@ const hoursAgo = (hours: number) =>
 
 function thread(
   id: string,
-  overrides: Partial<Thread> & { readonly title?: string } = {},
+  overrides: Omit<Partial<Thread>, "title"> & { readonly title?: string } = {},
 ): Thread {
   const { title, ...rest } = overrides;
   return {
@@ -142,7 +142,13 @@ function snapshot(
     forkOrigins: [],
     lineagePlacements: [],
     groups: [
-      { id: "group-1", name: "Launch", revision: 1, memberCount: 1, activeMemberCount: 0 },
+      {
+        id: "group-1",
+        name: "Launch",
+        revision: 1,
+        memberCount: 1,
+        activeMemberCount: 0,
+      },
     ],
     lineageFamilies: [],
     defaultNewThreadTargetId: null,
@@ -196,7 +202,7 @@ describe("selectArchiveBase", () => {
             branch: "feat/archive",
             availability: "unavailable",
           },
-        } as Partial<Thread>),
+        } as Omit<Partial<Thread>, "title">),
       ],
       {
         forkOrigins: [
@@ -245,7 +251,11 @@ describe("selectArchiveBase", () => {
   });
 
   it("returns the previous base when an event changes nothing it renders", () => {
-    const snap = snapshot([thread("a"), thread("b"), thread("live", { inventoryState: "active" })]);
+    const snap = snapshot([
+      thread("a"),
+      thread("b"),
+      thread("live", { inventoryState: "active" }),
+    ]);
     const first = selectArchiveBase(snap, []);
     // The normalized store re-parses every snapshot: equal values, new objects.
     const reparsed = clone(snap);
@@ -293,8 +303,12 @@ describe("selectArchiveBase", () => {
   it("compares rows and protocol values structurally", () => {
     const base = selectArchiveBase(snapshot([thread("a")]), []);
     const row = base.rows[0]!;
-    expect(archivedRowsEqual(row, { ...row, thread: clone(row.thread) })).toBe(true);
-    expect(archivedRowsEqual(row, { ...row, targetLabel: "Other" })).toBe(false);
+    expect(archivedRowsEqual(row, { ...row, thread: clone(row.thread) })).toBe(
+      true,
+    );
+    expect(archivedRowsEqual(row, { ...row, targetLabel: "Other" })).toBe(
+      false,
+    );
     expect(jsonEqual({ a: [1, { b: 2 }] }, { a: [1, { b: 2 }] })).toBe(true);
     expect(jsonEqual({ a: 1 }, { a: 1, b: undefined })).toBe(false);
     expect(jsonEqual([1], { 0: 1 })).toBe(false);
@@ -315,7 +329,11 @@ describe("projectArchivedThreads scope", () => {
 
   it("lists every archived thread without a scope", () => {
     const projection = project(snap);
-    expect(projection).toMatchObject({ total: 4, scopedCount: 4, matchCount: 4 });
+    expect(projection).toMatchObject({
+      total: 4,
+      scopedCount: 4,
+      matchCount: 4,
+    });
   });
 
   it.each([
@@ -354,7 +372,11 @@ describe("projectArchivedThreads search", () => {
       [
         parent,
         child,
-        thread("remote", { workspaceId: "ws-infra", targetId: "t-ssh", title: "Ops" }),
+        thread("remote", {
+          workspaceId: "ws-infra",
+          targetId: "t-ssh",
+          title: "Ops",
+        }),
       ],
       {
         forkOrigins: [
@@ -392,44 +414,84 @@ describe("projectArchivedThreads search", () => {
       );
     }
     const projection = project(snap, { search: "nothing like this" });
-    expect(projection).toMatchObject({ total: 3, scopedCount: 3, matchCount: 0, groups: [] });
+    expect(projection).toMatchObject({
+      total: 3,
+      scopedCount: 3,
+      matchCount: 0,
+      groups: [],
+    });
   });
 });
 
 describe("projectArchivedThreads order and grouping", () => {
   const snap = snapshot([
-    thread("b", { title: "beta", stateChangedAt: hoursAgo(2), lastActivityAt: hoursAgo(400) }),
-    thread("a", { title: "Alpha 10", stateChangedAt: hoursAgo(30), lastActivityAt: hoursAgo(1) }),
+    thread("b", {
+      title: "beta",
+      stateChangedAt: hoursAgo(2),
+      lastActivityAt: hoursAgo(400),
+    }),
+    thread("a", {
+      title: "Alpha 10",
+      stateChangedAt: hoursAgo(30),
+      lastActivityAt: hoursAgo(1),
+    }),
     thread("c", {
       title: "alpha 9",
       workspaceId: "ws-acme",
       stateChangedAt: hoursAgo(24 * 40),
       lastActivityAt: hoursAgo(24 * 41),
     }),
-    thread("d", { title: "Delta", stateChangedAt: hoursAgo(2), lastActivityAt: hoursAgo(3) }),
+    thread("d", {
+      title: "Delta",
+      stateChangedAt: hoursAgo(2),
+      lastActivityAt: hoursAgo(3),
+    }),
   ]);
 
   it("sorts by archive time, last activity, or title", () => {
-    expect(ids(project(snap, { sort: "archived" }))).toEqual(["b", "d", "a", "c"]);
-    expect(ids(project(snap, { sort: "activity" }))).toEqual(["a", "d", "b", "c"]);
+    expect(ids(project(snap, { sort: "archived" }))).toEqual([
+      "b",
+      "d",
+      "a",
+      "c",
+    ]);
+    expect(ids(project(snap, { sort: "activity" }))).toEqual([
+      "a",
+      "d",
+      "b",
+      "c",
+    ]);
     expect(ids(project(snap, { sort: "title" }))).toEqual(["c", "a", "b", "d"]);
   });
 
   it("groups by the sort's date bucket", () => {
     const byArchive = project(snap, { groupBy: "date" });
-    expect(byArchive.groups.map(({ label, rows }) => [label, rows.map(({ id }) => id)])).toEqual([
+    expect(
+      byArchive.groups.map(({ label, rows }) => [
+        label,
+        rows.map(({ id }) => id),
+      ]),
+    ).toEqual([
       ["Today", ["b", "d"]],
       ["Yesterday", ["a"]],
       [expect.any(String), ["c"]],
     ]);
     const byActivity = project(snap, { groupBy: "date", sort: "activity" });
-    expect(byActivity.groups[0]).toMatchObject({ label: "Today", rows: [{ id: "a" }, { id: "d" }] });
+    expect(byActivity.groups[0]).toMatchObject({
+      label: "Today",
+      rows: [{ id: "a" }, { id: "d" }],
+    });
   });
 
   it("groups by project label, and title order never groups by date", () => {
     const byProject = project(snap, { groupBy: "project", sort: "title" });
     expect(byProject.groupBy).toBe("project");
-    expect(byProject.groups.map(({ label, rows }) => [label, rows.map(({ id }) => id)])).toEqual([
+    expect(
+      byProject.groups.map(({ label, rows }) => [
+        label,
+        rows.map(({ id }) => id),
+      ]),
+    ).toEqual([
       ["acme-web", ["c"]],
       ["sedes", ["a", "b", "d"]],
     ]);
@@ -444,7 +506,9 @@ describe("projectArchivedThreads order and grouping", () => {
 describe("pageArchivedThreads", () => {
   const snap = snapshot(
     Array.from({ length: 7 }, (_, index) =>
-      thread(`t${index}`, { stateChangedAt: hoursAgo(index < 3 ? 1 + index : 30 + index) }),
+      thread(`t${index}`, {
+        stateChangedAt: hoursAgo(index < 3 ? 1 + index : 30 + index),
+      }),
     ),
   );
 
@@ -452,7 +516,9 @@ describe("pageArchivedThreads", () => {
     const projection = project(snap, { groupBy: "date" });
     const page = pageArchivedThreads(projection, 4);
     expect(page.rows.map(({ id }) => id)).toEqual(["t0", "t1", "t2", "t3"]);
-    expect(page.groups.map(({ label, count, rows }) => [label, count, rows.length])).toEqual([
+    expect(
+      page.groups.map(({ label, count, rows }) => [label, count, rows.length]),
+    ).toEqual([
       ["Today", 3, 3],
       ["Yesterday", 4, 1],
     ]);
@@ -477,11 +543,17 @@ describe("archiveAgeLabel", () => {
   it("falls back to a short date after about a month", () => {
     const sameYear = new Date(2026, 7, 12, 12).getTime();
     expect(archiveAgeLabel(sameYear, NOW)).toBe(
-      new Date(sameYear).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      new Date(sameYear).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      }),
     );
     const earlier = new Date(2025, 2, 4, 12).getTime();
     expect(archiveAgeLabel(earlier, NOW)).toBe(
-      new Date(earlier).toLocaleDateString(undefined, { month: "short", year: "numeric" }),
+      new Date(earlier).toLocaleDateString(undefined, {
+        month: "short",
+        year: "numeric",
+      }),
     );
   });
 });

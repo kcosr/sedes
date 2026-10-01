@@ -256,7 +256,9 @@ function indexCatalog(catalog: SidebarScopeCatalog): CatalogIndex {
     );
   }
   return {
-    workspaces: new Map(workspaces.map((workspace) => [workspace.id, workspace])),
+    workspaces: new Map(
+      workspaces.map((workspace) => [workspace.id, workspace]),
+    ),
     environments: environmentById,
     targets: new Map(executionTargets.map((target) => [target.id, target])),
     projectLabels,
@@ -477,8 +479,7 @@ function rowComparator(
       compareIds(left, right);
   }
   const field = sort === "activity" ? "lastActiveAt" : "archivedAt";
-  return (left, right) =>
-    right[field] - left[field] || compareIds(left, right);
+  return (left, right) => right[field] - left[field] || compareIds(left, right);
 }
 
 export function projectArchivedThreads(
@@ -527,7 +528,8 @@ export function projectArchivedThreads(
     for (const row of matching) {
       const entry = projects.get(row.workspaceId);
       if (entry) entry.rows.push(row);
-      else projects.set(row.workspaceId, { label: row.projectLabel, rows: [row] });
+      else
+        projects.set(row.workspaceId, { label: row.projectLabel, rows: [row] });
     }
     groups = [...projects]
       .sort(
@@ -535,7 +537,11 @@ export function projectArchivedThreads(
           titleCollator.compare(left.label, right.label) ||
           (leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0),
       )
-      .map(([key, { label, rows }]) => ({ key: `project:${key}`, label, rows }));
+      .map(([key, { label, rows }]) => ({
+        key: `project:${key}`,
+        label,
+        rows,
+      }));
   }
   return {
     total: base.rows.length,
