@@ -21,7 +21,7 @@ export function runThreadCreation(options: {
 }): Promise<void> {
   let createdThreadId: string | undefined;
   return runBlockingOperation({
-    allowCancel: false,
+    allowDismiss: false,
     message: options.message,
     run: async () => (createdThreadId ??= await options.create()),
     retry: (error) => !(error instanceof ApiError) || error.retryable,
@@ -45,7 +45,7 @@ export function runThreadFork(options: {
   let createdThreadId: string | undefined;
   const releaseSource = options.retainSource?.();
   return runBlockingOperation({
-    allowCancel: false,
+    allowDismiss: false,
     message: "Creating fork…",
     run: async () => {
       if (createdThreadId) return createdThreadId;

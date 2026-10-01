@@ -1465,19 +1465,19 @@ describe("application endpoint startup", () => {
     // A drawer action's check (a direct Archive) takes focus above it.
     act(() => {
       void runBlockingOperation({
-        message: "Checking thread activity…",
+        message: "Archiving thread…",
         run: () => new Promise<never>(() => undefined),
       });
     });
     const progress = await screen.findByRole("dialog", {
-      name: "Checking thread activity…",
+      name: "Archiving thread…",
     });
     await waitFor(() =>
       expect(progress).toContainElement(document.activeElement as HTMLElement),
     );
     expect(drawer).toBeInTheDocument();
 
-    act(() => getBlockingOperation()?.cancel());
+    act(() => getBlockingOperation()?.dismiss());
     await waitFor(() => expect(progress).not.toBeInTheDocument());
     expect(
       screen.getByRole("dialog", { name: "Thread navigation" }),

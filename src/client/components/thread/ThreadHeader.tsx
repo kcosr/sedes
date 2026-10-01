@@ -1121,7 +1121,6 @@ export const ThreadHeader = memo(function ThreadHeader({
             .finally(() => setWorkspaceDeletePending(false));
         }}
       />
-      {active && archiveAction.dialog}
       <ThreadModelPickerDialog
         store={store}
         snapshot={snapshot}

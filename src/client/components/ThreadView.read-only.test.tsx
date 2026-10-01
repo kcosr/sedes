@@ -82,7 +82,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  getBlockingOperation()?.cancel();
+  getBlockingOperation()?.dismiss();
   cleanup();
   clearDiagnostics();
   resetThreadLoadAttemptsForTests();

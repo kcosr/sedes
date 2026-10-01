@@ -24,13 +24,13 @@ function deferred<T>() {
 }
 afterEach(() => {
   act(() => {
-    getBlockingOperation()?.cancel();
+    getBlockingOperation()?.dismiss();
   });
   cleanup();
 });
 
 describe("operation overlay", () => {
-  it("blocks dismissal and keyboard shortcuts while keeping explicit Cancel reachable", async () => {
+  it("blocks dismissal and keyboard shortcuts while keeping explicit Dismiss reachable", async () => {
     const user = userEvent.setup();
     const request = deferred<string>();
     const navigate = vi.fn();
@@ -68,7 +68,7 @@ describe("operation overlay", () => {
     expect(screen.getByRole("dialog").contains(document.activeElement)).toBe(
       true,
     );
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
     await completion;
     expect(screen.queryByRole("dialog")).toBeNull();
     await act(async () => {
@@ -92,7 +92,7 @@ describe("operation overlay", () => {
         message: "Creating thread…",
         run,
         retry: true,
-        allowCancel: false,
+        allowDismiss: false,
         onSuccess: () => handoff.promise,
       }).then(() => {
         finished = true;
@@ -134,7 +134,7 @@ describe("operation overlay", () => {
     act(() => {
       void runBlockingOperation({
         message: "Creating fork…",
-        allowCancel: false,
+        allowDismiss: false,
         run: () => request.promise,
         onSuccess: navigate,
       });
@@ -153,7 +153,7 @@ describe("operation overlay", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("does not let a canceled old result dismiss a newer operation", async () => {
+  it("does not let a dismissed old result dismiss a newer operation", async () => {
     const old = deferred<string>();
     const newer = deferred<string>();
     render(<OperationOverlayHost />);
@@ -161,7 +161,7 @@ describe("operation overlay", () => {
       void runBlockingOperation({ message: "Old", run: () => old.promise });
     });
     act(() => {
-      getBlockingOperation()!.cancel();
+      getBlockingOperation()!.dismiss();
     });
     act(() => {
       void runBlockingOperation({ message: "New", run: () => newer.promise });

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -10,7 +11,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { NormalizedThreadSnapshot } from "../../../shared/index.js";
+import type { NormalizedApplicationThreadSummary, NormalizedThreadSnapshot } from "../../../shared/index.js";
 import type {
   ApplicationClientState,
   ApplicationClientStore,
@@ -20,6 +21,7 @@ import { UsageQueryCache } from "../../stores/UsageQueryCache.js";
 import { ThreadHeader } from "./ThreadHeader.js";
 import { NavigationControlsContext } from "../../app/navigation-controls.js";
 
+import { ThreadArchiveOperationHost } from "../../operations/ThreadArchiveOperationHost.js";
 import { OperationOverlayHost } from "../../operations/OperationOverlay.js";
 import { getBlockingOperation } from "../../operations/blocking-operation.js";
 
@@ -54,7 +56,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  getBlockingOperation()?.cancel();
+  getBlockingOperation()?.dismiss();
   cleanup();
   vi.unstubAllGlobals();
   window.history.replaceState(null, "", "/");
@@ -155,8 +157,9 @@ function fixture(descendantCount: number): {
     getThreadArchiveImpact: ReturnType<typeof vi.fn>;
   };
   readonly threadStore: ThreadClientStore;
+  readonly publishArchived: () => void;
 } {
-  const applicationState: ApplicationClientState = {
+  let applicationState: ApplicationClientState = {
     status: "ready",
     connection: "connected",
     authoritative: true,
@@ -180,8 +183,12 @@ function fixture(descendantCount: number): {
     },
     visibleThreads: [],
   } as unknown as ApplicationClientState;
+  const listeners = new Set<() => void>();
   const applicationStore = {
-    subscribe: () => () => undefined,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     getSnapshot: () => applicationState,
     createThreadFromSettings: vi.fn(async () => ({
       threadId: "thread-copy",
@@ -216,7 +223,21 @@ function fixture(descendantCount: number): {
     perform: vi.fn(async () => undefined),
     forkTurn: vi.fn(),
   } as unknown as ThreadClientStore;
-  return { applicationStore, threadStore };
+  render(<ThreadArchiveOperationHost store={applicationStore} />);
+  return {
+    applicationStore,
+    threadStore,
+    publishArchived: () => {
+      applicationState = {
+        ...applicationState,
+        snapshot: {
+          ...applicationState.snapshot!,
+          threads: [makeSnapshot("archived").thread as NormalizedApplicationThreadSummary],
+        },
+      };
+      for (const listener of listeners) listener();
+    },
+  };
 }
 
 function renderHeader(
@@ -224,8 +245,8 @@ function renderHeader(
   openDrawer = vi.fn(),
   inventoryState: "active" | "archived" = "active",
 ) {
-  const { applicationStore, threadStore } = fixture(descendantCount);
-  render(
+  const { applicationStore, threadStore, publishArchived } = fixture(descendantCount);
+  const view = render(
     <NavigationControlsContext.Provider
       value={{
         openDrawer,
@@ -256,7 +277,7 @@ function renderHeader(
       />
     </NavigationControlsContext.Provider>,
   );
-  return { applicationStore, openDrawer };
+  return { applicationStore, openDrawer, publishArchived, unmount: view.unmount };
 }
 
 /** Opens the desktop Thread actions menu (Radix opens on pointer down). */
@@ -381,6 +402,27 @@ describe("ThreadHeader archive action", () => {
     );
   });
 
+  it("keeps choice completion and navigation when inventory updates before the archive response", async () => {
+    const { applicationStore, publishArchived, unmount } = renderHeader(2);
+    let finish!: () => void;
+    applicationStore.mutateInventory.mockReturnValueOnce(new Promise<void>((resolve) => { finish = resolve; }));
+    window.history.replaceState(null, "", "/threads/thread-1");
+    const menu = await openThreadActions();
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Archive" }));
+    const dialog = await screen.findByRole("dialog", { name: "Archive this thread" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
+    act(() => { publishArchived(); });
+    unmount();
+
+    expect(within(dialog).getByRole("button", { name: "Archiving…" })).toBeDisabled();
+    expect(screen.queryByRole("dialog", { name: "Could not archive thread" })).not.toBeInTheDocument();
+    expect(window.location.pathname).toBe("/threads/thread-1");
+    await act(async () => { finish(); });
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(window.location.pathname).toBe("/");
+    expect(applicationStore.mutateInventory).toHaveBeenCalledOnce();
+  });
+
   it("requires confirmation before archiving a childless thread with stashed prompts", async () => {
     const { applicationStore } = renderHeader(0);
     applicationStore.getThreadArchiveImpact.mockResolvedValue(
@@ -459,5 +501,47 @@ describe("ThreadHeader archive action", () => {
       ).toBeEnabled(),
     );
     expect(applicationStore.mutateInventory).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("dismissed archive results after leaving a thread", () => {
+  it("keeps required choices after the source header unmounts", async () => {
+    const { applicationStore, unmount } = renderHeader(2);
+    let finish!: (impact: unknown) => void;
+    applicationStore.getThreadArchiveImpact.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const menu = await openThreadActions();
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Archive" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Dismiss" }));
+    unmount();
+    window.history.pushState(null, "", "/threads/another-thread");
+    await act(async () => { finish(emptyImpact({ descendantCount: 2 })); });
+    const dialog = await screen.findByRole("dialog", { name: "Archive this thread" });
+    expect(within(dialog).getByText("Header thread")).toBeVisible();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Archive" }));
+    await waitFor(() => expect(applicationStore.mutateInventory).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "thread-1" }), "archive", expect.anything(),
+    ));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+    expect(window.location.pathname).toBe("/threads/another-thread");
+  });
+
+  it.each(["check", "mutation"] as const)("keeps a late %s failure after the source header unmounts", async (phase) => {
+    const { applicationStore, unmount } = renderHeader(0);
+    let fail!: (error: Error) => void;
+    const failure = new Promise((_, reject) => { fail = reject; });
+    if (phase === "check") applicationStore.getThreadArchiveImpact.mockReturnValueOnce(failure);
+    else applicationStore.mutateInventory.mockReturnValueOnce(failure);
+    const menu = await openThreadActions();
+    await userEvent.click(within(menu).getByRole("menuitem", { name: "Archive" }));
+    if (phase === "mutation") await waitFor(() => expect(applicationStore.mutateInventory).toHaveBeenCalledOnce());
+    await userEvent.click(await screen.findByRole("button", { name: "Dismiss" }));
+    unmount();
+    window.history.pushState(null, "", "/threads/another-thread");
+    await act(async () => { fail(new Error("Archive service unavailable")); });
+    const dialog = await screen.findByRole("dialog", { name: "Could not archive thread" });
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("Archive service unavailable");
+    expect(within(dialog).getByText("Header thread")).toBeVisible();
+    expect(window.location.pathname).toBe("/threads/another-thread");
   });
 });
