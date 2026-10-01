@@ -36,6 +36,11 @@ export interface SearchableSelectOption {
   readonly value: string;
   readonly label: string;
   readonly description?: string;
+  /**
+   * The description is a path: a long one gives way from its start, so its
+   * last segments stay in view (the row's tooltip keeps all of it).
+   */
+  readonly descriptionIsPath?: boolean;
   readonly icon?: ReactNode;
   readonly searchTerms?: readonly string[];
   /** Not selectable: dimmed and skipped by the keyboard. */
@@ -469,9 +474,20 @@ export function SearchableSelectList({
               {" "}
               <span
                 data-slot="searchable-select-item-description"
-                className={cn(menuDescriptionClass, "truncate")}
+                data-path={option.descriptionIsPath ? "" : undefined}
+                className={cn(
+                  menuDescriptionClass,
+                  "truncate",
+                  // Right-to-left, the line overflows (and ellipsizes) at its
+                  // start; the isolated path still reads left to right.
+                  option.descriptionIsPath && "text-left [direction:rtl]",
+                )}
               >
-                {option.description}
+                {option.descriptionIsPath ? (
+                  <bdi dir="ltr">{option.description}</bdi>
+                ) : (
+                  option.description
+                )}
               </span>
             </>
           )}

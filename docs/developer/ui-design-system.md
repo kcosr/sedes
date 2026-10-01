@@ -197,6 +197,9 @@ subject's name and a meta line), and submenus drill in with a back row.
 wide as its trigger, with a plain search row over a divider. Options carry
 `label`, `description`, `icon`, `searchTerms`, `group`, `pinned` (always
 shown), `disabled`, or `unavailable` (dimmed with a note, still selectable).
+Set `descriptionIsPath` when the description is a path: a long one gives way
+from its start, so its last segments stay visible, and the row's tooltip keeps
+it whole.
 `presentation="dialog"` shows the shared bottom sheet; `trigger` takes a custom
 trigger such as a composer pill. Custom pickers reuse `SearchableSelectSearch`.
 

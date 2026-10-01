@@ -121,6 +121,7 @@ export function useTaskDestinations(
         value: scopeKey({ kind: "workspace", workspaceId: workspace.id }),
         label: projectLabel(workspace),
         description: workspace.displayPath.text,
+        descriptionIsPath: true,
         icon: <ScopeIcon kind="workspace" />,
         group: "Projects",
         searchTerms: [workspace.id, workspace.label.text],
