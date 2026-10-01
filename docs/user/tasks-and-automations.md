@@ -144,7 +144,7 @@ them.
 ### See the details
 
 Select a row, or press Enter on it, to expand it in place. One row is
-expanded at a time. The detail shows:
+expanded at a time, and its title shows whole. The detail shows:
 
 - the notes as plain text, with **Show more** for long notes;
 - the linked files, which open in Files when the project is available;

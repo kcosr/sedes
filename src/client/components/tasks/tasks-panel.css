@@ -492,6 +492,32 @@
   outline: none;
 }
 
+/* Expanded, the title shows whole: it wraps, and the circle, indicators and
+   ⋯ stay level with its first line. */
+.tasks-row[data-expanded] > .tasks-row-main {
+  align-items: flex-start;
+}
+
+.tasks-row[data-expanded] .tasks-row-title {
+  padding-block: calc(
+    (var(--tasks-row-height) - var(--tasks-row-text) * var(--leading-snug)) / 2
+  );
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.tasks-row[data-expanded] > .tasks-row-main > .tasks-check {
+  margin-top: calc((var(--tasks-row-height) - var(--tasks-check-target)) / 2);
+}
+
+.tasks-row[data-expanded] .tasks-row-meta {
+  height: var(--tasks-row-height);
+}
+
+.tasks-row[data-expanded] .tasks-row-more {
+  margin-top: calc((var(--tasks-row-height) - var(--tasks-more-width)) / 2);
+}
+
 /* Pending rows are spans: they keep the row's line box. */
 span.tasks-row-title {
   display: flex;
