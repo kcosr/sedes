@@ -7,9 +7,9 @@ import type { BackendBrand } from "../../shared/index.js";
  * Product chrome uses Lucide. The Sedes mark itself is `public/sedes-mark.png`
  * (`SedesMark`) on launch, welcome, and empty transcript. The error screen
  * still uses a plain `!` in `.brand-mark`. `PiBrandIcon`, `CodexBrandIcon`,
- * `ClaudeBrandIcon`, and `GrokBrandIcon` are backend brand marks selected
- * through the normalized `BackendPresentation.brand` enum — see their note
- * below.
+ * `ClaudeBrandIcon`, `GrokBrandIcon`, and `OpenCodeBrandIcon` are backend
+ * brand marks selected through the normalized `BackendPresentation.brand`
+ * enum — see their note below.
  *
  * Geometry note: 24×24 viewBox, 1.8 stroke, default 18px — the project icon
  * metrics that every migrated lucide call site now passes explicitly.
@@ -19,14 +19,17 @@ type IconProps = SVGProps<SVGSVGElement> & { size?: number };
 /**
  * Backend brand marks keyed by the normalized `BackendPresentation.brand`
  * enum. They are pure presentation and only ever rendered through the closed
- * protocol enum, never through provider-name string checks. Codex uses the
- * call site's `currentColor`; Pi and Claude retain recognizable brand palettes
- * in both light and dark themes.
+ * protocol enum, never through provider-name string checks. Codex, Grok, and
+ * OpenCode use the call site's `currentColor`; Pi and Claude retain
+ * recognizable brand palettes in both light and dark themes.
  *
  * Geometry: the Pi mark is a crisp six-by-five block glyph, cropped to its
  * colored bounds so it reads at dense-row sizes. The Codex mark is the OpenAI
  * knot on a 256×260 grid, and the Claude mark uses its native 256×257 grid.
- * All are fill marks, so they set no stroke.
+ * The OpenCode mark is its identity mark (a 4:5 frame with a block filling
+ * the lower half of the opening) scaled onto the 24 grid; the block's reduced
+ * opacity stands in for the brand's grey. All are fill marks, so they set no
+ * stroke.
  */
 export const PiBrandIcon = ({
   size = 15,
@@ -101,9 +104,24 @@ export const GrokBrandIcon = ({
   </svg>
 );
 
-export const OpenCodeBrandIcon = ({ size = 15, ...props }: IconProps): React.JSX.Element => (
-  <svg aria-hidden="true" fill="currentColor" height={size} viewBox="0 0 24 24" width={size} {...props}>
-    <path d="M8.4 17.4H19.2V21H4.8V13.8H8.4ZM15.6 10.2V13.8H8.4V10.2ZM19.2 10.2H15.6V6.6H4.8V3H19.2Z" />
+export const OpenCodeBrandIcon = ({
+  size = 15,
+  ...props
+}: IconProps): React.JSX.Element => (
+  <svg
+    aria-hidden="true"
+    fill="currentColor"
+    height={size}
+    viewBox="0 0 24 24"
+    width={size}
+    {...props}
+  >
+    <path d="M8.4 10.2H15.6V17.4H8.4Z" fillOpacity={0.3} />
+    <path
+      clipRule="evenodd"
+      d="M19.2 21H4.8V3H19.2ZM15.6 6.6H8.4V17.4H15.6Z"
+      fillRule="evenodd"
+    />
   </svg>
 );
 
