@@ -63,6 +63,7 @@ import {
   type ElectronConnectionRuntimeStateChange,
 } from "./electron-connection-runtime-plugin.js";
 import { Button } from "../components/ui/button.js";
+import { ToastProvider } from "../components/ui/toast.js";
 import { OperationOverlayHost } from "../operations/OperationOverlay.js";
 
 export function App({
@@ -780,7 +781,7 @@ function ConnectedApp({
   }, [dependencies]);
 
   return (
-    <>
+    <ToastProvider>
     <OperationOverlayHost threadRegistry={dependencies.threadRegistry} />
     <ApplicationShell
       state={state}
@@ -792,7 +793,7 @@ function ConnectedApp({
       panelTenants={panelTenants}
       toolClientEndpoint={endpoint.baseUrl ?? window.location.origin}
     />
-    </>
+    </ToastProvider>
   );
 }
 
