@@ -124,18 +124,15 @@ export function jsonEqual(left: unknown, right: unknown): boolean {
   if (Array.isArray(right)) return false;
   const leftRecord = left as Record<string, unknown>;
   const rightRecord = right as Record<string, unknown>;
-  let leftCount = 0;
-  for (const key in leftRecord) {
-    if (!Object.hasOwn(leftRecord, key)) continue;
-    leftCount += 1;
-    if (!Object.hasOwn(rightRecord, key)) return false;
-    if (!jsonEqual(leftRecord[key], rightRecord[key])) return false;
+  const keys = Object.keys(leftRecord);
+  if (keys.length !== Object.keys(rightRecord).length) return false;
+  for (const key of keys) {
+    const value = leftRecord[key];
+    if (!jsonEqual(value, rightRecord[key])) return false;
+    // Equal key counts, so a key missing on the right only hides behind undefined.
+    if (value === undefined && !Object.hasOwn(rightRecord, key)) return false;
   }
-  let rightCount = 0;
-  for (const key in rightRecord) {
-    if (Object.hasOwn(rightRecord, key)) rightCount += 1;
-  }
-  return leftCount === rightCount;
+  return true;
 }
 
 function shareArray<Values extends readonly unknown[]>(
@@ -282,9 +279,19 @@ function catalogIndexFor(catalog: SidebarScopeCatalog): CatalogIndex {
   return cachedIndex.index;
 }
 
+/** The inputs each base was last built or confirmed from. */
+const baseInputs = new WeakMap<
+  ArchiveBase,
+  {
+    readonly snapshot: NormalizedApplicationSnapshot;
+    readonly pending: readonly string[];
+  }
+>();
+
 /**
  * Build the archive base from a snapshot, reusing every unchanged row and,
- * when nothing the page renders changed, the previous base itself.
+ * when nothing the page renders changed, the previous base itself. The same
+ * inputs return the previous base without any work.
  */
 export function selectArchiveBase(
   snapshot: NormalizedApplicationSnapshot | undefined,
@@ -294,6 +301,30 @@ export function selectArchiveBase(
   if (!snapshot) {
     return previous?.rows.length === 0 ? previous : EMPTY_ARCHIVE_BASE;
   }
+  const inputs = previous ? baseInputs.get(previous) : undefined;
+  if (
+    inputs?.snapshot === snapshot &&
+    inputs.pending === pendingConfigurationCopySourceIds
+  ) {
+    return previous!;
+  }
+  const next = buildArchiveBase(
+    snapshot,
+    pendingConfigurationCopySourceIds,
+    previous,
+  );
+  baseInputs.set(next, {
+    snapshot,
+    pending: pendingConfigurationCopySourceIds,
+  });
+  return next;
+}
+
+function buildArchiveBase(
+  snapshot: NormalizedApplicationSnapshot,
+  pendingConfigurationCopySourceIds: readonly string[],
+  previous: ArchiveBase | undefined,
+): ArchiveBase {
   const catalog = shareCatalog(previous?.catalog, snapshot);
   const catalogUnchanged = previous?.catalog === catalog;
   const index = catalogIndexFor(catalog);
