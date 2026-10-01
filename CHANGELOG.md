@@ -75,6 +75,29 @@
 
 ### Added
 
+- **View options** for each Tasks view: sort by **Pinned, then newest**,
+  **Recently updated**, or **Title**; show **Open** or **Completed** Tasks;
+  show only pinned Tasks, Tasks with notes, or Tasks with files; group All by
+  project; include thread Tasks in Project; and search notes. Each view
+  remembers its own options on the device.
+
+- Completing, reopening, or moving a Task shows a notice with **Undo** for
+  about five seconds, whether the move came from **Move to** or a drag. F8 moves
+  focus to the notice. Deleting still asks first and has no Undo.
+
+- Ctrl+Shift+L (Command+Shift+L on macOS) opens and closes Tasks. Inside
+  Tasks, N adds, `/` searches, and the arrow keys move between Tasks; on a
+  Task, Enter expands it, Space completes it, E edits, P pins, M moves, Delete
+  deletes, and Ctrl/Command+Enter adds it to the prompt. **Keyboard
+  shortcuts** in the Tasks menu lists them.
+
+- Pasting several lines into the Tasks add row creates one Task per line, up
+  to 50, after a confirmation that previews them. List bullets, numbers, and
+  checkboxes are removed.
+
+- **Open task** on a Task card in the transcript opens Tasks and expands the
+  live Task, switching to a view that contains it.
+
 - OpenCode v2 can run on Linux execution hosts locally, through SSH, or through
   outbound HTTP(S) sidecars, using the same owned/external runtime and tools.
   Remote Disconnect preserves native work; external backend Stop retires only
@@ -174,6 +197,49 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- In a thread, Tasks docks beside Chat as a workspace panel instead of a
+  floating card, and resizes, collapses, docks on another edge, and closes
+  like Files and Workpads. Home, Archived, and Usage open Tasks as a popover
+  from the corner button, and phones keep a bottom sheet. The card's pin is
+  gone.
+
+- One scope control, **Thread**, **Project**, **Global**, and **All**,
+  replaces the old view switcher and its project and thread picker. Each view
+  shows its open count and follows the current chat, and a view that does not
+  apply says why. **All** lists every Task, grouped by project with each
+  thread's Tasks under its project, and replaces **Include nested scopes**.
+
+- Tasks are added from a separate add row instead of **Search or add task**.
+  Enter adds the Task and keeps focus for the next one, and Shift+Enter opens a
+  notes field. Search has its own button and never blocks adding.
+
+- Task rows are compact: a completion circle, a one-line title, and quiet
+  notes, file, and pin indicators. The whole row drags on desktop, without a
+  grip. Completed Tasks are muted, struck through, and kept in a collapsed
+  **Completed** section, most recently completed first; pinning no longer
+  lifts them above open Tasks.
+
+- Selecting a Task expands it in place, with its notes, files, when and where
+  it was added, and **Add to prompt**, **Edit**, and **Move to…**. **Edit**
+  opens a dialog with labelled fields, **Belongs to**, Files, Pinned, and
+  **Delete…**. On phones, a Task opens as a detail view in the sheet.
+
+- Each Task row has a **⋯** menu with **Add to prompt**, **Edit…**, **Pin**,
+  **Move to** (this thread, this project, Global, or a searchable choice), and
+  **Delete…**, so touch and keyboard users can move a Task without the editor.
+
+- Tasks in the composer are compact pills above the message box; a completed
+  or deleted Task shows a muted or warning pill with a tooltip. The
+  transcript's Task card shows a short notes preview and keeps the Task ID and
+  revision under **Details**. The Tasks button shows a count of open Tasks:
+  the thread's in a thread, and Global Tasks elsewhere.
+
+- Stored Tasks preferences migrate on first load. Tasks starts closed after
+  the upgrade, even if the card was open or pinned, and then opens on the view
+  you last chose instead of a fixed default view. A Global default with nested
+  scopes becomes All, nested scopes become Project's **Include thread tasks**,
+  and content search becomes **Search notes**.
 
 - OpenCode uses native execution-host defaults with optional Advanced path
   overrides. Multiple runtimes can share a database; ownership and recovery
@@ -331,6 +397,30 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Opening the Task editor no longer collapses the Task list to nothing or
+  scrolls the Tasks header away; the editor is a dialog with the list visible
+  behind it.
+
+- Task edits are no longer lost silently on Escape, selecting another row,
+  switching view, searching, or Android Back. Closing the editor with unsaved
+  changes asks first.
+
+- Saving or completing one Task no longer disables every control in Tasks or
+  drops keyboard focus. Only that Task's action waits, so you can keep adding
+  Tasks and working on other rows.
+
+- While a Task is dragged over the chat, the **Move task to** zone stops above
+  the composer, so the composer's **Add task to prompt** target stays visible.
+
+- Workspace panels no longer squeeze below their minimum widths when several
+  are open: Chat keeps 360px, Tasks 300px, and Files and Workpads 320px while
+  there is room. A panel opened or restored where the visible panels no longer
+  fit collapses the least recently used side panels instead, with an
+  announcement.
+
+- **New group…** now leads the **Move to group** picker, under the search,
+  instead of sitting below every group.
 
 - OpenCode's bundled MCP helper now launches through both the generated Sedes
   CLI and the sidecar entry point. (#17)
