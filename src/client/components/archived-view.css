@@ -164,6 +164,7 @@
 /* ---------------------------------------------------------------- row */
 
 .archive-row {
+  position: relative;
   display: flex;
   min-width: 0;
   align-items: flex-start;
@@ -180,13 +181,14 @@
   opacity: 0.7;
 }
 
-/* One button opens the thread: brand, title (up to two lines), and the
-   trailing fork mark and age on line 1; location details on line 2. */
+/* One button opens the thread: brand and title (up to two lines) on line 1,
+   location details on line 2. Its overlay covers the whole row, so the age
+   beside it opens the thread too; the fork mark and Restore sit above it. */
 .archive-row-open {
   display: grid;
   min-width: 0;
   flex: 1 1 auto;
-  grid-template-columns: var(--icon-md) minmax(0, 1fr) auto;
+  grid-template-columns: var(--icon-md) minmax(0, 1fr);
   align-items: start;
   gap: 3px var(--space-1-5);
   padding: 7px var(--space-2);
@@ -199,7 +201,19 @@
   cursor: pointer;
 }
 
+.archive-row-open::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  content: "";
+}
+
 .archive-row-open:focus-visible {
+  outline: none;
+}
+
+.archive-row-open:focus-visible::after {
+  outline: 2px solid var(--ring);
   outline-offset: -2px;
 }
 
@@ -230,12 +244,21 @@
 }
 
 .archive-row-trail {
-  gap: var(--space-1-5);
+  flex: 0 0 auto;
+  gap: var(--space-1);
+  margin-top: 7px;
   color: var(--muted-foreground-2);
 }
 
-.archive-row-fork {
-  display: inline-flex;
+.archive-row .archive-row-fork,
+.archive-row-restore {
+  position: relative;
+  z-index: 1;
+}
+
+.archive-row .archive-row-fork {
+  width: 22px;
+  height: 22px;
 }
 
 .archive-row-age {
@@ -250,7 +273,7 @@
   display: flex;
   min-width: 0;
   flex-wrap: wrap;
-  grid-column: 2 / -1;
+  grid-column: 2;
   align-items: center;
   gap: var(--space-0-5) var(--space-3);
   color: var(--muted-foreground-2);
@@ -316,6 +339,15 @@
 @media (max-width: 819px), (pointer: coarse) {
   .archive-row-open {
     padding-block: var(--space-2-5);
+  }
+
+  .archive-row-trail {
+    margin-top: var(--space-2-5);
+  }
+
+  .archive-row .archive-row-fork {
+    width: 32px;
+    height: 32px;
   }
 
   .archive-row-restore {

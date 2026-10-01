@@ -283,8 +283,8 @@ describe("ArchivedView rows", () => {
     expect(within(row).getByRole("img", { name: "Codex" })).toBeInTheDocument();
     const age = row.querySelector("time")!;
     expect(age).toHaveAttribute("dateTime", "2026-08-09T12:00:00.000Z");
-    expect(age.title).toMatch(/^Archived .+ · Last active .+$/u);
     const open = screen.getByRole("button", { name: "Archived work" });
+    expect(open.title).toMatch(/^Archived work\nArchived .+ · Last active .+$/u);
     expect(open).toHaveAccessibleDescription(
       /sedes.*Project and environment.*Unavailable.*Codex SSH.*Target.*Unavailable.*Codex\. Archived .+ · Last active/u,
     );
@@ -299,7 +299,7 @@ describe("ArchivedView rows", () => {
     removeOpenListener();
   });
 
-  it("shows the full title, a fork mark, and the worktree branch", () => {
+  it("shows the full title, a fork control, and the worktree branch", () => {
     const longTitle =
       "Rework archived threads page so titles and details are not truncated on mobile";
     const { store } = createStore(
@@ -333,18 +333,30 @@ describe("ArchivedView rows", () => {
         },
       ),
     );
+    const onOpen = vi.fn();
+    const removeOpenListener = installThreadPanelOpenRequestListener(
+      window,
+      onOpen,
+    );
     render(<ArchivedView store={store} />);
     const row = screen.getByTestId("archive-row");
-    expect(row.querySelector(".archive-row-open")).toHaveAttribute(
-      "title",
-      longTitle,
+    expect(row.querySelector(".archive-row-open")?.getAttribute("title")).toMatch(
+      new RegExp(`^${longTitle}\n`, "u"),
     );
     expect(row.querySelector(".archive-row-title")).toHaveTextContent(
       longTitle,
     );
     expect(
-      within(row).getByRole("img", { name: "Fork of Source work" }),
-    ).toBeInTheDocument();
+      screen.getByRole("button", { name: longTitle }),
+    ).toHaveAccessibleDescription(/Fork of Source work/u);
+    // The fork mark is its own control: it opens the fork source.
+    fireEvent.click(
+      within(row).getByRole("button", { name: /^Forked from “Source work”/u }),
+    );
+    expect(onOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: "source" }),
+    );
+    removeOpenListener();
     expect(row).toHaveTextContent("feat/archive");
     expect(row.querySelector("time")).toHaveTextContent("2h");
     const status = screen.getByTestId("archive-status");

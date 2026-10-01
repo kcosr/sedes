@@ -5,7 +5,6 @@ import {
   Folder,
   GitBranch,
   LoaderCircle,
-  Split,
 } from "lucide-react";
 import { Button } from "@client/components/ui/button";
 import { Callout } from "@client/components/ui/callout";
@@ -16,6 +15,7 @@ import {
   pointerPanelPresentation,
 } from "../workspace-panels/thread-panel-navigation.js";
 import { BackendBrandIcon } from "./brand-icons.js";
+import { ForkProvenanceButton } from "./lineage/ForkProvenanceButton.js";
 import { ThreadContextMenu } from "./ThreadContextMenu.js";
 
 export type ArchiveRestoreStatus =
@@ -39,8 +39,9 @@ function UnavailableMarker({
 }
 
 /**
- * One archived thread: the whole row opens it, Restore is its own control,
- * and right-click or long-press opens the shared thread actions menu.
+ * One archived thread: the whole row opens it, the fork mark opens the fork
+ * point, Restore is its own control, and right-click or long-press opens the
+ * shared thread actions menu.
  *
  * Memoized with React's shallow comparison: `selectArchiveBase` keeps an
  * unchanged row's object, the parent passes stable callbacks, and the age is a
@@ -114,7 +115,7 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
           <button
             type="button"
             className="archive-row-open"
-            title={row.title}
+            title={`${row.title}\n${ageTitle}`}
             // Named by the title alone; location, lineage, and times describe it.
             aria-labelledby={titleId}
             aria-describedby={hasMeta ? `${metaId} ${detailsId}` : detailsId}
@@ -132,26 +133,6 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
             </span>
             <span className="archive-row-title" id={titleId}>
               {row.title}
-            </span>
-            <span className="archive-row-trail">
-              {forkLabel && (
-                <span
-                  className="archive-row-fork"
-                  data-testid="archive-row-fork"
-                  role="img"
-                  aria-label={forkLabel}
-                  title={forkLabel}
-                >
-                  <Split size={14} strokeWidth={1.8} aria-hidden="true" />
-                </span>
-              )}
-              <time
-                className="archive-row-age"
-                dateTime={ageDateTime}
-                title={ageTitle}
-              >
-                {ageLabel}
-              </time>
             </span>
             <span className="sr-only" id={detailsId}>
               {[row.backendLabel, forkLabel, ageTitle]
@@ -197,6 +178,20 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
               </span>
             )}
           </button>
+          {/* Outside the open button so the fork mark can be a control of its
+              own; the open button's overlay still makes the age clickable. */}
+          <span className="archive-row-trail">
+            {row.origin && (
+              <ForkProvenanceButton
+                origin={row.origin}
+                sourceTitle={row.forkSourceTitle}
+                className="archive-row-fork"
+              />
+            )}
+            <time className="archive-row-age" dateTime={ageDateTime}>
+              {ageLabel}
+            </time>
+          </span>
           <Button
             type="button"
             variant="ghost"
