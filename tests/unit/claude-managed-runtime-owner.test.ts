@@ -383,6 +383,7 @@ function lifecycleHandlers(): ClaudeRuntimeV2WorkerHandlers {
     interruptDisposition: unused,
     cancelQueryInput: unused,
     setQueryModel: unused,
+    contextUsage: unused,
     setQueryEffort: unused,
     setQueryPermissionMode: unused,
     closeQuery: unused,

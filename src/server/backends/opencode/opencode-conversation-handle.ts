@@ -4,6 +4,10 @@ import { randomUUID } from "node:crypto";
 import type { BackendCapabilityDocument, BackendConversationEvent, SequencedBackendEvent } from "../../../shared/protocol/backend.js";
 import { backendConversationEventSchema } from "../../../shared/protocol/backend.js";
 import type { BackgroundActivity } from "../../../shared/protocol/background-activity.js";
+import type { UsageSnapshot } from "../../../shared/protocol/conversation.js";
+import { projectOpenCodeCurrentUsage } from "./opencode-current-usage.js";
+import type { OpenCodeModelCatalogRead } from "./opencode-model-catalog.js";
+import type { OpenCodeNativeSession } from "./opencode-native-api.js";
 import { boundDisplayText } from "../../conversations/payload-policy.js";
 import { BackendError, type AttachConversationInput, type BackendEventListener, type ConversationControl, type ConversationHandle,
   type EstablishProjectionInput, type EstablishedBackendProjection, type HistoryPageInput, type InterruptConversationInput, type LocateTurnInput } from "../contracts.js";
@@ -90,6 +94,9 @@ export class OpenCodeConversationHandle implements ConversationHandle {
   #projection?: OpenCodeHistoryProjection;
   #viewedImages: ReadonlyMap<string, OpenCodeViewedImage> = new Map();
   #retained?: OpenCodeRetainedHistory;
+  #usageSession?: OpenCodeNativeSession;
+  #usageCatalog?: OpenCodeModelCatalogRead;
+  #liveUsage: UsageSnapshot = {};
   #activity: "starting" | "running" | "idle" | "unknown" = "unknown";
   #background: BackgroundActivity = unknownActivity;
   #tail: Promise<unknown> = Promise.resolve();
@@ -204,11 +211,11 @@ export class OpenCodeConversationHandle implements ConversationHandle {
         observed.catalog.catalog.models.some(model => model.id === qualifiedOpenCodeModelId(observed.observed.resolvedSelection!) && model.inputModalities.includes("image")) }, nonblockingQuestions: false,
       providerOutputArtifacts: { nativeImage: false }, supportsHistory: true,
       branching: { availability: "unavailable", reason: boundDisplayText("Native branching is not qualified.") },
-      interactionKinds: ["decision", "form", "questionnaire"], usageAccounting: "supported", turnThroughput: "unsupported", usageSections: [],
+      interactionKinds: ["decision", "form", "questionnaire"], usageAccounting: "supported", turnThroughput: "unsupported", usageSections: ["context", "counters"],
       effectiveSettings: observed?.observed.classification === "recognized" && observed.observed.resolvedSelection
         ? toEffective(observed.observed.resolvedSelection, this.context.connection.id, observed.catalog.catalog) : {} };
   }
-  async usage() { this.#assertOpen(); return {}; }
+  async usage(): Promise<UsageSnapshot> { this.#assertOpen(); return structuredClone(this.#liveUsage); }
   async captureSubmissionRetryAnchor(): Promise<string> {
     return this.#acquire(undefined, async signal => {
       await this.#startObservation(signal);
@@ -351,6 +358,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     this.#release(); this.#rawListeners.clear(); this.#listeners.clear();
     this.#journal.length = 0; this.#journalBytes = 0; this.#parts.clear(); this.#partBytes = 0; this.#nativePartCounts.clear();
     this.#retained = undefined; this.#projection = undefined;
+    this.#usageSession = undefined; this.#usageCatalog = undefined; this.#liveUsage = {};
     this.#dirtyMessages.clear(); this.#shellMessageIds.clear();
   }
 
@@ -402,6 +410,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     signal.throwIfAborted(); this.#assertOpen();
     this.#generation = randomUUID(); this.#parts.clear(); this.#partBytes = 0; this.#seenEvents.clear(); this.#nativePartCounts.clear();
     this.#retained = undefined; this.#projection = undefined;
+    this.#usageSession = undefined; this.#usageCatalog = undefined; this.#liveUsage = {};
     this.#dirtyParts.clear(); this.#projectedRevision = this.#structuralRevision;
     this.#dirtyMessages.clear(); this.#shellMessageIds.clear();
     this.#latestAssistantMessageId = undefined; this.#latestCompactionMessageId = undefined;
@@ -539,6 +548,13 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       await this.runtime.assertCurrent(signal);
       check();
       this.#inputObservation.observer.observeHistory(retained.messages);
+      if (!this.#usageCatalog) {
+        // An unavailable model catalog suppresses the meter, not the transcript.
+        try { this.#usageCatalog = await this.context.catalog.read({ connection: this.context.connection, workspace: this.input.workspace,
+          signal: AbortSignal.any([signal, AbortSignal.timeout(5_000)]) }); }
+        catch { /* Context remains unknown until a model limit is available. */ }
+        await this.runtime.assertCurrent(signal); check();
+      }
       if (retained.messages.some(message => message.type === "assistant" && message.content.some(part => part.type === "tool" && classifyOpenCodeRead(part).kind === "viewed"))) {
         const catalog = await this.context.catalog.read({ connection: this.context.connection, workspace: this.input.workspace, signal });
         await this.runtime.assertCurrent(signal); check();
@@ -552,6 +568,8 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       this.#retainedPartAllowance = peakPartBytes;
       const projection = this.#project(signal); check();
       const prior = this.#projection; this.#projection = projection;
+      this.#usageSession = session;
+      this.#publishUsage(prior !== undefined && !this.#invalidated);
       this.#projectedRevision = revision; this.#observedActivityRevision = activityRevision;
       // An event arriving during the read retains its newer revision even if
       // this same native record was already selected for an earlier reread.
@@ -767,6 +785,7 @@ export class OpenCodeConversationHandle implements ConversationHandle {
     if (this.#invalidated && reason !== "provider_handle_closed") return;
     this.#usage.gap("capture_gap");
     this.#invalidated = true; this.#activity = "unknown"; this.#background = unknownActivity;
+    this.#liveUsage = {}; this.#usageSession = undefined;
     clearTimeout(this.#startupRecheckTimer); this.#startupRecheckTimer = undefined;
     this.#emit({ type: "resnapshot_required", reason });
   }
@@ -823,7 +842,12 @@ export class OpenCodeConversationHandle implements ConversationHandle {
       if (this.#closed || this.#lifetime.aborted || sequence !== this.#settingsRefreshSequence) return;
       try {
         const observed = await this.#settings.observe(this.#lifetime);
-        if (!this.#closed && !this.#lifetime.aborted && sequence === this.#settingsRefreshSequence) this.#observedSettings = observed;
+        if (!this.#closed && !this.#lifetime.aborted && sequence === this.#settingsRefreshSequence) {
+          this.#observedSettings = observed;
+          this.#usageCatalog = observed.catalog;
+          this.#usageSession = observed.session;
+          if (!this.#invalidated) this.#publishUsage();
+        }
         return;
       } catch (error) {
         if (this.#closed || this.#lifetime.aborted || sequence !== this.#settingsRefreshSequence) return;
@@ -831,10 +855,19 @@ export class OpenCodeConversationHandle implements ConversationHandle {
         // invalidates an already confirmed native state; retry the current view.
         if (error instanceof BackendError && error.backendCode === "opencode_settings_changed") continue;
         this.#observedSettings = undefined;
+        this.#usageCatalog = undefined;
+        if (!this.#invalidated) this.#publishUsage();
         try { this.#settings.markUnknown(); } catch { /* Retired authority cannot publish new effective state. */ }
         return;
       }
     }
+  }
+  #publishUsage(emit = true): void {
+    if (!this.#retained || !this.#usageSession) return;
+    const usage = projectOpenCodeCurrentUsage({ messages: this.#retained.messages, session: this.#usageSession, catalog: this.#usageCatalog });
+    if (openCodeHistoryFingerprint(usage) === openCodeHistoryFingerprint(this.#liveUsage)) return;
+    this.#liveUsage = usage;
+    if (emit) this.#emit({ type: "usage_changed", usage });
   }
   #emit(value: BackendConversationEvent): void {
     const event = backendConversationEventSchema.parse(value);

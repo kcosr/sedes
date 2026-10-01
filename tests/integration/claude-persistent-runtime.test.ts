@@ -179,6 +179,25 @@ function acceptedInput(sessionId: string, operation: { operationId: string; cont
 }
 
 describe("Claude persistent runtime through framed replacement carriers", () => {
+  it("round-trips bounded context telemetry and refuses a stale query generation", async () => {
+    const f = await fixture(); const carrier = await f.attach(); const client = f.client();
+    const id = randomUUID(); const session = client.createSession(sessionOptions(id));
+    await session.start();
+    const native = f.sessions[0]!;
+    const context = { usedTokens: 123, windowTokens: 1_000, percent: 12.3 };
+    native.contextUsage.mockResolvedValue(context);
+    expect(await session.contextUsage()).toEqual(context);
+    expect(native.contextUsage).toHaveBeenCalledOnce();
+    const runtimeId = await carrier.connection.ensure(configuration);
+    await expect(carrier.connection.execute({ action: "context_usage", runtimeId, controllerEpoch: carrier.lease.controllerEpoch,
+      request: { queryId: id, startupProbeUuid: randomUUID() } })).rejects.toThrow("sidecar_operation_failed");
+    expect(native.contextUsage).toHaveBeenCalledOnce();
+    native.contextUsage.mockRejectedValueOnce(new Error("telemetry_failed"));
+    await expect(session.contextUsage()).rejects.toThrow("sidecar_operation_failed");
+    expect(native.closed).toBe(false);
+    expect(await session.contextUsage()).toEqual(context);
+  });
+
   const agentToolMcp: NonNullable<ClaudeRuntimeSessionOptions["agentToolMcp"]> = {
     command: "/remote/sedes/sidecar/sedes",
     mode: "individual",

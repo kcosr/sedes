@@ -696,3 +696,26 @@ transcripts are withheld from turn allocation. Revert does not reduce native
 lifetime totals or already captured work. Exact replay is deduplicated; a genuine
 counter regression remains an accounting gap. Coverage is intentionally partial,
 including explicit child/model and retained-history limits.
+
+
+## Current context and session counters
+
+The handle projects live `UsageSnapshot` from its complete retained native
+history, restricted to records before a staged revert boundary. The browser's
+latest ten-turn page is not a counting boundary. Users and assistants are counted
+once per native message; tool calls count parsed running/completed/error tool
+parts and results count completed/error parts. Idle, model, metadata, fragments
+and image presentation rows are not messages. Successful compactions have their
+own counter.
+
+Context uses the latest measured assistant after a completed compaction or model
+switch and before the revert boundary. Its five disjoint native categories are
+input, visible output, reasoning, cache read and cache write. This is the last
+reported request occupancy, not accumulated requests or an estimate of unmeasured
+new input. The window comes from the matching native model catalog entry. A
+changed selected model cannot reuse the old model's occupancy. Missing/zero or
+invalid counts keep occupancy unknown, even if the window is available; a
+missing catalog leaves counters available. The retained branch and settings are
+reconciled on structural events and reconnect, with change-only complete
+`usage_changed` publications. Text deltas never trigger history scans for usage.
+This path works locally and remotely with recorded accounting disabled.

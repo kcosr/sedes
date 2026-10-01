@@ -26,11 +26,11 @@ function opened(events: ClaudePersistentEvent[] = [], reattached = false) {
   return { failureCode: null, pendingBackgroundTaskIds: [], backgroundActivity: { state: "known", agents: 0, commands: 0, other: 0 }, reattached, queryId: SESSION_ID, startupProbeUuid: PROBE_ID, initialization: { cliRelease: "2.1.283", models: [], commands: [], skillNames: [], terminalCommandNames: [], account: {}, actualPermissionMode: "default" }, events };
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
-function setup(input: { nativeDefault?: boolean; supportsRuntime?: boolean } = {}) {
+function setup(input: { nativeDefault?: boolean; supportsRuntime?: boolean; runtimeMajor?: number } = {}) {
   const carriers: { lost: ReturnType<typeof deferred<void>>; release: ReturnType<typeof vi.fn> }[] = [];
   const acquire = vi.fn(async (_signal?: AbortSignal, _options?: { existingOnly?: boolean }) => {
     const lost = deferred<void>(); const release = vi.fn(); carriers.push({ lost, release });
-    return { channel: { assertReady: vi.fn(), supportsOperation: () => input.supportsRuntime !== false } as unknown as SidecarRuntimeChannel, controllerEpoch: carriers.length, serviceIncarnation: "service", closed: lost.promise, release };
+    return { channel: { assertReady: vi.fn(), supportsOperation: (operation: { majorVersion: number }) => input.supportsRuntime !== false && operation.majorVersion === (input.runtimeMajor ?? 3) } as unknown as SidecarRuntimeChannel, controllerEpoch: carriers.length, serviceIncarnation: "service", closed: lost.promise, release };
   });
   const client = new ClaudePersistentRuntimeClient({ scope: { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "claude" }, sidecarRuntime: { acquireExisting: async () => { throw new Error("unused_existing_carrier_admission"); }, acquire }, executablePath: "/bin/claude", ...(input.nativeDefault ? {} : { configDirectory: "/config" }), initializationTimeoutMs: 1000 });
   const options: ClaudeRuntimeSessionOptions = { executablePath: "/bin/claude", initializationTimeoutMs: 1000, sessionId: SESSION_ID, cwd: "/work", launch: "new", environment: {}, onMessage: vi.fn() };
@@ -500,8 +500,8 @@ it("leaves the omitted SSH native store unresolved despite main-server environme
   await client.close();
 });
 
-it("fails closed and releases the lease when the remote host omits Claude runtime support", async () => {
-  const { client, carriers, options } = setup({ supportsRuntime: false });
+it.each([undefined, 2])("fails closed when Claude runtime support is absent or uses an old major (%s)", async runtimeMajor => {
+  const { client, carriers, options } = setup(runtimeMajor === undefined ? { supportsRuntime: false } : { runtimeMajor });
   await expect(client.createSession(options).start()).rejects.toThrow("claude_remote_runtime_unsupported");
   expect(connectionState.instances).toHaveLength(0);
   expect(carriers[0]!.release).toHaveBeenCalledOnce();
@@ -633,4 +633,29 @@ it("reports native-owner replacement separately from replacement of its carrier"
   expect(changed).toHaveBeenCalledOnce();
   expect(session.startupProbeUuid).toBe(next);
   await client.close();
+});
+
+
+it("reads context only from the current attachment and never reconnects to fill the meter", async () => {
+  vi.useFakeTimers();
+  const { client, acquire, carriers, options } = setup();
+  const session = client.createSession(options);
+  await expect(session.contextUsage()).rejects.toThrow();
+  expect(acquire).not.toHaveBeenCalled();
+  try {
+    await session.start();
+    const connection = connectionState.instances[0]!;
+    const context = { usedTokens: 20, windowTokens: 1_000, percent: 2 };
+    connection.execute.mockResolvedValueOnce(context);
+    const controller = new AbortController();
+    expect(await session.contextUsage(controller.signal)).toEqual(context);
+    expect(connection.execute).toHaveBeenLastCalledWith({ action: "context_usage", runtimeId: "runtime", controllerEpoch: 1,
+      request: { queryId: SESSION_ID, startupProbeUuid: PROBE_ID } }, { signal: controller.signal, deadlineMilliseconds: 5_000 });
+    connection.execute.mockResolvedValueOnce({ ...context, privateBreakdown: [] });
+    await expect(session.contextUsage()).rejects.toThrow();
+    carriers[0]!.lost.resolve(); await vi.advanceTimersByTimeAsync(0);
+    await expect(session.contextUsage()).rejects.toThrow("unavailable");
+    expect(acquire).toHaveBeenCalledOnce();
+    expect(session.closed).toBe(false);
+  } finally { await client.close(); }
 });

@@ -8,7 +8,7 @@ import { claudePersistentCommandSchema, claudePersistentConfigurationSchema, cla
   type ClaudePersistentCommand, type ClaudePersistentConfiguration, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
 import type { ClaudePersistentRuntimeRegistry } from "./claude-persistent-runtime-registry.js";
 
-const capability = { capabilityId: "claude_persistent_runtime", majorVersion: 2 } as const;
+const capability = { capabilityId: "claude_persistent_runtime", majorVersion: 3 } as const;
 const stopRefusals = new Map<string, BackendRuntimeControlRejectedError["reason"]>([
   ["claude_persistent_confirmation_stale", "confirmation_stale"],
   ["claude_persistent_restart_blocked", "blocked"],

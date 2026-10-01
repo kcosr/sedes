@@ -16,6 +16,7 @@ import { resolveClaudeSafeSkills, type ClaudeSafeSkill } from "../claude-skills.
 import * as worker from "../worker/claude-runtime-v2.js";
 import { CLAUDE_PERSISTENT_MAXIMUM_SESSIONS, claudePersistentOpenRequestSchema, claudePersistentRetireResponseSchema, claudePersistentSubmissionDispositionResponseSchema, claudePersistentConfigurationSchema, claudePersistentAttachmentSchema, claudePersistentSendResponseSchema, type ClaudePersistentCommand, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
 import { ClaudeSidecarRuntimeConnection, claudePersistentRuntimeOperations } from "./claude-sidecar-runtime.js";
+import { CLAUDE_CONTEXT_USAGE_TIMEOUT_MS } from "../claude-context-usage.js";
 
 type Command = ClaudePersistentCommand extends infer C ? C extends ClaudePersistentCommand ? Omit<C, "runtimeId" | "controllerEpoch"> : never : never;
 /** Acknowledgements in flight per client; the sidecar peer admits 128 requests. */
@@ -451,6 +452,19 @@ class PersistentSession implements ClaudeRuntimeSession {
     this.#assertReady();
     worker.claudeRuntimeQuerySetModelOperation.responseSchema.parse(await this.#execute({ action: "set_model", request: { queryId: this.options.sessionId, model: model ?? null } }));
     this.#modelSelection = model ?? null;
+  }
+  async contextUsage(signal?: AbortSignal) {
+    this.#assertReady();
+    const attachment = this.client.current();
+    // Reading the meter never launches a carrier/query or waits for replay.
+    if (!attachment || attachment.runtimeId !== this.#runtimeIdentity ||
+        attachment.lease.serviceIncarnation !== this.#serviceIncarnation || !this.#startupProbeUuid) {
+      throw new Error("claude_context_usage_unavailable");
+    }
+    return worker.claudeRuntimeQueryContextUsageOperation.responseSchema.parse(await attachment.connection.execute({
+      action: "context_usage", runtimeId: attachment.runtimeId, controllerEpoch: attachment.lease.controllerEpoch,
+      request: { queryId: this.options.sessionId, startupProbeUuid: this.#startupProbeUuid },
+    }, { signal, deadlineMilliseconds: CLAUDE_CONTEXT_USAGE_TIMEOUT_MS }));
   }
   async setEffort(effort?: Parameters<ClaudeRuntimeSession["setEffort"]>[0]) {
     this.#assertReady();

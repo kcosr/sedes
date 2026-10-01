@@ -11,6 +11,7 @@ import type {
   PermissionMode,
   Query,
   SDKControlInitializeResponse,
+  SDKControlGetContextUsageResponse,
   SDKControlInterruptResponse,
   SDKMessage,
   SDKUserMessage,
@@ -260,6 +261,7 @@ function fixture(options: {
   const messages = new MessageQueue();
   let queryInput: ClaudeQueryInput | undefined;
   const controls = {
+    getContextUsage: vi.fn(async (): Promise<SDKControlGetContextUsageResponse> => { throw new Error("fixture_context_unavailable"); }),
     interrupt: vi.fn(async (): Promise<SDKControlInterruptResponse> => ({ still_queued: [] })),
     cancelAsyncMessage: vi.fn(async (_messageUuid: string) => true),
     setModel: vi.fn(async () => undefined),
@@ -326,6 +328,7 @@ function fixture(options: {
       })();
       return Object.assign(stream, {
         initializationResult: async () => initialization,
+        getContextUsage: controls.getContextUsage,
         interrupt: controls.interrupt,
         cancelAsyncMessage: controls.cancelAsyncMessage,
         setModel: controls.setModel,
@@ -610,6 +613,7 @@ function retainedRuntime(
         setModel: session.setModel.bind(session),
         setEffort: session.setEffort.bind(session),
         setPermissionMode: session.setPermissionMode.bind(session),
+        contextUsage: session.contextUsage.bind(session),
         close() {
           detached = true;
           return session.close();
@@ -6475,5 +6479,116 @@ describe("Claude existing-owner Stop control", () => {
       await expect(control!.interrupt(input)).rejects.toMatchObject({ crossedSubmissionBoundary: true });
       expect(provider.controls.interrupt).toHaveBeenCalledOnce();
     } finally { vi.useRealTimers(); await handle.close(); }
+  });
+});
+
+describe("Claude live context independent of accounting", () => {
+  it.each([false, true])("clears context before a model setter settles (reject: %s)", async reject => {
+    const provider = fixture({ initModel: "claude-opus-5" });
+    provider.controls.getContextUsage.mockResolvedValue({ totalTokens: 200, rawMaxTokens: 1_000 } as SDKControlGetContextUsageResponse);
+    const { handle } = createHandle(provider);
+    let resolve!: () => void;
+    let fail!: (error: Error) => void;
+    try {
+      const established = await handle.establishProjection({ signal: new AbortController().signal });
+      await vi.waitFor(async () => expect((await handle.usage()).context?.usedTokens).toBe(200));
+      const counters = (await handle.usage()).counters;
+      const events: BackendConversationEvent[] = [];
+      established.subscribeFromNext(({ event }) => events.push(event));
+      provider.controls.setModel.mockImplementationOnce(async () => {
+        await new Promise<void>((yes, no) => { resolve = yes; fail = no; });
+        return undefined;
+      });
+      provider.controls.getContextUsage.mockResolvedValue({ totalTokens: 300, rawMaxTokens: 2_000 } as SDKControlGetContextUsageResponse);
+      const pending = handle.submit({ applicationOperationId: OPERATION_ID, mutationId: "context-model", source: { kind: "user" },
+        reconciliationToken: "context-model", text: "Follow up", contextExcerpts: [], attachments: [], taskContexts: [] });
+      const settled = pending.then(() => "accepted", () => "rejected");
+      await vi.waitFor(() => expect(provider.controls.setModel).toHaveBeenCalled());
+      expect(await handle.usage()).toEqual({ counters });
+      expect(events).toContainEqual({ type: "usage_changed", usage: { counters } });
+      if (reject) {
+        fail(new Error("model_set_failed"));
+        expect(await settled).toBe("rejected");
+        expect((await handle.usage()).context).toBeUndefined();
+      } else {
+        resolve();
+        const prompt = await provider.prompt()[Symbol.asyncIterator]().next();
+        provider.messages.push(prompt.value as SDKMessage);
+        expect(await settled).toBe("accepted");
+        await vi.waitFor(async () => expect((await handle.usage()).context).toEqual({ usedTokens: 300, windowTokens: 2_000, percent: 15 }));
+      }
+    } finally { await handle.close(); }
+  });
+  it("clears fallback context and fences an old read across a persistent authority change", async () => {
+    const provider = fixture();
+    const retained = retainedRuntime(provider, []);
+    const create = retained.runtime.createSession.bind(retained.runtime);
+    let authorityChanged!: () => void;
+    let completeOld!: (value: { usedTokens: number; windowTokens: number; percent: number }) => void;
+    const read = vi.fn(async (_signal?: AbortSignal) => ({ usedTokens: 200, windowTokens: 1_000, percent: 20 }));
+    vi.spyOn(retained.runtime, "createSession").mockImplementation(options => {
+      authorityChanged = options.onControlAuthorityChanged!;
+      return { ...create(options), contextUsage: read };
+    });
+    const { handle } = createHandle(provider, vi.fn(), { runtimeClient: retained.runtime });
+    try {
+      const established = await handle.establishProjection({ signal: new AbortController().signal });
+      const events: BackendConversationEvent[] = [];
+      established.subscribeFromNext(({ event }) => events.push(event));
+      await vi.waitFor(async () => expect((await handle.usage()).context?.usedTokens).toBe(200));
+      provider.messages.push({ type: "system", subtype: "model_refusal_fallback", trigger: "refusal", direction: "retry", scope: "session",
+        original_model: "claude-sonnet-5", fallback_model: "claude-opus-5", request_id: "context-fallback", retracted_message_uuids: [],
+        refused_user_message_uuid: OPERATION_ID, content: "Retrying", uuid: crypto.randomUUID(), session_id: SESSION_ID } as SDKMessage);
+      await vi.waitFor(async () => expect((await handle.usage()).context).toBeUndefined());
+      authorityChanged();
+      await vi.waitFor(async () => expect((await handle.usage()).context?.usedTokens).toBe(200));
+      read.mockImplementationOnce(() => new Promise(resolve => { completeOld = resolve; }));
+      provider.messages.push({ type: "stream_event", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
+        event: { type: "message_stop" } });
+      await vi.waitFor(() => expect(completeOld).toBeDefined());
+      read.mockResolvedValue({ usedTokens: 300, windowTokens: 2_000, percent: 15 });
+      authorityChanged();
+      expect((await handle.usage()).context).toBeUndefined();
+      await vi.waitFor(async () => expect((await handle.usage()).context?.usedTokens).toBe(300));
+      completeOld({ usedTokens: 999, windowTokens: 1_000, percent: 99.9 });
+      await new Promise(resolve => setImmediate(resolve));
+      expect((await handle.usage()).context?.usedTokens).toBe(300);
+      expect(events.some(event => event.type === "usage_changed" && event.usage.context?.usedTokens === 999)).toBe(false);
+    } finally { await handle.close(); }
+  });
+  it("refreshes at assistant boundaries, preserves counters, and clears compaction/failure estimates", async () => {
+    const provider = fixture();
+    provider.controls.getContextUsage.mockResolvedValue({ totalTokens: 200, rawMaxTokens: 1_000 } as SDKControlGetContextUsageResponse);
+    const { handle } = createHandle(provider);
+    try {
+      const established = await handle.establishProjection({ signal: new AbortController().signal });
+      const events: BackendConversationEvent[] = [];
+      established.subscribeFromNext(({ event }) => events.push(event));
+      await vi.waitFor(async () => expect((await handle.usage()).context).toEqual({ usedTokens: 200, windowTokens: 1_000, percent: 20 }));
+      expect((await handle.backendCapabilities()).usageSections).toEqual(["context", "counters"]);
+      const counters = (await handle.usage()).counters;
+      const stop = (parent_tool_use_id: string | null = null): SDKMessage => ({ type: "stream_event", uuid: crypto.randomUUID(),
+        session_id: SESSION_ID, parent_tool_use_id, event: { type: "message_stop" } });
+      const reads = provider.controls.getContextUsage.mock.calls.length;
+      provider.messages.push(stop("child-tool"));
+      await new Promise(r => setTimeout(r, 10));
+      expect(provider.controls.getContextUsage).toHaveBeenCalledTimes(reads);
+      provider.controls.getContextUsage.mockResolvedValue({ totalTokens: 400, rawMaxTokens: 1_000 } as SDKControlGetContextUsageResponse);
+      provider.messages.push(stop());
+      await vi.waitFor(async () => expect((await handle.usage()).context?.usedTokens).toBe(400));
+      expect(events).toContainEqual({ type: "usage_changed", usage: { counters, context: { usedTokens: 400, windowTokens: 1_000, percent: 40 } } });
+      provider.messages.push({ type: "system", subtype: "compact_boundary", uuid: crypto.randomUUID(), session_id: SESSION_ID,
+        compact_metadata: { trigger: "auto", pre_tokens: 400 } });
+      await vi.waitFor(async () => expect((await handle.usage()).context).toBeUndefined());
+      expect((await handle.usage()).counters).toEqual(counters);
+      provider.controls.getContextUsage.mockRejectedValueOnce(new Error("telemetry_failed"));
+      provider.messages.push(stop());
+      await vi.waitFor(() => expect(provider.controls.getContextUsage).toHaveBeenCalledTimes(reads + 2));
+      expect((await handle.usage()).context).toBeUndefined();
+      provider.controls.getContextUsage.mockResolvedValue({ totalTokens: 100, rawMaxTokens: 1_000 } as SDKControlGetContextUsageResponse);
+      provider.messages.push(stop());
+      await vi.waitFor(async () => expect((await handle.usage()).context?.usedTokens).toBe(100));
+      expect((await handle.establishProjection({ signal: new AbortController().signal })).snapshot.runState).not.toBe("disconnected");
+    } finally { await handle.close(); }
   });
 });

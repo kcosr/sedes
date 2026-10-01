@@ -21,6 +21,7 @@ import {
   claudeRuntimeInitializeOperation,
   claudeRuntimeProbeOperation,
   claudeRuntimeQueryOpenOperation,
+  claudeRuntimeQueryContextUsageOperation,
   claudeRuntimeQueryCancelInputRequestSchema,
   claudeRuntimeQueryInterruptRequestSchema,
   claudeRuntimeQueryInterruptDispositionRequestSchema,
@@ -117,6 +118,7 @@ describe("claude_runtime@2 protocol", () => {
     interruptDisposition: noHandler,
       cancelQueryInput: noHandler,
       setQueryModel: noHandler,
+      contextUsage: noHandler,
       setQueryEffort: noHandler,
       setQueryPermissionMode: noHandler,
       closeQuery: noHandler,
@@ -128,6 +130,7 @@ describe("claude_runtime@2 protocol", () => {
         operations: [
           "query.cancel_input",
           "query.close",
+          "query.context_usage",
           "query.interrupt",
           "query.interrupt_disposition",
           "query.open",
@@ -145,7 +148,9 @@ describe("claude_runtime@2 protocol", () => {
         ],
       },
     ]);
-    expect(claudeRuntimeWorkerOperations).toHaveLength(16);
+    expect(claudeRuntimeWorkerOperations).toHaveLength(17);
+    expect(claudeRuntimeQueryContextUsageOperation.maximumDeadlineMilliseconds).toBe(5_000);
+    expect(claudeRuntimeQueryContextUsageOperation.responseSchema.safeParse({ usedTokens: 1, windowTokens: 100, percent: 1, categories: [] }).success).toBe(false);
 
     const hostRegistry = new SidecarOperationRegistry();
     registerClaudeRuntimeV2HostOperations(hostRegistry, {
@@ -786,6 +791,7 @@ describe("ClaudeRuntimeWorkerHost", () => {
           payload: expect.objectContaining({ queryId: QUERY_ID }),
         }),
       ]);
+      await expect(host.handlers.contextUsage({ queryId: QUERY_ID }, context())).resolves.toEqual({ usedTokens: 123, windowTokens: 1_000, percent: 12.3 });
       const canUseTool = queryFixture.options().canUseTool!;
       await expect(
         canUseTool(
@@ -891,6 +897,7 @@ describe("ClaudeRuntimeWorkerHost", () => {
           enableCanUseTool: true, environment: {} },
         context(),
       );
+      await expect(host.handlers.contextUsage({ queryId: QUERY_ID }, context())).resolves.toEqual({ usedTokens: 123, windowTokens: 1_000, percent: 12.3 });
       const canUseTool = queryFixture.options().canUseTool!;
       for (const mcpServer of [
         { name: "x".repeat(513), source: "project" },
@@ -990,6 +997,7 @@ describe("ClaudeRuntimeWorkerHost", () => {
         },
         context(),
       );
+      await expect(host.handlers.contextUsage({ queryId: QUERY_ID }, context())).resolves.toEqual({ usedTokens: 123, windowTokens: 1_000, percent: 12.3 });
       const canUseTool = queryFixture.options().canUseTool!;
       const cancellation = new AbortController();
       const denied = canUseTool(
@@ -1334,6 +1342,7 @@ function queryFacade(
         initializationResult: async () => await initializationResult,
         interrupt: async () => ({ still_queued: [] }),
         cancelAsyncMessage,
+        getContextUsage: async () => ({ totalTokens: 123, rawMaxTokens: 1_000 }),
         setModel: async () => undefined,
         setPermissionMode: async () => undefined,
         applyFlagSettings: async () => undefined,

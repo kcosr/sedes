@@ -12,7 +12,11 @@
   v2 backend identity and terminal Stop diagnostics alongside runtime-only
   turn-throughput measurements and optional OpenCode path overrides. (#17, #20)
 
-- Claude worker and persistent runtime capabilities now require major 2 for
+- Claude persistent runtimes now require `claude_persistent_runtime@3` for
+  current context telemetry. Rebuild local workers for `query.context_usage`
+  and upgrade Claude sidecars with this server. (#24)
+
+- Claude workers and persistent runtimes require capability major 2 for
   bounded, recoverable conversation Stop. Rebuild local helpers and upgrade
   Claude sidecars with this server. Migration 119 closes old unconfirmed Stop
   receipts without sending a new cancellation. (#17)
@@ -74,6 +78,11 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Show Claude and OpenCode context occupancy in the composer and Session stats,
+  and OpenCode transcript counters across the retained active branch. These
+  work with experimental usage accounting disabled. Unavailable or invalidated
+  context estimates remain unknown until fresh provider evidence arrives. (#24)
 
 - **View options** for each Tasks view: sort by **Pinned, then newest**,
   **Recently updated**, or **Title**; show **Open** or **Completed** Tasks;

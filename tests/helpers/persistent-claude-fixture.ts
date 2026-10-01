@@ -27,6 +27,7 @@ export class FakePersistentClaudeSession implements ClaudeOwnedRuntimeSession {
   readonly setModel = vi.fn(async () => undefined);
   readonly setEffort = vi.fn(async () => undefined);
   readonly setPermissionMode = vi.fn(async () => undefined);
+  readonly contextUsage = vi.fn<ClaudeOwnedRuntimeSession["contextUsage"]>(async () => { throw new Error("fixture_context_unavailable"); });
   readonly close = vi.fn(async () => { this.closed = true; this.#permissionAbort.abort(); });
   readonly #permissionAbort = new AbortController();
   constructor(readonly options: ClaudeRuntimeSessionOptions) {}

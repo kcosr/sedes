@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionMessageInfo } from "@opencode/client";
+import type { ModelInfo, SessionMessageInfo } from "@opencode/client";
 import type { BackendConversationEvent, SequencedBackendEvent } from "../../src/shared/protocol/backend.js";
 import { backendCapabilityDocumentSchema } from "../../src/shared/protocol/backend.js";
 import { OpenCodeHistoryProjection, openCodeHistoryItemId } from "../../src/server/backends/opencode/opencode-history-projection.js";
@@ -41,6 +41,87 @@ function textOf(events: SequencedBackendEvent[], kind: "assistant_message" | "re
 }
 
 describe("OpenCode conversation authority and finite discovery", () => {
+  it("publishes current context and full-session counters independently of recorded accounting", async () => {
+    const tokens = { input: 100, output: 20, reasoning: 30, cache: { read: 200, write: 50 } };
+    const messages = Array.from({ length: 12 }, (_, index) => [user(`msg_user_${index}`),
+      { ...assistant([{ type: "text", text: "Done" }]), id: `msg_answer_${index}`, tokens, time: { created: 2, completed: 3 } }, idle(`msg_idle_${index}`)]).flat();
+    const current = await attached(messages);
+    const model: ModelInfo = { providerID: "fixture", id: "fixture", modelID: "fixture", name: "Fixture", package: "fixture", enabled: true, status: "active",
+      capabilities: { input: ["text"], output: ["text"], tools: true }, variants: [], time: { released: 0 }, cost: [], limit: { context: 1_000, output: 100 } };
+    current.wire.setResponse("/api/model", 200, { location: { directory: current.wire.directory }, data: [model] });
+    current.wire.setResponse("/api/model/default", 200, { location: { directory: current.wire.directory }, data: model });
+    const expected = { context: { usedTokens: 400, windowTokens: 1_000, percent: 40 },
+      counters: { userMessages: 12, assistantMessages: 12, totalMessages: 24, toolCalls: 0, toolResults: 0, compactions: 0 } };
+    expect(current.context.usage.enabled).toBe(false);
+    const established = await current.handle.establishProjection({ signal: signal() });
+    expect(established.snapshot.orderedBackendTurnIds).toHaveLength(10);
+    expect(await current.handle.usage()).toEqual(expected);
+    expect((await current.handle.backendCapabilities()).usageSections).toEqual(["context", "counters"]);
+    const events: SequencedBackendEvent[] = [];
+    established.subscribeFromNext(value => events.push(value));
+    current.wire.messages.push(user("msg_new"), { ...assistant([{ type: "text", text: "Next" }]),
+      tokens: { ...tokens, input: 200 }, time: { created: 4, completed: 5 } }, idle("msg_new_idle"));
+    current.wire.send(event("session.step.ended", { assistantMessageID: "msg_assistant", finish: "stop", cost: 0, tokens: { ...tokens, input: 200 } }, true));
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ event: { type: "usage_changed", usage: {
+      context: { usedTokens: 500, windowTokens: 1_000, percent: 50 },
+      counters: { ...expected.counters, userMessages: 13, assistantMessages: 13, totalMessages: 26 },
+    } } })));
+    const live = await current.handle.usage();
+    expect((await current.driver.read(current.target)).usage).toEqual(live);
+    // Neither paginating the display nor replaying a step adds message counts.
+    await current.handle.history({ limit: 10, cursor: established.history.previousCursor, signal: signal() });
+    expect(await current.handle.usage()).toEqual(live);
+  });
+  it("keeps transcript counters available when the native model catalog is unavailable", async () => {
+    const current = await attached([user(), assistant(), idle()]);
+    await current.handle.establishProjection({ signal: signal() });
+    expect(await current.handle.usage()).toMatchObject({ counters: { totalMessages: 2, userMessages: 1, assistantMessages: 1 } });
+    expect((await current.handle.usage()).context).toBeUndefined();
+  });
+  it("keeps transcript establishment alive when the meter catalog stalls", async () => {
+    const current = await attached([user(), assistant(), idle()]);
+    const held = current.wire.hold("/api/model");
+    // Exercise the real fetch cancellation with a short wall-clock timeout;
+    // the history's independent 60s budget remains untouched.
+    const timeout = AbortSignal.timeout.bind(AbortSignal);
+    const deadlines = vi.spyOn(AbortSignal, "timeout").mockImplementation(ms => timeout(ms === 5_000 ? 20 : ms));
+    try {
+      const projection = await current.handle.establishProjection({ signal: signal() });
+      expect(projection.snapshot.orderedBackendTurnIds).toHaveLength(1);
+      expect(await current.handle.usage()).toMatchObject({ counters: { totalMessages: 2 } });
+      expect((await current.handle.usage()).context).toBeUndefined();
+      expect(deadlines).toHaveBeenCalledWith(5_000);
+    } finally { held.release(); }
+  });
+  it("replaces the meter on native model selection, clears failed reads, and recovers after invalidation", async () => {
+    const tokens = { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } };
+    const current = await attached([user(), { ...assistant(), tokens, time: { created: 2, completed: 3 } }, idle()]);
+    const model: ModelInfo = { providerID: "fixture", id: "fixture", modelID: "fixture", name: "Fixture", package: "fixture", enabled: true, status: "active",
+      capabilities: { input: ["text"], output: ["text"], tools: true }, variants: [], time: { released: 0 }, cost: [], limit: { context: 1_000, output: 100 } };
+    const next = { ...model, id: "next", modelID: "next", limit: { context: 2_000, output: 100 } };
+    current.wire.setResponse("/api/model", 200, { location: { directory: current.wire.directory }, data: [model, next] });
+    current.wire.setResponse("/api/model/default", 200, { location: { directory: current.wire.directory }, data: model });
+    const established = await current.handle.establishProjection({ signal: signal() });
+    const counters = (await current.handle.usage()).counters;
+    expect((await current.handle.usage()).context?.usedTokens).toBe(120);
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    current.wire.session.model = { providerID: "fixture", id: "next" };
+    current.wire.send(event("session.model.selected", { model: current.wire.session.model }, true));
+    const nextUsage = { context: { windowTokens: 2_000 }, counters };
+    await vi.waitFor(async () => expect(await current.handle.usage()).toEqual(nextUsage));
+    expect(events.filter(value => value.type === "usage_changed")).toEqual([{ type: "usage_changed", usage: nextUsage }]);
+    current.wire.setResponse("/api/model", 503, {});
+    await current.handle.backendCapabilities();
+    expect(await current.handle.usage()).toEqual({ counters });
+    current.wire.setResponse("/api/model", 200, { location: { directory: current.wire.directory }, data: [model, next] });
+    const gap = event("session.model.selected", { model: current.wire.session.model }, true);
+    current.wire.send({ ...gap, durable: { ...gap.durable!, seq: gap.durable!.seq + 1 } });
+    await vi.waitFor(() => expect(events.some(value => value.type === "resnapshot_required")).toBe(true));
+    expect(await current.handle.usage()).toEqual({});
+    await current.handle.establishProjection({ signal: signal() });
+    expect(await current.handle.usage()).toEqual(nextUsage);
+  });
   it("declares throughput unsupported and does not infer request timing from completed history", async () => {
     const current = await attached([user(), { ...assistant([{ type: "text", text: "Done" }]),
       time: { created: 2, completed: 3 } }, idle()]);
