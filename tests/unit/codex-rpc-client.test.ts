@@ -1194,6 +1194,23 @@ describe("Codex RPC client", () => {
     });
   });
 
+  it.each([
+    ["account/gatewayOAuth/changed", { authUrl: null, providerId: "provider-1", status: "succeeded", error: null }],
+    ["thread/attachment/updated", { threadId: "thread-1", attachmentType: "file", identityKey: "identity-1", attachmentId: "attachment-1", operation: "created" }],
+    ["account/updated", { authMode: "chatgpt", planType: "promax" }],
+  ])("recognizes the 0.160 %s notification without disrupting RPC", async (method, params) => {
+    const { client, transport } = createClient();
+    const notifications: unknown[] = [];
+    client.subscribeNotifications((notification) => notifications.push(notification));
+    transport.emit({ method, params });
+    await vi.waitFor(() => expect(notifications).toHaveLength(1));
+    expect(notifications[0]).toMatchObject({ kind: "decoded_notification", method, params });
+    const followUp = client.request(echoMethod, { value: "still-open" }, { timeoutMilliseconds: 1_000 });
+    await waitForWrites(transport, 1);
+    transport.emit({ id: parsedWrite(transport, 0).id, result: { value: "still-open" } });
+    await expect(followUp).resolves.toBe("still-open");
+  });
+
   it("publishes a redacted attributable marker and continues notifications and pending requests", async () => {
     const { client, transport } = createClient();
     const notifications: unknown[] = [];
@@ -1423,7 +1440,7 @@ describe("Codex RPC client", () => {
     await expect(followUp).resolves.toBe("still-open");
   });
 
-  it("fails an unsolicited openai elicitation form without reaching an owner or closing RPC", async () => {
+  it.each(["openaiForm", "openai/form", "openai/userVerification"])("fails unsolicited %s elicitation without reaching an owner or closing RPC", async (mode) => {
     const router = new CodexServerRequestRouter();
     router.activateGeneration(7);
     const handle = vi.fn();
@@ -1444,13 +1461,11 @@ describe("Codex RPC client", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         serverName: "provider",
-        mode: "openaiForm",
+        mode,
         _meta: null,
-        message: "Configure the provider",
-        requestedSchema: {
-          type: "object",
-          properties: { account: { type: "string" } },
-        },
+        ...(mode === "openai/userVerification"
+          ? { title: "Verify account", description: "Verify the account", challenge: "opaque-challenge" }
+          : { message: "Configure the provider", requestedSchema: { type: "object", properties: { account: { type: "string" } } } }),
       },
     });
     await waitForWrites(transport, 1);

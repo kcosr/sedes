@@ -237,13 +237,17 @@ function refineTurnError(value: unknown): void {
 function refineUserInput(value: unknown): void {
   const input = variantKeys(value, "type", {
     text: ["type", "text", "text_elements"],
-    image: ["type", "detail", "url"],
+    image: ["type", "detail", "url", "fileId"],
     localImage: ["type", "detail", "path"],
     audio: ["type", "url"],
     localAudio: ["type", "path"],
     skill: ["type", "name", "path"],
     mention: ["type", "name", "path"],
   });
+  if (input.type === "image" && "fileId" in input) {
+    exactKeys(input, ["type", "detail", "fileId"]);
+    assertNativeId(input.fileId as string);
+  }
   if (input.type === "text") {
     for (const element of input.text_elements as readonly unknown[]) {
       const textElement = exactKeys(element, ["byteRange", "placeholder"]);
@@ -755,6 +759,9 @@ export function refineCodexC2ServerRequest<Method extends CodexServerRequestMeth
   const record = method === "mcpServer/elicitation/request"
     ? (() => {
         const elicitation = asRecord(attested);
+        if (elicitation.mode === "openaiForm" || elicitation.mode === "openai/form" || elicitation.mode === "openai/userVerification") {
+          throw new Error("codex_mcp_openai_elicitation_unadvertised");
+        }
         if (elicitation.mode === "url") {
           return exactKeys(elicitation, [
             "threadId", "turnId", "serverName", "mode", "_meta", "message", "url", "elicitationId",
@@ -837,9 +844,6 @@ export function refineCodexC2ServerRequest<Method extends CodexServerRequestMeth
       for (const option of (item.options ?? []) as readonly unknown[]) exactKeys(option, ["label", "description"]);
     }
   } else if (method === "mcpServer/elicitation/request") {
-    if (record.mode === "openaiForm") {
-      throw new Error("codex_mcp_openai_elicitation_unadvertised");
-    }
     if (record.mode === "form") {
       const requested = exactKeys(record.requestedSchema, ["$schema", "type", "properties", "required"]);
       for (const property of Object.values(asRecord(requested.properties))) refineElicitationProperty(property);
@@ -1017,7 +1021,13 @@ function refineNotification<Method extends keyof typeof notificationKeys>(
   } else if (method === "thread/status/changed") {
     refineCodexThreadStatus(notification.status as never);
   } else if (method === "thread/settings/updated") {
-    const settings = exactKeys(notification.threadSettings, ["cwd", "approvalPolicy", "approvalsReviewer", "sandboxPolicy", "activePermissionProfile", "model", "modelProvider", "serviceTier", "effort", "summary", "collaborationMode", "multiAgentMode", "personality"]);
+    const settings = exactKeys(notification.threadSettings, ["cwd", "approvalPolicy", "approvalsReviewer", "sandboxPolicy", "activePermissionProfile", "model", "modelProvider", "serviceTier", "effort", "summary", "collaborationMode", "multiAgentMode", "personality", "disabledPluginIds"]);
+    // This is saved provider metadata, not evidence that plugin tools are disabled.
+    if (settings.disabledPluginIds !== undefined) {
+      const ids = settings.disabledPluginIds as readonly string[];
+      if (ids.length > CODEX_C2_MAX_CATALOG_ITEMS) throw new Error("disabled_plugin_ids_bound");
+      ids.forEach(assertNativeId);
+    }
     refineApprovalPolicy(settings.approvalPolicy);
     refineSandboxPolicy(settings.sandboxPolicy);
     if (settings.activePermissionProfile != null) {

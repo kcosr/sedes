@@ -143,7 +143,7 @@ provide transport encryption for explicitly admitted LAN HTTP. See
 
 ## Codex byte authority and topology
 
-Codex 0.153.0 defines a closed `imageGeneration` item containing status,
+Codex defines a closed `imageGeneration` item containing status,
 revised prompt, a transparent-background flag, `result`, and `savedPath`.
 Sedes accepts only a completed item with canonical padded base64 whose
 decoded bytes are a PNG no larger than 16 MiB. It uses the in-band `result` as
@@ -164,8 +164,8 @@ is not browser authority.
 
 ## Codex viewed-image capture
 
-A completed Codex 0.153.0 `imageView` item carries only an ID and an absolute
-path. Sedes projects it as a `viewed_image` item and, once capture succeeds,
+A completed Codex `imageView` item identifies an absolute path and can include
+lifecycle timestamps. Sedes projects it as a `viewed_image` item and, once capture succeeds,
 adds a separate final image item immediately after it. Both carry only the
 path's final component as `fileName`, bounded to 255 bytes with control and
 bidirectional formatting characters removed; the directory stays

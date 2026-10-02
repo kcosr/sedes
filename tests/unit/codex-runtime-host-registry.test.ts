@@ -37,7 +37,7 @@ vi.mock("../../src/server/backends/codex/codex-daemon-supervisor.js", async () =
 const scope = { tenantId: "tenant", principalId: "principal" };
 const serviceConfiguration = { environmentRevision: 1, operationsRevision: 1 };
 const configuration = {
-  instance: { id: "backend", tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Codex", enabled: true, configurationRevision: 1, protocolRelease: "0.153.0" as const },
+  instance: { id: "backend", tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Codex", enabled: true, configurationRevision: 1, protocolRelease: "0.160.0" as const },
   connections: [{ id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "template", kind: "codex_app_server" as const, backendInstanceId: "backend", executionEnvironmentId: "remote", label: "Codex", enabled: true, configurationRevision: 1 }],
   connection: { ownership: "external" as const, channel: { type: "unix_websocket" as const, socketPath: "/provider/codex.sock" } },
 };

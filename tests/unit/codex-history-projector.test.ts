@@ -30,6 +30,7 @@ import {
   codexNativeItemCoordinate,
   projectCodexUsage,
   selectCodexNativeHistorySlice,
+  type CodexHistoryItemTimestamps,
 } from "../../src/server/backends/codex/codex-history-projector.js";
 import { displayFileName } from "../../src/server/output-artifacts/display-file-name.js";
 import {
@@ -62,8 +63,13 @@ import {
   type OutputArtifactPublisher,
 } from "../../src/server/output-artifacts/contracts.js";
 import { backendConversationSnapshotSchema } from "../../src/shared/protocol/backend.js";
+import { ConversationProjector } from "../../src/server/conversations/conversation-projector.js";
+import { ProjectionEventCoalescer, type ProjectionCoalescerOutput } from "../../src/server/conversations/projection-event-coalescer.js";
 
 const baseThread = {
+  environments: null,
+  originator: null,
+  daybreakEnabled: null,
   id: "native-thread-secret",
   extra: {},
   sessionId: "native-session-secret",
@@ -84,7 +90,7 @@ const baseThread = {
   status: { type: "idle" },
   path: "/native/rollout/secret.jsonl",
   cwd: "/workspace",
-  cliVersion: "0.153.0",
+  cliVersion: "0.160.0",
   source: "appServer",
   canAcceptDirectInput: true,
   threadSource: null,
@@ -173,13 +179,14 @@ function projectCodexHistory(
   scope: CodexSubmissionCorrelationScope = correlationScope(),
   outputArtifacts: OutputArtifactPublisher = testOutputArtifactPublisher(),
   verifiedPublicationKeys = new Set<string>(),
+  itemTimestamps: CodexHistoryItemTimestamps = new Map(),
 ) {
   return projectCodexHistoryWithScope(value as CodexThread, scope, new Map(), {
     scope: { tenantId: scope.tenantId, principalId: scope.principalId },
     applicationThreadId: "819dd2a6-012a-45b2-ac85-469743b7f503",
     outputArtifacts,
     verifiedPublicationKeys,
-  });
+  }, itemTimestamps);
 }
 
 function testOutputArtifactPublisher(): OutputArtifactPublisher {
@@ -548,6 +555,7 @@ const stableItems = [
   },
   {
     item: {
+      mcpAppUi: null,
       type: "mcpToolCall",
       id: "mcp-1",
       server: "fixture",
@@ -757,7 +765,67 @@ function decodeThreadItem(item: unknown): CodexThreadItem {
   }).item;
 }
 
-describe("Codex 0.153.0 C1 protocol codecs", () => {
+describe("Codex 0.160.0 C1 protocol codecs", () => {
+  it.each([
+    { type: "image", fileId: "file-private-image", detail: "high" },
+    { type: "image", url: "https://private.invalid/image.png", detail: "high" },
+  ])("accepts exclusive image references without exposing them: %j", (image) => {
+    const item = decodeThreadItem({ type: "userMessage", id: "user-image", clientId: null,
+      content: [{ type: "text", text: "Inspect", text_elements: [] }, image] });
+    const snapshot = projectCodexHistory(thread([turn("images", [item])])).snapshot;
+    expect(JSON.stringify(snapshot)).not.toContain("private");
+    expect(Object.values(snapshot.itemsById)[0]).toMatchObject({
+      content: [{ kind: "text", text: { text: "Inspect" } }, { kind: "image", omitted: true }],
+    });
+  });
+
+  it.each(["", "x".repeat(513), null, 123])("rejects invalid image file IDs: %j", (fileId) => {
+    expect(() => decodeThreadItem({ type: "userMessage", id: "user-image", clientId: null,
+      content: [{ type: "image", fileId, detail: "high" }] })).toThrow();
+    expect(() => decodeThreadItem({ type: "functionCallOutput", id: "output-image", name: "tool", namespace: null,
+      output: [{ type: "input_image", file_id: fileId, detail: "high" }] })).toThrow();
+  });
+
+  it("keeps file-ID function outputs private and rejects ambiguous references", () => {
+    const item = decodeThreadItem({ type: "functionCallOutput", id: "output-image", name: "tool", namespace: null,
+      output: [{ type: "input_image", file_id: "file-private-image", detail: "high" }] });
+    expect(projectCodexHistory(thread([turn("images", [item])])).snapshot.itemsById).toEqual({});
+    expect(() => decodeThreadItem({ type: "userMessage", id: "user-image", clientId: null,
+      content: [{ type: "image", fileId: "file-image", url: "https://private.invalid/image.png", detail: "high" }] })).toThrow();
+    expect(() => decodeThreadItem({ ...item,
+      output: [{ type: "input_image", file_id: "file-image", image_url: "https://private.invalid/image.png", detail: "high" }] })).toThrow();
+  });
+
+  it("rejects contradictory item lifecycle timestamps", () => {
+    expect(() => codexThreadItemsListMethod.decodeResult({ data: [{
+      turnId: "turn", item: { type: "plan", id: "plan", text: "Plan" }, startedAtMs: 2, completedAtMs: 1,
+    }], nextCursor: null, backwardsCursor: null })).toThrow();
+  });
+
+  it.each([{}, { startedAtMs: 1 }, { completedAtMs: 2 }])(
+    "accepts schema-valid omitted item lifecycle metadata: %j", timestamps => {
+      expect(codexThreadItemsListMethod.decodeResult({ data: [{
+        turnId: "turn", item: { type: "plan", id: "plan", text: "Plan" }, ...timestamps,
+      }], nextCursor: null, backwardsCursor: null }).data[0]).toMatchObject({
+        startedAtMs: "startedAtMs" in timestamps ? timestamps.startedAtMs : null,
+        completedAtMs: "completedAtMs" in timestamps ? timestamps.completedAtMs : null,
+      });
+    },
+  );
+
+  it("accepts schema-valid threads and MCP history without newly optional metadata", () => {
+    const native = stableItems.find(({ item }) => item.type === "mcpToolCall")!.item;
+    if (native.type !== "mcpToolCall") throw new Error("expected MCP fixture");
+    const { mcpAppUi: _ui, ...item } = native;
+    const { environments: _environments, originator: _originator, daybreakEnabled: _daybreak, ...metadata } = baseThread;
+    const decoded = codexThreadReadMethod.decodeResult({ thread: { ...metadata, turns: [turn("turn", [item])] } });
+    expect(decoded.thread.turns[0]?.items[0]).toEqual(item);
+    expect(decoded.thread).toMatchObject({ environments: null, originator: null, daybreakEnabled: null });
+    expect(codexThreadListMethod.decodeResult({ data: [decoded.thread], nextCursor: null, backwardsCursor: null }).data)
+      .toEqual([decoded.thread]);
+    expect(Object.values(projectCodexHistory(decoded.thread).snapshot.itemsById)[0]).toMatchObject({ semanticKind: "mcp" });
+  });
+
   it.each([null, { icon: null, color: null }, { icon: "folder", color: "blue" }])(
     "accepts pinned section appearance metadata on cold reads and listings: %j",
     (appearance) => {
@@ -795,7 +863,7 @@ describe("Codex 0.153.0 C1 protocol codecs", () => {
     const generated = readFileSync(
       path.join(
         repositoryRoot,
-        "protocol/codex-app-server/0.153.0/official/stable/typescript/v2/ThreadItem.ts",
+        "protocol/codex-app-server/0.160.0/official/stable/typescript/v2/ThreadItem.ts",
       ),
       "utf8",
     );
@@ -1041,6 +1109,8 @@ describe("Codex 0.153.0 C1 protocol codecs", () => {
       turns: [expect.objectContaining({ id: "turn-1" })],
     });
     const resumeResponse = {
+      disabledPluginIds: [],
+      collaborationMode: null,
       thread: thread([turn("turn-1", [])]),
       model: "gpt-fixture",
       modelProvider: "openai",
@@ -1238,6 +1308,8 @@ describe("Codex 0.153.0 C1 protocol codecs", () => {
       codexThreadItemsListMethod.decodeResult({
         data: [
           {
+            startedAtMs: null,
+            completedAtMs: null,
             turnId: "turn-1",
             item: { type: "plan", id: "item-1", text: "Plan" },
           },
@@ -1275,10 +1347,14 @@ describe("Codex 0.153.0 C1 protocol codecs", () => {
       codexThreadItemsListMethod.decodeResult({
         data: [
           {
+            startedAtMs: null,
+            completedAtMs: null,
             turnId: "turn-1",
             item: { type: "plan", id: "item-1", text: "Plan" },
           },
           {
+            startedAtMs: null,
+            completedAtMs: null,
             turnId: "turn-1",
             item: { type: "plan", id: "item-1", text: "Duplicate" },
           },
@@ -1293,10 +1369,12 @@ describe("Codex 0.153.0 C1 protocol codecs", () => {
     {},
     { startedAtMs: null, completedAtMs: null },
     { startedAtMs: 1_790_000_000_000, completedAtMs: 1_790_000_001_000 },
-    { startedAtMs: 0 },
-    { completedAtMs: 1_790_000_001_000 },
-  ])("validates and projects away additive item timestamps: %j", (timestamps) => {
+    { startedAtMs: 0, completedAtMs: null },
+    { startedAtMs: null, completedAtMs: 1_790_000_001_000 },
+  ])("retains reviewed native item timestamps: %j", (timestamps) => {
     const entry = {
+      startedAtMs: null,
+      completedAtMs: null,
       turnId: "turn-1",
       item: { type: "plan", id: "item-1", text: "Plan" },
     };
@@ -1305,19 +1383,18 @@ describe("Codex 0.153.0 C1 protocol codecs", () => {
       nextCursor: null,
       backwardsCursor: "head",
     };
-    expect(codexThreadItemsListMethod.decodeResult(wire)).toEqual({
-      ...wire,
-      data: [entry],
-    });
+    expect(codexThreadItemsListMethod.decodeResult(wire)).toEqual(wire);
     expect(wire.data[0]).toEqual({ ...entry, ...timestamps });
   });
 
   it.each(["startedAtMs", "completedAtMs"])(
     "rejects malformed %s without weakening entry closure",
     (key) => {
-      for (const value of ["123", true, {}, [], 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      for (const value of ["123", true, {}, [], -1, 1.5, 253_402_300_800_000, Number.MAX_SAFE_INTEGER + 1]) {
         expect(() => codexThreadItemsListMethod.decodeResult({
           data: [{
+            startedAtMs: null,
+            completedAtMs: null,
             turnId: "turn-1",
             item: { type: "plan", id: "item-1", text: "Plan" },
             [key]: value,
@@ -1328,6 +1405,8 @@ describe("Codex 0.153.0 C1 protocol codecs", () => {
       }
       expect(() => codexThreadItemsListMethod.decodeResult({
         data: [{
+          startedAtMs: null,
+          completedAtMs: null,
           turnId: "turn-1",
           item: { type: "plan", id: "item-1", text: "Plan" },
           [key]: null,
@@ -1343,29 +1422,31 @@ describe("Codex 0.153.0 C1 protocol codecs", () => {
     null,
     { resourceUri: "ui://fixture/view", preferredModelDisplayMode: "inline" },
     { resourceUri: "ui://fixture/view", preferredModelDisplayMode: "fullscreen" },
-  ])("projects reviewed MCP display metadata out of history and live events: %j", (mcpAppUi) => {
+  ])("retains reviewed MCP display metadata privately: %j", (mcpAppUi) => {
     const original = stableItems.find(({ item }) => item.type === "mcpToolCall")!.item;
     const item = { ...original, mcpAppUi };
     expect(codexThreadItemsListMethod.decodeResult({
-      data: [{ turnId: "turn-1", item }],
+      data: [{ startedAtMs: null, completedAtMs: null, turnId: "turn-1", item }],
       nextCursor: null,
       backwardsCursor: null,
-    }).data[0]?.item).toEqual(original);
+    }).data[0]?.item).toEqual(item);
     expect(codexThreadReadMethod.decodeResult({
       thread: thread([turn("turn-1", [item])]),
-    }).thread.turns[0]?.items[0]).toEqual(original);
+    }).thread.turns[0]?.items[0]).toEqual(item);
     for (const method of ["item/started", "item/completed"] as const) {
       expect(decodeCodexC2Notification(method, {
         item, threadId: "thread-1", turnId: "turn-1",
         [method === "item/started" ? "startedAtMs" : "completedAtMs"]: 0,
-      }).item).toEqual(original);
+      }).item).toEqual(item);
     }
     for (const method of ["turn/started", "turn/completed"] as const) {
       expect(decodeCodexC2Notification(method, {
         turn: turn("turn-1", [item]), threadId: "thread-1",
-      }).turn.items[0]).toEqual(original);
+      }).turn.items[0]).toEqual(item);
     }
     expect(item.mcpAppUi).toEqual(mcpAppUi);
+    expect(JSON.stringify(projectCodexHistory(thread([turn("turn-1", [item])])).snapshot))
+      .not.toContain("ui://fixture/view");
   });
 
   it.each([
@@ -1383,7 +1464,7 @@ describe("Codex 0.153.0 C1 protocol codecs", () => {
       mcpAppUi,
     };
     expect(() => codexThreadItemsListMethod.decodeResult({
-      data: [{ turnId: "turn-1", item }],
+      data: [{ startedAtMs: null, completedAtMs: null, turnId: "turn-1", item }],
       nextCursor: null,
       backwardsCursor: null,
     })).toThrow();
@@ -1393,7 +1474,7 @@ describe("Codex 0.153.0 C1 protocol codecs", () => {
     })).toThrow();
   });
 
-  it("decodes the authoritative Codex 0.153 completed subagent activity kind", () => {
+  it("decodes the authoritative Codex 0.160 completed subagent activity kind", () => {
     const completedActivity = {
       type: "subAgentActivity",
       id: "subagent-completed",
@@ -1403,7 +1484,7 @@ describe("Codex 0.153.0 C1 protocol codecs", () => {
     } as const;
     expect(
       codexThreadItemsListMethod.decodeResult({
-        data: [{ turnId: "turn-1", item: completedActivity }],
+        data: [{ startedAtMs: null, completedAtMs: null, turnId: "turn-1", item: completedActivity }],
         nextCursor: null,
         backwardsCursor: "head",
       } as never),
@@ -1417,6 +1498,8 @@ describe("Codex 0.153.0 C1 protocol codecs", () => {
       codexThreadItemsListMethod.decodeResult({
         data: [
           {
+            startedAtMs: null,
+            completedAtMs: null,
             turnId: "turn-1",
             item: { ...completedActivity, unexpected: true },
           },
@@ -1427,7 +1510,7 @@ describe("Codex 0.153.0 C1 protocol codecs", () => {
     ).toThrow();
   });
 
-  it("admits closed and bounded Codex 0.153 misalignment details without projecting them", () => {
+  it("admits closed and bounded Codex 0.160 misalignment details without projecting them", () => {
     const failedTurn = turn("failed-turn", [], {
       itemsView: "notLoaded",
       status: "failed",
@@ -1439,6 +1522,8 @@ describe("Codex 0.153.0 C1 protocol codecs", () => {
       },
     });
     const resumeResponse = {
+      disabledPluginIds: [],
+      collaborationMode: null,
       thread: thread([]),
       model: "gpt-fixture",
       modelProvider: "openai",
@@ -1611,7 +1696,7 @@ describe("Codex 0.153.0 C1 protocol codecs", () => {
     expect(decodeThreadItem(image)).toEqual(image);
     expect(
       codexThreadItemsListMethod.decodeResult({
-        data: [{ turnId: "large-image-turn", item: image }],
+        data: [{ startedAtMs: null, completedAtMs: null, turnId: "large-image-turn", item: image }],
         nextCursor: null,
         backwardsCursor: "head",
       }).data[0]?.item,
@@ -1659,7 +1744,89 @@ describe("Codex 0.153.0 C1 protocol codecs", () => {
   });
 });
 
-describe("Codex 0.153.0 C1 history projector", () => {
+describe("Codex 0.160.0 C1 history projector", () => {
+  it.each([
+    "userMessage", "hookPrompt", "collabAgentToolCall", "subAgentActivity",
+    "webSearch", "imageView", "sleep", "enteredReviewMode", "exitedReviewMode",
+  ])("keeps %s nonterminal until item completion supplies its final timing", type => {
+    const item = stableItems.find(({ item }) => item.type === type)!.item;
+    const native = codexThreadReadMethod.decodeResult({ thread: thread([turn("timed-live", [item], {
+      status: "inProgress", completedAt: null, durationMs: null,
+    })], { status: { type: "active", activeFlags: [] } }) }).thread;
+    const project = (streaming: boolean) => projectCodexHistoryWithScope(native, correlationScope(),
+      streaming ? new Map([["timed-live", new Set([item.id])]]) : new Map(), {
+        scope: { tenantId: "tenant-one", principalId: "principal-one" },
+        applicationThreadId: "819dd2a6-012a-45b2-ac85-469743b7f503",
+        outputArtifacts: testOutputArtifactPublisher(), verifiedPublicationKeys: new Set(),
+      }, new Map([[codexNativeItemCoordinate("timed-live", item.id), {
+        startedAtMs: 1_700_000_002_000, completedAtMs: streaming ? null : 1_700_000_002_500,
+      }]])).snapshot;
+    const started = project(true);
+    const completed = project(false);
+    expect(Object.values(started.itemsById)).not.toHaveLength(0);
+    expect(Object.values(started.itemsById).every(item => item.status === "streaming")).toBe(true);
+    const application = new ConversationProjector({ backendInstanceId: "codex-one", bindingIdentity: "timed-live" });
+    application.replace(started, 0);
+    const outputs: ProjectionCoalescerOutput[] = [];
+    const coalescer = new ProjectionEventCoalescer({ intervalMilliseconds: 10, maximumPendingItems: 100,
+      maximumPendingBytes: 1_000_000, emit: output => outputs.push(output) });
+    coalescer.reset(application.timeline());
+    for (const [index, item] of Object.values(completed.itemsById).entries()) {
+      const result = application.apply({ handleSequence: index + 1, event: { type: "item_completed", item } });
+      expect(result.kind).toBe("events");
+      if (result.kind === "events") result.events.forEach(event => {
+        if (event.type === "item_upsert") coalescer.accept(event);
+      });
+    }
+    expect(outputs.some(output => output.kind === "resnapshot_required")).toBe(false);
+    expect(Object.values(application.timeline().itemsById)[0]).toMatchObject({
+      status: "completed", completedAt: "2023-11-14T22:13:22.500Z",
+    });
+    coalescer.dispose();
+  });
+
+  it.each([
+    [{ startedAtMs: null, completedAtMs: null }, {}],
+    [{ startedAtMs: 0, completedAtMs: null }, { startedAt: "1970-01-01T00:00:00.000Z" }],
+    [{ startedAtMs: null, completedAtMs: 1_700_000_002_500 }, { completedAt: "2023-11-14T22:13:22.500Z" }],
+    [{ startedAtMs: 1_700_000_002_000, completedAtMs: 1_700_000_002_500 },
+      { startedAt: "2023-11-14T22:13:22.000Z", completedAt: "2023-11-14T22:13:22.500Z" }],
+  ])("projects provider item timing independently of turn timing and duration: %j", (timestamps, expected) => {
+    const item = stableItems.find(({ item }) => item.type === "commandExecution")!.item;
+    const native = thread([turn("timed", [item])]);
+    const untimed = projectCodexHistory(native).snapshot;
+    const projection = projectCodexHistory(native, correlationScope(), testOutputArtifactPublisher(), new Set(),
+      new Map([[codexNativeItemCoordinate("timed", item.id), timestamps],
+        [codexNativeItemCoordinate("outside-window", item.id), timestamps]]));
+    const projected = Object.values(projection.snapshot.itemsById)[0]!;
+    expect(projected).toEqual({ ...Object.values(untimed.itemsById)[0], ...expected });
+    expect(projected).toMatchObject({ durationMs: 10 });
+    expect(projection.snapshot.turnsById).toEqual(untimed.turnsById);
+    expect(projection.itemTimestamps.size).toBe(1);
+  });
+
+  it("preserves a bounded, redacted interrupted diagnostic without changing terminal status", () => {
+    const project = (message: string | null) => projectCodexHistory(thread([turn("interrupted", [], {
+      status: "interrupted", error: message === null ? null : { message, codexErrorInfo: null, additionalDetails: "private detail" },
+    })])).snapshot;
+    const snapshot = project(`Model failed: Bearer credential-secret sk-secret ${"detail ".repeat(300)}`);
+    const interrupted = Object.values(snapshot.turnsById)[0]!;
+    expect(interrupted).toMatchObject({ status: "interrupted", endedBy: "interrupted" });
+    expect(interrupted).not.toHaveProperty("failure");
+    expect(Object.values(snapshot.itemsById)).toHaveLength(1);
+    expect(Object.values(snapshot.itemsById)[0]).toMatchObject({ semanticKind: "notice", tone: "warning" });
+    const serialized = JSON.stringify(snapshot);
+    expect(serialized).toContain("[redacted]");
+    expect(serialized).not.toContain("credential-secret");
+    expect(serialized).not.toContain("sk-secret");
+    expect(serialized).not.toContain("private detail");
+    const notice = Object.values(snapshot.itemsById)[0]!;
+    if (notice.semanticKind !== "notice") throw new Error("expected notice");
+    expect(Buffer.byteLength(notice.text.text)).toBeLessThanOrEqual(1024);
+    expect(project(null).itemsById).toEqual({});
+    expect(project("\u001b[31m\u001b[0m").itemsById).toEqual({});
+  });
+
   it.each([
     ["commentary", "provisional"],
     ["final_answer", "final"],

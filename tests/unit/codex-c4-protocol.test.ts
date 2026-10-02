@@ -89,7 +89,15 @@ function projectedForkResponse() {
     multiAgentMode: _multiAgentMode,
     ...projected
   } = forkResponse();
-  return projected;
+  return {
+    ...projected,
+    thread: {
+      ...projected.thread,
+      environments: null,
+      originator: null,
+      daybreakEnabled: null,
+    },
+  };
 }
 
 describe("Codex C4 pinned fork protocol", () => {

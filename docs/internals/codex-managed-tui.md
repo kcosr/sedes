@@ -31,10 +31,10 @@ and execution environment can prove all launch requirements:
   persistent sidecar, whose runtime channel must have negotiated the
   `codex_managed_tui@1` `tui.control` and `tui.execute` operations; the sidecar
   advertises that capability only when its optional native PTY binding loaded;
-- the command reports a stable release at or above the supported `0.153.0`
+- the command reports a stable release at or above the supported `0.160.0`
   floor; and
 - the desired seven-axis execution tuple is complete, currently allowed, and
-  exactly representable by the CLI.
+  exactly representable by the provider policy contract.
 
 The backend model policy must be `catalog`. Allowlist and denylist policies
 disable managed TUI because the interactive client can select and invoke a
@@ -106,20 +106,36 @@ The backend launches `codex resume` for the exact native thread in the
 canonical workspace and points it at the externally operated app-server. For a
 sidecar-hosted runtime, main contributes only launch intent—revalidated
 authority, settings, and any configured executable path—and the sidecar runs
-the ordinary local launcher inside the remote namespace. Model,
-reasoning, service tier, sandbox, network, approval policy, and reviewer are
-passed as process-local overrides under strict configuration. Sedes does not
-write global `config.toml`.
+the ordinary local launcher inside the remote namespace. Before opening the
+PTY, Sedes checks the live model catalog, applies model, reasoning, service
+tier, sandbox, network, approval policy, and reviewer through
+`thread/settings/update`, and confirms the effective tuple through a
+generation-fenced `thread/resume` readback without overrides. A queued change
+must produce a matching settings observation before another readback; an
+unchanged tuple needs no notification. A failed, stale, or mismatched
+confirmation prevents the PTY from opening. This preserves an active turn.
+
+Codex 0.160 remote resume restores the daemon's saved permissions and rejects
+CLI permission overrides. Sedes therefore passes only model, reasoning,
+service tier, workspace, and TUI presentation options to the client under
+strict configuration. Sedes does not write global `config.toml`.
 
 The same process-local profile disables automatic recaps, binds composer
 submission to Enter, starts outside Vim mode, keeps alternate-screen support
 enabled for Codex's full-screen overlays, and disables raw-output mode. Codex's
-main surface remains an inline viewport by design. The profile also sets
+main surface remains an inline viewport through the explicit
+`tui.fullscreen_transcript=false` override, including on Codex 0.160.0. The profile also sets
 `tui.disable_paste_burst=false`, which keeps Codex's burst detector enabled for
 unframed rapid terminal input; Sedes Stage and Send use native bracketed-paste
 boundaries and send the submission Enter outside those boundaries. These
 overrides take precedence over account-owned Codex configuration because
 terminal synchronization and the durable composer contract depend on them.
+
+The profile also acknowledges Codex 0.160's optional catalog upgrade prompts
+for GPT-5.5 and GPT-5.6 Sol, Terra, and Luna through process-local
+`notice.model_migrations` entries. This preserves the thread's selected model
+and prevents a startup promotion from consuming Stage/Send input. It does not
+write the account's model selection or notice acknowledgments.
 
 For authenticated TCP, the environment provider resolves a short-lived secret
 capability. Its current value is copied into a dedicated child environment

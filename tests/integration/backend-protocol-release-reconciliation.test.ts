@@ -27,7 +27,7 @@ const releaseValidationCases = [
     label: "Codex",
     backendKind: "codex_app_server",
     connectionKind: "codex_app_server",
-    supportedRelease: "0.153.0",
+    supportedRelease: "0.160.0",
     unsupportedRelease: "0.152.0",
   },
   {
@@ -247,7 +247,7 @@ describe("backend protocol release reconciliation", () => {
       const value = savedAgentDatabase();
       try {
         const repository = new BackendConfigurationRepository(value.database);
-        repository.reconcile(value.scope, configuration("0.153.0"), {
+        repository.reconcile(value.scope, configuration("0.160.0"), {
           localWorkspaceRoots: [],
           now: 200,
         });
@@ -292,7 +292,7 @@ describe("backend protocol release reconciliation", () => {
           )
           .run(previousRelease, value.scope.tenantId);
 
-        repository.reconcile(value.scope, configuration("0.153.0"), {
+        repository.reconcile(value.scope, configuration("0.160.0"), {
           localWorkspaceRoots: [],
           now: 300,
         });
@@ -316,7 +316,7 @@ describe("backend protocol release reconciliation", () => {
         ).toEqual(profile);
         expect(bindings.getBinding(value.scope, thread.id)).toEqual(binding);
 
-        repository.reconcile(value.scope, configuration("0.153.0"), {
+        repository.reconcile(value.scope, configuration("0.160.0"), {
           localWorkspaceRoots: [],
           now: 400,
         });
@@ -341,11 +341,11 @@ describe("backend protocol release reconciliation", () => {
     },
   );
 
-  it("reconciles a persisted Codex 0.149.0 release to 0.153.0 without changing backend relationships", () => {
+  it("reconciles a persisted Codex 0.153.0 release to 0.160.0 without changing backend relationships", () => {
     const value = savedAgentDatabase();
     try {
       const repository = new BackendConfigurationRepository(value.database);
-      repository.reconcile(value.scope, configuration("0.153.0"), {
+      repository.reconcile(value.scope, configuration("0.160.0"), {
         localWorkspaceRoots: [],
         now: 200,
       });
@@ -388,13 +388,13 @@ describe("backend protocol release reconciliation", () => {
       value.database
         .prepare(
           `UPDATE agent_backend_instances
-           SET protocol_release = '0.149.0', configuration_revision = 7,
+           SET protocol_release = '0.153.0', configuration_revision = 7,
              updated_at = 240
            WHERE tenant_id = ? AND id = 'codex-primary'`,
         )
         .run(value.scope.tenantId);
 
-      repository.reconcile(value.scope, configuration("0.153.0"), {
+      repository.reconcile(value.scope, configuration("0.160.0"), {
         localWorkspaceRoots: [],
         now: 300,
       });
@@ -411,7 +411,7 @@ describe("backend protocol release reconciliation", () => {
       ).toEqual({
         id: "codex-primary",
         kind: "codex_app_server",
-        protocolRelease: "0.153.0",
+        protocolRelease: "0.160.0",
         configurationRevision: 8,
         updatedAt: 300,
       });
@@ -420,7 +420,7 @@ describe("backend protocol release reconciliation", () => {
       ).toEqual(profile);
       expect(bindings.getBinding(value.scope, thread.id)).toEqual(binding);
 
-      repository.reconcile(value.scope, configuration("0.153.0"), {
+      repository.reconcile(value.scope, configuration("0.160.0"), {
         localWorkspaceRoots: [],
         now: 400,
       });
@@ -435,7 +435,7 @@ describe("backend protocol release reconciliation", () => {
           )
           .get(value.scope.tenantId),
       ).toEqual({
-        protocolRelease: "0.153.0",
+        protocolRelease: "0.160.0",
         configurationRevision: 8,
         updatedAt: 300,
       });

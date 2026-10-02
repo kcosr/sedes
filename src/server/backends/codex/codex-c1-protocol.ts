@@ -87,6 +87,31 @@ export type CodexThreadTurnsListResponse = Omit<OfficialThreadTurnsListResponse,
 };
 export type CodexThreadItemsListParams = OfficialThreadItemsListParams;
 export type CodexThreadItemEntry = OfficialThreadItemsListResponse["data"][number];
+export type CodexItemLifecycleTimestamps = Pick<
+  CodexThreadItemEntry,
+  "startedAtMs" | "completedAtMs"
+>;
+
+/** Provider times describe lifecycle only; neither arrival time nor usage is inferred. */
+export function refineCodexItemLifecycleTimestamps(
+  value: Partial<CodexItemLifecycleTimestamps>,
+): CodexItemLifecycleTimestamps {
+  // The official JSON schema permits omission even though generated TS spells
+  // these fields as required nullable properties. Absence records no time.
+  for (const timestamp of [value.startedAtMs, value.completedAtMs]) {
+    if (
+      timestamp != null &&
+      (!Number.isSafeInteger(timestamp) || timestamp < 0 || timestamp > 253_402_300_799_999)
+    ) {
+      throw new Error("thread_item_timestamp_invalid");
+    }
+  }
+  if (value.startedAtMs != null && value.completedAtMs != null &&
+      value.completedAtMs < value.startedAtMs) {
+    throw new Error("thread_item_timestamp_order_invalid");
+  }
+  return { startedAtMs: value.startedAtMs ?? null, completedAtMs: value.completedAtMs ?? null };
+}
 export type CodexThreadItemsListResponse = Omit<OfficialThreadItemsListResponse, "data"> & {
   readonly data: readonly CodexThreadItemEntry[];
 };
@@ -197,8 +222,11 @@ function assertUserInputClosed(input: Extract<OfficialThreadItem, { type: "userM
       });
       break;
     case "image":
+      assertExactKeys(input, ["type", "detail", "url" in input ? "url" : "fileId"], "user_input_image");
+      if ("fileId" in input) assertNativeId(input.fileId, "user_input_image_file_id");
+      break;
     case "localImage":
-      assertExactKeys(input, ["type", "detail", input.type === "image" ? "url" : "path"], "user_input_image");
+      assertExactKeys(input, ["type", "detail", "path"], "user_input_image");
       break;
     case "audio":
       assertExactKeys(input, ["type", "url"], "user_input_audio");
@@ -239,13 +267,18 @@ function assertThreadItemClosed(item: OfficialThreadItem): void {
             content.type === "input_text"
               ? ["type", "text"]
               : content.type === "input_image"
-                ? ["type", "image_url", "detail"]
+                ? ["type", "image_url" in content ? "image_url" : "file_id", "detail"]
                 : content.type === "input_audio"
                   ? ["type", "audio_url"]
                   : ["type", "encrypted_content"],
             "function_call_output_content",
           ),
         );
+        for (const content of item.output) {
+          if (content.type === "input_image" && "file_id" in content) {
+            assertNativeId(content.file_id, "function_output_image_file_id");
+          }
+        }
       }
       break;
     case "commandExecution":
@@ -258,9 +291,7 @@ function assertThreadItemClosed(item: OfficialThreadItem): void {
       });
       break;
     case "mcpToolCall":
-      // Reviewed additive descriptor metadata from Codex 0.156.1/0.159.0.
-      // The pinned generated validator does not describe this optional field.
-      if ("mcpAppUi" in item && item.mcpAppUi !== null) {
+      if (item.mcpAppUi != null) {
         const ui = item.mcpAppUi;
         assertRecord(ui, "mcp_app_ui");
         assertExactKeys(ui, ["resourceUri", "preferredModelDisplayMode"], "mcp_app_ui");
@@ -493,23 +524,14 @@ function assertTurn(turn: OfficialTurn): void {
   turn.items.forEach(assertThreadItem);
 }
 
-function projectValidatedThreadItem(value: CodexThreadItem): CodexThreadItem {
-  if (value.type === "mcpToolCall" && "mcpAppUi" in value) {
-    // Presentation metadata is not a Sedes capability or transcript field.
-    const { mcpAppUi: _mcpAppUi, ...item } = value;
-    return item;
-  }
-  return value;
-}
-
 export function refineCodexThreadItem(value: CodexThreadItem): CodexThreadItem {
   assertThreadItem(value);
-  return projectValidatedThreadItem(value);
+  return value;
 }
 
 export function refineCodexTurn(value: CodexTurn): CodexTurn {
   assertTurn(value);
-  return { ...value, items: value.items.map(projectValidatedThreadItem) };
+  return value;
 }
 
 export function refineCodexThreadStatus(
@@ -578,6 +600,7 @@ export function projectCodexThread(value: OfficialThread): CodexThread {
   assertSupportedThreadProfile(value);
   return {
     id: value.id,
+    environments: value.environments ?? null,
     extra: value.extra,
     sessionId: value.sessionId,
     forkedFromId: value.forkedFromId,
@@ -598,6 +621,7 @@ export function projectCodexThread(value: OfficialThread): CodexThread {
     path: value.path,
     cwd: value.cwd,
     cliVersion: value.cliVersion,
+    originator: value.originator ?? null,
     source: value.source,
     canAcceptDirectInput: value.canAcceptDirectInput,
     threadSource: value.threadSource,
@@ -605,6 +629,7 @@ export function projectCodexThread(value: OfficialThread): CodexThread {
     agentRole: value.agentRole,
     gitInfo: value.gitInfo,
     name: value.name,
+    daybreakEnabled: value.daybreakEnabled ?? null,
     turns,
   };
 }
@@ -703,6 +728,10 @@ function refineThreadItemsListParams(
   assertNativeId(value.threadId, "thread_id");
   if (value.turnId === null) throw new Error("thread_items_turn_id_invalid");
   if (value.turnId !== undefined) assertNativeId(value.turnId, "turn_id");
+  // Sedes uses opaque provider cursors; item anchors are not an adopted request surface.
+  if (typeof value.cursor === "object" && value.cursor !== null) {
+    throw new Error("thread_items_anchor_unsupported");
+  }
   assertRequestCursor(value.cursor, "thread_items_cursor");
   assertPageLimit(
     value.limit,
@@ -779,16 +808,7 @@ function projectThreadItemsListResponse(
   const itemIdsByTurn = new Map<string, Set<string>>();
   const data = value.data.map((entry) => {
     assertExactKeys(entry, ["turnId", "item", "startedAtMs", "completedAtMs"], "thread_item_entry");
-    // Optional per-item timestamps added in Codex 0.159.0. Validate them,
-    // then omit them: Sedes does not use them for ordering or usage evidence.
-    for (const timestamp of [
-      "startedAtMs" in entry ? entry.startedAtMs : null,
-      "completedAtMs" in entry ? entry.completedAtMs : null,
-    ]) {
-      if (timestamp !== null && !Number.isSafeInteger(timestamp)) {
-        throw new Error("thread_item_timestamp_invalid");
-      }
-    }
+    const timestamps = refineCodexItemLifecycleTimestamps(entry);
     assertNativeId(entry.turnId, "turn_id");
     const item = refineCodexThreadItem(entry.item);
     const itemIds = itemIdsByTurn.get(entry.turnId) ?? new Set<string>();
@@ -797,7 +817,8 @@ function projectThreadItemsListResponse(
     }
     itemIds.add(entry.item.id);
     itemIdsByTurn.set(entry.turnId, itemIds);
-    return { turnId: entry.turnId, item };
+    return { turnId: entry.turnId, item,
+      startedAtMs: timestamps.startedAtMs, completedAtMs: timestamps.completedAtMs };
   });
   return { data, nextCursor: value.nextCursor, backwardsCursor: value.backwardsCursor };
 }

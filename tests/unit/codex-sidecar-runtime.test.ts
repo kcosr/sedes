@@ -356,6 +356,7 @@ it("keeps another runtime and acknowledgements responsive while preserving same-
 
 function metadata(threadId: string): OfficialCodexClientRequestResult<"thread/read"> {
   return { thread: {
+    environments: null, originator: null, daybreakEnabled: null,
     id: threadId, extra: {}, sessionId: "session", forkedFromId: null, parentThreadId: null,
     preview: "A thread", ephemeral: false, section: null, sectionEnteredAt: null,
     projectId: null, historyMode: "paginated", modelProvider: "openai", model: null,
@@ -419,6 +420,7 @@ it("multiplexes threads in one backend while preserving each snapshot's notifica
     pending.push(aRead);
     let aReattachFinished = false;
     vi.spyOn(f.host, "reattachThread").mockResolvedValue({ generation: 1, inboundSequence: 2, result: {
+      disabledPluginIds: [], collaborationMode: null,
       ...metadata("thread-a"), model: "gpt-5.6", modelProvider: "openai", serviceTier: "default",
       cwd: "/workspace", runtimeWorkspaceRoots: ["/workspace"], instructionSources: [],
       approvalPolicy: "never", approvalsReviewer: "user", sandbox: { type: "readOnly", networkAccess: false },
@@ -645,7 +647,7 @@ it("recovers administration after proxy close without ensuring a provider, and d
     stop,
   });
   const runtimeConfiguration = {
-    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Codex", enabled: false, configurationRevision: 0, protocolRelease: "0.153.0" as const },
+    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Codex", enabled: false, configurationRevision: 0, protocolRelease: "0.160.0" as const },
     connections: [{ id: "connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "template", kind: "codex_app_server" as const, backendInstanceId: scope.backendInstanceId, executionEnvironmentId: scope.executionEnvironmentId, label: "Codex", enabled: false, configurationRevision: 0 }],
     connection: { ownership: "external" as const, channel: { type: "unix_websocket" as const, socketPath: "/provider/codex.sock" } },
   };

@@ -85,6 +85,7 @@ import {
   materializeCodexGeneratedImagePublications,
   selectCodexNativeHistorySlice,
   type CodexHistoryProjection,
+  type CodexHistoryItemTimestamps,
 } from "./codex-history-projector.js";
 import {
   codexClientUserMessageId,
@@ -1303,6 +1304,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       detail.correlationAncestorThreadIds,
     );
     let thread: CodexThread;
+    let itemTimestamps: CodexHistoryItemTimestamps = new Map();
     switch (metadata.historyMode) {
       case "legacy":
         thread = await this.#readNativeThread(
@@ -1316,12 +1318,14 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         break;
       case "paginated":
         try {
-          thread = await new CodexPaginatedHistoryAdapter({
+          const hydrated = await new CodexPaginatedHistoryAdapter({
             client: this.#client,
             thread: metadata,
             generation: metadataReceipt.generation,
             correlationScope: scope,
           }).readDetachedHead(10, new AbortController().signal);
+          thread = hydrated.thread;
+          itemTimestamps = hydrated.itemTimestamps;
         } catch (error) {
           throw mapCodexReadError(error);
         }
@@ -1340,6 +1344,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       10,
       metadata.historyMode,
       input.binding,
+      itemTimestamps,
     );
     const current = this.#client.lifecycleSnapshot();
     if (
@@ -2522,6 +2527,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     visibleLimit?: number,
     expectedHistoryMode: "legacy" | "paginated" = "legacy",
     captureBinding?: ConversationBinding,
+    itemTimestamps: CodexHistoryItemTimestamps = new Map(),
   ) {
     if (thread.historyMode !== expectedHistoryMode) {
       throw codexError(
@@ -2562,6 +2568,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
           scope,
           new Map(),
           context,
+          itemTimestamps,
         );
         if (captureBinding && !captureBudgetUsed && projection.pendingViewedImages.length > 0) {
           captureBudgetUsed = true;
@@ -2569,7 +2576,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
             capture: this.#viewedImageCapture, onCaptured: () => undefined });
           try { await capture.capturePage(projection.pendingViewedImages); }
           finally { capture.close(); }
-          projection = projectCodexThreadHistory(candidate, scope, new Map(), context);
+          projection = projectCodexThreadHistory(candidate, scope, new Map(), context, itemTimestamps);
         }
         const materialized = await materializeCodexGeneratedImagePublications(
           projection,

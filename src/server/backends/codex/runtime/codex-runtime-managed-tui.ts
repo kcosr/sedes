@@ -9,7 +9,7 @@ import { sidecarRuntimeBodySchema } from "../../../sidecar/runtime-body-channel.
 import type { PersistentSidecarServiceRegistry } from "../../../sidecar/persistent-sidecar-service-registry.js";
 import type { CodexSharedClientFacade } from "../codex-client-facade.js";
 import { CODEX_SANDBOX_MODES, CODEX_NETWORK_ACCESS_VALUES, CODEX_APPROVAL_POLICIES, CODEX_APPROVAL_REVIEWERS } from "../codex-execution-policy.js";
-import { assertCodexLiveModelSelection } from "../codex-live-model-selection.js";
+import { prepareCodexManagedTuiThreadSettings } from "../codex-managed-tui-settings.js";
 import { EnvironmentCodexManagedTuiLauncher, codexTuiLaunchPolicyRepresentable, type CodexManagedTuiLaunchSettings } from "../codex-managed-tui-launcher.js";
 import {
   CodexManagedTuiRegistry, codexManagedTuiBindingFingerprint,
@@ -157,10 +157,9 @@ export class CodexRuntimeManagedTuiHosts {
       environment: host.runtime.environment, ...(configuredExecutablePath ? { configuredExecutablePath } : {}),
       settings: () => settings,
       assertLaunchAdmission: () => this.#assertAdmission(runtimeId, controllerEpoch),
-      validateModelSelection: async ({ authority: current, settings: selection, signal }) => {
-        await assertCodexLiveModelSelection({ client: host.runtime.supervisor.client,
-          expectedGeneration: current.appServerGeneration, model: selection.model,
-          reasoningEffort: selection.reasoningEffort, signal });
+      prepareThreadSettings: async ({ authority: current, settings: selection, signal }) => {
+        await prepareCodexManagedTuiThreadSettings({ client: host.runtime.supervisor.client,
+          authority: current, settings: selection, signal });
         this.#assertAdmission(runtimeId, controllerEpoch);
       },
       onRuntimeVersionAssessment: assessment => {

@@ -27,6 +27,8 @@ import type {
   ExecutionEnvironmentChannelProvider,
 } from "../../src/server/execution/environment-channel.js";
 import { assertCodexLiveModelSelection } from "../../src/server/backends/codex/codex-live-model-selection.js";
+import { prepareCodexManagedTuiThreadSettings } from "../../src/server/backends/codex/codex-managed-tui-settings.js";
+import { decodeCodexC2Notification } from "../../src/server/backends/codex/codex-c2-protocol.js";
 
 const authority: CodexManagedTuiBindingAuthority = Object.freeze({
   scope: Object.freeze({
@@ -127,7 +129,7 @@ function externalConfiguration(
       label: "Codex",
       enabled: true,
       configurationRevision: 1,
-      protocolRelease: "0.153.0",
+      protocolRelease: "0.160.0",
     },
     executionEnvironmentId: authority.executionEnvironmentId,
     connection: { ownership: "external", channel },
@@ -184,7 +186,7 @@ function launcherChannels() {
     ExecutionEnvironmentChannelProvider["openOwnedProcess"];
   const openOwnedProcess = vi.fn(
     async (..._arguments: Parameters<OpenOwnedProcess>) => {
-      return codexVersionProbeChannel("codex-cli 0.153.0\n");
+      return codexVersionProbeChannel("codex-cli 0.160.0\n");
     },
   );
   const resolveOwnedProcessExecutable = vi.fn(async (_scope, _input) => ({
@@ -907,6 +909,135 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
     serviceTier: "fast" as const,
   });
 
+  function settingsFixture(mode: "ready" | "no_op" | "failed" | "stale" | "stale_read" | "mismatch" | "missing" | "replaced" | "superseded" | "invalid") {
+    const fixture = launcherChannels();
+    const updateStarted = deferred<void>();
+    const readStarted = deferred<void>();
+    let client!: CodexSharedClientFacade;
+    let sequence = 0;
+    const nativeSettings = {
+      cwd: authority.canonicalWorkspacePath, disabledPluginIds: [],
+      model: settings.model, modelProvider: "openai", effort: settings.reasoningEffort,
+      serviceTier: "priority", approvalPolicy: settings.approvalPolicy,
+      approvalsReviewer: settings.approvalReviewer,
+      sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: true,
+        excludeTmpdirEnvVar: true, excludeSlashTmp: true },
+      activePermissionProfile: null, summary: null, personality: null,
+      collaborationMode: { mode: "default", settings: { model: settings.model,
+        reasoning_effort: settings.reasoningEffort, developer_instructions: null } },
+      multiAgentMode: "explicitRequestOnly",
+    };
+    let actual = { ...nativeSettings, effort: mode === "no_op" || mode === "invalid" ? settings.reasoningEffort : "low" };
+    const emitSettings = (overrides: Record<string, unknown> = {}) => {
+      actual = { ...nativeSettings, ...overrides };
+      client.forwardNotification(7, {
+        kind: "decoded_notification", generation: 7, sequence: ++sequence,
+        method: "thread/settings/updated",
+        params: decodeCodexC2Notification("thread/settings/updated", {
+          threadId: authority.backendConversationId, threadSettings: actual,
+        }),
+      });
+    };
+    const requestWithReceipt = vi.fn(async (method: { method: string }, _params: unknown) => {
+      if (method.method === "model/list") return {
+        generation: 7, inboundSequence: ++sequence,
+        result: { data: [{ id: settings.model, hidden: false, inputModalities: ["text"],
+          supportedReasoningEfforts: [{ reasoningEffort: settings.reasoningEffort }] }], nextCursor: null },
+      };
+      if (method.method === "thread/resume") {
+        readStarted.resolve();
+        const receipt = { generation: mode === "stale_read" ? 6 : 7, inboundSequence: ++sequence, result: {
+          ...actual, thread: { id: authority.backendConversationId },
+          reasoningEffort: actual.effort, sandbox: actual.sandboxPolicy,
+        } };
+        if (mode === "superseded") emitSettings({ approvalPolicy: "never" });
+        if (mode === "invalid") client.forwardNotification(7, {
+          kind: "undecodable_notification", generation: 7, sequence: ++sequence,
+          method: "thread/settings/updated", nativeThreadId: authority.backendConversationId,
+          code: "codex_rpc_notification_params_undecodable",
+        });
+        return receipt;
+      }
+      expect(method.method).toBe("thread/settings/update");
+      updateStarted.resolve();
+      if (mode === "failed") throw new Error("settings_update_failed");
+      if (mode === "replaced") client.updateLifecycle({ state: "ready", generation: 8 });
+      if (mode === "superseded") emitSettings();
+      if (mode === "mismatch") emitSettings({ approvalPolicy: "never" });
+      return { generation: mode === "stale" ? 6 : 7, inboundSequence: ++sequence, result: {} };
+    });
+    client = new CodexSharedClientFacade({
+      current: () => ({ generation: 7, request: vi.fn() as never, requestWithReceipt: requestWithReceipt as never }),
+      latestGeneration: () => 7, retireGeneration: async () => undefined,
+    });
+    client.updateLifecycle({ state: "ready", generation: 7 });
+    const launcher = new EnvironmentCodexManagedTuiLauncher({
+      channels: fixture.channels, configuration: externalConfiguration({
+        type: "unix_websocket", socketPath: "/run/private/codex.sock",
+      }), environment: ordinaryLauncherEnvironment, settings: () => settings,
+      onRuntimeVersionAssessment: vi.fn(),
+      prepareThreadSettings: input => prepareCodexManagedTuiThreadSettings({ client, ...input }),
+    });
+    return { ...fixture, emitSettings, requestWithReceipt, updateStarted: updateStarted.promise,
+      readStarted: readStarted.promise,
+      launch: () => launcher.launch({ authority, resourceGeneration: 1, signal: new AbortController().signal }) };
+  }
+
+  it("waits for the authoritative seven-axis daemon settings before spawning remote resume", async () => {
+    const fixture = settingsFixture("ready");
+    const launched = fixture.launch();
+    await fixture.updateStarted;
+    await fixture.readStarted;
+    expect(fixture.openOwnedPty).not.toHaveBeenCalled();
+    fixture.emitSettings();
+    await launched;
+    expect(fixture.requestWithReceipt.mock.calls[1]?.[1]).toEqual({
+      threadId: authority.backendConversationId, cwd: authority.canonicalWorkspacePath,
+      model: settings.model, effort: settings.reasoningEffort, serviceTier: "priority",
+      approvalPolicy: "on-request", approvalsReviewer: "auto_review",
+      sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: true,
+        excludeTmpdirEnvVar: true, excludeSlashTmp: true },
+    });
+    expect(fixture.openOwnedPty).toHaveBeenCalledOnce();
+    const args = fixture.openOwnedPty.mock.calls[0]![1].arguments;
+    expect(args).not.toContain("-s");
+    expect(args).not.toContain("-a");
+    expect(args.some(arg => /^(?:approvals_reviewer|sandbox_workspace_write)=/u.test(arg))).toBe(false);
+  });
+
+  it("confirms a no-op update by readback without requiring a settings notification", async () => {
+    const fixture = settingsFixture("no_op");
+    await fixture.launch();
+    expect(fixture.requestWithReceipt.mock.calls.map(([method]) => method.method)).toEqual([
+      "model/list", "thread/settings/update", "thread/resume",
+    ]);
+    expect(fixture.requestWithReceipt.mock.calls[2]?.[1]).toEqual({
+      threadId: authority.backendConversationId, excludeTurns: true,
+    });
+    expect(fixture.openOwnedPty).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["failed", "settings_update_failed"],
+    ["stale", "codex_tui_settings_generation_changed"],
+    ["stale_read", "codex_tui_settings_generation_changed"],
+    ["replaced", "codex_tui_settings_generation_changed"],
+    ["mismatch", "codex_tui_settings_confirmation_mismatch"],
+    ["missing", "codex_tui_settings_confirmation_missing"],
+    ["superseded", "codex_tui_settings_confirmation_mismatch"],
+    ["invalid", "codex_tui_settings_confirmation_invalid"],
+  ] as const)("never opens a PTY when daemon settings are %s", async (mode, code) => {
+    vi.useFakeTimers();
+    try {
+      const fixture = settingsFixture(mode);
+      const result = fixture.launch().catch(error => error);
+      await vi.advanceTimersByTimeAsync(10_001);
+      expect(await result).toMatchObject({ message: code });
+      expect(fixture.prepareManagedProcessEndpoint).not.toHaveBeenCalled();
+      expect(fixture.openOwnedPty).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
   it("supports only unrestricted catalog model policy", () => {
     expect(codexManagedTuiModelPolicySupported({ type: "catalog" })).toBe(true);
     expect(
@@ -967,7 +1098,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       }),
       environment: ordinaryLauncherEnvironment,
       settings: () => settings,
-      validateModelSelection: async () => undefined,
+      prepareThreadSettings: async () => undefined,
     });
     await launcher.launch({
       authority,
@@ -996,14 +1127,8 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       "--strict-config",
       "-C",
       authority.canonicalWorkspacePath,
-      "-s",
-      "workspace-write",
-      "-a",
-      "on-request",
       "-m",
       "gpt-5.6-luna",
-      "-c",
-      'approvals_reviewer="auto_review"',
       "-c",
       'model_reasoning_effort="high"',
       "-c",
@@ -1019,15 +1144,13 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       "-c",
       'tui.alternate_screen="always"',
       "-c",
+      "tui.fullscreen_transcript=false",
+      "-c",
       "tui.raw_output_mode=false",
       "-c",
       "tui.disable_paste_burst=false",
       "-c",
-      "sandbox_workspace_write.network_access=true",
-      "-c",
-      "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-      "-c",
-      "sandbox_workspace_write.exclude_slash_tmp=true",
+      'notice.model_migrations={"gpt-5.5"="gpt-6-sol","gpt-5.6-sol"="gpt-6-sol","gpt-5.6-terra"="gpt-6-sol","gpt-5.6-luna"="gpt-6-luna"}',
     ]);
     expect(launchInput.environment).toMatchObject({
       HOME: "/ordinary-home",
@@ -1065,7 +1188,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       }),
       environment: ordinaryLauncherEnvironment,
       settings: () => ({ ...settings, serviceTier: "standard" }),
-      validateModelSelection: async () => undefined,
+      prepareThreadSettings: async () => undefined,
     });
     await launcher.launch({
       authority,
@@ -1111,7 +1234,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
         authentication: { type: "capability_token", secret: { source: "protected_file", path: "/run/secret/token" } } }),
       environment: ordinaryLauncherEnvironment,
       settings: () => settings,
-      validateModelSelection: async () => {},
+      prepareThreadSettings: async () => {},
       onRuntimeVersionAssessment: vi.fn(),
       assertLaunchAdmission: () => { if (frozen) throw new Error("runtime_admission_frozen"); },
     });
@@ -1141,7 +1264,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
         sandboxMode: "read-only",
         networkAccess: "enabled",
       }),
-      validateModelSelection: async () => undefined,
+      prepareThreadSettings: async () => undefined,
     });
     await expect(
       launcher.launch({
@@ -1161,7 +1284,8 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       }),
     ).rejects.toThrow("codex_tui_execution_policy_unrepresentable");
     expect(fixture.openOwnedPty).not.toHaveBeenCalled();
-    expect(fixture.discard).toHaveBeenCalledTimes(1);
+    expect(fixture.prepareManagedProcessEndpoint).not.toHaveBeenCalled();
+    expect(fixture.discard).not.toHaveBeenCalled();
     expect(
       codexTuiLaunchPolicyRepresentable({
         ...settings,
@@ -1173,7 +1297,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
 
   it("fails closed before endpoint preparation when the live model tuple is unavailable", async () => {
     const fixture = launcherChannels();
-    const validateModelSelection = vi.fn(async () => {
+    const prepareThreadSettings = vi.fn(async () => {
       throw new Error("codex_tui_live_model_selection_unavailable");
     });
     const launcher = new EnvironmentCodexManagedTuiLauncher({
@@ -1186,7 +1310,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       }),
       environment: ordinaryLauncherEnvironment,
       settings: () => settings,
-      validateModelSelection,
+      prepareThreadSettings,
     });
 
     await expect(
@@ -1196,7 +1320,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
         signal: new AbortController().signal,
       }),
     ).rejects.toThrow("codex_tui_live_model_selection_unavailable");
-    expect(validateModelSelection).toHaveBeenCalledWith({
+    expect(prepareThreadSettings).toHaveBeenCalledWith({
       authority,
       settings,
       signal: expect.any(AbortSignal),
@@ -1226,7 +1350,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
           }),
           environment: ordinaryLauncherEnvironment,
           settings: () => settings,
-          validateModelSelection: async () => undefined,
+          prepareThreadSettings: async () => undefined,
         }),
     ).toThrow("codex_tui_environment_launcher_configuration_invalid");
   });
@@ -1257,7 +1381,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       }),
       environment: ordinaryLauncherEnvironment,
       settings: () => settings,
-      validateModelSelection: async () => undefined,
+      prepareThreadSettings: async () => undefined,
     });
     const registry = new CodexManagedTuiRegistry({
       startupTimeoutMilliseconds: 10,
@@ -1283,7 +1407,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       }),
       environment: ordinaryLauncherEnvironment,
       settings: () => settings,
-      validateModelSelection: async () => undefined,
+      prepareThreadSettings: async () => undefined,
     });
     for (const resourceGeneration of [1, 2]) {
       await launcher.launch({

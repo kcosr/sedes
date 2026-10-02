@@ -471,7 +471,7 @@ class ScriptedInteractionAppServer {
       state.role = clientName === "sedes_web" ? "controller" : "observer";
       await this.#respond(state, envelope.id, {
         userAgent:
-          `sedes_web/0.153.0 (Linux 6.8; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
+          `sedes_web/0.160.0 (Linux 6.8; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
         codexHome: CODEX_HOME,
         platformFamily: "unix",
         platformOs: "linux",
@@ -762,7 +762,7 @@ function nativeThread() {
     status: { type: "active", activeFlags: ["waitingOnApproval"] },
     path: "/private/rollout.jsonl",
     cwd: "/workspace",
-    cliVersion: "0.153.0",
+    cliVersion: "0.160.0",
     source: "appServer",
     canAcceptDirectInput: true,
     threadSource: null,

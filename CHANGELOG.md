@@ -4,6 +4,11 @@
 
 ### Breaking Changes
 
+- Codex uses the generated 0.160.0 app-server profile. Rebuild the server,
+  execution sidecars, and Electron Local together; mismatched compiled Codex
+  profiles are rejected. Codex app-servers and managed TUI commands now require
+  0.160.0 or newer; upgrade them on each execution host.
+
 - Remote OpenCode requires a matching sidecar build with private OpenCode
   runtime capability major 2 and tool capabilities. Upgrade existing execution sidecars before
   connecting this backend. (#17)
@@ -204,6 +209,9 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- Qualify Codex 0.160.0 and preserve the managed TUI inline transcript despite
+  the upstream fullscreen default.
 
 - In a thread, Tasks docks beside Chat as a workspace panel instead of a
   floating card, and resizes, collapses, docks on another edge, and closes
@@ -408,6 +416,10 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Accept Codex 0.160.0 settings, image references, errors, and account metadata.
+  Populate existing item timestamps in live and reloaded history, and retain
+  meaningful interrupted-turn errors without changing normal Stop behavior.
 
 - Archive progress now offers **Dismiss** throughout. Closing progress keeps
   the archive workflow running, including required choices, and reports failures
