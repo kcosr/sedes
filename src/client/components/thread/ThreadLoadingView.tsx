@@ -1,10 +1,12 @@
 import { GitBranch } from "lucide-react";
+import { useMemo } from "react";
+import type { NormalizedApplicationSnapshot } from "../../../shared/index.js";
 import {
   useApplicationStore,
   type ApplicationClientStore,
 } from "../../stores/ApplicationClientStore.js";
 import { useMediaQuery } from "../../app/use-media-query.js";
-import { workspaceDisplayLabel } from "../../app/sidebar-scope-presentation.js";
+import { describeProjectLocations } from "../../app/project-locations.js";
 import {
   PanelChrome,
   type PanelChromeControls,
@@ -12,6 +14,10 @@ import {
 import { SIDEBAR_NAV_MEDIA_QUERY } from "../SidebarNavTrigger.js";
 import { ThreadLoading } from "../LoadingStates.js";
 import { ThreadHeading, useThreadHeaderTint } from "./ThreadHeading.js";
+
+const noProjects: NormalizedApplicationSnapshot["projects"] = [];
+const noWorkspaces: NormalizedApplicationSnapshot["workspaces"] = [];
+const noEnvironments: NormalizedApplicationSnapshot["environments"] = [];
 
 /** Inventory identifies the selected chat while its provider snapshot loads. */
 export function ThreadLoadingView({
@@ -29,8 +35,13 @@ export function ThreadLoadingView({
     Object.values(application.descendantPages).flatMap(({ descendants }) =>
       descendants.map(({ thread }) => thread),
     ).find(({ id }) => id === threadId);
-  const workspaces = inventory?.workspaces ?? [];
-  const environments = inventory?.environments ?? [];
+  const projects = inventory?.projects ?? noProjects;
+  const workspaces = inventory?.workspaces ?? noWorkspaces;
+  const environments = inventory?.environments ?? noEnvironments;
+  const projectLocations = useMemo(
+    () => describeProjectLocations({ projects, workspaces, environments }),
+    [projects, workspaces, environments],
+  );
   const workspace = workspaces.find(({ id }) => id === thread?.workspaceId);
   const environment = environments.find(({ id }) => id === workspace?.environmentId);
   const target = inventory?.executionTargets.find(({ id }) => id === thread?.targetId);
@@ -52,12 +63,10 @@ export function ThreadLoadingView({
             title={<h1>{thread ? thread.title.text || "Untitled thread" : "Opening thread"}</h1>}
             mobile={mobile}
             context={workspace && environment && thread ? {
-              projectLabel: workspaceDisplayLabel({
-                workspace,
-                workspaces,
-                environments,
-                includeEnvironment: environments.length > 1 && environment.kind !== "local",
-              }),
+              projectLabel:
+                projectLocations.projectFolderLabel(workspace.id, {
+                  includeEnvironment: environments.length > 1,
+                }) ?? workspace.label.text,
               targetLabel: target?.label.text ?? thread.backend.label.text,
               targetAvailable: target?.available,
             } : undefined}

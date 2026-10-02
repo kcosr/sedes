@@ -4,13 +4,16 @@ import {
   memo,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
   type RefObject,
 } from "react";
 import type {
+  NormalizedApplicationSnapshot,
   NormalizedThreadSnapshot,
+  NormalizedWorkspaceSummary,
   OpenTaskDisposition,
   ThreadArchiveImpact,
 } from "../../../shared/index.js";
@@ -104,6 +107,7 @@ import {
 import { ForceResetDialog } from "./ForceResetDialog.js";
 import { TurnBookmarksMenu } from "./TurnBookmarksMenu.js";
 import { workspaceDisplayLabel } from "../../app/sidebar-scope-presentation.js";
+import { describeProjectLocations } from "../../app/project-locations.js";
 import {
   PanelChrome,
   type PanelChromeControls,
@@ -118,6 +122,9 @@ import { ThreadWorktreePicker } from "./ThreadWorktreePicker.js";
 import { useDelayedUnavailableConnection } from "../../app/use-delayed-connection-status.js";
 
 const SHEET_DIALOG_HANDOFF_DELAY_MS = 260;
+const noProjects: NormalizedApplicationSnapshot["projects"] = [];
+const noWorkspaces: NormalizedApplicationSnapshot["workspaces"] = [];
+const noEnvironments: NormalizedApplicationSnapshot["environments"] = [];
 
 /** A disabled row's short reason; the row's title carries the full one. */
 function ReasonShortcut({ reason }: { readonly reason: string }) {
@@ -281,36 +288,53 @@ export const ThreadHeader = memo(function ThreadHeader({
   const archive = snapshot.capabilities.operations.find(
     ({ id }) => id === "archive",
   );
-  const workspaces = (application.snapshot?.workspaces ?? []).filter(
+  const projects = application.snapshot?.projects ?? noProjects;
+  const workspaceCatalog = application.snapshot?.workspaces ?? noWorkspaces;
+  const environments = application.snapshot?.environments ?? noEnvironments;
+  const workspaces = workspaceCatalog.filter(
     ({ environmentId }) => environmentId === snapshot.environment.id,
   );
-  const environments = application.snapshot?.environments ?? [];
   const showEnvironmentLabel = environments.length > 1;
-  const draftWorkspaceLabel = (workspaceId: string): string => {
-    const workspace = workspaces.find(({ id }) => id === workspaceId);
-    if (!workspace) return snapshot.workspace.label.text;
-    const environment = environments.find(
-      ({ id }) => id === workspace.environmentId,
-    );
-    return showEnvironmentLabel && environment?.kind !== "local"
-      ? `${workspace.label.text} · ${environment?.label.text ?? "Unknown environment"}`
-      : workspace.label.text;
-  };
+  const applicationWorkspace = workspaceCatalog.find(
+    ({ id }) => id === snapshot.workspace.id,
+  );
+  // The snapshot lists active locations only; a thread in a removed one
+  // still names its project while that project is active.
+  const locationCatalog = useMemo(
+    () =>
+      applicationWorkspace
+        ? workspaceCatalog
+        : [...workspaceCatalog, snapshot.workspace],
+    [applicationWorkspace, workspaceCatalog, snapshot.workspace],
+  );
+  const projectLocations = useMemo(
+    () =>
+      describeProjectLocations({
+        projects,
+        workspaces: locationCatalog,
+        environments,
+      }),
+    [projects, locationCatalog, environments],
+  );
+  // Every choice shares the thread's environment, so the path tells them apart.
+  const draftLocationLabel = (workspace: NormalizedWorkspaceSummary): string =>
+    projectLocations.projectPathLabel(workspace.id) ??
+    workspace.displayPath.text;
   const headerEnvironmentTintStyle = useThreadHeaderTint(
     environments,
     snapshot.environment.id,
   );
-  const workspaceCatalog = application.snapshot?.workspaces ?? [];
-  const applicationWorkspace =
-    workspaceCatalog.find(({ id }) => id === snapshot.workspace.id) ??
-    snapshot.workspace;
-  const projectContextLabel = workspaceDisplayLabel({
-    workspace: applicationWorkspace,
-    workspaces: workspaceCatalog,
-    environments,
-    includeEnvironment:
-      showEnvironmentLabel && snapshot.environment.kind !== "local",
-  });
+  const projectContextLabel =
+    projectLocations.projectFolderLabel(snapshot.workspace.id, {
+      includeEnvironment: showEnvironmentLabel,
+    }) ??
+    workspaceDisplayLabel({
+      workspace: applicationWorkspace ?? snapshot.workspace,
+      workspaces: workspaceCatalog,
+      environments,
+      includeEnvironment:
+        showEnvironmentLabel && snapshot.environment.kind !== "local",
+    });
   const executionTargets = application.snapshot?.executionTargets ?? [];
   const executionTarget = executionTargets.find(
     ({ id }) => id === snapshot.thread.targetId,
@@ -772,13 +796,13 @@ export const ThreadHeader = memo(function ThreadHeader({
                   {snapshot.thread.backingState === "unbound" &&
                     workspaces.length > 1 && (
                       <DropdownMenuSub>
-                        {/* A workspace label is long by nature: the
+                        {/* A location label is long by nature: the
                             current one is the checked row inside. */}
                         <DropdownMenuSubTrigger
                           disabled={disabled || moveDraft?.available !== true}
                         >
                           <FolderInput aria-hidden="true" />
-                          Draft workspace
+                          Draft location
                         </DropdownMenuSubTrigger>
                         <DropdownMenuSubContent>
                           <DropdownMenuRadioGroup
@@ -798,7 +822,7 @@ export const ThreadHeader = memo(function ThreadHeader({
                                 disabled={!workspace.available}
                               >
                                 <span className="min-w-0 truncate">
-                                  {draftWorkspaceLabel(workspace.id)}
+                                  {draftLocationLabel(workspace)}
                                 </span>
                                 {!workspace.available && (
                                   <DropdownMenuValue aria-hidden="true">

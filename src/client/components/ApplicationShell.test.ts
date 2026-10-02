@@ -15,10 +15,12 @@ import {
   installPromptSettingsRequestListener,
   openThreadChatPanel,
   resolveComposerWorkspaceId,
+  toolClientResources,
 } from "./ApplicationShell.js";
 import { PanelLayoutStore } from "../workspace-panels/panel-state.js";
 import { WorkspacePanelTenantRegistry } from "../workspace-panels/registry.js";
 import type { Route } from "../app/router.js";
+import type { ApplicationClientState } from "../stores/ApplicationClientStore.js";
 import { ElectronConnectionRecovery } from "./ElectronConnectionSettings.js";
 
 afterEach(cleanup);
@@ -307,5 +309,88 @@ describe("workspace panel beforeunload policy", () => {
     store.setWorkspaceTenantDirty("workspace-1", "files", true);
     remove();
     expect(dispatchBeforeUnload()).toBe(false);
+  });
+});
+
+describe("tool client resources", () => {
+  it("names each location by its project and path", () => {
+    const location = {
+      environmentId: "environment-1",
+      projectId: "project-1",
+      label: { text: "sedes" },
+      available: true,
+    };
+    const snapshot = {
+      environments: [
+        {
+          id: "environment-1",
+          kind: "local",
+          label: { text: "Local" },
+          available: true,
+          directoryBrowsing: "available",
+        },
+        {
+          id: "environment-2",
+          kind: "ssh",
+          label: { text: "Build host" },
+          available: true,
+          directoryBrowsing: "available",
+        },
+      ],
+      projects: [
+        { id: "project-1", name: "sedes", revision: 0 },
+        { id: "project-2", name: "Docs", revision: 0 },
+      ],
+      workspaces: [
+        { ...location, id: "workspace-1", displayPath: { text: "/src/sedes" } },
+        {
+          ...location,
+          id: "workspace-2",
+          projectId: "project-2",
+          label: { text: "docs" },
+          displayPath: { text: "/src/docs" },
+          available: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "workspace-1",
+          title: { text: "Build thread" },
+          available: true,
+          inventoryState: "archived",
+        },
+      ],
+    } as unknown as NonNullable<ApplicationClientState["snapshot"]>;
+
+    expect(toolClientResources(snapshot)).toEqual({
+      workspaces: [
+        {
+          id: "workspace-1",
+          environmentId: "environment-1",
+          label: "sedes · /src/sedes",
+          available: true,
+        },
+        {
+          id: "workspace-2",
+          environmentId: "environment-1",
+          label: "Docs · /src/docs",
+          available: false,
+        },
+      ],
+      threads: [
+        {
+          id: "thread-1",
+          workspaceId: "workspace-1",
+          title: "Build thread",
+          available: true,
+          archived: true,
+        },
+      ],
+    });
+    expect(toolClientResources(undefined)).toEqual({
+      workspaces: [],
+      threads: [],
+    });
   });
 });

@@ -1576,7 +1576,7 @@ function fixture(
     snapshot: {
       advisories: [],
       environments: [snapshot.environment],
-      projects: [{ id: "project-1", name: "Project", revision: 0 }],
+      projects: [{ id: "project-1", name: "Workspace", revision: 0 }],
       workspaces: [snapshot.workspace],
       threads: [],
       forkOrigins: [],

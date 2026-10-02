@@ -17,6 +17,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  NormalizedApplicationSnapshot,
   NormalizedThreadSnapshot,
 } from "../../../shared/index.js";
 import type {
@@ -170,6 +171,26 @@ function makeSnapshot({
   } as unknown as NormalizedThreadSnapshot;
 }
 
+type CatalogProject = NormalizedApplicationSnapshot["projects"][number];
+type CatalogWorkspace = NormalizedApplicationSnapshot["workspaces"][number];
+
+const firstLocation: CatalogWorkspace = {
+  id: "workspace-1",
+  environmentId: "environment-1",
+  projectId: "project-1",
+  label: { text: "sedes" },
+  displayPath: { text: "/workspace" },
+  available: true,
+};
+const secondLocation: CatalogWorkspace = {
+  id: "workspace-2",
+  environmentId: "environment-1",
+  projectId: "project-1",
+  label: { text: "second" },
+  displayPath: { text: "/second" },
+  available: true,
+};
+
 function fixture(
   environmentCount: number,
   options: {
@@ -178,6 +199,8 @@ function fixture(
       readonly childThreadId: string;
       readonly sourceThreadId: string;
     }[];
+    readonly projects?: readonly CatalogProject[];
+    readonly workspaces?: readonly CatalogWorkspace[];
   } = {},
 ): {
   readonly applicationStore: ApplicationClientStore & {
@@ -207,27 +230,12 @@ function fixture(
         },
         available: true,
       })),
+      projects: options.projects ?? [
+        { id: "project-1", name: "sedes", revision: 0 },
+      ],
       workspaces:
-        environmentCount === 0
-          ? []
-          : [
-              {
-                id: "workspace-1",
-                environmentId: "environment-1",
-                projectId: "project-1",
-                label: { text: "sedes" },
-                displayPath: { text: "/workspace" },
-                available: true,
-              },
-              {
-                id: "workspace-2",
-                environmentId: "environment-1",
-                projectId: "project-1",
-                label: { text: "second" },
-                displayPath: { text: "/second" },
-                available: true,
-              },
-            ],
+        options.workspaces ??
+        (environmentCount === 0 ? [] : [firstLocation, secondLocation]),
       threads: [],
       forkOrigins: options.forkOrigins ?? [],
       lineagePlacements: [],
@@ -365,10 +373,14 @@ function renderHeader({
   withPanelControls = false,
   available = true,
   forkOrigins,
+  projects,
+  workspaces,
   automation = false,
   findOpen = false,
   onFindOpenChange = vi.fn(),
 }: {
+  readonly projects?: readonly CatalogProject[];
+  readonly workspaces?: readonly CatalogWorkspace[];
   readonly automation?: boolean;
   readonly findOpen?: boolean;
   readonly onFindOpenChange?: (open: boolean) => void;
@@ -390,6 +402,8 @@ function renderHeader({
   const { applicationStore, threadStore } = fixture(environmentCount, {
     environmentKind,
     ...(forkOrigins === undefined ? {} : { forkOrigins }),
+    ...(projects === undefined ? {} : { projects }),
+    ...(workspaces === undefined ? {} : { workspaces }),
   });
   const panelControls: PanelChromeControls | undefined = withPanelControls
     ? {
@@ -856,7 +870,65 @@ describe("ThreadHeader project context row", () => {
     expect(project).toHaveAttribute("title", "sedes · Pi");
   });
 
-  it("omits Local from draft workspace choices while retaining remote qualifiers", async () => {
+  it("names a single-location project by its name alone", () => {
+    renderHeader({
+      environmentCount: 1,
+      projects: [{ id: "project-1", name: "Harness", revision: 0 }],
+      workspaces: [firstLocation],
+    });
+
+    const project = screen.getByTestId("thread-context");
+    expect(project.querySelector(".thread-project-name")).toHaveTextContent(
+      /^Harness$/u,
+    );
+    expect(project).toHaveAttribute("title", "Harness · Pi");
+  });
+
+  it("adds the folder when the project has another location on the environment", () => {
+    renderHeader({
+      environmentCount: 1,
+      projects: [{ id: "project-1", name: "Harness", revision: 0 }],
+    });
+
+    expect(
+      screen.getByTestId("thread-context").querySelector(".thread-project-name"),
+    ).toHaveTextContent(/^Harness › sedes$/u);
+  });
+
+  it("keeps the remote environment qualifier after the project and folder", () => {
+    renderHeader({
+      environmentCount: 2,
+      projects: [{ id: "project-1", name: "Harness", revision: 0 }],
+    });
+
+    const project = screen.getByTestId("thread-context");
+    expect(project.querySelector(".thread-project-name")).toHaveTextContent(
+      /^Harness › sedes · Machine 1$/u,
+    );
+    expect(project).toHaveAttribute("title", "Harness › sedes · Machine 1 · Pi");
+  });
+
+  it("names the project of a removed location while the project is active", () => {
+    renderHeader({
+      environmentCount: 1,
+      projects: [{ id: "project-1", name: "Harness", revision: 0 }],
+      workspaces: [secondLocation],
+    });
+
+    expect(
+      screen.getByTestId("thread-context").querySelector(".thread-project-name"),
+    ).toHaveTextContent(/^Harness › sedes$/u);
+  });
+
+  it("falls back to the folder when the project is not active", () => {
+    renderHeader({ environmentCount: 1, projects: [], workspaces: [] });
+
+    expect(
+      screen.getByTestId("thread-context").querySelector(".thread-project-name"),
+    ).toHaveTextContent(/^sedes$/u);
+  });
+
+  it("lists draft locations by project and path within the thread's environment", async () => {
     const user = userEvent.setup();
     renderHeader({
       backingState: "unbound",
@@ -864,17 +936,17 @@ describe("ThreadHeader project context row", () => {
       environmentKind: "local",
     });
     await openThreadActions();
-    // A workspace label is long by nature: the row shows no inline value,
-    // and the current workspace is the checked row inside.
-    const draftWorkspace = screen.getByRole("menuitem", { name: "Draft workspace" });
-    expect(draftWorkspace).toHaveTextContent(/^Draft workspace$/u);
-    expect(draftWorkspace.querySelector('[data-slot$="item-value"]')).toBeNull();
-    await user.click(draftWorkspace);
+    // A location label is long by nature: the row shows no inline value,
+    // and the current location is the checked row inside.
+    const draftLocation = screen.getByRole("menuitem", { name: "Draft location" });
+    expect(draftLocation).toHaveTextContent(/^Draft location$/u);
+    expect(draftLocation.querySelector('[data-slot$="item-value"]')).toBeNull();
+    await user.click(draftLocation);
 
     const localChoices = await screen.findAllByRole("menuitemradio");
     expect(localChoices.map(({ textContent }) => textContent)).toEqual([
-      "sedes",
-      "second",
+      "sedes · /workspace",
+      "sedes · /second",
     ]);
     expect(localChoices[0]).toHaveAttribute("aria-checked", "true");
 
@@ -883,15 +955,26 @@ describe("ThreadHeader project context row", () => {
       backingState: "unbound",
       environmentCount: 2,
       environmentKind: "ssh",
+      projects: [
+        { id: "project-1", name: "sedes", revision: 0 },
+        { id: "project-2", name: "Docs", revision: 0 },
+      ],
+      workspaces: [
+        firstLocation,
+        { ...secondLocation, projectId: "project-2", available: false },
+        { ...secondLocation, id: "workspace-3", environmentId: "environment-2" },
+      ],
     });
     await openThreadActions();
-    await user.click(screen.getByRole("menuitem", { name: /Draft workspace/ }));
+    await user.click(screen.getByRole("menuitem", { name: "Draft location" }));
 
-    expect(
-      (await screen.findAllByRole("menuitemradio")).map(
-        ({ textContent }) => textContent,
-      ),
-    ).toEqual(["sedes · Machine 1", "second · Machine 1"]);
+    // The environment is the thread's own, so no choice repeats it.
+    const remoteChoices = await screen.findAllByRole("menuitemradio");
+    expect(remoteChoices.map(({ textContent }) => textContent)).toEqual([
+      "sedes · /workspace",
+      "Docs · /secondUnavailable",
+    ]);
+    expect(remoteChoices[1]).toHaveAttribute("aria-disabled", "true");
   });
 
   it("does not render a fork provenance icon for forked threads", () => {

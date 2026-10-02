@@ -568,7 +568,7 @@ A Tool client has:
 - exact allowed tool IDs;
 - a required default execution environment;
 - an explicit set of allowed environments;
-- optional default project/thread selections; and
+- optional default location and thread selections; and
 - enabled, disabled, rotated, or revoked credential state.
 
 Creation and rotation show the bearer token exactly once. Choose **Reveal

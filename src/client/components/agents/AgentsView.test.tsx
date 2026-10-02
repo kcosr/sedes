@@ -28,6 +28,19 @@ const workspace = {
   displayPath: { text: "/workspace/sedes" },
   available: true,
 };
+const locations = {
+  projects: [{ id: "project-1", name: "Sedes", revision: 0 }],
+  workspaces: [workspace],
+  environments: [
+    {
+      id: "environment-1",
+      kind: "local" as const,
+      label: { text: "Local" },
+      available: true,
+      directoryBrowsing: "available" as const,
+    },
+  ],
+};
 const backend = {
   typeId: "pi",
   label: { text: "Pi" },
@@ -74,7 +87,7 @@ describe("AgentsView", () => {
       listSavedAgents: vi.fn().mockResolvedValue({ items: [explicitSummary] }),
     } as unknown as ApiClient);
     navigate(agentsPath(), { replace: true });
-    render(<AgentsView store={store} workspaces={[workspace]} />);
+    render(<AgentsView store={store} {...locations} />);
 
     expect(
       await screen.findByRole("link", { name: "Careful reviewer" }),
@@ -88,7 +101,7 @@ describe("AgentsView", () => {
       listSavedAgents: vi.fn().mockResolvedValue({ items: [] }),
     } as unknown as ApiClient);
     navigate(agentsPath(), { replace: true });
-    render(<AgentsView store={store} workspaces={[workspace]} />);
+    render(<AgentsView store={store} {...locations} />);
 
     expect(
       screen.getByRole("searchbox", { name: "Search Agents" }),
@@ -104,7 +117,7 @@ describe("AgentsView", () => {
       getSavedAgentOptions: vi.fn().mockResolvedValue({ kind: "targets", targets: [] }),
     } as unknown as ApiClient);
     navigate(agentsPath(), { replace: true });
-    render(<AgentsView store={store} workspaces={[workspace]} />);
+    render(<AgentsView store={store} {...locations} />);
 
     expect(await screen.findByText("Careful reviewer")).toBeVisible();
     expect(listSavedAgents).toHaveBeenCalledTimes(1);
@@ -131,7 +144,7 @@ describe("AgentsView", () => {
     } as unknown as ApiClient;
     const store = new AgentClientStore(api);
     navigate(agentPath(agentId), { replace: true });
-    render(<AgentsView store={store} workspaces={[workspace]} />);
+    render(<AgentsView store={store} {...locations} />);
 
     const name = await screen.findByRole("textbox", { name: "Name" });
     await waitFor(() =>
@@ -164,7 +177,7 @@ describe("AgentsView", () => {
       }),
     } as unknown as ApiClient);
     navigate(newAgentPath(), { replace: true });
-    render(<AgentsView store={store} workspaces={[workspace]} />);
+    render(<AgentsView store={store} {...locations} />);
 
     fireEvent.click(
       within(screen.getByRole("region", { name: "Agent editor" })).getByRole("button", { name: "Create Agent" }),
@@ -173,6 +186,94 @@ describe("AgentsView", () => {
     await waitFor(() => expect(name).toHaveAttribute("aria-invalid", "true"));
     expect(name).toHaveAccessibleDescription("Enter an Agent name.");
     expect(name).toHaveFocus();
+  });
+
+  it("selects a lone location and names it by project and path", async () => {
+    const getSavedAgentOptions = vi.fn().mockResolvedValue({
+      kind: "targets",
+      targets: [],
+    });
+    const store = new AgentClientStore({
+      listSavedAgents: vi.fn().mockResolvedValue({ items: [] }),
+      getSavedAgentOptions,
+    } as unknown as ApiClient);
+    navigate(newAgentPath(), { replace: true });
+    render(<AgentsView store={store} {...locations} />);
+
+    expect(
+      await screen.findByRole("combobox", { name: "Project" }),
+    ).toHaveTextContent("Sedes · /workspace/sedes");
+    await waitFor(() =>
+      expect(getSavedAgentOptions).toHaveBeenCalledWith(
+        { workspaceId: workspace.id },
+        expect.any(AbortSignal),
+      ),
+    );
+  });
+
+  it("validates against an available location chosen by project and location", async () => {
+    const getSavedAgentOptions = vi.fn().mockResolvedValue({
+      kind: "targets",
+      targets: [],
+    });
+    const store = new AgentClientStore({
+      listSavedAgents: vi.fn().mockResolvedValue({ items: [] }),
+      getSavedAgentOptions,
+    } as unknown as ApiClient);
+    navigate(newAgentPath(), { replace: true });
+    render(
+      <AgentsView
+        store={store}
+        projects={[
+          ...locations.projects,
+          { id: "project-2", name: "Docs", revision: 0 },
+        ]}
+        workspaces={[
+          workspace,
+          {
+            ...workspace,
+            id: "workspace-2",
+            environmentId: "environment-2",
+            displayPath: { text: "/srv/sedes" },
+          },
+          {
+            ...workspace,
+            id: "workspace-3",
+            projectId: "project-2",
+            label: { text: "docs" },
+            displayPath: { text: "/workspace/docs" },
+            available: false,
+          },
+        ]}
+        environments={[
+          ...locations.environments,
+          {
+            id: "environment-2",
+            kind: "ssh",
+            label: { text: "Build host" },
+            available: true,
+            directoryBrowsing: "available",
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("combobox", { name: "Project" }));
+    expect(
+      screen.getAllByRole("option").map(({ textContent }) => textContent),
+    ).toEqual([
+      "Sedes · Local · /workspace/sedes",
+      "Sedes · Build host · /srv/sedes",
+    ]);
+    fireEvent.click(
+      screen.getByRole("option", { name: "Sedes · Build host · /srv/sedes" }),
+    );
+    await waitFor(() =>
+      expect(getSavedAgentOptions).toHaveBeenCalledWith(
+        { workspaceId: "workspace-2" },
+        expect.any(AbortSignal),
+      ),
+    );
   });
 
   it("deletes only after revision-checked confirmation", async () => {
@@ -191,7 +292,7 @@ describe("AgentsView", () => {
     } as unknown as ApiClient;
     const store = new AgentClientStore(api);
     navigate(agentPath(agentId), { replace: true });
-    render(<AgentsView store={store} workspaces={[workspace]} />);
+    render(<AgentsView store={store} {...locations} />);
 
     await screen.findByRole("textbox", { name: "Name" });
     fireEvent.click(screen.getByRole("button", { name: "Delete…" }));
@@ -238,7 +339,7 @@ describe("AgentsView", () => {
     } as unknown as ApiClient;
     const store = new AgentClientStore(api);
     navigate(agentPath(agentId), { replace: true });
-    render(<AgentsView store={store} workspaces={[workspace]} />);
+    render(<AgentsView store={store} {...locations} />);
 
     const name = await screen.findByRole("textbox", { name: "Name" });
     fireEvent.change(name, { target: { value: "Local draft" } });
@@ -291,7 +392,7 @@ describe("AgentsView", () => {
     } as unknown as ApiClient;
     const store = new AgentClientStore(api);
     navigate(agentPath(agentId), { replace: true });
-    render(<AgentsView store={store} workspaces={[workspace]} />);
+    render(<AgentsView store={store} {...locations} />);
 
     const name = await screen.findByRole("textbox", { name: "Name" });
     fireEvent.change(name, { target: { value: "Local draft" } });
@@ -323,7 +424,7 @@ describe("AgentsView", () => {
       getSavedAgentOptions: vi.fn().mockResolvedValue({ kind: "targets", targets: [] }),
     } as unknown as ApiClient;
     navigate(agentsPath(), { replace: true });
-    const { container } = render(<AgentsView store={new AgentClientStore(api)} workspaces={[workspace]} />);
+    const { container } = render(<AgentsView store={new AgentClientStore(api)} {...locations} />);
     const page = container.querySelector('[data-slot="settings-page"]')!;
     expect(page).toHaveAttribute("data-selection", "none");
     expect(page).toHaveAttribute("data-width", "wide");
@@ -365,7 +466,7 @@ describe("AgentsView", () => {
     } as unknown as ApiClient;
     navigate(agentsPath(), { replace: true });
     navigate(agentPath(agentId));
-    render(<AgentsView store={new AgentClientStore(api)} workspaces={[workspace]} />);
+    render(<AgentsView store={new AgentClientStore(api)} {...locations} />);
     await waitFor(() => expect(screen.getByRole("heading", { name: "Careful reviewer", level: 2 })).toHaveFocus());
     await screen.findByRole("link", { name: "Careful reviewer" });
     const length = window.history.length;
@@ -389,7 +490,7 @@ describe("AgentsView", () => {
     } as unknown as ApiClient;
     const missing = "22222222-2222-4222-8222-222222222222";
     navigate(agentPath(missing), { replace: true });
-    render(<AgentsView store={new AgentClientStore(api)} workspaces={[workspace]} />);
+    render(<AgentsView store={new AgentClientStore(api)} {...locations} />);
     const unavailable = await screen.findByRole("region", { name: "Agent unavailable" });
     expect(within(unavailable).getByRole("alert")).toHaveTextContent("That Agent does not exist.");
     expect(within(unavailable).getByRole("link", { name: "Agents" })).toHaveAttribute("href", agentsPath());
@@ -417,7 +518,7 @@ describe("AgentsView", () => {
       getSavedAgentOptions: vi.fn().mockResolvedValue({ kind: "targets", targets: [] }),
     } as unknown as ApiClient;
     navigate(agentPath(agentId), { replace: true });
-    render(<AgentsView store={new AgentClientStore(api)} workspaces={[workspace]} />);
+    render(<AgentsView store={new AgentClientStore(api)} {...locations} />);
     const unavailable = await screen.findByRole("region", { name: "Agent unavailable" });
     expect(within(unavailable).getByRole("alert")).toHaveTextContent("The server did not respond.");
     fireEvent.click(within(unavailable).getByRole("button", { name: "Retry" }));
@@ -449,7 +550,7 @@ describe("AgentsView", () => {
       getSavedAgentOptions: vi.fn().mockResolvedValue({ kind: "targets", targets: [] }),
     } as unknown as ApiClient;
     navigate(agentPath(agentId), { replace: true });
-    render(<AgentsView store={new AgentClientStore(api)} workspaces={[workspace]} />);
+    render(<AgentsView store={new AgentClientStore(api)} {...locations} />);
     await screen.findByRole("region", { name: "Agent unavailable" });
     act(() => navigate(agentPath(other.id)));
     expect(screen.queryByRole("region", { name: "Agent unavailable" })).toBeNull();

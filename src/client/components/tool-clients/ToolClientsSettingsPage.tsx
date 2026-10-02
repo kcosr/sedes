@@ -52,9 +52,11 @@ type ToolClientApi = Pick<
 >;
 
 export interface ToolClientSettingsResources {
+  /** Project locations; the default-location choices share one environment. */
   readonly workspaces: readonly {
     readonly id: string;
     readonly environmentId: string;
+    /** "Project · path". */
     readonly label: string;
     readonly available: boolean;
   }[];
@@ -682,7 +684,7 @@ function ToolClientEditor({
         </SettingsField>
         <SettingsField
           id="tool-client-default-workspace"
-          label="Default workspace"
+          label="Default location"
           description="Optional."
         >
           <NativeSelect
@@ -696,7 +698,7 @@ function ToolClientEditor({
               })
             }
           >
-            <option value="">No default workspace</option>
+            <option value="">No default location</option>
             {workspaces.map((workspace) => (
               <option key={workspace.id} value={workspace.id}>
                 {workspace.label}{workspace.available ? "" : " (unavailable)"}
@@ -707,7 +709,7 @@ function ToolClientEditor({
         <SettingsField
           id="tool-client-default-thread"
           label="Default thread"
-          description="Optional; needs a default workspace."
+          description="Optional; needs a default location."
           error={errorFor("thread")}
         >
           <NativeSelect
@@ -918,7 +920,7 @@ function validateDraft(draft: ToolClientDraft): DraftError | undefined {
     return { field: "environment", message: "The default environment must be allowed." };
   }
   if (draft.defaultThreadId && !draft.defaultWorkspaceId) {
-    return { field: "thread", message: "A default thread requires a default workspace." };
+    return { field: "thread", message: "A default thread requires a default location." };
   }
   return undefined;
 }

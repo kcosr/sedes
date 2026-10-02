@@ -106,7 +106,7 @@ function controls(
         {
           id: "workspace-1",
           environmentId: "env-local",
-          label: "Sedes",
+          label: "Sedes · /src/sedes",
           available: true,
         },
       ],
@@ -159,7 +159,7 @@ describe("Tool clients settings", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Threads" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "Thread status" }));
-    fireEvent.change(screen.getByLabelText("Default workspace"), {
+    fireEvent.change(screen.getByLabelText("Default location"), {
       target: { value: "workspace-1" },
     });
     fireEvent.change(screen.getByLabelText("Default thread"), {
@@ -446,6 +446,43 @@ describe("Tool clients settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create client" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Select at least one tool.");
     expect(createToolClient).not.toHaveBeenCalled();
+  });
+
+  it("names default locations by project and path and requires one for a default thread", async () => {
+    const replaceToolClient = vi.fn();
+    render(
+      <ToolClientsSettingsPage
+        controls={controls({
+          listToolClients: vi.fn().mockResolvedValue({
+            items: [
+              toolClient({
+                defaultWorkspaceId: null,
+                defaultWorkspaceAvailable: null,
+              }),
+            ],
+          }),
+          replaceToolClient,
+        })}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /External CLI/u }));
+    const location = screen.getByLabelText("Default location");
+    expect(
+      within(location)
+        .getAllByRole("option")
+        .map(({ textContent }) => textContent),
+    ).toEqual(["No default location", "Sedes · /src/sedes"]);
+    const thread = screen.getByLabelText("Default thread");
+    expect(thread).toHaveAccessibleDescription("Optional; needs a default location.");
+
+    fireEvent.click(screen.getByRole("switch", { name: "Enable tool client" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(thread).toHaveAttribute("aria-invalid", "true");
+    expect(thread).toHaveAccessibleDescription(
+      /A default thread requires a default location\./u,
+    );
+    expect(replaceToolClient).not.toHaveBeenCalled();
   });
 
   it("recovers an admitted create without inventing a missing secret", async () => {

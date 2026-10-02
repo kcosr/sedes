@@ -1187,6 +1187,65 @@ describe("ThreadContextMenu content per thread state", () => {
       expect(within(menu).getByText("Force reset…")).toBeInTheDocument();
     },
   );
+
+  it("leads the meta line with the project and, when it needs one, the folder", async () => {
+    const environment = {
+      id: "environment-1",
+      kind: "ssh" as const,
+      label: { text: "Build host" },
+      available: true,
+      directoryBrowsing: "available" as const,
+    };
+    const location = {
+      id: "workspace-1",
+      environmentId: environment.id,
+      projectId: "project-1",
+      label: { text: "sedes-context" },
+      displayPath: { text: "/src/sedes-context" },
+      available: true,
+    };
+    const metaLineFor = async (
+      workspaces: readonly (typeof location)[],
+    ): Promise<string | null> => {
+      const store = makeStore();
+      const state = store.getSnapshot();
+      store.getSnapshot.mockReturnValue({
+        ...state,
+        snapshot: {
+          ...state.snapshot,
+          environments: [environment, { ...environment, id: "environment-2" }],
+          projects: [{ id: "project-1", name: "sedes", revision: 0 }],
+          workspaces,
+        },
+      });
+      const { unmount } = render(
+        <ThreadContextMenu thread={makeThread()} store={store}>
+          <div data-testid="row-trigger">Row</div>
+        </ThreadContextMenu>,
+      );
+      const menu = await openMenu(screen.getByTestId("row-trigger"));
+      const text = menu.firstElementChild!.textContent;
+      await userEvent.keyboard("{Escape}");
+      unmount();
+      return text;
+    };
+
+    // The row's own environment never repeats in its meta line.
+    expect(await metaLineFor([location])).toMatch(
+      /^Review backend contractsedes · Pi · updated /u,
+    );
+    expect(
+      await metaLineFor([
+        location,
+        {
+          ...location,
+          id: "workspace-2",
+          label: { text: "sedes" },
+          displayPath: { text: "/src/sedes" },
+        },
+      ]),
+    ).toMatch(/^Review backend contractsedes › sedes-context · Pi · updated /u);
+  });
 });
 
 describe("searchable Move to group", () => {
