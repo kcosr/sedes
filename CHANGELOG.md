@@ -585,6 +585,9 @@
 
 ### Fixed
 
+- Slower conversation snapshots no longer overwrite newer completion attention,
+  which could leave an unread dot stuck or restore it after acknowledgment.
+
 - Tool client default-location errors and location-removal guards now use
   accurate location terminology while preserving project-level diagnostics.
   ([#34](https://github.com/kcosr/sedes/pull/34))

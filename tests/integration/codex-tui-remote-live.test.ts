@@ -339,6 +339,7 @@ describe.runIf(tmuxAvailable)("Codex TUI remote live compatibility", () => {
         normalizedEnvelopes.push(envelope),
       );
       const normalizedBridge = new ConversationEventBridge({
+        prepareSnapshot: async () => undefined,
         snapshot: async (_scope, _threadId, state) =>
           normalizedLiveSnapshot(state.timeline),
         capabilitiesAndProviderFeatures: async (_scope, _threadId, state) => ({
@@ -1755,6 +1756,7 @@ async function startNormalizedLiveProjection(input: {
   const failures: string[] = [];
   const subscription = hub.subscribe((envelope) => envelopes.push(envelope));
   const bridge = new ConversationEventBridge({
+    prepareSnapshot: async () => undefined,
     snapshot: async (_scope, _threadId, state) =>
       normalizedLiveSnapshot(state.timeline),
     capabilitiesAndProviderFeatures: async (_scope, _threadId, state) => ({
