@@ -30,7 +30,7 @@ import type {
   VerifiedClaudeRuntimeVersion,
 } from "./claude-release-guard.js";
 import type { CanUseTool } from "@anthropic-ai/claude-agent-sdk";
-import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v2.js";
+import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v3.js";
 import {
   runClaudeForkLaunch,
   type ClaudeRuntimeForkOptions,

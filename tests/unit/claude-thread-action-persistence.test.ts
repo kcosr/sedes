@@ -295,11 +295,12 @@ describe("ClaudeThreadActionPersistence", () => {
           },
         ],
         commands: [],
-        skills: [],
+        skills: [{ id: "canonical-skill", name: "canonical", reference: "/canonical", aliases: ["old-directory"] }],
         notices: [],
       },
     });
 
+    expect(presentation.skills).toEqual([{ id: "canonical-skill", name: { text: "canonical" }, reference: "/canonical", aliases: ["old-directory"] }]);
     expect(
       presentation.settings.values.find(({ id }) => id === "model"),
     ).toEqual({

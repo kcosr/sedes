@@ -1431,6 +1431,7 @@ export const composerSkillDescriptorSchema = z.strictObject({
   displayName: boundedDisplayTextSchema.optional(),
   reference: z.string().min(1).max(240),
   description: boundedDisplayTextSchema.optional(),
+  aliases: z.array(z.string().min(1).max(160)).max(128).optional(),
 });
 export type ComposerSkillDescriptor = z.infer<
   typeof composerSkillDescriptorSchema

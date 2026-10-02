@@ -1,7 +1,7 @@
 # Claude backend
 
 Sedes integrates Claude through the exact-pinned
-`@anthropic-ai/claude-agent-sdk` 0.3.283 package in a managed local
+`@anthropic-ai/claude-agent-sdk` 0.3.287 package in a managed local
 worker or persistent SSH/outbound sidecar and an operator-selected Claude Code
 executable. Claude Code owns authentication and native conversation history; Sedes provides its normalized thread workflow, durable controls, and
 recovery records.
@@ -94,7 +94,7 @@ is only for offline conversion:
    `CLAUDE_CONFIG_DIR`, otherwise `$HOME/.claude`, for provider state.
    Set `executablePath` or `configDirectory` only when overriding those defaults.
 2. Define the required top-level `modelPolicy`.
-3. Set `allowedModes` as the backend permission-mode ceiling.
+3. Set `allowedModes` for backend permission-mode launch and selection admission.
 4. Select a conservative target default; `bypassPermissions` can never be the
    default.
 
@@ -113,20 +113,17 @@ explicitly enable them; their IDs and native session bindings are retained.
 
 ## Version compatibility
 
-Sedes pins one SDK profile: `@anthropic-ai/claude-agent-sdk` 0.3.283. It admits
-stable Claude Code releases at or above 2.1.281, except for explicitly excluded
+Sedes pins one SDK profile: `@anthropic-ai/claude-agent-sdk` 0.3.287. It admits
+stable Claude Code releases at or above 2.1.287, except for explicitly excluded
 known-bad releases.
 
-The minimum is 2.1.281 because earlier releases change the conversation when
-Sedes opens or resumes a thread:
-
-- Before 2.1.281, resuming a session that ended during a tool call added a
-  hidden "Continue from where you left off." prompt. 2.1.281 also fixed Agent
-  SDK sessions failing every turn after an assistant message with plain-string
-  content.
+The minimum and tested-through release are both 2.1.287. This upgrade adopts
+SDK 0.3.287 history and command-catalog behavior and qualifies the matching
+CLI for queued input, detached continuations, permission initialization, and
+stream completion. Older runtimes fail admission; no older parser is retained.
 
 Sedes' startup message still reaches the model with the first prompt after
-each start, on every admitted release including 2.1.283. Claude Code labels
+each start, on the reviewed 2.1.287 release. Claude Code labels
 it `[MESSAGE FROM NON-USER SOURCE - NOT USER INPUT]`, followed by Sedes'
 marker "Sedes session start marker. It contains no request." Earlier builds
 sent no text, which Claude Code shows as "(no content)". Claude sometimes takes
@@ -146,14 +143,19 @@ Update Claude Code on every execution host, local and remote, before
 upgrading Sedes. An older release now fails backend startup with a runtime
 version error.
 
-The reviewed runtime baseline is Claude Code 2.1.283. A newer admitted stable
+The reviewed runtime baseline is Claude Code 2.1.287. A newer admitted stable
 release produces a structured advisory while continuing to use the pinned
 SDK profile and behavioral checks. This warning is not an authentication
-failure. Prereleases and releases older than 2.1.281 fail closed. The minimum
+failure. Prereleases and releases older than 2.1.287 fail closed. The minimum
 runtime does not move merely because a future SDK package bundles a newer CLI,
 and protocol or behavioral incompatibility still fails closed. The pinned SDK
-package bundles Claude Code 2.1.283; Sedes never runs it, removes it at
+package bundles Claude Code 2.1.287; Sedes never runs it, removes it at
 install, and always uses the operator-installed executable.
+
+Upgrade local worker artifacts and persistent sidecars with this server:
+Claude requires `claude_runtime@3` and `claude_persistent_runtime@4` for its
+updated catalog and history behavior. Client protocol 132 also requires a
+matching browser or packaged-client build for skill alias search.
 
 For the most predictable deployment, pin the reviewed baseline. Before adopting
 a newer admitted runtime, deliberately run the opt-in live gate described
@@ -162,7 +164,7 @@ below.
 Sedes launches Claude Code with `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1` so
 that Claude reports its own run state, including turns it starts itself. The
 run-state and input-lifecycle frames Sedes relies on are verified on Claude
-Code 2.1.281 through 2.1.283.
+Code 2.1.287.
 
 ## Topology and ownership
 
@@ -258,7 +260,7 @@ presentation.
 Claude permissions appear in Sedes as the private versioned
 `claude.permissions@1` feature. They are not Pi tool access and are not a
 filesystem sandbox. The backend configuration defines a closed
-backend ceiling over these modes:
+backend allowlist for launching and selecting these modes:
 
 | Mode                | Operator-visible behavior                                                                      |
 | ------------------- | ---------------------------------------------------------------------------------------------- |
@@ -273,6 +275,18 @@ boundary. Sedes blocks new work when an observed state cannot safely satisfy
 the desired selection instead of guessing or silently substituting values.
 Permission prompts become normalized Sedes interactions, including bounded
 ephemeral session grants where the SDK permits them.
+
+Every Claude conversation launch receives an explicit mode from the backend allowlist.
+When importing without a saved selection, or reopening a session whose saved
+mode is no longer allowed, Sedes prefers `default`, then `dontAsk`,
+`acceptEdits`, and `auto` in that order. It never selects `bypassPermissions`
+automatically; if none of those modes is allowed, launch fails. Native
+`permissions.defaultMode` cannot broaden this initial choice. An observed
+unrecognized, disallowed, or plan mode still blocks new submissions until an
+allowed selection is applied. Launch/submission admission is not a guarantee
+that Sedes can constrain every autonomous action of a retained native query.
+New threads with an explicit target selection and isolated fork launches keep
+their explicit modes.
 
 Claude permission decisions and Sedes execution-environment decisions are
 separate. A Claude **Allow once** or session grant authorizes only the SDK
@@ -294,7 +308,7 @@ The Claude backend can:
 - choose an admitted native model, reasoning effort, and Claude permission
   mode;
 - normalize confirmation, decision, and questionnaire interactions;
-- use positively classified nonterminal skills;
+- use positively classified nonterminal skills and find them by safe native aliases;
 - deliver ordinary text, immutable context excerpts, structured Task
   references, staged files, and native PNG, JPEG, GIF, and WebP image input;
 - show the image Claude received when it reads a PNG, JPEG, GIF, or WebP file
@@ -305,6 +319,11 @@ The Claude backend can:
 - retain direct main-loop turn usage and separate cumulative pipeline totals; and
 - fork an idle thread at its latest successfully completed ordinary turn or an
   exact successfully completed ordinary turn.
+
+The skill picker also searches safe alternate names supplied by Claude,
+including the directory name of a renamed skill. Selecting a match invokes
+its canonical skill name. Direct slash aliases are not accepted; use the
+picker or the canonical slash command.
 
 Ordinary staged files are provided to Claude as authenticated paths, not
 inlined contents; ask Claude to read the staged path. Recognized images use a
@@ -360,7 +379,7 @@ unknown outcome: Claude may still have received it. Review the conversation,
 then dismiss it or restore its text to send again. Later queued messages wait
 for that choice, and Sedes never resends it automatically.
 
-On the reviewed 2.1.283 runtime, native background inventories keep subagents
+On the reviewed 2.1.287 runtime, native background inventories keep subagents
 and commands visible after the main response finishes. Ordinary Send remains
 available. Live or uncertain background work blocks automatic idle eviction;
 remote runtime impact checks include known background work. Transport loss
@@ -459,8 +478,8 @@ workspace, and do not use sensitive files merely to validate connectivity.
 | Backend is unavailable at startup                            | Confirm the target account's `PATH` resolves `claude`, or verify the optional canonical `executablePath` override; also check the selected provider home (`configDirectory`, then the execution account's `CLAUDE_CONFIG_DIR`, then `$HOME/.claude`), worker artifact admission, executable permissions, and runtime compatibility. Inspect the bounded diagnostic code for worker, version, authentication, or initialization failure. |
 | Authentication is rejected despite a working interactive CLI | Run the configured executable's `auth status` as the selected local or remote execution account. Confirm first-party `claude.ai` subscription login, remove active API-key overrides, and verify the selected provider home and the environment visible to that account.                                                                                                              |
 | SSH runtime does not reconnect                              | Check the environment connection preference, exact SSH alias and account, remote Node installation, sidecar compatibility, and ownership/recovery status. Use **Connect** after intentional Disconnect; do not substitute local provider paths. |
-| Runtime version is rejected                                  | Use a stable Claude Code release at or above 2.1.281. Prereleases and explicitly excluded releases fail closed.                                                                                                                                                                                                                    |
-| Runtime is newer than tested                                 | This is advisory for an otherwise admitted stable release. Pin 2.1.283 for the reviewed baseline or deliberately run the opt-in real-Claude gate before adopting the newer CLI.                                                                                                                                                    |
+| Runtime version is rejected                                  | Use a stable Claude Code release at or above 2.1.287. Prereleases and explicitly excluded releases fail closed.                                                                                                                                                                                                                    |
+| Runtime is newer than tested                                 | This is advisory for an otherwise admitted stable release. Pin 2.1.287 for the reviewed baseline or deliberately run the opt-in real-Claude gate before adopting the newer CLI.                                                                                                                                                    |
 | No models or efforts are selectable                          | Confirm native initialization and catalog success, then inspect `modelPolicy`. Claude matchers use model IDs and efforts; `providerIds` are invalid.                                                                                                                                                                               |
 | Initialization times out on a healthy installation           | Investigate slow CLI startup first. If appropriate, increase `initializationTimeoutMs` within its supported one-to-120-second range; do not hide authentication or version failures with a longer timeout.                                                                                                                         |
 | The worker reports query capacity exceeded                   | The fixed 32-query worker guard indicates that too many Claude queries remain resident in one execution environment. Close or archive idle threads and inspect runtime retirement if capacity does not recover. Attaching the same native session twice is denied independently.                                                   |
@@ -517,7 +536,8 @@ an estimate against Claude's effective auto-compaction window. Read failures or
 query/model/compaction changes clear old estimates without interrupting work.
 Rebuild local workers and upgrade remote Claude sidecars with this server:
 the worker requires `query.context_usage`, and the persistent runtime requires
-capability major 3. No browser protocol or database migration is needed.
+`claude_persistent_runtime@4`. Context telemetry itself needs no browser
+protocol or database migration; follow the current upgrade requirements above.
 
 ## Recorded usage
 

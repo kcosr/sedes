@@ -8,7 +8,7 @@ import type { ClaudeRuntimeSessionOptions } from "../../src/server/backends/clau
 import {
   claudeRuntimeCanUseToolOperation,
   claudeRuntimePermissionResponseAckOperation,
-} from "../../src/server/backends/claude/worker/claude-runtime-v2.js";
+} from "../../src/server/backends/claude/worker/claude-runtime-v3.js";
 
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const STARTUP_UUID = "22222222-2222-4222-8222-222222222222";
@@ -45,7 +45,7 @@ describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
       }
       if (operation === "query.open") {
         queryId = (request as { queryId: string }).queryId;
-        return openedResponse("2.1.283", queryId);
+        return openedResponse("2.1.287", queryId);
       }
       throw new Error(`unexpected:${operation}`);
     });
@@ -145,7 +145,7 @@ describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
       }
       if (operation === "query.open") {
         queryId = (request as { queryId: string }).queryId;
-        return openedResponse("2.1.283", queryId);
+        return openedResponse("2.1.287", queryId);
       }
       if (operation === "query.cancel_input") {
         cancels.push(request);
@@ -181,7 +181,7 @@ describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
       }
       if (operation === "query.open") {
         queryId = (request as { queryId: string }).queryId;
-        return openedResponse("2.1.283", queryId);
+        return openedResponse("2.1.287", queryId);
       }
       if (operation === "query.close") return { closed: true };
       throw new Error(`unexpected:${operation}`);
@@ -320,7 +320,7 @@ describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
       }
       if (operation === "query.open") {
         queryId = (request as { queryId: string }).queryId;
-        return openedResponse("2.1.283", queryId);
+        return openedResponse("2.1.287", queryId);
       }
       throw new Error(`unexpected:${operation}`);
     });
@@ -391,7 +391,7 @@ describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
       }
       if (operation === "query.open") {
         queryId = (request as { queryId: string }).queryId;
-        return openedResponse("2.1.283", queryId);
+        return openedResponse("2.1.287", queryId);
       }
       if (operation === "query.close") return { closed: true };
       throw new Error(`unexpected:${operation}`);
@@ -476,7 +476,7 @@ describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
       }
       if (operation === "query.open") {
         queryId = (request as { queryId: string }).queryId;
-        return openedResponse("2.1.283", queryId);
+        return openedResponse("2.1.287", queryId);
       }
       if (operation === "query.close") {
         await remoteClose.promise;
@@ -569,7 +569,7 @@ describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
       }
       if (operation === "query.open") {
         queryId = (request as { queryId: string }).queryId;
-        return openedResponse("2.1.283", queryId);
+        return openedResponse("2.1.287", queryId);
       }
       if (operation === "query.close") return { closed: true };
       throw new Error(`unexpected:${operation}`);
@@ -636,7 +636,7 @@ describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
       }
       if (operation === "query.open") {
         queryId = (request as { queryId: string }).queryId;
-        return openedResponse("2.1.283", queryId);
+        return openedResponse("2.1.287", queryId);
       }
       throw new Error(`unexpected:${operation}`);
     });
@@ -703,7 +703,7 @@ describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
       }
       if (operation === "query.open") {
         queryId = (request as { queryId: string }).queryId;
-        return openedResponse("2.1.283", queryId);
+        return openedResponse("2.1.287", queryId);
       }
       if (operation === "query.close") return { closed: true };
       throw new Error(`unexpected:${operation}`);
@@ -873,7 +873,7 @@ describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
       }
       if (operation === "query.open") {
         queryId = (request as { queryId: string }).queryId;
-        return openedResponse("2.1.283", queryId);
+        return openedResponse("2.1.287", queryId);
       }
       if (operation === "query.close") {
         await cleanup.promise;
@@ -921,7 +921,7 @@ describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
       }
       if (operation === "query.open") {
         queryId = (request as { queryId: string }).queryId;
-        return openedResponse("2.1.283", queryId);
+        return openedResponse("2.1.287", queryId);
       }
       if (operation === "query.close") throw new Error("cleanup_failed");
       throw new Error(`unexpected:${operation}`);
@@ -955,7 +955,7 @@ describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
       }
       if (operation === "query.open") {
         queryId = (request as { queryId: string }).queryId;
-        return openedResponse("2.1.283", queryId);
+        return openedResponse("2.1.287", queryId);
       }
       throw new Error(`unexpected:${operation}`);
     });
@@ -988,7 +988,7 @@ describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
       }
       if (operation === "query.open") {
         queryId = (request as { queryId: string }).queryId;
-        return openedResponse("2.1.283", queryId);
+        return openedResponse("2.1.287", queryId);
       }
       throw new Error(`unexpected:${operation}`);
     });

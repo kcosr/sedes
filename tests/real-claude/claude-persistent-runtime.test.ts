@@ -104,11 +104,19 @@ describe.sequential("real Claude persistent runtime with local SSH carrier stand
       carriers.push(attached);
       return attached;
     }
-    async function waitFor(predicate: () => boolean | Promise<boolean>) {
+    async function waitFor(predicate: () => boolean | Promise<boolean>, phase = "predicate") {
       const deadline = Date.now() + TIMEOUT;
       while (!(await predicate())) {
         if (failures.length) throw failures[0];
-        if (Date.now() >= deadline) throw new Error("REAL_CLAUDE_FAILURE: persistent turn timed out");
+        if (Date.now() >= deadline) {
+          console.info("[real-claude-persistent-diagnostic]", JSON.stringify({
+            phase,
+            hosts: services.status().resources.map(resource => hosts.get(resource.resourceId).abandonmentEvidence()),
+            // This test's audit contains only allowlisted fixture metadata.
+            audit: (await readAudit(auditPath)).slice(-160),
+          }));
+          throw new Error("REAL_CLAUDE_FAILURE: persistent turn timed out");
+        }
         await new Promise(resolve => setTimeout(resolve, 20));
       }
     }
@@ -160,7 +168,7 @@ describe.sequential("real Claude persistent runtime with local SSH carrier stand
       const detachedMessageCount = firstMessages.length;
       expect(hosts.get(runtimeId).snapshot().blockers).toContain("active_work");
       // Completion must happen with no main client and no carrier attached.
-      await waitFor(() => !hosts.get(runtimeId).snapshot().blockers.includes("active_work"));
+      await waitFor(() => !hosts.get(runtimeId).snapshot().blockers.includes("active_work"), "detached_active_work");
       expect(hosts.get(runtimeId).snapshot().blockers).toContain("unsettled_outcome");
       expect(firstMessages).toHaveLength(detachedMessageCount);
 
@@ -356,7 +364,26 @@ OfficialClaudeSdkFacade.prototype.createQuery = function (input) {
     throw new Error("REAL_CLAUDE_BLOCKER: Sonnet 5 low dontAsk (or a locked-down default fork launch) required");
   }
   liveAudit({ persistent: options.persistSession !== false, pid: process.pid, model: options.model, effort: options.effort, permissionMode: options.permissionMode, toolsDisabled: true, ...(fork ? { fork, lockedDown } : {}) });
-  return originalLiveQuery.call(this, { ...input, options });
+  const nativeQuery = originalLiveQuery.call(this, { ...input, options });
+  const nativeIterator = nativeQuery[Symbol.asyncIterator].bind(nativeQuery);
+  nativeQuery[Symbol.asyncIterator] = async function* () {
+    for await (const message of { [Symbol.asyncIterator]: nativeIterator }) {
+      if (message.type !== "stream_event" || ["message_start", "message_stop"].includes(message.event?.type)) {
+        const frame = { type: message.type, at: Date.now() };
+        if (message.subtype) frame.subtype = message.subtype;
+        if (message.type === "stream_event") frame.event = message.event.type;
+        if (message.type === "command_lifecycle") { frame.commandUuid = message.command_uuid; frame.state = message.state; }
+        if (message.type === "system" && message.subtype === "session_state_changed") frame.state = message.state;
+        if (message.type === "system" && message.subtype === "background_tasks_changed") frame.taskCount = message.tasks?.length;
+        if (message.type === "result") { frame.numTurns = message.num_turns; frame.isError = message.is_error; frame.terminalReason = message.terminal_reason; }
+        if (message.user_message_uuid) frame.inputUuid = message.user_message_uuid;
+        if (message.user_message_uuids) frame.inputUuids = message.user_message_uuids;
+        liveAudit({ frame });
+      }
+      yield message;
+    }
+  };
+  return nativeQuery;
 };`,
       }));
     } }],

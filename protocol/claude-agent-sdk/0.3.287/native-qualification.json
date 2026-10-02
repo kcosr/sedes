@@ -1,0 +1,156 @@
+{
+  "schemaVersion": 1,
+  "sdkRelease": "0.3.287",
+  "reviewedOn": "2026-10-02",
+  "platform": "linux/x64",
+  "runtimePolicy": {
+    "minimum": "2.1.287",
+    "testedThrough": "2.1.287",
+    "excludedVersions": []
+  },
+  "sdkArtifact": {
+    "package": "@anthropic-ai/claude-agent-sdk",
+    "version": "0.3.287",
+    "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.287.tgz",
+    "integrity": "sha512-DrYUMzmSVfL1VciNDo/9BhxiVnTsSCKVzxLHB3+NvvRiyN4pfWTKFrUzQesPnWswds9x1Ir10Gi6GRsnjT0UkA==",
+    "bundledClaudeCodeVersion": "2.1.287",
+    "bundledExecutableUsedBySedes": false,
+    "declarationsSha256": "e21c63715af18e383c817716d8cb4a68466ef1b8aff93fc5807c9fcaabbaf240"
+  },
+  "nativeArtifacts": [
+    {
+      "package": "@anthropic-ai/claude-code-linux-x64",
+      "version": "2.1.287",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.287.tgz",
+      "integrity": "sha512-Q31ekN28viVjgfDuZKXUR5vxIBgUYoLGe+cRmjx/f01omqFDMi6IrgmcK5pWMnRbu/cjsTA/zO+bVES5oY3XUg==",
+      "tarballSha256": "348090e889baacf20e6665fd236e2bc617767eb733407151128efd0281a06111",
+      "executableRelativePath": "claude",
+      "executableSha256": "3920489a5109cff5786a1a392c25277408ff22bc796d5edb9c16a60e5a1718f0",
+      "reportedVersion": "2.1.287 (Claude Code)",
+      "qualification": "loopback_fixture_and_authenticated"
+    }
+  ],
+  "limitations": [
+    "No actual SSH host/carrier or outbound execution-host qualification; persistent tests use local framed carriers.",
+    "No native macOS or Windows runtime qualification.",
+    "The prior 2.1.286 persistent timeout did not reproduce on 2.1.287, but its cause remains unknown.",
+    "Native permission initialization and killed-background-Bash cleanup do not establish a global ceiling for every autonomous notification, schedule, or retained query.",
+    "Send now and prewarming remain follow-up work.",
+    "Historical peer replies newly separated by a visible external-input boundary retain previously recorded turn-level usage attribution with conflicting_evidence coverage; replay does not throw or double-charge. No accounting migration is performed."
+  ],
+  "verification": {
+    "date": "2026-10-02",
+    "typecheck": "passed",
+    "build": "passed, including documentation and provider/worker contract checks",
+    "defaultSuite": {
+      "initialRun": {
+        "passed": 13191,
+        "failed": 59,
+        "skipped": 23
+      },
+      "correctedFixtures": {
+        "files": [
+          "tests/integration/backend-runtime-compatibility-policy.test.ts",
+          "tests/unit/claude-persistent-runtime-client.test.ts"
+        ],
+        "passedOnRerun": 46
+      },
+      "remainingEnvironmentFailures": 24,
+      "environmentLimit": "Nested Bubblewrap /proc mounts and hostname changes fail with Operation not permitted; reproduced with isolated probes."
+    },
+    "browser": {
+      "initialRun": {
+        "passed": 119,
+        "failed": 1,
+        "seconds": 425.937,
+        "jobs": 42,
+        "lanes": 4
+      },
+      "retry": {
+        "case": "Pi pending inputs support Delete, Restore, and head Steer on desktop and mobile",
+        "passed": 1,
+        "changedCode": false
+      },
+      "claudeJourneySeconds": 33.384,
+      "claudeJourneyBaselineSeconds": 29,
+      "screenshotsInspected": [
+        "claude-skill-alias-search.png",
+        "claude-parity-streaming-tools.png"
+      ],
+      "timingLimit": "Shared host with concurrent development activity; not a quiet-host comparison."
+    },
+    "realClaude": {
+      "files": 14,
+      "initialRun": {
+        "passed": 33,
+        "failed": 1,
+        "seconds": 124.6
+      },
+      "failure": "Model refused the parallel-tools history request after seeing the native startup source label.",
+      "retry": {
+        "case": "reads a resumed transcript with parallel tool calls through its startup-message tip",
+        "passed": 1,
+        "changedCode": false
+      }
+    },
+    "android": "passed unit tests, debug application/test APK assembly and package checks; no device run",
+    "electron": {
+      "package": "passed full Linux x64 payload, native addons, provider imports, isolated bundled-server startup, HTTP assets and graceful shutdown",
+      "graphicalSmoke": "blocked: no secure OS keyring; Electron reports basic_text"
+    },
+    "reviewFixes": {
+      "typecheck": "passed",
+      "build": "passed",
+      "claudeOffline": {
+        "files": 52,
+        "passed": 1086
+      },
+      "durableUsageReplayTests": {
+        "passed": 2
+      },
+      "claudeBrowser": {
+        "passed": 2,
+        "seconds": 32.121,
+        "screenshotsInspected": true
+      },
+      "realClaude": {
+        "files": 14,
+        "passed": 33,
+        "failed": 1,
+        "seconds": 114.89,
+        "failure": "The same parallel-tools native history case received a model refusal citing the startup source label. No additional retry; the final full live gate is not fully passing."
+      }
+    },
+    "receiptOrderingFix": {
+      "typecheck": "passed",
+      "build": "passed",
+      "claudeAndUsageOffline": {
+        "files": 53,
+        "passed": 1172
+      },
+      "nativeLoopback": {
+        "files": 10,
+        "passed": 29,
+        "seconds": 33.33
+      },
+      "claudeBrowser": {
+        "passed": 2,
+        "seconds": 31.943
+      },
+      "authenticatedLive": "Not repeated for this correction; preceding full run and startup-label refusal remain recorded above."
+    },
+    "retainedReattachFix": {
+      "typecheck": "passed",
+      "build": "passed",
+      "claudeAndUsageOffline": {
+        "files": 53,
+        "passed": 1175
+      },
+      "nativePersistentTextSteerLoopback": {
+        "files": 1,
+        "passed": 1
+      },
+      "authenticatedLive": "Not repeated for this correction; preceding full run and startup-label refusal remain recorded above."
+    }
+  }
+}

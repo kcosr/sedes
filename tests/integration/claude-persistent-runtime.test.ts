@@ -386,7 +386,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
     await f.attach();
     const client = f.client();
     const childId = randomUUID();
-    await expect(client.forkSession(forkOptions(childId))).resolves.toEqual({ cliRelease: "2.1.283" });
+    await expect(client.forkSession(forkOptions(childId))).resolves.toEqual({ cliRelease: "2.1.287" });
     const launch = f.sessions[0]!;
     // Locked down, confirmed, and closed before the host answered.
     expect(launch.options).toMatchObject({ launch: "fork", sessionId: childId, model: "claude-sonnet-4-6", effort: "low", environment: {} });
@@ -399,7 +399,7 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
 
     const bridge = vi.fn<CanUseTool>(async () => ({ behavior: "deny", message: "no" }));
     const child = client.createSession(sessionOptions(childId, { launch: "resume", canUseTool: bridge, permissionMode: "acceptEdits" }));
-    await expect(child.start()).resolves.toMatchObject({ cliRelease: "2.1.283" });
+    await expect(child.start()).resolves.toMatchObject({ cliRelease: "2.1.287" });
     expect(f.runtime.createSession).toHaveBeenCalledTimes(2);
     expect(f.sessions[1]!.options).toMatchObject({ launch: "resume", sessionId: childId, permissionMode: "acceptEdits" });
     expect(f.sessions[1]!.options.canUseTool).toBeTypeOf("function");

@@ -653,6 +653,7 @@ export function Composer({
         skill.name.text.toLocaleLowerCase().includes(query) ||
         skill.displayName?.text.toLocaleLowerCase().includes(query) ||
         skill.reference.toLocaleLowerCase().includes(query) ||
+        skill.aliases?.some((alias) => alias.toLocaleLowerCase().includes(query)) ||
         skill.description?.text.toLocaleLowerCase().includes(query)
       );
     })

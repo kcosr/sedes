@@ -428,6 +428,13 @@ browser, make the Sedes host read an execution-host path, or silently widen
 workspace authority to account-global roots. Account-global roots require an
 explicit installation-owned capability and a fixed documented allowlist.
 
+Skill aliases in normalized catalogs are bounded search metadata, not alternate
+submission identifiers. Resolve native primary-name, builtin, and terminal
+collisions inside the backend before exposing them. Picker selection retains
+the canonical opaque skill ID, and backend submission revalidates that exact
+skill against its current catalog. A backend that does not qualify native
+aliases omits them.
+
 The shared application and browser may receive only:
 
 - normalized IDs, capabilities, messages, turns, interactions, and errors;
@@ -2397,7 +2404,8 @@ exact-target interrupt. An authoritative idle observation accepts a no-op.
 A stale native target is nonapplication; old-turn disappearance alone never
 proves command acceptance. Drivers record operation/generation evidence before
 effects. Persistent Claude owner evidence survives main-client replacement;
-worker capability major 2 and persistent capability major 3 are required, without older-contract parsers.
+`claude_runtime@3` and `claude_persistent_runtime@4` are required, without
+older-contract parsers.
 
 The deadline includes pending-input withdrawal and carrier/SDK acknowledgement.
 An uncertain receipt is reconciled read-only; no internal retry can resend Stop

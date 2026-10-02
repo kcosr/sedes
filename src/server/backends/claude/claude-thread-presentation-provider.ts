@@ -379,6 +379,13 @@ function projectSkills(
             ? { displayName: boundDisplayText(skill.displayName) }
             : {}),
           reference: skill.reference,
+          ...(skill.aliases?.length
+            ? {
+                aliases: skill.aliases
+                  .filter((alias) => alias.length > 0 && alias.length <= 160)
+                  .slice(0, 128),
+              }
+            : {}),
           ...(skill.description
             ? { description: boundDisplayText(skill.description) }
             : {}),

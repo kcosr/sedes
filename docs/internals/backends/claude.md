@@ -27,7 +27,7 @@ The shared backend rules remain normative. Read this page together with
 
 ## Runtime and session ownership
 
-The exact-pinned `@anthropic-ai/claude-agent-sdk` 0.3.283 package runs in one
+The exact-pinned `@anthropic-ai/claude-agent-sdk` 0.3.287 package runs in one
 digest-verified local provider worker or a backend-private persistent runtime
 hosted by the SSH or outbound sidecar. The Claude worker requires Node.js
 24.18+ and POSIX process-group supervision; native Windows Claude is
@@ -39,8 +39,8 @@ enabled. One
 principal/backend runtime owns the SDK queries admitted by the shared Sedes
 conversation-runtime budget for that execution environment. A live Sedes thread
 has at most one warm query. The strict worker and persistent sidecar capabilities
-are `claude_runtime@2` and `claude_persistent_runtime@3`. Worker operations are
-defined in `src/server/backends/claude/worker/claude-runtime-v2.ts`; older majors
+are `claude_runtime@3` and `claude_persistent_runtime@4`. Worker operations are
+defined in `src/server/backends/claude/worker/claude-runtime-v3.ts`; older majors
 are not accepted.
 Closing a handle does not delete its Claude session, and attaching the same
 native session twice is denied independently. After a query closes or fails,
@@ -201,7 +201,7 @@ Sedes does not pass `--replay-user-messages`. Its echoes arrive only with a
 turn's first model output, no earlier than the `user_message_uuid` stamp, and
 it does not echo task-notification rows. The fixture suite
 `tests/real-claude/claude-run-state-native.test.ts` pins these frames on Claude
-Code 2.1.281 through 2.1.283.
+Code 2.1.287.
 
 A send applies model, permission mode, and effort only for an axis that the live
 query generation has not already applied and confirmed. Contrary evidence
@@ -258,7 +258,7 @@ late responses cannot restore them. Missing telemetry leaves context unknown
 without failing the conversation. Persistent reads bind the current service,
 controller and startup identity and never launch or reconnect a runtime for the
 meter. The worker requires `query.context_usage` in its exact operation inventory;
-the persistent closed command union requires major 3.
+the persistent closed command union requires `claude_persistent_runtime@4`.
 
 Counters continue to come from the transcript projection. Every `usage_changed`
 event replaces the complete context-and-counters snapshot. Neither the context
@@ -294,7 +294,7 @@ about the surrounding text, since either would read as an injection from a
 non-user source. It lowers refusals of the first prompt without ending them;
 the [operator guide](../../operator/backends/claude.md#version-compatibility) gives
 the measured effect. Nothing depends on the text. Live
-handling matches the message by UUID, readers drop meta rows, and usage
+handling matches the message by UUID, readers drop internal meta rows, and usage
 baselines use its result. Transcripts with either text read the same. SDK 0.3.274's
 `getSessionMessages` picked the file-latest childless row that is not meta.
 Parallel tool calls leave childless sibling tool results, so a transcript
@@ -318,12 +318,16 @@ Apart from the tip and compaction, the reader reproduces the pinned SDK's
 projection exactly. That covers preserved-segment relinking at compact
 boundaries and re-insertion of off-chain assistant fragments with their
 parallel tool results, whether a result names its call by parent,
-`sourceToolAssistantUUID`, or `tool_use_id`. It converts every answered
-queued-command attachment (a queued prompt, a steer, or a task notification
-Claude read during a turn) to the user row it carried, marked
-`isQueuedCommand`, and marks a completed local command's rows
-`isCompletedLocalCommand` without counting them as prompts. It also covers
-meta, sidechain, and team filtering, `includeSystemMessages`,
+`sourceToolAssistantUUID`, or `tool_use_id`. It converts eligible
+queued-command attachments to the user rows they carried, marked
+`isQueuedCommand`. Native `absorbed_mid_turn` bookkeeping chooses delivered
+copies by delivery ID or unambiguous source UUID; eligible trailing queued
+inputs remain visible without implying acceptance. Explicit undelivered-copy
+evidence overrides the reply/trailing heuristic. Completed local commands
+remain marked `isCompletedLocalCommand` without counting them as prompts.
+External meta origins `peer`, `channel`, `observer`, `observer-activity`, and
+`slack-ping` remain visible; internal meta, sidechain, and team rows remain
+filtered. It also covers `includeSystemMessages`,
 task-notification origin reduction to kind, subkind, and fire reason, the
 `is_meta` flag, and offset/limit slicing. Unparseable
 lines, including a final line still being written, are skipped as the SDK skips
@@ -793,14 +797,43 @@ persistent-host active work. This includes a backgrounded agent's wait, during
 which Claude stays `running` after the foreground result with no idle edge.
 
 Provider history starts a task-notification turn at its notification row, which
-Claude does not stream, and omits a peer hand-back's `isMeta` row entirely.
-Both the live and the reloaded projection therefore identify a turn Claude
-started by its first Anthropic message ID. If a non-ambient `task_notification`
-preceded the turn, the live path opens it with a private in-memory boundary
-marker, so partial text streams under the same turn that reload shows. Otherwise
-its output extends the settled previous turn, as reload does for a peer. The
-result's exact `origin` confirms the choice or corrects it with one resnapshot.
-Markers never enter provider history or submission retry anchors.
+Claude does not stream. Both live and reloaded projection identify that turn
+by its first Anthropic message ID. If a non-ambient `task_notification`
+preceded it, the live path opens it with a private in-memory boundary marker,
+so partial text streams under the same turn that reload shows. The result's
+exact `origin` confirms the choice or corrects it with one resnapshot. Markers
+never enter provider history or submission retry anchors.
+
+SDK 0.3.287 retains external meta inputs from `peer`, `channel`, `observer`,
+`observer-activity`, and `slack-ping`. Their native `is_meta` flag crosses the
+private worker history transport; live synthetic inputs carry the same role.
+These inputs remain visible inside an unfinished native turn, preserving its
+tool results, terminal receipt, and assistant usage ownership. They never add
+their UUIDs to Sedes completion correlations or acknowledge pending Steer.
+When a terminal receipt already settles that turn, only exact native
+`absorbed_mid_turn` bookkeeping allows an external input to remain inside it.
+The reader preserves this evidence as the private `sedesAbsorbedMidTurn` flag;
+ordinary external rows and queued rows visible only because they trail the
+conversation open a separate provider turn after the receipt, including when
+the settled turn has no final assistant row. Live projection uses the active
+native input root and result order to retain the same distinction. No
+transcript/server timestamp comparison decides ownership.
+After a native answer, a standalone external input opens its own UUID-derived
+provider turn. Live projection keeps it in progress until the native result;
+coalesced external UUIDs can identify that result without creating a Sedes
+terminal receipt. Live and reloaded turn and item identities agree. Internal
+synthetic notes remain hidden. An external input arriving between a compaction
+boundary and its summary does not consume the pending summary marker.
+
+Older reads omitted these meta inputs. Revealing one inside an unfinished turn
+leaves persisted assistant usage ownership unchanged. Revealing a standalone
+input after an answer can move a later assistant message to the newly visible
+provider turn. If usage was already captured under the old turn, accounting
+keeps that immutable fact there and reports `conflicting_evidence` on the new
+turn. It does not add the message's tokens again or mark the session's usage
+as conflicting. This is a turn-attribution limitation for previously captured
+history; fresh capture uses the newly visible provider turn.
+Task-notification origins also retain the SDK's `producer` provenance.
 
 A notification that arrives while a turn runs is read by Claude between tool
 calls and folds into that turn. Claude Code records it as a queued-command
@@ -853,7 +886,7 @@ started, or any `worker_restart` notification, as orphaned work. It records the
 bookend and shows a warning notice naming the task by its recorded
 description, or by its native ID, because the task's result never arrived.
 The provider's summary text is not shown.
-`claude-resume-orphan-native.test.ts` qualifies this on Claude Code 2.1.283.
+`claude-resume-orphan-native.test.ts` qualifies this on Claude Code 2.1.287.
 
 `background_tasks_changed` is the authoritative level inventory for live
 subagents, Bash commands, and other nonambient work. It maps to the shared
@@ -969,9 +1002,22 @@ primary decisions and Pi's confirmations; Grok does not advertise provider
 blocking interactions. No provider metadata is added to the browser contract.
 
 Claude permissions use the private versioned `claude.permissions@1` feature.
-The configured `allowedModes` set is a closed backend ceiling. The backend
+The configured `allowedModes` set governs launch and submission admission. The backend
 keeps the SDK permission callback installed in every admitted mode; it does not
 rewrite Claude's user, project, local, or command-line permission files.
+
+Every conversation launch passes an explicit allowed `Options.permissionMode`. An
+allowed persisted selection wins. Imports without one, and saved selections
+the policy no longer allows, use `default` when allowed, otherwise the first
+allowed mode in the fixed order `dontAsk`, `acceptEdits`, `auto`. No automatic
+selection chooses `bypassPermissions`; without an eligible mode, launch fails
+closed. This avoids SDK 0.3.286's changed omission behavior, which would let
+native configuration choose the initial mode before Sedes can inspect it.
+Initialization still adopts only recognized allowed observations; a disallowed,
+unknown, or plan mode blocks new submissions until an allowed selection is
+applied. This launch/submission policy is not a global native sandbox or a
+guarantee about every autonomous action in a retained query. Explicit
+new-thread selections and isolated fork `default` launches are unchanged.
 
 SDK prompts become normalized blocking interactions. Bounded ephemeral session
 grants are available only where the SDK permits them. A decision's authority is
@@ -1024,22 +1070,32 @@ truthful omitted-image presentation. Native image input neither enables
 provider-output artifacts nor strengthens attachment fidelity across forks.
 
 Claude initialization mixes model skills with local, terminal, settings, and
-session-lifecycle commands. Sedes exposes a skill only when a primary command:
+session-lifecycle commands. The backend resolves primary-name winners across
+the complete bounded catalog before limiting displayed skills: native builtins
+win primary-name collisions, and ambiguous equal-precedence rows are omitted.
+A skill must be positively classified by the same stream initialization,
+through its canonical name or, for a non-builtin row, an unshadowed directory
+alias. A builtin alias cannot promote a local command into a skill. Claude reports
+renamed skill directories in the stream skill set while the control catalog
+uses the renamed canonical name. Terminal commands remain excluded.
 
-1. appears in the same stream initialization's skill set;
-2. exists in the official control catalog; and
-3. is absent from the terminal-command set.
+Safe aliases become bounded normalized skill search metadata. An alias is
+omitted when a primary command or terminal command owns its name, when its
+syntax is invalid, or when several catalog rows claim it. The common picker
+matches aliases but selects the canonical opaque skill ID and sends the
+canonical command name. Direct slash aliases remain rejected; aliases grant
+search access, not another command-submission contract. Skill selections and
+canonical direct invocations remain ordinary model turns with a scoped
+immutable skill-to-native-user-UUID association, restoring badges live and on
+reload. Forks copy that association only through a verified UUID remap.
 
-These positively classified skills appear in the common picker. A picker
-selection or exact direct invocation is sent as an ordinary model turn. Sedes
-records a scoped immutable association between the skill and the native user
-message UUID, allowing live and reopened history to restore the skill badge
-without provider-visible framing.
-
-A native fork copies the association only through its verified source-to-child
-UUID remap. Aliases, terminal-only commands, unclassified built-ins, stale
-selections, malformed commands, and reset-producing forms fail before provider
-submission.
+The alias list is bounded to 128 names of at most 160 characters per skill.
+The catalog exposes at most 512 skills. Client protocol 132 carries the
+optional normalized field; Pi, Codex, Grok, and OpenCode omit it and retain
+their existing behavior. Native `builtin` classification stays private and
+is preserved by `claude_runtime@3` / `claude_persistent_runtime@4` catalogs.
+Stale selections, terminal-only commands, unclassified builtins, malformed
+commands, and reset-producing forms fail before provider submission.
 
 ## Agent-tool presentation
 
@@ -1193,7 +1249,7 @@ same child fails with `claude_fork_child_evidence_conflict`.
 
 Claude Code resumes a compacted conversation only from its latest compaction.
 `--resume-session-at` a row before it fails with "No message found", as
-verified on 2.1.283. Only turns whose checkpoint follows the latest compaction
+verified by the current 2.1.287 native suite. Only turns whose checkpoint follows the latest compaction
 summary are forkable. The child holds the boundary, the summary, the preserved
 rows, and later rows up to the checkpoint, with the source's row UUIDs.
 Checkpoint prefixes are therefore counted, digested, and verified from the
@@ -1296,7 +1352,7 @@ Stop also withdraws every input Sedes sent that Claude has not started:
   main's attachments, so it withdraws every such input it holds when it
   handles the `interrupt` command, including a steer an earlier main
   attachment sent that the replacement never saw; main sends no withdrawal of
-  its own. The pinned SDK 0.3.283 implements the request as
+  its own. The pinned SDK 0.3.287 implements the request as
   `Query.cancelAsyncMessage`, although its declaration omits the method. It
   crosses the worker protocol as `query.cancel_input`. Then the owner sends
   the plain interrupt. A failed request proves nothing and does not block
@@ -1329,11 +1385,11 @@ Stop also withdraws every input Sedes sent that Claude has not started:
   belongs to the stopped turn: the interrupted result stamps it, although
   Claude ends it `cancelled`.
 
-`tests/real-claude/claude-steer-native.test.ts` pins both cases on 2.1.281 and
-2.1.283, as well as two steers Claude folds at one tool boundary, three steers
+`tests/real-claude/claude-steer-native.test.ts` pins both cases on 2.1.287,
+as well as two steers Claude folds at one tool boundary, three steers
 unconfirmed at once in one turn, and Stop withdrawing several unstarted steers.
 
-Steer needs 2.1.274 or newer, below the 2.1.281 runtime minimum. Testing
+Steer needs 2.1.274 or newer, below the 2.1.287 runtime minimum. Testing
 2.1.241 showed that it can consume guidance but omits the second input’s
 consumption UUID, which cannot establish safe delivery tracking. Older
 runtimes fail the common admission guard; there is no separate compatibility
@@ -1453,4 +1509,4 @@ changes. The authorization and safety guidance for the real suite remains in
 the [operator guide](../../operator/backends/claude.md#opt-in-live-verification).
 
 Release-specific native qualification and the distinction between native and
-synthetic evidence are recorded in the [SDK 0.3.283 evidence](../../../protocol/claude-agent-sdk/0.3.283/README.md).
+synthetic evidence are recorded in the [SDK 0.3.287 evidence](../../../protocol/claude-agent-sdk/0.3.287/README.md).

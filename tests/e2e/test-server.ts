@@ -374,7 +374,7 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
   }
 
   async readCliRelease(): Promise<string> {
-    return "2.1.283";
+    return "2.1.287";
   }
 
   async readCliAuthStatus() {
@@ -407,7 +407,7 @@ class ClaudeE2eSdk implements ClaudeSdkFacade {
           name: "review",
           description: "Review the current change",
           argumentHint: "[path]",
-          aliases: [],
+          aliases: ["old-review-directory"],
         },
       ],
       agents: [],
@@ -1053,7 +1053,7 @@ function claudeSystemInit(
     type: "system",
     subtype: "init",
     apiKeySource: "oauth",
-    claude_code_version: "2.1.283",
+    claude_code_version: "2.1.287",
     cwd: options.cwd!,
     tools: [],
     mcp_servers: [],
@@ -1062,7 +1062,7 @@ function claudeSystemInit(
     slash_commands: ["review", "compact"],
     terminal_slash_commands: ["compact"],
     output_style: "default",
-    skills: ["review"],
+    skills: ["old-review-directory"],
     plugins: [],
     uuid: crypto.randomUUID(),
     session_id: sessionId,

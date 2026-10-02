@@ -4,6 +4,17 @@
 
 ### Breaking Changes
 
+- Claude now requires Claude Code 2.1.287 or newer and uses Agent SDK 0.3.287.
+  Update Claude Code on every execution host. Rebuild local workers for
+  `claude_runtime@3` and upgrade Claude sidecars for
+  `claude_persistent_runtime@4`, which preserves skill command classification
+  and the updated history behavior.
+  ([#29](https://github.com/kcosr/sedes/pull/29))
+
+- Browser and packaged clients require client protocol 132 for searchable
+  skill aliases. Upgrade clients together with the server.
+  ([#29](https://github.com/kcosr/sedes/pull/29))
+
 - Codex uses the generated 0.160.0 app-server profile. Rebuild the server,
   execution sidecars, and Electron Local together; mismatched compiled Codex
   profiles are rejected. Codex app-servers and managed TUI commands now require
@@ -18,14 +29,14 @@
   v2 backend identity and terminal Stop diagnostics alongside runtime-only
   turn-throughput measurements and optional OpenCode path overrides. (#17, #20)
 
-- Claude persistent runtimes now require `claude_persistent_runtime@3` for
-  current context telemetry. Rebuild local workers for `query.context_usage`
-  and upgrade Claude sidecars with this server. (#24)
+- Claude current context telemetry requires `query.context_usage`. Rebuild
+  local workers and upgrade Claude sidecars with this server using the current
+  capability versions listed above. (#24)
 
-- Claude workers and persistent runtimes require capability major 2 for
-  bounded, recoverable conversation Stop. Rebuild local helpers and upgrade
-  Claude sidecars with this server. Migration 119 closes old unconfirmed Stop
-  receipts without sending a new cancellation. (#17)
+- Claude conversation Stop is bounded and recoverable. Rebuild local helpers
+  and upgrade Claude sidecars with this server using the current capability
+  versions listed above. Migration 119 closes old unconfirmed Stop receipts
+  without sending a new cancellation. (#17)
 
 - Browser and packaged clients must use client protocol 128, which adds
   reviewed Task snapshots to settle/archive previews and completion requests. (#19)
@@ -39,15 +50,8 @@
   browser protocol change is required for this fix. (#15)
 
 - Codex viewed images use a new `viewed_image` transcript item, introduced
-  in client protocol 123. This build requires client protocol 131; see the
+  in client protocol 123. This build requires client protocol 132; see the
   client protocol entries below. (#11, #13, #14)
-
-- Claude backends require Claude Code 2.1.281 or newer and are tested through
-  2.1.283. Earlier releases added a hidden "Continue" prompt when resuming
-  after an interrupted tool call, and failed Agent SDK turns after an
-  assistant message with plain-string content. Update Claude Code on
-  every local and remote execution host before upgrading; an older release
-  fails backend startup. (#12)
 
 - Sidecars must use runtime protocol 14, which reads Claude history through the
   transcript's true tip and across automatic compactions, and reports
@@ -84,6 +88,11 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Find Claude skills by their safe native aliases in the skill picker,
+  including directory names supplied for renamed skills. Selecting a match
+  invokes the canonical skill.
+  ([#29](https://github.com/kcosr/sedes/pull/29))
 
 - Show Claude and OpenCode context occupancy in the composer and Session stats,
   and OpenCode transcript counters across the retained active branch. These
@@ -210,6 +219,11 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- Claude imports and sessions whose saved permission mode is no longer
+  allowed launch with an explicit allowed mode, preferring `default`.
+  Native defaults cannot silently broaden the initial permission mode.
+  ([#29](https://github.com/kcosr/sedes/pull/29))
 
 - **Archived** follows the sidebar's Scope and shares its search, with a status
   line showing the match count, Scope, search, and **Clear scope**. View options
@@ -416,15 +430,18 @@
   Files other than its records are never removed. Sidecars apply this once
   upgraded to this version. (#12)
 
-- Claude backends use Agent SDK 0.3.283 (was 0.3.274). Claude history now
-  reads task notifications Claude received while running a tool, and other
-  queued input, where Claude read them, as SDK 0.3.283 does; they stay inside
-  their turn, so existing threads show the same turns. The Claude Code
-  runtime policy is unchanged (2.1.281 or newer, tested through 2.1.283).
+- Claude history reads task notifications Claude received while running a
+  tool, and other queued input, where Claude read them; they stay inside
+  their turn, so existing threads show the same turns.
   Upgrade sidecars together with the server: the sidecar build changes and
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Claude history retains eligible external-origin messages and chooses queued
+  inputs using native delivery evidence, matching the updated SDK while
+  keeping internal startup markers hidden.
+  ([#29](https://github.com/kcosr/sedes/pull/29))
 
 - Searching **Archived** no longer lists non-matching fork parents, and the
   page no longer re-renders for unrelated application events, which made large

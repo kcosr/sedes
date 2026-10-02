@@ -19,6 +19,8 @@ import { claudeForkContextBoundaryText } from "../../src/server/backends/claude/
 import { USER_FORK_CONTEXT_BOUNDARY } from "../../src/server/backends/fork-context-boundary.js";
 import { claudeAttachmentEnvelope } from "../../src/server/backends/claude/claude-attachment-manifest.js";
 import { claudeViewedImagePublicationKey } from "../../src/server/backends/claude/claude-viewed-images.js";
+import { parseClaudeTranscript, resolveClaudeSessionMessages } from "../../src/server/backends/claude/claude-native-transcript.js";
+import { ClaudeTranscriptFixture } from "../helpers/claude-native-transcript-fixture.js";
 import type { OutputImageArtifactDescriptor } from "../../src/server/output-artifacts/contracts.js";
 import { MAXIMUM_BACKEND_ITEMS_PER_TURN, type BackendConversationSnapshot } from "../../src/shared/protocol/backend.js";
 import {
@@ -190,6 +192,138 @@ describe("Claude turn completion from native stop reasons", () => {
     const settled = projectClaudeHistory([...answered, row(4, "msg-2", { type: "text", text: "And that" }, "end_turn")], [], authentication);
     expect(settled.snapshot.turnsById[id]?.status).toBe("completed");
     expect(settled.terminalCheckpointUuidByBackendTurnId.get(id)).toBe(uuid(4));
+  });
+
+  it.each([
+    { absorbed: false, externalMeta: false }, { absorbed: true, externalMeta: false },
+    { absorbed: false, externalMeta: true }, { absorbed: true, externalMeta: true },
+  ])("never treats a newly visible trailing queue as accepted Steer without scoped consumption ($absorbed, external meta: $externalMeta)", async ({ absorbed, externalMeta }) => {
+    const fixture = new ClaudeTranscriptFixture();
+    fixture.prompt("Original request.", { uuid: uuid(1) });
+    fixture.answer("Original answer.");
+    const before = await resolveClaudeSessionMessages(await parseClaudeTranscript(Buffer.from(fixture.jsonl())));
+    fixture.attachment({ type: "queued_command", source_uuid: uuid(3), delivery_id: "delivery-steer", prompt: "Pending steer.",
+      ...(externalMeta ? { isMeta: true, origin: { kind: "peer" } } : {}) });
+    if (absorbed) fixture.bookkeeping({ type: "queue-operation", operation: "remove", reason: "absorbed_mid_turn",
+      deliveryId: "delivery-steer", commandUuid: uuid(3) });
+    const messages = await resolveClaudeSessionMessages(await parseClaudeTranscript(Buffer.from(fixture.jsonl())));
+    expect(messages.at(-1)).toMatchObject({ uuid: uuid(3), isQueuedCommand: true });
+
+    const pending = { ...historyAuthentication, steerOperations: new Map([[uuid(3), null]]) };
+    const original = projectClaudeHistory(before, [], pending);
+    const projection = projectClaudeHistory(messages, [], pending);
+    expect(projection.snapshot).toEqual(original.snapshot);
+    expect(projection.usage?.counters).toEqual(original.usage?.counters);
+    expect(projection.snapshot.turnsById[projection.snapshot.orderedBackendTurnIds[0]!]!.completionCorrelations).toEqual([uuid(1)]);
+
+    const consumed = projectClaudeHistory(messages, [], { ...historyAuthentication, steerOperations: new Map([[uuid(3), uuid(1)]]) });
+    expect(consumed.snapshot.orderedBackendTurnIds).toEqual(original.snapshot.orderedBackendTurnIds);
+    expect(consumed.snapshot.turnsById[consumed.snapshot.orderedBackendTurnIds[0]!]!).toMatchObject({
+      status: "in_progress", completionCorrelations: [uuid(1), uuid(3)],
+    });
+    expect(consumed.usage?.counters?.userMessages).toBe(2);
+  });
+
+  it.each(["peer", "channel", "observer", "observer-activity", "slack-ping"])("keeps an absorbed %s meta input inside its unfinished native turn", async (kind) => {
+    const fixture = new ClaudeTranscriptFixture();
+    const prompt = fixture.prompt("Original request.");
+    const [call] = fixture.reply([{ type: "tool_use", id: "tool-external", name: "Read", input: { file_path: "/synthetic/file" } }], { stopReason: "tool_use" });
+    const external = uuid(10);
+    fixture.attachment({ type: "queued_command", source_uuid: external, delivery_id: "delivery-external",
+      prompt: "External context.", isMeta: true, origin: { kind } });
+    fixture.bookkeeping({ type: "queue-operation", operation: "remove", reason: "absorbed_mid_turn", deliveryId: "delivery-external" });
+    // The tool result remains after the external input in the active chain.
+    fixture.toolResult("tool-external", fixture.tip!);
+    fixture.answer("Original request answered.");
+    const messages = await resolveClaudeSessionMessages(await parseClaudeTranscript(Buffer.from(fixture.jsonl())));
+    const before = projectClaudeHistory(messages.filter(message => message.uuid !== external));
+    const projection = projectClaudeHistory(messages);
+    expect(projection.snapshot.orderedBackendTurnIds).toEqual(before.snapshot.orderedBackendTurnIds);
+    const turnId = projection.snapshot.orderedBackendTurnIds[0]!;
+    expect(projection.snapshot.turnsById[turnId]).toMatchObject({ status: "completed", completionCorrelations: [prompt] });
+    expect(projection.backendTurnIdByMessageUuid).toEqual(before.backendTurnIdByMessageUuid);
+    expect(projection.nativeUserMessageUuidByBackendTurnId.get(turnId)).toBe(prompt);
+    expect(Object.values(projection.snapshot.itemsById).filter(item => item.semanticKind === "file_read"))
+      .toEqual([expect.objectContaining({ backendTurnId: turnId, status: "completed" })]);
+    expect(JSON.stringify(projection.snapshot)).toContain("External context.");
+    expect(projection.terminalCheckpointUuidByBackendTurnId.get(turnId)).toBe(messages.at(-1)!.uuid);
+    expect(messages.some(message => message.uuid === call)).toBe(true);
+    for (const status of ["failed", "interrupted"] as const) {
+      const settled = projectClaudeHistory(messages, [{ backendTurnId: turnId, status, providerTerminalReason: status,
+        providerResultUuid: uuid(20), terminalAt: 1 }]);
+      expect(settled.snapshot.orderedBackendTurnIds).toEqual([turnId]);
+      expect(settled.snapshot.turnsById[turnId]).toMatchObject({ status, completionCorrelations: [prompt] });
+      expect(settled.backendTurnIdByMessageUuid).toEqual(before.backendTurnIdByMessageUuid);
+    }
+  });
+
+  it.each([
+    { status: "failed", queued: false }, { status: "failed", queued: true },
+    { status: "interrupted", queued: false }, { status: "interrupted", queued: true },
+  ] as const)("opens external context after a $status receipt with no terminal assistant (queued: $queued)", async ({ status, queued }) => {
+    const fixture = new ClaudeTranscriptFixture();
+    const prompt = fixture.prompt("Original request.");
+    const [call] = fixture.reply([{ type: "tool_use", id: "read-before-end", name: "Read", input: { file_path: "/synthetic" } }], { stopReason: "tool_use" });
+    fixture.toolResult("read-before-end", call!);
+    const beforeMessages = await resolveClaudeSessionMessages(await parseClaudeTranscript(Buffer.from(fixture.jsonl())));
+    const before = projectClaudeHistory(beforeMessages);
+    const original = before.snapshot.orderedBackendTurnIds[0]!;
+    const receipt = { backendTurnId: original, status, providerTerminalReason: status, providerResultUuid: uuid(20), terminalAt: 1 };
+    const external = queued
+      ? fixture.attachment({ type: "queued_command", isMeta: true, origin: { kind: "peer" }, prompt: "Later external input." })
+      : fixture.prompt("Later external input.", { isMeta: true, origin: { kind: "peer" } });
+    const trailing = await resolveClaudeSessionMessages(await parseClaudeTranscript(Buffer.from(fixture.jsonl())));
+    expect(trailing.at(-1)).not.toHaveProperty("sedesAbsorbedMidTurn");
+    const pending = projectClaudeHistory(trailing, [receipt]);
+    expect(pending.snapshot.orderedBackendTurnIds).toHaveLength(2);
+    expect(pending.snapshot.turnsById[original]).toMatchObject({ status, completionCorrelations: [prompt] });
+    const provider = pending.snapshot.orderedBackendTurnIds[1]!;
+    expect(pending.snapshot.turnsById[provider]).toMatchObject({ status: "in_progress" });
+    expect(pending.snapshot.turnsById[provider]).not.toHaveProperty("completionCorrelations");
+    expect(pending.externalInputUuidsByBackendTurnId.get(provider)).toEqual(new Set([external]));
+    const answer = fixture.answer("Later external answer.");
+    const messages = await resolveClaudeSessionMessages(await parseClaudeTranscript(Buffer.from(fixture.jsonl())));
+    const completed = projectClaudeHistory(messages, [receipt]);
+    expect(completed.snapshot.orderedBackendTurnIds).toEqual(pending.snapshot.orderedBackendTurnIds);
+    expect(completed.snapshot.turnsById[original]).toEqual(pending.snapshot.turnsById[original]);
+    expect(completed.snapshot.turnsById[provider]).toMatchObject({ status: "completed" });
+    expect(completed.backendTurnIdByMessageUuid.get(answer)).toBe(provider);
+  });
+
+  it("starts a standalone external meta turn after a native answer without giving it a Sedes input identity", async () => {
+    const fixture = new ClaudeTranscriptFixture();
+    const prompt = fixture.prompt("Original request.");
+    fixture.answer("Original answer.");
+    fixture.prompt("External request.", { isMeta: true, origin: { kind: "peer" } });
+    fixture.answer("External answer.");
+    const messages = await resolveClaudeSessionMessages(await parseClaudeTranscript(Buffer.from(fixture.jsonl())));
+    const projection = projectClaudeHistory(messages);
+    expect(projection.snapshot.orderedBackendTurnIds).toHaveLength(2);
+    const [first, external] = projection.snapshot.orderedBackendTurnIds;
+    expect(projection.snapshot.turnsById[first!]!.completionCorrelations).toEqual([prompt]);
+    expect(projection.snapshot.turnsById[external!]!).not.toHaveProperty("completionCorrelations");
+    expect(projection.nativeUserMessageUuidByBackendTurnId.has(external!)).toBe(false);
+  });
+
+  it("keeps ledger-proven external absorption after a terminal-looking answer in the same turn", async () => {
+    const fixture = new ClaudeTranscriptFixture();
+    const prompt = fixture.prompt("Original request.");
+    fixture.answer("A terminal-looking answer before the native result.");
+    const beforeMessages = await resolveClaudeSessionMessages(await parseClaudeTranscript(Buffer.from(fixture.jsonl())));
+    const original = projectClaudeHistory(beforeMessages).snapshot.orderedBackendTurnIds[0]!;
+    fixture.attachment({ type: "queued_command", delivery_id: "after-answer", isMeta: true,
+      origin: { kind: "peer" }, prompt: "External context absorbed before settlement." });
+    fixture.bookkeeping({ type: "queue-operation", operation: "remove", reason: "absorbed_mid_turn", deliveryId: "after-answer" });
+    const answer = fixture.answer("The final answer incorporates that context.");
+    const messages = await resolveClaudeSessionMessages(await parseClaudeTranscript(Buffer.from(fixture.jsonl())));
+    expect(messages.at(-2)).toHaveProperty("sedesAbsorbedMidTurn", true);
+    for (const receipts of [[], [{ backendTurnId: original, status: "completed" as const, providerTerminalReason: "completed",
+      providerResultUuid: uuid(20), terminalAt: 1 }]]) {
+      const projection = projectClaudeHistory(messages, receipts);
+      expect(projection.snapshot.orderedBackendTurnIds).toEqual([original]);
+      expect(projection.snapshot.turnsById[original]).toMatchObject({ status: "completed", completionCorrelations: [prompt] });
+      expect(projection.backendTurnIdByMessageUuid.get(answer)).toBe(original);
+    }
   });
 
   it("closes a turn that ended on a tool result as interrupted when Claude Code resumes it", () => {

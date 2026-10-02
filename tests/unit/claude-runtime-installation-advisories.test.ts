@@ -16,7 +16,7 @@ describe("Claude runtime installation advisories", () => {
     const unsubscribe = source.subscribe(listener);
     const observation = source.beginObservation("health_probe");
     const warning = {
-      version: "2.1.284",
+      version: "2.1.288",
       newerThanTested: true,
     };
 
@@ -30,7 +30,7 @@ describe("Claude runtime installation advisories", () => {
         tone: "warning",
         title: { text: "Claude Code is newer than tested" },
         message: {
-          text: "Running 2.1.284; Sedes is tested through 2.1.283.",
+          text: "Running 2.1.288; Sedes is tested through 2.1.287.",
         },
       },
     ]);
@@ -41,7 +41,7 @@ describe("Claude runtime installation advisories", () => {
     });
     expect(source.active()[0]?.message.text).toContain("Running 2.2.0");
     observation.observeVersionAssessment({
-      version: "2.1.283",
+      version: "2.1.287",
       newerThanTested: false,
     });
     expect(source.active()).toEqual([]);
@@ -67,7 +67,7 @@ describe("Claude runtime installation advisories", () => {
     const source = new ClaudeRuntimeInstallationAdvisories();
     const observation = source.beginObservation("conversation_session");
     observation.observeVersionAssessment({
-      version: "2.1.284",
+      version: "2.1.288",
       newerThanTested: true,
     });
 
@@ -83,7 +83,7 @@ describe("Claude runtime installation advisories", () => {
 
     newer.failed();
     older.observeVersionAssessment({
-      version: "2.1.284",
+      version: "2.1.288",
       newerThanTested: true,
     });
 
@@ -94,7 +94,7 @@ describe("Claude runtime installation advisories", () => {
     const source = new ClaudeRuntimeInstallationAdvisories();
     const older = source.beginObservation("health_probe");
     older.observeVersionAssessment({
-      version: "2.1.284",
+      version: "2.1.288",
       newerThanTested: true,
     });
     const newer = source.beginObservation("conversation_session");

@@ -1,4 +1,5 @@
 import { turnFailure } from "../turn-failure.js";
+import { claudeMessageHasVisibleExternalOrigin } from "./claude-message-scope.js";
 import type { ClaudeTaskLifecycleReceipt } from "./claude-thread-repository.js";
 import { createHash } from "node:crypto";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -149,6 +150,8 @@ export interface ClaudeHistoryProjection {
   readonly backendTurnIdByMessageUuid: ReadonlyMap<string, string>;
   readonly inheritedUsage?: {readonly forkOperationId: string; readonly turns: readonly {readonly backendTurnId: string; readonly sourceBackendTurnId: string}[]};
   readonly nativeUserMessageUuidByBackendTurnId: ReadonlyMap<string, string>;
+  /** Visible external context identities never count as Sedes input acceptance. */
+  readonly externalInputUuidsByBackendTurnId: ReadonlyMap<string, ReadonlySet<string>>;
   /** Main-thread tool calls in the entire supplied transcript, including older pages. */
   readonly nativeToolUseIds: ReadonlySet<string>;
   /** Last terminal assistant UUID, used only for provider receipt correlation. */
@@ -244,6 +247,10 @@ interface ParsedSessionMessage {
   readonly mainThread: boolean;
   readonly message: SessionMessage["message"];
   readonly origin?: unknown;
+  /** Native meta input is context from Claude or an external source, not a Sedes prompt. */
+  readonly meta?: true;
+  /** Sedes-private: exact native queue absorption, independent of later visibility. */
+  readonly absorbedMidTurn?: true;
   /** Anthropic Messages API identity shared by streamed and durable blocks. */
   readonly assistantMessageId?: string;
   /** Explicit null means this streamed block is not a turn boundary. */
@@ -252,7 +259,7 @@ interface ParsedSessionMessage {
   readonly timestamp?: string;
   /** Claude Code's compaction summary: the model's context for what came before. */
   readonly compactSummary?: true;
-  /** Queued input Claude read during a running turn, not input that started one. */
+  /** Visible input converted from a queued-command attachment. */
   readonly queuedCommand?: true;
 }
 
@@ -264,6 +271,7 @@ interface ProjectedTimeline {
   readonly backendTurnIdByMessageUuid: ReadonlyMap<string, string>;
   readonly inheritedUsage?: {readonly forkOperationId: string; readonly turns: readonly {readonly backendTurnId: string; readonly sourceBackendTurnId: string}[]};
   readonly nativeUserMessageUuidByBackendTurnId: ReadonlyMap<string, string>;
+  readonly externalInputUuidsByBackendTurnId: ReadonlyMap<string, ReadonlySet<string>>;
   /** Main-thread tool calls in the entire supplied transcript, including older pages. */
   readonly nativeToolUseIds: ReadonlySet<string>;
   readonly terminalAssistantUuidByBackendTurnId: ReadonlyMap<string, string>;
@@ -436,6 +444,7 @@ export function projectClaudeLatestSnapshot(
     ...(timeline.inheritedUsage ? {inheritedUsage: timeline.inheritedUsage} : {}),
     nativeUserMessageUuidByBackendTurnId:
       timeline.nativeUserMessageUuidByBackendTurnId,
+    externalInputUuidsByBackendTurnId: timeline.externalInputUuidsByBackendTurnId,
     nativeToolUseIds: timeline.nativeToolUseIds,
     terminalAssistantUuidByBackendTurnId:
       timeline.terminalAssistantUuidByBackendTurnId,
@@ -638,6 +647,7 @@ function buildTimeline(
   const itemsById: Record<string, BackendItem> = {};
   const toolItemsByNativeId = new Map<string, string>();
   const nativeUserMessageUuidByBackendTurnId = new Map<string, string>();
+  const externalInputUuidsByBackendTurnId = new Map<string, Set<string>>();
   const terminalAssistantUuidByBackendTurnId = new Map<string, string>();
   const terminalCheckpointUuidByBackendTurnId = new Map<string, string>();
   const authenticatedForkContextBoundaryOperationIds = new Set<string>();
@@ -890,14 +900,20 @@ function buildTimeline(
     // Retained native enqueue echoes are not consumption evidence. A scoped
     // association must be durable before Steer becomes accepted in history.
     if (message.type === "user" && authentication?.steerOperations?.get(message.uuid) === null) continue;
+    const steerRoot = authentication?.steerOperations?.get(message.uuid);
+    const externalMetaInput = message.type === "user" && message.meta === true &&
+      steerRoot === undefined && claudeMessageHasVisibleExternalOrigin(message.origin);
     const startsTurn =
       message.type === "user" &&
       content.some((block) => block.type !== "tool_result");
-    const steerRoot = authentication?.steerOperations?.get(message.uuid);
-    // Only an observed native association can join an earlier application turn.
-    // A pending enqueue is not evidence that a user message belongs to it.
-    const joinsCurrent = startsTurn && current !== undefined && steerRoot !== undefined &&
-      steerRoot !== null && current.completionCorrelations.includes(steerRoot);
+    // A Sedes input joins only through observed consumption. External meta
+    // context keeps the unfinished native turn it interrupted, without
+    // claiming input acceptance or moving the response's usage ownership.
+    const joinsCurrent = startsTurn && current !== undefined && (
+      steerRoot !== undefined && steerRoot !== null && current.completionCorrelations.includes(steerRoot) ||
+      externalMetaInput && (message.absorbedMidTurn === true ||
+        isUnsettledTurn(current) && !hasTerminalReceipt(terminalReceipts, current.backendTurnId))
+    );
     if (startsTurn && !joinsCurrent) {
       finishTurn();
       pendingProviderBoundary = undefined;
@@ -926,7 +942,12 @@ function buildTimeline(
       );
       if (ordinaryBlocks.length > 0) {
         userMessages += 1;
-        if (isOperationId(message.uuid)) {
+        if (externalMetaInput) {
+          const externalInputs = externalInputUuidsByBackendTurnId.get(current.backendTurnId) ?? new Set<string>();
+          externalInputs.add(message.uuid);
+          externalInputUuidsByBackendTurnId.set(current.backendTurnId, externalInputs);
+        }
+        if (!externalMetaInput && isOperationId(message.uuid)) {
           current.completionCorrelations.push(message.uuid);
           current.nativeUserMessageUuid ??= message.uuid;
         }
@@ -1133,6 +1154,7 @@ function buildTimeline(
     itemsById,
     usage,
     nativeUserMessageUuidByBackendTurnId,
+    externalInputUuidsByBackendTurnId,
     backendTurnIdByMessageUuid,
     ...(inheritedUsage ? {inheritedUsage} : {}),
     nativeToolUseIds: new Set(toolItemsByNativeId.keys()),
@@ -1507,6 +1529,8 @@ function parseMessages(
       mainThread: parentToolUseId === null && parentAgentId === null,
       message: candidate.message,
       ...(candidate.origin !== undefined ? { origin: candidate.origin } : {}),
+      ...(type === "user" && candidate.is_meta === true ? { meta: true as const } : {}),
+      ...(type === "user" && candidate.sedesAbsorbedMidTurn === true ? { absorbedMidTurn: true as const } : {}),
       ...(type === "assistant" &&
       isPlainRecord(candidate.message) &&
       boundedNativeId(candidate.message.id)
