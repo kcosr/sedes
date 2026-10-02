@@ -11,7 +11,7 @@ export const DIMENSION_META: Readonly<Record<UsageAnalyticsDimension, { label: s
   backend: { label: "Backend", plural: "Backends", unknown: "Unknown backend" },
   backendKind: { label: "Backend type", plural: "Backend types", unknown: "Unknown type" },
   environment: { label: "Environment", plural: "Environments", unknown: "Unknown environment" },
-  workspace: { label: "Project", plural: "Projects", unknown: "Unknown project" },
+  workspace: { label: "Location", plural: "Locations", unknown: "Unknown location" },
   effort: { label: "Reasoning effort", plural: "Reasoning effort", unknown: "Not recorded" },
   thread: { label: "Thread", plural: "Threads", unknown: "Unknown thread" },
   agentRole: { label: "Agent", plural: "Agents", unknown: "Unknown agent" },
@@ -84,10 +84,10 @@ export function dimensionLabel(
     case "model": return plain(key);
     case "backend": return plain(known?.label ?? "Removed backend", { brand: backendKindBrand(known?.kind), unknown: !known });
     case "environment": return plain(known?.label ?? "Removed environment", { unknown: !known });
-    case "workspace": return plain(known?.label ?? "Removed project", { detail: shortenPath(known?.detail ?? null), retired: known?.retired ?? false, unknown: !known });
+    case "workspace": return plain(known?.label ?? "Removed location", { detail: shortenPath(known?.detail ?? null), retired: known?.retired ?? false, unknown: !known });
     case "thread": {
-      const project = known?.workspaceId ? labels?.workspace[known.workspaceId]?.label ?? null : null;
-      return plain(known?.label ?? "Removed thread", { detail: project, brand: backendKindBrand(known?.kind), retired: known?.retired ?? false, unknown: !known });
+      const location = known?.workspaceId ? labels?.workspace[known.workspaceId]?.label ?? null : null;
+      return plain(known?.label ?? "Removed thread", { detail: location, brand: backendKindBrand(known?.kind), retired: known?.retired ?? false, unknown: !known });
     }
   }
 }

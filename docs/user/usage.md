@@ -25,7 +25,7 @@ The toolbar applies to everything on the page.
   that suits the range. Buckets follow your browser's time zone, including
   daylight-saving changes; weeks start on Monday.
 - **Filter** narrows the page by model, provider, reasoning effort, backend,
-  backend type, environment, project, thread, agent, or activity. The count
+  backend type, environment, location, thread, agent, or activity. The count
   beside each choice already reflects your other filters. The list shows the
   60 largest values; type in its search box to find others by name or ID. **Unknown
   model**, **Not recorded**, and similar choices select usage without that
@@ -43,7 +43,8 @@ remembered in this browser.
   time, grouped by one dimension. Choose stacked columns or lines, select
   legend entries to hide or show a series, or switch to a table. Cards break
   the range down by model, provider, reasoning effort, backend, environment,
-  project, agent, and activity.
+  location, agent, and activity. A location is one project directory on one
+  environment.
 - **Explore** is a sortable table of any dimension with every metric. Choose
   **Split** to compare two dimensions, such as model by reasoning effort.
   **Export CSV** downloads what is shown: the table, or every combination of
