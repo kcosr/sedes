@@ -73,6 +73,7 @@ function context(): TrustedToolInvocationContext {
       kind: "thread_agent",
       environmentId: "environment-1",
       workspaceId,
+      projectId: "project-1",
       threadId: "10000000-0000-4000-8000-000000000010",
     },
     policyIdentity: {
@@ -87,6 +88,7 @@ function context(): TrustedToolInvocationContext {
         kind: "thread_agent",
         environmentId: "environment-1",
         workspaceId,
+        projectId: "project-1",
         threadId: "10000000-0000-4000-8000-000000000010",
       },
       policyIdentity: {

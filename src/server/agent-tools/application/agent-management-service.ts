@@ -25,9 +25,15 @@ import { DomainError } from "../../domain/errors.js";
 import type { TaskService } from "../../domain/task-service.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import {
+  currentScopedResourceRefs,
   environmentAuthorityContinuationDigest,
+  grantProjectAccessCaller,
   requireAdmittedEnvironment,
   requireAdmittedResource,
+  requireAdmittedResources,
+  requireExactScopeQuery,
+  scopeAuthorityRefs,
+  type AgentToolEnvironmentAuthorityReader,
   type TrustedEnvironmentAuthorityGrant,
 } from "../environment/environment-authority.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
@@ -94,7 +100,7 @@ export type AgentThreadListScope =
 export type AgentTaskSummary = {
   readonly id: string;
   readonly scope: TaskScope;
-  readonly associatedWorkspaceId: string | null;
+  readonly associatedProjectId: string | null;
   readonly title: string;
   readonly pinned: boolean;
   readonly completedAt: string | null;
@@ -170,18 +176,19 @@ function activity(runState: string): AgentThreadActivity {
   return "running";
 }
 
-function taskScope(record: {
-  readonly scopeKind: "global" | "workspace" | "thread";
-  readonly workspaceId: string | null;
+function summaryTaskScope(record: {
+  readonly scopeKind: "global" | "project" | "thread";
+  readonly projectId: string | null;
   readonly threadId: string | null;
 }): TaskScope {
-  if (record.scopeKind === "workspace") {
-    return { kind: "workspace", workspaceId: record.workspaceId! };
+  switch (record.scopeKind) {
+    case "global":
+      return { kind: "global" };
+    case "project":
+      return { kind: "project", projectId: record.projectId! };
+    case "thread":
+      return { kind: "thread", threadId: record.threadId! };
   }
-  if (record.scopeKind === "thread") {
-    return { kind: "thread", threadId: record.threadId! };
-  }
-  return { kind: "global" };
 }
 
 function throwIfAborted(signal: AbortSignal): void {
@@ -206,6 +213,8 @@ export class AgentManagementService {
       >;
       readonly taskRepository: TaskRepository;
       readonly tasks: Pick<TaskService, "create" | "update">;
+      /** Live authority facts, read through the same reader as admission. */
+      readonly authorityReader: AgentToolEnvironmentAuthorityReader;
     },
   ) {}
 
@@ -217,7 +226,11 @@ export class AgentManagementService {
 
   openWorkspaceForAgent(
     scope: RequestScope,
-    request: { readonly environmentId: string; readonly path: string },
+    request: {
+      readonly environmentId: string;
+      readonly path: string;
+      readonly projectId?: string;
+    },
     environmentAuthority: TrustedEnvironmentAuthorityGrant,
     signal?: AbortSignal,
   ): Promise<OpenedWorkspaceSummary> {
@@ -565,28 +578,37 @@ export class AgentManagementService {
       readonly pageSize: number;
     },
   ): AgentTaskPage {
-    const page = this.input.taskRepository.listPageWithEnvironmentAuthority(
-      scope,
-      {
+    requireExactScopeQuery(
+      authority,
+      scopeAuthorityRefs(
+        this.input.authorityReader,
+        scope,
         taskScope,
-        scopeMode: request.scopeMode,
-        targetEnvironmentIds: authority.targetEnvironmentIds,
+        grantProjectAccessCaller(authority),
+        request.scopeMode,
+      ),
+    );
+    const page = this.input.taskRepository.listPage(scope, {
+      taskScope,
+      scopeMode: request.scopeMode,
+      ...(request.completed === undefined
+        ? {}
+        : { completed: request.completed }),
+      ...(request.pinned === undefined ? {} : { pinned: request.pinned }),
+      ...(request.query === undefined ? {} : { query: request.query }),
+      projection: request.projection,
+      ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
+      pageSize: request.pageSize,
+      authorityBinding: {
         sourceEnvironmentId: authority.defaults.environmentId,
+        targetEnvironmentIds: authority.targetEnvironmentIds,
         policyRevision: authority.policyIdentity.revision,
         continuationAuthorityDigest: environmentAuthorityContinuationDigest(
           authority,
           TASK_LIST_TOOL,
         ),
-        ...(request.completed === undefined
-          ? {}
-          : { completed: request.completed }),
-        ...(request.pinned === undefined ? {} : { pinned: request.pinned }),
-        ...(request.query === undefined ? {} : { query: request.query }),
-        projection: request.projection,
-        ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
-        pageSize: request.pageSize,
       },
-    );
+    });
     if (page.projection === "full") {
       return {
         projection: page.projection,
@@ -598,8 +620,8 @@ export class AgentManagementService {
       projection: page.projection,
       items: page.items.map((item) => ({
         id: item.id,
-        scope: taskScopeFromSummary(item),
-        associatedWorkspaceId: item.associatedWorkspaceId,
+        scope: summaryTaskScope(item),
+        associatedProjectId: item.associatedProjectId,
         title: item.title,
         pinned: item.pinned,
         completedAt:
@@ -620,20 +642,11 @@ export class AgentManagementService {
     taskId: string,
     authority: TrustedEnvironmentAuthorityGrant,
   ): Task {
-    const taskAuthority =
-      this.input.taskRepository.resolveTaskEnvironmentAuthority(scope, taskId);
-    requireAdmittedResource(authority, {
-      kind: "task",
-      id: taskId,
-      revision: taskAuthority.revision,
-      ...(taskAuthority.environmentId === null
-        ? {}
-        : { environmentId: taskAuthority.environmentId }),
-    });
     return presentTask(
-      this.input.taskRepository.getWithEnvironmentAuthority(
+      this.input.taskRepository.getAtRevision(
         scope,
-        taskAuthority,
+        taskId,
+        this.#requireAdmittedTask(scope, taskId, authority),
       ),
     );
   }
@@ -650,13 +663,7 @@ export class AgentManagementService {
       readonly taskScope: TaskScope;
     },
   ): Promise<Task> {
-    for (const environmentId of this.input.taskRepository.resolveScopeEnvironmentIds(
-      scope,
-      request.taskScope,
-      "exact",
-    )) {
-      requireAdmittedEnvironment(authority, environmentId);
-    }
+    this.#requireAdmittedDestination(scope, request.taskScope, authority);
     return this.input.tasks.create(scope, {
       mutationId,
       title: request.title,
@@ -674,44 +681,54 @@ export class AgentManagementService {
     authority: TrustedEnvironmentAuthorityGrant,
     request: Omit<UpdateTaskRequest, "mutationId">,
   ): Promise<Task> {
-    const current = this.input.taskRepository.resolveTaskEnvironmentAuthority(
-      scope,
-      taskId,
-    );
-    requireAdmittedResource(authority, {
-      kind: "task",
-      id: taskId,
-      revision: current.revision,
-      ...(current.environmentId === null
-        ? {}
-        : { environmentId: current.environmentId }),
-    });
-    if (current.revision !== request.expectedRevision) {
+    const revision = this.#requireAdmittedTask(scope, taskId, authority);
+    if (revision !== request.expectedRevision) {
       throw new DomainError(
         "task_revision_conflict",
         "The task changed in another client.",
       );
     }
     if (request.scope !== undefined) {
-      for (const environmentId of this.input.taskRepository.resolveScopeEnvironmentIds(
-        scope,
-        request.scope,
-        "exact",
-      )) {
-        requireAdmittedEnvironment(authority, environmentId);
-      }
+      this.#requireAdmittedDestination(scope, request.scope, authority);
     }
     return this.input.tasks.update(scope, taskId, {
       mutationId,
       ...request,
     });
   }
-}
 
-function taskScopeFromSummary(record: {
-  readonly scopeKind: "global" | "workspace" | "thread";
-  readonly workspaceId: string | null;
-  readonly threadId: string | null;
-}): TaskScope {
-  return taskScope(record);
+  /** Rechecks the task's current scope; returns the admitted revision. */
+  #requireAdmittedTask(
+    scope: RequestScope,
+    taskId: string,
+    authority: TrustedEnvironmentAuthorityGrant,
+  ): number {
+    const refs = currentScopedResourceRefs(
+      this.input.authorityReader,
+      scope,
+      "task",
+      taskId,
+      grantProjectAccessCaller(authority),
+    );
+    requireAdmittedResources(authority, refs);
+    return refs.find(({ kind }) => kind === "task")!.revision!;
+  }
+
+  /** A destination scope must have been admitted exactly as it is now. */
+  #requireAdmittedDestination(
+    scope: RequestScope,
+    destination: TaskScope,
+    authority: TrustedEnvironmentAuthorityGrant,
+  ): void {
+    requireAdmittedResources(
+      authority,
+      scopeAuthorityRefs(
+        this.input.authorityReader,
+        scope,
+        destination,
+        grantProjectAccessCaller(authority),
+        "exact",
+      ),
+    );
+  }
 }

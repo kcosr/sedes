@@ -27,7 +27,16 @@ describe("DatabaseAgentToolSourceAuthority", () => {
         owner_principal_id TEXT NOT NULL,
         environment_id TEXT NOT NULL,
         id TEXT NOT NULL,
+        project_id TEXT NOT NULL DEFAULT 'project-1',
         display_name TEXT NOT NULL,
+        removed_at INTEGER
+      ) STRICT;
+      CREATE TABLE projects (
+        tenant_id TEXT NOT NULL,
+        owner_principal_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        membership_revision INTEGER NOT NULL,
         removed_at INTEGER
       ) STRICT;
       CREATE TABLE agent_backend_instances (
@@ -68,8 +77,7 @@ describe("DatabaseAgentToolSourceAuthority", () => {
         owner_principal_id TEXT NOT NULL,
         id TEXT NOT NULL,
         scope_kind TEXT NOT NULL,
-        environment_id TEXT,
-        workspace_id TEXT,
+        project_id TEXT,
         thread_id TEXT,
         revision INTEGER NOT NULL DEFAULT 0,
         title TEXT NOT NULL
@@ -80,6 +88,8 @@ describe("DatabaseAgentToolSourceAuthority", () => {
       INSERT INTO workspaces(
         tenant_id, owner_principal_id, environment_id, id, display_name
       ) VALUES ('${tenantId}', '${principalId}', '${environmentId}', '${workspaceId}', 'Sedes');
+      INSERT INTO projects(tenant_id, owner_principal_id, id, name, membership_revision)
+      VALUES ('${tenantId}', '${principalId}', 'project-1', 'Sedes', 4);
       INSERT INTO agent_backend_instances(tenant_id, id, kind)
       VALUES ('${tenantId}', 'backend-1', 'codex_app_server');
       INSERT INTO application_threads(
@@ -179,11 +189,10 @@ describe("DatabaseAgentToolSourceAuthority", () => {
     database
       .prepare(
         `INSERT INTO tasks(
-          tenant_id, owner_principal_id, id, scope_kind, environment_id,
-          workspace_id, thread_id, title
-        ) VALUES (?, ?, ?, 'thread', NULL, NULL, ?, 'Review')`,
+          tenant_id, owner_principal_id, id, scope_kind, project_id, thread_id, title
+        ) VALUES (?, ?, ?, 'thread', NULL, ?, 'Review'), (?, ?, ?, 'project', 'project-1', NULL, 'Shared')`,
       )
-      .run(tenantId, principalId, "task-1", threadId);
+      .run(tenantId, principalId, "task-1", threadId, tenantId, principalId, "task-2");
     expect(authority.listEnvironments({ tenantId, principalId })).toEqual([
       { id: environmentId, environmentId, label: "Local" },
     ]);
@@ -211,6 +220,27 @@ describe("DatabaseAgentToolSourceAuthority", () => {
       threadId,
       revision: 0,
     });
+    expect(authority.resolveTask({ tenantId, principalId }, "task-2")).toEqual({
+      id: "task-2",
+      scopeKind: "project",
+      projectId: "project-1",
+      revision: 0,
+      label: "Shared",
+    });
+    expect(authority.resolveProject({ tenantId, principalId }, "project-1")).toEqual({
+      id: "project-1",
+      label: "Sedes",
+      membershipRevision: 4,
+      memberEnvironmentIds: [environmentId],
+    });
+    expect(authority.resolveWorkspaceProject({ tenantId, principalId }, workspaceId)).toBe("project-1");
+    expect(authority.resolveProject({ tenantId, principalId: "other" }, "project-1")).toBeUndefined();
+    // Removed locations leave a project without member environments; a removed project is not found.
+    database.prepare("UPDATE workspaces SET removed_at = 9 WHERE id = ?").run(workspaceId);
+    expect(authority.resolveProject({ tenantId, principalId }, "project-1")).toMatchObject({ memberEnvironmentIds: [] });
+    expect(authority.resolveWorkspaceProject({ tenantId, principalId }, workspaceId)).toBeUndefined();
+    database.prepare("UPDATE projects SET removed_at = 10").run();
+    expect(authority.resolveProject({ tenantId, principalId }, "project-1")).toBeUndefined();
   });
 
   it.each([

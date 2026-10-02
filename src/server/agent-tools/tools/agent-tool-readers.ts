@@ -5,7 +5,7 @@ import type { TrustedEnvironmentAuthorityGrant } from "../environment/environmen
 export interface AgentSourceContext {
   readonly threadId: string;
   readonly workspaceId: string;
-  /** The project of the source workspace, read when the tool runs. */
+  /** The project of the source workspace, read live at admission. */
   readonly projectId: string;
   readonly backend: BackendKind;
 }
@@ -19,16 +19,6 @@ export interface ThreadStatusResult {
 
 /** A scoped miss and a foreign-scope thread are intentionally indistinguishable. */
 export interface AgentToolApplicationReader {
-  /**
-   * The current project of the caller's own workspace. A location can move
-   * between projects while its threads run, so this is never part of the
-   * captured source authority.
-   */
-  readWorkspaceProjectId(
-    scope: RequestScope,
-    workspaceId: string,
-    signal: AbortSignal,
-  ): Promise<string | undefined>;
   readThreadStatus(
     scope: RequestScope,
     threadId: string,

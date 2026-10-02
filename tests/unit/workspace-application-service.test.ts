@@ -10,6 +10,7 @@ const agentAuthority = {
     kind: "thread_agent",
     environmentId: "environment-source",
     workspaceId: "workspace-source",
+    projectId: "project-1",
     threadId: "thread-source",
   },
   policyIdentity: {

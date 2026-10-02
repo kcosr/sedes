@@ -96,7 +96,6 @@ function fixture() {
   const management = unavailableDomainService<AgentManagementService>();
   const canonical = new CanonicalInlineAgentToolService({
     application: {
-      readWorkspaceProjectId: async () => workspace.projectId,
       readThreadStatus: async (_scope, threadId) =>
         threadId === thread.id
           ? {
@@ -318,7 +317,7 @@ describe("principal agent-tool client persistence and admission", () => {
       app.use(createAgentToolRouter(dependencies));
       const invoke = (toolId: string, input: unknown) => request(app).post("/api/agent-tool-invocations")
         .set(SEDES_AGENT_TOOL_CLIENT_CREDENTIAL_HEADER, created.credential)
-        .send({ toolId, schemaVersion: 1, requestId: randomUUID(), input });
+        .send({ toolId, schemaVersion: 2, requestId: randomUUID(), input });
       const response = await invoke("workpad.create", { title: "Client notes", scope: { kind: "thread" }, content: "Original" }).expect(200);
       const pad = response.body.output.workpad;
       expect(pad.author).toMatchObject({ kind: "tool_client", clientId: created.client.id, threadId: null, name: "Build CLI" });
@@ -919,5 +918,128 @@ describe("principal agent-tool client persistence and admission", () => {
         .toEqual({ id: remoteEnvironmentId, availability: "unavailable", diagnosticCode: "configuration_removed" });
       expect(() => value.service().revoke(value.scope, created.client.id, created.client.policyRevision)).not.toThrow();
     } finally { value.database.close(); }
+  });
+});
+
+describe("principal Tool client project access", () => {
+  function projectFixture(allowRemote: boolean) {
+    const value = fixture();
+    const inventory = new InventoryRepository(value.database);
+    const location = (
+      environmentId: string,
+      canonicalPath: string,
+      project:
+        | { readonly kind: "new"; readonly name: string }
+        | { readonly kind: "existing"; readonly projectId: string },
+    ) =>
+      inventory.upsertWorkspace(value.scope, {
+        environmentId,
+        canonicalPath,
+        displayName: canonicalPath.split("/").at(-1)!,
+        project,
+        available: true,
+        trustState: "trusted",
+        environmentConfigurationRevision: 0,
+        now: 200,
+      });
+    const created = createClient(value, {
+      toolIds: ["workpad.create"],
+      allowedEnvironmentIds: allowRemote
+        ? [value.environment.id, remoteEnvironmentId]
+        : [value.environment.id],
+    });
+    const admit = (scope: unknown) =>
+      value.service().admitInvocation(created.credential, {
+        toolId: "workpad.create",
+        schemaVersion: 2,
+        requestId: randomUUID(),
+        input: { title: "Shared", scope },
+      });
+    const accessEnvironments = (scope: unknown) =>
+      admit(scope)
+        .authority.environmentAuthority.resolvedResourceRefs.filter(
+          ({ kind }) => kind === "project",
+        )
+        .map(({ environmentId }) => environmentId);
+    return { ...value, inventory, location, created, admit, accessEnvironments };
+  }
+
+  it("uses the default environment when it is a member and otherwise the lowest allowlisted member", () => {
+    const value = projectFixture(true);
+    try {
+      // The default location's project is the default project scope.
+      expect(value.accessEnvironments({ kind: "project" })).toEqual([value.environment.id]);
+      value.location(remoteEnvironmentId, "/srv/principal-client", {
+        kind: "existing",
+        projectId: value.workspace.projectId,
+      });
+      expect(value.accessEnvironments({ kind: "project" })).toEqual([value.environment.id]);
+      const remoteOnly = value.location(remoteEnvironmentId, "/srv/remote-only", {
+        kind: "new",
+        name: "Remote only",
+      });
+      expect(
+        value.accessEnvironments({ kind: "project", projectId: remoteOnly.projectId }),
+      ).toEqual([remoteEnvironmentId]);
+    } finally {
+      value.database.close();
+    }
+  });
+
+  it("denies a project with no allowlisted member, with no active location, or removed", () => {
+    const value = projectFixture(false);
+    try {
+      const remoteOnly = value.location(remoteEnvironmentId, "/srv/remote-only", {
+        kind: "new",
+        name: "Remote only",
+      });
+      expect(() => value.admit({ kind: "project", projectId: remoteOnly.projectId })).toThrow(
+        expect.objectContaining({ code: "permission_denied" }),
+      );
+      // Any one allowlisted member reaches a project for an exact scope.
+      value.location(value.environment.id, "/srv/local-copy", {
+        kind: "existing",
+        projectId: remoteOnly.projectId,
+      });
+      expect(value.accessEnvironments({ kind: "project", projectId: remoteOnly.projectId })).toEqual([
+        value.environment.id,
+      ]);
+
+      const emptied = value.location(value.environment.id, "/srv/emptied", { kind: "new", name: "Emptied" });
+      value.inventory.removeWorkspace(value.scope, emptied.id, {
+        expectedRevision: emptied.revision,
+        expectedThreadIds: [],
+        now: 300,
+      });
+      expect(() => value.admit({ kind: "project", projectId: emptied.projectId })).toThrow(
+        expect.objectContaining({ code: "permission_denied" }),
+      );
+      const project = value.inventory.getProject(value.scope, emptied.projectId);
+      value.inventory.removeProject(value.scope, emptied.projectId, {
+        expectedRevision: project.revision,
+        expectedMembershipRevision: project.membershipRevision,
+        expectedLocations: [],
+        now: 310,
+      });
+      expect(() => value.admit({ kind: "project", projectId: emptied.projectId })).toThrow(
+        expect.objectContaining({ code: "not_found" }),
+      );
+    } finally {
+      value.database.close();
+    }
+  });
+
+  it("has no default project once its default location is removed", () => {
+    const value = projectFixture(false);
+    try {
+      value.database
+        .prepare("UPDATE workspaces SET removed_at = 400 WHERE id = ?")
+        .run(value.workspace.id);
+      expect(() => value.admit({ kind: "project" })).toThrow(
+        expect.objectContaining({ code: "invalid_input" }),
+      );
+    } finally {
+      value.database.close();
+    }
   });
 });

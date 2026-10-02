@@ -1716,6 +1716,7 @@ export async function startProductionApplication(
       inventory: inventoryRepository,
       execution,
       publications: activeApplicationSnapshots,
+      projectAuthority: agentToolSources,
       discoverWorkspace: discoverOpenedWorkspace,
     });
     const managementAgentTools = new AgentManagementService({
@@ -1726,6 +1727,7 @@ export async function startProductionApplication(
       workspaces: workspaceManagement,
       taskRepository,
       tasks,
+      authorityReader: agentToolSources,
     });
     const automationAgentTools = new AutomationAgentToolService({
       automations,

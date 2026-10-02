@@ -9,7 +9,7 @@ import type {
   TrustedAgentToolSource,
 } from "../../src/server/agent-tools/adapters/backend-facade.js";
 import type { SedesToolInvocationResult } from "../../src/server/agent-tools/contracts/agent-tool-contracts.js";
-import { createAgentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
+import { agentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
 import { AgentToolRegistry } from "../../src/server/agent-tools/registry/agent-tool-registry.js";
 import {
   assertNoPiAgentToolExtensionCollisions,
@@ -21,11 +21,6 @@ import {
   readPiAgentToolInvocationMarker,
 } from "../../src/server/backends/pi/pi-agent-tool-invocation-marker.js";
 import { PiToolAccessController } from "../../src/server/backends/pi/pi-tool-access.js";
-
-const agentContextToolDefinition = createAgentContextToolDefinition({
-  readWorkspaceProjectId: async () => "project-1",
-  readThreadStatus: async () => undefined,
-});
 
 const authentication = {
   conversationId: "pi-agent-tool-conversation",

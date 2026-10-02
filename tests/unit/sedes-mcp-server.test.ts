@@ -24,7 +24,7 @@ const threadId = "10000000-0000-4000-8000-000000000001";
 
 function catalog(toolIds?: readonly string[]) {
   const canonical = new CanonicalInlineAgentToolService({
-    application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+    application: { readThreadStatus: async () => undefined },
     additionalDefinitions: [
       createTaskCreateToolDefinition({} as never),
       createSavedAgentDeleteToolDefinition({} as never),

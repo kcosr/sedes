@@ -12,6 +12,7 @@ import type {
 import { assertTrustedAgentToolAuthority } from "../contracts/agent-tool-contracts.js";
 import {
   createTrustedEnvironmentAuthorityGrant,
+  reachesOutsideEveryEnvironment,
   type AgentToolEnvironmentAuthorityResolver,
 } from "../environment/environment-authority.js";
 import {
@@ -373,12 +374,21 @@ export class PrincipalAgentToolClientService {
           "principal_client",
           request,
         );
+        // The default location's project is read live; a removed location
+        // has none, so a request needing the default project fails closed.
+        const defaultProjectId = client.defaultWorkspaceId
+          ? this.environments.reader.resolveWorkspaceProject(
+              authenticated.scope,
+              client.defaultWorkspaceId,
+            )
+          : undefined;
         const defaults = Object.freeze({
           kind: "principal_client" as const,
           environmentId: required(client.defaultEnvironmentId),
           ...(client.defaultWorkspaceId
             ? { workspaceId: client.defaultWorkspaceId }
             : {}),
+          ...(defaultProjectId ? { projectId: defaultProjectId } : {}),
           ...(client.defaultThreadId ? { threadId: client.defaultThreadId } : {}),
         });
         const resolved = this.environments.resolve({
@@ -394,6 +404,7 @@ export class PrincipalAgentToolClientService {
           resolved.resolvedResourceRefs,
         );
         if (
+          reachesOutsideEveryEnvironment(resolved) ||
           resolved.targetEnvironmentIds.some(
             (environmentId) =>
               !client.allowedEnvironmentIds.includes(environmentId),

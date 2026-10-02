@@ -24,7 +24,7 @@ const targetThreadId = "10000000-0000-4000-8000-000000000002";
 
 function artifacts() {
   const canonical = new CanonicalInlineAgentToolService({
-    application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+    application: { readThreadStatus: async () => undefined },
   });
   return canonical.describeMany(
     "cli",
@@ -35,7 +35,7 @@ function artifacts() {
 
 function summaries() {
   return new CanonicalInlineAgentToolService({
-    application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+    application: { readThreadStatus: async () => undefined },
   }).catalogSummaries("cli", "thread_agent");
 }
 
@@ -85,7 +85,7 @@ describe("Sedes CLI", () => {
     // Help needs the real definitions and projections, but executes no domain
     // operation. Include every optional slice and fence coverage to the manifest.
     const canonical = new CanonicalInlineAgentToolService({
-      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+      application: { readThreadStatus: async () => undefined },
       management: {} as NonNullable<Dependencies["management"]>,
       workpads: {} as NonNullable<Dependencies["workpads"]>,
       automations: {} as NonNullable<Dependencies["automations"]>,
@@ -590,7 +590,7 @@ describe("Sedes CLI", () => {
   it("dispatches a catalog-advertised typed thread-messages command", async () => {
     const output = bufferedIo();
     const canonical = new CanonicalInlineAgentToolService({
-      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+      application: { readThreadStatus: async () => undefined },
       threadControl: {} as never,
     });
     const summary = canonical
@@ -645,7 +645,7 @@ describe("Sedes CLI", () => {
   ])("dispatches the live $toolId named command", async (testCase) => {
     const output = bufferedIo();
     const canonical = new CanonicalInlineAgentToolService({
-      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+      application: { readThreadStatus: async () => undefined },
       threadWorktrees: {} as AgentThreadWorktreeService,
     });
     const summary = canonical

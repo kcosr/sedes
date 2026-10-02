@@ -140,17 +140,25 @@ export type TrustedToolInvocationSubject =
       readonly credentialGeneration: number;
     };
 
+/**
+ * The caller's server-derived defaults. The project is the current project of
+ * the default location, read live at each admission: a location can move
+ * between projects while its threads run, so it is never captured with a
+ * runtime's trusted source.
+ */
 export type TrustedAgentToolCallerDefaults =
   | {
       readonly kind: "thread_agent";
       readonly environmentId: string;
       readonly workspaceId: string;
+      readonly projectId: string;
       readonly threadId: string;
     }
   | {
       readonly kind: "principal_client";
       readonly environmentId: string;
       readonly workspaceId?: string;
+      readonly projectId?: string;
       readonly threadId?: string;
     };
 
@@ -277,6 +285,7 @@ function sameDefaults(
     left.kind === right.kind &&
     left.environmentId === right.environmentId &&
     left.workspaceId === right.workspaceId &&
+    left.projectId === right.projectId &&
     left.threadId === right.threadId
   );
 }

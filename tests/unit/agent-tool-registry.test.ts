@@ -33,16 +33,11 @@ import {
   AGENT_TOOL_JSON_SCHEMA_DIALECT,
   type CanonicalAgentToolRootSchema,
 } from "../../src/server/agent-tools/schema/canonical-json-schema.js";
-import { createAgentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
+import { agentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
 import { createThreadStatusToolDefinition } from "../../src/server/agent-tools/tools/thread-status-tool.js";
 import { createThreadAgentToolPolicyDependencies } from "../../src/server/conversations/thread-agent-tool-policy-dependencies.js";
 import type { WebSearchExecutor } from "../../src/server/agent-tools/tools/web-search-tool.js";
 import type { AgentThreadWorktreeService } from "../../src/server/agent-tools/tools/thread-worktree-tools.js";
-
-const agentContextToolDefinition = createAgentContextToolDefinition({
-  readWorkspaceProjectId: async () => "project-1",
-  readThreadStatus: async () => undefined,
-});
 
 const inputSchema = {
   $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
@@ -146,7 +141,7 @@ describe("AgentToolRegistry", () => {
     const threadCreation = {} as AgentThreadCreationService;
     const savedAgents = {} as SavedAgentCanonicalToolService;
     const definitions = createCanonicalAgentToolDefinitions({
-      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+      application: { readThreadStatus: async () => undefined },
       management,
       automations,
       threadCreation,
@@ -185,7 +180,7 @@ describe("AgentToolRegistry", () => {
     ).toEqual(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES);
     expect(() =>
       createCanonicalAgentToolDefinitions({
-        application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+        application: { readThreadStatus: async () => undefined },
         management,
         automations,
         threadCreation,
@@ -195,7 +190,7 @@ describe("AgentToolRegistry", () => {
 
   it("keeps the complete shipped discovery catalog compact", () => {
     const canonical = new CanonicalInlineAgentToolService({
-      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+      application: { readThreadStatus: async () => undefined },
       management: {} as AgentManagementService,
       automations: {} as AutomationAgentToolService,
       threadCreation: {} as AgentThreadCreationService,
@@ -221,7 +216,7 @@ describe("AgentToolRegistry", () => {
 
   it("rejects an aggregate description response above the transport limit", () => {
     const canonical = new CanonicalInlineAgentToolService({
-      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+      application: { readThreadStatus: async () => undefined },
     });
     const properties = Object.fromEntries(
       Array.from({ length: 64 }, (_, index) => [
@@ -270,7 +265,7 @@ describe("AgentToolRegistry", () => {
 
   it("keeps deployment-selectable and canonically invocable IDs identical", () => {
     const definitions = createCanonicalAgentToolDefinitions({
-      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+      application: { readThreadStatus: async () => undefined },
       management: {} as AgentManagementService,
       automations: {} as AutomationAgentToolService,
       threadCreation: {} as AgentThreadCreationService,
@@ -313,7 +308,7 @@ describe("AgentToolRegistry", () => {
     });
 
     const canonical = new CanonicalInlineAgentToolService({
-      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+      application: { readThreadStatus: async () => undefined },
       webSearch,
       unavailableToolIds: new Set(["research.web_search"]),
     });
@@ -334,7 +329,7 @@ describe("AgentToolRegistry", () => {
 
   it("marks every write timeout-indeterminate and every read determinate", () => {
     const definitions = createCanonicalAgentToolDefinitions({
-      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+      application: { readThreadStatus: async () => undefined },
       management: {} as AgentManagementService,
       automations: {} as AutomationAgentToolService,
       threadCreation: {} as AgentThreadCreationService,
@@ -413,7 +408,6 @@ describe("AgentToolRegistry", () => {
     const registry = new AgentToolRegistry();
     registry.register(
       createThreadStatusToolDefinition({
-        readWorkspaceProjectId: async () => "project-1",
         readThreadStatus: async () => undefined,
       }),
     );
@@ -445,7 +439,6 @@ describe("AgentToolRegistry", () => {
     const registry = new AgentToolRegistry();
     registry.register(
       createThreadStatusToolDefinition({
-        readWorkspaceProjectId: async () => "project-1",
         readThreadStatus: async () => undefined,
       }),
     );

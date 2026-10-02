@@ -10,6 +10,7 @@ const environmentAuthority = {
     kind: "thread_agent" as const,
     environmentId: "environment-1",
     workspaceId: "workspace-1",
+    projectId: "project-1",
     threadId: "thread-1",
   },
   policyIdentity: {
@@ -71,7 +72,7 @@ describe("AgentThreadInventoryControlService", () => {
       service.archive(scope, {
         threadId: "thread-1",
         includeDescendants: true,
-        openTaskDisposition: "move_to_workspace",
+        openTaskDisposition: "move_to_project",
         mutationId: "mutation-1",
         environmentAuthority,
       }),
@@ -82,7 +83,7 @@ describe("AgentThreadInventoryControlService", () => {
       mutationId: "mutation-1",
       includeDescendants: true,
       expectedThreadIds: ["thread-1", "thread-2"],
-      openTaskDisposition: "move_to_workspace",
+      openTaskDisposition: "move_to_project",
       executionWorkspaceDisposition: { kind: "keep" },
     });
     expect(transition).not.toHaveBeenCalled();

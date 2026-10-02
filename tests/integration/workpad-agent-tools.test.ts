@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
 import { openOverlayDatabase } from "../../src/server/db/database.js";
 import { applyBackendNormalizationMigration, applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/server/db/migrate.js";
+import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { WorkpadRepository } from "../../src/server/db/repositories/workpad-repository.js";
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
 import { OverlayRepository } from "../support/schema9/overlay-repository.js";
@@ -94,12 +95,19 @@ function fixture(latestVersion = backendNormalizedMigrations.at(-1)!.version) {
       (migration) => migration.version <= latestVersion,
     ),
   );
+  const projectOf = (workspaceId: string) =>
+    (
+      database
+        .prepare("SELECT project_id AS projectId FROM workspaces WHERE id = ?")
+        .get(workspaceId) as { readonly projectId: string }
+    ).projectId;
   return {
     database,
     scope,
     environmentId: environment.id,
     firstWorkspaceId: firstWorkspace.id,
     secondWorkspaceId: secondWorkspace.id,
+    firstProjectId: projectOf(firstWorkspace.id),
     firstThreadId: firstThread.thread.id,
     secondThreadId: secondThread.thread.id,
     workpads: new WorkpadRepository(database),
@@ -114,7 +122,7 @@ function toolsFixture() {
   const definitions = createWorkpadToolDefinitions(service);
   const registry = new AgentToolRegistry();
   definitions.forEach(definition => registry.register(definition));
-  const defaults = { kind: "thread_agent" as const, threadId: f.firstThreadId, workspaceId: f.firstWorkspaceId, environmentId: f.environmentId };
+  const defaults = { kind: "thread_agent" as const, threadId: f.firstThreadId, workspaceId: f.firstWorkspaceId, projectId: f.firstProjectId, environmentId: f.environmentId };
   const policyIdentity = { ownerKind: "thread" as const, ownerId: f.firstThreadId, revision: 0 };
   const context = (id: string, input: unknown): TrustedToolInvocationContext => {
     const definition = definitions.find(definition => definition.id === id)!;
@@ -127,10 +135,10 @@ function toolsFixture() {
     };
   };
   const invoke = async (id: string, input: unknown, override?: TrustedToolInvocationContext) => {
-    expect(registry.validatesInput(id, 1, input)).toBe(true);
+    expect(registry.validatesInput(id, 2, input)).toBe(true);
     const definition = definitions.find(definition => definition.id === id)!;
     const result = await definition.execute(input, override ?? context(id, input));
-    expect(registry.validatesOutput(id, 1, result)).toBe(true);
+    expect(registry.validatesOutput(id, 2, result)).toBe(true);
     return result as any;
   };
   return { ...f, definitions, registry, invoke, context };
@@ -177,6 +185,37 @@ describe("canonical Workpad tools", () => {
     } finally { f.database.close(); }
   });
 
+  it("defaults project scope to the caller's project and reaches projects through their hosts", async () => {
+    const f = toolsFixture();
+    try {
+      const { workpad } = await f.invoke("workpad.create", { title: "Shared", scope: { kind: "project" }, content: "Plan" });
+      expect(workpad.scope).toEqual({ kind: "project", projectId: f.firstProjectId });
+      const listed = await f.invoke("workpad.list", { scope: { kind: "project" }, scopeMode: "exact" });
+      expect(listed.items.map((item: any) => item.id)).toEqual([workpad.id]);
+      expect((await f.invoke("workpad.get", { workpadId: workpad.id })).workpad.content).toBe("Plan");
+      await expect(f.invoke("workpad.create", { title: "Old shape", scope: { kind: "workspace" } })).rejects.toBeDefined();
+
+      // A project hosted only on another environment is outside this caller's admitted environment.
+      const remote = "019196f7-a0a8-7bc4-a89b-8cf013978499";
+      f.database.prepare(`INSERT INTO execution_environments(
+          tenant_id, owner_principal_id, id, kind, label, availability, diagnostic_code, revision,
+          configuration_revision, configuration_fingerprint, created_at, updated_at)
+        SELECT tenant_id, owner_principal_id, ?, 'ssh', 'Remote', availability, diagnostic_code, revision,
+          configuration_revision, configuration_fingerprint, created_at, updated_at
+        FROM execution_environments WHERE id = ?`).run(remote, f.environmentId);
+      const location = new InventoryRepository(f.database).upsertWorkspace(f.scope, {
+        environmentId: remote, canonicalPath: "/srv/remote-only", displayName: "remote-only",
+        project: { kind: "new", name: "Remote only" }, available: true, trustState: "trusted",
+        environmentConfigurationRevision: 0, now: 5_000,
+      });
+      await expect(f.invoke("workpad.create", { title: "Remote", scope: { kind: "project", projectId: location.projectId } }))
+        .rejects.toMatchObject({ code: "permission_denied" });
+      await expect(f.invoke("workpad.update", { workpadId: workpad.id, expectedRevision: 0, scope: { kind: "project", projectId: location.projectId } }))
+        .rejects.toMatchObject({ code: "permission_denied" });
+      expect((await f.invoke("workpad.get", { workpadId: workpad.id })).workpad.scope).toEqual({ kind: "project", projectId: f.firstProjectId });
+    } finally { f.database.close(); }
+  });
+
   it("bounds search cursors to query and authority, and rejects caller supplied attribution", async () => {
     const f = toolsFixture();
     try {
@@ -186,9 +225,9 @@ describe("canonical Workpad tools", () => {
       expect(page.items).toHaveLength(1);
       expect((await f.invoke("workpad.list", { ...input, cursor: page.nextCursor })).items[0].id).not.toBe(page.items[0].id);
       await expect(f.invoke("workpad.list", { ...input, query: "other", cursor: page.nextCursor })).rejects.toMatchObject({ code: "cursor_invalid" });
-      expect(f.registry.validatesInput("workpad.create", 1, { title: "Fake", scope: { kind: "global" }, author: { kind: "user" } })).toBe(false);
-      expect(f.registry.validatesInput("workpad.update", 1, { workpadId: "x", expectedRevision: 0, edit: { kind: "patch", edits: [{ oldText: "", newText: "x" }] } })).toBe(false);
-      expect(f.registry.validatesInput("workpad.create", 1, { title: "Long", scope: { kind: "global" }, content: "x".repeat(262145) })).toBe(false);
+      expect(f.registry.validatesInput("workpad.create", 2, { title: "Fake", scope: { kind: "global" }, author: { kind: "user" } })).toBe(false);
+      expect(f.registry.validatesInput("workpad.update", 2, { workpadId: "x", expectedRevision: 0, edit: { kind: "patch", edits: [{ oldText: "", newText: "x" }] } })).toBe(false);
+      expect(f.registry.validatesInput("workpad.create", 2, { title: "Long", scope: { kind: "global" }, content: "x".repeat(262145) })).toBe(false);
     } finally { f.database.close(); }
   });
 });

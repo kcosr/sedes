@@ -4,6 +4,7 @@ import type { RequestScope } from "../../identity/identity-provider.js";
 import type { TrustedAgentToolSource, BackendAgentToolAccessDecisionAuthority } from "../adapters/backend-facade.js";
 import type {
   AgentToolEnvironmentAuthorityReader,
+  EnvironmentAuthorityProjectFact,
   EnvironmentAuthorityResourceFact,
   EnvironmentAuthorityTaskFact,
 } from "../environment/environment-authority.js";
@@ -13,6 +14,16 @@ import {
   type ThreadSourceReferenceAudience,
   type ThreadSourceReferencePresentation,
 } from "./thread-source-reference.js";
+
+type ScopedResourceRow = {
+  readonly id: string;
+  readonly revision: number;
+  readonly scopeKind: "global" | "project" | "thread";
+  readonly environmentId: string | null;
+  readonly projectId: string | null;
+  readonly threadId: string | null;
+  readonly label: string;
+};
 
 type ScopedThreadFacts = {
   readonly threadId: string;
@@ -249,56 +260,116 @@ export class DatabaseAgentToolSourceAuthority
     scope: RequestScope,
     id: string,
   ): EnvironmentAuthorityTaskFact | undefined {
-    return this.database
-      .prepare(
-        `
-          SELECT task.id, task.revision, task.scope_kind AS scopeKind,
-            CASE
-              WHEN task.scope_kind = 'thread' THEN thread.environment_id
-              WHEN task.scope_kind = 'workspace' THEN workspace.environment_id
-              ELSE NULL
-            END AS environmentId,
-            task.workspace_id AS workspaceId, task.thread_id AS threadId,
-            task.title AS label
-          FROM tasks AS task
-          LEFT JOIN application_threads AS thread
-            ON thread.tenant_id = task.tenant_id
-            AND thread.owner_principal_id = task.owner_principal_id
-            AND thread.id = task.thread_id
-          LEFT JOIN workspaces AS workspace
-            ON workspace.tenant_id = task.tenant_id
-            AND workspace.owner_principal_id = task.owner_principal_id
-            AND workspace.id = task.workspace_id
-          WHERE task.tenant_id = ? AND task.owner_principal_id = ?
-            AND task.id = ?
-            AND (task.scope_kind <> 'thread' OR thread.id IS NOT NULL)
-            AND (task.scope_kind <> 'workspace' OR workspace.id IS NOT NULL)
-            AND (task.scope_kind <> 'workspace'
-              OR task.environment_id = workspace.environment_id)
-        `,
-      )
-      .get(scope.tenantId, scope.principalId, id) as
-      EnvironmentAuthorityTaskFact | undefined;
+    return this.#scopedResource(
+      this.database
+        .prepare(
+          `
+            SELECT task.id, task.revision, task.scope_kind AS scopeKind,
+              thread.environment_id AS environmentId,
+              task.project_id AS projectId, task.thread_id AS threadId,
+              task.title AS label
+            FROM tasks AS task
+            LEFT JOIN application_threads AS thread
+              ON thread.tenant_id = task.tenant_id
+              AND thread.owner_principal_id = task.owner_principal_id
+              AND thread.id = task.thread_id
+            WHERE task.tenant_id = ? AND task.owner_principal_id = ?
+              AND task.id = ?
+              AND (task.scope_kind <> 'thread' OR thread.id IS NOT NULL)
+          `,
+        )
+        .get(scope.tenantId, scope.principalId, id) as
+        ScopedResourceRow | undefined,
+    );
   }
 
   resolveWorkpad(
     scope: RequestScope,
     id: string,
   ): EnvironmentAuthorityTaskFact | undefined {
-    return this.database.prepare(`
-      SELECT pad.id, pad.revision, pad.scope_kind AS scopeKind,
-        CASE WHEN pad.scope_kind = 'thread' THEN thread.environment_id
-          WHEN pad.scope_kind = 'workspace' THEN workspace.environment_id ELSE NULL END AS environmentId,
-        pad.workspace_id AS workspaceId, pad.thread_id AS threadId, pad.title AS label
-      FROM workpads AS pad
-      LEFT JOIN application_threads AS thread ON thread.tenant_id = pad.tenant_id
-        AND thread.owner_principal_id = pad.owner_principal_id AND thread.id = pad.thread_id
-      LEFT JOIN workspaces AS workspace ON workspace.tenant_id = pad.tenant_id
-        AND workspace.owner_principal_id = pad.owner_principal_id AND workspace.id = pad.workspace_id
-      WHERE pad.tenant_id = ? AND pad.owner_principal_id = ? AND pad.id = ?
-        AND (pad.scope_kind <> 'thread' OR thread.id IS NOT NULL)
-        AND (pad.scope_kind <> 'workspace' OR workspace.id IS NOT NULL)
-    `).get(scope.tenantId, scope.principalId, id) as EnvironmentAuthorityTaskFact | undefined;
+    return this.#scopedResource(
+      this.database
+        .prepare(
+          `
+            SELECT pad.id, pad.revision, pad.scope_kind AS scopeKind,
+              thread.environment_id AS environmentId,
+              pad.project_id AS projectId, pad.thread_id AS threadId,
+              pad.title AS label
+            FROM workpads AS pad
+            LEFT JOIN application_threads AS thread
+              ON thread.tenant_id = pad.tenant_id
+              AND thread.owner_principal_id = pad.owner_principal_id
+              AND thread.id = pad.thread_id
+            WHERE pad.tenant_id = ? AND pad.owner_principal_id = ?
+              AND pad.id = ?
+              AND (pad.scope_kind <> 'thread' OR thread.id IS NOT NULL)
+          `,
+        )
+        .get(scope.tenantId, scope.principalId, id) as
+        ScopedResourceRow | undefined,
+    );
+  }
+
+  resolveProject(
+    scope: RequestScope,
+    id: string,
+  ): EnvironmentAuthorityProjectFact | undefined {
+    const row = this.database
+      .prepare(
+        `
+          SELECT project.id, project.name AS label,
+            project.membership_revision AS membershipRevision,
+            (
+              SELECT json_group_array(member.environment_id ORDER BY member.environment_id)
+              FROM (
+                SELECT DISTINCT location.environment_id
+                FROM workspaces AS location
+                WHERE location.tenant_id = project.tenant_id
+                  AND location.owner_principal_id = project.owner_principal_id
+                  AND location.project_id = project.id
+                  AND location.removed_at IS NULL
+              ) AS member
+            ) AS memberEnvironmentIdsJson
+          FROM projects AS project
+          WHERE project.tenant_id = ? AND project.owner_principal_id = ?
+            AND project.id = ? AND project.removed_at IS NULL
+        `,
+      )
+      .get(scope.tenantId, scope.principalId, id) as
+      | {
+          readonly id: string;
+          readonly label: string;
+          readonly membershipRevision: number;
+          readonly memberEnvironmentIdsJson: string;
+        }
+      | undefined;
+    if (!row) return undefined;
+    return Object.freeze({
+      id: row.id,
+      label: row.label,
+      membershipRevision: row.membershipRevision,
+      memberEnvironmentIds: Object.freeze(
+        JSON.parse(row.memberEnvironmentIdsJson) as string[],
+      ),
+    });
+  }
+
+  resolveWorkspaceProject(
+    scope: RequestScope,
+    workspaceId: string,
+  ): string | undefined {
+    const row = this.database
+      .prepare(
+        `
+          SELECT project_id AS projectId
+          FROM workspaces
+          WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
+            AND removed_at IS NULL
+        `,
+      )
+      .get(scope.tenantId, scope.principalId, workspaceId) as
+      { readonly projectId: string } | undefined;
+    return row?.projectId;
   }
 
   listEnvironments(
@@ -411,6 +482,23 @@ export class DatabaseAgentToolSourceAuthority
       source,
       presentation: reference.presentation,
       ...(accessDecisionAuthority ? { accessDecisionAuthority } : {}),
+    });
+  }
+
+  #scopedResource(
+    row: ScopedResourceRow | undefined,
+  ): EnvironmentAuthorityTaskFact | undefined {
+    if (!row) return undefined;
+    return Object.freeze({
+      id: row.id,
+      revision: row.revision,
+      scopeKind: row.scopeKind,
+      ...(row.scopeKind === "thread" && row.environmentId !== null
+        ? { environmentId: row.environmentId }
+        : {}),
+      ...(row.projectId !== null ? { projectId: row.projectId } : {}),
+      ...(row.threadId !== null ? { threadId: row.threadId } : {}),
+      label: row.label,
     });
   }
 

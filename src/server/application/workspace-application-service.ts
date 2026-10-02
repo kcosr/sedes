@@ -9,7 +9,11 @@ import type { RequestScope } from "../identity/identity-provider.js";
 import { callRuntime } from "../runtime/runtime-errors.js";
 import { environmentAdmitsForegroundOperation } from "../domain/environment-operational-state.js";
 import {
+  grantProjectAccessCaller,
+  projectScopeRefs,
   requireAdmittedResource,
+  requireAdmittedResources,
+  type AgentToolEnvironmentAuthorityReader,
   type TrustedEnvironmentAuthorityGrant,
 } from "../agent-tools/environment/environment-authority.js";
 
@@ -62,6 +66,11 @@ export class WorkspaceApplicationService {
         "validateWorkspace"
       >;
       readonly publications: WorkspaceApplicationPublication;
+      /** Live project facts for an agent that adds a directory to a project. */
+      readonly projectAuthority?: Pick<
+        AgentToolEnvironmentAuthorityReader,
+        "resolveProject"
+      >;
       readonly discoverWorkspace?: (
         scope: RequestScope,
         workspaceId: string,
@@ -111,12 +120,19 @@ export class WorkspaceApplicationService {
   }
 
   /**
-   * Agents cannot choose an existing project: a new directory becomes its own
-   * project, and a known one keeps its project.
+   * An agent adds a new directory to a project only with that project's
+   * authority, so an agent on one host cannot make its directory reachable
+   * from a project hosted elsewhere without approval. Without a project, a
+   * new directory becomes its own project. A known directory keeps its
+   * project: naming another is a conflict, never an implicit move.
    */
   async openWorkspaceForAgent(
     scope: RequestScope,
-    request: { readonly environmentId: string; readonly path: string },
+    request: {
+      readonly environmentId: string;
+      readonly path: string;
+      readonly projectId?: string;
+    },
     environmentAuthority: TrustedEnvironmentAuthorityGrant,
     signal = new AbortController().signal,
   ): Promise<OpenedWorkspaceSummary> {
@@ -131,8 +147,31 @@ export class WorkspaceApplicationService {
       environmentAuthority,
       signal,
     );
+    if (request.projectId === undefined) {
+      return this.#admit(scope, validated, {
+        project: { kind: "new", name: validated.summary.displayName },
+        restoreRemoved: true,
+      });
+    }
+    // Rechecked in the admitting turn: a membership change since admission
+    // changes the project's refs and fails closed.
+    const project = this.input.projectAuthority?.resolveProject(
+      scope,
+      request.projectId,
+    );
+    if (!project) {
+      throw new DomainError("not_found", "The project was not found.");
+    }
+    requireAdmittedResources(
+      environmentAuthority,
+      projectScopeRefs(
+        project,
+        grantProjectAccessCaller(environmentAuthority),
+        "exact",
+      ),
+    );
     return this.#admit(scope, validated, {
-      project: { kind: "new", name: validated.summary.displayName },
+      project: { kind: "existing", projectId: request.projectId },
       restoreRemoved: true,
     });
   }

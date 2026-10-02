@@ -10,18 +10,13 @@ import { AgentToolEnvironmentAuthorityResolver } from "../../src/server/agent-to
 import { DomainError } from "../../src/server/domain/errors.js";
 import { Type } from "typebox";
 import type { AgentToolDefinition } from "../../src/server/agent-tools/contracts/agent-tool-contracts.js";
-import { createAgentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
+import { agentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
 import {
   AGENT_TOOL_JSON_SCHEMA_DIALECT,
   normalizeCanonicalAgentToolSchema,
 } from "../../src/server/agent-tools/schema/canonical-json-schema.js";
 import type { ApplicationDecisionPresentation } from "../../src/server/conversations/interaction-broker.js";
 import { createSavedAgentDeleteToolDefinition } from "../../src/server/agent-tools/tools/saved-agent-management-tools.js";
-
-const agentContextToolDefinition = createAgentContextToolDefinition({
-  readWorkspaceProjectId: async () => "project-1",
-  readThreadStatus: async () => undefined,
-});
 
 const source = Object.freeze({
   scope: { tenantId: "tenant", principalId: "principal" },
@@ -32,6 +27,8 @@ const source = Object.freeze({
 });
 
 const environmentAuthority = new AgentToolEnvironmentAuthorityResolver({
+  resolveProject: () => undefined,
+  resolveWorkspaceProject: () => "project-1",
   resolveEnvironment: () => undefined,
   resolveWorkspace: () => undefined,
   resolveThread: () => undefined,
@@ -156,7 +153,7 @@ function service(
   } = source,
 ) {
   const canonical = new CanonicalInlineAgentToolService({
-    application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+    application: { readThreadStatus: async () => undefined },
     invocationId: () => "invocation-1",
   });
   const policies = {
@@ -186,7 +183,7 @@ describe("SourceScopedAgentToolService", () => {
       deleted: true,
     }));
     const canonical = new CanonicalInlineAgentToolService({
-      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+      application: { readThreadStatus: async () => undefined },
       additionalDefinitions: [
         createSavedAgentDeleteToolDefinition({ deleteAgent } as never),
       ],
@@ -237,7 +234,7 @@ describe("SourceScopedAgentToolService", () => {
 
   it("revalidates the source immediately before every invocation", async () => {
     const canonical = new CanonicalInlineAgentToolService({
-      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+      application: { readThreadStatus: async () => undefined },
     });
     const policies = {
       get: vi.fn(() => ({
@@ -290,7 +287,7 @@ describe("SourceScopedAgentToolService", () => {
   ] as const)("rejects stale attached %s authority", async (field, value) => {
     const current = new SourceScopedAgentToolService(
       new CanonicalInlineAgentToolService({
-        application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+        application: { readThreadStatus: async () => undefined },
       }),
       {
         get: vi.fn(() => {
@@ -338,7 +335,7 @@ describe("SourceScopedAgentToolService", () => {
       }));
       const current = new SourceScopedAgentToolService(
         new CanonicalInlineAgentToolService({
-          application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus },
+          application: { readThreadStatus },
         }),
         {
           get: () => ({
@@ -353,6 +350,8 @@ describe("SourceScopedAgentToolService", () => {
           }),
         } as unknown as ThreadAgentToolPolicyRepository,
         new AgentToolEnvironmentAuthorityResolver({
+          resolveProject: () => undefined,
+          resolveWorkspaceProject: () => "project-1",
           resolveEnvironment: () => undefined,
           resolveWorkspace: () => undefined,
           resolveThread: (_scope, id) =>
@@ -425,10 +424,12 @@ describe("SourceScopedAgentToolService", () => {
     const requestApplicationDecision = vi.fn(async () => "allow" as const);
     const current = new SourceScopedAgentToolService(
       new CanonicalInlineAgentToolService({
-        application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus },
+        application: { readThreadStatus },
       }),
       policies as unknown as ThreadAgentToolPolicyRepository,
       new AgentToolEnvironmentAuthorityResolver({
+        resolveProject: () => undefined,
+        resolveWorkspaceProject: () => "project-1",
         resolveEnvironment: () => undefined,
         resolveWorkspace: () => undefined,
         resolveThread: (_scope, id) =>
@@ -506,7 +507,7 @@ describe("SourceScopedAgentToolService", () => {
         activity: "idle" as const,
       }));
       const canonical = new CanonicalInlineAgentToolService({
-        application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus },
+        application: { readThreadStatus },
       });
       const originalGet = canonical.registry.get.bind(canonical.registry);
       vi.spyOn(canonical.registry, "get").mockImplementation((id, version) => {
@@ -539,6 +540,8 @@ describe("SourceScopedAgentToolService", () => {
         canonical,
         policies as unknown as ThreadAgentToolPolicyRepository,
         new AgentToolEnvironmentAuthorityResolver({
+          resolveProject: () => undefined,
+          resolveWorkspaceProject: () => "project-1",
           resolveEnvironment: () => undefined,
           resolveWorkspace: () => undefined,
           resolveThread: (_scope, id) => ({
@@ -610,7 +613,7 @@ describe("SourceScopedAgentToolService", () => {
     };
     const current = new SourceScopedAgentToolService(
       new CanonicalInlineAgentToolService({
-        application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+        application: { readThreadStatus: async () => undefined },
         additionalDefinitions: [crossEnvironmentWriteDefinition()],
       }),
       {
@@ -626,6 +629,8 @@ describe("SourceScopedAgentToolService", () => {
         }),
       } as unknown as ThreadAgentToolPolicyRepository,
       new AgentToolEnvironmentAuthorityResolver({
+        resolveProject: () => undefined,
+        resolveWorkspaceProject: () => "project-1",
         resolveEnvironment: (_scope, id) => ({
           id,
           environmentId: id,
@@ -674,7 +679,7 @@ describe("SourceScopedAgentToolService", () => {
     );
     const current = new SourceScopedAgentToolService(
       new CanonicalInlineAgentToolService({
-        application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+        application: { readThreadStatus: async () => undefined },
         additionalDefinitions: [crossEnvironmentWriteDefinition()],
       }),
       {
@@ -690,6 +695,8 @@ describe("SourceScopedAgentToolService", () => {
         }),
       } as unknown as ThreadAgentToolPolicyRepository,
       new AgentToolEnvironmentAuthorityResolver({
+        resolveProject: () => undefined,
+        resolveWorkspaceProject: () => "project-1",
         resolveEnvironment: (_scope, id) => ({
           id,
           environmentId: id,
@@ -759,7 +766,7 @@ describe("SourceScopedAgentToolService", () => {
     );
     const current = new SourceScopedAgentToolService(
       new CanonicalInlineAgentToolService({
-        application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+        application: { readThreadStatus: async () => undefined },
         additionalDefinitions: [allEnvironmentQueryDefinition()],
       }),
       {
@@ -775,6 +782,8 @@ describe("SourceScopedAgentToolService", () => {
         }),
       } as unknown as ThreadAgentToolPolicyRepository,
       new AgentToolEnvironmentAuthorityResolver({
+        resolveProject: () => undefined,
+        resolveWorkspaceProject: () => "project-1",
         resolveEnvironment: () => undefined,
         resolveWorkspace: () => undefined,
         resolveThread: () => undefined,
@@ -825,7 +834,7 @@ describe("SourceScopedAgentToolService", () => {
     });
     const current = new SourceScopedAgentToolService(
       new CanonicalInlineAgentToolService({
-        application: { readWorkspaceProjectId: vi.fn(), readThreadStatus: vi.fn() },
+        application: { readThreadStatus: vi.fn() },
       }),
       {
         get: () => ({
@@ -840,6 +849,8 @@ describe("SourceScopedAgentToolService", () => {
         }),
       } as unknown as ThreadAgentToolPolicyRepository,
       new AgentToolEnvironmentAuthorityResolver({
+        resolveProject: () => undefined,
+        resolveWorkspaceProject: () => "project-1",
         resolveEnvironment: () => undefined,
         resolveWorkspace: () => undefined,
         resolveThread: () => ({
@@ -877,7 +888,7 @@ describe("SourceScopedAgentToolService", () => {
     const readThreadStatus = vi.fn();
     const current = new SourceScopedAgentToolService(
       new CanonicalInlineAgentToolService({
-        application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus },
+        application: { readThreadStatus },
       }),
       {
         get: () => ({
@@ -892,6 +903,8 @@ describe("SourceScopedAgentToolService", () => {
         }),
       } as unknown as ThreadAgentToolPolicyRepository,
       new AgentToolEnvironmentAuthorityResolver({
+        resolveProject: () => undefined,
+        resolveWorkspaceProject: () => "project-1",
         resolveEnvironment: () => undefined,
         resolveWorkspace: () => undefined,
         resolveThread: () => ({
@@ -948,7 +961,7 @@ describe("SourceScopedAgentToolService", () => {
       } as unknown as ThreadAgentToolPolicyRepository;
       const current = new SourceScopedAgentToolService(
         new CanonicalInlineAgentToolService({
-          application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+          application: { readThreadStatus: async () => undefined },
         }),
         policies,
         environmentAuthority,
@@ -1215,6 +1228,7 @@ describe("thread access boundary", () => {
       { name: `${resource} project`, declaration: { kind: "direct_resource", resource }, input: { [`${resource}Id`]: "project" }, prompt: true },
       { name: `${resource} global query`, declaration: { kind: "scoped_query", resource }, input: { scope: { kind: "global" } }, prompt: true },
       { name: `${resource} thread query`, declaration: { kind: "scoped_query", resource }, input: { scope: { kind: "thread", threadId: "thread-1" } }, prompt: false },
+      { name: `${resource} project query`, declaration: { kind: "scoped_query", resource }, input: { scope: { kind: "project", projectId: "project-1" } }, prompt: true },
       { name: `${resource} move global`, declaration: { kind: "scope_transition", resource }, input: { [`${resource}Id`]: "self", scope: { kind: "global" } }, prompt: true },
       { name: `${resource} create self`, declaration: { kind: "scope_transition", resource }, input: { scope: { kind: "thread", threadId: "thread-1" } }, prompt: false },
     ]),
@@ -1232,23 +1246,25 @@ describe("thread access boundary", () => {
           workpadId: Type.Optional(Type.String({ maxLength: 128 })),
           threadId: Type.Optional(Type.String({ maxLength: 128 })),
           workspaceId: Type.Optional(Type.String({ maxLength: 128 })),
-          scope: Type.Optional(Type.Object({ kind: Type.String({ maxLength: 32 }), threadId: Type.Optional(Type.String({ maxLength: 128 })) }, { additionalProperties: false, maxProperties: 2 })),
+          scope: Type.Optional(Type.Object({ kind: Type.String({ maxLength: 32 }), threadId: Type.Optional(Type.String({ maxLength: 128 })), projectId: Type.Optional(Type.String({ maxLength: 128 })) }, { additionalProperties: false, maxProperties: 3 })),
         }, { $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT, additionalProperties: false, maxProperties: 5 })),
       };
       const fact = (_scope: unknown, id: string) => ({ id, revision: 1,
-        scopeKind: id === "global" ? "global" as const : id === "project" ? "workspace" as const : "thread" as const,
-        ...(id === "global" ? {} : { environmentId: source.sourceEnvironmentId }),
+        scopeKind: id === "global" ? "global" as const : id === "project" ? "project" as const : "thread" as const,
+        ...(id === "self" || id === "other" ? { environmentId: source.sourceEnvironmentId } : {}),
+        ...(id === "project" ? { projectId: "project-1" } : {}),
         ...(id === "self" || id === "other" ? { threadId: id === "self" ? source.sourceThreadId : "thread-2" } : {}),
       });
       const requestApplicationDecision = vi.fn(async () => "deny" as const);
       const service = new SourceScopedAgentToolService(
-        new CanonicalInlineAgentToolService({ application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined }, additionalDefinitions: [definition] }),
+        new CanonicalInlineAgentToolService({ application: { readThreadStatus: async () => undefined }, additionalDefinitions: [definition] }),
         { get: () => ({ enabled: true, enabledToolIds: [definition.id], presentation: { surface: "cli", mode: "progressive" }, accessBoundary: "thread", revision: 1 }) } as unknown as ThreadAgentToolPolicyRepository,
         new AgentToolEnvironmentAuthorityResolver({
           ...environmentAuthority.reader,
           resolveThread: (_scope, id) => ({ id, environmentId: source.sourceEnvironmentId }),
           resolveWorkspace: (_scope, id) => ({ id, environmentId: source.sourceEnvironmentId }),
           resolveTask: fact, resolveWorkpad: fact,
+          resolveProject: (_scope, id) => ({ id, membershipRevision: 1, memberEnvironmentIds: [source.sourceEnvironmentId] }),
         }),
         { resolveInScope: () => caller }, approvalAuthority, { requestApplicationDecision },
       );
@@ -1273,7 +1289,7 @@ it.each(["saved_agent", "task", "workpad"] as const)(
       return "allow" as const;
     });
     const service = new SourceScopedAgentToolService(
-      new CanonicalInlineAgentToolService({ application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined }, additionalDefinitions: [definition] }),
+      new CanonicalInlineAgentToolService({ application: { readThreadStatus: async () => undefined }, additionalDefinitions: [definition] }),
       { get: () => ({ enabled: true, enabledToolIds: [definition.id], presentation: { surface: "cli", mode: "progressive" }, accessBoundary: "thread", revision: 1 }) } as unknown as ThreadAgentToolPolicyRepository,
       new AgentToolEnvironmentAuthorityResolver({
         ...environmentAuthority.reader,
@@ -1304,9 +1320,9 @@ describe("provider current-input access decision authority", () => {
       return "allow" as const;
     });
     const gate = new SourceScopedAgentToolService(
-      new CanonicalInlineAgentToolService({ application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus } }),
+      new CanonicalInlineAgentToolService({ application: { readThreadStatus } }),
       { get: () => ({ enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "cli", mode: "progressive" }, accessBoundary: "environment", revision: 1 }) } as unknown as ThreadAgentToolPolicyRepository,
-      new AgentToolEnvironmentAuthorityResolver({ resolveEnvironment: () => undefined, resolveWorkspace: () => undefined,
+      new AgentToolEnvironmentAuthorityResolver({ resolveProject: () => undefined, resolveWorkspaceProject: () => "project-1", resolveEnvironment: () => undefined, resolveWorkspace: () => undefined,
         resolveThread: (_scope, id) => ({ id, environmentId: "environment-2", label: "Other thread" }),
         resolveThreadFamily: () => undefined, resolveSavedAgent: () => undefined, resolveWorkpad: () => undefined, resolveTask: () => undefined,
         listEnvironments: () => [{ id: "environment-1", environmentId: "environment-1", label: "Local" }, { id: "environment-2", environmentId: "environment-2", label: "Other" }] }),
@@ -1325,5 +1341,117 @@ describe("provider current-input access decision authority", () => {
       request: { toolId: "agent.context", schemaVersion: 3, requestId: "inside-boundary", input: {} },
       accessDecisionAuthority: { acquire } })).resolves.toMatchObject({ state: "completed" });
     expect(acquire).not.toHaveBeenCalled();
+  });
+});
+
+describe("project access for thread agents", () => {
+  const projectQueryDefinition = (): AgentToolDefinition => ({
+    ...agentContextToolDefinition,
+    id: "example.project_query",
+    environmentAuthority: { kind: "scoped_query", resource: "task" },
+    adapters: { pi: { name: "sedes_example_project_query", label: "Project query" }, mcp: { name: "sedes_example_project_query" }, cli: { command: "example.project_query" }, http: { invocation: "inline" } },
+    inputSchema: normalizeCanonicalAgentToolSchema(Type.Object({
+      scope: Type.Object({ kind: Type.String({ maxLength: 32 }), projectId: Type.Optional(Type.String({ maxLength: 128 })) }, { additionalProperties: false, maxProperties: 2 }),
+      scopeMode: Type.String({ maxLength: 16 }),
+    }, { $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT, additionalProperties: false, maxProperties: 2 })),
+  });
+  const members: Record<string, string[]> = {
+    "project-local": ["environment-1"],
+    "project-both": ["environment-1", "environment-2"],
+    "project-remote": ["environment-2", "environment-3"],
+    "project-empty": [],
+  };
+  function gate(options: {
+    readonly membershipRevision?: () => number;
+    readonly callerProject?: () => string;
+    readonly approvals?: { requestApplicationDecision: () => Promise<"allow" | "deny"> };
+    readonly source?: typeof source;
+  } = {}) {
+    const definition = projectQueryDefinition();
+    const requestApplicationDecision = vi.fn(options.approvals?.requestApplicationDecision ?? (async () => "deny" as const));
+    const service = new SourceScopedAgentToolService(
+      new CanonicalInlineAgentToolService({ application: { readThreadStatus: async () => undefined }, additionalDefinitions: [definition] }),
+      { get: () => ({ enabled: true, enabledToolIds: [definition.id], presentation: { surface: "cli", mode: "progressive" }, accessBoundary: "environment", revision: 1 }) } as unknown as ThreadAgentToolPolicyRepository,
+      new AgentToolEnvironmentAuthorityResolver({
+        ...environmentAuthority.reader,
+        resolveProject: (_scope, id) => members[id]
+          ? { id, membershipRevision: options.membershipRevision?.() ?? 1, memberEnvironmentIds: members[id]!, label: id }
+          : undefined,
+        resolveWorkspaceProject: () => options.callerProject?.() ?? "project-local",
+        listEnvironments: () => [
+          { id: "environment-1", environmentId: "environment-1", label: "Local" },
+          { id: "environment-2", environmentId: "environment-2", label: "Build server" },
+          { id: "environment-3", environmentId: "environment-3", label: "Lab" },
+        ],
+      }),
+      { resolveInScope: () => options.source ?? source }, approvalAuthority, { requestApplicationDecision },
+    );
+    const invoke = (scope: { kind: string; projectId?: string }) => service.invoke({
+      source: options.source ?? source, adapter: "cli", signal: new AbortController().signal,
+      request: { toolId: definition.id, schemaVersion: definition.schemaVersion, requestId: "project", input: { scope, scopeMode: "exact" } },
+    });
+    return { invoke, requestApplicationDecision };
+  }
+
+  it("admits a member environment without asking, including the caller's own project by default", async () => {
+    const current = gate();
+    await expect(current.invoke({ kind: "project" })).resolves.toMatchObject({ state: "completed" });
+    await expect(current.invoke({ kind: "project", projectId: "project-both" })).resolves.toMatchObject({ state: "completed" });
+    expect(current.requestApplicationDecision).not.toHaveBeenCalled();
+  });
+
+  it("asks for every member environment of a project hosted elsewhere", async () => {
+    const current = gate();
+    await expect(current.invoke({ kind: "project", projectId: "project-remote" })).rejects.toMatchObject({ toolError: { code: "permission_denied" } });
+    const [{ presentation }] = current.requestApplicationDecision.mock.calls[0]! as unknown as [{ presentation: ApplicationDecisionPresentation }];
+    expect(presentation.message?.text).toContain("This tool wants to access Build server, Lab for project-remote. Arguments:");
+  });
+
+  it("asks before reaching a project with no active location", async () => {
+    const current = gate();
+    await expect(current.invoke({ kind: "project", projectId: "project-empty" })).rejects.toMatchObject({ toolError: { code: "permission_denied" } });
+    const [{ presentation }] = current.requestApplicationDecision.mock.calls[0]! as unknown as [{ presentation: ApplicationDecisionPresentation }];
+    expect(presentation.message?.text).toContain("This tool wants to access a project with no active location for project-empty");
+    await expect(current.invoke({ kind: "project", projectId: "project-removed" })).rejects.toMatchObject({ toolError: { code: "not_found" } });
+    expect(current.requestApplicationDecision).toHaveBeenCalledOnce();
+  });
+
+  it("invalidates a pending approval when the project's membership changes", async () => {
+    let revision = 1;
+    const requestApplicationDecision = vi.fn(async () => { revision += 1; return "allow" as const; });
+    const current = gate({ membershipRevision: () => revision, approvals: { requestApplicationDecision } });
+    await expect(current.invoke({ kind: "project", projectId: "project-remote" })).rejects.toMatchObject({
+      toolError: { code: "permission_denied", message: "The access request changed while approval was pending." },
+    });
+    revision = 7;
+    const steady = gate({ membershipRevision: () => revision, approvals: { requestApplicationDecision: vi.fn(async () => "allow" as const) } });
+    await expect(steady.invoke({ kind: "project", projectId: "project-remote" })).resolves.toMatchObject({ state: "completed" });
+  });
+
+  it("invalidates a pending approval when the caller's location moves to another project", async () => {
+    let callerProject = "project-local";
+    const requestApplicationDecision = vi.fn(async () => { callerProject = "project-both"; return "allow" as const; });
+    const current = gate({ callerProject: () => callerProject, approvals: { requestApplicationDecision } });
+    await expect(current.invoke({ kind: "project", projectId: "project-remote" })).rejects.toMatchObject({
+      toolError: { code: "permission_denied", message: "The access request changed while approval was pending." },
+    });
+  });
+
+  it("keeps a running source valid after its location moves and reports the new project", async () => {
+    let callerProject = "project-local";
+    const context = new SourceScopedAgentToolService(
+      new CanonicalInlineAgentToolService({ application: { readThreadStatus: async () => undefined } }),
+      { get: () => ({ enabled: true, enabledToolIds: ["agent.context"], presentation: { surface: "cli", mode: "progressive" }, accessBoundary: "environment", revision: 1 }) } as unknown as ThreadAgentToolPolicyRepository,
+      new AgentToolEnvironmentAuthorityResolver({ ...environmentAuthority.reader, resolveWorkspaceProject: () => callerProject }),
+      // The live source is unchanged: a move keeps the thread's workspace and environment.
+      sourceRevalidator, approvalAuthority, denyApprovals,
+    );
+    const invoke = () => context.invoke({
+      source, adapter: "cli", signal: new AbortController().signal,
+      request: { toolId: "agent.context", schemaVersion: agentContextToolDefinition.schemaVersion, requestId: "context", input: {} },
+    });
+    await expect(invoke()).resolves.toMatchObject({ output: { projectId: "project-local" } });
+    callerProject = "project-both";
+    await expect(invoke()).resolves.toMatchObject({ state: "completed", output: { projectId: "project-both", workspaceId: source.sourceWorkspaceId } });
   });
 });

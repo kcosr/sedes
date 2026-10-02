@@ -17,7 +17,7 @@ it.skipIf(!RUN_REAL_OPENCODE)("stock opencode2 invokes the bundled per-call brid
   const cleanup = async () => { await ingress.close(); await native.stop(); await model.stop(); };
   cleanups.push(cleanup);
   const observed: string[] = [];
-  const canonical = new CanonicalInlineAgentToolService({ application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined } });
+  const canonical = new CanonicalInlineAgentToolService({ application: { readThreadStatus: async () => undefined } });
   const channel = await ingress.admit({ catalog: canonical.catalogSummaries("mcp", "thread_agent"),
     invoke: async request => { expect(request.operation).toBe("list"); observed.push(request.sessionID); return { tools: [] }; } });
   try {

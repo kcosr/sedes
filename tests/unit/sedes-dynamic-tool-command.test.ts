@@ -250,7 +250,7 @@ describe("dynamic Sedes tool commands", () => {
 
   it("represents every canonical CLI tool with one typed named command", () => {
     const service = new CanonicalInlineAgentToolService({
-      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+      application: { readThreadStatus: async () => undefined },
       management: {} as never,
       automations: {} as never,
       threadCreation: {} as never,

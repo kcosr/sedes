@@ -54,6 +54,7 @@ function context(): TrustedToolInvocationContext {
       kind: "thread_agent",
       environmentId: "environment-1",
       workspaceId: "workspace-1",
+      projectId: "project-1",
       threadId: "thread-1",
     },
     policyIdentity: {
@@ -71,6 +72,7 @@ function context(): TrustedToolInvocationContext {
         kind: "thread_agent",
         environmentId: "environment-1",
         workspaceId: "workspace-1",
+        projectId: "project-1",
         threadId: "thread-1",
       },
       policyIdentity: {
@@ -206,7 +208,7 @@ describe("Thread worktree agent tools", () => {
 
   it("is discoverable by thread agents but absent for principal Tool clients", () => {
     const canonical = new CanonicalInlineAgentToolService({
-      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+      application: { readThreadStatus: async () => undefined },
       threadWorktrees: service(),
     });
     expect(
