@@ -4233,6 +4233,17 @@ textarea:disabled {
   }
 }
 
+/* The other panel headers (Tasks, Files, Workpads, Terminals) match the
+   chat header's quieter actions, with the same hit areas. */
+.workspace-panel-chrome > .workspace-panel-actions > button svg,
+.workspace-panel-chrome .tasks-header-button svg,
+.workspace-panel-chrome .workspace-files-toolbar-actions > button svg,
+.workspace-panel-chrome .terminal-panel-chrome-actions > button svg,
+.workspace-panel-chrome .terminal-tab-add svg {
+  width: calc(var(--bar-icon) - 2px);
+  height: calc(var(--bar-icon) - 2px);
+}
+
 .thread-heading {
   display: flex;
   min-width: 0;
