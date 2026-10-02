@@ -7,6 +7,11 @@ import {
 const MAXIMUM_MODEL_CATALOG_PAGES = 32;
 const MAXIMUM_CURSOR_BYTES = 16 * 1_024;
 const REQUEST_TIMEOUT_MILLISECONDS = 10_000;
+const MAXIMUM_MODEL_ID_CHARACTERS = 512;
+
+export interface CodexLiveModelSelection {
+  readonly upgrade: string | null;
+}
 
 /**
  * Rechecks one exact model/effort tuple against the uncached live daemon
@@ -19,7 +24,7 @@ export async function assertCodexLiveModelSelection(input: {
   readonly model: string;
   readonly reasoningEffort: string;
   readonly signal: AbortSignal;
-}): Promise<void> {
+}): Promise<CodexLiveModelSelection> {
   const cursors = new Set<string>();
   let cursor: string | undefined;
   let itemCount = 0;
@@ -41,24 +46,28 @@ export async function assertCodexLiveModelSelection(input: {
     assertGeneration(input.client, input.expectedGeneration, response.generation);
     itemCount += response.result.data.length;
     if (itemCount > CODEX_C2_MAX_CATALOG_ITEMS) break;
-    if (
-      response.result.data.some(
-        (candidate) =>
-          !candidate.hidden &&
-          candidate.id === input.model &&
-          candidate.inputModalities.includes("text") &&
-          candidate.supportedReasoningEfforts.some(
-            ({ reasoningEffort }) =>
-              reasoningEffort === input.reasoningEffort,
-          ),
-      )
-    ) {
+    const selected = response.result.data.find(
+      (candidate) =>
+        !candidate.hidden &&
+        candidate.id === input.model &&
+        candidate.inputModalities.includes("text") &&
+        candidate.supportedReasoningEfforts.some(
+          ({ reasoningEffort }) => reasoningEffort === input.reasoningEffort,
+        ),
+    );
+    if (selected) {
       assertGeneration(
         input.client,
         input.expectedGeneration,
         response.generation,
       );
-      return;
+      const upgrade = selected.upgrade ?? null;
+      if (upgrade !== null && (typeof upgrade !== "string" ||
+          upgrade.length === 0 || upgrade.length > MAXIMUM_MODEL_ID_CHARACTERS ||
+          /[\uD800-\uDFFF]/u.test(upgrade))) {
+        throw new Error("codex_tui_live_model_upgrade_invalid");
+      }
+      return Object.freeze({ upgrade });
     }
     const nextCursor = response.result.nextCursor;
     if (nextCursor === null) break;

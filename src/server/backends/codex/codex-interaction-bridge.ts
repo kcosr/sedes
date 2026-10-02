@@ -864,7 +864,8 @@ function presentMcpElicitation(
 ): ReturnType<typeof presentRequest> {
   if (
     request.params.mode === "openaiForm" ||
-    request.params.mode === "openai/form"
+    request.params.mode === "openai/form" ||
+    request.params.mode === "openai/userVerification"
   ) {
     throw new CodexInteractionBridgeError(
       "codex_mcp_openai_elicitation_unadvertised",

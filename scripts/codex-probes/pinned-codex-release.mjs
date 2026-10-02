@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const RELEASE = "0.153.0";
+const RELEASE = "0.160.0";
 const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
 const releaseRoot = path.join(
   repositoryRoot,

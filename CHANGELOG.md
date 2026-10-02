@@ -4,6 +4,12 @@
 
 ### Breaking Changes
 
+- Codex uses the generated 0.160.0 app-server profile. Rebuild the server,
+  execution sidecars, and Electron Local together; mismatched compiled Codex
+  profiles are rejected. Codex app-servers and managed TUI commands now require
+  0.160.0 or newer; upgrade them on each execution host.
+  ([#27](https://github.com/kcosr/sedes/pull/27))
+
 - Remote OpenCode requires a matching sidecar build with private OpenCode
   runtime capability major 2 and tool capabilities. Upgrade existing execution sidecars before
   connecting this backend. (#17)
@@ -211,6 +217,9 @@
   or None. Rows show the backend, a two-line title, location details, and the
   archive age, with an always-visible Restore button that reports progress and
   failures inline. The list shows 100 threads at a time with **Show more**.
+
+- Qualify Codex 0.160.0 and preserve the managed TUI inline transcript despite
+  the upstream fullscreen default. ([#27](https://github.com/kcosr/sedes/pull/27))
 
 - In a thread, Tasks docks beside Chat as a workspace panel instead of a
   floating card, and resizes, collapses, docks on another edge, and closes
@@ -421,6 +430,17 @@
   archives slow to use. Thread menus mount their dialogs only when first
   opened, the sidebar no longer builds lineage for archived threads, and
   events that change nothing no longer re-render the app.
+
+- Linux x64 server and full Electron packages retain only the compatible
+  msgpackr N-API addon, removing bundled musl and Node 20 ABI variants that
+  caused server archive dependency checks to fail. Glibc arm64 packages omit
+  msgpackr's musl-only optional addon and use its JavaScript implementation.
+  ([#27](https://github.com/kcosr/sedes/pull/27))
+
+- Accept Codex 0.160.0 settings, image references, errors, and account metadata.
+  Populate existing item timestamps in live and reloaded history, and retain
+  meaningful interrupted-turn errors without changing normal Stop behavior.
+  ([#27](https://github.com/kcosr/sedes/pull/27))
 
 - Saving agent tools on an existing idle thread now refreshes the saved policy
   in open clients after runtime retirement. Subsequent edits no longer report

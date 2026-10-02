@@ -20,6 +20,7 @@ const manifestPath = path.join(
 const run = promisify(execFile);
 
 const canonicalInputs = {
+  "src/cli/opencode-owner-cli.ts": {},
   "src/cli/sedes-dynamic-tool-command.ts": {},
   "src/cli/sedes-cli.ts": {},
   "src/cli/sedes-mcp.ts": {},
@@ -40,6 +41,7 @@ const syntheticOutputPath = path.join(
   "test.mjs",
 );
 const canonicalOutputInputs = {
+  "src/cli/opencode-owner-cli.ts": { bytesInOutput: 1 },
   "src/cli/sedes-dynamic-tool-command.ts": { bytesInOutput: 1 },
   "src/cli/sedes-cli.ts": { bytesInOutput: 1 },
   "src/cli/sedes-mcp.ts": { bytesInOutput: 1 },

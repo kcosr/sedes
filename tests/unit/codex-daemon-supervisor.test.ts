@@ -110,7 +110,7 @@ function authenticatedTcpTransportFactory(
 
 const goodInitialize = {
   userAgent:
-    `sedes_web/0.153.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
+    `sedes_web/0.160.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
   codexHome,
   platformFamily: "unix",
   platformOs: "linux",
@@ -541,7 +541,7 @@ describe("CodexDaemonSupervisor", () => {
         initialize: {
           ...goodInitialize,
           userAgent:
-            `sedes_web/0.153.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
+            `sedes_web/0.160.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
           futureRuntimeMetadata: { revision: 2 },
         },
       },
@@ -574,7 +574,7 @@ describe("CodexDaemonSupervisor", () => {
         initialize: {
           ...goodInitialize,
           userAgent:
-            `codex-tui/0.153.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
+            `codex-tui/0.160.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
         },
       },
     ]);
@@ -594,7 +594,7 @@ describe("CodexDaemonSupervisor", () => {
         initialize: {
           ...goodInitialize,
           userAgent:
-            `pi_web_harness/0.153.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
+            `pi_web_harness/0.160.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
         },
       },
     ]);
@@ -639,7 +639,7 @@ describe("CodexDaemonSupervisor", () => {
           initialize: {
             ...goodInitialize,
             userAgent:
-              `sedes_web/0.155.0+vendor.1 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
+              `sedes_web/0.161.0+vendor.1 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
           },
         },
       ],
@@ -649,7 +649,7 @@ describe("CodexDaemonSupervisor", () => {
     await supervisor.start();
 
     expect(onRuntimeVersionAssessment).toHaveBeenCalledWith({
-      version: "0.155.0+vendor.1",
+      version: "0.161.0+vendor.1",
       newerThanTested: true,
     });
     expect(supervisor.snapshot().state).toBe("ready");
@@ -657,8 +657,8 @@ describe("CodexDaemonSupervisor", () => {
   });
 
   it.each([
-    ["0.153.0", "0.154.0"],
-    ["0.154.0", "0.153.0"],
+    ["0.160.0", "0.161.0"],
+    ["0.161.0", "0.160.0"],
   ])(
     "rejects an owned runtime whose probed %s executable initializes as %s",
     async (expectedRuntimeVersion, initializedRuntimeVersion) => {
@@ -686,7 +686,7 @@ describe("CodexDaemonSupervisor", () => {
 
   it("matches an owned runtime by semantic precedence rather than build metadata", async () => {
     const { supervisor } = fixture([{ initialize: goodInitialize }], {
-      expectedRuntimeVersion: "0.153.0+owned.1",
+      expectedRuntimeVersion: "0.160.0+owned.1",
     });
 
     await supervisor.start();
@@ -710,11 +710,11 @@ describe("CodexDaemonSupervisor", () => {
     ],
     [
       "unsupported prerelease alias",
-      `sedes_web/0.153.0-rc.1 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
+      `sedes_web/0.160.0-rc.1 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
     ],
     [
       "unknown server product",
-      `forged-server/0.153.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
+      `forged-server/0.160.0 (Ubuntu 26.4.0; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
     ],
   ])(
     "rejects a %s initialized runtime version on a replacement generation",
@@ -793,7 +793,7 @@ describe("CodexDaemonSupervisor", () => {
             initialize: {
               ...goodInitialize,
               userAgent:
-                `Codex Desktop/0.153.4 (Windows 10.0.26200; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
+                `Codex Desktop/0.160.0 (Windows 10.0.26200; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
               codexHome: windowsHome,
               platformFamily: "windows",
               platformOs: "windows",

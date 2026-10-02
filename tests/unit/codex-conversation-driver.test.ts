@@ -114,7 +114,7 @@ const instance: AgentBackendInstance = {
   label: "Codex",
   enabled: true,
   configurationRevision: 1,
-  protocolRelease: "0.153.0",
+  protocolRelease: "0.160.0",
 };
 const toolProvenanceKey = new Uint8Array(32).fill(0x43);
 const agentToolSourceCapability =
@@ -260,6 +260,9 @@ function nativeThread(
 ): CodexThread {
   return codexThreadReadMethod.decodeResult({
     thread: {
+      environments: null,
+      originator: null,
+      daybreakEnabled: null,
       id: "thread-1",
       extra: {},
       sessionId: "session-1",
@@ -280,7 +283,7 @@ function nativeThread(
       status: { type: "idle" },
       path: "/private/rollout.jsonl",
       cwd: "/workspace",
-      cliVersion: "0.153.0",
+      cliVersion: "0.160.0",
       source: "appServer",
       canAcceptDirectInput: true,
       threadSource: null,
@@ -350,6 +353,8 @@ function overLimitNativeThread(): CodexThread {
 
 function resumeResult(thread = nativeThread()) {
   return {
+    disabledPluginIds: [],
+    collaborationMode: null,
     thread,
     model: "gpt-5.6",
     modelProvider: "openai",
@@ -419,11 +424,22 @@ function paginatedResumeResult(input: {
 function paginatedItems(index: number) {
   return {
     data: nativeTurn(index).items.map((item) => ({
+      startedAtMs: null,
+      completedAtMs: null,
       turnId: `turn-${index}`,
       item,
     })),
     nextCursor: null,
     backwardsCursor: "item-head",
+  };
+}
+
+function timedPaginatedItems(index: number) {
+  return {
+    ...paginatedItems(index),
+    data: paginatedItems(index).data.map(entry => ({
+      ...entry, startedAtMs: 1_700_000_002_000, completedAtMs: 1_700_000_002_500,
+    })),
   };
 }
 
@@ -438,6 +454,8 @@ function hiddenBoundaryItems(index: number) {
   return {
     data: [
       {
+        startedAtMs: null,
+        completedAtMs: null,
         turnId: `hidden-boundary-${index}`,
         item: {
           type: "hookPrompt" as const,
@@ -480,6 +498,7 @@ function threadStartResult(thread = paginatedThread()) {
     initialTurnsPage: _initialTurnsPage,
     turnsBackwardsCursor: _turnsBackwardsCursor,
     itemsBackwardsCursor: _itemsBackwardsCursor,
+    collaborationMode: _collaborationMode,
     ...result
   } = resumeResult(thread);
   return result;
@@ -981,7 +1000,8 @@ describe("CodexConversationBackendDriver", () => {
 
   it("validates consumed thread fields while ignoring additive response metadata", () => {
     const actualShape = resumeResult();
-    expect(codexThreadResumeMethod.decodeResult(actualShape)).toMatchObject({
+    const decoded = codexThreadResumeMethod.decodeResult(actualShape);
+    expect(decoded).toMatchObject({
       thread: {
         extra: {},
         historyMode: "legacy",
@@ -1000,7 +1020,7 @@ describe("CodexConversationBackendDriver", () => {
           futureThreadMetadata: { revision: 2 },
         },
       }),
-    ).toEqual(actualShape);
+    ).toEqual(decoded);
     expect(
       codexThreadResumeMethod.decodeResult({
         ...actualShape,
@@ -1148,7 +1168,7 @@ describe("CodexConversationBackendDriver", () => {
     ).resolves.toEqual(expect.objectContaining({ models: expect.any(Array) }));
   });
 
-  it("normalizes only Fast from the Codex 0.153 service-tier catalog", async () => {
+  it("normalizes only Fast from the Codex 0.160 service-tier catalog", async () => {
     const harness = new RpcHarness();
     harness.enqueue("model/list", {
       data: [
@@ -2695,6 +2715,7 @@ describe("CodexConversationBackendDriver", () => {
     const mcp = {
       type: "mcpToolCall" as const,
       id: "attached-mcp",
+      mcpAppUi: null,
       server: "files",
       tool: "inspect",
       status: "inProgress" as const,
@@ -3589,6 +3610,8 @@ describe("CodexConversationBackendDriver", () => {
       {
         data: [
           {
+            startedAtMs: null,
+            completedAtMs: null,
             turnId: "turn-1",
             item: { ...nativeTurn(1).items[0], clientId },
           },
@@ -3600,6 +3623,8 @@ describe("CodexConversationBackendDriver", () => {
       {
         data: [
           {
+            startedAtMs: null,
+            completedAtMs: null,
             turnId: "turn-1",
             item: { ...nativeTurn(1).items[0], clientId },
           },
@@ -3644,6 +3669,8 @@ describe("CodexConversationBackendDriver", () => {
       reconciliationToken: "paginated-duplicate-token",
     });
     const repeated = {
+      startedAtMs: null,
+      completedAtMs: null,
       turnId: "turn-1",
       item: { ...nativeTurn(1).items[0], clientId },
     };
@@ -3662,6 +3689,8 @@ describe("CodexConversationBackendDriver", () => {
           index === 0 || index === 9
             ? repeated
             : {
+              startedAtMs: null,
+              completedAtMs: null,
                 turnId: `turn-${index + 10}`,
                 item: nativeTurn(index + 10).items[0],
               },
@@ -3774,6 +3803,8 @@ describe("CodexConversationBackendDriver", () => {
     const newItemsPage = {
       data: [
         {
+          startedAtMs: null,
+          completedAtMs: null,
           turnId: "turn-1",
           item: { ...nativeTurn(1).items[0], clientId },
         },
@@ -5107,6 +5138,8 @@ describe("CodexConversationHandle", () => {
       "thread/items/list",
       {
         data: [items[2], items[1]].map((item) => ({
+          startedAtMs: null,
+          completedAtMs: null,
           turnId: "turn-0",
           item,
         })),
@@ -5114,7 +5147,7 @@ describe("CodexConversationHandle", () => {
         backwardsCursor: "item-boundary",
       },
       {
-        data: [{ turnId: "turn-0", item: items[0] }],
+        data: [{ startedAtMs: null, completedAtMs: null, turnId: "turn-0", item: items[0] }],
         nextCursor: null,
         backwardsCursor: "older-items",
       },
@@ -5253,15 +5286,14 @@ describe("CodexConversationHandle", () => {
         backwardsCursor: "older-turns",
       },
     );
-    harness.enqueue("thread/items/list", paginatedItems(0));
+    harness.enqueue("thread/items/list", timedPaginatedItems(0));
     const targetBackendTurnId = codexBackendTurnId("thread-1", "turn-0");
 
-    await expect(
-      handle.locateTurn({
+    const located = await handle.locateTurn({
         matchesBackendTurnId: (candidate) => candidate === targetBackendTurnId,
         maximumTurnCandidates: 12,
-      }),
-    ).resolves.toMatchObject({
+      });
+    expect(located).toMatchObject({
       status: "found",
       page: {
         orderedBackendTurnIds: [targetBackendTurnId],
@@ -5272,6 +5304,10 @@ describe("CodexConversationHandle", () => {
           },
         },
       },
+    });
+    if (located.status !== "found") throw new Error("expected located turn");
+    expect(Object.values(located.page.itemsById)[0]).toMatchObject({
+      startedAt: "2023-11-14T22:13:22.000Z", completedAt: "2023-11-14T22:13:22.500Z",
     });
     expect(
       harness.calls
@@ -5411,7 +5447,7 @@ describe("CodexConversationHandle", () => {
       (_, pageIndex) => {
         const data = items
           .slice(pageIndex * 100, (pageIndex + 1) * 100)
-          .map((item) => ({ turnId: "turn-0", item }));
+          .map((item) => ({ startedAtMs: null, completedAtMs: null, turnId: "turn-0", item }));
         return {
           data,
           nextCursor:
@@ -5769,7 +5805,7 @@ describe("CodexConversationHandle", () => {
       nextCursor: null,
       backwardsCursor: "older-head",
     });
-    harness.enqueue("thread/items/list", paginatedItems(1), paginatedItems(0));
+    harness.enqueue("thread/items/list", timedPaginatedItems(1), timedPaginatedItems(0));
     const older = await handle.history({
       limit: 2,
       cursor: established.history.previousCursor,
@@ -5782,6 +5818,10 @@ describe("CodexConversationHandle", () => {
       older.turnsById[codexBackendTurnId("thread-1", "turn-0")],
     ).toMatchObject({ status: "interrupted", endedBy: "interrupted" });
     expect(older.previousCursor).toBeUndefined();
+    expect(Object.values(older.itemsById)).toHaveLength(2);
+    for (const item of Object.values(older.itemsById)) expect(item).toMatchObject({
+      startedAt: "2023-11-14T22:13:22.000Z", completedAt: "2023-11-14T22:13:22.500Z",
+    });
     expect(
       harness.calls
         .filter(({ method }) => method === "thread/turns/list")
@@ -7010,7 +7050,7 @@ describe("CodexConversationHandle", () => {
       backwardsCursor: "turns-head",
     });
     rolloverHarness.enqueue("thread/items/list", {
-      data: [{ turnId: "turn-0", item: nativeGeneratedImage() }],
+      data: [{ startedAtMs: null, completedAtMs: null, turnId: "turn-0", item: nativeGeneratedImage() }],
       nextCursor: null,
       backwardsCursor: "item-head",
     });
@@ -7235,6 +7275,8 @@ describe("CodexConversationHandle", () => {
     harness.enqueue("thread/items/list", paginatedItems(0), paginatedItems(0), {
       data: [
         {
+          startedAtMs: null,
+          completedAtMs: null,
           turnId: "discovery-boundary-turn",
           item: {
             type: "hookPrompt" as const,
@@ -7517,7 +7559,7 @@ describe("CodexConversationHandle", () => {
       backwardsCursor: "older-head",
     });
     harness.enqueue("thread/items/list", {
-      data: nativeTurn(0).items.map((item) => ({ turnId: "wrong-turn", item })),
+      data: nativeTurn(0).items.map((item) => ({ startedAtMs: null, completedAtMs: null, turnId: "wrong-turn", item })),
       nextCursor: null,
       backwardsCursor: "item-head",
     });
@@ -9582,6 +9624,151 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it("retains observed live item timing when persisted history omits it", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    harness.enqueue("thread/read", { thread: paginatedThread() });
+    harness.enqueue("thread/resume", paginatedResumeResult({ shells: [] }));
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: SequencedBackendEvent[] = [];
+    established.subscribeFromNext(event => events.push(event));
+    const active = { ...nativeTurn(1), items: [], status: "inProgress" as const, completedAt: null, durationMs: null };
+    const item = { type: "contextCompaction" as const, id: "live-timed-item" };
+    harness.notify("turn/started", { threadId: "thread-1", turn: active });
+    harness.notify("item/started", { threadId: "thread-1", turnId: active.id, item, startedAtMs: 2_000 });
+    harness.notify("item/completed", { threadId: "thread-1", turnId: active.id, item, completedAtMs: 2_500 });
+    await handle.readCurrent();
+    const untimed = { type: "plan" as const, id: "untimed-item", text: "No recorded item timing" };
+    const completed = { ...active, status: "completed" as const, completedAt: 1_700_000_003, items: [item, untimed] };
+    harness.enqueue("thread/turns/list", { data: [{ ...completed, items: [], itemsView: "notLoaded" }],
+      nextCursor: null, backwardsCursor: "turns-head" });
+    harness.enqueue("thread/items/list", { data: completed.items.map(item => ({ turnId: active.id, item })),
+      nextCursor: null, backwardsCursor: "items-head" });
+    harness.notify("turn/completed", { threadId: "thread-1", turn: completed });
+    await vi.waitFor(async () => expect(Object.values((await handle.readCurrent()).snapshot.turnsById)[0]?.status).toBe("completed"));
+    const current = (await handle.readCurrent()).snapshot;
+    expect(Object.values(current.itemsById)[0]).toMatchObject({
+      startedAt: "1970-01-01T00:00:02.000Z", completedAt: "1970-01-01T00:00:02.500Z",
+    });
+    const untimedProjection = Object.values(current.itemsById).find(item => item.semanticKind === "plan");
+    expect(untimedProjection).toBeDefined();
+    expect(untimedProjection).not.toHaveProperty("startedAt");
+    expect(untimedProjection).not.toHaveProperty("completedAt");
+    const projector = new ConversationProjector({ backendInstanceId: instance.id, bindingIdentity: binding().applicationThreadId });
+    projector.replace(established.snapshot, established.handleSequence);
+    for (const event of events) expect(projector.apply(event)).not.toMatchObject({ kind: "resnapshot_required" });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it.each([1_700_000_002_500, 1_700_000_001_500])(
+    "loads paginated history across attach, reload, and detached reads with completion time %i", async (completedAtMs) => {
+    const harness = new RpcHarness();
+    const target = driver(harness);
+    const handle = await attachIdle(harness, target);
+    const persisted = timedPaginatedItems(0);
+    const items = { ...persisted, data: persisted.data.map(entry => ({ ...entry, completedAtMs })) };
+    const establishTimed = async () => {
+      harness.enqueue("thread/read", { thread: paginatedThread() });
+      harness.enqueue("thread/resume", paginatedResumeResult({ shells: [notLoadedTurn(0)] }));
+      harness.enqueue("thread/items/list", items);
+      return await handle.establishProjection({ signal: new AbortController().signal });
+    };
+    const initial = await establishTimed();
+    const item = Object.values(initial.snapshot.itemsById)[0];
+    expect(item).toMatchObject({ startedAt: "2023-11-14T22:13:22.000Z" });
+    if (completedAtMs < 1_700_000_002_000) {
+      expect(item).not.toHaveProperty("completedAt");
+      expect(item).not.toHaveProperty("durationMs");
+    } else {
+      expect(item).toMatchObject({ completedAt: "2023-11-14T22:13:22.500Z" });
+    }
+    expect((await establishTimed()).snapshot.itemsById).toEqual(initial.snapshot.itemsById);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+    harness.enqueue("thread/read", { thread: paginatedThread() });
+    harness.enqueue("thread/turns/list", { data: [notLoadedTurn(0)], nextCursor: null, backwardsCursor: "turns-head" });
+    harness.enqueue("thread/items/list", items);
+    const detached = await target.read(attachInput());
+    expect(detached.snapshot.itemsById).toEqual(initial.snapshot.itemsById);
+  });
+
+  it.each([null, "The model response was interrupted after a provider error."])(
+    "preserves interrupted diagnostics consistently in live and loaded history: %j", async (message) => {
+      const harness = new RpcHarness();
+      const handle = await attachIdle(harness);
+      const established = await establish(harness, handle);
+      const events: BackendConversationEvent[] = [];
+      established.subscribeFromNext(({ event }) => events.push(event));
+      const active = { ...nativeTurn(1), items: [], status: "inProgress" as const, completedAt: null, durationMs: null };
+      const interrupted = { ...active, status: "interrupted" as const, completedAt: 1_700_000_003,
+        error: message === null ? null : { message, codexErrorInfo: null, additionalDetails: null } };
+      harness.notify("turn/started", { threadId: "thread-1", turn: active });
+      harness.notify("turn/completed", { threadId: "thread-1", turn: interrupted });
+      const live = (await handle.readCurrent()).snapshot;
+      expect(Object.values(live.turnsById).at(-1)).toMatchObject({ status: "interrupted", endedBy: "interrupted" });
+      const notices = Object.values(live.itemsById).filter(item => item.semanticKind === "notice");
+      expect(notices).toHaveLength(message === null ? 0 : 1);
+      expect(events).not.toContainEqual(expect.objectContaining({ type: "resnapshot_required" }));
+      const loaded = await establish(harness, handle, nativeThread({ turns: [nativeTurn(0), interrupted] }));
+      expect(loaded.snapshot.itemsById).toEqual(live.itemsById);
+      expect(loaded.snapshot.turnsById).toEqual(live.turnsById);
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+    },
+  );
+
+  it.each([true, false])(
+    "completes live items after wall-clock rollback and safely merges persisted timing (start persisted: %s)", async (persistedStart) => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    harness.enqueue("thread/read", { thread: paginatedThread() });
+    harness.enqueue("thread/resume", paginatedResumeResult({ shells: [] }));
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: SequencedBackendEvent[] = [];
+    established.subscribeFromNext(event => events.push(event));
+    const active = { ...nativeTurn(1), items: [], status: "inProgress" as const, completedAt: null, durationMs: null };
+    const item = { type: "contextCompaction" as const, id: "timed-compaction" };
+    harness.notify("turn/started", { threadId: "thread-1", turn: active });
+    harness.notify("item/started", { threadId: "thread-1", turnId: active.id, item, startedAtMs: 2_000 });
+    await handle.readCurrent();
+    harness.notify("item/completed", { threadId: "thread-1", turnId: active.id, item, completedAtMs: 1_000 });
+    const liveItem = Object.values((await handle.readCurrent()).snapshot.itemsById)[0];
+    expect(liveItem).toMatchObject({ status: "completed", startedAt: "1970-01-01T00:00:02.000Z" });
+    expect(liveItem).not.toHaveProperty("completedAt");
+    expect(liveItem).not.toHaveProperty("durationMs");
+
+    // Later notifications must still project on the same live handle.
+    const nextItem = { type: "contextCompaction" as const, id: "next-compaction" };
+    harness.notify("item/started", { threadId: "thread-1", turnId: active.id, item: nextItem, startedAtMs: 3_000 });
+    harness.notify("item/completed", { threadId: "thread-1", turnId: active.id, item: nextItem, completedAtMs: 3_500 });
+    await handle.readCurrent();
+    const completed = { ...active, status: "completed" as const, completedAt: 1_700_000_003, items: [item, nextItem] };
+    harness.enqueue("thread/turns/list", { data: [{ ...completed, items: [], itemsView: "notLoaded" }],
+      nextCursor: null, backwardsCursor: "turns-head" });
+    harness.enqueue("thread/items/list", {
+      data: [
+        { turnId: active.id, item, ...(persistedStart ? { startedAtMs: 2_000 } : {}), completedAtMs: 1_000 },
+        { turnId: active.id, item: nextItem, startedAtMs: 3_000, completedAtMs: 3_500 },
+      ],
+      nextCursor: null, backwardsCursor: "items-head",
+    });
+    harness.notify("turn/completed", { threadId: "thread-1", turn: completed });
+    await vi.waitFor(async () => expect(Object.values((await handle.readCurrent()).snapshot.turnsById)[0]?.status).toBe("completed"));
+    const current = (await handle.readCurrent()).snapshot;
+    const projectedItems = Object.values(current.itemsById);
+    expect(projectedItems[0]).toEqual(liveItem);
+    expect(projectedItems[1]).toMatchObject({
+      status: "completed", startedAt: "1970-01-01T00:00:03.000Z", completedAt: "1970-01-01T00:00:03.500Z",
+    });
+    expect(events.map(({ event }) => event)).not.toContainEqual(expect.objectContaining({ type: "resnapshot_required" }));
+    const projector = new ConversationProjector({ backendInstanceId: instance.id, bindingIdentity: binding().applicationThreadId });
+    projector.replace(established.snapshot, established.handleSequence);
+    for (const event of events) expect(projector.apply(event)).not.toMatchObject({ kind: "resnapshot_required" });
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
   it("projects stable turn, item, and delta notifications without duplicate authoritative state", async () => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
@@ -9659,6 +9846,8 @@ describe("CodexConversationHandle", () => {
         expect.objectContaining({
           semanticKind: "assistant_message",
           markdown: expect.objectContaining({ text: "authoritative final" }),
+          startedAt: "2023-11-14T22:13:22.000Z",
+          completedAt: "2023-11-14T22:13:22.500Z",
         }),
       ]),
     );
@@ -9683,6 +9872,7 @@ describe("CodexConversationHandle", () => {
         item: expect.objectContaining({
           status: "streaming",
           markdown: expect.objectContaining({ text: "hello" }),
+          startedAt: "2023-11-14T22:13:22.000Z",
         }),
       }),
       expect.objectContaining({
@@ -9690,6 +9880,7 @@ describe("CodexConversationHandle", () => {
         item: expect.objectContaining({
           status: "streaming",
           markdown: expect.objectContaining({ text: "hello world" }),
+          startedAt: "2023-11-14T22:13:22.000Z",
         }),
       }),
       expect.objectContaining({
@@ -9697,6 +9888,8 @@ describe("CodexConversationHandle", () => {
         item: expect.objectContaining({
           status: "completed",
           markdown: expect.objectContaining({ text: "authoritative final" }),
+          startedAt: "2023-11-14T22:13:22.000Z",
+          completedAt: "2023-11-14T22:13:22.500Z",
         }),
       }),
     ]);
@@ -9788,7 +9981,8 @@ describe("CodexConversationHandle", () => {
     const native = nativeThread({ turns: [{ ...active, status: "completed", completedAt: 1_700_000_003, items: [viewed, text] }] });
     const restarted = await establish(harness, handle, native);
     expect(Object.values(restarted.snapshot.itemsById).filter(item => item.semanticKind === "image")).toEqual(
-      Object.values(after.itemsById).filter(item => item.semanticKind === "image"));
+      Object.values(after.itemsById).filter(item => item.semanticKind === "image")
+        .map(({ startedAt: _startedAt, completedAt: _completedAt, ...item }) => item));
     expect(capture).toHaveBeenCalledTimes(1);
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
@@ -9926,7 +10120,7 @@ describe("CodexConversationHandle", () => {
     const viewed = { type: "imageView" as const, id: "older-view", path: "/workspace/older.png" };
     harness.enqueue("thread/turns/list", { data: [notLoadedTurn(1), notLoadedTurn(0)], nextCursor: null, backwardsCursor: "older-head" });
     harness.enqueue("thread/items/list", paginatedItems(1), {
-      data: [...nativeTurn(0).items, viewed].map(item => ({ turnId: "turn-0", item })),
+      data: [...nativeTurn(0).items, viewed].map(item => ({ startedAtMs: null, completedAtMs: null, turnId: "turn-0", item })),
       nextCursor: null, backwardsCursor: "item-head" });
     const older = await handle.history({ limit: 2, cursor: established.history.previousCursor });
     expect(capture).toHaveBeenCalledTimes(1);
@@ -10866,6 +11060,7 @@ describe("CodexConversationHandle", () => {
     const mcp = {
       type: "mcpToolCall" as const,
       id: "mcp-live",
+      mcpAppUi: null,
       server: "files",
       tool: "inspect",
       status: "inProgress" as const,

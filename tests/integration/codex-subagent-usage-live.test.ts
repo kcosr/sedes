@@ -1,6 +1,6 @@
 import { usageSubagentRecoveryIndexesMigration } from "../../src/server/db/migrations/114-usage-subagent-recovery-indexes.js";
 import Database from "better-sqlite3";
-import { chmod, copyFile, lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -68,8 +68,12 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
     let database: Database.Database | undefined;
     let environmentChannel: LocalEnvironmentChannelProvider | undefined;
     if (udsSocket && (!path.isAbsolute(udsSocket) || path.resolve(udsSocket) !== udsSocket)) throw new Error("Expected absolute UDS socket path");
-    const socketBefore = udsSocket ? await lstat(udsSocket, { bigint: true }) : undefined;
-    if (socketBefore) expect(socketBefore.isSocket()).toBe(true);
+    const socketPathBefore = udsSocket ? await lstat(udsSocket, { bigint: true }) : undefined;
+    const socketBefore = udsSocket ? await stat(udsSocket, { bigint: true }) : undefined;
+    if (socketBefore) {
+      expect(socketBefore.isSocket()).toBe(true);
+      expect(socketBefore.mode & 0o777n).toBe(0o600n);
+    }
     try {
       await mkdir(codexHome, { mode: 0o700 });
       await mkdir(workingDirectory);
@@ -214,9 +218,12 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
       database?.close();
       environmentChannel?.close();
       await rm(temporaryRoot, { recursive: true, force: true });
-      if (udsSocket && socketBefore) {
-        const after = await lstat(udsSocket, { bigint: true });
+      if (udsSocket && socketBefore && socketPathBefore) {
+        const pathAfter = await lstat(udsSocket, { bigint: true });
+        expect({ device: pathAfter.dev, inode: pathAfter.ino }).toEqual({ device: socketPathBefore.dev, inode: socketPathBefore.ino });
+        const after = await stat(udsSocket, { bigint: true });
         expect(after.isSocket()).toBe(true);
+        expect(after.mode & 0o777n).toBe(0o600n);
         expect({ device: after.dev, inode: after.ino }).toEqual({ device: socketBefore.dev, inode: socketBefore.ino });
       }
     }

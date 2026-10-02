@@ -674,7 +674,7 @@ class MinimalCodexAppServer {
                 id: envelope.id,
                 result: {
                   userAgent:
-                    `sedes_web/0.153.0 (Linux 6.8; x86_64) fixture (sedes_web; ${SEDES_VERSION})`,
+                    `sedes_web/0.160.0 (Linux 6.8; x86_64) fixture (sedes_web; ${SEDES_VERSION})`,
                   codexHome: "/fixture/codex-home",
                   platformFamily: "unix",
                   platformOs: "linux",

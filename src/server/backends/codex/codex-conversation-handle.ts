@@ -73,6 +73,7 @@ import {
   codexThreadTurnsListMethod,
   codexThreadResumeMethod,
   codexThreadUnsubscribeMethod,
+  refineCodexItemLifecycleTimestamps,
   type CodexThread,
   type CodexThreadItem,
   type CodexThreadResumeResponse,
@@ -119,6 +120,7 @@ import {
   projectCodexUsage,
   selectCodexNativeHistorySlice,
   type CodexHistoryProjection,
+  type CodexHistoryItemTimestamps,
   type CodexProjectedItemCoordinate,
   type CodexStreamingNativeItems,
 } from "./codex-history-projector.js";
@@ -457,6 +459,7 @@ export class CodexConversationHandle implements ConversationHandle {
   #terminalErrorFallbackThread: CodexThread | undefined;
   #failureFencedGeneration: number | undefined;
   #nativeThread: CodexThread | undefined;
+  #itemTimestamps: CodexHistoryItemTimestamps = new Map();
   #paginatedHistoryAdapter: CodexPaginatedHistoryAdapter | undefined;
   #paginatedHistoryPreviousCursor: string | undefined;
   #nativeTurnById = new Map<string, CodexThread["turns"][number]>();
@@ -920,6 +923,7 @@ export class CodexConversationHandle implements ConversationHandle {
               fetchedPageCurrent = true;
             },
           },
+          page.itemTimestamps,
         );
         assertPageCurrent(!fetchedPageCurrent);
         return historyPage(
@@ -1018,7 +1022,7 @@ export class CodexConversationHandle implements ConversationHandle {
           signal,
         );
         if (located.status !== "found") return located;
-        return await this.#projectLocatedTurn(nativeThread, located.turn, signal);
+        return await this.#projectLocatedTurn(nativeThread, located.turn, signal, located.itemTimestamps);
       }
       if (nativeThread.historyMode !== "legacy") {
         throw codexError(
@@ -1053,6 +1057,7 @@ export class CodexConversationHandle implements ConversationHandle {
     sourceThread: CodexThread,
     turn: CodexTurn,
     signal: AbortSignal,
+    itemTimestamps: CodexHistoryItemTimestamps = this.#itemTimestamps,
   ): Promise<LocateTurnResult> {
     const thread: CodexThread = {
       ...sourceThread,
@@ -1065,7 +1070,7 @@ export class CodexConversationHandle implements ConversationHandle {
     const projection = await this.#projectNativeHistorySliceDurably(
       thread,
       1,
-      1, new Map(), { signal },
+      1, new Map(), { signal }, itemTimestamps,
     );
     const turnIds = projection.snapshot.orderedBackendTurnIds;
     if (turnIds.length === 0) return { status: "not_found" };
@@ -2853,6 +2858,7 @@ export class CodexConversationHandle implements ConversationHandle {
             });
             const page: CodexPaginatedNativePage = {
               thread: projectionThread,
+              itemTimestamps: new Map(),
               source: { syntheticNativeTurnIds: [], segments: [] },
             };
             const projection =
@@ -2980,7 +2986,7 @@ export class CodexConversationHandle implements ConversationHandle {
           });
           const page = await adapter.bootstrap(resumed.result, signal);
           projectionThread = page.thread;
-          projection = await this.#projectThreadHistoryDurably(page.thread);
+          projection = await this.#projectThreadHistoryDurably(page.thread, page.itemTimestamps);
           paginatedInstallation = { adapter, page };
         }
         if (
@@ -3256,6 +3262,7 @@ export class CodexConversationHandle implements ConversationHandle {
           : normalizedSettled;
       this.#projectionInstallEpoch += 1;
       this.#snapshotWindow = snapshot;
+      this.#itemTimestamps = projection.itemTimestamps;
       this.#projectedItemByNativeCoordinate = new Map(
         projection.projectedItemByNativeCoordinate,
       );
@@ -3433,6 +3440,7 @@ export class CodexConversationHandle implements ConversationHandle {
     visibleLimit: number,
     streamingNativeItems: CodexStreamingNativeItems = new Map(),
     liveWindow = true,
+    itemTimestamps: CodexHistoryItemTimestamps = this.#itemTimestamps,
   ): CodexWindowProjection {
     let candidateLimit = visibleLimit;
     for (;;) {
@@ -3449,6 +3457,7 @@ export class CodexConversationHandle implements ConversationHandle {
             this.#correlationScope,
             streamingNativeItems,
             this.#generatedImageProjectionContext(liveWindow),
+            itemTimestamps,
           ),
           startNativeTurnIndex: selected.startNativeTurnIndex,
         };
@@ -3472,6 +3481,7 @@ export class CodexConversationHandle implements ConversationHandle {
     visibleLimit: number,
     streamingNativeItems: CodexStreamingNativeItems = new Map(),
     historyPage?: CodexHistoryPageCapture,
+    itemTimestamps: CodexHistoryItemTimestamps = this.#itemTimestamps,
   ): Promise<CodexWindowProjection> {
     const context = this.#generatedImageProjectionContext();
     const normalized = normalizeCodexTurnStatuses(thread);
@@ -3485,6 +3495,7 @@ export class CodexConversationHandle implements ConversationHandle {
           candidateLimit,
           streamingNativeItems,
           historyPage === undefined,
+          itemTimestamps,
         );
         if (historyPage && !captureBudgetUsed && selected.pendingViewedImages.length > 0) {
           captureBudgetUsed = true;
@@ -3492,7 +3503,7 @@ export class CodexConversationHandle implements ConversationHandle {
           await this.#viewedImageCapture.capturePage(selected.pendingViewedImages, historyPage.signal);
           historyPage.signal?.throwIfAborted();
           selected = this.#projectNativeHistorySlice(normalized, beforeNativeTurnIndex,
-            candidateLimit, streamingNativeItems, false);
+            candidateLimit, streamingNativeItems, false, itemTimestamps);
         }
         const projection = await materializeCodexGeneratedImagePublications(
           selected,
@@ -3527,6 +3538,7 @@ export class CodexConversationHandle implements ConversationHandle {
 
   async #projectThreadHistoryDurably(
     thread: CodexThread,
+    itemTimestamps: CodexHistoryItemTimestamps = this.#establishing ? new Map() : this.#itemTimestamps,
   ): Promise<CodexWindowProjection> {
     const normalized = normalizeCodexTurnStatuses(thread);
     return await this.#projectNativeHistorySliceDurably(
@@ -3534,6 +3546,8 @@ export class CodexConversationHandle implements ConversationHandle {
       normalized.turns.length,
       SNAPSHOT_TURN_LIMIT,
       this.#streamingNativeItemsForProjection(normalized),
+      undefined,
+      itemTimestamps,
     );
   }
 
@@ -3589,6 +3603,7 @@ export class CodexConversationHandle implements ConversationHandle {
   #projectThreadHistoryWithStreamingItems(
     thread: CodexThread,
     streamingNativeItems: CodexStreamingNativeItems,
+    itemTimestamps: CodexHistoryItemTimestamps = this.#itemTimestamps,
   ): CodexWindowProjection {
     const normalized = normalizeCodexTurnStatuses(thread);
     return this.#projectNativeHistorySlice(
@@ -3596,6 +3611,8 @@ export class CodexConversationHandle implements ConversationHandle {
       normalized.turns.length,
       SNAPSHOT_TURN_LIMIT,
       streamingNativeItems,
+      true,
+      itemTimestamps,
     );
   }
 
@@ -3622,7 +3639,8 @@ export class CodexConversationHandle implements ConversationHandle {
       if (!turn || nativeItem?.type !== "imageView") continue;
       const slice = projectCodexItemSlice(this.#nativeThread.id, turn, nativeItem,
         coordinate.backendTurnId, coordinate.nativeOrdinal, coordinate.sourceOrder,
-        false, this.#correlationScope, undefined, undefined, this.#generatedImageProjectionContext(), []);
+        false, this.#correlationScope, undefined, undefined, this.#generatedImageProjectionContext(), [],
+        this.#itemTimestamps.get(key));
       const image = slice[1];
       if (!image || image.semanticKind !== "image" || itemsById[image.backendItemId]) continue;
       const existingTurn = turnsById[image.backendTurnId]!;
@@ -3918,6 +3936,7 @@ export class CodexConversationHandle implements ConversationHandle {
           undefined,
           this.#generatedImageProjectionContext(),
           [],
+          this.#itemTimestamps.get(liveKey),
         ).map((item) => backendItemSchema.parse(item));
         const oldSliceIds = coordinate.orderedBackendItemIds;
         const sameShape =
@@ -4536,9 +4555,20 @@ export class CodexConversationHandle implements ConversationHandle {
           updated,
           this.#liveProjectionOverlay.materializedItems(),
         );
+        // A producer may omit persisted item times it already emitted live.
+        // Retain that observed evidence for unchanged native coordinates.
+        const itemTimestamps = new Map(this.#itemTimestamps);
+        for (const [coordinate, persisted] of paginatedInstallation?.page.itemTimestamps ?? []) {
+          const observed = itemTimestamps.get(coordinate);
+          itemTimestamps.set(coordinate, refineCodexItemLifecycleTimestamps({
+            startedAtMs: persisted.startedAtMs ?? observed?.startedAtMs,
+            completedAtMs: persisted.completedAtMs ?? observed?.completedAtMs,
+          }));
+        }
         let projection = this.#projectThreadHistoryWithStreamingItems(
           liveUpdated,
           streamingNativeItems,
+          itemTimestamps,
         );
         if (projection.pendingGeneratedImages.length > 0) {
           projection = {
@@ -4643,6 +4673,26 @@ export class CodexConversationHandle implements ConversationHandle {
           parsed.item,
         );
         if (!updated) return false;
+        const coordinate = codexNativeItemCoordinate(parsed.turnId, parsed.item.id);
+        const previousTimestamps = this.#itemTimestamps.get(coordinate) ?? {
+          startedAtMs: null, completedAtMs: null,
+        };
+        const startedAtMs = "startedAtMs" in parsed ? parsed.startedAtMs : undefined;
+        const completedAtMs = "completedAtMs" in parsed ? parsed.completedAtMs : undefined;
+        if ((startedAtMs != null && previousTimestamps.startedAtMs !== null &&
+              startedAtMs !== previousTimestamps.startedAtMs) ||
+            (completedAtMs != null && previousTimestamps.completedAtMs !== null &&
+              completedAtMs !== previousTimestamps.completedAtMs)) {
+          return false;
+        }
+        const timestamps = refineCodexItemLifecycleTimestamps({
+          startedAtMs: startedAtMs ?? previousTimestamps.startedAtMs,
+          completedAtMs: completedAtMs ?? previousTimestamps.completedAtMs,
+        });
+        const itemTimestamps = new Map(this.#itemTimestamps);
+        if (timestamps.startedAtMs !== null || timestamps.completedAtMs !== null) {
+          itemTimestamps.set(coordinate, timestamps);
+        }
         const streamingNativeItems =
           method === "item/started"
             ? this.#withStreamingNativeItem(parsed.turnId, parsed.item.id)
@@ -4658,6 +4708,7 @@ export class CodexConversationHandle implements ConversationHandle {
         let projection = this.#projectThreadHistoryWithStreamingItems(
           liveUpdated,
           streamingNativeItems,
+          itemTimestamps,
         );
         if (projection.pendingGeneratedImages.length > 0) {
           projection = {
@@ -5863,6 +5914,7 @@ export function projectCodexThreadHistory(
   correlationScope: CodexSubmissionCorrelationScope,
   streamingNativeItems: CodexStreamingNativeItems,
   generatedImages: import("./codex-history-projector.js").CodexGeneratedImageProjectionContext,
+  itemTimestamps: CodexHistoryItemTimestamps = new Map(),
 ) {
   try {
     return projectCodexHistory(
@@ -5870,6 +5922,7 @@ export function projectCodexThreadHistory(
       correlationScope,
       streamingNativeItems,
       generatedImages,
+      itemTimestamps,
     );
   } catch (error) {
     throw mapCodexHistoryProjectionError(error);

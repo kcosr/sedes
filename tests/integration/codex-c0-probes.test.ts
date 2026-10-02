@@ -9,7 +9,7 @@ const evidenceRoot = path.join(
   repositoryRoot,
   "protocol",
   "codex-app-server",
-  "0.153.0",
+  "0.160.0",
   "evidence",
 );
 
@@ -31,10 +31,10 @@ function evidence(filename: string): unknown {
   return JSON.parse(readFileSync(path.join(evidenceRoot, filename), "utf8"));
 }
 
-describe.sequential("Codex 0.153.0 C0 release probes", () => {
+describe.sequential("Codex 0.160.0 C0 release probes", () => {
   it("starts the pinned stable app-server without enabling experimental APIs", () => {
     expect(runProbe("probe-release.mjs")).toMatchObject({
-      release: "0.153.0",
+      release: "0.160.0",
       initialized: true,
       stableThreadList: true,
       experimentalMethodRejected: true,

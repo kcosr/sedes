@@ -186,7 +186,7 @@ function fixture(
           configuration_fingerprint, protocol_release, created_at, updated_at
         )
         VALUES (?, 'codex-primary', 'codex_app_server', 'Codex', 1, 0, ?,
-          '0.153.0', 210, 210)
+          '0.160.0', 210, 210)
       `,
     )
     .run(scope.tenantId, ABSENT_MODULE_CONFIGURATION_FINGERPRINT);
