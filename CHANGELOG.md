@@ -217,6 +217,7 @@
   or None. Rows show the backend, a two-line title, location details, and the
   archive age, with an always-visible Restore button that reports progress and
   failures inline. The list shows 100 threads at a time with **Show more**.
+  ([#28](https://github.com/kcosr/sedes/pull/28))
 
 - Qualify Codex 0.160.0 and preserve the managed TUI inline transcript despite
   the upstream fullscreen default. ([#27](https://github.com/kcosr/sedes/pull/27))
@@ -430,6 +431,7 @@
   archives slow to use. Thread menus mount their dialogs only when first
   opened, the sidebar no longer builds lineage for archived threads, and
   events that change nothing no longer re-render the app.
+  ([#28](https://github.com/kcosr/sedes/pull/28))
 
 - Linux x64 server and full Electron packages retain only the compatible
   msgpackr N-API addon, removing bundled musl and Node 20 ABI variants that
