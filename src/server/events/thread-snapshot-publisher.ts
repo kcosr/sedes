@@ -138,12 +138,14 @@ export class ThreadSnapshotPublisher {
               const quiet = this.runtimes.quiet(scope, applicationThreadId);
               try {
                 if (quiet.hub.subscriberCount > 0) {
-                  const snapshot = await this.application.disconnectedSnapshot(
-                    scope,
-                    applicationThreadId,
-                  );
-                  // A concurrent successful acquire owns its own baseline.
-                  quiet.publishIfUnowned(snapshot);
+                  await quiet.hub.serializeApplicationPublication(async () => {
+                    const snapshot = await this.application.disconnectedSnapshot(
+                      scope,
+                      applicationThreadId,
+                    );
+                    // A concurrent successful acquire owns its own baseline.
+                    quiet.publishIfUnowned(snapshot);
+                  });
                 }
               } finally {
                 quiet.release();
@@ -180,26 +182,28 @@ export class ThreadSnapshotPublisher {
               // to read application-owned policy and location (also safe
               // after Stop or archive). Other projection fields stay exactly
               // as observed.
-              const overlay = await this.application.retainedOverlay(
-                scope,
-                applicationThreadId,
-              );
-              const generation = quiet.hub.projectionGeneration;
-              const current = quiet.hub.snapshot;
-              if (generation && current?.thread.backingState === "bound") {
-                // A slower capture never replaces a newer retained policy.
-                const agentTools =
-                  overlay.agentTools.revision > current.agentTools.revision
-                    ? overlay.agentTools
-                    : current.agentTools;
-                for (const event of ThreadSnapshotPublisher.applicationChangeIncrementals(
-                  generation,
-                  current,
-                  { ...current, agentTools, workspace: overlay.workspace },
-                )) {
-                  quiet.hub.publish(event);
+              await quiet.hub.serializeApplicationPublication(async () => {
+                const overlay = await this.application.retainedOverlay(
+                  scope,
+                  applicationThreadId,
+                );
+                const generation = quiet.hub.projectionGeneration;
+                const current = quiet.hub.snapshot;
+                if (generation && current?.thread.backingState === "bound") {
+                  // A slower capture never replaces a newer retained policy.
+                  const agentTools =
+                    overlay.agentTools.revision > current.agentTools.revision
+                      ? overlay.agentTools
+                      : current.agentTools;
+                  for (const event of ThreadSnapshotPublisher.applicationChangeIncrementals(
+                    generation,
+                    current,
+                    { ...current, agentTools, workspace: overlay.workspace },
+                  )) {
+                    quiet.hub.publish(event);
+                  }
                 }
-              }
+              });
             }
           } finally {
             quiet.release();

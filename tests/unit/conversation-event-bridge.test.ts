@@ -1,13 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
+  ConversationActor,
   ConversationActorEvent,
   ConversationActorListener,
 } from "../../src/server/conversations/conversation-actor.js";
+import type { AcquireConversationActorInput } from "../../src/server/conversations/conversation-actor-manager.js";
 import {
   ConversationEventBridge,
   type ConversationEventBridgeSource,
 } from "../../src/server/events/conversation-event-bridge.js";
 import { ThreadEventHub } from "../../src/server/events/thread-event-hub.js";
+import {
+  ScopedThreadEventHubRegistry,
+  ThreadRuntimeCoordinator,
+} from "../../src/server/events/thread-runtime-coordinator.js";
 import type {
   NormalizedThreadSnapshot,
   ThreadForkSourceCapability,
@@ -190,6 +196,7 @@ function snapshot(
 }
 
 const targetedProjection = {
+  prepareSnapshot: async () => undefined,
   capabilitiesAndProviderFeatures: async (
     _scope: typeof scope,
     _threadId: string,
@@ -230,6 +237,156 @@ class Source implements ConversationEventBridgeSource {
 }
 
 describe("ConversationEventBridge", () => {
+  for (const firstCapture of ["snapshot", "application"] as const) {
+    for (const replacement of ["actor event", "authoritative request"] as const) {
+      for (const generation of ["generation-1", "generation-2"]) {
+        it.each(["created", "acknowledged"] as const)(
+          `preserves %s completion attention with ${firstCapture} capture first during ${replacement} replacement in ${generation}`,
+          async (transition) => {
+            const completion = {
+              unseenCompletion: {
+                operationId: "completion-operation",
+                completedAt: "2026-10-02T16:54:42.808Z",
+              },
+            };
+            let attention: NormalizedThreadSnapshot["attention"] =
+              transition === "created" ? {} : completion;
+            let state = actorState("generation-1");
+            const source = new Source();
+            const actor = {
+              subscribe: source.subscribe.bind(source),
+              get timeline() { return state.timeline; },
+              closed: false,
+              canEvict: true,
+              canAutomaticallyEvict: true,
+              automaticEviction: "requires_quiescence",
+              peekSnapshotState: () => state,
+              captureSnapshotState: async () => state,
+              ensureProjectionCurrent: async () => undefined,
+            } as unknown as ConversationActor;
+            let releaseComposition!: () => void;
+            const compositionGate = new Promise<void>((resolve) => {
+              releaseComposition = resolve;
+            });
+            let compositionStarted!: () => void;
+            const started = new Promise<void>((resolve) => {
+              compositionStarted = resolve;
+            });
+            let compositions = 0;
+            const bridge = new ConversationEventBridge({
+              ...targetedProjection,
+              snapshot: async (_scope, _threadId, current) => {
+                const captured = {
+                  ...snapshot(current.timeline.generation),
+                  attention,
+                };
+                if (++compositions === 2 && firstCapture === "snapshot") {
+                  compositionStarted();
+                  await compositionGate;
+                }
+                return captured;
+              },
+              ancillary: async () => [],
+            }, () => undefined);
+            const coordinator = new ThreadRuntimeCoordinator({
+              actors: {
+                acquire: async () => ({ actor, release: () => undefined }),
+                acquireExistingControl: () => undefined,
+                captureUnprojectedGeneration: () => undefined,
+                runWithRuntimesStopped: async () => { throw new Error("unexpected stop"); },
+                runWithRuntimeRetired: async () => { throw new Error("unexpected retirement"); },
+              },
+              targets: {
+                resolve: async () => ({
+                  binding: { executionEnvironmentId: "environment-1" },
+                }) as AcquireConversationActorInput,
+              },
+              bridge,
+              interactions: {
+                bind: () => ({
+                  publishPending: () => undefined,
+                  release: async () => undefined,
+                  detach: () => undefined,
+                }),
+              } as never,
+              hubs: new ScopedThreadEventHubRegistry(),
+              retentionMilliseconds: 60_000,
+            });
+            try {
+              const runtime = await coordinator.acquire(scope, "thread-1");
+              let replacing: Promise<unknown> | undefined;
+              const replace = () => {
+                state = actorState(generation);
+                if (replacement === "actor event") {
+                  source.emit({ type: "projection_replaced", state });
+                } else {
+                  replacing = runtime.publishAuthoritativeReplacement();
+                }
+              };
+              const publish = () => coordinator.publishApplicationIncrementalsIfLoaded(
+                scope,
+                "thread-1",
+                async (current) => {
+                  const {
+                    orderedTurnIds: _orderedTurnIds,
+                    turnsById: _turnsById,
+                    itemsById: _itemsById,
+                    forksByTurnId: _forksByTurnId,
+                    history: _history,
+                    runState: _runState,
+                    usage: _usage,
+                    ...application
+                  } = snapshot(current.timeline.generation);
+                  const captured = { ...application, attention };
+                  if (firstCapture === "application") {
+                    compositionStarted();
+                    await compositionGate;
+                  }
+                  return captured;
+                },
+                (currentGeneration, _current, captured) => [{
+                  type: "application_state_changed" as const,
+                  generation: currentGeneration,
+                  state: captured,
+                }],
+              );
+              let publishing: Promise<boolean>;
+              if (firstCapture === "snapshot") {
+                replace();
+                await started;
+                attention = transition === "created" ? completion : {};
+                publishing = publish();
+              } else {
+                publishing = publish();
+                await started;
+                attention = transition === "created" ? completion : {};
+                replace();
+              }
+              // Drain runnable work while the older capture is paused. This
+              // reproduces either publication overtaking composition without
+              // sleeps, but permits a shared publication queue to block it.
+              await new Promise<void>((resolve) => setImmediate(resolve));
+              releaseComposition();
+              await replacing;
+              await expect(publishing).resolves.toBe(true);
+              await new Promise<void>((resolve) => setImmediate(resolve));
+              expect(runtime.hub.snapshot?.attention).toEqual(attention);
+              expect(runtime.hub.projectionGeneration).toBe(generation);
+              const connection = runtime.hub.subscribeFromCurrentSnapshot(() => undefined);
+              expect(connection.checkpoint?.snapshot.attention).toEqual(attention);
+              expect(connection.checkpoint?.projectionGeneration).toBe(generation);
+              connection.close();
+              runtime.release();
+            } finally {
+              releaseComposition();
+              await coordinator.close();
+            }
+          },
+        );
+      }
+    }
+  }
+
   it("registers live usage turn stubs before fanout and rejects stale generations before registration", async () => {
     const source = new Source();
     const hub = new ThreadEventHub();
@@ -1284,6 +1441,123 @@ describe("ConversationEventBridge", () => {
       "snapshot",
       "snapshot",
     ]);
+  });
+
+  for (const phase of ["preparation", "composition"] as const) {
+    it.each(["resolves", "rejects"] as const)(`lets a successor publish before a detached snapshot ${phase} %s`, async (settlement) => {
+      const source = new Source();
+      const hub = new ThreadEventHub();
+      const listener = vi.fn();
+      hub.subscribe(listener);
+      let releaseComposition!: () => void;
+      const gate = new Promise<void>((resolve, reject) => {
+        releaseComposition = settlement === "resolves"
+          ? resolve
+          : () => reject(new Error("detached composition failed"));
+      });
+      let compositionStarted!: () => void;
+      const started = new Promise<void>((resolve) => { compositionStarted = resolve; });
+      const staleAttention = {
+        unseenCompletion: {
+          operationId: "acknowledged-operation",
+          completedAt: "2026-10-02T16:54:42.808Z",
+        },
+      };
+      let compositions = 0;
+      let preparations = 0;
+      const bridge = new ConversationEventBridge({
+        ...targetedProjection,
+        prepareSnapshot: async () => {
+          if (++preparations === 2 && phase === "preparation") {
+            compositionStarted();
+            await gate;
+          }
+        },
+        snapshot: async (_scope, _threadId, current) => {
+          const captured = snapshot(current.timeline.generation);
+          if (++compositions === 2 && phase === "composition") {
+            captured.attention = staleAttention;
+            compositionStarted();
+            await gate;
+          }
+          return captured;
+        },
+        ancillary: async () => [],
+      }, () => undefined);
+      const input = { scope, applicationThreadId: "thread-1", actor: source, hub };
+      const first = bridge.bind(input);
+      await first.ready;
+      source.emit({ type: "projection_replaced", state: actorState("stale-generation") });
+      await started;
+      const second = bridge.bind(input);
+      try {
+        // Detachment must release the shared publication queue even if a
+        // preparation or cached composition never returns.
+        await second.ready;
+        expect(hub.projectionGeneration).toBe("generation-1");
+        expect(hub.snapshot?.attention).toEqual({});
+      } finally {
+        releaseComposition();
+        await first.release();
+        await second.release();
+      }
+      expect(hub.snapshot?.attention).toEqual({});
+      expect(listener.mock.calls.map(([envelope]) => envelope.projectionGeneration)).toEqual([
+        "generation-1", "generation-1",
+      ]);
+    });
+  }
+
+  it("continues application publication and snapshot recovery after composition fails", async () => {
+    const source = new Source();
+    const hub = new ThreadEventHub();
+    const failure = new Error("snapshot composition failed");
+    const onFailure = vi.fn();
+    let rejectComposition!: (error: Error) => void;
+    const gate = new Promise<void>((_resolve, reject) => { rejectComposition = reject; });
+    let compositionStarted!: () => void;
+    const started = new Promise<void>((resolve) => { compositionStarted = resolve; });
+    let compositions = 0;
+    const attention = {
+      unseenCompletion: {
+        operationId: "new-completion",
+        completedAt: "2026-10-02T16:54:42.808Z",
+      },
+    };
+    const bridge = new ConversationEventBridge({
+      ...targetedProjection,
+      snapshot: async (_scope, _threadId, current) => {
+        if (++compositions === 2) {
+          compositionStarted();
+          await gate;
+        }
+        return {
+          ...snapshot(current.timeline.generation),
+          attention: compositions === 1 ? {} : attention,
+        };
+      },
+      ancillary: async () => [],
+    }, () => undefined);
+    const binding = bridge.bind({
+      scope, applicationThreadId: "thread-1", actor: source, hub, onFailure,
+      captureAuthoritativeState: async () => actorState("generation-2"),
+    });
+    await binding.ready;
+    source.emit({ type: "projection_replaced", state: actorState("generation-2") });
+    await started;
+    const publication = hub.serializeApplicationPublication(() => hub.publish({
+      type: "attention_changed", generation: hub.projectionGeneration!, attention,
+    }));
+    rejectComposition(failure);
+    await publication;
+    expect(hub.currentCheckpoint()?.snapshot.attention).toEqual(attention);
+    expect(hub.projectionGeneration).toBe("generation-1");
+    expect(hub.watermark).toBe(2);
+    const replacement = await binding.publishAuthoritativeReplacement();
+    await binding.release();
+    expect(onFailure).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(replacement.projectionGeneration).toBe("generation-2");
+    expect(hub.currentCheckpoint()?.snapshot.attention).toEqual(attention);
   });
 
   it("fences the prior binding when the same actor is bound again", async () => {

@@ -518,7 +518,24 @@ for Pi, Codex, Claude, Grok and OpenCode; it adds no backend method, capability,
 identifier, or provider-specific fallback.
 
 Thread catch-up uses the runtime hub's incrementally maintained normalized
-projection, including already expanded older pages. Client protocol 104 supports a
+projection, including already expanded older pages. Full snapshot composition
+and durable application-state capture must share the retained hub's publication
+queue through synchronous publication, including across runtime bindings and
+projection generations. An older capture must neither erase newly created
+completion attention nor restore acknowledged attention. Capture authoritative
+actor state and refresh provider catalogs before entering this queue. Recapture
+durable inventory and presentation after admission using only the cached catalog;
+do not retain durable state from catalog preparation. This keeps attention
+publication and publisher shutdown independent of stalled provider reads.
+Retain cache-only actor reads for application updates, and recheck runtime or
+binding ownership after asynchronous composition. Detaching a binding must
+release both preparation and composition waits. Archived snapshot preparation
+skips provider catalog refresh entirely; failed-restore disconnected snapshots
+also capture and publish inside this shared queue.
+Pi, Codex, Claude, Grok and OpenCode all use this shared application boundary;
+their native protocols and browser wire shapes are unchanged.
+
+Client protocol 104 supports a
 `thread-checkpoint` SSE control frame with that state, its exact transport
 watermark, retained runtime notices, and the last actual capability projection
 revision and run state. Capture state and watermark synchronously before subscriber-count

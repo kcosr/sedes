@@ -41,6 +41,13 @@ export interface ConversationEventBridgeSource {
 }
 
 export interface ConversationEventBridgeProjection {
+  /** Refresh provider-backed presentation before entering the publication queue. */
+  prepareSnapshot(
+    scope: RequestScope,
+    applicationThreadId: string,
+    state: ConversationActorSnapshotState,
+  ): Promise<void>;
+  /** Capture current application state using only the prepared catalog cache. */
   snapshot(
     scope: RequestScope,
     applicationThreadId: string,
@@ -124,6 +131,7 @@ export class ConversationEventBridge {
   }): ConversationEventBridgeBinding {
     this.#activeBindings.get(input.actor)?.detach();
     const mailbox = new SerializedMailbox();
+    const detachedController = new AbortController();
     let bindingValid = true;
     let initialSeen = false;
     let readyResolve!: () => void;
@@ -134,6 +142,7 @@ export class ConversationEventBridge {
     });
     void ready.catch(() => undefined);
     const reportFailure = (error: unknown): void => {
+      if (!bindingValid) return;
       if (!initialSeen) readyReject(error);
       try {
         const reported = input.onFailure?.(error);
@@ -232,20 +241,35 @@ export class ConversationEventBridge {
           case "authoritative_completion":
             return;
           case "projection_replaced": {
-            const snapshot = await this.#projection.snapshot(
-              input.scope,
-              input.applicationThreadId,
-              event.state,
+            await abortable(
+              this.#projection.prepareSnapshot(
+                input.scope,
+                input.applicationThreadId,
+                event.state,
+              ),
+              detachedController.signal,
             );
-            input.hub.publish({
-              type: "snapshot",
-              generation: event.state.timeline.generation,
-              snapshot,
+            await input.hub.serializeApplicationPublication(async () => {
+              if (!bindingValid) return;
+              const snapshot = await abortable(
+                this.#projection.snapshot(
+                  input.scope,
+                  input.applicationThreadId,
+                  event.state,
+                ),
+                detachedController.signal,
+              );
+              if (!bindingValid) return;
+              input.hub.publish({
+                type: "snapshot",
+                generation: event.state.timeline.generation,
+                snapshot,
+              });
+              if (!initialSeen) {
+                initialSeen = true;
+                readyResolve();
+              }
             });
-            if (!initialSeen) {
-              initialSeen = true;
-              readyResolve();
-            }
             return;
           }
           case "projection_events":
@@ -368,6 +392,10 @@ export class ConversationEventBridge {
       detached = true;
       unsubscribeOnly();
       bindingValid = false;
+      // Cancel both provider preparation and queued composition on detachment
+      // so a replacement binding cannot wait for work whose result no longer
+      // has publication authority.
+      detachedController.abort(new Error("conversation_event_bridge_detached"));
       if (!initialSeen) {
         readyReject(new Error("conversation_event_bridge_detached"));
       }
@@ -416,15 +444,37 @@ export class ConversationEventBridge {
             );
           }
           const state = await input.captureAuthoritativeState();
-          const snapshot = await this.#projection.snapshot(
-            input.scope,
-            input.applicationThreadId,
-            state,
+          if (!bindingValid) {
+            throw new Error("conversation_event_bridge_replacement_unavailable");
+          }
+          await abortable(
+            this.#projection.prepareSnapshot(
+              input.scope,
+              input.applicationThreadId,
+              state,
+            ),
+            detachedController.signal,
           );
-          return input.hub.publish({
-            type: "snapshot",
-            generation: state.timeline.generation,
-            snapshot,
+          return input.hub.serializeApplicationPublication(async () => {
+            if (!bindingValid) {
+              throw new Error("conversation_event_bridge_replacement_unavailable");
+            }
+            const snapshot = await abortable(
+              this.#projection.snapshot(
+                input.scope,
+                input.applicationThreadId,
+                state,
+              ),
+              detachedController.signal,
+            );
+            if (!bindingValid) {
+              throw new Error("conversation_event_bridge_replacement_unavailable");
+            }
+            return input.hub.publish({
+              type: "snapshot",
+              generation: state.timeline.generation,
+              snapshot,
+            });
           });
         }),
       detach,
@@ -457,6 +507,22 @@ export class ConversationEventBridge {
     ) {
       throw new Error("conversation_event_bridge_publisher_scope_mismatch");
     }
+  }
+}
+
+async function abortable<T>(value: Promise<T>, signal: AbortSignal): Promise<T> {
+  let abort: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      value,
+      new Promise<never>((_, reject) => {
+        abort = () => reject(signal.reason);
+        if (signal.aborted) abort();
+        else signal.addEventListener("abort", abort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (abort) signal.removeEventListener("abort", abort);
   }
 }
 

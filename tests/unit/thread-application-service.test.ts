@@ -1,8 +1,13 @@
 import { ConversationEventBridge } from "../../src/server/events/conversation-event-bridge.js";
 import { ThreadEventPresentation } from "../../src/server/events/thread-event-presentation.js";
 import { ThreadEventHub } from "../../src/server/events/thread-event-hub.js";
+import { ThreadSnapshotPublisher } from "../../src/server/events/thread-snapshot-publisher.js";
+import {
+  ScopedThreadEventHubRegistry,
+  ThreadRuntimeCoordinator,
+} from "../../src/server/events/thread-runtime-coordinator.js";
 import { NormalizedThreadStore } from "../../src/client/stores/NormalizedThreadStore.js";
-import type { ConversationActorListener } from "../../src/server/conversations/conversation-actor.js";
+import type { ConversationActor, ConversationActorListener } from "../../src/server/conversations/conversation-actor.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   ActorBackedThreadApplicationConversationReader,
@@ -655,6 +660,7 @@ describe("ThreadApplicationService", () => {
     current.readPresentation.mockRejectedValue(new Error("Archived reads must not load a provider catalog."));
 
     const snapshot = await current.service.snapshot(scope, "thread-1");
+    await current.service.prepareSnapshotFromActorCapture(scope, "thread-1", captured.state);
     const actorSnapshot = await current.service.snapshotFromActorCapture(scope, "thread-1", captured.state);
     const targeted = await current.service.capabilitiesAndProviderFeaturesFromActorCapture(scope, "thread-1", captured.state);
     const fork = await current.service.forkSourceFromActorCapture(scope, "thread-1", captured.state);
@@ -677,6 +683,7 @@ describe("ThreadApplicationService", () => {
     current.getAuthorized.mockResolvedValue(active);
     current.readPresentation.mockImplementation(freshPresentation);
     const restored = await current.service.snapshot(scope, "thread-1");
+    await current.service.prepareSnapshotFromActorCapture(scope, "thread-1", captured.state);
     await current.service.snapshotFromActorCapture(scope, "thread-1", captured.state);
     await current.service.capabilitiesAndProviderFeaturesFromActorCapture(scope, "thread-1", captured.state);
     await current.service.forkSourceFromActorCapture(scope, "thread-1", captured.state);
@@ -684,7 +691,7 @@ describe("ThreadApplicationService", () => {
     expect(restored.thread.inventoryState).toBe("active");
     expect(restored.capabilities.deliveryModes).toContainEqual(expect.objectContaining({ id: "submit", available: true }));
     expect(current.readPresentation).toHaveBeenCalledTimes(5);
-    expect(current.readCachedPresentation).toHaveBeenCalledTimes(5);
+    expect(current.readCachedPresentation).toHaveBeenCalledTimes(6);
   });
 
   it("renders an archived SSE baseline using only cached presentation", async () => {
@@ -755,6 +762,130 @@ describe("ThreadApplicationService", () => {
     expect(current.readPresentation).not.toHaveBeenCalled();
     expect(current.readCachedPresentation).not.toHaveBeenCalled();
   });
+
+  for (const replacement of ["actor event", "authoritative request"] as const) {
+    it.each(["created", "acknowledged"] as const)(
+      `publishes %s attention and drains the publisher during stalled ${replacement} catalog preparation`,
+      async (transition) => {
+        const completion = {
+          unseenCompletion: {
+            operationId: "completion-operation",
+            completedAt: "2026-10-02T16:54:42.808Z",
+          },
+        };
+        const durable = {
+          ...inventory(),
+          attention: transition === "created" ? {} : completion,
+        };
+        const current = createService({
+          state: durable,
+          runState: "idle",
+          includeInteraction: false,
+          queue: [],
+        });
+        const captured = await current.capture();
+        if (captured.status !== "connected") throw new Error("fixture disconnected");
+        let actorState = captured.state;
+        let listener!: ConversationActorListener;
+        const actor = {
+          subscribe(next: ConversationActorListener) {
+            listener = next;
+            next({ type: "projection_replaced", state: actorState });
+            return () => undefined;
+          },
+          get timeline() { return actorState.timeline; },
+          closed: false,
+          canEvict: true,
+          canAutomaticallyEvict: true,
+          automaticEviction: "requires_quiescence",
+          peekSnapshotState: () => actorState,
+          captureSnapshotState: async () => actorState,
+          ensureProjectionCurrent: async () => undefined,
+        } as unknown as ConversationActor;
+        const coordinator = new ThreadRuntimeCoordinator({
+          actors: {
+            acquire: async () => ({ actor, release: () => undefined }),
+            acquireExistingControl: () => undefined,
+            captureUnprojectedGeneration: () => undefined,
+            runWithRuntimesStopped: async () => { throw new Error("unexpected stop"); },
+            runWithRuntimeRetired: async () => { throw new Error("unexpected retirement"); },
+          },
+          targets: {
+            resolve: async () => ({
+              binding: { executionEnvironmentId: "environment-1" },
+            }) as AcquireConversationActorInput,
+          },
+          bridge: new ConversationEventBridge(
+            new ThreadEventPresentation(current.service), () => undefined,
+          ),
+          interactions: {
+            bind: () => ({
+              publishPending: () => undefined,
+              release: async () => undefined,
+              detach: () => undefined,
+            }),
+          } as never,
+          hubs: new ScopedThreadEventHubRegistry(),
+          retentionMilliseconds: 60_000,
+        });
+        const publisher = new ThreadSnapshotPublisher(
+          { getTarget: () => ({ backingState: "bound" }) } as never,
+          current.service,
+          coordinator,
+        );
+        let releaseCatalog!: () => void;
+        const catalogGate = new Promise<void>((resolve) => { releaseCatalog = resolve; });
+        let catalogStarted!: () => void;
+        const started = new Promise<void>((resolve) => { catalogStarted = resolve; });
+        try {
+          const runtime = await coordinator.acquire(scope, "thread-1");
+          const stalePresentation = await current.readPresentation();
+          current.readPresentation.mockClear();
+          current.readCachedPresentation.mockClear();
+          current.readPresentation.mockImplementationOnce(async () => {
+            catalogStarted();
+            await catalogGate;
+            return stalePresentation;
+          });
+          actorState = {
+            ...actorState,
+            timeline: { ...actorState.timeline, generation: "replacement-generation" },
+          };
+          const replacing = replacement === "authoritative request"
+            ? runtime.publishAuthoritativeReplacement()
+            : undefined;
+          if (replacement === "actor event") {
+            listener({ type: "projection_replaced", state: actorState });
+          }
+          await started;
+          const attention = transition === "created" ? completion : {};
+          current.getAuthorized.mockResolvedValue({ ...durable, attention });
+          publisher.schedule(scope, "thread-1");
+          let publisherClosed = false;
+          const closing = publisher.close().then(() => { publisherClosed = true; });
+          // Closing must finish while the provider read remains stalled.
+          await vi.waitFor(() => expect(publisherClosed).toBe(true));
+          await closing;
+          expect(runtime.hub.snapshot?.attention).toEqual(attention);
+          expect(current.readCachedPresentation).toHaveBeenCalledOnce();
+
+          releaseCatalog();
+          await replacing;
+          await vi.waitFor(() =>
+            expect(runtime.hub.projectionGeneration).toBe("replacement-generation"),
+          );
+          expect(runtime.hub.currentCheckpoint()?.snapshot.attention).toEqual(attention);
+          expect(current.readPresentation).toHaveBeenCalledOnce();
+          expect(current.readCachedPresentation).toHaveBeenCalledTimes(2);
+          runtime.release();
+        } finally {
+          releaseCatalog();
+          await coordinator.closeForShutdown();
+          await publisher.close();
+        }
+      },
+    );
+  }
 
   it("composes targeted capabilities and fork state identically to the actor snapshot", async () => {
     const current = createService({ runState: "idle", queue: [] });

@@ -907,46 +907,56 @@ export class ThreadRuntimeCoordinator {
         return true;
       }
     }
-    const publish = async (runtime: EstablishedRuntime): Promise<boolean> => {
-      // One cache-only capture is enough. Merge against the latest hub after
-      // the await, without actor recovery or waiting for a quiet provider.
-      const actorState = runtime.actor.peekSnapshotState();
-      if (!actorState) return false;
-      const captureStart = Date.now();
-      const captured = await abortable(
-        capture(actorState),
-        AbortSignal.any([
-          this.#shutdownController.signal,
-          entry.establishmentAbort.signal,
-        ]),
-      );
-      if (
-        this.#closed ||
-        this.#entries.get(key) !== entry ||
-        entry.eviction ||
-        this.#detached.has(runtime) ||
-        runtime.actor.closed
-      ) {
-        return false;
-      }
-      // A newer mutation during initial composition needs another capture.
-      // Do not publish the already superseded intermediate state.
-      if (!entry.applicationOverlayReady && entry.pendingApplicationPublication) {
-        return true;
-      }
-      const generation = runtime.hub.projectionGeneration;
-      const current = runtime.hub.snapshot;
-      if (!generation || !current) return false;
-      if (process.env.SEDES_DEBUG_DELIVERY) {
-        console.error(
-          `[delivery-capture] thread=${applicationThreadId} ms=${Date.now() - captureStart}`,
+    const publish = (runtime: EstablishedRuntime): Promise<boolean> =>
+      runtime.hub.serializeApplicationPublication(async () => {
+        if (
+          this.#closed ||
+          this.#entries.get(key) !== entry ||
+          entry.eviction ||
+          this.#detached.has(runtime) ||
+          runtime.actor.closed
+        ) {
+          return false;
+        }
+        // One cache-only capture is enough. Merge against the latest hub after
+        // the await, without actor recovery or waiting for a quiet provider.
+        const actorState = runtime.actor.peekSnapshotState();
+        if (!actorState) return false;
+        const captureStart = Date.now();
+        const captured = await abortable(
+          capture(actorState),
+          AbortSignal.any([
+            this.#shutdownController.signal,
+            entry.establishmentAbort.signal,
+          ]),
         );
-      }
-      for (const event of createEvents(generation, current, captured)) {
-        runtime.hub.publish(event);
-      }
-      return true;
-    };
+        if (
+          this.#closed ||
+          this.#entries.get(key) !== entry ||
+          entry.eviction ||
+          this.#detached.has(runtime) ||
+          runtime.actor.closed
+        ) {
+          return false;
+        }
+        // A newer mutation during initial composition needs another capture.
+        // Do not publish the already superseded intermediate state.
+        if (!entry.applicationOverlayReady && entry.pendingApplicationPublication) {
+          return true;
+        }
+        const generation = runtime.hub.projectionGeneration;
+        const current = runtime.hub.snapshot;
+        if (!generation || !current) return false;
+        if (process.env.SEDES_DEBUG_DELIVERY) {
+          console.error(
+            `[delivery-capture] thread=${applicationThreadId} ms=${Date.now() - captureStart}`,
+          );
+        }
+        for (const event of createEvents(generation, current, captured)) {
+          runtime.hub.publish(event);
+        }
+        return true;
+      });
     if (entry.evictionTimer) {
       clearTimeout(entry.evictionTimer);
       entry.evictionTimer = undefined;

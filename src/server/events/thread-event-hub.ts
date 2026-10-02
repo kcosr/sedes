@@ -21,6 +21,7 @@ import {
   MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES,
   serializedUtf8Bytes,
 } from "../../shared/protocol/payload.js";
+import { SerializedMailbox } from "../conversations/serialized-mailbox.js";
 
 export interface ThreadEventSubscription {
   readonly watermark: number;
@@ -51,6 +52,7 @@ function envelope(
  */
 export class ThreadEventHub {
   readonly #hub: EventHub<NormalizedThreadEvent>;
+  readonly #applicationPublications = new SerializedMailbox();
   readonly #subscriberCountListeners = new Set<(count: number) => void>();
   #internalSubscriberCount = 0;
   #projectionGeneration?: string;
@@ -120,6 +122,18 @@ export class ThreadEventHub {
       sequence <= this.#hub.watermark
       ? sequence
       : undefined;
+  }
+
+  /**
+   * Order application capture through publication across actor replacements
+   * and durable-state updates. The boundary belongs to the retained hub, so
+   * replacing a runtime binding cannot start an independent publication queue.
+   * Actor capture and provider catalog refresh must finish before entering;
+   * queued captures use cached presentation. Synchronous runtime deltas remain
+   * independent and are merged against the current snapshot.
+   */
+  serializeApplicationPublication<T>(operation: () => T | Promise<T>): Promise<T> {
+    return this.#applicationPublications.enqueue(operation);
   }
 
   publish(rawEvent: NormalizedThreadEvent): ThreadEventEnvelope {

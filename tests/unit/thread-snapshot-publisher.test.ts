@@ -194,16 +194,30 @@ function retainedPolicyFixture(initial: NormalizedThreadSnapshot) {
 }
 
 describe("ThreadSnapshotPublisher", () => {
-  it("publishes restored disconnected state to a retained viewer when execution attach fails", async () => {
+  it.each(["created", "acknowledged"] as const)("orders %s attention with restored disconnected state when execution attach fails", async (transition) => {
+    const completion = {
+      unseenCompletion: {
+        operationId: "completion-operation",
+        completedAt: "2026-10-02T16:54:42.808Z",
+      },
+    };
     const archived = snapshot();
     archived.thread.inventoryState = "archived";
+    archived.attention = transition === "created" ? {} : completion;
     const restored = snapshot();
+    restored.attention = transition === "created" ? completion : {};
     restored.runState = "disconnected";
     restored.thread.runState = "disconnected";
     restored.capabilities.runState = "disconnected";
     const hub = new ThreadEventHub();
     hub.publish({ type: "snapshot", generation: "archived", snapshot: archived });
     const subscriber = hub.subscribe(() => undefined);
+    const previousGate = deferred<void>();
+    const previousPublication = hub.serializeApplicationPublication(async () => {
+      await previousGate.promise;
+      hub.publish({ type: "snapshot", generation: "archived", snapshot: archived });
+    });
+    const restoreFailed = deferred<void>();
     const disconnectedSnapshot = vi.fn(async () => restored);
     const snapshotWithProvider = vi.fn(() => { throw new Error("must not retry provider attach"); });
     const release = vi.fn();
@@ -212,20 +226,36 @@ describe("ThreadSnapshotPublisher", () => {
       { disconnectedSnapshot, snapshot: snapshotWithProvider } as never,
       {
         publishApplicationIncrementalsIfLoaded: async () => { throw new ThreadRuntimeRestoreFailedError(new Error("provider unavailable")); },
-        quiet: () => ({
-          hub, release,
-          publishIfUnowned: (value: NormalizedThreadSnapshot) => hub.publish({ type: "snapshot", generation: "disconnected", snapshot: value }),
-        }),
+        quiet: () => {
+          restoreFailed.resolve();
+          return {
+            hub, release,
+            publishIfUnowned: (value: NormalizedThreadSnapshot) => hub.publish({ type: "snapshot", generation: "disconnected", snapshot: value }),
+          };
+        },
       } as never,
     );
     try {
-      await publisher.publish(scope, "thread-1");
+      const publishing = publisher.publish(scope, "thread-1");
+      await restoreFailed.promise;
+      // The failed-restore baseline must wait for earlier hub publications
+      // before capturing durable state, just like an attached replacement.
+      expect(disconnectedSnapshot).not.toHaveBeenCalled();
+      previousGate.resolve();
+      await previousPublication;
+      await publishing;
       expect(hub.snapshot?.thread.inventoryState).toBe("active");
       expect(hub.snapshot?.runState).toBe("disconnected");
+      expect(hub.currentCheckpoint()?.snapshot.attention).toEqual(restored.attention);
       expect(disconnectedSnapshot).toHaveBeenCalledWith(scope, "thread-1");
       expect(snapshotWithProvider).not.toHaveBeenCalled();
       expect(release).toHaveBeenCalledOnce();
-    } finally { subscriber.close(); await publisher.close(); }
+    } finally {
+      previousGate.resolve();
+      await previousPublication;
+      subscriber.close();
+      await publisher.close();
+    }
   });
 
   it("publishes every changed application summary after a batch", async () => {

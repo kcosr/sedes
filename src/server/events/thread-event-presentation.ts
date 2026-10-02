@@ -29,11 +29,24 @@ export class ThreadEventPresentation implements ConversationEventBridgeProjectio
   constructor(
     readonly application: Pick<
       ThreadApplicationService,
+      | "prepareSnapshotFromActorCapture"
       | "snapshotFromActorCapture"
       | "capabilitiesAndProviderFeaturesFromActorCapture"
       | "forkSourceFromActorCapture"
     >,
   ) {}
+
+  prepareSnapshot(
+    scope: RequestScope,
+    applicationThreadId: string,
+    state: ConversationActorSnapshotState,
+  ): Promise<void> {
+    return this.application.prepareSnapshotFromActorCapture(
+      scope,
+      applicationThreadId,
+      state,
+    );
+  }
 
   snapshot(
     scope: RequestScope,
