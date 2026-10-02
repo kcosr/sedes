@@ -238,8 +238,7 @@
 
 - In a thread, Tasks docks beside Chat as a workspace panel instead of a
   floating card, and resizes, collapses, docks on another edge, and closes
-  like Files and Workpads. Home, Archived, and Usage open Tasks as a popover
-  from the corner button, and phones keep a bottom sheet. The card's pin is
+  like Files and Workpads. Phones keep a bottom sheet. The card's pin is
   gone. Docked Tasks opens at about a third of the stage, and its button keeps
   an outline while Tasks is collapsed, by hand or to make room for another
   panel.
@@ -766,6 +765,11 @@
   only the four most recent earlier daemon PIDs. Diagnostics remain opt-in.
 
 ### Removed
+
+- Tasks on Home, Archived, and Usage, including their corner Tasks button.
+  Tasks now appears only beside a thread, and Ctrl+Shift+L (Command+Shift+L
+  on macOS) does nothing on those pages. To see Global Tasks, open any thread
+  and choose **Global** in Tasks.
 
 - The `/agents`, `/agents/new`, and `/agents/<id>` addresses. They now open
   the workspace without a redirect; update bookmarks to `/settings/agents`. (#21)
