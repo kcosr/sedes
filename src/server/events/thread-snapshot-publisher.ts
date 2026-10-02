@@ -32,7 +32,10 @@ export class ThreadSnapshotPublisher {
     readonly bindings: ConversationBindingRepository,
     readonly application: Pick<
       ThreadApplicationService,
-      "snapshot" | "applicationState" | "applicationStateFromActorCapture"
+      | "snapshot"
+      | "applicationState"
+      | "applicationStateFromActorCapture"
+      | "agentToolPolicy"
     >,
     readonly runtimes: ThreadRuntimeCoordinator,
     readonly onThreadChanged?: (
@@ -144,11 +147,43 @@ export class ThreadSnapshotPublisher {
           }
           if (published) return;
           const quiet = this.runtimes.quiet(scope, applicationThreadId);
-          const requiresBoundGeneration =
-            quiet.hub.subscriberCount > 0 &&
-            quiet.hub.snapshot !== undefined &&
-            quiet.hub.snapshot.thread.backingState !== "bound";
-          quiet.release();
+          let requiresBoundGeneration = false;
+          try {
+            requiresBoundGeneration =
+              quiet.hub.subscriberCount > 0 &&
+              quiet.hub.snapshot !== undefined &&
+              quiet.hub.snapshot.thread.backingState !== "bound";
+            if (
+              quiet.hub.subscriberCount > 0 &&
+              quiet.hub.snapshot?.thread.backingState === "bound"
+            ) {
+              // A native policy edit retires the runtime before committing.
+              // Keep its open clients current without attaching a provider
+              // just to read application-owned policy (also safe after Stop
+              // or archive). Other projection fields stay exactly as observed.
+              const agentTools = await this.application.agentToolPolicy(
+                scope,
+                applicationThreadId,
+              );
+              const generation = quiet.hub.projectionGeneration;
+              const current = quiet.hub.snapshot;
+              if (
+                generation &&
+                current?.thread.backingState === "bound" &&
+                agentTools.revision > current.agentTools.revision
+              ) {
+                for (const event of ThreadSnapshotPublisher.applicationChangeIncrementals(
+                  generation,
+                  current,
+                  { ...current, agentTools },
+                )) {
+                  quiet.hub.publish(event);
+                }
+              }
+            }
+          } finally {
+            quiet.release();
+          }
           if (requiresBoundGeneration) {
             const runtime = await this.runtimes.acquire(
               scope,
@@ -159,9 +194,8 @@ export class ThreadSnapshotPublisher {
             // here would create two baselines for the same generation.
             runtime.release();
           }
-          // A dormant bound provider is deliberately not attached merely to
-          // project an application-owned overlay. Its next attach captures the
-          // durable overlay in the authoritative initial snapshot.
+          // Other dormant overlays wait for the next authoritative attach;
+          // publication alone must not restart the provider.
           return;
         }
         const quiet = this.runtimes.quiet(scope, applicationThreadId);
