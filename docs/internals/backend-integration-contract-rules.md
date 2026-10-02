@@ -2404,7 +2404,8 @@ exact-target interrupt. An authoritative idle observation accepts a no-op.
 A stale native target is nonapplication; old-turn disappearance alone never
 proves command acceptance. Drivers record operation/generation evidence before
 effects. Persistent Claude owner evidence survives main-client replacement;
-worker capability major 2 and persistent capability major 3 are required, without older-contract parsers.
+`claude_runtime@3` and `claude_persistent_runtime@4` are required, without
+older-contract parsers.
 
 The deadline includes pending-input withdrawal and carrier/SDK acknowledgement.
 An uncertain receipt is reconciled read-only; no internal retry can resend Stop

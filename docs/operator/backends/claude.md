@@ -536,7 +536,8 @@ an estimate against Claude's effective auto-compaction window. Read failures or
 query/model/compaction changes clear old estimates without interrupting work.
 Rebuild local workers and upgrade remote Claude sidecars with this server:
 the worker requires `query.context_usage`, and the persistent runtime requires
-capability major 3. No browser protocol or database migration is needed.
+`claude_persistent_runtime@4`. Context telemetry itself needs no browser
+protocol or database migration; follow the current upgrade requirements above.
 
 ## Recorded usage
 

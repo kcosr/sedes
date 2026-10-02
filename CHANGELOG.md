@@ -29,14 +29,14 @@
   v2 backend identity and terminal Stop diagnostics alongside runtime-only
   turn-throughput measurements and optional OpenCode path overrides. (#17, #20)
 
-- Claude persistent runtimes now require `claude_persistent_runtime@3` for
-  current context telemetry. Rebuild local workers for `query.context_usage`
-  and upgrade Claude sidecars with this server. (#24)
+- Claude current context telemetry requires `query.context_usage`. Rebuild
+  local workers and upgrade Claude sidecars with this server using the current
+  capability versions listed above. (#24)
 
-- Claude workers and persistent runtimes require capability major 2 for
-  bounded, recoverable conversation Stop. Rebuild local helpers and upgrade
-  Claude sidecars with this server. Migration 119 closes old unconfirmed Stop
-  receipts without sending a new cancellation. (#17)
+- Claude conversation Stop is bounded and recoverable. Rebuild local helpers
+  and upgrade Claude sidecars with this server using the current capability
+  versions listed above. Migration 119 closes old unconfirmed Stop receipts
+  without sending a new cancellation. (#17)
 
 - Browser and packaged clients must use client protocol 128, which adds
   reviewed Task snapshots to settle/archive previews and completion requests. (#19)
