@@ -4,7 +4,13 @@ import { mkdir } from "node:fs/promises";
 import { loadE2ERunContext } from "./run-context.js";
 import type { Locator, Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
-import { capture, createDraftThread, overlaySettled } from "./helpers";
+import {
+  capture,
+  createDraftThread,
+  overlaySettled,
+  selectCustomNewThreadTarget,
+  selectRadixOption,
+} from "./helpers";
 import {
   normalizedApplicationSnapshotSchema,
   taskMutationResultSchema,
@@ -565,6 +571,105 @@ for (const action of ["Settle", "Archive"] as const) {
   });
 }
 
+
+/** Creates a named thread in one location of a project through New thread. */
+async function createThreadAt(
+  page: Page,
+  project: RegExp,
+  location: RegExp,
+  title: string,
+): Promise<string> {
+  const created = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/api/threads") &&
+      response.status() === 201,
+  );
+  await page.getByTestId("desktop-sidebar").getByTestId("new-thread-trigger").click();
+  await page.getByRole("textbox", { name: "Thread name" }).fill(title);
+  await selectRadixOption(page, page.getByRole("combobox", { name: "Project", exact: true }), project);
+  await selectRadixOption(page, page.getByRole("combobox", { name: "Location", exact: true }), location);
+  await selectCustomNewThreadTarget(page, "Pi SDK");
+  await page.getByRole("button", { name: "Create thread" }).click();
+  await created;
+  await expect(page).toHaveURL(/\/threads\/[0-9a-f-]+$/);
+  return new URL(page.url()).pathname;
+}
+
+test("a project's tasks are shared by every location of the project", async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  const session = (await (await page.request.get("/api/application/session")).json()) as { csrfToken: string };
+  const snapshot = normalizedApplicationSnapshotSchema.parse(
+    await (await page.request.get("/api/application/snapshot")).json(),
+  );
+  const environmentId = snapshot.environments.find(({ kind }) => kind === "local")!.id;
+  const headers = { "X-CSRF-Token": session.csrfToken };
+  // One project with two locations: the same work in two directories.
+  const root = path.join(loadE2ERunContext().workspacesDirectory, `shared-project-${randomUUID()}`);
+  const [alphaPath, betaPath] = ["alpha", "beta"].map((name) => path.join(root, name)) as [string, string];
+  await Promise.all([alphaPath, betaPath].map((directory) => mkdir(directory, { recursive: true })));
+  const alpha = await page.request.post("/api/workspaces/open", {
+    headers,
+    data: { environmentId, path: alphaPath, project: { kind: "new", name: "Shared app" } },
+  });
+  expect(alpha.status(), await alpha.text()).toBe(201);
+  const { projectId } = (await alpha.json()) as { projectId: string };
+  const beta = await page.request.post("/api/workspaces/open", {
+    headers,
+    data: { environmentId, path: betaPath, project: { kind: "existing", projectId } },
+  });
+  expect(beta.status(), await beta.text()).toBe(201);
+  await page.reload();
+
+  // A project task and a thread task created in the alpha location.
+  await createThreadAt(page, /^Shared app/u, /alpha$/u, "Alpha work");
+  const toggle = page.getByTestId("workspace-workbench-bar").getByTestId("tasks-panel-toggle");
+  await toggle.click();
+  const tasks = tasksContent(page);
+  await selectScope(tasks, "Thread");
+  await addTask(tasks, "Alpha follow-up");
+  await expect(taskRow(tasks, "Alpha follow-up")).toBeVisible({ timeout: TASK_MUTATION_TIMEOUT_MS });
+  await selectScope(tasks, "Project");
+  const created = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === "/api/tasks" &&
+      response.ok(),
+  );
+  await addTask(tasks, "Shared release checklist");
+  const task = taskMutationResultSchema.parse(await (await created).json()).task;
+  // Created for the project, never for one of its locations.
+  expect(task.scope).toEqual({ kind: "project", projectId });
+  await expect(taskRow(tasks, "Shared release checklist")).toBeVisible();
+
+  // A thread in the beta location sees it in This project.
+  await createThreadAt(page, /^Shared app/u, /beta$/u, "Beta work");
+  await expect(toggle).toBeVisible();
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  const betaTasks = tasksContent(page);
+  await selectScope(betaTasks, "Project");
+  await expect(taskRow(betaTasks, "Shared release checklist")).toBeVisible();
+  await expect(taskRow(betaTasks, "Alpha follow-up")).toHaveCount(0);
+  // With thread tasks, the alpha thread's task says where its thread runs.
+  await betaTasks.getByRole("button", { name: "View options" }).click();
+  await page.getByRole("menuitemcheckbox", { name: "Include thread tasks" }).click();
+  await page.keyboard.press("Escape");
+  await expect(
+    taskRow(betaTasks, "Alpha follow-up").getByRole("button", { name: "Alpha follow-up", exact: true }),
+  ).toHaveAccessibleDescription("In Alpha work · alpha");
+  await capture(page, testInfo, "tasks-project-shared-across-locations.png");
+
+  // All groups the project once, with both locations' threads under it.
+  await selectScope(betaTasks, "All");
+  const projectGroups = betaTasks
+    .locator('.tasks-group[data-kind="project"]')
+    .filter({ has: page.locator(".tasks-group-heading", { hasText: /^Shared app\d+$/u }) });
+  await expect(projectGroups).toHaveCount(1);
+  await expect(projectGroups.getByRole("button", { name: /^Alpha work · alpha/u })).toBeVisible();
+  await expect(taskRow(projectGroups, "Shared release checklist")).toBeVisible();
+  await capture(page, testInfo, "tasks-project-shared-all-grouped.png");
+});
 
 test("mobile task destinations remain usable with long lists and short viewports", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 });

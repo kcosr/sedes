@@ -402,7 +402,13 @@ export function TasksPanelContent({
             mainTasks,
             {
               projects: destinations.projectLabels,
-              threads: destinations.threadTitles,
+              // A thread in a project with several locations says where it runs.
+              threads: new Map(
+                [...destinations.threadTitles].map(([threadId, title]) => {
+                  const location = destinations.threadLocation(threadId);
+                  return [threadId, location ? `${title} · ${location}` : title];
+                }),
+              ),
             },
             context,
           )
@@ -993,15 +999,17 @@ export function TasksPanelContent({
     (view === "project" && options.includeThreadTasks);
   const locationOf = (task: AssociatedTask) => {
     const label = destinations.label(task.scope);
+    if (task.scope.kind !== "thread") return { kind: task.scope.kind, label };
+    // A thread task names its thread, its project in All, and where the
+    // thread runs when the project has several locations.
     const project =
-      view === "all" &&
-      task.scope.kind === "thread" &&
-      task.associatedProjectId !== null
+      view === "all" && task.associatedProjectId !== null
         ? destinations.projectLabels.get(task.associatedProjectId)
         : undefined;
+    const location = destinations.threadLocation(task.scope.threadId);
     return {
       kind: task.scope.kind,
-      label: project ? `${label} · ${project}` : label,
+      label: [label, project, location].filter(Boolean).join(" · "),
     };
   };
   const filters = viewFilters(options);

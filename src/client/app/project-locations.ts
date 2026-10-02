@@ -84,6 +84,8 @@ export interface ProjectLocations {
     workspaceId: string,
     options?: { readonly includeEnvironment?: boolean },
   ) => string | undefined;
+  /** The environments hosting a project's active locations: Local first, then by name. */
+  readonly projectHosts: (projectId: string) => readonly string[];
   /**
    * A project in a picker, described by the environments that host it:
    * "sedes — on Local, aw-personal +1", with every host in `title`.
@@ -208,6 +210,24 @@ export function describeProjectLocations(
       : workspace.displayPath.text;
   };
 
+  const projectHosts = (projectId: string): readonly string[] =>
+    [
+      ...new Set(
+        locationsOf(projectId).flatMap(({ environmentId }) => {
+          const environment = environmentById.get(environmentId);
+          return environment ? [environment] : [];
+        }),
+      ),
+    ]
+      .sort(
+        (left, right) =>
+          Number(right.kind === "local") - Number(left.kind === "local") ||
+          environmentDisplayLabel(left, environments).localeCompare(
+            environmentDisplayLabel(right, environments),
+          ),
+      )
+      .map((environment) => environmentDisplayLabel(environment, environments));
+
   return {
     project: (projectId) => projectById.get(projectId),
     projectForLocation: (workspaceId) => {
@@ -270,37 +290,17 @@ export function describeProjectLocations(
       ].filter((part): part is string => part !== undefined);
       return parts.length > 0 ? parts.join(" · ") : undefined;
     },
+    projectHosts,
     projectChoice: (projectId) => {
       const label = projectLabels.get(projectId);
       if (label === undefined) return undefined;
-      // Local hosts first, then by name.
-      const hosts = [
-        ...new Set(
-          locationsOf(projectId).flatMap(({ environmentId }) => {
-            const environment = environmentById.get(environmentId);
-            return environment ? [environment] : [];
-          }),
-        ),
-      ]
-        .sort(
-          (left, right) =>
-            Number(right.kind === "local") - Number(left.kind === "local") ||
-            environmentDisplayLabel(left, environments).localeCompare(
-              environmentDisplayLabel(right, environments),
-            ),
-        )
-        .map((environment) => environmentDisplayLabel(environment, environments));
+      const hosts = projectHosts(projectId);
       if (hosts.length === 0) {
         const empty = `${label} — no locations`;
         return { label: empty, title: empty };
       }
-      const shown = hosts.slice(0, CHOICE_HOST_LIMIT).join(", ");
-      const more =
-        hosts.length > CHOICE_HOST_LIMIT
-          ? ` +${hosts.length - CHOICE_HOST_LIMIT}`
-          : "";
       return {
-        label: `${label} — on ${shown}${more}`,
+        label: `${label} — on ${summarizeHosts(hosts)}`,
         title: `${label} — on ${hosts.join(", ")}`,
       };
     },
@@ -323,6 +323,14 @@ export function describeProjectLocations(
         : undefined;
     },
   };
+}
+
+/** Up to two hosts, then "+N": "Local, aw-personal +1". */
+export function summarizeHosts(hosts: readonly string[]): string {
+  const shown = hosts.slice(0, CHOICE_HOST_LIMIT).join(", ");
+  return hosts.length > CHOICE_HOST_LIMIT
+    ? `${shown} +${hosts.length - CHOICE_HOST_LIMIT}`
+    : shown;
 }
 
 /** The distinct non-Local environments of these locations, in order. */

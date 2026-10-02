@@ -153,3 +153,95 @@ describe("useTaskScopeDropTargets", () => {
     expect(moveTask).not.toHaveBeenCalled();
   });
 });
+
+describe("TaskDragProvider sidebar drops", () => {
+  const withFiles: AssociatedTask = {
+    ...task,
+    id: "task-files",
+    files: ["/workspace/src/checkout.ts"],
+  };
+  // project-1 has locations on two hosts; project-2 is another project.
+  const snapshot = {
+    threads: [
+      { id: "thread-1", workspaceId: "workspace-local", title: { text: "Checkout" } },
+      { id: "thread-remote", workspaceId: "workspace-remote", title: { text: "Remote checkout" } },
+      { id: "thread-billing", workspaceId: "workspace-billing", title: { text: "Invoices" } },
+    ],
+    workspaces: [
+      { id: "workspace-local", projectId: "project-1" },
+      { id: "workspace-remote", projectId: "project-1" },
+      { id: "workspace-billing", projectId: "project-2" },
+    ],
+    tasks: [withFiles],
+  };
+
+  function Sidebar(): React.JSX.Element {
+    const taskDrag = useTaskDrag();
+    return (
+      <div className="sidebar-inner">
+        <button
+          type="button"
+          draggable
+          onDragStart={(event) => handleTaskDragStart(taskDrag, withFiles, event)}
+        >
+          Drag
+        </button>
+        {snapshot.threads.map((thread) => (
+          <div key={thread.id} data-thread-id={thread.id}>
+            {thread.title.text}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  function renderSidebar() {
+    const moveTask = vi.fn(async () => undefined);
+    const store = { getTasks: () => [withFiles], moveTask } as unknown as ApplicationClientStore;
+    render(
+      <TaskDragProvider
+        store={store}
+        snapshot={snapshot as unknown as NormalizedApplicationSnapshot}
+      >
+        <Sidebar />
+      </TaskDragProvider>,
+    );
+    return { moveTask };
+  }
+
+  function dropOn(title: string) {
+    const transfer = dataTransfer();
+    fireEvent.dragStart(screen.getByRole("button", { name: "Drag" }), { dataTransfer: transfer });
+    fireEvent.dragOver(screen.getByText(title), { dataTransfer: transfer });
+    fireEvent.drop(screen.getByText(title), { dataTransfer: transfer });
+  }
+
+  it("moves a task with files to a thread on another location of its project without asking", async () => {
+    const { moveTask } = renderSidebar();
+    dropOn("Remote checkout");
+    await waitFor(() =>
+      expect(moveTask).toHaveBeenCalledWith(
+        withFiles,
+        { kind: "thread", threadId: "thread-remote" },
+        expect.any(String),
+      ),
+    );
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("confirms moving a task with files into another project's thread", async () => {
+    const { moveTask } = renderSidebar();
+    dropOn("Invoices");
+    const confirm = await screen.findByRole("dialog", { name: "Move task with project files?" });
+    expect(confirm).toHaveTextContent("Moving it to Invoices keeps those absolute file paths unchanged.");
+    expect(moveTask).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Move task" }));
+    await waitFor(() =>
+      expect(moveTask).toHaveBeenCalledWith(
+        withFiles,
+        { kind: "thread", threadId: "thread-billing" },
+        expect.any(String),
+      ),
+    );
+  });
+});
