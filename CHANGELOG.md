@@ -8,6 +8,7 @@
   Tasks and Workpads to `global`, `project`, or `thread`, gives each Task an
   `associatedProjectId`, and reduces a transcript `task_context` part to the
   Task's display fields. Upgrade clients together with the server.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
 
 - Agent tools `task.list@4`, `task.get@2`, `task.create@2`, `task.update@2`,
   `workpad.list@2`, `workpad.get@2`, `workpad.revisions@2`,
@@ -23,16 +24,19 @@
   individual native MCP session retained across the upgrade, such as a
   sidecar-retained Claude query, keeps the old schemas until its runtime
   restarts.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
 
 - The HTTP Task and Workpad APIs use the `project` scope instead of
   `workspace` (`{ kind: "project", projectId }`, and
   `scopeKind=project&projectId=…` for Workpad lists). Settle, archive, and
   bulk stack requests name the open-Task disposition `move_to_project`
   instead of `move_to_workspace`.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
 
 - A Task update or move whose response was lost before the upgrade can't be
   replayed: retrying it with the same mutation ID reports that the ID was
   reused. Read the Task again and make a new request.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
 
 - Browser and packaged clients require client protocol 133, which adds
   projects to the application snapshot and a `projectId` to every workspace.
@@ -58,7 +62,8 @@
   `workspace.open` of a directory whose project was removed is a conflict.
   Restore the project in **Settings → Projects**. A removed location of an
   active project is restored only when the call names that project.
-  ([#33](https://github.com/kcosr/sedes/pull/33))
+  ([#33](https://github.com/kcosr/sedes/pull/33),
+  [#34](https://github.com/kcosr/sedes/pull/34))
 
 - Claude now requires Claude Code 2.1.287 or newer and uses Agent SDK 0.3.287.
   Update Claude Code on every execution host. Rebuild local workers for
@@ -305,15 +310,18 @@
   removed, and merging carries them into the target. **Settings → Projects**
   shows each active project's Task count. Task file links still open against
   the thread you are viewing.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
 
 - Agents reach a project's Tasks and Workpads from any environment that hosts
   one of the project's active locations. Under **Ask outside this
   environment**, a project hosted only elsewhere asks for approval; a Tool
   client needs one of the project's environments allowlisted. A project with
   no active location is outside every environment.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
 
 - Visibility change: Project Tasks and Workpads created in a location that was
   later removed reappear while their project is active.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
 
 - Migration 127 moves location-scoped Tasks and Workpads to their projects,
   rewriting stored Workpad scopes and Task snapshots no provider has received;
@@ -321,6 +329,7 @@
   It stops without changes if saved work refers to a location that no longer
   exists. The migration is one-way; back up the state directory, including
   `overlay.sqlite`, before upgrading.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
 
 - Scope filters by project instead of by directory name and lists the projects
   with a location on the scoped environment. A saved project-name filter
