@@ -112,7 +112,13 @@ describe("task create fingerprint migration", () => {
         scope: { kind: "global" },
         mutationId,
         now: 2_000,
-      })).toEqual(record);
+      })).toEqual({
+        // Migration 127 replaced the record's workspace columns with its project.
+        ...Object.fromEntries(
+          Object.entries(record).filter(([key]) => key !== "environmentId" && key !== "workspaceId"),
+        ),
+        projectId: null,
+      });
       expect(() => tasks.create(scope, {
         title: record.title,
         details: `${record.details}!`,

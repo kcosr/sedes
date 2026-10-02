@@ -14,6 +14,7 @@ import { openCodeExecutionSettingsMigration } from "./migrations/123-opencode-ex
 import { openCodeRecoveryRetirementMigration } from "./migrations/124-opencode-recovery-retirement.js";
 import { openCodeObservationCursorsMigration } from "./migrations/125-opencode-observation-cursors.js";
 import { projectsAndLocationsMigration } from "./migrations/126-projects-and-locations.js";
+import { sharedProjectTasksMigration } from "./migrations/127-shared-project-tasks.js";
 import { conversationStopReceiptsMigration } from "./migrations/119-conversation-stop-receipts.js";
 import { claudeTurnFailureDetailsMigration } from "./migrations/109-claude-turn-failure-details.js";
 import { forkEnvironmentFingerprintsMigration } from "./migrations/108-fork-environment-fingerprints.js";
@@ -266,6 +267,7 @@ export const backendNormalizedMigrations = [
   openCodeRecoveryRetirementMigration,
   openCodeObservationCursorsMigration,
   projectsAndLocationsMigration,
+  sharedProjectTasksMigration,
 ] as const;
 
 export type DatabaseMigration = {
@@ -307,6 +309,45 @@ function taskCreateReceiptFingerprint(resultJson: string): string {
       : record.scopeKind === "thread"
         ? ["thread", record.threadId]
         : ["global"];
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        "create_task",
+        record.title,
+        record.details,
+        record.pinned,
+        record.files,
+        ...scope,
+      ]),
+    )
+    .digest("hex");
+}
+
+/**
+ * Migration 127's create-receipt fingerprint for a project-scoped Task. It
+ * must equal what the task repository computes for the same create request.
+ */
+function projectTaskCreateReceiptFingerprint(resultJson: string): string {
+  const { record } = JSON.parse(resultJson) as {
+    readonly record: {
+      readonly title: string;
+      readonly details: string;
+      readonly pinned: boolean;
+      readonly files: readonly string[];
+      readonly scopeKind: "global" | "project" | "thread";
+      readonly projectId: string | null;
+      readonly threadId: string | null;
+    };
+  };
+  const scope =
+    record.scopeKind === "project"
+      ? ["project", record.projectId]
+      : record.scopeKind === "thread"
+        ? ["thread", record.threadId]
+        : record.scopeKind === "global"
+          ? ["global"]
+          : undefined;
+  if (!scope) throw new Error("Task create receipt has an unknown scope.");
   return createHash("sha256")
     .update(
       JSON.stringify([
@@ -388,6 +429,11 @@ export function applyDatabaseMigrations(
     "harness_task_create_receipt_fingerprint",
     { deterministic: true },
     taskCreateReceiptFingerprint,
+  );
+  database.function(
+    "sedes_project_task_create_receipt_fingerprint",
+    { deterministic: true },
+    projectTaskCreateReceiptFingerprint,
   );
   assertMigrationPlan(migrationsToApply);
   database.exec(`

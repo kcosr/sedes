@@ -1,6 +1,6 @@
 import { DomainError } from "../domain/errors.js";
 
-// These are the fixed public diagnostics raised by migrations 99 and 126.
+// These are the fixed public diagnostics raised by migrations 99, 126 and 127.
 // Never expose arbitrary database diagnostics through the application or
 // agent-tool API.
 const admissionMessages = new Set([
