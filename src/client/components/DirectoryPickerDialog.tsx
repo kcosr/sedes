@@ -343,7 +343,7 @@ export function DirectoryPickerDialog({
                   type="button"
                   variant="outline"
                   className="h-(--control-default)"
-                  disabled={!path.trim() || loading}
+                  disabled={submitting || !path.trim() || loading}
                   onClick={browseTypedPath}
                 >
                   Browse
@@ -374,7 +374,7 @@ export function DirectoryPickerDialog({
                   size="icon-sm"
                   variant="ghost"
                   aria-label="Back one directory"
-                  disabled={loading || history.length <= 1}
+                  disabled={submitting || loading || history.length <= 1}
                   onClick={navigateBack}
                 >
                   <ArrowLeft />
@@ -402,7 +402,11 @@ export function DirectoryPickerDialog({
                         }
                         title={item.label}
                         aria-label={item.label}
-                        disabled={loading || index === history.length - 1}
+                        disabled={
+                          submitting ||
+                          loading ||
+                          index === history.length - 1
+                        }
                         onClick={() => navigateHistory(index)}
                       >
                         <span className="min-w-0 truncate">
@@ -465,15 +469,18 @@ export function DirectoryPickerDialog({
                   <div role="list" aria-label="Directories">
                     {entries.map((entry, index) => (
                       <div role="listitem" key={entry.path}>
+                        {/* Like the path and environment, the chosen
+                            directory cannot change while it is submitted. */}
                         <button
                           ref={index === 0 ? firstEntryRef : undefined}
                           type="button"
+                          disabled={submitting}
                           aria-label={
                             result?.location.kind === "roots"
                               ? `${entry.name} — ${entry.path}`
                               : undefined
                           }
-                          className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-(--disabled-opacity)"
                           onClick={() => navigateTo(entry)}
                         >
                           <Folder className="size-4 shrink-0" />

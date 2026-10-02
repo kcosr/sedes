@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  DirectoryBrowseRequest,
+  DirectoryBrowseResult,
   LocationConflict,
   NormalizedEnvironmentSummary,
   NormalizedProjectSummary,
@@ -48,9 +50,17 @@ const conflict: LocationConflict = {
   projectId: "project-old", projectName: "Old home", projectRevision: 2,
 };
 
-function setup(options: { readonly projectId?: string; readonly environmentLocked?: boolean } = {}) {
+function setup(options: {
+  readonly projectId?: string;
+  readonly environmentLocked?: boolean;
+  readonly environments?: readonly NormalizedEnvironmentSummary[];
+} = {}) {
   const api = {
-    browseExecutionEnvironmentDirectories: vi.fn(),
+    // Two directories under one root, each without children.
+    browseExecutionEnvironmentDirectories: vi.fn(async (_environmentId: string, request: DirectoryBrowseRequest): Promise<DirectoryBrowseResult> =>
+      request.location.kind === "roots"
+        ? { location: { kind: "roots" }, entries: [{ name: "notes", path: "/src/notes" }, { name: "billing", path: "/src/billing" }], truncated: false }
+        : { location: { kind: "directory", path: request.location.path, parentPath: "/src" }, entries: [], truncated: false }),
     // The project the location moved into.
     moveLocation: vi.fn(async (): Promise<{ id: string }> => ({ id: "project-moved" })),
     restoreProject: vi.fn(async (): Promise<{ project: unknown; locations: readonly RestoredLocationResult[] }> => ({
@@ -62,7 +72,7 @@ function setup(options: { readonly projectId?: string; readonly environmentLocke
   const onAdded = vi.fn();
   const onClose = vi.fn();
   const store = { api, openWorkspace, reopenWorkspace } as unknown as Pick<ApplicationClientStore, "api" | "openWorkspace" | "reopenWorkspace">;
-  render(<AddProjectDialog store={store} environments={environments} projects={projects} workspaces={workspaces}
+  render(<AddProjectDialog store={store} environments={options.environments ?? environments} projects={projects} workspaces={workspaces}
     initialEnvironmentId="local" environmentLocked={options.environmentLocked ?? false}
     {...(options.projectId === undefined ? {} : { projectId: options.projectId })}
     onAdded={onAdded} onClose={onClose} />);
@@ -219,6 +229,45 @@ describe("AddProjectDialog", () => {
     });
     expect(other.reopenWorkspace).toHaveBeenCalledWith("existing-location");
     await waitFor(() => expect(other.onAdded).toHaveBeenCalledWith({ id: "existing-location", projectId: "project-reopened" }, "local"));
+  });
+
+  it("keeps a delayed conflict with the directory it was submitted for", async () => {
+    const user = userEvent.setup();
+    const browsable = environments.map((environment) =>
+      environment.id === "local" ? { ...environment, directoryBrowsing: "available" as const } : environment);
+    const { api, openWorkspace, onAdded } = setup({ environments: browsable });
+    let deliver!: (cause: unknown) => void;
+    openWorkspace.mockImplementationOnce(() => new Promise((_resolve, reject) => { deliver = reject; }));
+    const path = within(dialog()).getByRole("textbox", { name: "Absolute directory path" });
+    await enterPath(user, "/src/notes");
+    await user.click(within(dialog()).getByRole("button", { name: "Add project" }));
+    expect(openWorkspace).toHaveBeenCalledWith("/src/notes", "local", { kind: "new", name: "notes" });
+
+    // While the request is pending, browsing cannot choose another directory.
+    const billing = within(dialog()).getByRole("button", { name: "billing — /src/billing" });
+    expect(billing).toBeDisabled();
+    await user.click(billing);
+    expect(path).toHaveValue("/src/notes");
+    expect(within(dialog()).getByRole("button", { name: "Browse" })).toBeDisabled();
+    expect(api.browseExecutionEnvironmentDirectories).toHaveBeenCalledTimes(1);
+
+    await act(async () => deliver(new LocationConflictApiError(409, "conflict", "Move it instead.", false, conflict)));
+    const alert = await within(dialog()).findByRole("alert");
+    expect(alert).toHaveTextContent("Already in project “Old home”");
+    expect(within(alert).getByRole("button", { name: "Move here" })).toBeEnabled();
+    expect(path).toHaveValue("/src/notes");
+
+    // Choosing another directory withdraws the conflict and its actions.
+    await user.click(billing);
+    expect(path).toHaveValue("/src/billing");
+    expect(within(dialog()).queryByRole("alert")).toBeNull();
+    expect(within(dialog()).queryByRole("button", { name: "Move here" })).toBeNull();
+    await user.click(within(dialog()).getByRole("button", { name: "Roots" }));
+    await user.click(await within(dialog()).findByRole("button", { name: "notes — /src/notes" }));
+    expect(path).toHaveValue("/src/notes");
+    expect(within(dialog()).queryByRole("alert")).toBeNull();
+    expect(api.moveLocation).not.toHaveBeenCalled();
+    expect(onAdded).not.toHaveBeenCalled();
   });
 
   it("adds a location to a fixed project from its menu", async () => {

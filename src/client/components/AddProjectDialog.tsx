@@ -50,6 +50,16 @@ export function preselectedProjectId(
 }
 
 /**
+ * A conflict and the directory it was reported for. Its actions act on that
+ * directory's location, so they are offered only while it is on display.
+ */
+interface ReportedConflict {
+  readonly conflict: LocationConflict;
+  readonly environmentId: string;
+  readonly path: string;
+}
+
+/**
  * Adds a directory as a location of a new or an existing project. Projects
  * are principal-owned; adding a location never changes root grants. A
  * directory that is already a location keeps its project unless the user
@@ -87,7 +97,7 @@ export function AddProjectDialog({
   // Undefined until the user chooses, so the choice follows the directory.
   const [chosenProjectId, setChosenProjectId] = useState<string>();
   const [editedName, setEditedName] = useState<string>();
-  const [conflict, setConflict] = useState<LocationConflict>();
+  const [reported, setReported] = useState<ReportedConflict>();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const projectLocations = useMemo(
@@ -111,20 +121,25 @@ export function AddProjectDialog({
   const destination = selectedProjectId === NEW_PROJECT
     ? `a new project “${newName.trim() || folder}”`
     : `“${selectedProject ? projectLocations.projectLabel(selectedProject.id) ?? selectedProject.name : "this project"}”`;
-  const reset = () => { setConflict(undefined); setError(""); };
+  // A response to an earlier directory or environment never exposes its actions here.
+  const conflict = reported?.environmentId === environmentId && reported.path === directory
+    ? reported.conflict : undefined;
+  const reset = () => { setReported(undefined); setError(""); };
 
+  /** Runs an operation for the directory on display, which stays chosen until it settles. */
   const run = async (operation: () => Promise<OpenWorkspaceResult | undefined>) => {
     if (pending) return;
+    const submitted = { environmentId, path: directory };
     setPending(true);
     setError("");
     try {
       const added = await operation();
       if (added !== undefined) {
-        onAdded(added, environmentId);
+        onAdded(added, submitted.environmentId);
         onClose();
       }
     } catch (cause) {
-      if (cause instanceof LocationConflictApiError) setConflict(cause.conflict);
+      if (cause instanceof LocationConflictApiError) setReported({ conflict: cause.conflict, ...submitted });
       else setError(messageFrom(cause));
     } finally {
       setPending(false);
@@ -137,7 +152,7 @@ export function AddProjectDialog({
       setError(`Enter a project name of 1 to ${MAXIMUM_PROJECT_NAME_LENGTH} characters.`);
       return;
     }
-    setConflict(undefined);
+    setReported(undefined);
     void run(() => store.openWorkspace(directory, environmentId, target));
   };
   /** Moves the existing location into the chosen project, restoring it if removed. */
@@ -149,7 +164,7 @@ export function AddProjectDialog({
     }
     void run(async () => {
       const project = await store.api.moveLocation(existing.workspaceId, { target, expectedRevision: existing.locationRevision });
-      setConflict(undefined);
+      setReported(undefined);
       return existing.locationRemoved
         ? store.reopenWorkspace(existing.workspaceId)
         : { id: existing.workspaceId, projectId: project.id };
@@ -162,7 +177,7 @@ export function AddProjectDialog({
       expectedRevision: existing.projectRevision,
       locationIds: [existing.workspaceId],
     });
-    setConflict(undefined);
+    setReported(undefined);
     const location = restored.locations[0];
     if (location?.status === "failed") {
       setError(`Restored project “${existing.projectName}”, but not this location: ${location.error.message}`);
