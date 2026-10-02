@@ -1380,6 +1380,7 @@ export function NewThreadControl({
               <Plus size={14} /> {pendingLocationId ? "Adding project…" : "Add project"}
             </Button>
             {addProjectOpen && <AddProjectDialog store={store} environments={environments}
+              projects={projects} workspaces={workspaces}
               initialEnvironmentId={effectiveEnvironmentId}
               environmentLocked={scopedEnvironmentId !== undefined}
               onClose={() => setAddProjectOpen(false)}

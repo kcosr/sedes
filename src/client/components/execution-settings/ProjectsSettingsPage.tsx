@@ -157,6 +157,7 @@ export function ProjectsSettingsPage({ store }: {
       </li>)}</ul> : null}
     </section>
     {addOpen && <AddProjectDialog store={store} environments={environments} initialEnvironmentId={filter || undefined}
+      projects={application.snapshot?.projects ?? []} workspaces={application.snapshot?.workspaces ?? []}
       onClose={() => setAddOpen(false)} onAdded={(id, addedEnvironmentId) => {
         const restored = projects.find((project) => project.id === id && project.removed);
         setNotice(restored ? `Restored project ${restored.label}.` : "Project added."); setStatus("all"); setSearch("");

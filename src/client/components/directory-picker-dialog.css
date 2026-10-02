@@ -11,3 +11,10 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
 }
+
+/* Add project: the actions offered for a directory that is already a location. */
+.add-project-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}

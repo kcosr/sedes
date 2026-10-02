@@ -2153,6 +2153,8 @@ export function InventorySidebar({
         {addProjectOpen && <AddProjectDialog
           store={store}
           environments={environments}
+          projects={projects}
+          workspaces={workspaces}
           initialEnvironmentId={scope.effectiveEnvironmentId ?? undefined}
           environmentLocked={scope.effectiveEnvironmentId !== null}
           onClose={() => setAddProjectOpen(false)}
