@@ -878,7 +878,11 @@ async function fixture(
         threadIds.flatMap((threadId) => {
           const snapshot = boundHubs.get(threadId)?.snapshot;
           return snapshot
-            ? [[threadId, { kind: "loaded" as const, runState: snapshot.runState }] as const]
+            ? [[threadId, {
+                kind: "loaded" as const,
+                runState: snapshot.runState,
+                retirable: snapshot.runState === "idle" || snapshot.runState === "failed",
+              }] as const]
             : [];
         }),
       );
@@ -1804,12 +1808,23 @@ describe("normalized HTTP application contract", () => {
         source: { kind: "agent_control", expectedThreadRevision: current.repository.getThread(current.owner, thread).thread.revision, initiatingAgentThreadId: thread },
         now: Date.now(),
       });
+      // A loaded runtime with a turn in progress is reported alongside.
+      const running = (await current.mutate(request(current.app).post("/api/threads"))
+        .send({ workspaceId: supplemental.id, configuration: { kind: "custom", targetId: current.profile.id }, executionWorkspace: { kind: "direct" }, title: "Running" })
+        .expect(201)).body.threadId as string;
+      current.bindThread(running);
+      const runningHub = await current.loadBoundHub(running);
+      runningHub.publish({ type: "run_state", generation: runningHub.projectionGeneration!, state: "running" });
       project = await projectOf(target.id);
       const blocked = await current.mutate(request(current.app).post(`/api/projects/${project.id}/remove`))
         .send({ expectedRevision: project.revision, expectedMembershipRevision: project.membershipRevision }).expect(400);
+      const blockersByLocation = {
+        [second.id]: { locationId: second.id, environmentId: current.environmentId, kind: "durable_work", threadIds: [thread] },
+        [supplemental.id]: { locationId: supplemental.id, environmentId: current.environmentId, kind: "busy_runtime", threadIds: [running] },
+      };
       expect(blocked.body).toEqual({
         error: { code: "invalid_transition", message: expect.stringContaining("before removing it"), retryable: false },
-        blockers: [{ locationId: second.id, environmentId: current.environmentId, kind: "durable_work", threadIds: [thread] }],
+        blockers: [second.id, supplemental.id].sort().map((id) => blockersByLocation[id]),
       });
       expect(projectRemovalBlockedErrorSchema.safeParse(blocked.body).success).toBe(true);
       await current.mutate(request(current.app).post(`/api/projects/${project.id}/remove`))

@@ -41,7 +41,7 @@ async function viewedIdleThread(harness: Harness) {
   })).resolves.toMatchObject({ status: "delivery_accepted" });
   await vi.waitFor(() => {
     expect(frames.some(({ event }) => event.type === "turn_upsert" && event.turn.status === "completed")).toBe(true);
-    expect(runtimes.observeRuntimes(scope, [threadId]).get(threadId)).toEqual({ kind: "loaded", runState: "idle" });
+    expect(runtimes.observeRuntimes(scope, [threadId]).get(threadId)).toEqual({ kind: "loaded", runState: "idle", retirable: true });
   }, { timeout: 15_000 });
   await Promise.all(harness.completionFollowUps.splice(0));
   const draft = await lifecycle.createServerDraft(scope, {
@@ -125,7 +125,7 @@ describe("project membership changes against live runtimes", () => {
         const moving = move();
         viewed.providerRunState("running");
         await vi.waitFor(() => expect(runtimes.observeRuntimes(scope, [viewed.threadId]).get(viewed.threadId))
-          .toEqual({ kind: "loaded", runState: "running" }));
+          .toEqual({ kind: "loaded", runState: "running", retirable: false }));
         // Only the runtime shows the provider's turn; no durable record does.
         expect(inventoryRepository.findArchiveDurablyBlockedThreadIds(scope, [viewed.threadId, viewed.draftId]).size).toBe(0);
         await release();
@@ -134,7 +134,7 @@ describe("project membership changes against live runtimes", () => {
 
         viewed.providerRunState("idle");
         await vi.waitFor(() => expect(runtimes.observeRuntimes(scope, [viewed.threadId]).get(viewed.threadId))
-          .toEqual({ kind: "loaded", runState: "idle" }));
+          .toEqual({ kind: "loaded", runState: "idle", retirable: true }));
         const since = viewed.frames.length;
         const moved = await move();
         expect(moved).toMatchObject({ name: "Split", locations: [{ id: workspaceRecord.id }] });
@@ -174,7 +174,7 @@ describe("project membership changes against live runtimes", () => {
         const merging = merge();
         viewed.providerRunState("running");
         await vi.waitFor(() => expect(runtimes.observeRuntimes(scope, [viewed.threadId]).get(viewed.threadId))
-          .toEqual({ kind: "loaded", runState: "running" }));
+          .toEqual({ kind: "loaded", runState: "running", retirable: false }));
         expect(inventoryRepository.findArchiveDurablyBlockedThreadIds(scope, [viewed.threadId, viewed.draftId]).size).toBe(0);
         await release();
         await expect(merging).rejects.toMatchObject({ code: "invalid_transition" });
@@ -182,7 +182,7 @@ describe("project membership changes against live runtimes", () => {
 
         viewed.providerRunState("idle");
         await vi.waitFor(() => expect(runtimes.observeRuntimes(scope, [viewed.threadId]).get(viewed.threadId))
-          .toEqual({ kind: "loaded", runState: "idle" }));
+          .toEqual({ kind: "loaded", runState: "idle", retirable: true }));
         const since = viewed.frames.length;
         const merged = await merge();
         expect(merged.locations.map(({ id }) => id).sort()).toEqual([workspaceRecord.id, target.id].sort());
@@ -190,6 +190,44 @@ describe("project membership changes against live runtimes", () => {
         expect(() => inventoryRepository.getProject(scope, sourceProjectId)).toThrow(expect.objectContaining({ code: "not_found" }));
         expect(await runtimes.captureLoadedRuntime(scope, viewed.threadId))
           .toMatchObject({ generation: viewed.generation, runState: "idle" });
+      } finally {
+        viewed.close();
+      }
+    } finally {
+      await harness.close();
+    }
+  }, 60_000);
+
+  it("reports a provider turn as a busy runtime when removing the project, and removes the project once it is idle", async () => {
+    const harness = await createInMemoryThreadRuntimeHarness();
+    const { scope, workspaceRecord, inventoryRepository, runtimes } = harness;
+    try {
+      const viewed = await viewedIdleThread(harness);
+      try {
+        const service = projectManagement(harness);
+        const location = inventoryRepository.getWorkspace(scope, workspaceRecord.id);
+        const remove = () => {
+          const project = inventoryRepository.getProject(scope, location.projectId);
+          return service.removeProject(scope, project.id, {
+            expectedRevision: project.revision, expectedMembershipRevision: project.membershipRevision,
+          });
+        };
+
+        viewed.providerRunState("running");
+        await vi.waitFor(() => expect(runtimes.observeRuntimes(scope, [viewed.threadId]).get(viewed.threadId))
+          .toEqual({ kind: "loaded", runState: "running", retirable: false }));
+        await expect(remove()).rejects.toMatchObject({
+          code: "invalid_transition",
+          blockers: [{ workspaceId: location.id, environmentId: location.environmentId, kind: "busy_runtime", threadIds: [viewed.threadId] }],
+        });
+        expect(inventoryRepository.isWorkspaceRemoved(scope, location.id)).toBe(false);
+
+        viewed.providerRunState("idle");
+        await vi.waitFor(() => expect(runtimes.observeRuntimes(scope, [viewed.threadId]).get(viewed.threadId))
+          .toEqual({ kind: "loaded", runState: "idle", retirable: true }));
+        await expect(remove()).resolves.toMatchObject({ id: location.projectId, removed: true });
+        // Removal retires the idle runtime.
+        expect(runtimes.observeRuntimes(scope, [viewed.threadId]).size).toBe(0);
       } finally {
         viewed.close();
       }

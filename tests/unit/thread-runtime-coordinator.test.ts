@@ -2814,7 +2814,7 @@ describe("runtime observation for atomic commits", () => {
       ["thread-loaded", "thread-absent", "thread-loaded"],
       (runtimes) => new Map(runtimes),
     );
-    expect(observed).toEqual(new Map([["thread-loaded", { kind: "loaded", runState: "idle" }]]));
+    expect(observed).toEqual(new Map([["thread-loaded", { kind: "loaded", runState: "idle", retirable: true }]]));
     expect(loaded.close).not.toHaveBeenCalled();
     expect(actorRelease[0]).not.toHaveBeenCalled();
     const again = await coordinator.acquire(scope, "thread-loaded");
@@ -2846,7 +2846,7 @@ describe("runtime observation for atomic commits", () => {
     gate.resolve();
     await maintenance;
 
-    await expect(committing).resolves.toEqual({ kind: "loaded", runState: "running" });
+    await expect(committing).resolves.toMatchObject({ kind: "loaded", runState: "running" });
     expect(commit).toHaveBeenCalledOnce();
     expect(loaded.close).not.toHaveBeenCalled();
     await coordinator.close();

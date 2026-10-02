@@ -130,13 +130,17 @@ export type InventoryProjectListing = InventoryProjectRecord & {
   readonly locations: readonly InventoryProjectLocationRecord[];
 };
 
-export type ProjectRemovalBlockerKind =
+/** Removal blockers recorded in the database. */
+export type DurableProjectRemovalBlockerKind =
   "durable_work" | "enabled_schedule" | "live_terminal";
 
-export type ProjectRemovalBlocker = {
+/** A busy runtime is observed in memory by the service, not recorded here. */
+export type ProjectRemovalBlockerKind = DurableProjectRemovalBlockerKind | "busy_runtime";
+
+export type ProjectRemovalBlocker<Kind extends ProjectRemovalBlockerKind = ProjectRemovalBlockerKind> = {
   readonly workspaceId: string;
   readonly environmentId: string;
-  readonly kind: ProjectRemovalBlockerKind;
+  readonly kind: Kind;
   readonly threadIds: readonly string[];
 };
 
@@ -151,8 +155,8 @@ export type ProjectRemovalInspection = {
   readonly project: InventoryProjectRecord;
   /** Active locations in the fixed order their fences must run. */
   readonly locations: readonly ProjectRemovalLocation[];
-  /** Every blocker across every active location, not only the first. */
-  readonly blockers: readonly ProjectRemovalBlocker[];
+  /** Every durable blocker across every active location, not only the first. */
+  readonly blockers: readonly ProjectRemovalBlocker<DurableProjectRemovalBlockerKind>[];
 };
 
 export class ProjectRemovalBlockedError extends DomainError {
@@ -187,7 +191,7 @@ function sameRemovalLocations(
 }
 
 // The single-location removal path reports the first blocker in this order.
-const locationRemovalMessages: Readonly<Record<ProjectRemovalBlockerKind, string>> = {
+const locationRemovalMessages: Readonly<Record<DurableProjectRemovalBlockerKind, string>> = {
   durable_work: "Resolve running, queued, or uncertain work before removing this project.",
   enabled_schedule: "Pause scheduled work before removing this project. Restore will leave schedules paused.",
   live_terminal: "End live or interrupted terminals before removing this project.",
@@ -3450,8 +3454,14 @@ export class InventoryRepository {
   }
 
   /** Durable blockers to removing one location, in a fixed kind order. */
-  #locationRemovalBlockers(scope: RequestScope, location: ProjectRemovalLocation): ProjectRemovalBlocker[] {
-    const blocker = (kind: ProjectRemovalBlockerKind, threadIds: readonly string[]): ProjectRemovalBlocker[] =>
+  #locationRemovalBlockers(
+    scope: RequestScope,
+    location: ProjectRemovalLocation,
+  ): ProjectRemovalBlocker<DurableProjectRemovalBlockerKind>[] {
+    const blocker = (
+      kind: DurableProjectRemovalBlockerKind,
+      threadIds: readonly string[],
+    ): ProjectRemovalBlocker<DurableProjectRemovalBlockerKind>[] =>
       threadIds.length === 0 ? [] : [{ workspaceId: location.workspaceId, environmentId: location.environmentId, kind, threadIds }];
     const ids = (rows: unknown[]) => (rows as Array<{ threadId: string }>).map(row => row.threadId);
     const durable = this.findArchiveDurablyBlockedThreadIds(scope, location.threadIds);

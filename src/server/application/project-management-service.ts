@@ -13,6 +13,7 @@ import {
   ProjectRemovalBlockedError,
   type InventoryProjectListing,
   type InventoryRepository,
+  type ProjectRemovalBlocker,
   type ProjectRemovalLocation,
 } from "../db/repositories/inventory-repository.js";
 import { DomainError } from "../domain/errors.js";
@@ -76,7 +77,7 @@ function presentProject(project: InventoryProjectListing): ProjectSummary {
 export class ProjectManagementService {
   constructor(readonly input: {
     inventory: InventoryRepository;
-    runtimes: ArchivedThreadRuntimeRetirement & Pick<ThreadRuntimeCoordinator, "commitWithRuntimesObserved">;
+    runtimes: ArchivedThreadRuntimeRetirement & Pick<ThreadRuntimeCoordinator, "observeRuntimes" | "commitWithRuntimesObserved">;
     files: WorkspaceRetirement;
     terminals?: WorkspaceRetirement;
     locations: Pick<WorkspaceApplicationService, "restoreLocation">;
@@ -109,13 +110,29 @@ export class ProjectManagementService {
   }
 
   /**
-   * Removes the project with every active location. All blockers are reported
-   * together; then every location is fenced, in a fixed order, while one
-   * transaction rechecks the location set and commits.
+   * Removes the project with every active location. All blockers, durable and
+   * busy runtimes alike, are reported together; then every location is
+   * fenced, in a fixed order, while one transaction rechecks the location set
+   * and commits. The fences still refuse work that starts after the check.
    */
   async removeProject(scope: RequestScope, projectId: string, request: RemoveProjectRequest): Promise<ProjectSummary> {
     const inspection = this.input.inventory.inspectProjectRemoval(scope, projectId, request);
-    if (inspection.blockers.length > 0) throw new ProjectRemovalBlockedError(inspection.blockers);
+    const runtimes = this.input.runtimes.observeRuntimes(
+      scope, inspection.locations.flatMap(({ threadIds }) => threadIds));
+    const blockers = inspection.locations.flatMap((location): ProjectRemovalBlocker[] => {
+      const busy = location.threadIds.filter((threadId) => {
+        const runtime = runtimes.get(threadId);
+        return runtime?.kind === "loaded" && !runtime.retirable;
+      });
+      return [
+        ...inspection.blockers.filter(({ workspaceId }) => workspaceId === location.workspaceId),
+        ...(busy.length === 0 ? [] : [{
+          workspaceId: location.workspaceId, environmentId: location.environmentId,
+          kind: "busy_runtime" as const, threadIds: busy,
+        }]),
+      ];
+    });
+    if (blockers.length > 0) throw new ProjectRemovalBlockedError(blockers);
     const removed = await this.#withLocationsRetired(scope, inspection.locations, async () =>
       this.input.inventory.removeProject(scope, projectId, {
         ...request, expectedLocations: inspection.locations, now: this.#now(),

@@ -45,8 +45,10 @@ function fixture() {
   const runWithTerminalsRetired = vi.fn(async <T>(_scope: typeof scope, _id: string, operation: () => Promise<T>) => operation());
   // Loaded runtimes by thread; a test sets one to make it busy or establishing.
   const runtimeStates = new Map<string, ThreadRuntimeObservation>();
-  const commitWithRuntimesObserved = vi.fn(async <T>(_scope: typeof scope, threadIds: readonly string[], commit: (runtimes: ReadonlyMap<string, ThreadRuntimeObservation>) => T) =>
-    commit(new Map(threadIds.flatMap((id) => runtimeStates.has(id) ? [[id, runtimeStates.get(id)!] as const] : []))));
+  const observeRuntimes = vi.fn((_scope: typeof scope, threadIds: readonly string[]): ReadonlyMap<string, ThreadRuntimeObservation> =>
+    new Map(threadIds.flatMap((id) => runtimeStates.has(id) ? [[id, runtimeStates.get(id)!] as const] : [])));
+  const commitWithRuntimesObserved = vi.fn(async <T>(eventScope: typeof scope, threadIds: readonly string[], commit: (runtimes: ReadonlyMap<string, ThreadRuntimeObservation>) => T) =>
+    commit(observeRuntimes(eventScope, threadIds)));
   const handoffAuthoritativeReplacement = vi.fn();
   const scheduleThreadPublications = vi.fn();
   // Validation echoes the requested directory unless a test makes it resolve elsewhere.
@@ -58,7 +60,7 @@ function fixture() {
   });
   const open = new WorkspaceApplicationService({inventory, execution: {validateWorkspace}, publications: {handoffAuthoritativeReplacement} });
   const service = new ProjectManagementService({ inventory,
-    runtimes: {runWithRuntimeRetired: runWithRuntimeRetired as RuntimeRetirement, releaseProviderResidency: async () => undefined, commitWithRuntimesObserved: commitWithRuntimesObserved as RuntimeCommit},
+    runtimes: {runWithRuntimeRetired: runWithRuntimeRetired as RuntimeRetirement, releaseProviderResidency: async () => undefined, observeRuntimes, commitWithRuntimesObserved: commitWithRuntimesObserved as RuntimeCommit},
     files: {runWithWorkspaceRetired: runWithWorkspaceRetired as Retirement},
     terminals: {runWithWorkspaceRetired: runWithTerminalsRetired as Retirement},
     locations: open, publications: {handoffAuthoritativeReplacement}, threads: {scheduleMany: scheduleThreadPublications} });
@@ -317,6 +319,38 @@ describe("project and location management", () => {
     expect(f.project(f.workspace.projectId).removedAt).toBeNull();
   });
 
+  it("reports busy runtimes of every location with the durable blockers, before fencing", async () => {
+    const f = fixture();
+    const { second, secondThread } = twoLocations(f);
+    const idle = f.createIn(second.id);
+    const establishing = f.createIn(second.id);
+    enqueue(f, f.thread.id);
+    f.runtimeStates.set(f.thread.id, { kind: "loaded", runState: "running", retirable: false });
+    f.runtimeStates.set(secondThread.id, { kind: "loaded", runState: "idle", retirable: false });
+    // An idle runtime is retired by removal, and an establishing one is cancelled.
+    f.runtimeStates.set(idle.id, { kind: "loaded", runState: "idle", retirable: true });
+    f.runtimeStates.set(establishing.id, { kind: "establishing" });
+
+    const blocked = f.service.removeProject(f.scope, f.workspace.projectId, expected(f, f.workspace.projectId));
+    const byLocation = {
+      [f.workspace.id]: [
+        { workspaceId: f.workspace.id, environmentId: f.environment.id, kind: "durable_work", threadIds: [f.thread.id] },
+        { workspaceId: f.workspace.id, environmentId: f.environment.id, kind: "busy_runtime", threadIds: [f.thread.id] },
+      ],
+      [second.id]: [
+        { workspaceId: second.id, environmentId: f.environment.id, kind: "busy_runtime", threadIds: [secondThread.id] },
+      ],
+    };
+    await expect(blocked).rejects.toBeInstanceOf(ProjectRemovalBlockedError);
+    await expect(blocked).rejects.toMatchObject({
+      code: "invalid_transition",
+      blockers: [f.workspace.id, second.id].sort().flatMap((id) => byLocation[id]!),
+    });
+    expect(f.runWithTerminalsRetired).not.toHaveBeenCalled();
+    expect(f.runWithRuntimeRetired).not.toHaveBeenCalled();
+    expect(f.project(f.workspace.projectId).removedAt).toBeNull();
+  });
+
   it.each([
     ["a busy runtime", (f: Fixture, threadId: string) => f.runWithRuntimeRetired.mockImplementation(async (_scope, id, operation) => {
       if (id === threadId) throw new ThreadRuntimeNotIdleError();
@@ -419,11 +453,11 @@ describe("project and location management", () => {
     const move = (target: Parameters<Fixture["service"]["moveLocation"]>[2]["target"]) => f.service.moveLocation(f.scope, f.workspace.id, {
       target, expectedRevision: f.inventory.getWorkspace(f.scope, f.workspace.id).revision,
     });
-    for (const runtime of [{ kind: "loaded", runState: "running" }, { kind: "establishing" }] as const) {
+    for (const runtime of [{ kind: "loaded", runState: "running", retirable: false }, { kind: "establishing" }] as const) {
       f.runtimeStates.set(f.thread.id, runtime);
       await expect(move({ kind: "new", name: "Split" })).rejects.toMatchObject({ code: "invalid_transition" });
     }
-    f.runtimeStates.set(f.thread.id, { kind: "loaded", runState: "disconnected" });
+    f.runtimeStates.set(f.thread.id, { kind: "loaded", runState: "disconnected", retirable: false });
     f.commitWithRuntimesObserved.mockRejectedValueOnce(new ThreadRuntimeRetirementUnprovenError(new Error("close failed")));
     await expect(move({ kind: "new", name: "Split" })).rejects.toMatchObject({ code: "operation_outcome_uncertain" });
     expect(f.inventory.getWorkspace(f.scope, f.workspace.id).projectId).toBe(f.workspace.projectId);
@@ -438,7 +472,7 @@ describe("project and location management", () => {
     const f = fixture();
     terminal(f, f.workspace, f.thread.id);
     // An offline host's disconnected runtime does not block reorganizing it.
-    f.runtimeStates.set(f.thread.id, { kind: "loaded", runState: "disconnected" });
+    f.runtimeStates.set(f.thread.id, { kind: "loaded", runState: "disconnected", retirable: false });
     const source = f.project(f.workspace.projectId);
     const destination = await f.service.moveLocation(f.scope, f.workspace.id, {
       target: { kind: "new", name: "Split" }, expectedRevision: f.workspace.revision,
@@ -472,9 +506,9 @@ describe("project and location management", () => {
       expectedSourceMembershipRevision: f.project(f.workspace.projectId).membershipRevision,
       expectedTargetMembershipRevision: f.project(target.projectId).membershipRevision,
     });
-    f.runtimeStates.set(f.thread.id, { kind: "loaded", runState: "waiting_for_input" });
+    f.runtimeStates.set(f.thread.id, { kind: "loaded", runState: "waiting_for_input", retirable: false });
     await expect(merge()).rejects.toMatchObject({ code: "invalid_transition" });
-    f.runtimeStates.set(f.thread.id, { kind: "loaded", runState: "idle" });
+    f.runtimeStates.set(f.thread.id, { kind: "loaded", runState: "idle", retirable: true });
     await expect(f.service.merge(f.scope, f.workspace.projectId, {
       targetProjectId: target.projectId, expectedSourceMembershipRevision: 99, expectedTargetMembershipRevision: 0,
     })).rejects.toMatchObject({ code: "conflict" });

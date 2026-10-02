@@ -183,7 +183,12 @@ export interface ThreadRuntimeRetirement {
 export type ThreadRuntimeObservation =
   /** Still being established; its run state is not known yet. */
   | { readonly kind: "establishing" }
-  | { readonly kind: "loaded"; readonly runState: ThreadRunState };
+  | {
+      readonly kind: "loaded";
+      readonly runState: ThreadRunState;
+      /** Idle retirement, as removal and archive perform it, would accept it now. */
+      readonly retirable: boolean;
+    };
 
 export class ThreadRuntimeNotIdleError extends Error {
   constructor() {
@@ -986,6 +991,7 @@ export class ThreadRuntimeCoordinator {
       observed.set(applicationThreadId, {
         kind: "loaded",
         runState: runtime.actor.timeline.runState,
+        retirable: runtime.actor.canEvict,
       });
     }
     return observed;

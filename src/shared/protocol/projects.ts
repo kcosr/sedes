@@ -138,6 +138,8 @@ export const projectRemovalBlockerKindSchema = z.enum([
   "durable_work",
   "enabled_schedule",
   "live_terminal",
+  /** A loaded thread runtime is not idle: a turn, request, or background work is outstanding. */
+  "busy_runtime",
 ]);
 export const projectRemovalBlockerSchema = z.strictObject({
   locationId: workspaceIdSchema,
