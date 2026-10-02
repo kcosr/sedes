@@ -220,7 +220,7 @@
 
 ### Changed
 
-- Raise the per-account backend limit from 32 to 64.
+- Raise the per-account backend limit from 32 to 64. ([#32](https://github.com/kcosr/sedes/pull/32))
 
 - Claude imports and sessions whose saved permission mode is no longer
   allowed launch with an explicit allowed mode, preferring `default`.
