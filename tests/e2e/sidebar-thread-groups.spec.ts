@@ -520,7 +520,7 @@ test("thread groups stack on desktop and open as a member sheet on mobile", asyn
     .getByRole("menuitemradio", { name: "Projects" })
     .click();
   const projectStack = desktopSidebar.locator(
-    '[data-testid="project-stack"][data-workspace-id]',
+    '[data-testid="project-stack"][data-project-id]',
   );
   await expect(projectStack).toHaveCount(1);
   await expect(projectStack).toHaveAttribute(

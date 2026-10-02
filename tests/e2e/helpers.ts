@@ -77,6 +77,10 @@ export async function selectCustomNewThreadTarget(
   return targetPicker;
 }
 
+/**
+ * Chooses a project in New thread, or one of its locations in a picker that
+ * lists "Project · Location" choices, unless the form already chose one.
+ */
 export async function selectProjectIfNeeded(
   page: Page,
   projectName: string,
@@ -87,7 +91,14 @@ export async function selectProjectIfNeeded(
   });
   if ((await project.count()) === 0) return;
   if ((await project.textContent())?.match(/Choose a project/i)) {
-    await selectRadixOption(page, project, projectName);
+    await selectRadixOption(
+      page,
+      project,
+      new RegExp(
+        `^${projectName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?: · |$)`,
+        "u",
+      ),
+    );
   }
 }
 

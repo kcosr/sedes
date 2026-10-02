@@ -514,15 +514,13 @@ test.describe("sidebar name filtering preference", () => {
     await page.getByRole("dialog", { name: "Add project" }).getByRole("button", { name: "Add project", exact: true }).click();
     const sameWorkspace = await (await added).json();
     await expect(page.getByRole("dialog", { name: "Add project" })).toBeHidden();
-    await expect(initialSidebar.getByTestId("project-row").filter({ hasText: "click-project" })).toHaveCount(2);
-    // The name filter includes both directories; creation still needs one ID.
+    // The same folder name elsewhere is a separate project; paths tell the
+    // two apart, and Scope follows the one just added.
+    await expect(initialSidebar.getByTestId("project-row")).toHaveText([`click-project · ${sameName}`]);
+    // New thread follows the scoped project; its one location needs no choice.
     await initialSidebar.getByTestId("new-thread-trigger").click();
-    const concreteProject = page.getByRole("combobox", { name: "Project", exact: true });
-    await expect(concreteProject).toContainText("Choose a project");
-    await expect(page.getByRole("button", { name: "Create thread", exact: true })).toBeDisabled();
-    await concreteProject.click();
-    await expect(page.getByRole("option", { name: `click-project · ${first}`, exact: true })).toBeVisible();
-    await page.getByRole("option", { name: `click-project · ${sameName}`, exact: true }).click();
+    await expect(page.getByRole("textbox", { name: "Thread name" })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "Project", exact: true })).toHaveCount(0);
     await selectCustomNewThreadTarget(page, "Pi SDK");
     await capture(page, testInfo, "same-name-project-creation.png");
     const sameCreated = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith("/api/threads") && response.status() === 201);
@@ -548,10 +546,10 @@ test.describe("sidebar name filtering preference", () => {
     const secondRow = sidebar.locator(`[data-thread-id="${selectedThread.split("/").pop()}"]`).first();
     const sameNameRow = sidebar.locator(`[data-thread-id="${sameThreadId}"]`).first();
     await sidebar.getByTestId("project-filter").click();
-    await expect(page.getByRole("option", { name: "click-project", exact: true })).toHaveCount(1);
-    await page.getByRole("option", { name: "click-project", exact: true }).click();
+    await expect(page.getByRole("option", { name: `click-project · ${sameName}`, exact: true })).toBeVisible();
+    await page.getByRole("option", { name: `click-project · ${first}`, exact: true }).click();
     await expect(firstRow).toBeVisible();
-    await expect(sameNameRow).toBeVisible();
+    await expect(sameNameRow).toHaveCount(0);
     await expect(secondRow).toHaveCount(0);
     await clearProject();
     await expect(firstRow.getByTestId("flat-row-project")).toBeVisible();
@@ -599,19 +597,19 @@ test.describe("sidebar name filtering preference", () => {
     }
     await project.click();
     await expect(secondRow).toHaveCount(0);
-    await expect(sameNameRow).toBeVisible();
+    await expect(sameNameRow).toHaveCount(0);
     await expect(page).toHaveURL(selectedThread);
     await clearProject();
     await project.focus();
     await project.press("Enter");
     await expect(secondRow).toHaveCount(0);
-    await expect(sameNameRow).toBeVisible();
+    await expect(sameNameRow).toHaveCount(0);
     await expect(page).toHaveURL(selectedThread);
     await clearProject();
     await project.focus();
     await project.press("Space");
     await expect(secondRow).toHaveCount(0);
-    await expect(sameNameRow).toBeVisible();
+    await expect(sameNameRow).toHaveCount(0);
     await clearProject();
     await firstRow.getByTestId("thread-row-link").click();
     await expect(page).toHaveURL(firstThread);
@@ -639,8 +637,8 @@ test.describe("sidebar name filtering preference", () => {
     await mobileProject.tap();
     await expect(page).toHaveURL(selectedThread);
     await expect(page.getByRole("dialog", { name: "Thread navigation" })).toBeVisible();
-    await expect(page.getByTestId("project-filter").filter({ visible: true })).toContainText("click-project");
-    await expect(drawer.locator(`[data-thread-id="${sameThreadId}"]`).first()).toBeVisible();
+    await expect(page.getByTestId("project-filter").filter({ visible: true })).toContainText(`click-project · ${first}`);
+    await expect(drawer.locator(`[data-thread-id="${sameThreadId}"]`)).toHaveCount(0);
 
     await page.getByRole("button", { name: "Close thread navigation", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "Thread navigation" })).toBeHidden();

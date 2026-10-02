@@ -15,6 +15,10 @@ import {
 
 const repositoryDisplayName = path.basename(process.cwd());
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 test("composer reasoning yields to active-turn controls and returns when space is available", async ({ page }, testInfo) => {
   await openSedesWorkspace(page);
   await page.getByTestId("desktop-sidebar").getByTestId("new-thread-trigger").click();
@@ -804,24 +808,24 @@ test.describe.serial("normalized composer state", () => {
         response.ok() &&
         response.request().postDataJSON().kind === "move_draft",
     );
-    // Draft workspace is a submenu of workspace radio rows. The row shows
-    // no inline value; the current workspace is the checked row inside.
+    // Draft location is a submenu of location radio rows ("Project · path").
+    // The row shows no inline value; the current location is the checked row
+    // inside.
     const threadActions = page.getByRole("menu", { name: "Thread actions" });
-    const draftWorkspace = threadActions.getByRole("menuitem", {
-      name: "Draft workspace",
+    const draftLocation = threadActions.getByRole("menuitem", {
+      name: "Draft location",
       exact: true,
     });
-    await expect(draftWorkspace).toHaveText("Draft workspace");
-    await draftWorkspace.click();
-    const workspaces = page.getByRole("menu", { name: "Draft workspace" });
+    await expect(draftLocation).toHaveText("Draft location");
+    await draftLocation.click();
+    const locations = page.getByRole("menu", { name: "Draft location" });
     await expect(
-      workspaces.getByRole("menuitemradio", {
-        name: repositoryDisplayName,
-        exact: true,
+      locations.getByRole("menuitemradio", {
+        name: new RegExp(`^${escapeRegExp(repositoryDisplayName)} · `, "u"),
       }),
     ).toHaveAttribute("aria-checked", "true");
-    await workspaces
-      .getByRole("menuitemradio", { name: "src", exact: true })
+    await locations
+      .getByRole("menuitemradio", { name: /^src · /u })
       .click();
     await moved;
     await expect(page).toHaveURL(threadPath);
