@@ -46,6 +46,24 @@ describe("Codex C2 pinned protocol", () => {
     }
   });
 
+  it("accepts file-backed native images without inventing URL or path fields", () => {
+    const input = [{ type: "image", fileId: "file-1", detail: "high" }] as const;
+    expect(codexTurnStartMethod.encodeParams({ threadId: "thread-1", input: [...input] })).toEqual({ threadId: "thread-1", input });
+    for (const image of [
+      { type: "image", fileId: "" },
+      { type: "image", fileId: "file-1", url: "https://example.test/image.png" },
+      { type: "image", fileId: "file-1", path: "/private/image.png" },
+    ]) {
+      expect(() => codexTurnStartMethod.encodeParams({ threadId: "thread-1", input: [image] } as never)).toThrow();
+    }
+  });
+
+  it.each(["flexUnavailable", "tooManyDenials"])("accepts the 0.160 %s error category", (codexErrorInfo) => {
+    const params = { threadId: "thread-1", turnId: "turn-1", willRetry: false,
+      error: { message: "Provider could not continue", codexErrorInfo, additionalDetails: null } };
+    expect(decodeCodexC2Notification("error", params)).toEqual(params);
+  });
+
   it("keeps native text bounds in UTF-16 code units below the wire ceiling", () => {
     const underFrameAstral = "😀".repeat(1_900_000);
     expect(
@@ -1171,11 +1189,17 @@ describe("Codex C2 pinned protocol", () => {
         },
         multiAgentMode: "explicitRequestOnly",
         personality: null,
+        disabledPluginIds: ["plugin-1"],
       },
     };
     expect(
       decodeCodexC2Notification("thread/settings/updated", params),
     ).toEqual(params);
+    for (const disabledPluginIds of [[""], [42], Array.from({ length: 1001 }, () => "plugin")]) {
+      expect(() => decodeCodexC2Notification("thread/settings/updated", {
+        ...params, threadSettings: { ...params.threadSettings, disabledPluginIds },
+      })).toThrow();
+    }
     expect(() =>
       decodeCodexC2Notification("thread/settings/updated", {
         ...params,

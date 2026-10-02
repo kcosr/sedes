@@ -241,7 +241,13 @@ try {
   await call(client, codexThreadSettingsUpdateMethod, {
     threadId,
     model: "sedes-fixture",
+    effort: "high",
   });
+  const settings = await client.nextNotification("thread/settings/updated");
+  decodeCodexC2Notification("thread/settings/updated", settings.params);
+  assert.equal(settings.params.threadId, threadId);
+  assert.equal(settings.params.threadSettings.effort, "high");
+  assert.deepEqual(settings.params.threadSettings.disabledPluginIds, []);
   fixture.enqueue([
     { type: "response.created", response: { id: "qualification-response" } },
     {
@@ -325,6 +331,7 @@ try {
     excludeTurns: true,
   });
   assert.equal(resumed.thread.id, threadId);
+  assert.equal(resumed.reasoningEffort, "high");
   const turns = await call(resumedClient, codexThreadTurnsListMethod, {
     threadId,
     limit: 10,
@@ -337,8 +344,11 @@ try {
     limit: 10,
   });
   assert(items.data.length > 0);
-  const fork = await call(resumedClient, codexThreadForkMethod, { threadId });
+  const fork = await call(resumedClient, codexThreadForkMethod, {
+    threadId, model: resumed.model, config: { model_reasoning_effort: "high" },
+  });
   assert.notEqual(fork.thread.id, threadId);
+  assert.equal(fork.reasoningEffort, "high");
   const forkRead = await call(resumedClient, codexThreadReadMethod, {
     threadId: fork.thread.id,
     includeTurns: true,
@@ -362,6 +372,7 @@ try {
         experimentalGateRejected: true,
         notificationsValidated: [
           "thread/started",
+          "thread/settings/updated",
           "turn/completed",
           "item/started",
           "item/completed",
@@ -371,6 +382,7 @@ try {
         modelIds: models.data.map((model) => model.id),
         deterministicProviderRequests: fixture.requestCount,
         persistentTurnResumedAfterRestart: true,
+        executionSettingsPreservedOnResumeAndFork: true,
         forkHistoryPreserved: true,
         liveProviderVerified: false,
       },

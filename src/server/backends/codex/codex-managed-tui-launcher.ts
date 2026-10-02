@@ -22,10 +22,11 @@ import {
 } from "./codex-service-tier.js";
 import { parseCodexTcpEndpoint } from "./transport/tcp-websocket-transport.js";
 import type { BackendModelPolicy } from "../model-policy.js";
+import type { CodexLiveModelSelection } from "./codex-live-model-selection.js";
 
 const REMOTE_TOKEN_ENVIRONMENT_NAME = "SEDES_CODEX_TUI_REMOTE_TOKEN";
 
-// The managed terminal protocol depends on these Codex 0.153 TUI settings.
+// The managed terminal protocol depends on these Codex 0.160 TUI settings.
 // Keep them process-local so account-owned config cannot change Stage/Send
 // framing, startup mode, or the repaint surface shared by Sedes viewers.
 const MANAGED_TUI_CONFIG_OVERRIDES = Object.freeze([
@@ -34,9 +35,24 @@ const MANAGED_TUI_CONFIG_OVERRIDES = Object.freeze([
   'tui.keymap.composer.submit="enter"',
   "tui.vim_mode_default=false",
   'tui.alternate_screen="always"',
+  "tui.fullscreen_transcript=false",
   "tui.raw_output_mode=false",
   "tui.disable_paste_burst=false",
 ]);
+
+export function codexManagedTuiConfigArguments(
+  model: string,
+  selection: CodexLiveModelSelection,
+): readonly string[] {
+  const overrides: string[] = [...MANAGED_TUI_CONFIG_OVERRIDES];
+  if (selection.upgrade !== null) {
+    // Acknowledge only the selected model's authoritative live upgrade. This
+    // keeps its startup prompt from consuming Stage/Send input or changing the
+    // selected model, including after a provider catalog refresh.
+    overrides.push(`notice.model_migrations={${tomlString(model)}=${tomlString(selection.upgrade)}}`);
+  }
+  return overrides.flatMap(override => ["-c", override]);
+}
 
 /**
  * A running interactive client can select a model and submit the turn before
@@ -68,11 +84,11 @@ export class EnvironmentCodexManagedTuiLauncher implements CodexManagedTuiLaunch
   readonly #settings: (
     authority: CodexManagedTuiBindingAuthority,
   ) => CodexManagedTuiLaunchSettings;
-  readonly #validateModelSelection: (input: {
+  readonly #prepareThreadSettings: (input: {
     readonly authority: CodexManagedTuiBindingAuthority;
     readonly settings: CodexManagedTuiLaunchSettings;
     readonly signal: AbortSignal;
-  }) => Promise<void>;
+  }) => Promise<CodexLiveModelSelection>;
   readonly #onRuntimeVersionAssessment: (
     assessment: VerifiedCodexRuntimeVersion,
   ) => void;
@@ -86,11 +102,11 @@ export class EnvironmentCodexManagedTuiLauncher implements CodexManagedTuiLaunch
     readonly settings: (
       authority: CodexManagedTuiBindingAuthority,
     ) => CodexManagedTuiLaunchSettings;
-    readonly validateModelSelection: (input: {
+    readonly prepareThreadSettings: (input: {
       readonly authority: CodexManagedTuiBindingAuthority;
       readonly settings: CodexManagedTuiLaunchSettings;
       readonly signal: AbortSignal;
-    }) => Promise<void>;
+    }) => Promise<CodexLiveModelSelection>;
     readonly onRuntimeVersionAssessment: (
       assessment: VerifiedCodexRuntimeVersion,
     ) => void;
@@ -116,7 +132,7 @@ export class EnvironmentCodexManagedTuiLauncher implements CodexManagedTuiLaunch
       home: input.environment.HOME ?? homedir(),
     });
     this.#settings = input.settings;
-    this.#validateModelSelection = input.validateModelSelection;
+    this.#prepareThreadSettings = input.prepareThreadSettings;
     this.#onRuntimeVersionAssessment = input.onRuntimeVersionAssessment;
     this.#assertLaunchAdmission = input.assertLaunchAdmission;
   }
@@ -153,6 +169,9 @@ export class EnvironmentCodexManagedTuiLauncher implements CodexManagedTuiLaunch
     );
     this.#onRuntimeVersionAssessment(assessment);
     const settings = this.#settings(authority);
+    if (!codexTuiLaunchPolicyRepresentable(settings)) {
+      throw new Error("codex_tui_execution_policy_unrepresentable");
+    }
     const connection = this.#configuration.connection;
     if (connection.ownership !== "external") {
       throw new Error("codex_tui_external_connection_required");
@@ -167,8 +186,9 @@ export class EnvironmentCodexManagedTuiLauncher implements CodexManagedTuiLaunch
     // but an interactive TUI must be allowed to negotiate the terminal's
     // advertised color capabilities.
     delete environment.NO_COLOR;
-    await this.#validateModelSelection({ authority, settings, signal });
+    const modelSelection = await this.#prepareThreadSettings({ authority, settings, signal });
     if (signal.aborted) throw signal.reason;
+    const configArguments = codexManagedTuiConfigArguments(settings.model, modelSelection);
     const endpoint =
       connection.channel.type === "unix_websocket"
         ? await this.#channels.prepareManagedProcessEndpoint!(
@@ -204,43 +224,14 @@ export class EnvironmentCodexManagedTuiLauncher implements CodexManagedTuiLaunch
       "--strict-config",
       "-C",
       authority.canonicalWorkspacePath,
-      "-s",
-      settings.sandboxMode,
-      "-a",
-      settings.approvalPolicy,
       "-m",
       settings.model,
-      "-c",
-      `approvals_reviewer=${tomlString(settings.approvalReviewer)}`,
       "-c",
       `model_reasoning_effort=${tomlString(settings.reasoningEffort)}`,
       "-c",
       `service_tier=${tomlString(encodeCodexServiceTier(settings.serviceTier))}`,
     );
-    for (const override of MANAGED_TUI_CONFIG_OVERRIDES) {
-      arguments_.push("-c", override);
-    }
-    if (settings.sandboxMode === "workspace-write") {
-      arguments_.push(
-        "-c",
-        `sandbox_workspace_write.network_access=${
-          settings.networkAccess === "enabled" ? "true" : "false"
-        }`,
-        "-c",
-        "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-        "-c",
-        "sandbox_workspace_write.exclude_slash_tmp=true",
-      );
-    } else if (
-      (settings.sandboxMode === "read-only" &&
-        settings.networkAccess !== "disabled") ||
-      (settings.sandboxMode === "danger-full-access" &&
-        settings.networkAccess !== "enabled")
-    ) {
-      endpoint.authentication?.discard();
-      throw new Error("codex_tui_execution_policy_unrepresentable");
-    }
-
+    arguments_.push(...configArguments);
     let channel: EnvironmentOwnedPtyChannel;
     try {
       this.#assertLaunchAdmission?.();
@@ -333,5 +324,6 @@ function ptyProcess(
 }
 
 function tomlString(value: string): string {
-  return JSON.stringify(value);
+  if (/[\uD800-\uDFFF]/u.test(value)) throw new Error("codex_tui_config_string_invalid");
+  return JSON.stringify(value).replace(/\u007f/gu, "\\u007f");
 }

@@ -17,10 +17,13 @@ import {
   type CodexThreadItem,
   type CodexThreadResumeResponse,
   type CodexTurn,
+  type CodexItemLifecycleTimestamps,
 } from "./codex-c1-protocol.js";
 import {
   codexBackendTurnId,
   codexNativeHistoryVisibleTurnCount,
+  codexNativeItemCoordinate,
+  type CodexHistoryItemTimestamps,
 } from "./codex-history-projector.js";
 import type { CodexSubmissionCorrelationScope } from "./codex-submission-correlation.js";
 import { CODEX_HISTORY_TIMEOUT_MILLISECONDS } from "./codex-history-timeouts.js";
@@ -55,6 +58,7 @@ export type CodexPaginatedHistoryPageSource = {
 
 export type CodexPaginatedNativePage = {
   readonly thread: CodexThread;
+  readonly itemTimestamps: CodexHistoryItemTimestamps;
   readonly source: CodexPaginatedHistoryPageSource;
 };
 
@@ -69,7 +73,7 @@ export type CodexPaginatedCompletedTurnEvidence = {
 };
 
 export type CodexPaginatedTurnLocation =
-  | { readonly status: "found"; readonly turn: CodexTurn }
+  | { readonly status: "found"; readonly turn: CodexTurn; readonly itemTimestamps: CodexHistoryItemTimestamps }
   | { readonly status: "not_found" }
   | { readonly status: "search_limit_reached" };
 
@@ -178,14 +182,17 @@ export class CodexPaginatedHistoryAdapter {
             nativeTurnIds: durableShells.map(({ id }) => id),
             nextProviderCursor: initial.nextCursor,
           };
+    const itemTimestamps = new Map<string, CodexItemLifecycleTimestamps>();
     const hydrated = await this.#hydrateTurnShells(
       initial.data,
       signal,
       resume.itemsBackwardsCursor,
+      itemTimestamps,
     );
     const visible = this.#visibleTurns(hydrated);
     let page: CodexPaginatedNativePage = {
       thread: { ...this.#thread, turns: [...visible].reverse() },
+      itemTimestamps,
       source: {
         syntheticNativeTurnIds,
         segments: firstSegment
@@ -226,6 +233,7 @@ export class CodexPaginatedHistoryAdapter {
           ...page.thread,
           turns: older.thread.turns.concat(page.thread.turns),
         },
+        itemTimestamps: new Map([...older.itemTimestamps, ...page.itemTimestamps]),
         source: {
           syntheticNativeTurnIds: [],
           segments: currentSegments.concat(older.source.segments),
@@ -253,12 +261,14 @@ export class CodexPaginatedHistoryAdapter {
   async readDetachedHead(
     visibleLimit: number,
     signal: AbortSignal,
-  ): Promise<CodexThread> {
-    return await this.#withAcquisitionDeadline(
+  ): Promise<{ readonly thread: CodexThread; readonly itemTimestamps: CodexHistoryItemTimestamps }> {
+    const itemTimestamps = new Map<string, CodexItemLifecycleTimestamps>();
+    const thread = await this.#withAcquisitionDeadline(
       signal,
       async (bounded) =>
-        await this.#readDetachedHeadWithinDeadline(visibleLimit, bounded),
+        await this.#readDetachedHeadWithinDeadline(visibleLimit, bounded, itemTimestamps),
     );
+    return { thread, itemTimestamps };
   }
 
   async refreshCurrentHead(
@@ -279,6 +289,7 @@ export class CodexPaginatedHistoryAdapter {
   ): Promise<CodexPaginatedNativePage> {
     let cursor: string | undefined;
     const newestFirst: CodexTurn[] = [];
+    const itemTimestamps = new Map<string, CodexItemLifecycleTimestamps>();
     const segments: PageSegment[] = [];
     const seenCursors = new RecentCursorCycleDetector();
     let nativeHeadInProgress = false;
@@ -298,8 +309,8 @@ export class CodexPaginatedHistoryAdapter {
       }
       const seekingLookahead = newestFirst.length >= visibleLimit;
       const hydrated = seekingLookahead
-        ? await this.#hydrateUntilFirstVisibleTurn(response.data, signal)
-        : await this.#hydrateTurnShells(response.data, signal);
+        ? await this.#hydrateUntilFirstVisibleTurn(response.data, signal, itemTimestamps)
+        : await this.#hydrateTurnShells(response.data, signal, undefined, itemTimestamps);
       const visible = this.#visibleTurns(hydrated);
       newestFirst.push(...visible);
       const providerCursor = cursor ?? response.backwardsCursor ?? undefined;
@@ -349,6 +360,7 @@ export class CodexPaginatedHistoryAdapter {
           }
         }
         return {
+          itemTimestamps,
           thread: {
             ...this.#thread,
             status: nativeHeadInProgress
@@ -574,11 +586,12 @@ export class CodexPaginatedHistoryAdapter {
         ) {
           continue;
         }
-        const [turn] = await this.#hydrateTurnShells([shell], signal);
+        const itemTimestamps = new Map<string, CodexItemLifecycleTimestamps>();
+        const [turn] = await this.#hydrateTurnShells([shell], signal, undefined, itemTimestamps);
         if (!turn || this.#visibleTurns([turn]).length === 0) {
           return { status: "not_found" };
         }
-        return { status: "found", turn };
+        return { status: "found", turn, itemTimestamps };
       }
       if (response.nextCursor === null) return { status: "not_found" };
       if (examined >= input.maximumTurnCandidates) {
@@ -602,6 +615,7 @@ export class CodexPaginatedHistoryAdapter {
   async #readDetachedHeadWithinDeadline(
     visibleLimit: number,
     signal: AbortSignal,
+    itemTimestamps: Map<string, CodexItemLifecycleTimestamps>,
   ): Promise<CodexThread> {
     switch (this.#thread.status.type) {
       case "idle":
@@ -643,7 +657,7 @@ export class CodexPaginatedHistoryAdapter {
             ),
         signal,
       );
-      const hydrated = await this.#hydrateTurnShells(response.data, signal);
+      const hydrated = await this.#hydrateTurnShells(response.data, signal, undefined, itemTimestamps);
       const visible = this.#visibleTurns(hydrated);
       hiddenPlateau = visible.length === 0;
       for (const turn of visible) {
@@ -772,8 +786,10 @@ export class CodexPaginatedHistoryAdapter {
   ): Promise<CodexPaginatedNativePage> {
     let providerCursor: string | null = state.providerCursor;
     let skip = state.skip;
+    const itemTimestamps = new Map<string, CodexItemLifecycleTimestamps>();
     let page: CodexPaginatedNativePage = {
       thread: { ...this.#thread, status: { type: "idle" }, turns: [] },
+      itemTimestamps,
       source: { syntheticNativeTurnIds: [], segments: [] },
     };
     const seenCursors = new RecentCursorCycleDetector();
@@ -833,7 +849,7 @@ export class CodexPaginatedHistoryAdapter {
         continue;
       }
       const shells = response.data.slice(skip);
-      const hydrated = await this.#hydrateTurnShells(shells, signal);
+      const hydrated = await this.#hydrateTurnShells(shells, signal, undefined, itemTimestamps);
       const visible = this.#visibleTurns(hydrated);
       hiddenPlateau = visible.length === 0;
       const duplicateIds = new Set(page.thread.turns.map(({ id }) => id));
@@ -847,6 +863,7 @@ export class CodexPaginatedHistoryAdapter {
         duplicateIds.add(turn.id);
       }
       page = {
+        itemTimestamps,
         thread: {
           ...page.thread,
           turns: [...visible].reverse().concat(page.thread.turns),
@@ -948,6 +965,7 @@ export class CodexPaginatedHistoryAdapter {
     shells: readonly CodexTurn[],
     signal: AbortSignal,
     resumeBoundaryCursor?: string | null,
+    itemTimestamps = new Map<string, CodexItemLifecycleTimestamps>(),
   ): Promise<CodexTurn[]> {
     signal.throwIfAborted();
     if (resumeBoundaryCursor === null) {
@@ -961,6 +979,7 @@ export class CodexPaginatedHistoryAdapter {
     for (const shell of shells) {
       signal.throwIfAborted();
       const items: CodexThreadItem[] = [];
+      const turnItemTimestamps = new Map<string, CodexItemLifecycleTimestamps>();
       const itemIds = new Set<string>();
       const seenCursors = new RecentCursorCycleDetector();
       // Codex item cursors are thread-scoped rollout ordinals; their provider
@@ -991,6 +1010,11 @@ export class CodexPaginatedHistoryAdapter {
           }
           itemIds.add(entry.item.id);
           items.push(entry.item);
+          if (entry.startedAtMs !== null || entry.completedAtMs !== null) {
+            turnItemTimestamps.set(codexNativeItemCoordinate(entry.turnId, entry.item.id), {
+              startedAtMs: entry.startedAtMs, completedAtMs: entry.completedAtMs,
+            });
+          }
           if (items.length > CODEX_C1_MAX_ITEMS_PER_TURN) {
             throw protocolError(
               "A Codex paginated turn exceeded the supported item boundary.",
@@ -1014,12 +1038,17 @@ export class CodexPaginatedHistoryAdapter {
         seenCursors.add(next);
         cursor = next;
       }
-      hydrated.push({
+      const hydratedTurn: CodexTurn = {
         ...shell,
         items:
           resumeBoundaryCursor === undefined ? items : [...items].reverse(),
         itemsView: "full",
-      });
+      };
+      hydrated.push(hydratedTurn);
+      // Hidden boundary turns must not accumulate metadata during a long seek.
+      if (this.#visibleTurns([hydratedTurn]).length > 0) {
+        for (const [key, value] of turnItemTimestamps) itemTimestamps.set(key, value);
+      }
     }
     return hydrated;
   }
@@ -1027,10 +1056,11 @@ export class CodexPaginatedHistoryAdapter {
   async #hydrateUntilFirstVisibleTurn(
     shells: readonly CodexTurn[],
     signal: AbortSignal,
+    itemTimestamps: Map<string, CodexItemLifecycleTimestamps>,
   ): Promise<CodexTurn[]> {
     const hydrated: CodexTurn[] = [];
     for (const shell of shells) {
-      const turn = (await this.#hydrateTurnShells([shell], signal))[0]!;
+      const turn = (await this.#hydrateTurnShells([shell], signal, undefined, itemTimestamps))[0]!;
       hydrated.push(turn);
       if (this.#visibleTurns([turn]).length > 0) break;
     }

@@ -110,7 +110,7 @@ export class OutboundCodexFixture {
     const params = request.params ?? {};
     switch (request.method) {
       case "initialize": return {
-        userAgent: `sedes_web/0.153.0 (Linux 6.8; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
+        userAgent: `sedes_web/0.160.0 (Linux 6.8; x86_64) unknown (sedes_web; ${SEDES_VERSION})`,
         codexHome: this.#codexHome,
         platformFamily: "unix",
         platformOs: process.platform === "darwin" ? "macos" : "linux",
@@ -149,7 +149,7 @@ export class OutboundCodexFixture {
           modelProvider: "openai", model: this.model, reasoningEffort: "low",
           createdAt: 1_700_000_000, updatedAt: 1_700_000_000, recencyAt: 1_700_000_000,
           status: { type: "idle" }, path: path.join(this.#codexHome, "sessions", `${id}.jsonl`),
-          cwd, cliVersion: "0.153.0", source: "appServer", canAcceptDirectInput: true,
+          cwd, cliVersion: "0.160.0", source: "appServer", canAcceptDirectInput: true,
           threadSource: null, agentNickname: null, agentRole: null, gitInfo: null,
           name: null, turns: [],
         } }).thread;

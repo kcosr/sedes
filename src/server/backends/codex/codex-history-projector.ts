@@ -1,4 +1,4 @@
-import { turnFailure } from "../turn-failure.js";
+import { GENERIC_TURN_FAILURE, turnFailure } from "../turn-failure.js";
 import { createHash } from "node:crypto";
 import type {
   BackendConversationSnapshot,
@@ -34,11 +34,13 @@ import {
   CODEX_C1_MAX_ITEMS_PER_TURN,
   codexAsyncQuestionsFromAgentMessage,
   projectCodexThread,
+  refineCodexItemLifecycleTimestamps,
   refineCodexThreadTokenUsage,
   type CodexThread,
   type CodexThreadItem,
   type CodexThreadTokenUsage,
   type CodexTurn,
+  type CodexItemLifecycleTimestamps,
 } from "./codex-c1-protocol.js";
 import {
   inspectCodexForkContextBoundaryHookRunId,
@@ -84,6 +86,8 @@ export interface CodexHistoryProjection {
   readonly projectedItemCount: number;
   readonly reservedViewedImageBytes: number;
   readonly nativeThreadId: string;
+  /** Lifecycle evidence retained only for the native items in this window. */
+  readonly itemTimestamps: CodexHistoryItemTimestamps;
   readonly backendTurnIdByNativeId: ReadonlyMap<string, string>;
   readonly projectedItemByNativeCoordinate: ReadonlyMap<
     string,
@@ -251,6 +255,8 @@ export type CodexStreamingNativeItems = ReadonlyMap<
   string,
   ReadonlySet<string>
 >;
+
+export type CodexHistoryItemTimestamps = ReadonlyMap<string, CodexItemLifecycleTimestamps>;
 
 export interface CodexGeneratedImageProjectionContext {
   readonly scope: RequestScope;
@@ -492,6 +498,7 @@ export function projectCodexHistory(
   correlationScope: CodexSubmissionCorrelationScope,
   streamingNativeItems: CodexStreamingNativeItems,
   generatedImages: CodexGeneratedImageProjectionContext,
+  itemTimestamps: CodexHistoryItemTimestamps = new Map(),
 ): CodexHistoryProjection {
   let thread: CodexThread;
   const rawNativeHistoryBytes = serializedUtf8Bytes(value);
@@ -526,6 +533,7 @@ export function projectCodexHistory(
   const itemsById: Record<string, BackendItem> = {};
   const turnIds = new Set<string>();
   const itemCoordinates = new Set<string>();
+  const retainedItemTimestamps = new Map<string, CodexItemLifecycleTimestamps>();
   const authenticatedOperationIds = new Set<string>();
   const authenticatedForkContextBoundaryOperationIds = new Set<string>();
   const authenticatedForkContextBoundaryNativeTurnIds = new Set<string>();
@@ -596,6 +604,8 @@ export function projectCodexHistory(
         throw new CodexHistoryProjectionError("codex_history_invalid");
       }
       itemCoordinates.add(coordinate);
+      const lifecycleTimestamps = itemTimestamps.get(coordinate);
+      if (lifecycleTimestamps) retainedItemTimestamps.set(coordinate, lifecycleTimestamps);
       const itemSourceOrder = sourceOrder;
       let projected = projectCodexItemSlice(
         thread.id,
@@ -610,6 +620,7 @@ export function projectCodexHistory(
         authenticatedApplicationOperationId,
         generatedImages,
         pendingGeneratedImages,
+        lifecycleTimestamps,
       );
       const retained = item.type === "imageView" && projected.length === 2 &&
         generatedImages.admitsRetainedViewedImage?.(projected[1]!.backendItemId) === false;
@@ -668,6 +679,29 @@ export function projectCodexHistory(
           ({ backendItemId }) => backendItemId,
         ),
       });
+    }
+    if (turn.status === "interrupted" && turn.error?.message.trim()) {
+      const diagnostic = turnFailure(turn.error.message);
+      if (diagnostic.message.text !== GENERIC_TURN_FAILURE) {
+        const backendItemId = hashedId("interruption", thread.id, turn.id);
+        itemsById[backendItemId] = {
+          backendItemId, backendTurnId, sourceOrder,
+          ...terminalItem,
+          semanticKind: "notice",
+          tone: "warning",
+          text: diagnostic.message,
+        };
+        orderedBackendItemIds.push(backendItemId);
+        projectedItemCount += 1;
+        if (orderedBackendItemIds.length > CODEX_C1_MAX_ITEMS_PER_TURN) {
+          throw new CodexHistoryProjectionError("history_too_large");
+        }
+        while (reservedTurnImageCount > 0 &&
+            orderedBackendItemIds.length + reservedTurnImageCount > CODEX_C1_MAX_ITEMS_PER_TURN) {
+          pendingViewedImages.pop();
+          reservedTurnImageCount -= 1;
+        }
+      }
     }
     turnsById[backendTurnId] = projectCodexTurnFromSlices(
       turn,
@@ -728,6 +762,7 @@ export function projectCodexHistory(
       projectedItemCount,
       reservedViewedImageBytes,
       nativeThreadId: thread.id,
+      itemTimestamps: retainedItemTimestamps,
       backendTurnIdByNativeId,
       projectedItemByNativeCoordinate,
       authenticatedForkContextBoundaryOperationIds,
@@ -978,9 +1013,14 @@ export function projectCodexItemSlice(
   authenticatedApplicationOperationId: string | undefined,
   generatedImages: CodexGeneratedImageProjectionContext,
   pendingGeneratedImages: DeferredCodexGeneratedImagePublication[],
+  lifecycleTimestamps?: CodexItemLifecycleTimestamps,
 ): readonly BackendItem[] {
+  const timestamps = lifecycleTimestamps
+    ? refineCodexItemLifecycleTimestamps(lifecycleTimestamps)
+    : undefined;
+  const lifecycle = streaming ? { status: "streaming" as const } : terminalItem;
   const base = (subkey = "item", offset = 0) => ({
-    // Stable 0.153.0 may rewrite native item IDs when a live turn is persisted.
+    // Codex may rewrite native item IDs when a live turn is persisted.
     // Turn-local semantic coordinates remain ordered and are therefore the
     // durable normalized identity across live projection and reattach.
     backendItemId: hashedId(
@@ -993,13 +1033,19 @@ export function projectCodexItemSlice(
     ),
     backendTurnId,
     sourceOrder: sourceOrder + offset,
+    ...(timestamps?.startedAtMs != null
+      ? { startedAt: new Date(timestamps.startedAtMs).toISOString() }
+      : {}),
+    ...(timestamps?.completedAtMs != null
+      ? { completedAt: new Date(timestamps.completedAtMs).toISOString() }
+      : {}),
   });
   switch (item.type) {
     case "userMessage":
       return [
         {
           ...base(),
-          ...terminalItem,
+          ...lifecycle,
           semanticKind: "user_message",
           ...(authenticatedApplicationOperationId
             ? {
@@ -1019,6 +1065,7 @@ export function projectCodexItemSlice(
           base(),
           "Codex hook supplied additional instructions.",
           "neutral",
+          streaming,
         ),
       ];
     case "agentMessage": {
@@ -1026,7 +1073,7 @@ export function projectCodexItemSlice(
       return [
         {
           ...base(),
-          ...(streaming ? { status: "streaming" as const } : terminalItem),
+          ...lifecycle,
           semanticKind: "assistant_message",
           responsePhase:
             item.phase === "final_answer"
@@ -1048,7 +1095,7 @@ export function projectCodexItemSlice(
       return [
         {
           ...base(),
-          ...(streaming ? { status: "streaming" as const } : terminalItem),
+          ...lifecycle,
           semanticKind: "plan",
           entries: [
             {
@@ -1069,7 +1116,7 @@ export function projectCodexItemSlice(
       return [
         {
           ...base(),
-          ...(streaming ? { status: "streaming" as const } : terminalItem),
+          ...lifecycle,
           semanticKind: "reasoning",
           ...(summaryParts.length > 0 ? { summaryParts } : {}),
           markdown: boundText(item.content.filter(Boolean).join("\n\n")),
@@ -1089,7 +1136,7 @@ export function projectCodexItemSlice(
       return [
         {
           ...base(),
-          ...terminalItem,
+          ...lifecycle,
           semanticKind: "collaboration",
           action:
             item.tool === "spawnAgent"
@@ -1104,7 +1151,7 @@ export function projectCodexItemSlice(
       return [
         {
           ...base(),
-          ...terminalItem,
+          ...lifecycle,
           semanticKind: "collaboration",
           action:
             item.kind === "started"
@@ -1119,9 +1166,9 @@ export function projectCodexItemSlice(
       return [
         {
           ...base(),
-          ...terminalItem,
+          ...lifecycle,
           semanticKind: "web_search",
-          phase: "completed",
+          phase: streaming ? "preflight_or_executing" : "completed",
           query: boundDisplayText(item.query || searchActionQuery(item)),
           result: boundToolResult(
             {
@@ -1136,7 +1183,7 @@ export function projectCodexItemSlice(
       const fileName = displayFileName(item.path);
       const viewed: BackendItem = {
         ...base(),
-        ...terminalItem,
+        ...lifecycle,
         semanticKind: "viewed_image",
         ...(fileName ? { fileName } : {}),
       };
@@ -1149,7 +1196,7 @@ export function projectCodexItemSlice(
           codexViewedImagePublicationKey(identity.backendItemId),
         );
         return existing
-          ? [viewed, backendItemSchema.parse(codexViewedImageItem(identity, existing, fileName))]
+          ? [viewed, backendItemSchema.parse({ ...codexViewedImageItem(identity, existing, fileName), ...lifecycle })]
           : [viewed];
       } catch {
         return [viewed];
@@ -1159,9 +1206,9 @@ export function projectCodexItemSlice(
       return [
         {
           ...base(),
-          ...terminalItem,
+          ...lifecycle,
           semanticKind: "tool",
-          phase: "completed",
+          phase: streaming ? "preflight_or_executing" : "completed",
           toolName: boundDisplayText("clock.sleep"),
           title: boundDisplayText("Sleep"),
           category: "other",
@@ -1263,7 +1310,7 @@ export function projectCodexItemSlice(
       return [
         {
           ...base(),
-          ...terminalItem,
+          ...lifecycle,
           semanticKind: "review_marker",
           verdict: "comment",
           label: boundDisplayText(
@@ -1278,7 +1325,7 @@ export function projectCodexItemSlice(
       return [
         {
           ...base(),
-          ...(streaming ? { status: "streaming" as const } : terminalItem),
+          ...lifecycle,
           semanticKind: "compaction",
         },
       ];
@@ -1721,10 +1768,11 @@ function notice(
   },
   text: string,
   tone: Extract<BackendItem, { semanticKind: "notice" }>["tone"],
+  streaming = false,
 ): BackendItem {
   return {
     ...base,
-    ...terminalItem,
+    ...(streaming ? { status: "streaming" as const } : terminalItem),
     semanticKind: "notice",
     tone,
     text: boundText(text),

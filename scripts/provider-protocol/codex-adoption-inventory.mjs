@@ -46,7 +46,7 @@ export const serverRequests = [
   ["item/permissions/requestApproval", "PermissionsRequestApprovalParams", "PermissionsRequestApprovalResponse", "handled"],
   ["item/tool/call", "DynamicToolCallParams", "DynamicToolCallResponse", "recognized_fail_closed"],
   ["item/tool/requestUserInput", "ToolRequestUserInputParams", "ToolRequestUserInputResponse", "handled"],
-  ["mcpServer/elicitation/request", "McpServerElicitationRequestParams", "McpServerElicitationRequestResponse", "handled"],
+  ["mcpServer/elicitation/request", "McpServerElicitationRequestParams", "McpServerElicitationRequestResponse", "handled", "experimental"],
 ];
 
 export const serverNotifications = [

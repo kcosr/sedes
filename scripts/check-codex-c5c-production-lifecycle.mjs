@@ -44,7 +44,7 @@ async function preflightLifecycleArtifacts() {
   const supportedTargets = {
     "linux/x64": {
       packageName: "@openai/codex-linux-x64",
-      packageVersion: "0.153.0-linux-x64",
+      packageVersion: "0.160.0-linux-x64",
       vendorTarget: "x86_64-unknown-linux-musl",
     },
   };

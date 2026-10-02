@@ -89,6 +89,7 @@ import { DatabaseCodexAgentToolCliEnvironmentProvider } from "./codex-agent-tool
 import { CodexSavedAgentBackendAdapter } from "./codex-saved-agent-adapter.js";
 import type { CompiledBackendModelPolicy } from "../model-policy.js";
 import { assertCodexLiveModelSelection } from "./codex-live-model-selection.js";
+import { prepareCodexManagedTuiThreadSettings } from "./codex-managed-tui-settings.js";
 import { CodexAutomationExecutionPolicy } from "./codex-automation-execution-policy.js";
 import { CodexInstallationAdvisorySource } from "./codex-installation-advisories.js";
 
@@ -551,12 +552,11 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
             }
             return current;
           },
-          validateModelSelection: async ({ authority, settings, signal }) =>
-            await assertCodexLiveModelSelection({
+          prepareThreadSettings: async ({ authority, settings, signal }) =>
+            await prepareCodexManagedTuiThreadSettings({
               client: this.#supervisor.client,
-              expectedGeneration: authority.appServerGeneration,
-              model: settings.model,
-              reasoningEffort: settings.reasoningEffort,
+              authority,
+              settings,
               signal,
             }),
           onRuntimeVersionAssessment: (assessment) =>

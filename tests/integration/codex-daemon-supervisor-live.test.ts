@@ -9,6 +9,7 @@ import {
   mkdir,
   mkdtemp,
   rm,
+  stat,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -1611,7 +1612,7 @@ plugins = false
         socketPath,
       });
       const initialPid = external.pid;
-      const socketMetadata = await lstat(socketPath);
+      const socketMetadata = await stat(socketPath);
       expect(socketMetadata.isSocket()).toBe(true);
       expect(socketMetadata.mode & 0o777).toBe(0o600);
 
@@ -2119,7 +2120,10 @@ plugins = false
         scope,
         executionEnvironmentId: runtimeScope.executionEnvironmentId,
       });
-      const before = await lstat(configured.socketPath, { bigint: true });
+      const pathBefore = await lstat(configured.socketPath, { bigint: true });
+      const before = await stat(configured.socketPath, { bigint: true });
+      expect(before.isSocket()).toBe(true);
+      expect(before.mode & 0o777n).toBe(0o600n);
       let observer: WebSocket | undefined;
       let supervisor: CodexDaemonSupervisor | undefined;
 
@@ -2191,8 +2195,14 @@ plugins = false
         observer = undefined;
         await supervisor.close();
         supervisor = undefined;
-        const after = await lstat(configured.socketPath, { bigint: true });
+        const pathAfter = await lstat(configured.socketPath, { bigint: true });
+        expect({ device: pathAfter.dev, inode: pathAfter.ino }).toEqual({
+          device: pathBefore.dev,
+          inode: pathBefore.ino,
+        });
+        const after = await stat(configured.socketPath, { bigint: true });
         expect(after.isSocket()).toBe(true);
+        expect(after.mode & 0o777n).toBe(0o600n);
         expect({ device: after.dev, inode: after.ino }).toEqual({
           device: before.dev,
           inode: before.ino,
@@ -2703,9 +2713,9 @@ async function startExternalCodexUds(input: {
         );
       }
       try {
-        const metadata = await lstat(input.socketPath);
-        // The exact app-server creates the filesystem node before applying its
-        // private mode. Treat only the final assured identity as listener-ready.
+        // Codex publishes a rendezvous symlink to its private socket. Keep
+        // checking the physical listener's private mode before connecting.
+        const metadata = await stat(input.socketPath);
         return metadata.isSocket() && (metadata.mode & 0o777) === 0o600
           ? true
           : undefined;
@@ -3099,7 +3109,9 @@ async function waitForChildExit(
 async function removeFixtureSocket(socketPath: string): Promise<void> {
   try {
     const metadata = await lstat(socketPath);
-    if (!metadata.isSocket()) {
+    // Only unlink the fixture-owned rendezvous entry. After a forced stop,
+    // its symlink can remain even when Codex has removed the private socket.
+    if (!metadata.isSocket() && !metadata.isSymbolicLink()) {
       throw new Error("codex_uds_live_socket_path_not_socket");
     }
     await unlink(socketPath);

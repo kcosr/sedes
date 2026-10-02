@@ -4,6 +4,12 @@
 
 ### Breaking Changes
 
+- Codex uses the generated 0.160.0 app-server profile. Rebuild the server,
+  execution sidecars, and Electron Local together; mismatched compiled Codex
+  profiles are rejected. Codex app-servers and managed TUI commands now require
+  0.160.0 or newer; upgrade them on each execution host.
+  ([#27](https://github.com/kcosr/sedes/pull/27))
+
 - Remote OpenCode requires a matching sidecar build with private OpenCode
   runtime capability major 2 and tool capabilities. Upgrade existing execution sidecars before
   connecting this backend. (#17)
@@ -204,6 +210,9 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- Qualify Codex 0.160.0 and preserve the managed TUI inline transcript despite
+  the upstream fullscreen default. ([#27](https://github.com/kcosr/sedes/pull/27))
 
 - In a thread, Tasks docks beside Chat as a workspace panel instead of a
   floating card, and resizes, collapses, docks on another edge, and closes
@@ -408,6 +417,17 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Linux x64 server and full Electron packages retain only the compatible
+  msgpackr N-API addon, removing bundled musl and Node 20 ABI variants that
+  caused server archive dependency checks to fail. Glibc arm64 packages omit
+  msgpackr's musl-only optional addon and use its JavaScript implementation.
+  ([#27](https://github.com/kcosr/sedes/pull/27))
+
+- Accept Codex 0.160.0 settings, image references, errors, and account metadata.
+  Populate existing item timestamps in live and reloaded history, and retain
+  meaningful interrupted-turn errors without changing normal Stop behavior.
+  ([#27](https://github.com/kcosr/sedes/pull/27))
 
 - Saving agent tools on an existing idle thread now refreshes the saved policy
   in open clients after runtime retirement. Subsequent edits no longer report
