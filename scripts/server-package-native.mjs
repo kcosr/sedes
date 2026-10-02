@@ -89,6 +89,14 @@ export async function prunePlatformPackages(modules, target, removed = []) {
     if (manifest.name === '@openai/codex' || manifest.name.startsWith('@openai/codex-') || manifest.name === '@anthropic-ai/claude-code' || manifest.name.startsWith('@anthropic-ai/claude-code-') || manifest.name === 'electron' || manifest.name.startsWith('@capacitor/') || manifest.name === '@capawesome/capacitor-electron') throw new Error(`Forbidden runtime dependency: ${manifest.name}`);
     if (manifest.name === '@earendil-works/pi-tui') await prunePiNativePayload(directory, manifest, target, removed);
     if (manifest.name === '@msgpackr-extract/msgpackr-extract-linux-x64') await pruneMsgpackrLinuxX64Payload(directory, manifest, removed);
+    if (manifest.name === '@msgpackr-extract/msgpackr-extract-linux-arm64') {
+      if (manifest.version !== '3.0.4') throw new Error(`Unreviewed msgpackr native layout: ${manifest.version}`);
+      // This optional package contains only musl addons. Glibc arm64 uses
+      // msgpackr's JavaScript implementation, with no loadable native payload.
+      await rm(directory, { recursive: true });
+      removed.push({ name: manifest.name, version: manifest.version });
+      continue;
+    }
     await prunePlatformPackages(path.join(directory, 'node_modules'), target, removed);
   }
   return removed;
