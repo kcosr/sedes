@@ -773,7 +773,7 @@
 
 - Tasks on Home and Archived, including their corner Tasks button. Tasks now
   appears only beside a thread. To see Global Tasks, open any thread and
-  choose **Global** in Tasks.
+  choose **Global** in Tasks. (#31)
 
 - The `/agents`, `/agents/new`, and `/agents/<id>` addresses. They now open
   the workspace without a redirect; update bookmarks to `/settings/agents`. (#21)
