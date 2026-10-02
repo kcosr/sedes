@@ -411,10 +411,31 @@ export class ThreadApplicationService {
   }
 
   /**
+   * Refresh the provider-backed catalog outside the hub's application
+   * publication queue. Do not retain this pass's durable inventory or
+   * presentation: the later snapshot must capture them again after admission.
+   */
+  async prepareSnapshotFromActorCapture(
+    scope: RequestScope,
+    applicationThreadId: string,
+    actor: ConversationActorSnapshotState,
+  ): Promise<void> {
+    const inventory = await this.#authorize(scope, applicationThreadId);
+    if (inventory.thread.backingState !== "bound") {
+      throw new Error("thread_application_capture_requires_bound_thread");
+    }
+    await this.#presentation.read(
+      scope,
+      applicationThreadId,
+      actor.backendCapabilities.effectiveSettings,
+    );
+  }
+
+  /**
    * Composes the application-owned snapshot fields around the exact actor
-   * capture carried by a projection replacement. The event bridge must use
-   * this path so it never stamps a later actor capture with an older
-   * projection generation.
+   * capture carried by a projection replacement, using the catalog refreshed
+   * by prepareSnapshotFromActorCapture. This queued phase never refreshes a
+   * provider catalog or stamps a later actor capture with an older generation.
    */
   async snapshotFromActorCapture(
     scope: RequestScope,
@@ -425,10 +446,13 @@ export class ThreadApplicationService {
     if (inventory.thread.backingState !== "bound") {
       throw new Error("thread_application_capture_requires_bound_thread");
     }
-    return this.#composeSnapshot(scope, applicationThreadId, inventory, {
-      status: "connected",
-      state: actor,
-    });
+    return this.#composeSnapshot(
+      scope,
+      applicationThreadId,
+      inventory,
+      { status: "connected", state: actor },
+      "cached",
+    );
   }
 
   /**
@@ -598,6 +622,7 @@ export class ThreadApplicationService {
     applicationThreadId: string,
     inventory: AuthorizedThreadApplicationState,
     capture: ThreadConversationCapture,
+    presentationSource: "fresh" | "cached" = "fresh",
   ): Promise<NormalizedThreadSnapshot> {
     const {
       queue,
@@ -614,6 +639,7 @@ export class ThreadApplicationService {
       applicationThreadId,
       inventory,
       capture,
+      presentationSource,
     );
     const timeline = actor?.timeline;
     const snapshotWithoutHistory = normalizedThreadSnapshotSchema.parse({

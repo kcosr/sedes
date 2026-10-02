@@ -10,6 +10,7 @@ import {
   type ThreadRuntimeObservation,
 } from "../../src/server/events/thread-runtime-coordinator.js";
 import type { ConversationActor } from "../../src/server/conversations/conversation-actor.js";
+import { SerializedMailbox } from "../../src/server/conversations/serialized-mailbox.js";
 import { runWithArchivedThreadRuntimesRetired } from "../../src/server/domain/thread-runtime-archive-retirement.js";
 import {
   ConversationActorRetirementBusyError,
@@ -218,6 +219,7 @@ function overlayRevision(revision: number): ApplicationOverlay {
 }
 
 function pendingOverlayFixture() {
+  const applicationPublications = new SerializedMailbox();
   const threadId = "thread-pending-overlay";
   const bound = deferred<void>();
   const bridgeReady = deferred<void>();
@@ -245,6 +247,8 @@ function pendingOverlayFixture() {
     subscribeInternal: vi.fn(() => ({ close: vi.fn() })),
     onSubscriberCountChanged: vi.fn(() => vi.fn()),
     publish: vi.fn(),
+    serializeApplicationPublication: <T>(operation: () => T | Promise<T>) =>
+      applicationPublications.enqueue(operation),
   };
   const coordinator = new ThreadRuntimeCoordinator({
     actors: {
@@ -1739,6 +1743,7 @@ describe("ThreadRuntimeCoordinator", () => {
     } as unknown as NormalizedThreadSnapshot;
     let watermark = 1;
     let current = baseline;
+    const applicationPublications = new SerializedMailbox();
     const hub = {
       get projectionGeneration() {
         return "generation-1";
@@ -1754,6 +1759,8 @@ describe("ThreadRuntimeCoordinator", () => {
       onSubscriberCountChanged: vi.fn(() => vi.fn()),
       publish: vi.fn(),
       validateCurrentSnapshot: vi.fn(),
+      serializeApplicationPublication: <T>(operation: () => T | Promise<T>) =>
+        applicationPublications.enqueue(operation),
     };
     const coordinator = new ThreadRuntimeCoordinator({
       actors: {
