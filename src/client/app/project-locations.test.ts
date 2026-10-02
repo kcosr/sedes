@@ -176,6 +176,58 @@ describe("project location presentation", () => {
     expect(byPath.projectLabel("first")).toBe("sedes · /src/sedes");
     expect(byPath.projectLabel("second")).toBe("sedes · /work/sedes +1");
     expect(byPath.projectLabel("empty")).toBe("sedes · No locations");
+    // The path hint names only its first location's environment.
+    expect(
+      byPath.projectFolderLabel("c", { includeEnvironment: true }),
+    ).toBe("sedes · /work/sedes +1 · aw-personal");
+  });
+
+  it("keeps a location's own host when its project's hint names several", () => {
+    const projects = describeProjectLocations(
+      catalog(
+        [
+          { id: "spread", name: "sedes" },
+          { id: "home", name: "sedes" },
+        ],
+        [
+          location("on-remote", "spread", "remote", "sedes"),
+          location("on-ci", "spread", "ci", "sedes"),
+          location("on-local", "home", "local", "sedes"),
+        ],
+      ),
+    );
+    expect(projects.projectLabel("spread")).toBe("sedes · aw-personal, CI");
+    expect(
+      projects.projectFolderLabel("on-remote", { includeEnvironment: true }),
+    ).toBe("sedes · aw-personal, CI · aw-personal");
+    expect(
+      projects.projectFolderLabel("on-ci", { includeEnvironment: true }),
+    ).toBe("sedes · aw-personal, CI · CI");
+    expect(projects.projectFolderLabel("on-remote")).toBe(
+      "sedes · aw-personal, CI",
+    );
+    expect(
+      projects.projectFolderLabel("on-local", { includeEnvironment: true }),
+    ).toBe("sedes");
+  });
+
+  it("does not repeat the one host a path hint already names", () => {
+    const projects = describeProjectLocations(
+      catalog(
+        [
+          { id: "first", name: "sedes" },
+          { id: "second", name: "sedes" },
+        ],
+        [
+          location("a", "first", "remote", "sedes", "/srv/a"),
+          location("b", "second", "remote", "sedes", "/srv/b"),
+        ],
+      ),
+    );
+    expect(projects.projectLabel("first")).toBe("sedes · aw-personal · /srv/a");
+    expect(
+      projects.projectFolderLabel("a", { includeEnvironment: true }),
+    ).toBe("sedes · aw-personal · /srv/a");
   });
 
   it("falls back to an ID suffix when location hints still collide", () => {

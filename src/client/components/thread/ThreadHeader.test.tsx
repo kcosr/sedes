@@ -908,6 +908,25 @@ describe("ThreadHeader project context row", () => {
     expect(project).toHaveAttribute("title", "Harness › sedes · Machine 1 · Pi");
   });
 
+  it("keeps the thread's host when a same-named project's hint names several", () => {
+    renderHeader({
+      environmentCount: 3,
+      projects: [
+        { id: "project-1", name: "sedes", revision: 0 },
+        { id: "project-2", name: "sedes", revision: 0 },
+      ],
+      workspaces: [
+        firstLocation,
+        { ...secondLocation, environmentId: "environment-2", label: { text: "sedes" } },
+        { ...secondLocation, id: "workspace-3", projectId: "project-2", environmentId: "environment-3", label: { text: "sedes" } },
+      ],
+    });
+
+    expect(
+      screen.getByTestId("thread-context").querySelector(".thread-project-name"),
+    ).toHaveTextContent(/^sedes · Machine 1, Machine 2 · Machine 1$/u);
+  });
+
   it("names the project of a removed location while the project is active", () => {
     renderHeader({
       environmentCount: 1,

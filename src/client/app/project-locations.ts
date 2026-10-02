@@ -57,7 +57,8 @@ export interface ProjectLocations {
   readonly folderLabel: (workspaceId: string) => string | undefined;
   /**
    * "sedes › sedes-context": the project label and, when needed, the folder.
-   * `includeEnvironment` appends a non-Local environment: "sedes · Build host".
+   * `includeEnvironment` appends a non-Local environment: "sedes · Build host",
+   * unless the label's hint already names that one environment alone.
    */
   readonly projectFolderLabel: (
     workspaceId: string,
@@ -111,8 +112,9 @@ export function describeProjectLocations(
   };
 
   const projectLabels = new Map<string, string>();
-  // Projects whose label already names their environments.
-  const environmentQualified = new Set<string>();
+  // The one environment a project's label names, when its hint names exactly
+  // one: a location there needs no environment appended.
+  const labelEnvironment = new Map<string, string>();
   const projectsByName = new Map<string, ProjectPresentation[]>();
   for (const project of projects) {
     const named = projectsByName.get(project.name) ?? [];
@@ -133,8 +135,14 @@ export function describeProjectLocations(
       : named.map((project) =>
           pathHint(locationsOf(project.id), environmentLabel, environmentById),
         );
-    if (byEnvironment) {
-      for (const project of named) environmentQualified.add(project.id);
+    for (const project of named) {
+      const hinted = byEnvironment
+        ? remoteEnvironmentIds(locationsOf(project.id), environmentById)
+        : remoteEnvironmentIds(
+            locationsOf(project.id).slice(0, 1),
+            environmentById,
+          );
+      if (hinted.length === 1) labelEnvironment.set(project.id, hinted[0]!);
     }
     named.forEach((project, index) => {
       const hint = hints[index]!;
@@ -202,7 +210,7 @@ export function describeProjectLocations(
       const label = folder ? `${name} › ${folder}` : name;
       const environment = environmentById.get(workspace.environmentId);
       return options?.includeEnvironment &&
-        !environmentQualified.has(project.id) &&
+        labelEnvironment.get(project.id) !== workspace.environmentId &&
         environment &&
         environment.kind !== "local"
         ? `${label} · ${environmentDisplayLabel(environment, environments)}`
@@ -246,6 +254,23 @@ export function describeProjectLocations(
         : undefined;
     },
   };
+}
+
+/** The distinct non-Local environments of these locations, in order. */
+function remoteEnvironmentIds(
+  locations: readonly LocationPresentation[],
+  environmentById: ReadonlyMap<string, LocationEnvironmentPresentation>,
+): string[] {
+  return [
+    ...new Set(
+      locations
+        .filter(({ environmentId }) => {
+          const environment = environmentById.get(environmentId);
+          return environment !== undefined && environment.kind !== "local";
+        })
+        .map(({ environmentId }) => environmentId),
+    ),
+  ];
 }
 
 /** Non-Local environments hosting the project: "Build host, CI +1". */
