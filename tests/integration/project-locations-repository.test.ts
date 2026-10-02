@@ -7,6 +7,7 @@ import { AutomationRepository } from "../../src/server/db/repositories/automatio
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import {
   InventoryRepository,
+  LocationConflictError,
   ProjectRemovalBlockedError,
   type InventoryProjectAssignment,
   type InventoryWorkspaceRecord,
@@ -148,6 +149,14 @@ describe("project and location repository", () => {
     const a = f.open("/srv/a");
     const b = f.open("/srv/b");
     expect(() => f.open("/srv/a", { project: { kind: "existing", projectId: b.projectId } })).toThrow(domainError("conflict"));
+    // The conflict names the existing location and its project.
+    let elsewhere: unknown;
+    try { f.open("/srv/a", { project: { kind: "existing", projectId: b.projectId } }); } catch (error) { elsewhere = error; }
+    expect(elsewhere).toBeInstanceOf(LocationConflictError);
+    expect((elsewhere as LocationConflictError).conflict).toEqual({
+      reason: "other_project", workspaceId: a.id, locationRevision: a.revision, locationRemoved: false,
+      projectId: a.projectId, projectName: "a", projectRevision: f.project(a.projectId).revision,
+    });
     expect(f.inventory.getWorkspace(f.scope, a.id).projectId).toBe(a.projectId);
     expect(() => f.open("/srv/c", { project: { kind: "existing", projectId: randomUUID() } })).toThrow(domainError("not_found"));
     expect(() => f.open("/srv/c", { project: { kind: "new", name: " \t" } })).toThrow(domainError("bad_request"));
@@ -204,6 +213,13 @@ describe("project and location repository", () => {
     f.removeProject(a.projectId);
     expect(() => f.open("/srv/a", { restoreRemoved: true }))
       .toThrow(domainError("invalid_transition", "The project was removed. Restore it before restoring its locations."));
+    let removedProject: unknown;
+    try { f.open("/srv/a", { restoreRemoved: true, project: { kind: "existing", projectId: other.projectId } }); } catch (error) { removedProject = error; }
+    expect((removedProject as LocationConflictError).conflict).toEqual({
+      reason: "project_removed", workspaceId: a.id, locationRevision: f.inventory.getWorkspace(f.scope, a.id).revision,
+      locationRemoved: true, projectId: a.projectId, projectName: f.project(a.projectId).name,
+      projectRevision: f.project(a.projectId).revision,
+    });
     // The commit-time trigger is the backstop for writes that skip the repository check.
     let rejected: unknown;
     try {

@@ -44,6 +44,7 @@ import {
 } from "../../src/shared/protocol/workspace-files.js";
 import { createNormalizedApp, type NormalizedAppDependencies } from "../../src/server/normalized-app.js";
 import {
+  locationConflictErrorSchema,
   projectRemovalBlockedErrorSchema,
   restoreProjectResultSchema,
 } from "../../src/shared/protocol/projects.js";
@@ -1764,9 +1765,20 @@ describe("normalized HTTP application contract", () => {
       expect(second.projectId).toBe(primary.projectId);
       const supplemental = await open(current.supplementalPath, { kind: "new", name: "Supplemental" });
       // A known directory keeps its project; naming another one is a conflict, never a move.
-      await current.mutate(request(current.app).post("/api/workspaces/open"))
+      // The conflict names the location and its project, so Add project can offer the move.
+      const elsewhere = await current.mutate(request(current.app).post("/api/workspaces/open"))
         .send({ environmentId: current.environmentId, path: current.secondWorkspacePath, project: { kind: "existing", projectId: supplemental.projectId } })
         .expect(409);
+      const primaryListing = await projectOf(primary.projectId);
+      expect(elsewhere.body).toEqual({
+        error: { code: "conflict", message: "This directory already belongs to another project. Move it instead.", retryable: false },
+        conflict: {
+          reason: "other_project", workspaceId: second.id,
+          locationRevision: primaryListing.locations.find(({ id }) => id === second.id)!.revision, locationRemoved: false,
+          projectId: primary.projectId, projectName: "Primary", projectRevision: primaryListing.revision,
+        },
+      });
+      expect(locationConflictErrorSchema.safeParse(elsewhere.body).success).toBe(true);
       await current.mutate(request(current.app).post("/api/workspaces/open"))
         .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: " " } })
         .expect(400);
@@ -1837,9 +1849,23 @@ describe("normalized HTTP application contract", () => {
       expect(removed.body).toMatchObject({ removed: true, locations: [{ id: primary.id, removed: true, removedWithProject: true }] });
       expect((await current.withHost(request(current.app).get("/api/application/snapshot")).expect(200)).body.projects
         .some(({ id }: { id: string }) => id === project.id)).toBe(false);
-      await current.mutate(request(current.app).post(`/api/workspaces/${primary.id}/open`)).expect(400);
-      await current.mutate(request(current.app).post("/api/workspaces/open"))
+      // Restoring the location alone reports a plain error; adding its directory again names the removed project.
+      expect((await current.mutate(request(current.app).post(`/api/workspaces/${primary.id}/open`)).expect(400)).body)
+        .toEqual({ error: { code: "invalid_transition", message: expect.any(String), retryable: false } });
+      const again = await current.mutate(request(current.app).post("/api/workspaces/open"))
         .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "Again" } }).expect(400);
+      expect(again.body).toEqual({
+        error: { code: "invalid_transition", message: "The project was removed. Restore it before restoring its locations.", retryable: false },
+        conflict: {
+          reason: "project_removed", workspaceId: primary.id,
+          locationRevision: removed.body.locations[0].revision, locationRemoved: true,
+          projectId: project.id, projectName: "Renamed", projectRevision: removed.body.revision,
+        },
+      });
+      // A removed project takes precedence over a request naming another project.
+      expect((await current.mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "existing", projectId: target.id } })
+        .expect(400)).body.conflict).toMatchObject({ reason: "project_removed", projectId: project.id });
       await current.mutate(request(current.app).post(`/api/projects/${project.id}/restore`))
         .send({ expectedRevision: removed.body.revision, locationIds: [second.id] }).expect(400);
       await current.mutate(request(current.app).post(`/api/projects/${project.id}/restore`))

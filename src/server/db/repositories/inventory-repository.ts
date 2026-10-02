@@ -169,6 +169,30 @@ export class ProjectRemovalBlockedError extends DomainError {
   }
 }
 
+/** The known location a directory resolved to when it cannot simply be opened. */
+export type InventoryLocationConflict = {
+  /** `other_project`: joining the requested project is a move; `project_removed`: its project was removed. */
+  readonly reason: "other_project" | "project_removed";
+  readonly workspaceId: string;
+  readonly locationRevision: number;
+  readonly locationRemoved: boolean;
+  readonly projectId: string;
+  readonly projectName: string;
+  readonly projectRevision: number;
+};
+
+export class LocationConflictError extends DomainError {
+  constructor(readonly conflict: InventoryLocationConflict) {
+    super(
+      conflict.reason === "other_project" ? "conflict" : "invalid_transition",
+      conflict.reason === "other_project"
+        ? "This directory already belongs to another project. Move it instead."
+        : "The project was removed. Restore it before restoring its locations.",
+    );
+    this.name = "LocationConflictError";
+  }
+}
+
 function assertProjectName(name: string): void {
   // SQLite length() counts code points, as does string iteration.
   if (name.trim().length === 0 || [...name].length > MAXIMUM_PROJECT_NAME_LENGTH) {
@@ -855,21 +879,25 @@ export class InventoryRepository {
       }
       const removed = this.isWorkspaceRemoved(scope, existing.id);
       if (removed && !input.restoreRemoved) this.assertWorkspaceActive(scope, existing.id);
+      const project = this.#project(scope, existing.projectId);
+      const conflict = (reason: InventoryLocationConflict["reason"]) =>
+        new LocationConflictError({
+          reason,
+          workspaceId: existing.id,
+          locationRevision: existing.revision,
+          locationRemoved: removed,
+          projectId: project.id,
+          projectName: project.name,
+          projectRevision: project.revision,
+        });
+      // Only a removed location can belong to a removed project.
+      if (project.removedAt !== null) throw conflict("project_removed");
       // An existing location keeps its project; joining another one is a move.
       if (
         input.project?.kind === "existing" &&
         input.project.projectId !== existing.projectId
       ) {
-        throw new DomainError(
-          "conflict",
-          "This directory already belongs to another project. Move it instead.",
-        );
-      }
-      if (removed && this.#project(scope, existing.projectId).removedAt !== null) {
-        throw new DomainError(
-          "invalid_transition",
-          "The project was removed. Restore it before restoring its locations.",
-        );
+        throw conflict("other_project");
       }
       const availability = input.available ? "available" : "unavailable";
       const changed =

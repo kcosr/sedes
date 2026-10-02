@@ -6,6 +6,7 @@ import type { EnvironmentVariablesService } from "./environment-variables/enviro
 import { ProjectManagementService } from "./application/project-management-service.js";
 import {
   listProjectsResultSchema,
+  locationConflictErrorSchema,
   mergeProjectRequestSchema,
   moveLocationRequestSchema,
   openWorkspaceRequestSchema,
@@ -19,7 +20,7 @@ import {
   restoreProjectResultSchema,
 } from "../shared/protocol/projects.js";
 import { projectIdSchema } from "../shared/protocol/domain.js";
-import { ProjectRemovalBlockedError } from "./db/repositories/inventory-repository.js";
+import { LocationConflictError, ProjectRemovalBlockedError } from "./db/repositories/inventory-repository.js";
 import { respondToQuestionResultSchema } from "../shared/protocol/api.js";
 import type { QuestionRequestService } from "./domain/question-request-service.js";
 import {
@@ -1888,10 +1889,19 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
   routes.post("/api/workspaces/open", async (request, response) => {
     const requestScope = await scope(request);
     const body = openWorkspaceRequestSchema.parse(request.body);
-    const workspace = await workspaceManagement().openWorkspace(
-      requestScope,
-      body,
-    );
+    let workspace;
+    try {
+      workspace = await workspaceManagement().openWorkspace(requestScope, body);
+    } catch (error) {
+      if (!(error instanceof LocationConflictError)) throw error;
+      // The known location and its project, so Add project can offer a move or a restore.
+      const projected = projectApiError(error);
+      response.status(projected.status).json(locationConflictErrorSchema.parse({
+        error: projected.body.error,
+        conflict: error.conflict,
+      }));
+      return;
+    }
     response.status(201).json(openWorkspaceResultSchema.parse({
       id: workspace.workspaceId,
       projectId: workspace.projectId,

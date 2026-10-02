@@ -86,6 +86,30 @@ export const openWorkspaceResultSchema = z.strictObject({
   projectId: projectIdSchema,
 });
 
+export const locationConflictReasonSchema = z.enum([
+  /** The directory is a location of another project; joining this one is a move. */
+  "other_project",
+  /** The directory's project was removed; restore it or move the location. */
+  "project_removed",
+]);
+/** The known location an added directory resolved to, and its project. */
+export const locationConflictSchema = z.strictObject({
+  reason: locationConflictReasonSchema,
+  workspaceId: workspaceIdSchema,
+  locationRevision: revisionSchema,
+  locationRemoved: z.boolean(),
+  projectId: projectIdSchema,
+  projectName: projectNameSchema,
+  projectRevision: revisionSchema,
+});
+/** Opening a directory that cannot simply join or restore into the chosen project. */
+export const locationConflictErrorSchema = z.strictObject({
+  error: apiErrorDetailSchema.extend({
+    code: z.enum(["conflict", "invalid_transition"]),
+  }),
+  conflict: locationConflictSchema,
+});
+
 export const renameProjectRequestSchema = z.strictObject({
   name: projectNameInputSchema,
   expectedRevision: revisionSchema,
@@ -170,6 +194,10 @@ export type RestoreProjectResult = z.infer<typeof restoreProjectResultSchema>;
 export type MergeProjectRequest = z.infer<typeof mergeProjectRequestSchema>;
 export type RemoveLocationRequest = z.infer<typeof removeLocationRequestSchema>;
 export type MoveLocationRequest = z.infer<typeof moveLocationRequestSchema>;
+export type LocationConflictReason = z.infer<typeof locationConflictReasonSchema>;
+export type LocationConflict = z.infer<typeof locationConflictSchema>;
+export type LocationConflictResponse = z.infer<typeof locationConflictErrorSchema>;
+export type ProjectRemovalBlockerKind = z.infer<typeof projectRemovalBlockerKindSchema>;
 export type ProjectRemovalBlocker = z.infer<typeof projectRemovalBlockerSchema>;
 export type ProjectRemovalBlockedResponse = z.infer<
   typeof projectRemovalBlockedErrorSchema
