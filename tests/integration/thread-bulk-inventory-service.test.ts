@@ -196,6 +196,9 @@ function fixture() {
     questions,
     service,
     workspaceIds: [workspace.id, otherWorkspace.id] as const,
+    projectIds: [workspace.id, otherWorkspace.id].map(
+      (id) => inventory.getWorkspace(scope, id).projectId,
+    ),
   };
 }
 
@@ -259,7 +262,7 @@ describe("thread bulk inventory service", () => {
         mutationId: "bulk-settle-mutation",
         expectedStashedPromptCount: 0,
         expectedOpenTaskCount: 1,
-        openTaskDisposition: "move_to_workspace" as const,
+        openTaskDisposition: "move_to_project" as const,
       };
       await expect(
         current.service.transition(current.scope, request),
@@ -273,7 +276,8 @@ describe("thread bulk inventory service", () => {
         inventoryRevision: 1,
       });
       expect(current.tasks.get(current.scope, task.id)).toMatchObject({
-        scopeKind: "workspace",
+        scopeKind: "project",
+        projectId: current.projectIds[0],
         revision: 1,
       });
       await expect(
@@ -585,7 +589,7 @@ describe("thread bulk inventory service", () => {
           mutationId: "bulk-stale-task",
           expectedStashedPromptCount: refreshed.stashedPromptCount,
           expectedOpenTaskCount: refreshed.openTasks.total,
-          openTaskDisposition: "move_to_workspace",
+          openTaskDisposition: "move_to_project",
         }),
       ).rejects.toThrow("Open tasks changed");
       expect(current.tasks.get(current.scope, task.id)).toMatchObject({
@@ -690,14 +694,15 @@ describe("thread bulk inventory service", () => {
         mutationId: "bulk-cross-project-settle",
         expectedStashedPromptCount: 0,
         expectedOpenTaskCount: 2,
-        openTaskDisposition: "move_to_workspace",
+        openTaskDisposition: "move_to_project",
       });
-      expect(current.tasks.get(current.scope, tasks[0]!.id).workspaceId).toBe(
-        current.workspaceIds[0],
+      expect(current.tasks.get(current.scope, tasks[0]!.id).projectId).toBe(
+        current.projectIds[0],
       );
-      expect(current.tasks.get(current.scope, tasks[1]!.id).workspaceId).toBe(
-        current.workspaceIds[1],
+      expect(current.tasks.get(current.scope, tasks[1]!.id).projectId).toBe(
+        current.projectIds[1],
       );
+      expect(current.projectIds[0]).not.toBe(current.projectIds[1]);
     } finally {
       current.database.close();
     }

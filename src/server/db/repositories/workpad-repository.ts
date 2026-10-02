@@ -15,11 +15,17 @@ import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 
 export type WorkpadActor = { kind: "user" } | { kind: "agent"; threadId: string } | { kind: "tool_client"; clientId: string };
+/**
+ * Environment authority for an agent list. A thread workpad is listed when
+ * its thread's environment is admitted. A project workpad is listed when the
+ * query names its project (the caller checked that project's access) or,
+ * for a global query, when one of the project's active locations is on an
+ * admitted environment.
+ */
 export type WorkpadListAuthority = {
-  readonly environmentIds?: readonly string[];
+  readonly environmentIds: readonly string[];
   readonly continuationKey: string;
 };
-export type WorkpadAuthority = { scope: WorkpadScope; environmentId: string | null; revision: number };
 const notFound = () => new DomainError("not_found", "The workpad was not found.");
 const conflict = () => new DomainError("conflict", "The workpad changed. Read its latest revision before editing.");
 const draftConflict = () => new DomainError("draft_revision_conflict", "The workpad draft changed on another client. Read the latest draft before saving.");
@@ -33,8 +39,17 @@ function validRevision(value: number): void {
   if (!Number.isSafeInteger(value) || value < 0) throw new DomainError("bad_request", "Invalid workpad revision.");
 }
 function scopeColumns(scope: WorkpadScope): [string, string | null, string | null] {
-  return [scope.kind, scope.kind === "workspace" ? scope.workspaceId : null, scope.kind === "thread" ? scope.threadId : null];
+  return [scope.kind, scope.kind === "project" ? scope.projectId : null, scope.kind === "thread" ? scope.threadId : null];
 }
+const activeLocationOf = (thread: string) => `EXISTS (SELECT 1 FROM workspaces AS location
+  WHERE location.tenant_id = ${thread}.tenant_id AND location.owner_principal_id = ${thread}.owner_principal_id
+    AND location.id = ${thread}.workspace_id AND location.removed_at IS NULL)`;
+/** Removed projects and removed locations hide their own workpads. */
+const visibleWorkpad = `(p.scope_kind = 'global'
+  OR (p.scope_kind = 'project' AND EXISTS (SELECT 1 FROM projects AS project
+    WHERE project.tenant_id = p.tenant_id AND project.owner_principal_id = p.owner_principal_id
+      AND project.id = p.project_id AND project.removed_at IS NULL))
+  OR (p.scope_kind = 'thread' AND t.id IS NOT NULL AND ${activeLocationOf("t")}))`;
 function sameScope(a: WorkpadScope, b: WorkpadScope) { return JSON.stringify(a) === JSON.stringify(b); }
 
 /** Pure text provenance transformation. Offsets are UTF-16, as in browser selection APIs. */
@@ -153,24 +168,14 @@ export class WorkpadRepository {
     };
     return { ...value, author: resolve(value.author), ...(value.attribution ? { attribution: value.attribution.map(span => ({ ...span, author: resolve(span.author) })) } : {}) };
   }
+  /** A project destination or query must be an active project. */
   #assertScope(scope: RequestScope, target: WorkpadScope): void {
     parse(workpadScopeSchema, target);
     if (target.kind === "global") return;
-    const table = target.kind === "thread" ? "application_threads" : "workspaces";
-    const id = target.kind === "thread" ? target.threadId : target.workspaceId;
-    if (!this.database.prepare(`SELECT 1 FROM ${table} WHERE tenant_id=? AND owner_principal_id=? AND id=?`).get(scope.tenantId, scope.principalId, id)) {
-      throw new DomainError("not_found", "The workpad scope was not found.");
-    }
-  }
-  getAuthority(scope: RequestScope, id: string): WorkpadAuthority {
-    const row = this.database.prepare(`SELECT p.scope_kind AS kind, p.workspace_id AS workspaceId, p.thread_id AS threadId, p.revision,
-      CASE WHEN p.scope_kind='workspace' THEN w.environment_id WHEN p.scope_kind='thread' THEN t.environment_id ELSE NULL END AS environmentId
-      FROM workpads p LEFT JOIN workspaces w ON w.tenant_id=p.tenant_id AND w.owner_principal_id=p.owner_principal_id AND w.id=p.workspace_id
-      LEFT JOIN application_threads t ON t.tenant_id=p.tenant_id AND t.owner_principal_id=p.owner_principal_id AND t.id=p.thread_id
-      WHERE p.tenant_id=? AND p.owner_principal_id=? AND p.id=?`).get(scope.tenantId, scope.principalId, id) as { kind: "global" | "workspace" | "thread"; workspaceId: string | null; threadId: string | null; revision: number; environmentId: string | null } | undefined;
-    if (!row) throw notFound();
-    if (row.kind !== "global" && row.environmentId === null) throw notFound();
-    return { scope: row.kind === "global" ? { kind: "global" } : row.kind === "workspace" ? { kind: "workspace", workspaceId: row.workspaceId! } : { kind: "thread", threadId: row.threadId! }, environmentId: row.environmentId, revision: row.revision };
+    const found = target.kind === "thread"
+      ? this.database.prepare("SELECT 1 FROM application_threads WHERE tenant_id=? AND owner_principal_id=? AND id=?").get(scope.tenantId, scope.principalId, target.threadId)
+      : this.database.prepare("SELECT 1 FROM projects WHERE tenant_id=? AND owner_principal_id=? AND id=? AND removed_at IS NULL").get(scope.tenantId, scope.principalId, target.projectId);
+    if (!found) throw new DomainError("not_found", "The workpad scope was not found.");
   }
   get(scope: RequestScope, id: string): Workpad { return this.#present(scope, this.#owned(scope, id)); }
   create(scope: RequestScope, input: CreateWorkpadRequest, actor: WorkpadActor = { kind: "user" }, now = Date.now()): Workpad {
@@ -183,7 +188,7 @@ export class WorkpadRepository {
       const content = request.content ?? "";
       const pad: Workpad = { id, title: request.title, scope: request.scope, content, revision: 0, createdAt: date, updatedAt: date, archivedAt: null, author,
         attribution: content ? [{ start: 0, end: content.length, revision: 0, author, createdAt: date }] : [] };
-      this.database.prepare("INSERT INTO workpads(tenant_id,owner_principal_id,id,scope_kind,workspace_id,thread_id,title,revision,archived_at,created_at,updated_at,document_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").run(scope.tenantId, scope.principalId, id, ...scopeColumns(pad.scope), pad.title, 0, null, date, date, JSON.stringify(pad));
+      this.database.prepare("INSERT INTO workpads(tenant_id,owner_principal_id,id,scope_kind,project_id,thread_id,title,revision,archived_at,created_at,updated_at,document_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").run(scope.tenantId, scope.principalId, id, ...scopeColumns(pad.scope), pad.title, 0, null, date, date, JSON.stringify(pad));
       this.#writeRevision(scope, pad, content ? [{ kind: "added", text: content, offset: 0 }] : []);
       this.database.prepare("INSERT INTO workpad_drafts(tenant_id,owner_principal_id,workpad_id,revision,base_revision,content,updated_at) VALUES(?,?,?,0,0,?,?)").run(scope.tenantId, scope.principalId, id, content, date);
       return pad;
@@ -203,7 +208,8 @@ export class WorkpadRepository {
       const previous = this.#owned(scope, id);
       if (previous.revision !== request.expectedRevision) throw conflict();
       const author = this.#resolveAuthor(scope, actor);
-      if (request.scope) this.#assertScope(scope, request.scope);
+      // Naming the current scope is an in-place edit, even in a removed project.
+      if (request.scope && !sameScope(request.scope, previous.scope)) this.#assertScope(scope, request.scope);
       if (previous.archivedAt && request.edit) throw new DomainError("invalid_transition", "Restore the workpad before editing its content.");
       let content = previous.content;
       let operations: TextOperation[] | undefined;
@@ -247,7 +253,7 @@ export class WorkpadRepository {
         throw new DomainError("bad_request", "This edit exceeds the workpad attribution limit. Split this document into smaller workpads.");
       }
       const pad = parse(workpadSchema, candidate);
-      const changed = this.database.prepare("UPDATE workpads SET scope_kind=?,workspace_id=?,thread_id=?,title=?,revision=?,archived_at=?,updated_at=?,document_json=? WHERE tenant_id=? AND owner_principal_id=? AND id=? AND revision=?").run(...scopeColumns(target), title, pad.revision, archivedAt, date, JSON.stringify(pad), scope.tenantId, scope.principalId, id, request.expectedRevision);
+      const changed = this.database.prepare("UPDATE workpads SET scope_kind=?,project_id=?,thread_id=?,title=?,revision=?,archived_at=?,updated_at=?,document_json=? WHERE tenant_id=? AND owner_principal_id=? AND id=? AND revision=?").run(...scopeColumns(target), title, pad.revision, archivedAt, date, JSON.stringify(pad), scope.tenantId, scope.principalId, id, request.expectedRevision);
       if (changed.changes !== 1) throw conflict();
       this.#writeRevision(scope, pad, changes);
       // A clean synchronized draft follows committed changes. Dirty drafts
@@ -269,23 +275,30 @@ export class WorkpadRepository {
         after = cursor;
       } catch { throw new DomainError("cursor_invalid", "The workpad cursor does not match this query."); }
     }
-    const conditions = ["p.tenant_id=?", "p.owner_principal_id=?", request.archived ? "p.archived_at IS NOT NULL" : "p.archived_at IS NULL"];
+    const conditions = ["p.tenant_id=?", "p.owner_principal_id=?", request.archived ? "p.archived_at IS NOT NULL" : "p.archived_at IS NULL", visibleWorkpad];
     const params: (string | number)[] = [scope.tenantId, scope.principalId];
     if (request.scope.kind === "thread") { conditions.push("p.scope_kind='thread' AND p.thread_id=?"); params.push(request.scope.threadId); }
-    else if (request.scope.kind === "workspace") {
-      conditions.push(request.scopeMode === "subtree" ? "((p.scope_kind='workspace' AND p.workspace_id=?) OR (p.scope_kind='thread' AND t.workspace_id=?))" : "p.scope_kind='workspace' AND p.workspace_id=?");
-      params.push(request.scope.workspaceId); if (request.scopeMode === "subtree") params.push(request.scope.workspaceId);
+    else if (request.scope.kind === "project") {
+      // A project's subtree spans its workpads and those of threads in its active locations.
+      conditions.push(request.scopeMode === "subtree"
+        ? "((p.scope_kind='project' AND p.project_id=?) OR (p.scope_kind='thread' AND EXISTS (SELECT 1 FROM workspaces AS location WHERE location.tenant_id=t.tenant_id AND location.owner_principal_id=t.owner_principal_id AND location.id=t.workspace_id AND location.project_id=?)))"
+        : "p.scope_kind='project' AND p.project_id=?");
+      params.push(request.scope.projectId); if (request.scopeMode === "subtree") params.push(request.scope.projectId);
     } else if (request.scopeMode === "exact") conditions.push("p.scope_kind='global'");
-    if (authority?.environmentIds !== undefined) {
+    if (authority) {
       const ids = [...new Set(authority.environmentIds)];
-      conditions.push(ids.length ? `(p.scope_kind='global' OR CASE WHEN p.scope_kind='workspace' THEN w.environment_id ELSE t.environment_id END IN (${ids.map(() => "?").join(",")}))` : "p.scope_kind='global'");
-      params.push(...ids);
+      const admitted = ids.map(() => "?").join(",");
+      conditions.push(`(p.scope_kind='global'
+        OR (p.scope_kind='thread' AND t.environment_id IN (${admitted}))
+        OR (p.scope_kind='project' AND ${request.scope.kind === "project" ? "p.project_id=?" : `EXISTS (SELECT 1 FROM workspaces AS location
+          WHERE location.tenant_id=p.tenant_id AND location.owner_principal_id=p.owner_principal_id
+            AND location.project_id=p.project_id AND location.removed_at IS NULL AND location.environment_id IN (${admitted}))`}))`);
+      params.push(...ids, ...(request.scope.kind === "project" ? [request.scope.projectId] : ids));
     }
     if (request.query) { conditions.push("(instr(lower(p.title), lower(?)) > 0 OR instr(lower(json_extract(p.document_json,'$.content')), lower(?)) > 0)"); params.push(request.query, request.query); }
     if (after) { conditions.push("(p.updated_at < ? OR (p.updated_at=? AND p.id>?))"); params.push(after.updatedAt, after.updatedAt, after.id); }
     const rows = this.database.prepare(`SELECT json_remove(p.document_json,'$.content','$.attribution') AS json FROM workpads p
       LEFT JOIN application_threads t ON t.tenant_id=p.tenant_id AND t.owner_principal_id=p.owner_principal_id AND t.id=p.thread_id
-      LEFT JOIN workspaces w ON w.tenant_id=p.tenant_id AND w.owner_principal_id=p.owner_principal_id AND w.id=p.workspace_id
       WHERE ${conditions.map(c => `(${c})`).join(" AND ")} ORDER BY p.updated_at DESC,p.id ASC LIMIT ?`).all(...params, request.limit + 1) as { json: string }[];
     const items = rows.slice(0, request.limit).map(row => this.#present(scope, workpadSummarySchema.parse(JSON.parse(row.json))));
     const last = items.at(-1);

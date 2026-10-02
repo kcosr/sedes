@@ -220,10 +220,18 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   expect((await readWorkpad(page, workpad.id)).content).toBe(reconciled);
   expect(agentRevision.revision).toBeLessThan(saved.revision);
 
+  // Project means the thread's project, named in the workpad's header.
+  const snapshot = (await (await page.request.get("/api/application/snapshot")).json()) as {
+    threads: { id: string; workspaceId: string }[]; workspaces: { id: string; projectId: string }[];
+  };
+  const threadWorkspaceId = snapshot.threads.find(({ id }) => id === threadId)!.workspaceId;
+  const projectId = snapshot.workspaces.find(({ id }) => id === threadWorkspaceId)!.projectId;
   await panel.getByRole("button", { name: "Move workpad", exact: true }).click();
   await panel.getByRole("radiogroup", { name: "Destination scope" }).getByRole("radio", { name: "Project", exact: true }).click();
+  await expect(panel.getByRole("combobox", { name: "Destination project", exact: true })).toHaveValue(projectId);
   await panel.getByRole("button", { name: "Move", exact: true }).click();
-  await expect.poll(async () => (await readWorkpad(page, workpad.id)).scope.kind).toBe("workspace");
+  await expect.poll(async () => (await readWorkpad(page, workpad.id)).scope).toEqual({ kind: "project", projectId });
+  await expect(panel.locator(".workpads-title")).toContainText("Project · workpad-workspace");
   await panel.getByRole("button", { name: "Back to workpads", exact: true }).click();
   await expect(panel.getByRole("button", { name: /^Authentication integration/ })).toHaveCount(0);
   await panel.getByRole("radio", { name: "Project", exact: true }).click();

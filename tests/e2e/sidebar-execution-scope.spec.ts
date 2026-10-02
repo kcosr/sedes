@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import {
   normalizedApplicationSessionSchema,
   normalizedApplicationSnapshotSchema,
+  openWorkspaceResultSchema,
 } from "../../src/shared/index.js";
 import { loadE2ERunContext } from "./run-context";
 import type { Locator, Page, TestInfo } from "@playwright/test";
@@ -628,11 +629,13 @@ test("Settings renames, moves, merges, removes, and restores projects", async ({
   const environmentId = snapshot.environments.find(({ kind }) => kind === "local")!.id;
   const headers = { "Content-Type": "application/json", "X-CSRF-Token": session.csrfToken };
   // Two projects share the name "Alpha", which the duplicate-name note offers to merge.
+  const projectIds = new Map<string, string>();
   for (const directory of [alphaPath, gammaPath]) {
     const opened = await page.request.post("/api/workspaces/open", {
       headers, data: { environmentId, path: directory, project: { kind: "new", name: "Alpha" } },
     });
     expect(opened.status(), await opened.text()).toBe(201);
+    projectIds.set(directory, openWorkspaceResultSchema.parse(await opened.json()).projectId);
   }
 
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -652,6 +655,29 @@ test("Settings renames, moves, merges, removes, and restores projects", async ({
   const note = settings.locator(".projects-duplicates");
   await expect(note).toContainText("“Alpha” · 2 projects");
   await expect(note.getByRole("button", { name: "Merge projects named Alpha", exact: true })).toBeVisible();
+
+  // Saved work created while Settings is open updates counts without a manual refresh.
+  await expect(projectRow(alphaPath)).toContainText("0 tasks · 0 workpads");
+  const scope = { kind: "project", projectId: projectIds.get(alphaPath)! };
+  const task = await page.request.post("/api/tasks", {
+    headers, data: { mutationId: randomUUID(), title: "Project count task", scope },
+  });
+  expect(task.status(), await task.text()).toBe(201);
+  await expect(projectRow(alphaPath)).toContainText("1 task · 0 workpads");
+  const workpad = await page.request.post("/api/workpads", {
+    headers, data: { title: "Project count workpad", scope },
+  });
+  expect(workpad.status(), await workpad.text()).toBe(201);
+  await expect(projectRow(alphaPath)).toContainText("1 task · 1 workpad");
+
+  await projectRow(alphaPath).getByRole("button", { name: `Actions for Local · ${alphaPath}`, exact: true }).click();
+  await page.getByRole("menuitem", { name: "Remove location…", exact: true }).click();
+  const locationRemoval = page.getByRole("dialog", { name: "Remove “alpha” from “Alpha”?", exact: true });
+  const alsoProject = locationRemoval.getByRole("checkbox", { name: /Also remove project “Alpha”/u });
+  await expect(alsoProject).not.toBeChecked();
+  await expect(locationRemoval).toContainText("1 task and 1 workpad");
+  await capture(page, testInfo, "projects-remove-location-counts-desktop.png");
+  await locationRemoval.getByRole("button", { name: "Cancel", exact: true }).click();
 
   // Add a location to the first project from its menu.
   await projectActions(alphaPath).click();
@@ -684,7 +710,7 @@ test("Settings renames, moves, merges, removes, and restores projects", async ({
   await projectRow(alphaPath).getByRole("button", { name: `Actions for Local · ${betaPath}`, exact: true }).click();
   await page.getByRole("menuitem", { name: "Move to project…", exact: true }).click();
   const move = page.getByRole("dialog", { name: "Move “beta” to another project", exact: true });
-  await expect(move).toContainText("tasks, and workpads move with it");
+  await expect(move).toContainText("The project’s own tasks and workpads stay in “Alpha”.");
   await choose(move, "Move to", "Gamma — on Local");
   const moved = response("POST", /^\/api\/workspaces\/[^/]+\/move$/u);
   await move.getByRole("button", { name: "Move location", exact: true }).click();
@@ -706,18 +732,21 @@ test("Settings renames, moves, merges, removes, and restores projects", async ({
   await expect(merge).toBeHidden();
   await expect(settings.getByTestId("project-settings-row").filter({ hasText: `${root}${path.sep}` })).toHaveCount(1);
   await expect(projectRow(alphaPath)).toContainText("3 locations");
+  await expect(projectRow(alphaPath)).toContainText("1 task · 1 workpad");
 
   // Remove the whole project, then restore it with every location its removal took.
   await projectActions(gammaPath).click();
   await page.getByRole("menuitem", { name: "Remove project…", exact: true }).click();
   const remove = page.getByRole("dialog", { name: "Remove project “Gamma”?", exact: true });
   await expect(remove).toContainText("its 3 active locations");
+  await expect(remove).toContainText("1 task and 1 workpad");
   const removedProject = response("POST", /^\/api\/projects\/[^/]+\/remove$/u);
   await remove.getByRole("button", { name: "Remove project", exact: true }).click();
   const removedProjectResponse = await removedProject;
   expect(removedProjectResponse.status(), await removedProjectResponse.text()).toBe(200);
   await expect(remove).toBeHidden();
   await expect(projectRow(gammaPath).locator(".projects-project-row")).toContainText("Removed");
+  await expect(projectRow(gammaPath)).toContainText("1 task · 1 workpad");
   await expect(projectRow(gammaPath).getByTestId("location-settings-row").filter({ hasText: "Removed" })).toHaveCount(3);
 
   await projectActions(gammaPath).click();

@@ -10,6 +10,7 @@ import {
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { TaskRepository } from "../../src/server/db/repositories/task-repository.js";
+import { DatabaseAgentToolSourceAuthority } from "../../src/server/agent-tools/application/database-agent-tool-source-authority.js";
 import type { DomainError } from "../../src/server/domain/errors.js";
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
@@ -100,12 +101,23 @@ function fixture(latestVersion = backendNormalizedMigrations.at(-1)!.version) {
       (migration) => migration.version <= latestVersion,
     ),
   );
+  const projectOf = (workspaceId: string) =>
+    latestVersion >= 126
+      ? (
+          database
+            .prepare("SELECT project_id AS projectId FROM workspaces WHERE id = ?")
+            .get(workspaceId) as { readonly projectId: string }
+        ).projectId
+      : "";
   return {
     database,
     scope,
     environmentId: environment.id,
     firstWorkspaceId: firstWorkspace.id,
     secondWorkspaceId: secondWorkspace.id,
+    // Differently named locations became separate projects in migration 126.
+    firstProjectId: projectOf(firstWorkspace.id),
+    secondProjectId: projectOf(secondWorkspace.id),
     firstThreadId: firstThread.thread.id,
     secondThreadId: secondThread.thread.id,
     tasks: new TaskRepository(database),
@@ -163,13 +175,6 @@ describe("task repository", () => {
       expect(
         current.tasks.resolveScopeEnvironmentIds(
           current.scope,
-          { kind: "workspace", workspaceId: current.firstWorkspaceId },
-          "subtree",
-        ),
-      ).toEqual([current.environmentId]);
-      expect(
-        current.tasks.resolveScopeEnvironmentIds(
-          current.scope,
           { kind: "thread", threadId: current.firstThreadId },
           "exact",
         ),
@@ -181,10 +186,10 @@ describe("task repository", () => {
         mutationId: "global-authority",
         now: 1_000,
       });
-      const workspaceTask = current.tasks.create(current.scope, {
-        title: "Workspace authority",
-        scope: { kind: "workspace", workspaceId: current.firstWorkspaceId },
-        mutationId: "workspace-authority",
+      const projectTask = current.tasks.create(current.scope, {
+        title: "Project authority",
+        scope: { kind: "project", projectId: current.firstProjectId },
+        mutationId: "project-authority",
         now: 1_001,
       });
       const threadTask = current.tasks.create(current.scope, {
@@ -193,41 +198,48 @@ describe("task repository", () => {
         mutationId: "thread-authority",
         now: 1_002,
       });
-      expect(
-        current.tasks.resolveTaskEnvironmentAuthority(
-          current.scope,
-          globalTask.id,
-        ),
-      ).toMatchObject({
-        scopeKind: "global",
-        environmentId: null,
+      // A project task carries no environment of its own: agents reach it
+      // through the project's member environments.
+      const reader = new DatabaseAgentToolSourceAuthority(
+        current.database,
+        new Uint8Array(32).fill(3),
+      );
+      expect(reader.resolveTask(current.scope, globalTask.id)).toEqual({
+        id: globalTask.id,
         revision: 0,
+        scopeKind: "global",
+        label: "Global authority",
       });
-      expect(
-        current.tasks.resolveTaskEnvironmentAuthority(
-          current.scope,
-          workspaceTask.id,
-        ),
-      ).toMatchObject({
-        scopeKind: "workspace",
-        environmentId: current.environmentId,
+      expect(reader.resolveTask(current.scope, projectTask.id)).toEqual({
+        id: projectTask.id,
+        revision: 0,
+        scopeKind: "project",
+        projectId: current.firstProjectId,
+        label: "Project authority",
       });
-      expect(threadTask.environmentId).toBeNull();
-      expect(
-        current.tasks.resolveTaskEnvironmentAuthority(
-          current.scope,
-          threadTask.id,
-        ),
-      ).toMatchObject({
+      expect(reader.resolveTask(current.scope, threadTask.id)).toEqual({
+        id: threadTask.id,
+        revision: 0,
         scopeKind: "thread",
         environmentId: current.environmentId,
+        threadId: current.firstThreadId,
+        label: "Thread authority",
       });
+      expect(reader.resolveProject(current.scope, current.firstProjectId)).toEqual({
+        id: current.firstProjectId,
+        label: "Tasks first",
+        membershipRevision: expect.any(Number),
+        memberEnvironmentIds: [current.environmentId],
+      });
+      expect(
+        reader.resolveTask({ ...current.scope, principalId: "other" }, projectTask.id),
+      ).toBeUndefined();
     } finally {
       current.database.close();
     }
   });
 
-  it("binds authorized task reads and lists to fresh authority facts", () => {
+  it("binds authorized task reads to the admitted revision", () => {
     const current = fixture();
     try {
       const task = current.tasks.create(current.scope, {
@@ -236,84 +248,26 @@ describe("task repository", () => {
         mutationId: "authority-bound-create",
         now: 1_000,
       });
-      const authority = current.tasks.resolveTaskEnvironmentAuthority(
-        current.scope,
-        task.id,
-      );
       expect(
-        current.tasks.getWithEnvironmentAuthority(current.scope, authority),
+        current.tasks.getAtRevision(current.scope, task.id, 0),
       ).toMatchObject({ id: task.id, title: "Authority-bound" });
-      expect(
-        current.tasks.listPageWithEnvironmentAuthority(current.scope, {
-          taskScope: { kind: "global" },
-          scopeMode: "subtree",
-          targetEnvironmentIds: [current.environmentId],
-          sourceEnvironmentId: current.environmentId,
-          policyRevision: 1,
-          continuationAuthorityDigest: "a".repeat(64),
-          projection: "summary",
-          pageSize: 50,
-        }).items,
-      ).toHaveLength(1);
-      expect(() =>
-        current.tasks.listPageWithEnvironmentAuthority(current.scope, {
-          taskScope: { kind: "global" },
-          scopeMode: "subtree",
-          targetEnvironmentIds: [],
-          sourceEnvironmentId: current.environmentId,
-          policyRevision: 1,
-          continuationAuthorityDigest: "a".repeat(64),
-          projection: "summary",
-          pageSize: 50,
-        }),
-      ).toThrow(domainError("not_found"));
-
-      const globalTask = current.tasks.create(current.scope, {
-        title: "Principal-wide authority",
-        scope: { kind: "global" },
-        mutationId: "global-authority-create",
-        now: 1_500,
-      });
-      expect(
-        current.tasks.listPageWithEnvironmentAuthority(current.scope, {
-          taskScope: { kind: "global" },
-          scopeMode: "exact",
-          targetEnvironmentIds: [],
-          sourceEnvironmentId: current.environmentId,
-          policyRevision: 1,
-          continuationAuthorityDigest: "b".repeat(64),
-          projection: "summary",
-          pageSize: 50,
-        }).items,
-      ).toEqual([
-        expect.objectContaining({
-          id: globalTask.id,
-          scopeKind: "global",
-          associatedWorkspaceId: null,
-        }),
-      ]);
-      expect(() =>
-        current.tasks.listPageWithEnvironmentAuthority(current.scope, {
-          taskScope: { kind: "global" },
-          scopeMode: "exact",
-          targetEnvironmentIds: [current.environmentId],
-          sourceEnvironmentId: current.environmentId,
-          policyRevision: 1,
-          continuationAuthorityDigest: "b".repeat(64),
-          projection: "summary",
-          pageSize: 50,
-        }),
-      ).toThrow(domainError("not_found"));
-
-      current.tasks.update(current.scope, task.id, {
-        title: "Changed after admission",
+      current.tasks.move(current.scope, task.id, {
+        scope: { kind: "project", projectId: current.firstProjectId },
         expectedRevision: 0,
-        mutationId: "authority-bound-update",
+        mutationId: "authority-bound-move",
         now: 2_000,
       });
+      // A scope change advances the revision, so stale authority cannot read it.
       expect(() =>
-        current.tasks.getWithEnvironmentAuthority(current.scope, authority),
+        current.tasks.getAtRevision(current.scope, task.id, 0),
       ).toThrow(domainError("conflict"));
+      expect(() =>
+        current.tasks.getAtRevision(
+          { ...current.scope, principalId: "other" },
+          task.id,
+          1,
+        ),
+      ).toThrow(domainError("not_found"));
     } finally {
       current.database.close();
     }
@@ -352,8 +306,7 @@ describe("task repository", () => {
         ownerPrincipalId: current.scope.principalId,
         id: taskId,
         scopeKind: "global",
-        environmentId: null,
-        workspaceId: null,
+        projectId: null,
         threadId: null,
         title: "Existing task",
         details: "Existing details",
@@ -478,8 +431,7 @@ describe("task repository", () => {
         ownerPrincipalId: current.scope.principalId,
         id: taskId,
         scopeKind: "global",
-        environmentId: null,
-        workspaceId: null,
+        projectId: null,
         threadId: null,
         title: "Large document",
         details: "",
@@ -578,8 +530,7 @@ describe("task repository", () => {
         tenantId: current.scope.tenantId,
         ownerPrincipalId: current.scope.principalId,
         scopeKind: "global",
-        environmentId: null,
-        workspaceId: null,
+        projectId: null,
         threadId: null,
         title: "Global task",
         details: "",
@@ -599,21 +550,19 @@ describe("task repository", () => {
       });
       expect(threadTask).toMatchObject({
         scopeKind: "thread",
-        environmentId: null,
-        workspaceId: null,
+        projectId: null,
         threadId: current.firstThreadId,
       });
 
       const workspaceTask = current.tasks.create(current.scope, {
         title: "Workspace task",
-        scope: { kind: "workspace", workspaceId: current.firstWorkspaceId },
+        scope: { kind: "project", projectId: current.firstProjectId },
         mutationId: "create-workspace",
         now: 3_000,
       });
       expect(workspaceTask).toMatchObject({
-        scopeKind: "workspace",
-        environmentId: current.environmentId,
-        workspaceId: current.firstWorkspaceId,
+        scopeKind: "project",
+        projectId: current.firstProjectId,
         threadId: null,
       });
 
@@ -690,7 +639,7 @@ describe("task repository", () => {
         details: "Review both artifacts",
         pinned: true,
         files: ["/tmp/spec.md", "/tmp/report.txt"],
-        scope: { kind: "workspace", workspaceId: current.firstWorkspaceId },
+        scope: { kind: "project", projectId: current.firstProjectId },
         mutationId: "create-complete-record",
         now: 1_000,
       });
@@ -708,7 +657,7 @@ describe("task repository", () => {
           details: "Review both artifacts",
           pinned: true,
           files: ["/tmp/spec.md", "/tmp/report.txt"],
-          scope: { kind: "workspace", workspaceId: current.firstWorkspaceId },
+          scope: { kind: "project", projectId: current.firstProjectId },
           mutationId: "create-complete-record",
           now: 2_000,
         }),
@@ -719,7 +668,7 @@ describe("task repository", () => {
           details: "Changed",
           pinned: true,
           files: ["/tmp/spec.md", "/tmp/report.txt"],
-          scope: { kind: "workspace", workspaceId: current.firstWorkspaceId },
+          scope: { kind: "project", projectId: current.firstProjectId },
           mutationId: "create-complete-record",
           now: 3_000,
         }),
@@ -736,25 +685,25 @@ describe("task repository", () => {
         title: "First",
         details: "secret first body",
         files: ["/tmp/one", "/tmp/two"],
-        scope: { kind: "workspace", workspaceId: current.firstWorkspaceId },
+        scope: { kind: "project", projectId: current.firstProjectId },
         mutationId: "page-first",
         now: 1_000,
       });
       const second = current.tasks.create(current.scope, {
         title: "Second",
-        scope: { kind: "workspace", workspaceId: current.firstWorkspaceId },
+        scope: { kind: "project", projectId: current.firstProjectId },
         mutationId: "page-second",
         now: 2_000,
       });
       current.tasks.create(current.scope, {
         title: "Other workspace",
-        scope: { kind: "workspace", workspaceId: current.secondWorkspaceId },
+        scope: { kind: "project", projectId: current.secondProjectId },
         mutationId: "page-other",
         now: 3_000,
       });
       const pageOne = current.tasks.listPage(current.scope, {
         scopeMode: "exact",
-        taskScope: { kind: "workspace", workspaceId: current.firstWorkspaceId },
+        taskScope: { kind: "project", projectId: current.firstProjectId },
         projection: "summary",
         pageSize: 1,
       });
@@ -769,8 +718,8 @@ describe("task repository", () => {
           .listPage(current.scope, {
             scopeMode: "exact",
             taskScope: {
-              kind: "workspace",
-              workspaceId: current.firstWorkspaceId,
+              kind: "project",
+              projectId: current.firstProjectId,
             },
             projection: "summary",
             pageSize: 1,
@@ -782,8 +731,8 @@ describe("task repository", () => {
         current.tasks.listPage(current.scope, {
           scopeMode: "exact",
           taskScope: {
-            kind: "workspace",
-            workspaceId: current.secondWorkspaceId,
+            kind: "project",
+            projectId: current.secondProjectId,
           },
           projection: "summary",
           pageSize: 1,
@@ -938,7 +887,7 @@ describe("task repository", () => {
       });
       const firstWorkspace = current.tasks.create(current.scope, {
         title: "First workspace task",
-        scope: { kind: "workspace", workspaceId: current.firstWorkspaceId },
+        scope: { kind: "project", projectId: current.firstProjectId },
         mutationId: "subtree-first-workspace",
         now: 2_000,
       });
@@ -950,7 +899,7 @@ describe("task repository", () => {
       });
       const secondWorkspace = current.tasks.create(current.scope, {
         title: "Second workspace task",
-        scope: { kind: "workspace", workspaceId: current.secondWorkspaceId },
+        scope: { kind: "project", projectId: current.secondProjectId },
         mutationId: "subtree-second-workspace",
         now: 4_000,
       });
@@ -991,8 +940,8 @@ describe("task repository", () => {
         current.tasks
           .listPage(current.scope, {
             taskScope: {
-              kind: "workspace",
-              workspaceId: current.firstWorkspaceId,
+              kind: "project",
+              projectId: current.firstProjectId,
             },
             scopeMode: "subtree",
             projection: "summary",
@@ -1003,7 +952,7 @@ describe("task repository", () => {
       expect(
         current.tasks.getAssociated(current.scope, firstThread.id),
       ).toMatchObject({
-        associatedWorkspaceId: current.firstWorkspaceId,
+        associatedProjectId: current.firstProjectId,
       });
       expect(
         current.tasks
@@ -1024,15 +973,15 @@ describe("task repository", () => {
       expect(
         current.tasks.getAssociated(current.scope, firstThread.id),
       ).toMatchObject({
-        associatedWorkspaceId: current.secondWorkspaceId,
+        associatedProjectId: current.secondProjectId,
       });
       expect(
         current.tasks
           .listPage(current.scope, {
             scopeMode: "subtree",
             taskScope: {
-              kind: "workspace",
-              workspaceId: current.firstWorkspaceId,
+              kind: "project",
+              projectId: current.firstProjectId,
             },
             projection: "summary",
             pageSize: 50,
@@ -1044,8 +993,8 @@ describe("task repository", () => {
           .listPage(current.scope, {
             scopeMode: "subtree",
             taskScope: {
-              kind: "workspace",
-              workspaceId: current.secondWorkspaceId,
+              kind: "project",
+              projectId: current.secondProjectId,
             },
             projection: "summary",
             pageSize: 50,
@@ -1071,8 +1020,8 @@ describe("task repository", () => {
           .listPage(current.scope, {
             scopeMode: "subtree",
             taskScope: {
-              kind: "workspace",
-              workspaceId: current.secondWorkspaceId,
+              kind: "project",
+              projectId: current.secondProjectId,
             },
             projection: "summary",
             pageSize: 50,
@@ -1111,14 +1060,299 @@ describe("task repository", () => {
       expect(() =>
         current.tasks.listPage(foreignScope, {
           taskScope: {
-            kind: "workspace",
-            workspaceId: current.firstWorkspaceId,
+            kind: "project",
+            projectId: current.firstProjectId,
           },
           scopeMode: "subtree",
           projection: "summary",
           pageSize: 50,
         }),
       ).toThrow(domainError("not_found"));
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("spans a project's active locations and hides removed projects and locations", () => {
+    const current = fixture();
+    try {
+      const list = (
+        taskScope: Parameters<TaskRepository["listPage"]>[1]["taskScope"],
+        scopeMode: "exact" | "subtree",
+      ) =>
+        current.tasks
+          .listPage(current.scope, {
+            taskScope,
+            scopeMode,
+            projection: "summary",
+            pageSize: 50,
+          })
+          .items.map(({ id }) => id);
+      const profile = current.database
+        .prepare("SELECT id FROM agent_connection_profiles LIMIT 1")
+        .get() as { readonly id: string };
+      const location = (canonicalPath: string, projectId: string) =>
+        current.inventory.upsertWorkspace(current.scope, {
+          environmentId: current.environmentId,
+          canonicalPath,
+          displayName: canonicalPath.split("/").at(-1)!,
+          project: { kind: "existing", projectId },
+          available: true,
+          trustState: "trusted",
+          environmentConfigurationRevision: 0,
+          now: 900,
+        });
+      const remove = (workspaceId: string) =>
+        current.inventory.removeWorkspace(current.scope, workspaceId, {
+          expectedRevision: current.inventory.getWorkspace(
+            current.scope,
+            workspaceId,
+          ).revision,
+          expectedThreadIds: current.inventory.listThreadIdsForWorkspace(
+            current.scope,
+            workspaceId,
+          ),
+          now: 950,
+        });
+      // A second location of the first project, with its own thread.
+      const copy = location("/tmp/tasks-first-copy", current.firstProjectId);
+      const copyThread = current.bindings.createUnboundThread(current.scope, {
+        workspaceId: copy.id,
+        connectionProfileId: profile.id,
+        title: "Copy thread",
+        now: 910,
+      });
+      const projectTask = current.tasks.create(current.scope, {
+        title: "Shared project task",
+        scope: { kind: "project", projectId: current.firstProjectId },
+        mutationId: "spans-project",
+        now: 1_000,
+      });
+      const copyTask = current.tasks.create(current.scope, {
+        title: "Copy thread task",
+        scope: { kind: "thread", threadId: copyThread.id },
+        mutationId: "spans-copy-thread",
+        now: 1_100,
+      });
+      const firstThreadTask = current.tasks.create(current.scope, {
+        title: "First thread task",
+        scope: { kind: "thread", threadId: current.firstThreadId },
+        mutationId: "spans-first-thread",
+        now: 1_200,
+      });
+      expect(
+        list({ kind: "project", projectId: current.firstProjectId }, "subtree"),
+      ).toEqual([projectTask.id, copyTask.id, firstThreadTask.id]);
+      expect(
+        current.tasks.getAssociated(current.scope, copyTask.id),
+      ).toMatchObject({
+        associatedProjectId: current.firstProjectId,
+        associatedWorkspaceId: copy.id,
+      });
+
+      // A removed location hides its thread tasks; its project stays active.
+      remove(copy.id);
+      expect(
+        list({ kind: "project", projectId: current.firstProjectId }, "subtree"),
+      ).toEqual([projectTask.id, firstThreadTask.id]);
+      expect(list({ kind: "global" }, "subtree")).toEqual([
+        projectTask.id,
+        firstThreadTask.id,
+      ]);
+
+      // A project without an active location is reached only by its own query.
+      remove(current.firstWorkspaceId);
+      expect(
+        list({ kind: "project", projectId: current.firstProjectId }, "exact"),
+      ).toEqual([projectTask.id]);
+      expect(list({ kind: "global" }, "subtree")).toEqual([]);
+
+      // A removed project is neither listed nor a destination.
+      const project = current.inventory.getProject(
+        current.scope,
+        current.firstProjectId,
+      );
+      const inspection = current.inventory.inspectProjectRemoval(
+        current.scope,
+        current.firstProjectId,
+        {
+          expectedRevision: project.revision,
+          expectedMembershipRevision: project.membershipRevision,
+        },
+      );
+      current.inventory.removeProject(current.scope, current.firstProjectId, {
+        expectedRevision: project.revision,
+        expectedMembershipRevision: project.membershipRevision,
+        expectedLocations: inspection.locations,
+        now: 1_300,
+      });
+      expect(() =>
+        list({ kind: "project", projectId: current.firstProjectId }, "exact"),
+      ).toThrow(domainError("not_found"));
+      expect(() =>
+        current.tasks.create(current.scope, {
+          title: "Into a removed project",
+          scope: { kind: "project", projectId: current.firstProjectId },
+          mutationId: "spans-removed-create",
+          now: 1_400,
+        }),
+      ).toThrow(domainError("not_found"));
+      const global = current.tasks.create(current.scope, {
+        title: "Global",
+        scope: { kind: "global" },
+        mutationId: "spans-global",
+        now: 1_500,
+      });
+      expect(() =>
+        current.tasks.move(current.scope, global.id, {
+          scope: { kind: "project", projectId: current.firstProjectId },
+          expectedRevision: 0,
+          mutationId: "spans-removed-move",
+          now: 1_600,
+        }),
+      ).toThrow(domainError("not_found"));
+      // The commit-time guard also refuses a write that skipped the check.
+      expect(() =>
+        current.database
+          .prepare(
+            "UPDATE tasks SET scope_kind = 'project', project_id = ? WHERE id = ?",
+          )
+          .run(current.firstProjectId, global.id),
+      ).toThrow(
+        "The project was removed. Restore it before moving saved work into it.",
+      );
+      expect(current.tasks.get(current.scope, projectTask.id).title).toBe(
+        "Shared project task",
+      );
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("replays pre-upgrade create receipts in project form and fails closed for scoped updates", () => {
+    const current = fixture(126);
+    try {
+      const taskId = randomUUID();
+      const record = {
+        tenantId: current.scope.tenantId,
+        ownerPrincipalId: current.scope.principalId,
+        id: taskId,
+        scopeKind: "workspace",
+        environmentId: current.environmentId,
+        workspaceId: current.firstWorkspaceId,
+        threadId: null,
+        title: "Before projects",
+        details: "Old",
+        pinned: true,
+        files: ["/tmp/a.md"],
+        completedAt: null,
+        revision: 0,
+        createdAt: 1_000,
+        updatedAt: 1_000,
+      };
+      current.database
+        .prepare(
+          `
+            INSERT INTO tasks(
+              tenant_id, owner_principal_id, id, scope_kind, environment_id,
+              workspace_id, thread_id, title, details, pinned, files_json,
+              completed_at, revision, created_at, updated_at
+            ) VALUES (?, ?, ?, 'workspace', ?, ?, NULL, ?, ?, 1, ?, NULL, 0, ?, ?)
+          `,
+        )
+        .run(
+          current.scope.tenantId,
+          current.scope.principalId,
+          taskId,
+          current.environmentId,
+          current.firstWorkspaceId,
+          record.title,
+          record.details,
+          JSON.stringify(record.files),
+          1_000,
+          1_000,
+        );
+      const receipt = current.database.prepare(
+        `
+          INSERT INTO task_mutation_receipts(
+            tenant_id, principal_id, mutation_id, operation_kind,
+            request_fingerprint, result_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `,
+      );
+      const fingerprint = (parts: readonly unknown[]) =>
+        createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+      receipt.run(
+        current.scope.tenantId,
+        current.scope.principalId,
+        "create-before-projects",
+        "create_task",
+        fingerprint([
+          "create_task",
+          record.title,
+          record.details,
+          true,
+          record.files,
+          "workspace",
+          current.firstWorkspaceId,
+        ]),
+        JSON.stringify({ version: 1, record }),
+        1_000,
+      );
+      const moved = { ...record, revision: 1, updatedAt: 1_500 };
+      receipt.run(
+        current.scope.tenantId,
+        current.scope.principalId,
+        "update-scope-before-projects",
+        "update_task",
+        fingerprint([
+          "update_task",
+          taskId,
+          null,
+          null,
+          null,
+          0,
+          null,
+          null,
+          ["workspace", current.firstWorkspaceId],
+        ]),
+        JSON.stringify({ version: 1, record: moved }),
+        1_500,
+      );
+
+      applyDatabaseMigrations(current.database, backendNormalizedMigrations);
+      const projectId = current.inventory.getWorkspace(
+        current.scope,
+        current.firstWorkspaceId,
+      ).projectId;
+      const { environmentId: _environment, workspaceId: _workspace, ...rest } =
+        record;
+      expect(
+        current.tasks.create(current.scope, {
+          title: record.title,
+          details: record.details,
+          pinned: true,
+          files: record.files,
+          scope: { kind: "project", projectId },
+          mutationId: "create-before-projects",
+          now: 2_000,
+        }),
+      ).toEqual({ ...rest, scopeKind: "project", projectId });
+      // The update fingerprint covered the former scope and an unstored
+      // expected revision, so its replay fails closed.
+      expect(() =>
+        current.tasks.update(current.scope, taskId, {
+          scope: { kind: "project", projectId },
+          expectedRevision: 0,
+          mutationId: "update-scope-before-projects",
+          now: 2_500,
+        }),
+      ).toThrow(domainError("conflict"));
+      expect(current.tasks.get(current.scope, taskId)).toMatchObject({
+        scopeKind: "project",
+        projectId,
+        revision: 0,
+      });
     } finally {
       current.database.close();
     }
@@ -1132,14 +1366,14 @@ describe("task repository", () => {
         details: "Check the rollout notes",
         pinned: true,
         files: ["/tmp/release.md"],
-        scope: { kind: "workspace", workspaceId: current.firstWorkspaceId },
+        scope: { kind: "project", projectId: current.firstProjectId },
         mutationId: "audit-matching",
         now: 1_000,
       });
       const completed = current.tasks.create(current.scope, {
         title: "Release follow-up",
         pinned: true,
-        scope: { kind: "workspace", workspaceId: current.firstWorkspaceId },
+        scope: { kind: "project", projectId: current.firstProjectId },
         mutationId: "audit-completed",
         now: 2_000,
       });
@@ -1151,20 +1385,20 @@ describe("task repository", () => {
       });
       current.tasks.create(current.scope, {
         title: "Unpinned release task",
-        scope: { kind: "workspace", workspaceId: current.firstWorkspaceId },
+        scope: { kind: "project", projectId: current.firstProjectId },
         mutationId: "audit-unpinned",
         now: 3_000,
       });
       const unicode = current.tasks.create(current.scope, {
         title: "Ärger review",
-        scope: { kind: "workspace", workspaceId: current.firstWorkspaceId },
+        scope: { kind: "project", projectId: current.firstProjectId },
         mutationId: "audit-unicode",
         now: 4_000,
       });
 
       const page = current.tasks.listPage(current.scope, {
         scopeMode: "exact",
-        taskScope: { kind: "workspace", workspaceId: current.firstWorkspaceId },
+        taskScope: { kind: "project", projectId: current.firstProjectId },
         completed: false,
         pinned: true,
         query: "  release  ",
@@ -1177,7 +1411,8 @@ describe("task repository", () => {
         items: [
           {
             ...matching,
-            associatedWorkspaceId: current.firstWorkspaceId,
+            associatedProjectId: current.firstProjectId,
+            associatedWorkspaceId: null,
           },
         ],
       });
@@ -1190,8 +1425,8 @@ describe("task repository", () => {
           .listPage(current.scope, {
             scopeMode: "exact",
             taskScope: {
-              kind: "workspace",
-              workspaceId: current.firstWorkspaceId,
+              kind: "project",
+              projectId: current.firstProjectId,
             },
             query: "ÄRGER",
             projection: "summary",
@@ -1203,8 +1438,8 @@ describe("task repository", () => {
         current.tasks.listPage(current.scope, {
           scopeMode: "exact",
           taskScope: {
-            kind: "workspace",
-            workspaceId: current.firstWorkspaceId,
+            kind: "project",
+            projectId: current.firstProjectId,
           },
           query: "ärger",
           projection: "summary",
@@ -1215,8 +1450,8 @@ describe("task repository", () => {
         current.tasks.listPage(current.scope, {
           scopeMode: "exact",
           taskScope: {
-            kind: "workspace",
-            workspaceId: current.firstWorkspaceId,
+            kind: "project",
+            projectId: current.firstProjectId,
           },
           query: "   ",
           projection: "summary",
@@ -1327,7 +1562,7 @@ describe("task repository", () => {
         completed: false,
         pinned: true,
         files: ["/tmp/spec.md", "/tmp/release.zip"],
-        scope: { kind: "workspace", workspaceId: current.firstWorkspaceId },
+        scope: { kind: "project", projectId: current.firstProjectId },
         expectedRevision: 1,
         mutationId: "update-all-fields",
         now: 2_500,
@@ -1338,9 +1573,8 @@ describe("task repository", () => {
         completedAt: null,
         pinned: true,
         files: ["/tmp/spec.md", "/tmp/release.zip"],
-        scopeKind: "workspace",
-        environmentId: current.environmentId,
-        workspaceId: current.firstWorkspaceId,
+        scopeKind: "project",
+        projectId: current.firstProjectId,
         threadId: null,
         revision: 2,
         updatedAt: 2_500,
@@ -1352,7 +1586,7 @@ describe("task repository", () => {
           completed: false,
           pinned: true,
           files: ["/tmp/spec.md", "/tmp/release.zip"],
-          scope: { kind: "workspace", workspaceId: current.firstWorkspaceId },
+          scope: { kind: "project", projectId: current.firstProjectId },
           expectedRevision: 1,
           mutationId: "update-all-fields",
           now: 2_750,
@@ -1461,15 +1695,14 @@ describe("task repository", () => {
       });
 
       const toWorkspace = current.tasks.move(current.scope, task.id, {
-        scope: { kind: "workspace", workspaceId: current.secondWorkspaceId },
+        scope: { kind: "project", projectId: current.secondProjectId },
         expectedRevision: 0,
         mutationId: "move-workspace",
         now: 2_000,
       });
       expect(toWorkspace).toMatchObject({
-        scopeKind: "workspace",
-        environmentId: current.environmentId,
-        workspaceId: current.secondWorkspaceId,
+        scopeKind: "project",
+        projectId: current.secondProjectId,
         threadId: null,
         revision: 1,
         updatedAt: 2_000,
@@ -1483,8 +1716,7 @@ describe("task repository", () => {
       });
       expect(toGlobal).toMatchObject({
         scopeKind: "global",
-        environmentId: null,
-        workspaceId: null,
+        projectId: null,
         threadId: null,
         revision: 2,
       });
@@ -1502,8 +1734,7 @@ describe("task repository", () => {
       );
       expect(toThread).toMatchObject({
         scopeKind: "thread",
-        environmentId: null,
-        workspaceId: null,
+        projectId: null,
         threadId: current.firstThreadId,
         revision: 3,
         updatedAt: 4_000,
@@ -1528,9 +1759,9 @@ describe("task repository", () => {
 
       expect(() =>
         current.tasks.move(current.scope, task.id, {
-          scope: { kind: "workspace", workspaceId: randomUUID() },
+          scope: { kind: "project", projectId: randomUUID() },
           expectedRevision: 3,
-          mutationId: "move-missing-workspace",
+          mutationId: "move-missing-project",
           now: 6_000,
         }),
       ).toThrow(domainError("not_found"));
@@ -1597,8 +1828,8 @@ describe("task repository", () => {
           current.tasks.listPage(foreign, {
             scopeMode: "exact",
             taskScope: {
-              kind: "workspace",
-              workspaceId: current.firstWorkspaceId,
+              kind: "project",
+              projectId: current.firstProjectId,
             },
             projection: "summary",
             pageSize: 50,
@@ -1693,7 +1924,7 @@ describe("task repository", () => {
       });
       current.tasks.create(current.scope, {
         title: "Workspace task excluded",
-        scope: { kind: "workspace", workspaceId: current.firstWorkspaceId },
+        scope: { kind: "project", projectId: current.firstProjectId },
         mutationId: "count-workspace-excluded",
         now: 1_500,
       });
@@ -1780,8 +2011,7 @@ describe("task repository", () => {
       expect(moved).toEqual([open.id]);
       expect(current.tasks.get(current.scope, open.id)).toMatchObject({
         scopeKind: "global",
-        environmentId: null,
-        workspaceId: null,
+        projectId: null,
         threadId: null,
         revision: 1,
         updatedAt: 2_000,
@@ -1828,21 +2058,19 @@ describe("task repository", () => {
       const moved = current.tasks.applyOpenThreadTaskDisposition(
         current.scope,
         [current.firstThreadId, current.secondThreadId],
-        "move_to_workspace",
+        "move_to_project",
         3_000,
       );
       expect([...moved].sort()).toEqual([firstOpen.id, secondOpen.id].sort());
       expect(current.tasks.get(current.scope, firstOpen.id)).toMatchObject({
-        scopeKind: "workspace",
-        environmentId: current.environmentId,
-        workspaceId: current.firstWorkspaceId,
+        scopeKind: "project",
+        projectId: current.firstProjectId,
         threadId: null,
         revision: 1,
       });
       expect(current.tasks.get(current.scope, secondOpen.id)).toMatchObject({
-        scopeKind: "workspace",
-        environmentId: current.environmentId,
-        workspaceId: current.secondWorkspaceId,
+        scopeKind: "project",
+        projectId: current.secondProjectId,
         threadId: null,
         revision: 1,
       });
@@ -1855,106 +2083,53 @@ describe("task repository", () => {
     }
   });
 
-  it("promotes open and completed thread tasks to the workspace", () => {
-    const current = fixture();
-    try {
-      const open = current.tasks.create(current.scope, {
-        title: "Open promotable",
-        scope: { kind: "thread", threadId: current.firstThreadId },
-        mutationId: "promote-open",
-        now: 1_000,
-      });
-      const done = current.tasks.create(current.scope, {
-        title: "Completed promotable",
-        scope: { kind: "thread", threadId: current.firstThreadId },
-        mutationId: "promote-done",
-        now: 1_100,
-      });
-      current.tasks.update(current.scope, done.id, {
-        completed: true,
-        expectedRevision: 0,
-        mutationId: "promote-done-complete",
-        now: 1_200,
-      });
-      const untouched = current.tasks.create(current.scope, {
-        title: "Other thread task",
-        scope: { kind: "thread", threadId: current.secondThreadId },
-        mutationId: "promote-untouched",
-        now: 1_300,
-      });
-
-      const moved = current.tasks.promoteThreadTasksToWorkspace(
-        current.scope,
-        current.firstThreadId,
-        2_000,
-      );
-      expect([...moved].sort()).toEqual([open.id, done.id].sort());
-      expect(current.tasks.get(current.scope, open.id)).toMatchObject({
-        scopeKind: "workspace",
-        environmentId: current.environmentId,
-        workspaceId: current.firstWorkspaceId,
-        threadId: null,
-        revision: 1,
-      });
-      expect(current.tasks.get(current.scope, done.id)).toMatchObject({
-        scopeKind: "workspace",
-        environmentId: current.environmentId,
-        workspaceId: current.firstWorkspaceId,
-        threadId: null,
-        completedAt: 1_200,
-        revision: 2,
-      });
-      expect(current.tasks.get(current.scope, untouched.id)).toMatchObject({
-        scopeKind: "thread",
-        threadId: current.secondThreadId,
-        revision: 0,
-      });
-    } finally {
-      current.database.close();
-    }
-  });
-
   it("rejects direct inserts with contradictory scope columns", () => {
     const current = fixture();
     try {
       const insert = current.database.prepare(
         `
           INSERT INTO tasks(
-            tenant_id, owner_principal_id, id, scope_kind, environment_id,
-            workspace_id, thread_id, title, details, completed_at, revision,
+            tenant_id, owner_principal_id, id, scope_kind, project_id,
+            thread_id, title, details, completed_at, revision,
             created_at, updated_at
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', NULL, 0, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, '', NULL, 0, ?, ?)
         `,
       );
+      for (const [scopeKind, projectId, threadId] of [
+        ["global", null, current.firstThreadId],
+        ["project", null, null],
+        ["project", current.firstProjectId, current.firstThreadId],
+        ["thread", current.firstProjectId, current.firstThreadId],
+        ["workspace", current.firstProjectId, null],
+      ] as const) {
+        expect(() =>
+          insert.run(
+            current.scope.tenantId,
+            current.scope.principalId,
+            randomUUID(),
+            scopeKind,
+            projectId,
+            threadId,
+            "Contradictory",
+            1_000,
+            1_000,
+          ),
+        ).toThrow(/CHECK constraint failed/);
+      }
       expect(() =>
         insert.run(
           current.scope.tenantId,
           current.scope.principalId,
           randomUUID(),
-          "global",
-          null,
-          null,
-          current.firstThreadId,
-          "Global with thread",
-          1_000,
-          1_000,
-        ),
-      ).toThrow(/CHECK constraint failed/);
-      expect(() =>
-        insert.run(
-          current.scope.tenantId,
-          current.scope.principalId,
+          "project",
           randomUUID(),
-          "workspace",
           null,
-          current.firstWorkspaceId,
-          null,
-          "Workspace without environment",
+          "Unknown project",
           1_000,
           1_000,
         ),
-      ).toThrow(/CHECK constraint failed/);
+      ).toThrow(/FOREIGN KEY constraint failed/);
       expect(current.tasks.list(current.scope)).toEqual([]);
     } finally {
       current.database.close();
@@ -1992,7 +2167,7 @@ describe("task repository", () => {
           blockedThreadIds: new Set(),
           executionWorkspaceDisposition: { kind: "keep" },
           now: 2_000,
-          openTaskDisposition: "move_to_workspace",
+          openTaskDisposition: "move_to_project",
           applyOpenTasks: () => {
             throw new Error("disposition_failed");
           },
@@ -2011,7 +2186,7 @@ describe("task repository", () => {
         current.tasks.applyOpenThreadTaskDisposition(
           current.scope,
           archivedThreadIds,
-          "move_to_workspace",
+          "move_to_project",
           3_000,
         ),
       );
@@ -2023,7 +2198,7 @@ describe("task repository", () => {
         blockedThreadIds: new Set<string>(),
         executionWorkspaceDisposition: { kind: "keep" },
         now: 3_000,
-        openTaskDisposition: "move_to_workspace",
+        openTaskDisposition: "move_to_project",
         applyOpenTasks,
       } as const;
       const result = current.inventory.archiveThreads(
@@ -2041,9 +2216,8 @@ describe("task repository", () => {
       ).toMatchObject({ inventoryState: "archived", inventoryRevision: 1 });
       const movedOpen = current.tasks.get(current.scope, open.id);
       expect(movedOpen).toMatchObject({
-        scopeKind: "workspace",
-        environmentId: current.environmentId,
-        workspaceId: current.firstWorkspaceId,
+        scopeKind: "project",
+        projectId: current.firstProjectId,
         threadId: null,
         revision: 1,
         updatedAt: 3_000,

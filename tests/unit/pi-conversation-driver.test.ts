@@ -104,20 +104,17 @@ import type {
   BackendAgentToolInvocationInput,
 } from "../../src/server/agent-tools/adapters/backend-facade.js";
 import { AgentToolRegistry } from "../../src/server/agent-tools/registry/agent-tool-registry.js";
-import { createAgentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
+import { agentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
 import { ConversationProjector } from "../../src/server/conversations/conversation-projector.js";
 import { renderTaskContextsForModel } from "../../src/server/conversations/delivery-input-projection.js";
+import { parseStoredTaskContexts } from "../../src/server/db/composer-tasks-json.js";
+import type { MaterializedTaskContext } from "../../src/server/domain/materialized-task-contexts.js";
 import {
   compileBackendModelPolicy,
   type CompiledBackendModelPolicy,
 } from "../../src/server/backends/model-policy.js";
 import { createFakeAgentToolSourceCapabilities } from "../helpers/fake-agent-tool-source-capabilities.js";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
-
-const agentContextToolDefinition = createAgentContextToolDefinition({
-  readWorkspaceProjectId: async () => "project-1",
-  readThreadStatus: async () => undefined,
-});
 
 const roots: string[] = [];
 const toolProvenanceKey = new Uint8Array(32).fill(0x42);
@@ -1308,9 +1305,14 @@ describe("Pi session persistence adapter", () => {
         sourceAuthentication,
       ),
     );
+    // A snapshot delivered before Tasks moved from workspace to project scope
+    // is re-signed for the branch exactly as delivered.
     const taskContext = {
       id: "10000000-0000-4000-8000-000000000001",
-      scope: { kind: "global" as const },
+      scope: {
+        kind: "workspace" as const,
+        workspaceId: "20000000-0000-4000-8000-000000000001",
+      },
       title: "Preserve this task",
       details: "The native branch keeps this immutable snapshot.",
       pinned: false,
@@ -3327,95 +3329,152 @@ describe("Pi conversation backend driver", () => {
     await handle.close();
   });
 
-  it("repairs task history when reattached after user persistence but before live attestation", async () => {
-    const fixture = await workspace();
-    const nativeId = "task-attestation-recovery-native";
-    const store = new PiSessionStore({ sessionDirectory: fixture.sessions });
-    const reserved = await store.reserve(fixture.workspace, nativeId);
-    const authentication = {
-      conversationId: nativeId,
-      installationKey: toolProvenanceKey,
-    };
-    const taskContext = {
-      id: "10000000-0000-4000-8000-000000000001",
-      scope: { kind: "global" as const },
-      title: "Recover after restart",
-      details: "The native user entry is already durable.",
-      pinned: false,
-      files: [],
-      completedAt: null,
-      revision: 5,
-      createdAt: "2026-08-11T12:00:00.000Z",
-      updatedAt: "2026-08-11T13:00:00.000Z",
-    };
-    const submission = createPiSubmissionMarker({
-      applicationOperationId: "task-attestation-recovery",
-      mutationId: "task-attestation-recovery",
-      reconciliationToken: "task-attestation-recovery",
-      mode: "submit",
-      contextExcerpts: [],
-      attachments: [],
-      taskContexts: [taskContext],
-      text: "",
-    });
-    reserved.manager.appendCustomEntry(
-      piTaskContextMarkerType,
-      createPiTaskContextMarker(
-        {
-          applicationOperationId: submission.applicationOperationId,
-          requestFingerprint: submission.requestFingerprint,
-          taskContexts: [taskContext],
-        },
-        authentication,
-      ),
-    );
-    reserved.manager.appendCustomEntry(piSubmissionMarkerType, submission);
-    const userEntryId = reserved.manager.appendMessage({
-      role: "user",
-      content: formatPiTaskContextPrompt([taskContext], ""),
-      timestamp: Date.now(),
-    });
-
-    const driver = new PiConversationBackendDriver({
-      instance,
-      connection,
-      usage: NO_USAGE_SINK,
-      nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
-      toolProvenanceKey,
-      agentTools: noAgentTools,
-      toolAccessPolicy: fullToolAccessPolicy,
-      sessionDirectory: fixture.sessions,
-      sessionFactory: fakeSessionFactory(),
-    });
-    const handle = await driver.attach({
-      scope,
-      workspace: fixture.workspace,
-      binding: binding(nativeId, "task-attestation-recovery-thread"),
-      opaqueBindingDetail: reserved.opaqueBindingDetail,
-    });
-    const projection = await handle.establishProjection({
-      signal: new AbortController().signal,
-    });
-
-    expect(projection.snapshot.itemsById[`${userEntryId}:user`]).toMatchObject({
-      deliveryOperationId: "task-attestation-recovery",
-      content: [{ kind: "task_context", task: taskContext }],
-    });
-    const recoveredManager = await store.openPersisted(
-      fixture.workspace,
-      nativeId,
-    );
-    expect(
-      recoveredManager!
-        .getBranch()
-        .filter(
-          (entry) =>
-            entry.type === "custom" &&
-            entry.customType === piSubmissionAttestationType,
+  it.each([
+    ["global", '{"kind":"global"}'],
+    // Delivered before Tasks moved from workspace to project scope.
+    [
+      "legacy workspace",
+      '{"kind":"workspace","workspaceId":"20000000-0000-4000-8000-000000000001"}',
+    ],
+    [
+      "project",
+      '{"kind":"project","projectId":"30000000-0000-4000-8000-000000000001"}',
+    ],
+  ] as const)(
+    "repairs %s-scope task history when reattached after user persistence but before live attestation",
+    async (_label, scopeJson) => {
+      const fixture = await workspace();
+      const nativeId = "task-attestation-recovery-native";
+      const store = new PiSessionStore({ sessionDirectory: fixture.sessions });
+      const reserved = await store.reserve(fixture.workspace, nativeId);
+      const authentication = {
+        conversationId: nativeId,
+        installationKey: toolProvenanceKey,
+      };
+      // The exact delivery snapshot row the application stored for this operation.
+      const storedTaskContextsJson = `[{"id":"10000000-0000-4000-8000-000000000001","scope":${scopeJson},"title":"Recover after restart","details":"The native user entry is already durable.","pinned":false,"files":[],"completedAt":null,"revision":5,"createdAt":"2026-08-11T12:00:00.000Z","updatedAt":"2026-08-11T13:00:00.000Z"}]`;
+      const [taskContext] = parseStoredTaskContexts(storedTaskContextsJson) as [
+        MaterializedTaskContext,
+      ];
+      const submission = createPiSubmissionMarker({
+        applicationOperationId: "task-attestation-recovery",
+        mutationId: "task-attestation-recovery",
+        reconciliationToken: "task-attestation-recovery",
+        mode: "submit",
+        contextExcerpts: [],
+        attachments: [],
+        taskContexts: [taskContext],
+        text: "",
+      });
+      reserved.manager.appendCustomEntry(
+        piTaskContextMarkerType,
+        createPiTaskContextMarker(
+          {
+            applicationOperationId: submission.applicationOperationId,
+            requestFingerprint: submission.requestFingerprint,
+            taskContexts: [taskContext],
+          },
+          authentication,
         ),
-    ).toHaveLength(1);
-    await handle.close();
-  });
+      );
+      reserved.manager.appendCustomEntry(piSubmissionMarkerType, submission);
+      const userEntryId = reserved.manager.appendMessage({
+        role: "user",
+        content: formatPiTaskContextPrompt([taskContext], ""),
+        timestamp: Date.now(),
+      });
+
+      const driver = new PiConversationBackendDriver({
+        instance,
+        connection,
+        usage: NO_USAGE_SINK,
+        nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
+        toolProvenanceKey,
+        agentTools: noAgentTools,
+        toolAccessPolicy: fullToolAccessPolicy,
+        sessionDirectory: fixture.sessions,
+        sessionFactory: fakeSessionFactory(),
+      });
+      const handle = await driver.attach({
+        scope,
+        workspace: fixture.workspace,
+        binding: binding(nativeId, "task-attestation-recovery-thread"),
+        opaqueBindingDetail: reserved.opaqueBindingDetail,
+      });
+      const projection = await handle.establishProjection({
+        signal: new AbortController().signal,
+      });
+
+      expect(projection.snapshot.itemsById[`${userEntryId}:user`]).toMatchObject({
+        deliveryOperationId: "task-attestation-recovery",
+        content: [
+          {
+            kind: "task_context",
+            task: {
+              id: taskContext.id,
+              title: taskContext.title,
+              details: taskContext.details,
+              completedAt: taskContext.completedAt,
+              revision: taskContext.revision,
+            },
+          },
+        ],
+      });
+      expect(
+        JSON.stringify(projection.snapshot.itemsById[`${userEntryId}:user`]),
+      ).not.toContain('"scope"');
+      const recoveredManager = await store.openPersisted(
+        fixture.workspace,
+        nativeId,
+      );
+      expect(
+        recoveredManager!
+          .getBranch()
+          .filter(
+            (entry) =>
+              entry.type === "custom" &&
+              entry.customType === piSubmissionAttestationType,
+          ),
+      ).toHaveLength(1);
+
+      // Replaying the operation from its stored row matches the durable intent.
+      const replay = {
+        applicationOperationId: "task-attestation-recovery",
+        mutationId: "task-attestation-recovery",
+        reconciliationToken: "task-attestation-recovery",
+        source: { kind: "user" as const },
+        contextExcerpts: [],
+        attachments: [],
+        taskContexts: parseStoredTaskContexts(storedTaskContextsJson),
+        text: "",
+      };
+      await expect(handle.submit(replay)).resolves.toEqual({
+        accepted: true,
+        reconciliationToken: "task-attestation-recovery",
+        completionCorrelation: "task-attestation-recovery",
+        backendTurnId: userEntryId,
+      });
+      await handle.close();
+
+      const reattached = await driver.attach({
+        scope,
+        workspace: fixture.workspace,
+        binding: binding(nativeId, "task-attestation-recovery-thread"),
+        opaqueBindingDetail: reserved.opaqueBindingDetail,
+      });
+      await expect(
+        reattached.submit({
+          ...replay,
+          taskContexts: [{ ...taskContext, revision: taskContext.revision + 1 }],
+        }),
+      ).rejects.toMatchObject({ backendCode: "pi_submission_replay_mismatch" });
+      await expect(reattached.submit(replay)).resolves.toMatchObject({
+        accepted: true,
+        backendTurnId: userEntryId,
+      });
+      await reattached.close();
+    },
+  );
 
   it("forwards the exact skill, context, and text through Pi steering", async () => {
     const fixture = await workspace();

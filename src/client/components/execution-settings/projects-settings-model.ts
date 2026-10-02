@@ -92,7 +92,14 @@ export function describeProjectChanges(
   if (threads !== activeThreadCount(before)) {
     changes.push(`Its active locations now have ${counted(threads, "thread")}.`);
   }
+  changes.push(...describeProjectCountChanges(before, after));
   return changes;
+}
+
+function describeProjectCountChanges(before: ProjectSummary, after: ProjectSummary): string[] {
+  return before.taskCount === after.taskCount && before.workpadCount === after.workpadCount ? [] : [
+    `The project now has ${counted(after.taskCount, "task")} and ${counted(after.workpadCount, "workpad")}.`,
+  ];
 }
 
 /** What changed about a location that its dialogs describe, as sentences. */
@@ -112,6 +119,7 @@ export function describeLocationChanges(
   if (after.location.threadCount !== before.location.threadCount) {
     changes.push(`It now has ${counted(after.location.threadCount, "thread")}.`);
   }
+  if (after.project.id === before.project.id) changes.push(...describeProjectCountChanges(before.project, after.project));
   return changes;
 }
 

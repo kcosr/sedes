@@ -7,14 +7,13 @@ import type { WorkpadService } from "../../domain/workpad-service.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import type { TrustedToolInvocationContext } from "../contracts/agent-tool-contracts.js";
 import {
-  environmentAuthorityContinuationDigest, requireAdmittedEnvironment, requireAdmittedResource,
-  type AgentToolEnvironmentAuthorityReader,
+  currentScopedResourceRefs, environmentAuthorityContinuationDigest, grantProjectAccessCaller,
+  requireAdmittedResources, scopeAuthorityRefs, type AgentToolEnvironmentAuthorityReader,
 } from "../environment/environment-authority.js";
-import { CanonicalAgentToolRequestError } from "../invocation/canonical-agent-tool-request-error.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
 import { resolveTaskTargetScope } from "./management-tool-schemas.js";
 
-const target = z.strictObject({ kind: z.enum(["global", "workspace", "thread"]), workspaceId: z.string().min(1).max(128).optional(), threadId: z.string().min(1).max(128).optional() });
+const target = z.strictObject({ kind: z.enum(["global", "project", "thread"]), projectId: z.string().min(1).max(128).optional(), threadId: z.string().min(1).max(128).optional() });
 const getInput = z.strictObject({ workpadId: workpadIdSchema, revision: z.number().int().nonnegative().optional() });
 const revisionInput = z.strictObject({ workpadId: workpadIdSchema, limit: z.number().int().min(1).max(100).optional(), cursor: z.string().min(1).max(256).optional() });
 const updateInput = z.object({ workpadId: workpadIdSchema }).passthrough();
@@ -36,14 +35,15 @@ export class WorkpadAgentToolService {
     if (operation === "list" || operation === "create") {
       const input = record.parse(raw);
       const resolved = resolveTaskTargetScope(target.parse(input.scope), context);
-      this.assertScope(scope, resolved, context);
       if (operation === "list") {
         const request = listWorkpadsRequestSchema.parse({ ...input, scope: resolved });
+        this.assertScope(scope, resolved, request.scopeMode, context);
         return this.input.workpads.list(scope, request, {
           environmentIds: context.environmentAuthority.targetEnvironmentIds,
           continuationKey: environmentAuthorityContinuationDigest(context.environmentAuthority, tool),
         });
       }
+      this.assertScope(scope, resolved, "exact", context);
       const request = createWorkpadRequestSchema.parse({ ...input, scope: resolved });
       return { workpad: documentText(await this.input.workpads.create(scope, request, actor)) };
     }
@@ -62,28 +62,22 @@ export class WorkpadAgentToolService {
     const { workpadId, ...input } = updateInput.parse(raw);
     this.assertWorkpad(scope, workpadId, context);
     const resolved = input.scope === undefined ? undefined : resolveTaskTargetScope(target.parse(input.scope), context);
-    if (resolved) this.assertScope(scope, resolved, context);
+    if (resolved) this.assertScope(scope, resolved, "exact", context);
     const request = updateWorkpadRequestSchema.parse({ ...input, ...(resolved ? { scope: resolved } : {}) });
     return { workpad: documentText(await this.input.workpads.update(scope, workpadId, request, actor)) };
   }
 
+  /** Rechecks the workpad's current scope against the admitted authority. */
   private assertWorkpad(scope: RequestScope, id: string, context: TrustedToolInvocationContext): void {
-    const current = this.input.workpads.getAuthority(scope, id);
-    requireAdmittedResource(context.environmentAuthority, {
-      kind: "workpad", id, revision: current.revision,
-      ...(current.environmentId === null ? {} : { environmentId: current.environmentId }),
-    });
+    requireAdmittedResources(context.environmentAuthority, currentScopedResourceRefs(
+      this.input.authorityReader, scope, "workpad", id, grantProjectAccessCaller(context.environmentAuthority)));
   }
 
-  private assertScope(scope: RequestScope, targetScope: WorkpadScope, context: TrustedToolInvocationContext): void {
+  /** Admission binds the exact destination or query scope, not just another resource in its environment. */
+  private assertScope(scope: RequestScope, targetScope: WorkpadScope, mode: "exact" | "subtree", context: TrustedToolInvocationContext): void {
     if (targetScope.kind === "global") return;
-    const fact = targetScope.kind === "thread"
-      ? this.input.authorityReader.resolveThread(scope, targetScope.threadId)
-      : this.input.authorityReader.resolveWorkspace(scope, targetScope.workspaceId);
-    if (!fact) throw new CanonicalAgentToolRequestError("permission_denied", "The requested resource is unavailable.");
-    requireAdmittedEnvironment(context.environmentAuthority, fact.environmentId);
-    // Admission binds the exact destination, not just another resource in its environment.
-    requireAdmittedResource(context.environmentAuthority, { kind: targetScope.kind, id: fact.id, environmentId: fact.environmentId, ...(fact.workspaceId ? { workspaceId: fact.workspaceId } : {}) });
+    requireAdmittedResources(context.environmentAuthority, scopeAuthorityRefs(
+      this.input.authorityReader, scope, targetScope, grantProjectAccessCaller(context.environmentAuthority), mode));
   }
 }
 

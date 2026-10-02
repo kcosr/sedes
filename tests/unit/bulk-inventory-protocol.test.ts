@@ -13,7 +13,7 @@ const secondThreadId = "10000000-0000-4000-8000-000000000002";
 
 describe("bulk inventory protocol", () => {
   it("advances the browser protocol fence", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(133);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(135);
   });
 
   it("accepts only strict, unique, bounded impact target sets", () => {
@@ -82,7 +82,7 @@ describe("bulk inventory protocol", () => {
         targets,
         expectedStashedPromptCount: 3,
         expectedOpenTaskCount: 4,
-        openTaskDisposition: "move_to_workspace",
+        openTaskDisposition: "move_to_project",
         mutationId: "20000000-0000-4000-8000-000000000003",
       }),
     ).toMatchObject({ action: "archive", targets });
@@ -166,7 +166,7 @@ describe("bulk inventory protocol", () => {
       targets,
       expectedStashedPromptCount: Number.MAX_SAFE_INTEGER,
       expectedOpenTaskCount: 10_000,
-      openTaskDisposition: "move_to_workspace",
+      openTaskDisposition: "move_to_project",
       mutationId: "20000000-0000-4000-8000-000000000004",
     });
     expect(Buffer.byteLength(JSON.stringify(request), "utf8")).toBeLessThan(

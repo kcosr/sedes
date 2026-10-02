@@ -369,7 +369,7 @@ test.describe.serial("blocking interaction panel", () => {
       );
       await expect(
         approval.getByTestId("interaction-prompt-code"),
-      ).toContainText("workspace.open@2 · write");
+      ).toContainText("workspace.open@3 · write");
       await expect(
         approval.getByRole("button", { name: "Allow once", exact: true }),
       ).toBeVisible();

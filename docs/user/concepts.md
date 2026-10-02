@@ -11,7 +11,8 @@ directory on one execution environment, and belongs to exactly one project. The
 same repository checked out on this computer and on an SSH host can be one
 project with two locations, and several related directories can share a
 project too. A project's name is a label you can change; it never renames a
-directory.
+directory. A project's Tasks and Workpads are shared by all of its locations,
+on every host.
 
 A thread runs in one location, which provides its working directory and, when
 supported, the root for Files, Git status, skills, and native-conversation
@@ -130,8 +131,8 @@ or lineage.
 ## Task and automation
 
 A **Task** is durable work tracked outside provider history. It may be global,
-belong to a project, or belong to one thread. A Task can be added to a prompt
-as a structured reference.
+belong to a project, where every location of the project lists it, or belong
+to one thread. A Task can be added to a prompt as a structured reference.
 
 An **automation** schedules a prompt on one thread. It can run on that thread or
 create a child thread for each run. Each thread can have at most one

@@ -268,9 +268,6 @@ function fixture() {
     },
   };
   const application = {
-    async readWorkspaceProjectId() {
-      return "project-1";
-    },
     async readThreadStatus(requestScope: RequestScope, threadId: string) {
       expect(requestScope).toEqual(scope);
       if (!turns.has(threadId)) return undefined;
@@ -357,6 +354,8 @@ function fixture() {
         ? [{ id, environmentId: "environment-1", label: id }]
         : undefined,
     resolveTask: () => undefined,
+    resolveProject: () => undefined,
+    resolveWorkspaceProject: () => "project-1",
     resolveWorkpad: () => undefined,
     resolveSavedAgent: () => undefined,
     listEnvironments: () => [
@@ -515,6 +514,7 @@ describe("agent control tools through canonical adapters", () => {
                 kind: "thread_agent",
                 environmentId: "environment-1",
                 workspaceId,
+                projectId: "project-1",
                 threadId: sourceThreadId,
               },
               policyIdentity: {
@@ -529,6 +529,7 @@ describe("agent control tools through canonical adapters", () => {
                   kind: "thread_agent",
                   environmentId: "environment-1",
                   workspaceId,
+                  projectId: "project-1",
                   threadId: sourceThreadId,
                 },
                 policyIdentity: {

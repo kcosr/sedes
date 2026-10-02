@@ -4,7 +4,12 @@ import {
   canonicalUserMessageContent,
   renderTaskContextsForModel,
 } from "../../src/server/conversations/delivery-input-projection.js";
-import type { MaterializedTaskContext } from "../../src/shared/protocol/tasks.js";
+import type { MaterializedTaskContext } from "../../src/server/domain/materialized-task-contexts.js";
+import {
+  parseStoredTaskContexts,
+  serializeTaskContexts,
+} from "../../src/server/db/composer-tasks-json.js";
+import { DomainError } from "../../src/server/domain/errors.js";
 import type { SubmitTurnInput } from "../../src/server/backends/contracts.js";
 import type { ApplicationSubmitTurnInput } from "../../src/server/conversations/delivery-input-projection.js";
 
@@ -20,6 +25,40 @@ const task: MaterializedTaskContext = {
   createdAt: "2026-08-16T10:00:00.000Z",
   updatedAt: "2026-08-16T11:00:00.000Z",
 };
+// Exact bytes stored before Tasks moved from workspace to project scope.
+const legacyTaskJson =
+  '{"id":"9b0a11bf-95a6-49f9-8e1f-0f433903beb2","scope":{"kind":"workspace","workspaceId":"0c1d2e3f-4a5b-4c6d-8e7f-901a2b3c4d5e"},"title":"Legacy workspace task","details":"Delivered before projects existed.","pinned":true,"files":["/workspace/legacy.ts"],"completedAt":"2026-08-15T09:00:00.000Z","revision":4,"createdAt":"2026-08-14T10:00:00.000Z","updatedAt":"2026-08-15T09:00:00.000Z"}';
+const projectTask: MaterializedTaskContext = {
+  ...task,
+  id: "2e3f4a5b-6c7d-4e8f-9a01-b2c3d4e5f607",
+  scope: { kind: "project", projectId: "1d2e3f4a-5b6c-4d7e-8f90-a1b2c3d4e5f6" },
+};
+
+/** The scope-free projection a conversation message shows of a Task snapshot. */
+function messageTask(value: MaterializedTaskContext) {
+  return {
+    id: value.id,
+    title: value.title,
+    details: value.details,
+    completedAt: value.completedAt,
+    revision: value.revision,
+  };
+}
+
+function snapshotWithTasks(taskContexts: readonly MaterializedTaskContext[]) {
+  return {
+    tenantId: "tenant-1",
+    principalId: "principal-1",
+    threadId: "thread-1",
+    deliveryOperationId: "operation-1",
+    text: "Original prompt",
+    contextExcerpts: [],
+    taskContexts,
+    attachments: [],
+    fingerprint: "b".repeat(64),
+    createdAt: 1,
+  };
+}
 
 describe("common delivery input projection", () => {
   it("renders deterministic Task-only and mixed model input without backend security framing", () => {
@@ -166,11 +205,88 @@ describe("common delivery input projection", () => {
           byteSize: 123,
         },
       },
-      { kind: "task_context", task },
+      { kind: "task_context", task: messageTask(task) },
       { kind: "text", text: { text: "Original prompt" } },
     ]);
     expect(JSON.stringify(content)).not.toContain("private provider carrier");
     expect(JSON.stringify(content)).not.toContain("sha256");
+  });
+
+  it("projects stored legacy workspace-scope and current project-scope snapshots without their scope", () => {
+    const [legacyTask] = parseStoredTaskContexts(`[${legacyTaskJson}]`);
+    const content = canonicalUserMessageContent({
+      snapshot: snapshotWithTasks([legacyTask!, projectTask]),
+      providerContent: [{ kind: "text", text: { text: "provider echo" } }],
+    });
+
+    expect(content).toEqual([
+      {
+        kind: "task_context",
+        task: {
+          id: "9b0a11bf-95a6-49f9-8e1f-0f433903beb2",
+          title: "Legacy workspace task",
+          details: "Delivered before projects existed.",
+          completedAt: "2026-08-15T09:00:00.000Z",
+          revision: 4,
+        },
+      },
+      { kind: "task_context", task: messageTask(projectTask) },
+      { kind: "text", text: { text: "Original prompt" } },
+    ]);
+    expect(JSON.stringify(content)).not.toMatch(
+      /"scope"|workspaceId|projectId|"pinned"|"files"/u,
+    );
+  });
+
+  it("re-renders a stored legacy workspace-scope snapshot to its exact delivered bytes", () => {
+    const stored = parseStoredTaskContexts(`[${legacyTaskJson}]`);
+    const delivered = [
+      "Sedes Tasks selected for this message:",
+      "The user selected the following Sedes Tasks as work and context for this message. Use each task id as its stable identity when calling Sedes Task tools.",
+      `{"taskContexts":[${legacyTaskJson}]}`,
+    ].join("\n");
+
+    expect(serializeTaskContexts(stored)).toBe(`[${legacyTaskJson}]`);
+    expect(renderTaskContextsForModel(stored, "Do this")).toBe(
+      `${delivered}\n\nDo this`,
+    );
+    expect(
+      backendDeliveryInput({
+        applicationOperationId: "operation-1",
+        mutationId: "mutation-1",
+        source: { kind: "user" },
+        reconciliationToken: "token-1",
+        text: "Do this",
+        contextExcerpts: [],
+        taskContexts: stored,
+        attachments: [],
+      }),
+    ).toMatchObject({ text: `${delivered}\n\nDo this`, taskContexts: [] });
+  });
+
+  it("accepts only exact legacy workspace or current Task scopes in stored rows", () => {
+    expect(parseStoredTaskContexts(`[${legacyTaskJson}]`)).toEqual([
+      JSON.parse(legacyTaskJson),
+    ]);
+    expect(
+      parseStoredTaskContexts(serializeTaskContexts([task, projectTask])),
+    ).toEqual([task, projectTask]);
+    for (const scope of [
+      '{"kind":"workspace","workspaceId":"0c1d2e3f-4a5b-4c6d-8e7f-901a2b3c4d5e","projectId":"1d2e3f4a-5b6c-4d7e-8f90-a1b2c3d4e5f6"}',
+      '{"kind":"workspace"}',
+      '{"kind":"workspace","workspaceId":"not-a-uuid"}',
+      '{"kind":"project","workspaceId":"0c1d2e3f-4a5b-4c6d-8e7f-901a2b3c4d5e"}',
+      '{"kind":"location","workspaceId":"0c1d2e3f-4a5b-4c6d-8e7f-901a2b3c4d5e"}',
+    ]) {
+      const row = `[${legacyTaskJson.replace(
+        '{"kind":"workspace","workspaceId":"0c1d2e3f-4a5b-4c6d-8e7f-901a2b3c4d5e"}',
+        scope,
+      )}]`;
+      expect(() => parseStoredTaskContexts(row)).toThrow(DomainError);
+      expect(() => parseStoredTaskContexts(row)).toThrow(
+        "The stored task contexts are invalid.",
+      );
+    }
   });
 
   it("retains a backend-authenticated direct skill only at an exact snapshot token boundary", () => {

@@ -73,6 +73,8 @@ export function ProjectsSettingsPage({ store }: {
     snapshot?.environments,
     snapshot?.threads.map(({ id, workspaceId }) => ({ id, workspaceId }))
       .sort((left, right) => left.id.localeCompare(right.id)),
+    snapshot?.tasks.filter(({ scope }) => scope.kind === "project")
+      .map(({ id, scope }) => ({ id, scope })).sort((left, right) => left.id.localeCompare(right.id)),
   ]);
   /** Reloads the list and resolves to it, or to undefined when it cannot be loaded. */
   const refresh = useCallback((): Promise<readonly ProjectSummary[] | undefined> => {
@@ -101,6 +103,15 @@ export function ProjectsSettingsPage({ store }: {
     return load;
   }, [store]);
   useEffect(() => { void refresh(); return () => request.current?.abort(); }, [refresh, publication]);
+  useEffect(() => {
+    let scheduled: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = store.normalized.subscribeWorkpadChanges((change) => {
+      if (change?.change === "draft" || scheduled !== undefined) return;
+      // Coalesce bursts; document changes can create, archive, or move a workpad.
+      scheduled = setTimeout(() => { scheduled = undefined; void refresh(); }, 0);
+    });
+    return () => { unsubscribe(); clearTimeout(scheduled); };
+  }, [store, refresh]);
 
   const projectLocations = useMemo(() => describeProjectLocations({
     projects: snapshot?.projects ?? [], workspaces: snapshot?.workspaces ?? [], environments,
@@ -227,7 +238,7 @@ export function ProjectsSettingsPage({ store }: {
             <span className="projects-row-icon" aria-hidden="true"><Folders /></span>
             <span className="projects-row-text">
               <span className="projects-row-title"><span>{project.name}</span>{project.removed ? <Tag>Removed</Tag> : null}</span>
-              <span className="projects-row-meta">{countLabel(project.locations.length, "location")}{removedLocations > 0 && !project.removed ? ` · ${removedLocations} removed` : ""}</span>
+              <span className="projects-row-meta">{countLabel(project.locations.length, "location")}{removedLocations > 0 && !project.removed ? ` · ${removedLocations} removed` : ""} · {countLabel(project.taskCount, "task")} · {countLabel(project.workpadCount, "workpad")}</span>
             </span>
             <span className="projects-row-actions"><RowActions label={projectLocations.projectLabel(project.id) ?? project.name} actions={projectActions(project)} /></span>
           </div>

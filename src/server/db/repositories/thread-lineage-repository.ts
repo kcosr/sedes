@@ -850,21 +850,20 @@ export class ThreadLineageRepository {
       scopedDelete("thread_drafts", "thread_id");
       scopedDelete("thread_principal_state", "thread_id");
       // Tasks are user data, not per-thread machinery: a hard delete promotes
-      // them (open and completed) to the child's workspace instead of losing
-      // them or tripping the schema-24 RESTRICT foreign key.
+      // them (open and completed) to the project of the child's location
+      // instead of losing them or tripping the schema-24 RESTRICT foreign key.
       const promotedTasks = this.database
         .prepare(
           `
         UPDATE tasks
-        SET scope_kind = 'workspace',
-          environment_id = (
-            SELECT thread.environment_id FROM application_threads AS thread
-            WHERE thread.tenant_id = tasks.tenant_id
-              AND thread.owner_principal_id = tasks.owner_principal_id
-              AND thread.id = tasks.thread_id
-          ),
-          workspace_id = (
-            SELECT thread.workspace_id FROM application_threads AS thread
+        SET scope_kind = 'project',
+          project_id = (
+            SELECT location.project_id
+            FROM application_threads AS thread
+            JOIN workspaces AS location
+              ON location.tenant_id = thread.tenant_id
+              AND location.owner_principal_id = thread.owner_principal_id
+              AND location.id = thread.workspace_id
             WHERE thread.tenant_id = tasks.tenant_id
               AND thread.owner_principal_id = tasks.owner_principal_id
               AND thread.id = tasks.thread_id

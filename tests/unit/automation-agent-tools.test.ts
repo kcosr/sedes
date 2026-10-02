@@ -65,6 +65,7 @@ function context(mutationId = firstMutationId): TrustedToolInvocationContext {
       kind: "thread_agent",
       environmentId: "environment-1",
       workspaceId: "0191cfe0-7d51-7a51-ae51-444444444444",
+      projectId: "project-1",
       threadId: sourceThreadId,
     },
     policyIdentity: {
@@ -79,6 +80,7 @@ function context(mutationId = firstMutationId): TrustedToolInvocationContext {
         kind: "thread_agent",
         environmentId: "environment-1",
         workspaceId: "0191cfe0-7d51-7a51-ae51-444444444444",
+        projectId: "project-1",
         threadId: sourceThreadId,
       },
       policyIdentity: {
@@ -165,7 +167,7 @@ function fixture(input?: {
 describe("automation canonical tool service", () => {
   function canonical(setup: ReturnType<typeof fixture>) {
     return new CanonicalInlineAgentToolService({
-      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+      application: { readThreadStatus: async () => undefined },
       management: {} as never,
       automations: setup.service,
       threadCreation: {} as never,

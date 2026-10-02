@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   describeProjectLocations,
+  summarizeHosts,
   type LocationPresentation,
   type ProjectLocationCatalog,
 } from "./project-locations.js";
@@ -359,6 +360,11 @@ describe("project location presentation", () => {
       title: "empty — no locations",
     });
     expect(projects.projectChoice("missing")).toBeUndefined();
+    // Each host once, Local first.
+    expect(projects.projectHosts("sedes")).toEqual(["Local", "aw-personal", "build-box", "CI"]);
+    expect(projects.projectHosts("empty")).toEqual([]);
+    expect(summarizeHosts(["Local", "aw-personal"])).toBe("Local, aw-personal");
+    expect(summarizeHosts(projects.projectHosts("sedes"))).toBe("Local, aw-personal +2");
   });
 
   it("describes locations for pickers with their environment and path", () => {

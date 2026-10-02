@@ -147,11 +147,12 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       kind: "direct_resource",
       resource: "environment",
       inputField: "environmentId",
+      projectInputField: "projectId",
     },
     id: "workspace.open",
-    schemaVersion: 2,
+    schemaVersion: 3,
     description:
-      "Opens an existing directory in a configured execution environment as a Sedes workspace; a new directory becomes its own project.",
+      "Opens an existing directory in a configured execution environment as a Sedes workspace, optionally as a location of an existing project; otherwise a new directory becomes its own project. Restoring a removed location requires naming its project.",
     catalog: { groupId: "context", label: "Open workspace", order: 40 },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),
@@ -259,7 +260,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       inputField: "threadId",
     },
     id: "thread.archive",
-    schemaVersion: 1,
+    schemaVersion: 2,
     description:
       "Archives a principal-owned Sedes thread, optionally including descendants, without changing provider-owned conversation data.",
     catalog: { groupId: "threads", label: "Archive thread", order: 70 },
@@ -347,7 +348,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "workpad.list": manifestEntry({
     environmentAuthority: { kind: "scoped_query", resource: "workpad" },
     id: "workpad.list",
-    schemaVersion: 1,
+    schemaVersion: 2,
     description: "Lists bounded workpad summaries in a scope or its descendants, optionally searching title and content.",
     catalog: { groupId: "workpads", label: "List workpads", order: 10 },
     effects: { application: "read", modelUsage: "none", external: "none" },
@@ -355,7 +356,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "workpad.get": manifestEntry({
     environmentAuthority: { kind: "direct_resource", resource: "workpad" },
     id: "workpad.get",
-    schemaVersion: 1,
+    schemaVersion: 2,
     description: "Reads current or historical workpad text and revision author. Access follows the current scope.",
     catalog: { groupId: "workpads", label: "Get workpad", order: 20 },
     effects: { application: "read", modelUsage: "none", external: "none" },
@@ -363,7 +364,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "workpad.revisions": manifestEntry({
     environmentAuthority: { kind: "direct_resource", resource: "workpad" },
     id: "workpad.revisions",
-    schemaVersion: 1,
+    schemaVersion: 2,
     description: "Lists bounded revision history metadata for a workpad.",
     catalog: { groupId: "workpads", label: "Workpad revisions", order: 30 },
     effects: { application: "read", modelUsage: "none", external: "none" },
@@ -371,7 +372,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "workpad.create": manifestEntry({
     environmentAuthority: { kind: "scope_transition", resource: "workpad" },
     id: "workpad.create",
-    schemaVersion: 1,
+    schemaVersion: 2,
     description: "Creates a scoped Markdown workpad attributed to the authenticated caller.",
     catalog: { groupId: "workpads", label: "Create workpad", order: 40 },
     effects: { application: "write", modelUsage: "none", external: "none" },
@@ -379,7 +380,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "workpad.update": manifestEntry({
     environmentAuthority: { kind: "scope_transition", resource: "workpad" },
     id: "workpad.update",
-    schemaVersion: 1,
+    schemaVersion: 2,
     description: "Atomically edits, renames, moves, archives, or restores a workpad against its expected revision. Replace content, append text, or apply exact unique replacements; unchanged text retains attribution.",
     catalog: { groupId: "workpads", label: "Update workpad", order: 50 },
     effects: { application: "write", modelUsage: "none", external: "none" },
@@ -387,7 +388,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "task.list": manifestEntry({
     environmentAuthority: { kind: "scoped_query", resource: "task" },
     id: "task.list",
-    schemaVersion: 3,
+    schemaVersion: 4,
     description:
       "Lists filtered tasks in one scope or its descendant scopes as summaries or bounded full records.",
     catalog: { groupId: "tasks", label: "List tasks", order: 10 },
@@ -396,7 +397,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "task.get": manifestEntry({
     environmentAuthority: { kind: "direct_resource", resource: "task" },
     id: "task.get",
-    schemaVersion: 1,
+    schemaVersion: 2,
     description: "Returns one complete principal-owned Sedes task.",
     catalog: { groupId: "tasks", label: "Get task", order: 20 },
     effects: { application: "read", modelUsage: "none", external: "none" },
@@ -404,7 +405,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "task.create": manifestEntry({
     environmentAuthority: { kind: "scope_transition", resource: "task" },
     id: "task.create",
-    schemaVersion: 1,
+    schemaVersion: 2,
     description:
       "Creates an open task atomically with its content, pin, files, and scope.",
     catalog: { groupId: "tasks", label: "Create task", order: 30 },
@@ -413,7 +414,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "task.update": manifestEntry({
     environmentAuthority: { kind: "scope_transition", resource: "task" },
     id: "task.update",
-    schemaVersion: 1,
+    schemaVersion: 2,
     description:
       "Atomically updates one or more mutable task fields against an expected revision.",
     catalog: { groupId: "tasks", label: "Update task", order: 40 },

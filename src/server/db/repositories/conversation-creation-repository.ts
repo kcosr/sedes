@@ -10,10 +10,8 @@ import {
 } from "../context-excerpts-json.js";
 import { hasDeliverableComposerInput } from "../../../shared/protocol/conversation.js";
 import { ComposerAttachmentRepository } from "./composer-attachment-repository.js";
-import type {
-  ComposerTaskReference,
-  MaterializedTaskContext,
-} from "../../../shared/protocol/tasks.js";
+import type { ComposerTaskReference } from "../../../shared/protocol/tasks.js";
+import type { MaterializedTaskContext } from "../../domain/materialized-task-contexts.js";
 import {
   assertMaterializedComposerBytes,
   materializeTaskReferences,

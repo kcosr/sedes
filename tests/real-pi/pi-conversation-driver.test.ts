@@ -500,7 +500,6 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
     );
     const canonical = new CanonicalInlineAgentToolService({
       application: {
-        readWorkspaceProjectId: async () => "project-1",
         readThreadStatus: async () => undefined,
       },
     });
@@ -526,6 +525,7 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
             kind: "thread_agent",
             environmentId: input.source.sourceEnvironmentId,
             workspaceId: input.source.sourceWorkspaceId,
+            projectId: "project-1",
             threadId: input.source.sourceThreadId,
           },
           policyIdentity: {
@@ -540,6 +540,7 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
               kind: "thread_agent",
               environmentId: input.source.sourceEnvironmentId,
               workspaceId: input.source.sourceWorkspaceId,
+              projectId: "project-1",
               threadId: input.source.sourceThreadId,
             },
             policyIdentity: {

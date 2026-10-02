@@ -12,6 +12,7 @@ export type EnvironmentResourceKind =
   | "global"
   | "environment"
   | "workspace"
+  | "project"
   | "thread"
   | "thread_family"
   | "task"
@@ -29,6 +30,8 @@ export type EnvironmentAuthorityDeclaration =
       readonly resource: "environment" | "workspace" | "thread";
       readonly inputField?: string;
       readonly defaultToSource?: boolean;
+      /** An optional project the operation also targets, authorized as a project ref. */
+      readonly projectInputField?: string;
     }
   | {
       readonly kind: "direct_resource";
@@ -90,10 +93,23 @@ export interface EnvironmentAuthorityResourceFact {
 export interface EnvironmentAuthorityTaskFact {
   readonly id: string;
   readonly revision: number;
-  readonly scopeKind: "global" | "workspace" | "thread";
+  readonly scopeKind: "global" | "project" | "thread";
+  /** The environment of a thread-scoped resource's thread. */
   readonly environmentId?: string;
-  readonly workspaceId?: string;
+  readonly projectId?: string;
   readonly threadId?: string;
+  readonly label?: string;
+}
+
+/**
+ * An active project. Its member environments are those hosting one of its
+ * active locations; every location edit advances the membership revision.
+ */
+export interface EnvironmentAuthorityProjectFact {
+  readonly id: string;
+  readonly membershipRevision: number;
+  /** Distinct and sorted. Empty when the project has no active location. */
+  readonly memberEnvironmentIds: readonly string[];
   readonly label?: string;
 }
 
@@ -127,6 +143,16 @@ export interface AgentToolEnvironmentAuthorityReader {
     scope: RequestScope,
     id: string,
   ): EnvironmentAuthorityTaskFact | undefined;
+  /** Undefined when the project does not exist or was removed. */
+  resolveProject(
+    scope: RequestScope,
+    id: string,
+  ): EnvironmentAuthorityProjectFact | undefined;
+  /** The project of an active location; undefined when it was removed. */
+  resolveWorkspaceProject(
+    scope: RequestScope,
+    workspaceId: string,
+  ): string | undefined;
   listEnvironments(
     scope: RequestScope,
   ): readonly EnvironmentAuthorityResourceFact[];
@@ -264,13 +290,24 @@ export class AgentToolEnvironmentAuthorityResolver {
       if (declaration.defaultToSource) return invalidContext();
       return deny();
     }
-    if (declaration.resource === "environment")
+    if (declaration.resource === "environment") {
+      const projectId = declaration.projectInputField
+        ? object[declaration.projectInputField]
+        : undefined;
       return [
         resourceRef(
           "environment",
           required(this.reader.resolveEnvironment(request.scope, id)),
         ),
+        ...(typeof projectId === "string"
+          ? projectScopeRefs(
+              required(this.reader.resolveProject(request.scope, projectId)),
+              request,
+              "exact",
+            )
+          : []),
       ];
+    }
     if (declaration.resource === "workspace")
       return [
         resourceRef(
@@ -315,7 +352,7 @@ export class AgentToolEnvironmentAuthorityResolver {
       const fact = required(this.reader.resolveSavedAgent(request.scope, id));
       return [{ kind: "saved_agent", ...fact }];
     }
-    return taskRefs(
+    return this.#taskRefs(
       required(declaration.resource === "workpad" ? this.reader.resolveWorkpad(request.scope, id) : this.reader.resolveTask(request.scope, id)),
       request,
       declaration.resource,
@@ -409,20 +446,19 @@ export class AgentToolEnvironmentAuthorityResolver {
           )
         : [];
     }
-    if (scope.kind === "workspace")
-      return [
-        resourceRef(
-          "workspace",
-          required(
-            this.reader.resolveWorkspace(
-              request.scope,
-              typeof scope.workspaceId === "string"
-                ? scope.workspaceId
-                : requiredDefaultWorkspaceId(request),
-            ),
+    if (scope.kind === "project")
+      return projectScopeRefs(
+        required(
+          this.reader.resolveProject(
+            request.scope,
+            typeof scope.projectId === "string"
+              ? scope.projectId
+              : requiredDefaultProjectId(request),
           ),
         ),
-      ];
+        request,
+        input.scopeMode === "subtree" ? "subtree" : "exact",
+      );
     if (scope.kind === "thread")
       return [
         resourceRef(
@@ -438,6 +474,21 @@ export class AgentToolEnvironmentAuthorityResolver {
         ),
       ];
     return deny();
+  }
+
+  #taskRefs(
+    task: EnvironmentAuthorityTaskFact,
+    request: ResolveEnvironmentAuthorityInput,
+    kind: "task" | "workpad",
+  ): readonly ResolvedEnvironmentResourceRef[] {
+    return scopedResourceRefs(
+      kind,
+      task,
+      task.scopeKind === "project"
+        ? required(this.reader.resolveProject(request.scope, task.projectId!))
+        : undefined,
+      request,
+    );
   }
 
   #transition(
@@ -469,7 +520,7 @@ export class AgentToolEnvironmentAuthorityResolver {
     const resourceId = input[`${resource}Id`];
     if (typeof resourceId === "string")
       refs.push(
-        ...taskRefs(
+        ...this.#taskRefs(
           required(resource === "workpad" ? this.reader.resolveWorkpad(request.scope, resourceId) : this.reader.resolveTask(request.scope, resourceId)),
           request,
           resource,
@@ -603,20 +654,19 @@ function scopeRefs(
   reader: AgentToolEnvironmentAuthorityReader,
 ): readonly ResolvedEnvironmentResourceRef[] {
   if (scope.kind === "global") return [{ kind: "global", id: "global" }];
-  if (scope.kind === "workspace")
-    return [
-      resourceRef(
-        "workspace",
-        required(
-          reader.resolveWorkspace(
-            request.scope,
-            typeof scope.workspaceId === "string"
-              ? scope.workspaceId
-              : requiredDefaultWorkspaceId(request),
-          ),
+  if (scope.kind === "project")
+    return projectScopeRefs(
+      required(
+        reader.resolveProject(
+          request.scope,
+          typeof scope.projectId === "string"
+            ? scope.projectId
+            : requiredDefaultProjectId(request),
         ),
       ),
-    ];
+      request,
+      "exact",
+    );
   if (scope.kind === "thread")
     return [
       resourceRef(
@@ -634,32 +684,223 @@ function scopeRefs(
   return deny();
 }
 
-function taskRefs(
-  task: EnvironmentAuthorityTaskFact,
-  request: ResolveEnvironmentAuthorityInput,
-  kind: "task" | "workpad" = "task",
+/** Who reaches a project, and through which pre-authorized environments. */
+export interface ProjectAccessCaller {
+  readonly defaults: TrustedAgentToolCallerDefaults;
+  /** A Tool client's environment allowlist; thread agents ask instead. */
+  readonly admittedEnvironmentIds?: readonly string[];
+}
+
+/** The caller facts an admitted grant was resolved with. */
+export function grantProjectAccessCaller(
+  grant: TrustedEnvironmentAuthorityGrant,
+): ProjectAccessCaller {
+  return grant.callerKind === "principal_client"
+    ? {
+        defaults: grant.defaults,
+        admittedEnvironmentIds: grant.admittedEnvironmentIds,
+      }
+    : { defaults: grant.defaults };
+}
+
+/**
+ * The environments through which a caller reaches a project resource. A
+ * project is reachable from its member environments: a thread agent on a
+ * member environment is inside it; any other thread agent targets every
+ * member, so its approval names them; a Tool client uses its default
+ * environment when that is a member, otherwise its lowest allowlisted member,
+ * and is denied when it may use none. Subtree queries span every member.
+ * An empty result means the project has no active location: that is outside
+ * every environment, never environment-neutral like a global resource, so
+ * thread agents ask and Tool clients are denied.
+ */
+export function projectAccessEnvironmentIds(
+  project: EnvironmentAuthorityProjectFact,
+  caller: ProjectAccessCaller,
+  mode: "exact" | "subtree",
+): readonly string[] {
+  const members = [...new Set(project.memberEnvironmentIds)].sort();
+  if (members.length === 0) {
+    return caller.defaults.kind === "principal_client" ? deny() : [];
+  }
+  if (mode === "subtree") return members;
+  if (members.includes(caller.defaults.environmentId))
+    return [caller.defaults.environmentId];
+  if (caller.defaults.kind === "thread_agent") return members;
+  const allowed = members.filter((environmentId) =>
+    caller.admittedEnvironmentIds?.includes(environmentId),
+  );
+  return allowed.length > 0 ? [allowed[0]!] : deny();
+}
+
+/**
+ * Project refs carry the membership revision, so any location edit changes
+ * the authority digest and invalidates a pending approval. A project ref
+ * without an environment is the explicit outside marker.
+ */
+export function projectScopeRefs(
+  project: EnvironmentAuthorityProjectFact,
+  caller: ProjectAccessCaller,
+  mode: "exact" | "subtree",
 ): readonly ResolvedEnvironmentResourceRef[] {
-  if (task.scopeKind === "global")
+  const base = {
+    kind: "project" as const,
+    id: project.id,
+    revision: project.membershipRevision,
+    ...(project.label ? { label: project.label } : {}),
+  };
+  const environmentIds = projectAccessEnvironmentIds(project, caller, mode);
+  return environmentIds.length === 0
+    ? [base]
+    : environmentIds.map((environmentId) => ({ ...base, environmentId }));
+}
+
+/** Whether a resolution reaches a project that has no active location. */
+export function reachesOutsideEveryEnvironment(authority: {
+  readonly resolvedResourceRefs: readonly ResolvedEnvironmentResourceRef[];
+}): boolean {
+  return authority.resolvedResourceRefs.some(
+    (ref) => ref.kind === "project" && ref.environmentId === undefined,
+  );
+}
+
+/**
+ * Refs for one Task or Workpad in its current scope. A project resource is
+ * reached through its project's access environments and also binds the
+ * project's membership revision.
+ */
+export function scopedResourceRefs(
+  kind: "task" | "workpad",
+  resource: EnvironmentAuthorityTaskFact,
+  project: EnvironmentAuthorityProjectFact | undefined,
+  caller: ProjectAccessCaller,
+): readonly ResolvedEnvironmentResourceRef[] {
+  const base = {
+    kind,
+    id: resource.id,
+    revision: resource.revision,
+    ...(resource.label ? { label: resource.label } : {}),
+  };
+  if (resource.scopeKind === "global") return [base];
+  if (resource.scopeKind === "project") {
+    if (!project || project.id !== resource.projectId) return unavailable();
+    const projectRefs = projectScopeRefs(project, caller, "exact");
     return [
-      { kind, id: task.id, revision: task.revision, label: task.label },
+      ...projectRefs.map(({ environmentId }) => ({
+        ...base,
+        ...(environmentId ? { environmentId } : {}),
+      })),
+      ...projectRefs,
     ];
+  }
   const environmentId =
-    task.environmentId ??
-    (task.workspaceId === request.defaults.workspaceId ||
-    task.threadId === request.defaults.threadId
-      ? request.defaults.environmentId
+    resource.environmentId ??
+    (resource.threadId === caller.defaults.threadId
+      ? caller.defaults.environmentId
       : undefined);
   if (!environmentId) return deny();
   return [
     {
-      kind,
-      id: task.id,
-      ...(task.threadId ? { threadId: task.threadId } : {}),
+      ...base,
+      ...(resource.threadId ? { threadId: resource.threadId } : {}),
       environmentId,
-      revision: task.revision,
-      label: task.label,
     },
   ];
+}
+
+/**
+ * Refs for a Task or Workpad as its current scope requires them now. A
+ * removed project is not found.
+ */
+export function currentScopedResourceRefs(
+  reader: AgentToolEnvironmentAuthorityReader,
+  scope: RequestScope,
+  kind: "task" | "workpad",
+  id: string,
+  caller: ProjectAccessCaller,
+): readonly ResolvedEnvironmentResourceRef[] {
+  const resource = required(
+    kind === "workpad"
+      ? reader.resolveWorkpad(scope, id)
+      : reader.resolveTask(scope, id),
+  );
+  return scopedResourceRefs(
+    kind,
+    resource,
+    resource.scopeKind === "project"
+      ? required(reader.resolveProject(scope, resource.projectId!))
+      : undefined,
+    caller,
+  );
+}
+
+/**
+ * Refs a Task or Workpad scope requires now, as a destination (exact) or as
+ * a list query. A global subtree spans every environment.
+ */
+export function scopeAuthorityRefs(
+  reader: AgentToolEnvironmentAuthorityReader,
+  scope: RequestScope,
+  target:
+    | { readonly kind: "global" }
+    | { readonly kind: "project"; readonly projectId: string }
+    | { readonly kind: "thread"; readonly threadId: string },
+  caller: ProjectAccessCaller,
+  mode: "exact" | "subtree",
+): readonly ResolvedEnvironmentResourceRef[] {
+  switch (target.kind) {
+    case "global":
+      return mode === "exact"
+        ? []
+        : reader
+            .listEnvironments(scope)
+            .map((fact) => resourceRef("environment", fact));
+    case "project":
+      return projectScopeRefs(
+        required(reader.resolveProject(scope, target.projectId)),
+        caller,
+        mode,
+      );
+    case "thread":
+      return [
+        resourceRef("thread", required(reader.resolveThread(scope, target.threadId))),
+      ];
+  }
+}
+
+/**
+ * Rechecks at execution that a list query was admitted with exactly the
+ * environments and refs its scope needs now, so a missing or narrower grant
+ * never falls back to a wider query.
+ */
+export function requireExactScopeQuery(
+  grant: TrustedEnvironmentAuthorityGrant,
+  refs: readonly ResolvedEnvironmentResourceRef[],
+): void {
+  const environmentIds = [
+    ...new Set(refs.flatMap(({ environmentId }) => (environmentId ? [environmentId] : []))),
+  ].sort();
+  if (
+    environmentIds.length !== grant.targetEnvironmentIds.length ||
+    environmentIds.some((id, index) => id !== grant.targetEnvironmentIds[index])
+  ) {
+    throw new CanonicalAgentToolRequestError(
+      "not_found",
+      "The target environments no longer match the query scope.",
+    );
+  }
+  requireAdmittedResources(
+    grant,
+    refs.filter(({ kind }) => kind !== "environment"),
+  );
+}
+
+/** Rechecks freshly resolved refs against an admitted grant at execution. */
+export function requireAdmittedResources(
+  grant: TrustedEnvironmentAuthorityGrant,
+  resources: readonly ResolvedEnvironmentResourceRef[],
+): void {
+  for (const resource of resources) requireAdmittedResource(grant, resource);
 }
 
 function requiredDefaultWorkspaceId(
@@ -668,6 +909,14 @@ function requiredDefaultWorkspaceId(
   const workspaceId = request.defaults.workspaceId;
   if (!workspaceId) return invalidContext();
   return workspaceId;
+}
+
+function requiredDefaultProjectId(
+  request: ResolveEnvironmentAuthorityInput,
+): string {
+  const projectId = request.defaults.projectId;
+  if (!projectId) return invalidContext();
+  return projectId;
 }
 
 function requiredDefaultThreadId(

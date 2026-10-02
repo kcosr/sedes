@@ -515,7 +515,7 @@ export class PrincipalAgentToolClientRepository {
           input.defaultWorkspaceId,
         ) as { readonly availability: "available" | "unavailable" } | undefined;
       if (!workspace || workspace.availability !== "available") {
-        invalid("The default workspace is unavailable.");
+        invalid("The default location is unavailable.");
       }
     }
     if (input.defaultThreadId) {

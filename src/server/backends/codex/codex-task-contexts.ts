@@ -2,7 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import {
   materializedTaskContextsSchema,
   type MaterializedTaskContext,
-} from "../../../shared/protocol/tasks.js";
+} from "../../domain/materialized-task-contexts.js";
 import { copyCodexSubmissionCorrelationKey } from "./codex-submission-correlation.js";
 
 const CARRIER_HEADER = '<sedes-task-contexts version="1">';

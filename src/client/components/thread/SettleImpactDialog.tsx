@@ -45,14 +45,14 @@ export function SettleImpactDialog({
     ThreadArchiveImpact | undefined
   >(impact);
   const [disposition, setDisposition] =
-    useState<OpenTaskDisposition>("move_to_workspace");
+    useState<OpenTaskDisposition>("move_to_project");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     if (!open) return;
     setCurrentImpact(impact);
-    setDisposition("move_to_workspace");
+    setDisposition("move_to_project");
     setError("");
   }, [impact, open]);
 

@@ -52,9 +52,9 @@ export function ThreadStackActionDialog({
   readonly returnFocusRef?: React.RefObject<HTMLElement | null>;
 }): React.JSX.Element {
   const [disposition, setDisposition] =
-    useState<OpenTaskDisposition>("move_to_workspace");
+    useState<OpenTaskDisposition>("move_to_project");
   useEffect(() => {
-    if (open) setDisposition("move_to_workspace");
+    if (open) setDisposition("move_to_project");
   }, [open, action]);
 
   const affectedCount = impact?.affectedCount ?? 0;

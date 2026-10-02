@@ -3227,6 +3227,14 @@ describe("inactive schema-10 repositories", () => {
         now: 547,
       });
 
+      const { projectId: childProjectId } = fixture.database
+        .prepare(
+          `SELECT location.project_id AS projectId
+           FROM application_threads AS thread
+           JOIN workspaces AS location ON location.id = thread.workspace_id
+           WHERE thread.id = ?`,
+        )
+        .get(fixture.secondThreadId) as { readonly projectId: string };
       const promoted: string[][] = [];
       lineage.abortPreparedFork(fixture.scope, fixture.secondThreadId, {
         creationOperationId: "task-abort-operation",
@@ -3241,15 +3249,16 @@ describe("inactive schema-10 repositories", () => {
         [openTask.id, doneTask.id].sort(),
       );
       for (const promotedTaskId of [openTask.id, doneTask.id]) {
+        // A discarded fork's tasks go to the project of its location.
         expect(tasks.get(fixture.scope, promotedTaskId)).toMatchObject({
-          scopeKind: "workspace",
+          scopeKind: "project",
           threadId: null,
           revision: expect.any(Number),
           updatedAt: 560,
         });
-        expect(
-          tasks.get(fixture.scope, promotedTaskId).workspaceId,
-        ).not.toBeNull();
+        expect(tasks.get(fixture.scope, promotedTaskId).projectId).toBe(
+          childProjectId,
+        );
       }
       expect(
         new ConversationBindingRepository(

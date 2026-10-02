@@ -94,7 +94,7 @@ function makeTask(overrides: Partial<AssociatedTask> = {}): AssociatedTask {
   return {
     id: "task-1",
     scope: { kind: "global" },
-    associatedWorkspaceId: null,
+    associatedProjectId: null,
     title: "Write docs",
     details: "",
     pinned: false,
@@ -109,6 +109,7 @@ function makeTask(overrides: Partial<AssociatedTask> = {}): AssociatedTask {
 
 type StoreContext = {
   readonly threads?: readonly unknown[];
+  readonly projects?: readonly unknown[];
   readonly workspaces?: readonly unknown[];
   readonly environments?: readonly unknown[];
   readonly resolveFileLink?: (absolutePath: string) =>
@@ -129,6 +130,7 @@ function makeStore(
   let state = {
     snapshot: {
       threads: context.threads ?? [],
+      projects: context.projects ?? [],
       workspaces: context.workspaces ?? [],
       environments: context.environments ?? [],
       tasks: initialTasks,
@@ -344,11 +346,16 @@ const WORKSPACES = [
   {
     id: "workspace-2",
     environmentId: "local",
-    projectId: "project-1",
+    projectId: "project-2",
     label: { text: "billing-service" },
     displayPath: { text: "/billing" },
     available: true,
   },
+];
+
+const PROJECTS = [
+  { id: "project-1", name: "acme-web", revision: 0 },
+  { id: "project-2", name: "billing-service", revision: 0 },
 ];
 
 const ENVIRONMENTS = [{ id: "local", kind: "local", label: { text: "Local" }, available: true }];
@@ -356,7 +363,7 @@ const ENVIRONMENTS = [{ id: "local", kind: "local", label: { text: "Local" }, av
 const threadTask = (overrides: Partial<AssociatedTask> = {}) =>
   makeTask({
     scope: { kind: "thread", threadId: "thread-9" },
-    associatedWorkspaceId: "workspace-1",
+    associatedProjectId: "project-1",
     ...overrides,
   });
 
@@ -368,13 +375,13 @@ function seededStore(extra: readonly AssociatedTask[] = []) {
       threadTask({ id: "t-audit", title: "Audit checkout error states", createdAt: "2026-08-03T10:00:00.000Z", details: "Walk every error branch.", files: ["/workspace/src/checkout.ts"], pinned: true }),
       threadTask({ id: "t-retry", title: "Add retry to the payment call", createdAt: "2026-08-02T10:00:00.000Z" }),
       threadTask({ id: "t-done", title: "Remove the legacy flag", completedAt: "2026-08-04T10:00:00.000Z" }),
-      makeTask({ id: "p-upgrade", title: "Upgrade the test runner", scope: { kind: "workspace", workspaceId: "workspace-1" }, associatedWorkspaceId: "workspace-1" }),
-      makeTask({ id: "s-sibling", title: "Sibling thread task", scope: { kind: "thread", threadId: "thread-2" }, associatedWorkspaceId: "workspace-1" }),
-      makeTask({ id: "o-other", title: "Round invoices half-even", scope: { kind: "thread", threadId: "thread-other" }, associatedWorkspaceId: "workspace-2" }),
+      makeTask({ id: "p-upgrade", title: "Upgrade the test runner", scope: { kind: "project", projectId: "project-1" }, associatedProjectId: "project-1" }),
+      makeTask({ id: "s-sibling", title: "Sibling thread task", scope: { kind: "thread", threadId: "thread-2" }, associatedProjectId: "project-1" }),
+      makeTask({ id: "o-other", title: "Round invoices half-even", scope: { kind: "thread", threadId: "thread-other" }, associatedProjectId: "project-2" }),
       makeTask({ id: "g-rotate", title: "Rotate staging credentials" }),
       ...extra,
     ],
-    { threads: THREADS, workspaces: WORKSPACES, environments: ENVIRONMENTS },
+    { threads: THREADS, projects: PROJECTS, workspaces: WORKSPACES, environments: ENVIRONMENTS },
   );
 }
 
@@ -451,7 +458,7 @@ describe("TasksPanel scope", () => {
 
   it("says why an archived thread has no Thread view", () => {
     act(() => navigate(threadPath("thread-archived")));
-    const store = makeStore([makeTask()], { threads: THREADS, workspaces: WORKSPACES });
+    const store = makeStore([makeTask()], { threads: THREADS, projects: PROJECTS, workspaces: WORKSPACES });
     renderPanel(store);
 
     const archived = "This thread is archived. Restore it to see its tasks.";
@@ -468,7 +475,7 @@ describe("TasksPanel scope", () => {
 
   it("disables Thread and Project for a thread the snapshot does not hold", () => {
     act(() => navigate(threadPath("thread-missing")));
-    const store = makeStore([makeTask()], { threads: THREADS, workspaces: WORKSPACES });
+    const store = makeStore([makeTask()], { threads: THREADS, projects: PROJECTS, workspaces: WORKSPACES });
     renderPanel(store);
 
     expect(segment("Thread")).toBeDisabled();
@@ -485,7 +492,7 @@ describe("TasksPanel scope", () => {
 
   it("shows a disabled view's reason when its segment is tapped", async () => {
     act(() => navigate(threadPath("thread-archived")));
-    const store = makeStore([makeTask()], { threads: THREADS, workspaces: WORKSPACES });
+    const store = makeStore([makeTask()], { threads: THREADS, projects: PROJECTS, workspaces: WORKSPACES });
     // The tooltip's positioning measures its arrow.
     vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
     renderPanel(store);
@@ -567,6 +574,151 @@ describe("TasksPanel scope", () => {
     // A thread task names its project too, as the grouped headings do.
     expect(rowTitle("Add retry to the payment call")).toHaveAccessibleDescription(
       "In Checkout flow refactor · acme-web",
+    );
+  });
+});
+
+// acme-web also has a checkout on a build host: one project, two locations.
+const SHARED_ENVIRONMENTS = [
+  ...ENVIRONMENTS,
+  { id: "build", kind: "ssh", label: { text: "Build host" }, available: true },
+];
+const SHARED_WORKSPACES = [
+  ...WORKSPACES,
+  {
+    id: "workspace-3",
+    environmentId: "build",
+    projectId: "project-1",
+    label: { text: "acme-web" },
+    displayPath: { text: "/srv/acme-web" },
+    available: true,
+  },
+];
+const SHARED_THREADS = [
+  ...THREADS,
+  {
+    id: "thread-remote",
+    workspaceId: "workspace-3",
+    title: { text: "Remote checkout" },
+    inventoryState: "active",
+  },
+];
+
+/** A route on `threadId` with tasks from both of acme-web's locations. */
+function sharedProjectStore(threadId: string) {
+  act(() => navigate(threadPath(threadId)));
+  return makeStore(
+    [
+      threadTask({ id: "t-retry", title: "Add retry to the payment call", createdAt: "2026-08-02T10:00:00.000Z" }),
+      makeTask({ id: "p-upgrade", title: "Upgrade the test runner", scope: { kind: "project", projectId: "project-1" }, associatedProjectId: "project-1", createdAt: "2026-08-03T10:00:00.000Z", files: ["/workspace/package.json"] }),
+      makeTask({ id: "r-deploy", title: "Deploy from the build host", scope: { kind: "thread", threadId: "thread-remote" }, associatedProjectId: "project-1", createdAt: "2026-08-04T10:00:00.000Z" }),
+      makeTask({ id: "o-other", title: "Round invoices half-even", scope: { kind: "thread", threadId: "thread-other" }, associatedProjectId: "project-2" }),
+    ],
+    { threads: SHARED_THREADS, projects: PROJECTS, workspaces: SHARED_WORKSPACES, environments: SHARED_ENVIRONMENTS },
+  );
+}
+
+describe("TasksPanel across a project's locations", () => {
+  it("shows a thread on another host the tasks of its whole project", async () => {
+    const user = userEvent.setup();
+    const store = sharedProjectStore("thread-remote");
+    renderPanel(store);
+
+    await user.click(segment("Project"));
+    expect(titles()).toEqual(["Upgrade the test runner"]);
+    expect(segment("Project")).toHaveAccessibleDescription("1 open");
+
+    await user.click(screen.getByRole("button", { name: "View options" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Include thread tasks" }));
+    await user.keyboard("{Escape}");
+    // Thread tasks of threads in every location, each saying where it runs.
+    expect(titles()).toEqual([
+      "Deploy from the build host",
+      "Upgrade the test runner",
+      "Add retry to the payment call",
+    ]);
+    expect(rowTitle("Deploy from the build host")).toHaveAccessibleDescription(
+      "In Remote checkout · Build host",
+    );
+    expect(rowTitle("Add retry to the payment call")).toHaveAccessibleDescription(
+      "In Checkout flow refactor",
+    );
+    expect(rowTitle("Upgrade the test runner")).toHaveAccessibleDescription("In acme-web");
+
+    // Adding to the project never asks for a location.
+    fireEvent.change(addInput(), { target: { value: "Share with every checkout" } });
+    fireEvent.keyDown(addInput(), { key: "Enter" });
+    await vi.waitFor(() =>
+      expect(store.createTask).toHaveBeenCalledWith(
+        "Share with every checkout",
+        { kind: "project", projectId: "project-1" },
+        undefined,
+      ),
+    );
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  });
+
+  it("groups All once per project, with each thread saying where it runs", () => {
+    renderPanel(sharedProjectStore("thread-9"));
+    fireEvent.click(segment("All"));
+
+    const headings = [...panel().querySelectorAll(".tasks-group-heading")].map(
+      (node) => node.textContent,
+    );
+    expect(headings).toEqual([
+      "acme-web3",
+      "Checkout flow refactor1",
+      "Remote checkout · Build host1",
+      "billing-service1",
+      "Invoice rounding bug1",
+    ]);
+  });
+
+  it("offers each project once as a destination, described by its locations", async () => {
+    const user = userEvent.setup();
+    const store = sharedProjectStore("thread-other");
+    renderPanel(store);
+
+    await user.click(screen.getByRole("button", { name: 'Actions for "Round invoices half-even"' }));
+    const moveMenu = await openSubmenu(user, screen.getByRole("menu"), "Move to");
+    within(moveMenu).getByRole("menuitem", { name: "Choose…" }).focus();
+    await user.keyboard("{Enter}");
+    const dialog = screen.getByRole("dialog", { name: "Move task" });
+    const projects = within(within(dialog).getByRole("group", { name: "Projects" })).getAllByRole("option");
+    expect(projects.map((option) => option.textContent)).toEqual([
+      "acme-web 2 locations · Local, Build host",
+    ]);
+    expect(projects[0]).toHaveAttribute("title", "acme-web\n2 locations · Local, Build host");
+    const threads = within(within(dialog).getByRole("group", { name: "Threads" })).getAllByRole("option");
+    expect(threads.map((option) => option.textContent)).toEqual([
+      "Checkout flow refactor acme-web",
+      "Remote checkout acme-web · Build host",
+      "Sibling thread acme-web",
+    ]);
+    await user.click(projects[0]!);
+
+    expect(store.moveTask).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "o-other" }),
+      { kind: "project", projectId: "project-1" },
+    );
+  });
+
+  it("moves a task with files between a project's locations without asking", async () => {
+    const user = userEvent.setup();
+    const store = sharedProjectStore("thread-remote");
+    renderPanel(store);
+    await user.click(segment("Project"));
+
+    // The thread runs on the other host, but in the same project.
+    await user.click(screen.getByRole("button", { name: 'Actions for "Upgrade the test runner"' }));
+    const moveMenu = await openSubmenu(user, screen.getByRole("menu"), "Move to");
+    within(moveMenu).getByRole("menuitem", { name: "This thread" }).focus();
+    await user.keyboard("{Enter}");
+
+    expect(screen.queryByRole("dialog", { name: "Move task with project files?" })).not.toBeInTheDocument();
+    expect(store.moveTask).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "p-upgrade" }),
+      { kind: "thread", threadId: "thread-remote" },
     );
   });
 });
@@ -801,7 +953,7 @@ describe("TasksPanel rows", () => {
 
     expect(store.moveTask).toHaveBeenCalledWith(
       expect.objectContaining({ id: "t-retry" }),
-      { kind: "workspace", workspaceId: "workspace-1" },
+      { kind: "project", projectId: "project-1" },
     );
     await waitFor(() => expect(announced("Moved “Add retry to the payment call” to acme-web.")).toBe(true));
   });
@@ -932,7 +1084,7 @@ describe("TasksPanel rows", () => {
     await vi.waitFor(() =>
       expect(store.moveTask).toHaveBeenCalledWith(
         expect.objectContaining({ id: "t-retry" }),
-        { kind: "workspace", workspaceId: "workspace-1" },
+        { kind: "project", projectId: "project-1" },
         expect.any(String),
       ),
     );
@@ -969,7 +1121,7 @@ describe("TasksPanel rows", () => {
     await vi.waitFor(() =>
       expect(store.moveTask).toHaveBeenCalledWith(
         expect.objectContaining({ id: "t-retry" }),
-        { kind: "workspace", workspaceId: "workspace-1" },
+        { kind: "project", projectId: "project-1" },
         expect.any(String),
       ),
     );
@@ -1032,7 +1184,7 @@ describe("TasksPanel edit dialog", () => {
       {
         title: "Add retry with backoff",
         details: "Three attempts.",
-        scope: { kind: "workspace", workspaceId: "workspace-1" },
+        scope: { kind: "project", projectId: "project-1" },
         pinned: true,
       },
     );
@@ -1386,7 +1538,7 @@ describe("TasksPanel files", () => {
         threadTask({ id: "a", title: "Outside", files: ["/other/private.txt"] }),
         threadTask({ id: "b", title: "Dotted", files: ["/other/../private.txt"] }),
       ],
-      { threads: THREADS, workspaces: WORKSPACES, resolveFileLink: () => ({ status: "not_found" }) },
+      { threads: THREADS, projects: PROJECTS, workspaces: WORKSPACES, resolveFileLink: () => ({ status: "not_found" }) },
     );
     renderPanel(store);
 

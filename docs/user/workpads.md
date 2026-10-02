@@ -15,11 +15,17 @@ screens, switch between full-stage panels using the panel shortcuts or menu.
 Draft text stays mounted while the panel is collapsed, another panel is shown,
 or you switch threads. The document's scope does not change when you navigate.
 
-Choose **Global**, **Project**, or **Thread**, then search that scope. Enable
-**Include nested scopes** to include its descendants. Choose **New workpad** to
-create a titled document in the selected scope. A Project workpad currently
-belongs to one [location](concepts.md#project-and-location) of its project,
-the directory it was created for, and moves with that location.
+Choose **Global**, **Project**, or **Thread**, then search that scope.
+**Project** starts on the current thread's project; its dropdown lists your
+projects, named as in the sidebar. Enable **Include nested scopes** to include
+its descendants, such as the workpads of a project's threads. Choose **New
+workpad** to create a titled document in the selected scope.
+
+A Project workpad belongs to the whole project, so every
+[location](concepts.md#project-and-location) of the project shares it, on
+every host. It stays with the project when you move or remove a location, and
+is hidden while the project is removed. A Thread workpad follows its thread. A
+workpad's header and list rows name its scope, such as **Project · sedes**.
 
 Open a workpad to read it, rename it, or choose **Move workpad** and a destination
 scope. **Archive workpad** removes it from the active list without losing its
@@ -69,10 +75,13 @@ and thread ID, then use a workpad ID for individual reads and updates.
 
 The thread's **Access boundary** controls which access requires approval.
 **Ask outside this thread** requires approval for other threads, project
-workpads, and global workpads. **Ask outside this environment** uses the
-environment boundary; project scope alone does not isolate agents in the same
+workpads, and global workpads. **Ask outside this environment** reaches a
+project's workpads without asking from any environment that hosts one of the
+project's locations, and asks otherwise, including for a project with no
+active location; project scope alone does not isolate agents in the same
 environment. **Allow without asking** removes boundary prompts. Enabled tools
-and principal ownership still apply. See [Provider features](provider-features.md).
+and principal ownership still apply. See
+[Provider features](provider-features.md).
 
 Moving a workpad changes the scope used to authorize both its current content
 and history. There are no separate per-workpad sharing grants. Agent edits

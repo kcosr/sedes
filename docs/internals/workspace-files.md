@@ -443,7 +443,9 @@ tree and is not a supplemental attachment. Every later read, list, or save
 revalidates the canonical hidden root through current execution-environment
 authority. Workspace-relative references from a conversation use that
 thread's preferred available linked worktree, or Primary when the preference
-is null. Workspace-scoped Task references remain anchored to Primary. A
+is null. Task file references are absolute and resolve against the workspace
+of the thread being viewed, without its worktree preference; a project-scoped
+Task therefore resolves against each viewing location on its own host. A
 relative reference from a rendered Markdown file is normalized against the
 source file's containing directory and carries its opaque root ID; the server
 accepts it only when that root belongs to the current principal and workspace.
@@ -489,8 +491,10 @@ not rewrite them. Adding or updating a task path does not read the filesystem or
 claim that the file exists.
 
 When a task is shown in a thread with an available workspace, every stored path
-is offered to the same absolute-path resolver used by rendered links. An
-allowed primary, supplemental, or link-only file opens in the
+is offered to the same absolute-path resolver used by rendered links, against
+that thread's workspace. A task stores no workspace or host for its paths, so
+a project-scoped task resolves them on whichever location displays it. An
+allowed primary, supplemental, linked-worktree, or link-only file opens in the
 existing Files panel; a rejected path remains visible task metadata and reports
 that it is unavailable. The server still derives the tenant, principal,
 workspace, and execution environment and reapplies every containment and

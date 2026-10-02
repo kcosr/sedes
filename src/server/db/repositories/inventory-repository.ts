@@ -15,6 +15,7 @@ import {
   serializeContextExcerpts,
 } from "../context-excerpts-json.js";
 import { ComposerAttachmentRepository } from "./composer-attachment-repository.js";
+import { WorkpadRepository } from "./workpad-repository.js";
 import type { ComposerTaskReference } from "../../../shared/protocol/tasks.js";
 import {
   parseStoredTaskReferences,
@@ -60,7 +61,16 @@ export type InventoryWorkspaceRecord = {
 
 /** The project a location joins when it is first admitted. */
 export type InventoryProjectAssignment =
-  | { readonly kind: "existing"; readonly projectId: string }
+  | {
+      readonly kind: "existing";
+      readonly projectId: string;
+      /**
+       * The membership the caller was authorized against. Any location edit
+       * since then fails the commit, so authority computed for one membership
+       * never admits a location into another.
+       */
+      readonly expectedMembershipRevision?: number;
+    }
   | { readonly kind: "new"; readonly name: string };
 
 type WorkspaceObservation = {
@@ -79,7 +89,11 @@ export type InventoryWorkspaceUpsert = WorkspaceObservation &
         /** Admission may insert the location; only a new row uses this. */
         readonly project: InventoryProjectAssignment;
         readonly id?: string;
-        /** Only explicit user open/restore may revive a removed location. */
+        /**
+         * Revives a removed location in its own active project: the user's
+         * explicit open, or an agent's open authorized for that project.
+         * Without it, a removed location is a `RemovedLocationError`.
+         */
         readonly restoreRemoved?: true;
         readonly expectedProjectId?: never;
       }
@@ -127,6 +141,8 @@ export type InventoryProjectLocationRecord = {
 };
 
 export type InventoryProjectListing = InventoryProjectRecord & {
+  readonly taskCount: number;
+  readonly workpadCount: number;
   readonly locations: readonly InventoryProjectLocationRecord[];
 };
 
@@ -193,6 +209,23 @@ export class LocationConflictError extends DomainError {
   }
 }
 
+/**
+ * Admission found a removed location of an active project without leave to
+ * restore it. Restoring changes that project's membership, so it needs the
+ * project's own authority.
+ */
+export class RemovedLocationError extends DomainError {
+  constructor(
+    readonly location: { readonly workspaceId: string; readonly projectId: string },
+  ) {
+    super(
+      "conflict",
+      "This directory is a removed location of an existing project. Restore it in that project.",
+    );
+    this.name = "RemovedLocationError";
+  }
+}
+
 function assertProjectName(name: string): void {
   // SQLite length() counts code points, as does string iteration.
   if (name.trim().length === 0 || [...name].length > MAXIMUM_PROJECT_NAME_LENGTH) {
@@ -216,9 +249,9 @@ function sameRemovalLocations(
 
 // The single-location removal path reports the first blocker in this order.
 const locationRemovalMessages: Readonly<Record<DurableProjectRemovalBlockerKind, string>> = {
-  durable_work: "Resolve running, queued, or uncertain work before removing this project.",
-  enabled_schedule: "Pause scheduled work before removing this project. Restore will leave schedules paused.",
-  live_terminal: "End live or interrupted terminals before removing this project.",
+  durable_work: "Resolve running, queued, or uncertain work before removing this location.",
+  enabled_schedule: "Pause scheduled work before removing this location. Restore will leave schedules paused.",
+  live_terminal: "End live or interrupted terminals before removing this location.",
 };
 
 export type InventoryThreadRecord = {
@@ -561,6 +594,19 @@ function fingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+/**
+ * Archive, settle, and bulk receipts hash the open-task disposition. Moving
+ * open tasks up to their thread's project was "move_to_workspace" before
+ * projects existed, and receipts are never rewritten, so these persisted
+ * derivation inputs keep that token. Only fingerprints use it; the wire
+ * value is "move_to_project", with no alias.
+ */
+function storedDispositionToken(
+  disposition: "move_to_project" | "move_to_global" | "complete" | "keep",
+): string {
+  return disposition === "move_to_project" ? "move_to_workspace" : disposition;
+}
+
 /** Non-default archive side effects participate in mutation replay identity. */
 function archiveThreadsFingerprint(
   threadId: string,
@@ -570,7 +616,7 @@ function archiveThreadsFingerprint(
     readonly expectedStashedPromptCount?: number;
     readonly expectedOpenTaskSnapshot?: string;
     readonly openTaskDisposition?:
-      "move_to_workspace" | "move_to_global" | "complete" | "keep";
+      "move_to_project" | "move_to_global" | "complete" | "keep";
     readonly executionWorkspaceDisposition?:
       | { readonly kind: "keep" }
       | {
@@ -589,7 +635,7 @@ function archiveThreadsFingerprint(
     ...(input.expectedStashedPromptCount === undefined
       ? []
       : [input.expectedStashedPromptCount]),
-    ...(disposition === "keep" ? [] : [disposition]),
+    ...(disposition === "keep" ? [] : [storedDispositionToken(disposition)]),
     ...(input.expectedOpenTaskSnapshot === undefined
       ? []
       : [input.expectedOpenTaskSnapshot]),
@@ -606,7 +652,7 @@ function bulkInventoryFingerprint(input: {
   readonly expectedOpenTaskCount?: number;
   readonly expectedOpenTaskSnapshot?: string;
   readonly openTaskDisposition?:
-    "move_to_workspace" | "move_to_global" | "complete" | "keep";
+    "move_to_project" | "move_to_global" | "complete" | "keep";
 }): string {
   const disposition = input.openTaskDisposition ?? "keep";
   const canonicalTargets = input.targets
@@ -624,7 +670,7 @@ function bulkInventoryFingerprint(input: {
     ...(input.expectedOpenTaskCount === undefined
       ? []
       : [input.expectedOpenTaskCount]),
-    disposition,
+    storedDispositionToken(disposition),
     ...(input.expectedOpenTaskSnapshot === undefined
       ? []
       : [input.expectedOpenTaskSnapshot]),
@@ -878,7 +924,10 @@ export class InventoryRepository {
         );
       }
       const removed = this.isWorkspaceRemoved(scope, existing.id);
-      if (removed && !input.restoreRemoved) this.assertWorkspaceActive(scope, existing.id);
+      // Revalidation never revives a location.
+      if (removed && !input.project && !input.restoreRemoved) {
+        this.assertWorkspaceActive(scope, existing.id);
+      }
       const project = this.#project(scope, existing.projectId);
       const conflict = (reason: InventoryLocationConflict["reason"]) =>
         new LocationConflictError({
@@ -892,12 +941,24 @@ export class InventoryRepository {
         });
       // Only a removed location can belong to a removed project.
       if (project.removedAt !== null) throw conflict("project_removed");
-      // An existing location keeps its project; joining another one is a move.
-      if (
-        input.project?.kind === "existing" &&
-        input.project.projectId !== existing.projectId
-      ) {
-        throw conflict("other_project");
+      if (input.project?.kind === "existing") {
+        // An existing location keeps its project; joining another one is a move.
+        if (input.project.projectId !== existing.projectId) {
+          throw conflict("other_project");
+        }
+        if (input.project.expectedMembershipRevision !== undefined) {
+          this.#assertProjectMembershipRevision(
+            project,
+            input.project.expectedMembershipRevision,
+          );
+        }
+      }
+      // Admission without leave to restore leaves the location removed.
+      if (removed && !input.restoreRemoved) {
+        throw new RemovedLocationError({
+          workspaceId: existing.id,
+          projectId: project.id,
+        });
       }
       const availability = input.available ? "available" : "unavailable";
       const changed =
@@ -964,9 +1025,17 @@ export class InventoryRepository {
     return row.removedAt !== null;
   }
 
+  isProjectRemoved(scope: RequestScope, projectId: string): boolean {
+    const row = this.database.prepare(`SELECT removed_at AS removedAt FROM projects
+      WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
+      .get(scope.tenantId, scope.principalId, projectId) as { removedAt: number | null } | undefined;
+    if (!row) throw new DomainError("not_found", "The project was not found.");
+    return row.removedAt !== null;
+  }
+
   assertWorkspaceActive(scope: RequestScope, workspaceId: string): void {
     if (this.isWorkspaceRemoved(scope, workspaceId)) {
-      throw new DomainError("invalid_transition", "This project was removed. Restore it in Settings → Projects before starting new work.");
+      throw new DomainError("invalid_transition", "This location was removed. Restore it in Settings → Projects before starting new work.");
     }
   }
 
@@ -989,11 +1058,11 @@ export class InventoryRepository {
     const workspace = this.getWorkspace(scope, workspaceId);
     if (this.isWorkspaceRemoved(scope, workspaceId)) return;
     if (workspace.revision !== input.expectedRevision) {
-      throw new DomainError("conflict", "The project changed. Refresh and try again.");
+      throw new DomainError("conflict", "The location changed. Refresh and try again.");
     }
     const threadIds = this.listThreadIdsForWorkspace(scope, workspaceId);
     if (JSON.stringify(threadIds) !== JSON.stringify(input.expectedThreadIds)) {
-      throw new DomainError("conflict", "The project's threads changed. Refresh and try again.");
+      throw new DomainError("conflict", "The location's threads changed. Refresh and try again.");
     }
     const [blocker] = this.#locationRemovalBlockers(scope, {
       workspaceId, environmentId: workspace.environmentId, threadIds,
@@ -1114,9 +1183,10 @@ export class InventoryRepository {
   }
 
   /**
-   * Moves every location of the source, active and removed, into the target
-   * and deletes the emptied source. This cannot be undone. Runtime and
-   * active-turn checks belong to the caller.
+   * Moves every location of the source, active and removed, and every
+   * project Task and Workpad into the target, then deletes the emptied
+   * source. This cannot be undone. Runtime and active-turn checks belong to
+   * the caller. Each moved Workpad gets a revision recording its new scope.
    */
   mergeProject(scope: RequestScope, sourceProjectId: string, input: {
     readonly targetProjectId: string;
@@ -1125,11 +1195,15 @@ export class InventoryRepository {
     /** Threads of the source's active locations, as listActiveThreadIdsForProject returns them. */
     readonly expectedThreadIds: readonly string[];
     readonly now: number;
-  }): InventoryProjectListing {
+  }): {
+    readonly project: InventoryProjectListing;
+    readonly movedTaskIds: readonly string[];
+    readonly movedWorkpads: readonly { readonly id: string; readonly revision: number }[];
+  } {
     if (sourceProjectId === input.targetProjectId) {
       throw new DomainError("bad_request", "A project cannot be merged into itself.");
     }
-    this.database.transaction(() => {
+    const moved = this.database.transaction(() => {
       const source = this.#project(scope, sourceProjectId);
       const target = this.#project(scope, input.targetProjectId);
       this.#assertProjectMembershipRevision(source, input.expectedSourceMembershipRevision);
@@ -1149,12 +1223,30 @@ export class InventoryRepository {
         WHERE tenant_id = ? AND owner_principal_id = ? AND project_id = ?`)
         .run(target.id, input.now, scope.tenantId, scope.principalId, source.id);
       this.#touchProjectMembership(scope, target.id, input.now);
+      const movedTaskIds = (this.database.prepare(`UPDATE tasks SET project_id = ?,
+        revision = revision + 1, updated_at = max(updated_at, ?)
+        WHERE tenant_id = ? AND owner_principal_id = ? AND scope_kind = 'project' AND project_id = ?
+        RETURNING id`)
+        .all(target.id, input.now, scope.tenantId, scope.principalId, source.id) as Array<{ id: string }>)
+        .map(({ id }) => id).sort();
+      const workpads = new WorkpadRepository(this.database);
+      const movedWorkpads = (this.database.prepare(`SELECT id, revision FROM workpads
+        WHERE tenant_id = ? AND owner_principal_id = ? AND scope_kind = 'project' AND project_id = ?
+        ORDER BY id`)
+        .all(scope.tenantId, scope.principalId, source.id) as Array<{ id: string; revision: number }>)
+        .map(({ id, revision }) => {
+          const pad = workpads.update(scope, id, {
+            expectedRevision: revision, scope: { kind: "project", projectId: target.id },
+          }, { kind: "user" }, input.now);
+          return { id: pad.id, revision: pad.revision };
+        });
       this.database.prepare(`DELETE FROM projects
         WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
         .run(scope.tenantId, scope.principalId, source.id);
       this.#bumpGeneration(scope);
+      return { movedTaskIds, movedWorkpads };
     })();
-    return this.getProject(scope, input.targetProjectId);
+    return { project: this.getProject(scope, input.targetProjectId), ...moved };
   }
 
   /**
@@ -1962,7 +2054,7 @@ export class InventoryRepository {
       readonly expectedStashedPromptCount?: number;
       readonly expectedOpenTaskSnapshot?: string;
       readonly openTaskDisposition?:
-        "move_to_workspace" | "move_to_global" | "complete" | "keep";
+        "move_to_project" | "move_to_global" | "complete" | "keep";
       readonly assertOpenTasks?: (threadIds: readonly string[]) => void;
       readonly applyOpenTasks?: () => readonly string[];
     },
@@ -1976,7 +2068,7 @@ export class InventoryRepository {
       "settle_thread",
       threadId,
       input.expectedRevision,
-      disposition,
+      storedDispositionToken(disposition),
       ...(input.expectedOpenTaskSnapshot === undefined
         ? []
         : [input.expectedOpenTaskSnapshot]),
@@ -2057,7 +2149,7 @@ export class InventoryRepository {
       readonly expectedStashedPromptCount?: number;
       readonly expectedOpenTaskSnapshot?: string;
       readonly openTaskDisposition?:
-        "move_to_workspace" | "move_to_global" | "complete" | "keep";
+        "move_to_project" | "move_to_global" | "complete" | "keep";
       readonly executionWorkspaceDisposition?:
         | { readonly kind: "keep" }
         | {
@@ -2223,7 +2315,7 @@ export class InventoryRepository {
       readonly expectedStashedPromptCount?: number;
       readonly expectedOpenTaskSnapshot?: string;
       readonly openTaskDisposition?:
-        "move_to_workspace" | "move_to_global" | "complete" | "keep";
+        "move_to_project" | "move_to_global" | "complete" | "keep";
       readonly executionWorkspaceDisposition?:
         | { readonly kind: "keep" }
         | {
@@ -2273,7 +2365,7 @@ export class InventoryRepository {
       readonly expectedOpenTaskCount?: number;
       readonly expectedOpenTaskSnapshot?: string;
       readonly openTaskDisposition?:
-        "move_to_workspace" | "move_to_global" | "complete" | "keep";
+        "move_to_project" | "move_to_global" | "complete" | "keep";
       /** Runs inside this transaction and must inspect the affected set. */
       readonly countOpenTasks?: (threadIds: readonly string[]) => number;
       /** Confirms the reviewed task set before any inventory or task writes. */
@@ -2438,7 +2530,7 @@ export class InventoryRepository {
       readonly expectedOpenTaskCount?: number;
       readonly expectedOpenTaskSnapshot?: string;
       readonly openTaskDisposition?:
-        "move_to_workspace" | "move_to_global" | "complete" | "keep";
+        "move_to_project" | "move_to_global" | "complete" | "keep";
     },
   ):
     | {
@@ -3457,6 +3549,9 @@ export class InventoryRepository {
     if (project.removedAt !== null) {
       throw new DomainError("invalid_transition", "The project was removed. Restore it before adding locations to it.");
     }
+    if (assignment.expectedMembershipRevision !== undefined) {
+      this.#assertProjectMembershipRevision(project, assignment.expectedMembershipRevision);
+    }
     return project.id;
   }
 
@@ -3542,7 +3637,23 @@ export class InventoryRepository {
       group.push({ ...location, available: available === 1, removedWithProject: removedWithProject === 1 });
       locations.set(owner, group);
     }
-    return projects.map(project => ({ ...project, locations: locations.get(project.id) ?? [] }));
+    // Exact project ownership survives location/project removal. Count retained
+    // objects, including completed tasks and archived workpads, without joining
+    // locations (which would multiply shared objects across directories).
+    const counts = (table: "tasks" | "workpads") => new Map(
+      (this.database.prepare(`SELECT project_id AS projectId, COUNT(*) AS count FROM ${table}
+        WHERE tenant_id = ? AND owner_principal_id = ? AND scope_kind = 'project'
+          ${projectId === undefined ? "" : "AND project_id = ?"}
+        GROUP BY project_id`).all(scope.tenantId, scope.principalId, ...only) as Array<{
+          projectId: string; count: number;
+        }>).map(({ projectId: id, count }) => [id, count]),
+    );
+    const tasks = counts("tasks");
+    const workpads = counts("workpads");
+    return projects.map(project => ({
+      ...project, taskCount: tasks.get(project.id) ?? 0, workpadCount: workpads.get(project.id) ?? 0,
+      locations: locations.get(project.id) ?? [],
+    }));
   }
 
   #bumpGeneration(scope: RequestScope): void {

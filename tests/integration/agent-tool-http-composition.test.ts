@@ -74,7 +74,7 @@ function createCrossEnvironmentApprovalComposition() {
     activity: "idle" as const,
   }));
   const canonical = new CanonicalInlineAgentToolService({
-    application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus },
+    application: { readThreadStatus },
     invocationId: () => "cross-environment-invocation",
   });
   const policies = {
@@ -99,6 +99,8 @@ function createCrossEnvironmentApprovalComposition() {
         : undefined,
     resolveThreadFamily: () => undefined,
     resolveTask: () => undefined,
+    resolveProject: () => undefined,
+    resolveWorkspaceProject: () => "project-1",
     resolveWorkpad: () => undefined,
     resolveSavedAgent: () => undefined,
     listEnvironments: () => [
@@ -280,7 +282,6 @@ describe("agent-tool HTTP production composition", () => {
       });
       const firstCanonical = new CanonicalInlineAgentToolService({
         application: {
-          readWorkspaceProjectId: async () => "project-1",
           readThreadStatus: async (_scope, _threadId, _grant, signal) =>
             await new Promise((_resolve, reject) => {
               signal.addEventListener(

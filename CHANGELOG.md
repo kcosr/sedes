@@ -4,6 +4,44 @@
 
 ### Breaking Changes
 
+- Browser and packaged clients require client protocol 135. Project summaries
+  now include Task and Workpad counts. Upgrade clients together with the server.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
+
+- Browser and packaged clients require client protocol 134, which scopes
+  Tasks and Workpads to `global`, `project`, or `thread`, gives each Task an
+  `associatedProjectId`, and reduces a transcript `task_context` part to the
+  Task's display fields. Upgrade clients together with the server.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
+
+- Agent tools `task.list@4`, `task.get@2`, `task.create@2`, `task.update@2`,
+  `workpad.list@2`, `workpad.get@2`, `workpad.revisions@2`,
+  `workpad.create@2`, `workpad.update@2`, `thread.archive@2`, and
+  `workspace.open@3` replace their previous versions. Task and Workpad scopes
+  take `{ kind: "project", projectId? }`, defaulting to the caller's project,
+  instead of a workspace scope; `thread.archive` names its disposition
+  `move_to_project`; `workspace.open` accepts an optional `projectId` to add a
+  directory to an existing project, and restores a removed location only when
+  the call names that location's project, authorized like reaching it.
+  Callers must describe these tools again;
+  the previous versions and earlier `task.list` cursors are rejected. An
+  individual native MCP session retained across the upgrade, such as a
+  sidecar-retained Claude query, keeps the old schemas until its runtime
+  restarts.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
+
+- The HTTP Task and Workpad APIs use the `project` scope instead of
+  `workspace` (`{ kind: "project", projectId }`, and
+  `scopeKind=project&projectId=…` for Workpad lists). Settle, archive, and
+  bulk stack requests name the open-Task disposition `move_to_project`
+  instead of `move_to_workspace`.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
+
+- A Task update or move whose response was lost before the upgrade can't be
+  replayed: retrying it with the same mutation ID reports that the ID was
+  reused. Read the Task again and make a new request.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
+
 - Browser and packaged clients require client protocol 133, which adds
   projects to the application snapshot and a `projectId` to every workspace.
   Upgrade clients together with the server.
@@ -26,9 +64,10 @@
 
 - Agents and Tool clients can no longer restore a removed project:
   `workspace.open` of a directory whose project was removed is a conflict.
-  Restore the project in **Settings → Projects**. Opening a removed location
-  of an active project still restores it.
-  ([#33](https://github.com/kcosr/sedes/pull/33))
+  Restore the project in **Settings → Projects**. A removed location of an
+  active project is restored only when the call names that project.
+  ([#33](https://github.com/kcosr/sedes/pull/33),
+  [#34](https://github.com/kcosr/sedes/pull/34))
 
 - Claude now requires Claude Code 2.1.287 or newer and uses Agent SDK 0.3.287.
   Update Claude Code on every execution host. Rebuild local workers for
@@ -76,8 +115,8 @@
   browser protocol change is required for this fix. (#15)
 
 - Codex viewed images use a new `viewed_image` transcript item, introduced
-  in client protocol 123. This build requires client protocol 133; see the
-  client protocol entries below. (#11, #13, #14)
+  in client protocol 123. This build requires client protocol 135; see the
+  client protocol entries above and below. (#11, #13, #14)
 
 - Sidecars must use runtime protocol 14, which reads Claude history through the
   transcript's true tip and across automatic compactions, and reports
@@ -115,11 +154,16 @@
 
 ### Added
 
+- **Settings → Projects** shows Task and Workpad counts for active and removed
+  projects, including completed Tasks and archived Workpads. Removal dialogs
+  and **Also remove project** show the project-owned saved work that will be
+  hidden; thread-owned items are separate.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
+
 - Projects can span several directories and environments. Each directory on
   one environment is a location of exactly one project, such as the same
   repository on this computer and on an SSH host. A project's name is
-  editable and independent of its directories. Project Tasks and Workpads
-  still belong to the location they were created in.
+  editable and independent of its directories.
   ([#33](https://github.com/kcosr/sedes/pull/33))
 
 - **Settings → Projects** lists each project with its locations. Rename a
@@ -267,6 +311,35 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- A project's Tasks and Workpads are shared by every location of the project,
+  on every host. Tasks' **Project** view and Workpads' **Project** scope
+  follow the current thread's project, adding a Task there never asks for a
+  location, and destination pickers and All list each project once. A
+  project's own Tasks and Workpads stay with it when a location moves or is
+  removed, and merging carries them into the target. **Settings → Projects**
+  shows each active project's Task count. Task file links still open against
+  the thread you are viewing.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
+
+- Agents reach a project's Tasks and Workpads from any environment that hosts
+  one of the project's active locations. Under **Ask outside this
+  environment**, a project hosted only elsewhere asks for approval; a Tool
+  client needs one of the project's environments allowlisted. A project with
+  no active location is outside every environment.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
+
+- Visibility change: Project Tasks and Workpads created in a location that was
+  later removed reappear while their project is active.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
+
+- Migration 127 moves location-scoped Tasks and Workpads to their projects,
+  rewriting stored Workpad scopes and Task snapshots no provider has received;
+  delivered snapshots stay byte-identical so provider history keeps verifying.
+  It stops without changes if saved work refers to a location that no longer
+  exists. The migration is one-way; back up the state directory, including
+  `overlay.sqlite`, before upgrading.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
 
 - Scope filters by project instead of by directory name and lists the projects
   with a location on the scoped environment. A saved project-name filter
@@ -511,6 +584,10 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Tool client default-location errors and location-removal guards now use
+  accurate location terminology while preserving project-level diagnostics.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
 
 - Removing a project or location while terminal work blocked it could return
   an internal server error. Terminal conflicts now return their own error from

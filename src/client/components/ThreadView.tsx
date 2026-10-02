@@ -438,8 +438,7 @@ export function ThreadView({
           void taskDrag.requestMove(task, {
             threadId,
             threadTitle: snapshot.thread.title.text,
-            workspaceId: snapshot.thread.workspaceId,
-            workspaceLabel: snapshot.workspace.label.text,
+            projectId: snapshot.workspace.projectId,
           });
         }}
       >

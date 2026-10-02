@@ -49,9 +49,6 @@ function fixture(
   };
   const canonical = new CanonicalInlineAgentToolService({
     application: {
-      async readWorkspaceProjectId() {
-        return "project-1";
-      },
       async readThreadStatus(_scope, threadId) {
         if (threadId !== targetThreadId) return undefined;
         return {
@@ -78,6 +75,8 @@ function fixture(
           : undefined,
       resolveThreadFamily: () => undefined,
       resolveTask: () => undefined,
+      resolveProject: () => undefined,
+      resolveWorkspaceProject: () => "project-1",
     resolveWorkpad: () => undefined,
     resolveSavedAgent: () => undefined,
       listEnvironments: () => [

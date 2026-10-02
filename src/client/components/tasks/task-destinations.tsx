@@ -4,8 +4,11 @@ import type {
   NormalizedApplicationSnapshot,
   TaskScope,
 } from "../../../shared/index.js";
+import {
+  describeProjectLocations,
+  summarizeHosts,
+} from "../../app/project-locations.js";
 import type { Route } from "../../app/router.js";
-import { workspaceDisplayLabel } from "../../app/sidebar-scope-presentation.js";
 import type { SearchableSelectOption } from "../ui/searchable-select.js";
 import {
   scopeKey,
@@ -29,8 +32,14 @@ export function ScopeIcon({
 export interface TaskDestinations {
   /** The chat the panel follows. */
   readonly context: TasksContext;
-  readonly workspaceLabels: ReadonlyMap<string, string>;
+  /** Project labels by project ID. */
+  readonly projectLabels: ReadonlyMap<string, string>;
   readonly threadTitles: ReadonlyMap<string, string>;
+  /**
+   * Where a thread runs, for a thread in a project with several locations:
+   * only what tells its location apart ("aw-personal", a folder).
+   */
+  threadLocation(threadId: string): string | undefined;
   /** A scope's short name: "Global", the project's label or the thread's title. */
   label(scope: TaskScope): string;
   /**
@@ -44,7 +53,7 @@ export interface TaskDestinations {
 
 type Snapshot = Pick<
   NormalizedApplicationSnapshot,
-  "threads" | "workspaces" | "environments"
+  "threads" | "projects" | "workspaces" | "environments"
 >;
 
 export function useTaskDestinations(
@@ -52,15 +61,25 @@ export function useTaskDestinations(
   route: Route,
 ): TaskDestinations {
   const threads = snapshot?.threads;
+  const projects = snapshot?.projects;
   const workspaces = snapshot?.workspaces;
   const environments = snapshot?.environments;
   const routeThreadId = route.name === "thread" ? route.threadId : undefined;
   return useMemo(() => {
     const threadList = threads ?? [];
+    const projectList = projects ?? [];
     const workspaceList = workspaces ?? [];
     const environmentList = environments ?? [];
-    const workspaceLabels = new Map(
-      workspaceList.map((workspace) => [workspace.id, workspace.label.text]),
+    const projectLocations = describeProjectLocations({
+      projects: projectList,
+      workspaces: workspaceList,
+      environments: environmentList,
+    });
+    const projectLabels = new Map(
+      projectList.map((project) => [
+        project.id,
+        projectLocations.projectLabel(project.id) ?? project.name,
+      ]),
     );
     const threadTitles = new Map(
       threadList.map((thread) => [thread.id, thread.title.text]),
@@ -90,26 +109,28 @@ export function useTaskDestinations(
       ...(currentWorkspace
         ? {
             project: {
-              id: currentWorkspace.id,
-              label: currentWorkspace.label.text,
+              id: currentWorkspace.projectId,
+              label:
+                projectLabels.get(currentWorkspace.projectId) ??
+                currentWorkspace.label.text,
             },
           }
         : {}),
     };
 
-    const projectLabel = (workspace: (typeof workspaceList)[number]) =>
-      workspaceDisplayLabel({
-        workspace,
-        workspaces: workspaceList,
-        environments: environmentList,
-        includeEnvironment:
-          environmentList.find(({ id }) => id === workspace.environmentId)
-            ?.kind !== "local",
-      });
+    const threadWorkspaces = new Map(
+      threadList.map((thread) => [thread.id, thread.workspaceId]),
+    );
+    const threadLocation = (threadId: string) => {
+      const workspaceId = threadWorkspaces.get(threadId);
+      return workspaceId === undefined
+        ? undefined
+        : projectLocations.locationTag(workspaceId);
+    };
     const label = (scope: TaskScope): string => {
       if (scope.kind === "global") return "Global";
-      if (scope.kind === "workspace") {
-        return workspaceLabels.get(scope.workspaceId) ?? "Unavailable project";
+      if (scope.kind === "project") {
+        return projectLabels.get(scope.projectId) ?? "Unavailable project";
       }
       return threadTitles.get(scope.threadId) ?? "Unavailable thread";
     };
@@ -117,17 +138,35 @@ export function useTaskDestinations(
       left.label.localeCompare(right.label, undefined, { numeric: true }) ||
       left.value.localeCompare(right.value);
 
-    const projectOptions = workspaceList
+    // A project is listed once, however many locations it has: one
+    // location shows its path, several their count and hosts.
+    const projectOptions = projectList
       .filter(({ id }) => id !== context.project?.id)
-      .map((workspace): SearchableSelectOption => ({
-        value: scopeKey({ kind: "workspace", workspaceId: workspace.id }),
-        label: projectLabel(workspace),
-        description: workspace.displayPath.text,
-        descriptionIsPath: true,
-        icon: <ScopeIcon kind="workspace" />,
-        group: "Projects",
-        searchTerms: [workspace.id, workspace.label.text],
-      }))
+      .map((project): SearchableSelectOption => {
+        const locations = projectLocations.locationsOf(project.id);
+        const [only] = locations;
+        const label = projectLabels.get(project.id) ?? project.name;
+        const hosts = projectLocations.projectHosts(project.id);
+        return {
+          value: scopeKey({ kind: "project", projectId: project.id }),
+          label,
+          ...(locations.length === 0
+            ? { description: "No locations" }
+            : locations.length === 1 && only
+              ? { description: only.displayPath.text, descriptionIsPath: true }
+              : {
+                  description: `${locations.length} locations · ${summarizeHosts(hosts)}`,
+                  title: `${label}\n${locations.length} locations · ${hosts.join(", ")}`,
+                }),
+          icon: <ScopeIcon kind="project" />,
+          group: "Projects",
+          searchTerms: [
+            project.id,
+            project.name,
+            ...locations.map(({ label }) => label.text),
+          ],
+        };
+      })
       .sort(compare);
     const titleCounts = new Map<string, number>();
     const activeThreads = threadList.filter(
@@ -147,15 +186,26 @@ export function useTaskDestinations(
         const workspace = workspaceList.find(
           ({ id }) => id === thread.workspaceId,
         );
+        const project = workspace
+          ? projectLocations.project(workspace.projectId)
+          : undefined;
         return {
           value: scopeKey({ kind: "thread", threadId: thread.id }),
           label: duplicate
             ? `${thread.title.text} · ${thread.id}`
             : thread.title.text,
-          description: workspace ? projectLabel(workspace) : thread.workspaceId,
+          // Its project, and where it runs when the project has several locations.
+          description:
+            projectLocations.projectFolderLabel(thread.workspaceId, {
+              includeEnvironment: true,
+            }) ?? thread.workspaceId,
           icon: <ScopeIcon kind="thread" />,
           group: "Threads",
-          searchTerms: [thread.id, workspace?.label.text ?? ""],
+          searchTerms: [
+            thread.id,
+            workspace?.label.text ?? "",
+            project?.name ?? "",
+          ],
         };
       })
       .sort(compare);
@@ -175,11 +225,11 @@ export function useTaskDestinations(
           ? [
               {
                 value: scopeKey({
-                  kind: "workspace",
-                  workspaceId: context.project.id,
+                  kind: "project",
+                  projectId: context.project.id,
                 }),
                 label: `This project · ${context.project.label}`,
-                icon: <ScopeIcon kind="workspace" />,
+                icon: <ScopeIcon kind="project" />,
                 pinned: true,
               },
             ]
@@ -203,6 +253,13 @@ export function useTaskDestinations(
       }
       return all;
     };
-    return { context, workspaceLabels, threadTitles, label, options };
-  }, [threads, workspaces, environments, routeThreadId]);
+    return {
+      context,
+      projectLabels,
+      threadTitles,
+      threadLocation,
+      label,
+      options,
+    };
+  }, [threads, projects, workspaces, environments, routeThreadId]);
 }

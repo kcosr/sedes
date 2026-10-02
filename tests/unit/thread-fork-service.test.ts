@@ -380,6 +380,7 @@ function fixture(withEnvironmentVariables = false) {
         kind: "thread_agent" as const,
         environmentId: environment.id,
         workspaceId: workspace.id,
+        projectId: "project-1",
         threadId: secondSource.id,
       },
       policyIdentity: {

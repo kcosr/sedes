@@ -1772,7 +1772,7 @@ describe("ThreadContextMenu actions", () => {
     await waitFor(() =>
       expect(store.mutateInventory).toHaveBeenCalledWith(thread, "settle", {
         expectedStashedPromptCount: 0,
-        openTaskDisposition: "move_to_workspace",
+        openTaskDisposition: "move_to_project",
       }),
     );
   });
@@ -1878,7 +1878,7 @@ describe("ThreadContextMenu actions", () => {
     await waitFor(() =>
       expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
         expectedStashedPromptCount: 0,
-        openTaskDisposition: "move_to_workspace",
+        openTaskDisposition: "move_to_project",
         executionWorkspaceDisposition: { kind: "keep" },
       }),
     );
@@ -1956,7 +1956,7 @@ describe("ThreadContextMenu actions", () => {
       await waitFor(() =>
         expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
           expectedStashedPromptCount: 0,
-          openTaskDisposition: "move_to_workspace",
+          openTaskDisposition: "move_to_project",
           executionWorkspaceDisposition: { kind: "keep" },
         }),
       );
@@ -2087,7 +2087,7 @@ describe("ThreadContextMenu actions", () => {
       expect(store.archiveThreadFamily).toHaveBeenCalledWith(thread, {
         expectedStashedPromptCount: 3,
         executionWorkspaceDisposition: { kind: "keep" },
-        openTaskDisposition: "move_to_workspace",
+        openTaskDisposition: "move_to_project",
       }),
     );
     expect(store.mutateInventory).not.toHaveBeenCalledWith(

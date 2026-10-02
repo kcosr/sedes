@@ -26,7 +26,7 @@ function task(overrides: Partial<AssociatedTask> = {}): AssociatedTask {
   return {
     id: "task",
     scope: { kind: "global" },
-    associatedWorkspaceId: null,
+    associatedProjectId: null,
     title: "Task",
     details: "",
     pinned: false,
@@ -41,28 +41,28 @@ function task(overrides: Partial<AssociatedTask> = {}): AssociatedTask {
 
 const context: TasksContext = {
   thread: { id: "thread-1", title: "Current", workspaceId: "workspace-1" },
-  project: { id: "workspace-1", label: "acme-web" },
+  project: { id: "project-1", label: "acme-web" },
 };
 
 const projectTask = task({
   id: "project",
-  scope: { kind: "workspace", workspaceId: "workspace-1" },
-  associatedWorkspaceId: "workspace-1",
+  scope: { kind: "project", projectId: "project-1" },
+  associatedProjectId: "project-1",
 });
 const threadTask = task({
   id: "thread",
   scope: { kind: "thread", threadId: "thread-1" },
-  associatedWorkspaceId: "workspace-1",
+  associatedProjectId: "project-1",
 });
 const siblingTask = task({
   id: "sibling",
   scope: { kind: "thread", threadId: "thread-2" },
-  associatedWorkspaceId: "workspace-1",
+  associatedProjectId: "project-1",
 });
 const otherTask = task({
   id: "other",
   scope: { kind: "thread", threadId: "thread-3" },
-  associatedWorkspaceId: "workspace-2",
+  associatedProjectId: "project-2",
 });
 
 describe("views", () => {
@@ -86,7 +86,7 @@ describe("views", () => {
 
   it("adds to the scope in view, and to Global from All", () => {
     expect(destinationScope("thread", context)).toEqual({ kind: "thread", threadId: "thread-1" });
-    expect(destinationScope("project", context)).toEqual({ kind: "workspace", workspaceId: "workspace-1" });
+    expect(destinationScope("project", context)).toEqual({ kind: "project", projectId: "project-1" });
     expect(destinationScope("global", context)).toEqual({ kind: "global" });
     expect(destinationScope("all", context)).toEqual({ kind: "global" });
     expect(destinationScope("thread", {})).toBeUndefined();
@@ -170,12 +170,12 @@ describe("search, filters and order", () => {
 describe("grouping", () => {
   it("puts Global first, then the current project, then others by name, with threads nested", () => {
     const groups = groupTasks(
-      [otherTask, siblingTask, threadTask, projectTask, task({ id: "global" }), task({ id: "zed", scope: { kind: "workspace", workspaceId: "workspace-0" }, associatedWorkspaceId: "workspace-0" })],
+      [otherTask, siblingTask, threadTask, projectTask, task({ id: "global" }), task({ id: "zed", scope: { kind: "project", projectId: "project-0" }, associatedProjectId: "project-0" })],
       {
-        workspaces: new Map([
-          ["workspace-0", "zeta"],
-          ["workspace-1", "acme-web"],
-          ["workspace-2", "billing"],
+        projects: new Map([
+          ["project-0", "zeta"],
+          ["project-1", "acme-web"],
+          ["project-2", "billing"],
         ]),
         threads: new Map([
           ["thread-1", "Current"],
@@ -197,14 +197,14 @@ describe("grouping", () => {
       ["billing", 1, [], [["Thread", ["other"]]]],
       ["zeta", 1, ["zed"], []],
     ]);
-    expect(groups.map(({ key }) => key)).toEqual(["global", "workspace:workspace-1", "workspace:workspace-2", "workspace:workspace-0"]);
+    expect(groups.map(({ key }) => key)).toEqual(["global", "project:project-1", "project:project-2", "project:project-0"]);
     expect(groups[1]!.children[0]!.key).toBe("thread:thread-1");
   });
 
   it("names unknown projects and keeps project-less thread tasks together", () => {
     const groups = groupTasks(
       [task({ id: "orphan", scope: { kind: "thread", threadId: "gone" } })],
-      { workspaces: new Map(), threads: new Map() },
+      { projects: new Map(), threads: new Map() },
       {},
     );
     expect(groups.map(({ label, kind }) => [label, kind])).toEqual([["No project", "project"]]);

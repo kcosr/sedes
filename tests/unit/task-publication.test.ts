@@ -19,6 +19,7 @@ const GLOBAL_TASK_ID = "20000000-0000-4000-8000-000000000001";
 const WORKSPACE_TASK_ID = "20000000-0000-4000-8000-000000000002";
 const THREAD_TASK_ID = "20000000-0000-4000-8000-000000000003";
 const WORKSPACE_ID = "30000000-0000-4000-8000-000000000001";
+const PROJECT_ID = "30000000-0000-4000-8000-000000000003";
 const THREAD_ID = "30000000-0000-4000-8000-000000000002";
 
 // 2024-08-01T00:00:00.000Z
@@ -32,9 +33,9 @@ function taskRecord(
     ownerPrincipalId: scope.principalId,
     id: GLOBAL_TASK_ID,
     scopeKind: "global",
-    environmentId: null,
-    workspaceId: null,
+    projectId: null,
     threadId: null,
+    associatedProjectId: null,
     associatedWorkspaceId: null,
     title: "Task",
     details: "",
@@ -48,9 +49,13 @@ function taskRecord(
   };
 }
 
-function snapshotService(tasks: readonly AssociatedTaskRecord[]) {
+function snapshotService(
+  tasks: readonly AssociatedTaskRecord[],
+  removed: { readonly project?: boolean; readonly location?: boolean } = {},
+) {
   const inventory = {
-    isWorkspaceRemoved: () => false,
+    isWorkspaceRemoved: () => removed.location === true,
+    isProjectRemoved: () => removed.project === true,
     listEnvironments: () => [
       {
         tenantId: scope.tenantId,
@@ -63,13 +68,14 @@ function snapshotService(tasks: readonly AssociatedTaskRecord[]) {
         revision: 0,
       },
     ],
-    listActiveProjects: () => [{ id: "project-1", name: "Project", revision: 0 }],
-    listWorkspaces: () => [
+    listActiveProjects: () =>
+      removed.project ? [] : [{ id: PROJECT_ID, name: "Project", revision: 0 }],
+    listWorkspaces: () => removed.location ? [] : [
       {
         tenantId: scope.tenantId,
         ownerPrincipalId: scope.principalId,
         environmentId: "environment-1",
-        projectId: "project-1",
+        projectId: PROJECT_ID,
         id: WORKSPACE_ID,
         canonicalPath: "/tmp/task-workspace",
         displayName: "Task workspace",
@@ -136,17 +142,17 @@ describe("task publication", () => {
       }),
       taskRecord({
         id: WORKSPACE_TASK_ID,
-        scopeKind: "workspace",
-        environmentId: "environment-1",
-        workspaceId: WORKSPACE_ID,
-        associatedWorkspaceId: WORKSPACE_ID,
-        title: "Workspace task",
+        scopeKind: "project",
+        projectId: PROJECT_ID,
+        associatedProjectId: PROJECT_ID,
+        title: "Project task",
         details: "With details",
       }),
       taskRecord({
         id: THREAD_TASK_ID,
         scopeKind: "thread",
         threadId: THREAD_ID,
+        associatedProjectId: PROJECT_ID,
         associatedWorkspaceId: WORKSPACE_ID,
         title: "Thread task",
       }),
@@ -158,7 +164,7 @@ describe("task publication", () => {
       {
         id: GLOBAL_TASK_ID,
         scope: { kind: "global" },
-        associatedWorkspaceId: null,
+        associatedProjectId: null,
         title: "Global task",
         details: "",
         pinned: false,
@@ -170,9 +176,9 @@ describe("task publication", () => {
       },
       {
         id: WORKSPACE_TASK_ID,
-        scope: { kind: "workspace", workspaceId: WORKSPACE_ID },
-        associatedWorkspaceId: WORKSPACE_ID,
-        title: "Workspace task",
+        scope: { kind: "project", projectId: PROJECT_ID },
+        associatedProjectId: PROJECT_ID,
+        title: "Project task",
         details: "With details",
         pinned: false,
         files: [],
@@ -184,7 +190,7 @@ describe("task publication", () => {
       {
         id: THREAD_TASK_ID,
         scope: { kind: "thread", threadId: THREAD_ID },
-        associatedWorkspaceId: WORKSPACE_ID,
+        associatedProjectId: PROJECT_ID,
         title: "Thread task",
         details: "",
         pinned: false,
@@ -202,10 +208,9 @@ describe("task publication", () => {
       snapshotService([
         taskRecord({
           id: WORKSPACE_TASK_ID,
-          scopeKind: "workspace",
-          environmentId: "environment-1",
-          workspaceId: WORKSPACE_ID,
-          associatedWorkspaceId: WORKSPACE_ID,
+          scopeKind: "project",
+          projectId: PROJECT_ID,
+          associatedProjectId: PROJECT_ID,
           title: "Publish me",
           pinned: true,
           files: ["/tmp/publish-me.md"],
@@ -236,8 +241,8 @@ describe("task publication", () => {
       type: "task_upsert",
       task: {
         id: WORKSPACE_TASK_ID,
-        scope: { kind: "workspace", workspaceId: WORKSPACE_ID },
-        associatedWorkspaceId: WORKSPACE_ID,
+        scope: { kind: "project", projectId: PROJECT_ID },
+        associatedProjectId: PROJECT_ID,
         title: "Publish me",
         pinned: true,
         files: ["/tmp/publish-me.md"],
@@ -245,6 +250,61 @@ describe("task publication", () => {
         createdAt: "2024-08-01T00:00:00.000Z",
       },
     });
+    subscription.close();
+  });
+
+  it("hides project tasks only with their project and thread tasks with their location", async () => {
+    const records = [
+      taskRecord({
+        id: WORKSPACE_TASK_ID,
+        scopeKind: "project",
+        projectId: PROJECT_ID,
+        associatedProjectId: PROJECT_ID,
+      }),
+      taskRecord({
+        id: THREAD_TASK_ID,
+        scopeKind: "thread",
+        threadId: THREAD_ID,
+        associatedProjectId: PROJECT_ID,
+        associatedWorkspaceId: WORKSPACE_ID,
+      }),
+    ];
+    // A removed location hides its thread tasks; its project's tasks stay.
+    const locationRemoved = await snapshotService(records, {
+      location: true,
+    }).capture(scope);
+    expect(locationRemoved.tasks.map(({ id }) => id)).toEqual([
+      WORKSPACE_TASK_ID,
+    ]);
+    const removedProject = await snapshotService(records, {
+      location: true,
+      project: true,
+    }).capture(scope);
+    expect(removedProject.tasks).toEqual([]);
+
+    const boundary = new ApplicationSnapshotPublicationBoundary(
+      snapshotService(records, { location: true }),
+      new ScopedApplicationEventHubs(),
+    );
+    const published: ApplicationEventEnvelope["event"][] = [];
+    const subscription = boundary
+      .hub(scope)
+      .subscribe(({ event }) => published.push(event));
+    boundary.hub(scope).publish({
+      type: "snapshot",
+      generation: boundary.hub(scope).generation,
+      snapshot: { ...locationRemoved, tasks: [] },
+    });
+    published.length = 0;
+    await boundary.publishTaskChange(scope, THREAD_TASK_ID);
+    await boundary.publishTaskChange(scope, WORKSPACE_TASK_ID);
+    await boundary.flush();
+    expect(published).toEqual([
+      expect.objectContaining({
+        type: "task_upsert",
+        task: expect.objectContaining({ id: WORKSPACE_TASK_ID }),
+      }),
+    ]);
     subscription.close();
   });
 

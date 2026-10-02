@@ -5,7 +5,7 @@ import {
 } from "../../conversations/payload-policy.js";
 import type { ContextExcerpt } from "../../../shared/protocol/context-excerpts.js";
 import { projectAuthenticatedPiContextExcerpts } from "./pi-context-excerpt-message.js";
-import type { MaterializedTaskContext } from "../../../shared/protocol/tasks.js";
+import type { MaterializedTaskContext } from "../../domain/materialized-task-contexts.js";
 import { projectAuthenticatedPiTaskContexts } from "./pi-task-context-message.js";
 import { inspectStagedAttachmentManifest } from "../staged-attachment-manifest.js";
 

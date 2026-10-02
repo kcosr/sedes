@@ -2052,7 +2052,7 @@ export class ApiClient {
 
   listWorkpads(request: ListWorkpadsRequest) {
     const query = new URLSearchParams({ scopeKind: request.scope.kind });
-    if (request.scope.kind === "workspace") query.set("workspaceId", request.scope.workspaceId);
+    if (request.scope.kind === "project") query.set("projectId", request.scope.projectId);
     if (request.scope.kind === "thread") query.set("threadId", request.scope.threadId);
     for (const key of ["scopeMode", "query", "archived", "limit", "cursor"] as const) {
       if (request[key] !== undefined) query.set(key, String(request[key]));

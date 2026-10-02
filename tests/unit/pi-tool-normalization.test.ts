@@ -32,6 +32,7 @@ import {
 } from "../../src/server/backends/pi/pi-context-excerpt-marker.js";
 import { formatPiContextExcerptPrompt } from "../../src/server/backends/pi/pi-context-excerpt-message.js";
 import { formatPiTaskContextPrompt } from "../../src/server/backends/pi/pi-task-context-message.js";
+import type { MaterializedTaskContext } from "../../src/server/domain/materialized-task-contexts.js";
 import {
   createPiTaskContextMarker,
   piTaskContextMarkerType,
@@ -973,112 +974,154 @@ describe("Pi persisted history projection", () => {
     expect(projection.diagnostics).toEqual([]);
   });
 
-  it("restores only unambiguous authenticated task-context cards from Pi history", () => {
-    const taskContext = {
-      id: "10000000-0000-4000-8000-000000000001",
-      scope: { kind: "global" as const },
-      title: "Historical task snapshot",
-      details: "Keep this exact revision.",
-      pinned: false,
-      files: [],
-      completedAt: null,
-      revision: 9,
-      createdAt: "2026-08-11T12:00:00.000Z",
-      updatedAt: "2026-08-11T13:00:00.000Z",
-    };
-    const submission = createPiSubmissionMarker({
-      applicationOperationId: "task-context-operation",
-      reconciliationToken: "task-context-token",
-      mutationId: "task-context-mutation",
-      mode: "submit",
-      text: "",
-      contextExcerpts: [],
-      attachments: [],
-      taskContexts: [taskContext],
-    });
-    const taskMarker = createPiTaskContextMarker(
-      {
-        applicationOperationId: submission.applicationOperationId,
-        requestFingerprint: submission.requestFingerprint,
+  it.each([
+    ["global", '{"kind":"global"}'],
+    // Delivered before Tasks moved from workspace to project scope.
+    [
+      "legacy workspace",
+      '{"kind":"workspace","workspaceId":"20000000-0000-4000-8000-000000000001"}',
+    ],
+    [
+      "project",
+      '{"kind":"project","projectId":"30000000-0000-4000-8000-000000000001"}',
+    ],
+  ] as const)(
+    "restores only unambiguous authenticated %s-scope task-context cards from Pi history",
+    (_label, scopeJson) => {
+      const taskContext = JSON.parse(
+        `{"id":"10000000-0000-4000-8000-000000000001","scope":${scopeJson},"title":"Historical task snapshot","details":"Keep this exact revision.","pinned":false,"files":[],"completedAt":null,"revision":9,"createdAt":"2026-08-11T12:00:00.000Z","updatedAt":"2026-08-11T13:00:00.000Z"}`,
+      ) as MaterializedTaskContext;
+      const submission = createPiSubmissionMarker({
+        applicationOperationId: "task-context-operation",
+        reconciliationToken: "task-context-token",
+        mutationId: "task-context-mutation",
+        mode: "submit",
+        text: "",
+        contextExcerpts: [],
+        attachments: [],
         taskContexts: [taskContext],
-      },
-      toolIdentityAuthentication,
-    );
-    const attestation = createPiSubmissionAttestation(
-      {
-        applicationOperationId: submission.applicationOperationId,
-        requestFingerprint: submission.requestFingerprint,
-        userEntryId: "03",
-      },
-      toolIdentityAuthentication,
-    );
-    const taskEntry = (id: string): SessionEntry =>
-      ({
-        type: "custom",
-        id,
-        parentId: null,
-        timestamp: `2026-01-01T00:00:${id}.000Z`,
-        customType: piTaskContextMarkerType,
-        data: taskMarker,
-      }) as SessionEntry;
-    const common = [
-      {
-        type: "custom",
-        id: "02",
-        parentId: "01",
-        timestamp: "2026-01-01T00:00:02.000Z",
-        customType: piSubmissionMarkerType,
-        data: submission,
-      } as SessionEntry,
-      entry(
-        "03",
+      });
+      const taskMarker = createPiTaskContextMarker(
         {
-          role: "user",
-          content: formatPiTaskContextPrompt([taskContext], ""),
-          timestamp: 3,
+          applicationOperationId: submission.applicationOperationId,
+          requestFingerprint: submission.requestFingerprint,
+          taskContexts: [taskContext],
         },
-        "02",
-      ),
-      {
-        type: "custom",
-        id: "04",
-        parentId: "03",
-        timestamp: "2026-01-01T00:00:04.000Z",
-        customType: piSubmissionAttestationType,
-        data: attestation,
-      } as SessionEntry,
-    ];
-
-    const authenticated = historyProjector().project([
-      taskEntry("01"),
-      ...common,
-    ]);
-    expect(authenticated.snapshot.itemsById["03:user"]).toMatchObject({
-      deliveryOperationId: "task-context-operation",
-      content: [{ kind: "task_context", task: taskContext }],
-    });
-    expect(() =>
-      backendConversationSnapshotSchema.parse(authenticated.snapshot),
-    ).not.toThrow();
-
-    const duplicated = historyProjector().project([
-      taskEntry("01"),
-      taskEntry("05"),
-      ...common,
-    ]);
-    expect(duplicated.snapshot.itemsById["03:user"]).toMatchObject({
-      content: [
+        toolIdentityAuthentication,
+      );
+      const attestation = createPiSubmissionAttestation(
         {
-          kind: "text",
-          text: { text: formatPiTaskContextPrompt([taskContext], "") },
+          applicationOperationId: submission.applicationOperationId,
+          requestFingerprint: submission.requestFingerprint,
+          userEntryId: "03",
         },
-      ],
-    });
-    expect(duplicated.diagnostics).toContainEqual({
-      code: "task_context_marker_conflict",
-      entryId: "05",
-    });
-  });
+        toolIdentityAuthentication,
+      );
+      const taskEntry = (id: string): SessionEntry =>
+        ({
+          type: "custom",
+          id,
+          parentId: null,
+          timestamp: `2026-01-01T00:00:${id}.000Z`,
+          customType: piTaskContextMarkerType,
+          data: taskMarker,
+        }) as SessionEntry;
+      const common = [
+        {
+          type: "custom",
+          id: "02",
+          parentId: "01",
+          timestamp: "2026-01-01T00:00:02.000Z",
+          customType: piSubmissionMarkerType,
+          data: submission,
+        } as SessionEntry,
+        entry(
+          "03",
+          {
+            role: "user",
+            content: formatPiTaskContextPrompt([taskContext], ""),
+            timestamp: 3,
+          },
+          "02",
+        ),
+        {
+          type: "custom",
+          id: "04",
+          parentId: "03",
+          timestamp: "2026-01-01T00:00:04.000Z",
+          customType: piSubmissionAttestationType,
+          data: attestation,
+        } as SessionEntry,
+      ];
+
+      const authenticated = historyProjector().project([
+        taskEntry("01"),
+        ...common,
+      ]);
+      expect(authenticated.snapshot.itemsById["03:user"]).toMatchObject({
+        deliveryOperationId: "task-context-operation",
+        content: [
+          {
+            kind: "task_context",
+            task: {
+              id: taskContext.id,
+              title: taskContext.title,
+              details: taskContext.details,
+              completedAt: taskContext.completedAt,
+              revision: taskContext.revision,
+            },
+          },
+        ],
+      });
+      expect(
+        JSON.stringify(authenticated.snapshot.itemsById["03:user"]),
+      ).not.toContain('"scope"');
+      expect(() =>
+        backendConversationSnapshotSchema.parse(authenticated.snapshot),
+      ).not.toThrow();
+
+      const tampered = historyProjector().project([
+        {
+          ...taskEntry("01"),
+          data: {
+            ...taskMarker,
+            taskContexts: [{ ...taskContext, title: "Altered snapshot" }],
+          },
+        } as SessionEntry,
+        ...common,
+      ]);
+      expect(tampered.snapshot.itemsById["03:user"]).toMatchObject({
+        content: [
+          {
+            kind: "text",
+            text: { text: formatPiTaskContextPrompt([taskContext], "") },
+          },
+        ],
+      });
+      expect(tampered.diagnostics).toContainEqual({
+        code: "task_context_marker_unauthenticated",
+        entryId: "01",
+      });
+
+      const duplicated = historyProjector().project([
+        taskEntry("01"),
+        taskEntry("05"),
+        ...common,
+      ]);
+      expect(duplicated.snapshot.itemsById["03:user"]).toMatchObject({
+        content: [
+          {
+            kind: "text",
+            text: { text: formatPiTaskContextPrompt([taskContext], "") },
+          },
+        ],
+      });
+      expect(duplicated.diagnostics).toContainEqual({
+        code: "task_context_marker_conflict",
+        entryId: "05",
+      });
+    },
+  );
 
   it.each([
     {

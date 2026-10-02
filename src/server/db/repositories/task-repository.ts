@@ -15,15 +15,14 @@ import {
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 
-export type TaskScopeKind = "global" | "workspace" | "thread";
+export type TaskScopeKind = "global" | "project" | "thread";
 
 export type TaskRecord = {
   readonly tenantId: string;
   readonly ownerPrincipalId: string;
   readonly id: string;
   readonly scopeKind: TaskScopeKind;
-  readonly environmentId: string | null;
-  readonly workspaceId: string | null;
+  readonly projectId: string | null;
   readonly threadId: string | null;
   readonly title: string;
   readonly details: string;
@@ -53,7 +52,7 @@ export type TaskListSummary = Pick<
   TaskRecord,
   | "id"
   | "scopeKind"
-  | "workspaceId"
+  | "projectId"
   | "threadId"
   | "title"
   | "pinned"
@@ -62,26 +61,22 @@ export type TaskListSummary = Pick<
   | "createdAt"
   | "updatedAt"
 > & {
-  readonly associatedWorkspaceId: string | null;
+  readonly associatedProjectId: string | null;
   readonly fileCount: number;
 };
 
 export type AssociatedTaskRecord = TaskRecord & {
-  /** Read-only workspace association resolved from authoritative thread state. */
+  /**
+   * Read-only project association: the task's project, or the current
+   * project of a thread task's thread's location; null for global tasks.
+   */
+  readonly associatedProjectId: string | null;
+  /**
+   * Server-only: a thread task's thread's location, so a removed location
+   * hides its thread tasks even while their project stays active. Null for
+   * global and project tasks.
+   */
   readonly associatedWorkspaceId: string | null;
-};
-
-/**
- * Bounded task authority facts used before any task body or list result is
- * read. Thread-scoped tasks deliberately resolve their environment through
- * the authoritative thread row because tasks.environment_id is NULL for that
- * scope.
- */
-export type TaskEnvironmentAuthority = {
-  readonly taskId: string;
-  readonly revision: number;
-  readonly scopeKind: TaskScopeKind;
-  readonly environmentId: string | null;
 };
 
 export type TaskListPage =
@@ -102,6 +97,7 @@ type TaskRow = Omit<TaskRecord, "pinned" | "files"> & {
 };
 
 type AssociatedTaskRow = TaskRow & {
+  readonly associatedProjectId: string | null;
   readonly associatedWorkspaceId: string | null;
 };
 
@@ -121,15 +117,13 @@ type TaskMutationReceipt = {
 const FULL_TASK_LIST_RECORD_BUDGET_BYTES = 900 * 1_024;
 
 /**
- * Scope column tuple for one task row. The environment id of a workspace
- * scope is resolved server-side from the workspace row; thread scopes stay
- * unresolved on purpose so a draft moving between workspaces cannot strand a
- * stale denormalized copy.
+ * Scope column tuple for one task row. A thread task deliberately stores no
+ * project: its association follows its thread's location, so a draft moving
+ * between locations cannot strand a stale denormalized copy.
  */
 type ResolvedScopeColumns = {
   readonly scopeKind: TaskScopeKind;
-  readonly environmentId: string | null;
-  readonly workspaceId: string | null;
+  readonly projectId: string | null;
   readonly threadId: string | null;
 };
 
@@ -140,9 +134,14 @@ function fingerprint(operation: string, parts: readonly unknown[]): string {
 }
 
 function scopeFingerprintParts(scope: TaskScope): readonly unknown[] {
-  if (scope.kind === "workspace") return [scope.kind, scope.workspaceId];
-  if (scope.kind === "thread") return [scope.kind, scope.threadId];
-  return [scope.kind];
+  switch (scope.kind) {
+    case "project":
+      return [scope.kind, scope.projectId];
+    case "thread":
+      return [scope.kind, scope.threadId];
+    case "global":
+      return [scope.kind];
+  }
 }
 
 function asciiLowercase(value: string): string {
@@ -194,8 +193,7 @@ const columns = `
   owner_principal_id AS ownerPrincipalId,
   id,
   scope_kind AS scopeKind,
-  environment_id AS environmentId,
-  workspace_id AS workspaceId,
+  project_id AS projectId,
   thread_id AS threadId,
   title,
   details,
@@ -207,19 +205,62 @@ const columns = `
   updated_at AS updatedAt
 `;
 
+const threadLocationColumn = (column: string) => `(
+  SELECT task_location.${column}
+  FROM application_threads AS task_thread
+  JOIN workspaces AS task_location
+    ON task_location.tenant_id = task_thread.tenant_id
+    AND task_location.owner_principal_id = task_thread.owner_principal_id
+    AND task_location.id = task_thread.workspace_id
+  WHERE task_thread.tenant_id = tasks.tenant_id
+    AND task_thread.owner_principal_id = tasks.owner_principal_id
+    AND task_thread.id = tasks.thread_id
+)`;
+
+const associatedProjectColumn = `
+  CASE
+    WHEN scope_kind = 'thread' THEN ${threadLocationColumn("project_id")}
+    ELSE project_id
+  END AS associatedProjectId
+`;
+
 const associatedColumns = `
   ${columns},
+  ${associatedProjectColumn},
   CASE
-    WHEN scope_kind = 'thread' THEN (
-      SELECT task_thread.workspace_id
-      FROM application_threads AS task_thread
-      WHERE task_thread.tenant_id = tasks.tenant_id
-        AND task_thread.owner_principal_id = tasks.owner_principal_id
-        AND task_thread.id = tasks.thread_id
-    )
-    ELSE workspace_id
+    WHEN scope_kind = 'thread' THEN ${threadLocationColumn("id")}
+    ELSE NULL
   END AS associatedWorkspaceId
 `;
+
+/**
+ * The global subtree an agent can reach through every environment: removed
+ * projects and removed locations hide their own tasks, and a project without
+ * an active location is outside every environment, so only its own project
+ * query reaches its tasks.
+ */
+const globalSubtreeClause = `(
+  scope_kind = 'global'
+  OR (scope_kind = 'project' AND EXISTS (
+    SELECT 1 FROM workspaces AS project_location
+    WHERE project_location.tenant_id = tasks.tenant_id
+      AND project_location.owner_principal_id = tasks.owner_principal_id
+      AND project_location.project_id = tasks.project_id
+      AND project_location.removed_at IS NULL
+  ))
+  OR (scope_kind = 'thread' AND EXISTS (
+    SELECT 1
+    FROM application_threads AS task_thread
+    JOIN workspaces AS task_location
+      ON task_location.tenant_id = task_thread.tenant_id
+      AND task_location.owner_principal_id = task_thread.owner_principal_id
+      AND task_location.id = task_thread.workspace_id
+    WHERE task_thread.tenant_id = tasks.tenant_id
+      AND task_thread.owner_principal_id = tasks.owner_principal_id
+      AND task_thread.id = tasks.thread_id
+      AND task_location.removed_at IS NULL
+  ))
+)`;
 
 export class TaskRepository {
   constructor(readonly database: Database.Database) {}
@@ -271,13 +312,15 @@ export class TaskRepository {
   }
 
   /**
-   * Resolve only the environment roots spanned by a task query. Global-exact
-   * is environment-neutral, while global-subtree intentionally spans every
-   * configured principal environment, including environments with no tasks.
+   * Resolve the environment roots spanned by a global or thread task query.
+   * Global-exact is environment-neutral, while global-subtree intentionally
+   * spans every configured principal environment, including environments
+   * with no tasks. Project queries are reached through the agent-tool
+   * project access rule instead.
    */
   resolveScopeEnvironmentIds(
     scope: RequestScope,
-    taskScope: TaskScope,
+    taskScope: Exclude<TaskScope, { kind: "project" }>,
     scopeMode: TaskScopeMode,
   ): readonly string[] {
     const mode = taskScopeModeSchema.parse(scopeMode);
@@ -298,9 +341,6 @@ export class TaskRepository {
       return rows.map(({ id }) => id);
     }
     const resolved = this.#resolveScope(scope, taskScope);
-    if (resolved.scopeKind === "workspace") {
-      return [resolved.environmentId!];
-    }
     const row = this.database
       .prepare(
         `
@@ -315,74 +355,6 @@ export class TaskRepository {
       throw new DomainError("not_found", "The task scope was not found.");
     }
     return [row.environmentId];
-  }
-
-  /** Resolve current task scope authority without selecting task contents. */
-  resolveTaskEnvironmentAuthority(
-    scope: RequestScope,
-    taskId: string,
-  ): TaskEnvironmentAuthority {
-    const row = this.database
-      .prepare(
-        `
-          SELECT task.id AS taskId, task.revision,
-            task.scope_kind AS scopeKind,
-            CASE
-              WHEN task.scope_kind = 'global' THEN NULL
-              WHEN task.scope_kind = 'workspace' THEN workspace.environment_id
-              ELSE thread.environment_id
-            END AS environmentId,
-            task.environment_id AS storedEnvironmentId,
-            workspace.id AS resolvedWorkspaceId,
-            thread.id AS resolvedThreadId
-          FROM tasks AS task
-          LEFT JOIN workspaces AS workspace
-            ON workspace.tenant_id = task.tenant_id
-            AND workspace.owner_principal_id = task.owner_principal_id
-            AND workspace.id = task.workspace_id
-            AND task.scope_kind = 'workspace'
-          LEFT JOIN application_threads AS thread
-            ON thread.tenant_id = task.tenant_id
-            AND thread.owner_principal_id = task.owner_principal_id
-            AND thread.id = task.thread_id
-            AND task.scope_kind = 'thread'
-          WHERE task.tenant_id = ? AND task.owner_principal_id = ?
-            AND task.id = ?
-        `,
-      )
-      .get(scope.tenantId, scope.principalId, taskId) as
-      | {
-          readonly taskId: string;
-          readonly revision: number;
-          readonly scopeKind: TaskScopeKind;
-          readonly environmentId: string | null;
-          readonly storedEnvironmentId: string | null;
-          readonly resolvedWorkspaceId: string | null;
-          readonly resolvedThreadId: string | null;
-        }
-      | undefined;
-    if (!row) {
-      throw new DomainError("not_found", "The task was not found.");
-    }
-    const invalidWorkspace =
-      row.scopeKind === "workspace" &&
-      (row.resolvedWorkspaceId === null ||
-        row.environmentId === null ||
-        row.storedEnvironmentId !== row.environmentId);
-    const invalidThread =
-      row.scopeKind === "thread" &&
-      (row.resolvedThreadId === null || row.environmentId === null);
-    const invalidGlobal =
-      row.scopeKind === "global" && row.environmentId !== null;
-    if (invalidWorkspace || invalidThread || invalidGlobal) {
-      throw new DomainError("not_found", "The task was not found.");
-    }
-    return {
-      taskId: row.taskId,
-      revision: row.revision,
-      scopeKind: row.scopeKind,
-      environmentId: row.environmentId,
-    };
   }
 
   listPage(
@@ -419,7 +391,7 @@ export class TaskRepository {
         ? undefined
         : asciiLowercase(taskQuerySchema.parse(input.query).trim());
     const resolved = this.#resolveScope(scope, input.taskScope);
-    const queryFingerprint = fingerprint("task.list@3", [
+    const queryFingerprint = fingerprint("task.list@4", [
       scope.tenantId,
       scope.principalId,
       ...scopeFingerprintParts(input.taskScope),
@@ -436,31 +408,38 @@ export class TaskRepository {
       : undefined;
     const scopeSelection =
       scopeMode === "subtree" && resolved.scopeKind === "global"
-        ? { clause: "1 = 1", values: [] }
-        : scopeMode === "subtree" && resolved.scopeKind === "workspace"
+        ? { clause: globalSubtreeClause, values: [] }
+        : scopeMode === "subtree" && resolved.scopeKind === "project"
           ? {
+              // A project's subtree spans its tasks and the thread tasks of
+              // threads in its active locations.
               clause: `(
-                (scope_kind = 'workspace' AND workspace_id = ?)
+                (scope_kind = 'project' AND project_id = ?)
                 OR (
                   scope_kind = 'thread'
                   AND EXISTS (
                     SELECT 1
                     FROM application_threads AS scoped_thread
+                    JOIN workspaces AS scoped_location
+                      ON scoped_location.tenant_id = scoped_thread.tenant_id
+                      AND scoped_location.owner_principal_id = scoped_thread.owner_principal_id
+                      AND scoped_location.id = scoped_thread.workspace_id
                     WHERE scoped_thread.tenant_id = tasks.tenant_id
                       AND scoped_thread.owner_principal_id = tasks.owner_principal_id
                       AND scoped_thread.id = tasks.thread_id
-                      AND scoped_thread.workspace_id = ?
+                      AND scoped_location.project_id = ?
+                      AND scoped_location.removed_at IS NULL
                   )
                 )
               )`,
-              values: [resolved.workspaceId, resolved.workspaceId],
+              values: [resolved.projectId, resolved.projectId],
             }
           : resolved.scopeKind === "global"
             ? { clause: "scope_kind = 'global'", values: [] }
-            : resolved.scopeKind === "workspace"
+            : resolved.scopeKind === "project"
               ? {
-                  clause: "scope_kind = 'workspace' AND workspace_id = ?",
-                  values: [resolved.workspaceId],
+                  clause: "scope_kind = 'project' AND project_id = ?",
+                  values: [resolved.projectId],
                 }
               : {
                   clause: "scope_kind = 'thread' AND thread_id = ?",
@@ -480,18 +459,9 @@ export class TaskRepository {
     const rows = this.database
       .prepare(
         `
-          SELECT id, scope_kind AS scopeKind, workspace_id AS workspaceId,
+          SELECT id, scope_kind AS scopeKind, project_id AS projectId,
             thread_id AS threadId,
-            CASE
-              WHEN scope_kind = 'thread' THEN (
-                SELECT task_thread.workspace_id
-                FROM application_threads AS task_thread
-                WHERE task_thread.tenant_id = tasks.tenant_id
-                  AND task_thread.owner_principal_id = tasks.owner_principal_id
-                  AND task_thread.id = tasks.thread_id
-              )
-              ELSE workspace_id
-            END AS associatedWorkspaceId,
+            ${associatedProjectColumn},
             title, pinned, completed_at AS completedAt,
             revision, created_at AS createdAt, updated_at AS updatedAt,
             json_array_length(files_json) AS fileCount
@@ -564,66 +534,6 @@ export class TaskRepository {
     };
   }
 
-  /**
-   * Agent-tool list entry point. The admitted set must exactly match fresh
-   * scope authority, preventing a missing or narrower grant from falling back
-   * to the principal-wide global-subtree query.
-   */
-  listPageWithEnvironmentAuthority(
-    scope: RequestScope,
-    input: {
-      readonly taskScope: TaskScope;
-      readonly scopeMode: TaskScopeMode;
-      readonly targetEnvironmentIds: readonly string[];
-      readonly sourceEnvironmentId: string;
-      readonly policyRevision: number;
-      readonly continuationAuthorityDigest: string;
-      readonly completed?: boolean;
-      readonly pinned?: boolean;
-      readonly query?: string;
-      readonly projection: TaskListProjection;
-      readonly cursor?: string;
-      readonly pageSize: number;
-    },
-  ): TaskListPage {
-    const currentEnvironmentIds = this.resolveScopeEnvironmentIds(
-      scope,
-      input.taskScope,
-      input.scopeMode,
-    );
-    const targetEnvironmentIds = [
-      ...new Set(input.targetEnvironmentIds),
-    ].sort();
-    if (
-      targetEnvironmentIds.length !== currentEnvironmentIds.length ||
-      targetEnvironmentIds.some(
-        (environmentId, index) =>
-          environmentId !== currentEnvironmentIds[index],
-      )
-    ) {
-      throw new DomainError(
-        "not_found",
-        "The target task environments no longer match the query scope.",
-      );
-    }
-    return this.listPage(scope, {
-      taskScope: input.taskScope,
-      scopeMode: input.scopeMode,
-      ...(input.completed === undefined ? {} : { completed: input.completed }),
-      ...(input.pinned === undefined ? {} : { pinned: input.pinned }),
-      ...(input.query === undefined ? {} : { query: input.query }),
-      projection: input.projection,
-      ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-      pageSize: input.pageSize,
-      authorityBinding: {
-        sourceEnvironmentId: input.sourceEnvironmentId,
-        targetEnvironmentIds,
-        policyRevision: input.policyRevision,
-        continuationAuthorityDigest: input.continuationAuthorityDigest,
-      },
-    });
-  }
-
   find(scope: RequestScope, taskId: string): TaskRecord | undefined {
     const row = this.database
       .prepare(
@@ -671,29 +581,23 @@ export class TaskRepository {
   }
 
   /**
-   * Read a task body only if its bounded authority facts still match the
-   * pre-admission snapshot. The revision comparison also closes scope-change
-   * races because every task update increments the same CAS revision.
+   * Read a task body only at the revision whose authority was admitted.
+   * Every scope change increments the same CAS revision, so this also closes
+   * scope-change races between admission and the read.
    */
-  getWithEnvironmentAuthority(
+  getAtRevision(
     scope: RequestScope,
-    expected: TaskEnvironmentAuthority,
+    taskId: string,
+    expectedRevision: number,
   ): TaskRecord {
-    const current = this.resolveTaskEnvironmentAuthority(
-      scope,
-      expected.taskId,
-    );
-    if (
-      current.revision !== expected.revision ||
-      current.scopeKind !== expected.scopeKind ||
-      current.environmentId !== expected.environmentId
-    ) {
+    const record = this.get(scope, taskId);
+    if (record.revision !== expectedRevision) {
       throw new DomainError(
         "conflict",
         "The task authority changed before it could be read.",
       );
     }
-    return this.get(scope, expected.taskId);
+    return record;
   }
 
   create(
@@ -735,11 +639,11 @@ export class TaskRepository {
         .prepare(
           `
             INSERT INTO tasks(
-              tenant_id, owner_principal_id, id, scope_kind, environment_id,
-              workspace_id, thread_id, title, details, pinned, files_json,
+              tenant_id, owner_principal_id, id, scope_kind, project_id,
+              thread_id, title, details, pinned, files_json,
               completed_at, revision, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)
           `,
         )
         .run(
@@ -747,8 +651,7 @@ export class TaskRepository {
           scope.principalId,
           id,
           resolved.scopeKind,
-          resolved.environmentId,
-          resolved.workspaceId,
+          resolved.projectId,
           resolved.threadId,
           input.title,
           details,
@@ -818,11 +721,11 @@ export class TaskRepository {
         requestFingerprint,
       );
       if (replayed) return replayed;
-      this.get(scope, taskId);
+      const current = this.get(scope, taskId);
       const resolvedScope =
         input.scope === undefined
           ? undefined
-          : this.#resolveScope(scope, input.scope);
+          : this.#resolveScope(scope, input.scope, current);
       const assignments = ["revision = revision + 1", "updated_at = ?"];
       const values: unknown[] = [input.now];
       if (input.title !== undefined) {
@@ -846,16 +749,10 @@ export class TaskRepository {
         values.push(JSON.stringify(input.files));
       }
       if (resolvedScope !== undefined) {
-        assignments.push(
-          "scope_kind = ?",
-          "environment_id = ?",
-          "workspace_id = ?",
-          "thread_id = ?",
-        );
+        assignments.push("scope_kind = ?", "project_id = ?", "thread_id = ?");
         values.push(
           resolvedScope.scopeKind,
-          resolvedScope.environmentId,
-          resolvedScope.workspaceId,
+          resolvedScope.projectId,
           resolvedScope.threadId,
         );
       }
@@ -918,11 +815,10 @@ export class TaskRepository {
       );
       if (replayed) return replayed;
       const current = this.get(scope, taskId);
-      const resolved = this.#resolveScope(scope, input.scope);
+      const resolved = this.#resolveScope(scope, input.scope, current);
       if (
         current.scopeKind === resolved.scopeKind &&
-        current.environmentId === resolved.environmentId &&
-        current.workspaceId === resolved.workspaceId &&
+        current.projectId === resolved.projectId &&
         current.threadId === resolved.threadId
       ) {
         if (current.revision !== input.expectedRevision) {
@@ -936,16 +832,15 @@ export class TaskRepository {
           .prepare(
             `
               UPDATE tasks
-              SET scope_kind = ?, environment_id = ?, workspace_id = ?,
-                thread_id = ?, revision = revision + 1, updated_at = ?
+              SET scope_kind = ?, project_id = ?, thread_id = ?,
+                revision = revision + 1, updated_at = ?
               WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
                 AND revision = ?
             `,
           )
           .run(
             resolved.scopeKind,
-            resolved.environmentId,
-            resolved.workspaceId,
+            resolved.projectId,
             resolved.threadId,
             input.now,
             scope.tenantId,
@@ -1145,8 +1040,7 @@ export class TaskRepository {
         : disposition === "move_to_global"
           ? `
           UPDATE tasks
-          SET scope_kind = 'global', environment_id = NULL,
-            workspace_id = NULL, thread_id = NULL,
+          SET scope_kind = 'global', project_id = NULL, thread_id = NULL,
             revision = revision + 1, updated_at = ?
           WHERE tenant_id = ? AND owner_principal_id = ?
             AND thread_id IN (${placeholders})
@@ -1155,19 +1049,8 @@ export class TaskRepository {
         `
           : `
           UPDATE tasks
-          SET scope_kind = 'workspace',
-            environment_id = (
-              SELECT thread.environment_id FROM application_threads AS thread
-              WHERE thread.tenant_id = tasks.tenant_id
-                AND thread.owner_principal_id = tasks.owner_principal_id
-                AND thread.id = tasks.thread_id
-            ),
-            workspace_id = (
-              SELECT thread.workspace_id FROM application_threads AS thread
-              WHERE thread.tenant_id = tasks.tenant_id
-                AND thread.owner_principal_id = tasks.owner_principal_id
-                AND thread.id = tasks.thread_id
-            ),
+          SET scope_kind = 'project',
+            project_id = ${threadLocationColumn("project_id")},
             thread_id = NULL,
             revision = revision + 1, updated_at = ?
           WHERE tenant_id = ? AND owner_principal_id = ?
@@ -1192,98 +1075,66 @@ export class TaskRepository {
   }
 
   /**
-   * Draft-discard disposition: promote every task of a hard-deleted thread
-   * (open and completed) to the thread's workspace. Runs inside the caller's
-   * delete transaction, before the thread row disappears.
+   * A removed project is not a destination; naming the project a task is
+   * already in stays an in-place edit, as the commit-time guard allows.
    */
-  promoteThreadTasksToWorkspace(
+  #resolveScope(
     scope: RequestScope,
-    threadId: string,
-    now: number,
-  ): readonly string[] {
-    const moved = this.database
-      .prepare(
-        `
-          UPDATE tasks
-          SET scope_kind = 'workspace',
-            environment_id = (
-              SELECT thread.environment_id FROM application_threads AS thread
-              WHERE thread.tenant_id = tasks.tenant_id
-                AND thread.owner_principal_id = tasks.owner_principal_id
-                AND thread.id = tasks.thread_id
-            ),
-            workspace_id = (
-              SELECT thread.workspace_id FROM application_threads AS thread
-              WHERE thread.tenant_id = tasks.tenant_id
-                AND thread.owner_principal_id = tasks.owner_principal_id
-                AND thread.id = tasks.thread_id
-            ),
-            thread_id = NULL,
-            revision = revision + 1, updated_at = ?
-          WHERE tenant_id = ? AND owner_principal_id = ? AND thread_id = ?
-          RETURNING id
-        `,
-      )
-      .all(now, scope.tenantId, scope.principalId, threadId) as readonly {
-      readonly id: string;
-    }[];
-    return moved.map(({ id }) => id);
-  }
-
-  #resolveScope(scope: RequestScope, target: TaskScope): ResolvedScopeColumns {
-    if (target.kind === "global") {
-      return {
-        scopeKind: "global",
-        environmentId: null,
-        workspaceId: null,
-        threadId: null,
-      };
-    }
-    if (target.kind === "workspace") {
-      const workspace = this.database
-        .prepare(
-          `
-            SELECT environment_id AS environmentId
-            FROM workspaces
-            WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
-          `,
-        )
-        .get(scope.tenantId, scope.principalId, target.workspaceId) as
-        { readonly environmentId: string } | undefined;
-      if (!workspace) {
-        throw new DomainError(
-          "not_found",
-          "The destination workspace was not found.",
-        );
+    target: TaskScope,
+    current?: Pick<TaskRecord, "scopeKind" | "projectId">,
+  ): ResolvedScopeColumns {
+    switch (target.kind) {
+      case "global":
+        return { scopeKind: "global", projectId: null, threadId: null };
+      case "project": {
+        const project = this.database
+          .prepare(
+            `
+              SELECT removed_at AS removedAt
+              FROM projects
+              WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
+            `,
+          )
+          .get(scope.tenantId, scope.principalId, target.projectId) as
+          { readonly removedAt: number | null } | undefined;
+        const unchanged =
+          current?.scopeKind === "project" &&
+          current.projectId === target.projectId;
+        if (!project || (project.removedAt !== null && !unchanged)) {
+          throw new DomainError(
+            "not_found",
+            "The destination project was not found.",
+          );
+        }
+        return {
+          scopeKind: "project",
+          projectId: target.projectId,
+          threadId: null,
+        };
       }
-      return {
-        scopeKind: "workspace",
-        environmentId: workspace.environmentId,
-        workspaceId: target.workspaceId,
-        threadId: null,
-      };
+      case "thread": {
+        const thread = this.database
+          .prepare(
+            `
+              SELECT 1
+              FROM application_threads
+              WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
+            `,
+          )
+          .get(scope.tenantId, scope.principalId, target.threadId);
+        if (!thread) {
+          throw new DomainError(
+            "not_found",
+            "The destination thread was not found.",
+          );
+        }
+        return {
+          scopeKind: "thread",
+          projectId: null,
+          threadId: target.threadId,
+        };
+      }
     }
-    const thread = this.database
-      .prepare(
-        `
-          SELECT 1
-          FROM application_threads
-          WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
-        `,
-      )
-      .get(scope.tenantId, scope.principalId, target.threadId);
-    if (!thread) {
-      throw new DomainError(
-        "not_found",
-        "The destination thread was not found.",
-      );
-    }
-    return {
-      scopeKind: "thread",
-      environmentId: null,
-      workspaceId: null,
-      threadId: target.threadId,
-    };
   }
 
   #presentRow(row: TaskRow): TaskRecord {
@@ -1296,8 +1147,12 @@ export class TaskRepository {
   }
 
   #presentAssociatedRow(row: AssociatedTaskRow): AssociatedTaskRecord {
-    const { associatedWorkspaceId, ...taskRow } = row;
-    return { ...this.#presentRow(taskRow), associatedWorkspaceId };
+    const { associatedProjectId, associatedWorkspaceId, ...taskRow } = row;
+    return {
+      ...this.#presentRow(taskRow),
+      associatedProjectId,
+      associatedWorkspaceId,
+    };
   }
 
   /**

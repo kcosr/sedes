@@ -38,8 +38,8 @@ const taskCreateManifest = CANONICAL_AGENT_TOOL_MANIFEST["task.create"];
 const taskUpdateManifest = CANONICAL_AGENT_TOOL_MANIFEST["task.update"];
 
 type TargetScope = {
-  readonly kind: "global" | "workspace" | "thread";
-  readonly workspaceId?: string;
+  readonly kind: "global" | "project" | "thread";
+  readonly projectId?: string;
   readonly threadId?: string;
 };
 export type TaskListInput = {
@@ -74,9 +74,9 @@ const taskSummarySchema = Type.Object(
   {
     id: identifierSchema,
     scope: taskScopeSchema,
-    associatedWorkspaceId: Type.Union([identifierSchema, Type.Null()], {
+    associatedProjectId: Type.Union([identifierSchema, Type.Null()], {
       description:
-        "Read-only authoritative workspace association; null only for global tasks.",
+        "Read-only project association: the task's project, or the current project of a thread task's thread; null only for global tasks.",
     }),
     title: taskTitleSchema,
     pinned: Type.Boolean(),
@@ -137,7 +137,7 @@ export function createTaskListToolDefinition(
             enum: ["exact", "subtree"],
             maxLength: 7,
             description:
-              "Select only the requested scope or include all descendant scopes. Global subtree includes every principal-owned task; workspace subtree also includes tasks on its threads.",
+              "Select only the requested scope or include all descendant scopes. Project subtree also includes tasks on the threads of its active locations and needs access to every environment hosting one; prefer exact scope for project tasks. Global subtree spans every environment.",
           }),
           completed: Type.Optional(Type.Boolean()),
           pinned: Type.Optional(Type.Boolean()),

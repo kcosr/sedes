@@ -66,13 +66,14 @@ has stopped.
 
 A project groups the directories you work in, across your environments. Each
 directory on one environment is a **location** of exactly one project, such as
-the same repository checked out on this computer and on an SSH host, or
-several related repositories on one host. Open **Settings → Projects** to see
-every project with its locations underneath. A project row shows its name and
-location count; a location row shows its environment, path, availability, and
-thread count. Removed projects and locations stay listed with a **Removed**
-tag. Allowed workspace roots remain separate: adding a location remembers a
-directory within existing access grants.
+the same repository checked out on this computer and on an SSH host, or several
+related repositories on one host. A project's Tasks and Workpads are shared by
+all of its locations, on every host. Open **Settings → Projects** to see every
+project with its locations underneath. A project row shows its name, location
+count, and, for an active project, how many Tasks belong to it; a location row
+shows its environment, path, availability, and thread count. Removed projects
+and locations stay listed with a **Removed** tag. Allowed workspace roots remain
+separate: adding a location remembers a directory within existing access grants.
 
 Filter by environment, status, or search text. The filters apply to
 locations, and a project is shown when any of its locations matches, with only
@@ -101,27 +102,33 @@ The same directory spelling on another environment is a separate location.
 
 Use a project's menu to **Rename** it, to **Merge into** another project, or to
 remove or restore it. Use a location's menu to **Move to project**, which can
-also split it into a new project, or to remove or restore it. Moving or merging
-carries a location's threads, Tasks, Workpads, and other saved records with it.
-A merge moves every location of the project, removed ones included, and then
-deletes the merged project; it can't be undone. Running, queued, or uncertain
-work blocks moving and merging.
+also split it into a new project, or to remove or restore it. Moving a location
+carries its threads, their Tasks and Workpads, and its other saved records with
+it; the project's own Tasks and Workpads stay with the project. A merge moves
+every location of the project, removed ones included, and the project's Tasks
+and Workpads into the other project, then deletes the merged project; it can't
+be undone. Running, queued, or uncertain work blocks moving and merging.
 
 When several active projects share a name, an inline note above the list names them
 with a **Merge** action, so separately added checkouts of the same work can be
 combined.
 
-**Remove location** hides one location and its threads from ordinary inventory
-and creation pickers. Its directory, Git worktrees, provider history, drafts,
-Tasks, and other saved records remain intact, and thread inventory states are
-preserved. End live or interrupted terminals, resolve running, queued, or
-uncertain work, and pause enabled schedules first. Removal stops new work and
-conversation discovery for that location. When it is the project's last active
-location, you can also remove the project in the same step.
+**Remove location** hides one location and its threads, with their Tasks and
+Workpads, from ordinary inventory and creation pickers; the project's own Tasks
+and Workpads stay visible. Its directory, Git worktrees, provider history,
+drafts, Tasks, and other saved records remain intact, and thread inventory
+states are preserved. End live or interrupted terminals, resolve running,
+queued, or uncertain work, and pause enabled schedules first. Removal stops new
+work and conversation discovery for that location. When it is the project's last
+active location, you can also remove the project in the same step. The **Also
+remove project** checkbox shows how many project-owned Tasks and Workpads that
+will hide, including completed Tasks and archived Workpads. These counts
+exclude the thread-owned items hidden with the location itself.
 
-**Remove project** removes every active location of the project at once. If
-anything blocks it, Sedes lists every blocker by location, such as running
-work, enabled schedules, terminals, or busy agents, with the affected threads.
+**Remove project** removes every active location of the project at once and
+hides the project's Tasks and Workpads until you restore it. If anything
+blocks it, Sedes lists every blocker by location, such as running work,
+enabled schedules, terminals, or busy agents, with the affected threads.
 **Restore project** restores the project and lets you choose which removed
 locations to restore with it; the locations its removal took on available
 environments are preselected, and each one reports whether it was restored. A
@@ -162,8 +169,8 @@ matches the name; otherwise it is cleared.
 
 With **Click project and environment names to filter** enabled in
 **Settings → General**, project links on sidebar cards filter to that project.
-Environment links narrow by the specific environment. Tasks, files, and agent
-permissions keep their existing location and environment boundaries.
+Environment links narrow by the specific environment. Scope filters only the
+sidebar; it doesn't change what Tasks, Files, or agent permissions reach.
 
 Changing Environment clears an incompatible Target. Choose **Ungrouped** to see threads without a Group, or
 **Clear** to reset the entire Scope without changing search or visibility
@@ -382,8 +389,8 @@ stashes, bookmarks, pins, and open Tasks. Counts are deliberately local:
 
 - stash and bookmark counts belong to that thread;
 - only open Tasks directly owned by a thread contribute to its Task count;
-- workspace/global Tasks and Tasks owned by descendants are not rolled into a
-  parent row.
+- project and global Tasks and Tasks owned by descendants are not rolled into
+  a parent row.
 
 ## Manage saved Agents
 

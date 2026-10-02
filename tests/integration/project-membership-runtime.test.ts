@@ -75,6 +75,7 @@ function projectManagement(harness: Harness) {
     locations: { restoreLocation: async () => { throw new Error("unexpected_location_restore"); } },
     publications: { handoffAuthoritativeReplacement: vi.fn() },
     threads: harness.threadSnapshots,
+    workpads: { publishWorkpadChange: async () => undefined },
   });
 }
 

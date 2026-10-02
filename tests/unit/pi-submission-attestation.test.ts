@@ -16,6 +16,9 @@ import {
   piTaskContextMarkerType,
 } from "../../src/server/backends/pi/pi-task-context-marker.js";
 import { formatPiTaskContextPrompt } from "../../src/server/backends/pi/pi-task-context-message.js";
+import { findPiTaskContextsForSubmission } from "../../src/server/backends/pi/pi-task-context-marker.js";
+import { parseStoredTaskContexts } from "../../src/server/db/composer-tasks-json.js";
+import type { MaterializedTaskContext } from "../../src/server/domain/materialized-task-contexts.js";
 
 const authentication = {
   conversationId: "conversation-1",
@@ -44,7 +47,118 @@ const submission = createPiSubmissionMarker({
   taskContexts: [],
 });
 
+// Exact bytes of a snapshot delivered while Tasks still had workspace scope.
+const legacyTaskJson =
+  '{"id":"10000000-0000-4000-8000-000000000002","scope":{"kind":"workspace","workspaceId":"20000000-0000-4000-8000-000000000002"},"title":"Recover a legacy task","details":"Delivered before projects existed.","pinned":false,"files":["/workspace/legacy.ts"],"completedAt":null,"revision":4,"createdAt":"2026-08-10T12:00:00.000Z","updatedAt":"2026-08-10T13:00:00.000Z"}';
+const [legacyTask] = parseStoredTaskContexts(`[${legacyTaskJson}]`) as [
+  MaterializedTaskContext,
+];
+const projectTask: MaterializedTaskContext = {
+  ...legacyTask,
+  scope: {
+    kind: "project",
+    projectId: "30000000-0000-4000-8000-000000000002",
+  },
+};
+
+/** One exact native task submission sequence as the Pi backend emitted it. */
+function taskSubmissionEntries(
+  markerTask: MaterializedTaskContext,
+  envelopeTask: MaterializedTaskContext = markerTask,
+) {
+  const intent = createPiSubmissionMarker({
+    applicationOperationId: "scoped-task-operation",
+    reconciliationToken: "scoped-task-token",
+    mutationId: "scoped-task-mutation",
+    mode: "submit",
+    text: "",
+    contextExcerpts: [],
+    attachments: [],
+    taskContexts: [markerTask],
+  });
+  return {
+    intent,
+    entries: [
+      custom(
+        "task-marker",
+        piTaskContextMarkerType,
+        createPiTaskContextMarker(
+          {
+            applicationOperationId: intent.applicationOperationId,
+            requestFingerprint: intent.requestFingerprint,
+            taskContexts: [markerTask],
+          },
+          authentication,
+        ),
+      ),
+      custom("task-intent", piSubmissionMarkerType, intent),
+      {
+        type: "message",
+        id: "task-user",
+        parentId: null,
+        timestamp: "2026-01-01T00:00:01.000Z",
+        message: {
+          role: "user",
+          content: formatPiTaskContextPrompt([envelopeTask], ""),
+          timestamp: 1,
+        },
+      } as SessionEntry,
+    ],
+  };
+}
+
 describe("Pi submission attestations", () => {
+  it.each([
+    ["legacy workspace", legacyTask],
+    ["current project", projectTask],
+  ] as const)(
+    "repairs an exact %s-scope task submission and finds its snapshot",
+    (_label, task) => {
+      const { intent, entries } = taskSubmissionEntries(task);
+      const recovered: unknown[] = [];
+      expect(
+        recoverPiTaskSubmissionAttestations(
+          entries,
+          (marker) => recovered.push(marker),
+          authentication,
+        ),
+      ).toBe(1);
+      expect(recovered).toMatchObject([
+        {
+          applicationOperationId: "scoped-task-operation",
+          requestFingerprint: intent.requestFingerprint,
+          userEntryId: "task-user",
+        },
+      ]);
+      expect(
+        findPiTaskContextsForSubmission(
+          entries,
+          intent.applicationOperationId,
+          intent.requestFingerprint,
+          authentication,
+        ),
+      ).toEqual([task]);
+    },
+  );
+
+  it("does not repair an envelope whose snapshot differs from its marker only in scope", () => {
+    for (const [markerTask, envelopeTask] of [
+      [legacyTask, projectTask],
+      [projectTask, legacyTask],
+    ] as const) {
+      const { entries } = taskSubmissionEntries(markerTask, envelopeTask);
+      expect(
+        recoverPiTaskSubmissionAttestations(
+          entries,
+          () => {
+            throw new Error("unexpected attestation");
+          },
+          authentication,
+        ),
+      ).toBe(0);
+    }
+  });
+
   it("repairs an exact persisted task submission after the live attestation crash window", () => {
     const task = {
       id: "10000000-0000-4000-8000-000000000001",

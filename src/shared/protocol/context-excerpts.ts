@@ -9,7 +9,6 @@ import {
   workspaceDiffFileIdSchema,
   workspaceDiffFingerprintSchema,
 } from "./workspace-diffs.js";
-import type { MaterializedTaskContext } from "./tasks.js";
 
 export const MAXIMUM_CONTEXT_EXCERPTS = 16;
 export const MAXIMUM_CONTEXT_EXCERPT_BYTES = 16 * 1_024;
@@ -265,7 +264,7 @@ export function requireComposerInputByteLimit(
   value: {
     readonly text: string;
     readonly contextExcerpts: readonly ContextExcerpt[];
-    readonly taskContexts?: readonly MaterializedTaskContext[];
+    readonly taskContexts?: readonly unknown[];
   },
   context: z.RefinementCtx,
 ): void {
@@ -280,10 +279,11 @@ export function requireComposerInputByteLimit(
   }
 }
 
+/** Delivered Task snapshots count as their serialized JSON. */
 export function composerInputUtf8Bytes(value: {
   readonly text: string;
   readonly contextExcerpts: readonly ContextExcerpt[];
-  readonly taskContexts?: readonly MaterializedTaskContext[];
+  readonly taskContexts?: readonly unknown[];
 }): number {
   let bytes = encoder.encode(value.text).byteLength;
   for (const excerpt of value.contextExcerpts) {

@@ -2502,6 +2502,33 @@ for accepted or uncertain outcomes; remove it only after authoritative evidence
 proves non-acceptance. A backend must not create a second input snapshot,
 attachment or Task store, replay record, or security policy.
 
+A delivery snapshot holds each Task whole, scope included, as it was at
+acceptance. Normalized `task_context` message parts, from backends and to the
+browser, carry only its scope-free display projection (`MessageTaskContext`:
+ID, title, details, completion time, and revision), which is everything a
+renderer reads. The whole snapshot stays on the server, in queued inputs,
+creation attempts, mutation receipts, and delivery snapshots, and in provider
+transcripts as authenticated carriers that history projection re-parses:
+Codex requires byte equality with the re-serialized snapshot plus its HMAC,
+Claude verifies a tag over the re-serialized JSON, and Pi verifies its
+task-context marker HMAC and recomputes its submission fingerprint from the
+stored contexts on replay. Snapshots accepted before projects existed carry
+the scope `{ kind: "workspace", workspaceId }`, and rewriting them would break
+those signatures and fingerprints. The server-only stored schema in
+`src/server/domain/materialized-task-contexts.ts` therefore accepts exactly
+that strict legacy scope beside the current ones. It extends the live Task
+schema and transforms nothing, so a parsed snapshot re-serializes to its
+original bytes. Only carrier inspectors and stored-row parsers use it; it is
+never part of a browser or normalized backend contract. Migration 127
+rewrote only contexts no provider had received (pending, never-retried queued
+inputs and unsubmitted creation attempts), and the server never writes the
+legacy scope again. This is the one permitted legacy Task shape under the
+historical-carrier rule in
+[Configuration and persistence](#configuration-and-persistence). A
+Task schema change must keep every stored carrier parseable byte for byte, and
+tests cover history projection, reconciliation or recovery, and replay for
+each carrier with legacy and current scopes.
+
 Before crossing the provider boundary, Sedes resolves scope and ownership,
 stages immutable attachment bytes through the exact execution environment, and
 rechecks descriptor equality, byte count, and digest. An execution-environment
@@ -2660,9 +2687,14 @@ grouping key on project ID. Project scope is a viewer-local browsing
 preference, and creation must resolve it to an exact workspace and target,
 asking for a location when the project has several. All compiled backends (Pi,
 Codex, Claude, Grok, and OpenCode) continue to receive the existing exact-ID
-creation contract and never receive a project ID. Tasks, Workpads, Files, and
-agent-tool authority retain their workspace and environment boundaries;
-project membership is not an access boundary.
+creation contract and never receive a project ID. Files and workspace and
+thread agent-tool authority retain their workspace and environment boundaries.
+Project-scoped Tasks and Workpads are shared by every location of the project,
+and agent tools reach them from its member environments, those hosting one of
+its active locations, under the host rule in
+[Project resources](agent-tools.md#project-resources). Membership grants that
+reachability only through those environments; it is not a separate access
+boundary.
 
 Creating or importing a thread establishes a durable binding between one
 Sedes thread and one provider-native conversation under the exact target,
@@ -3589,7 +3621,11 @@ the exact inventoried legacy formats under their original authentication
 domains and continue emitting only the current format. Legacy recognition must
 remain fail-closed, backend-private, and covered through the consuming history,
 reconciliation, recovery, and presentation paths rather than only by an
-isolated parser test.
+isolated parser test. The legacy workspace scope of delivered Task snapshots
+is the one inventoried exception shared across backends: the Codex, Claude,
+and Pi carriers recognize it through one server-only stored schema, described
+in [Interactions, input, and interruption](#interactions-input-and-interruption),
+and it never reaches a browser or normalized backend contract.
 
 ### Project and location removal
 
@@ -3606,7 +3642,8 @@ operations; rechecks the location revision, exact thread membership, durable
 pending work, live terminals, and enabled schedules at commit, reporting the
 first blocker; advances the project's membership revision; then publishes an
 authoritative application replacement. Removing a project's last active
-location leaves the project active.
+location leaves the project active, with its project-scoped Tasks and
+Workpads.
 
 Project removal checks the project's revision and membership revision, then
 reports every blocker across every active location before fencing anything:
@@ -3625,17 +3662,22 @@ that are still removed.
 Queue/creation/fork/automation admission must also check workspace state at
 reservation, so earlier validation cannot admit work after removal; the
 membership invariant keeps that check sufficient after a project removal.
-List projections omit removed locations, removed projects, and their threads
-while retained read identities remain valid.
+List projections omit removed locations, removed projects, and their threads,
+together with the Tasks and Workpads scoped to them, while retained read
+identities remain valid.
 
 Only an explicit validated open or restore can revive a removed location, at
 its original workspace ID, environment, and canonical path: a user's, or an
-agent's `workspace.open` when the location's project is active. Background
-revalidation and in-flight discovery must not restore it. A location restore
-is refused while its project is removed, fails when the directory now resolves
-to a different canonical path, and fails when the location moved to another
-project while validation was pending; the restoring transaction rechecks that
-project.
+agent's `workspace.open` that names the location's own active project.
+Restoring or adding a location changes which environments reach the project,
+so an agent or Tool client needs that project's authority, computed against
+its membership before the change and rechecked at commit. An agent's open
+without a project never revives a location; it fails and names the project.
+Background revalidation and in-flight discovery must not restore it. A
+location restore is refused while its project is removed, fails when the
+directory now resolves to a different canonical path, and fails when the
+location moved to another project while validation was pending; the restoring
+transaction rechecks that project.
 Project restore clears only the project's removal, then restores each
 requested location individually through that revalidating path and reports
 each outcome, so one failed location leaves the project and the others
@@ -3647,8 +3689,11 @@ and leave idle runtimes loaded. Each rechecks its revisions and the exact
 thread set and refuses durable pending work. The commit runs in the same
 synchronous turn as a final observation of every affected thread runtime,
 after in-progress runtime maintenance settles, and refuses a busy or
-still-establishing runtime; `disconnected` does not block. Merge moves every
-source location, removed ones included, then deletes the empty source project.
+still-establishing runtime; `disconnected` does not block. A move leaves the
+project's own Tasks and Workpads in the project. Merge moves every source
+location, removed ones included, and every project-scoped Task and Workpad,
+advancing each Task's revision and writing a Workpad revision for its new
+scope, then deletes the empty source project.
 Both publish an application replacement and each affected thread's
 application state, including the open streams of dormant bound threads,
 without attaching a provider.

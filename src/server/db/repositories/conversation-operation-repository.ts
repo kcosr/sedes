@@ -19,10 +19,8 @@ import {
 import { hasDeliverableComposerInput } from "../../../shared/protocol/conversation.js";
 import { interactionResponseInputSchema } from "../../../shared/protocol/backend.js";
 import type { ComposerAttachmentDescriptor } from "../../../shared/protocol/composer-attachments.js";
-import type {
-  ComposerTaskReference,
-  MaterializedTaskContext,
-} from "../../../shared/protocol/tasks.js";
+import type { ComposerTaskReference } from "../../../shared/protocol/tasks.js";
+import type { MaterializedTaskContext } from "../../domain/materialized-task-contexts.js";
 import { ComposerAttachmentRepository } from "./composer-attachment-repository.js";
 import { activateSettledThreadForAcceptedInput } from "./accepted-input-inventory.js";
 import {

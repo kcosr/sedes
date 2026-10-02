@@ -274,7 +274,7 @@ export interface ThreadArchiveToolInput {
   readonly includeDescendants?: boolean;
   // No reviewed impact snapshot is exposed by this tool; completion is unsupported.
   readonly openTaskDisposition?:
-    "move_to_workspace" | "move_to_global" | "keep";
+    "move_to_project" | "move_to_global" | "keep";
 }
 
 export interface ThreadRestoreToolInput {
@@ -566,8 +566,10 @@ export function createThreadArchiveToolDefinition(
           includeDescendants: Type.Optional(Type.Boolean()),
           openTaskDisposition: Type.Optional(
             Type.String({
-              enum: ["move_to_workspace", "move_to_global", "keep"],
-              maxLength: 17,
+              enum: ["move_to_project", "move_to_global", "keep"],
+              maxLength: 15,
+              description:
+                "Open tasks of the archived threads move to their thread's project, move to global, or stay with their thread.",
             }),
           ),
         },

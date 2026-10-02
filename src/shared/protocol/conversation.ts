@@ -62,7 +62,7 @@ import {
 import {
   MAXIMUM_COMPOSER_TASK_REFERENCES,
   composerTaskReferencesSchema,
-  materializedTaskContextSchema,
+  messageTaskContextSchema,
   requireUniqueTaskContextContentParts,
 } from "./tasks.js";
 
@@ -244,7 +244,7 @@ export const messageContentPartSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     kind: z.literal("task_context"),
-    task: materializedTaskContextSchema,
+    task: messageTaskContextSchema,
   }),
   z.strictObject({
     kind: z.literal("image"),

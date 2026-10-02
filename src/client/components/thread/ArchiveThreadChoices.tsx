@@ -40,7 +40,7 @@ export function useArchiveChoices(
   const [pending, setPending] = useState<"only" | "all">();
   const [error, setError] = useState("");
   const [taskDisposition, setTaskDisposition] =
-    useState<OpenTaskDisposition>("move_to_workspace");
+    useState<OpenTaskDisposition>("move_to_project");
   const [executionWorkspaceDisposition, setExecutionWorkspaceDisposition] =
     useState<"keep" | "delete">("keep");
 

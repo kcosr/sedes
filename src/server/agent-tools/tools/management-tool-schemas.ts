@@ -44,8 +44,8 @@ export const taskScopeSchema = Type.Union([
   ),
   Type.Object(
     {
-      kind: Type.String({ enum: ["workspace"], maxLength: 9 }),
-      workspaceId: identifierSchema,
+      kind: Type.String({ enum: ["project"], maxLength: 9 }),
+      projectId: identifierSchema,
     },
     { additionalProperties: false, maxProperties: 2 },
   ),
@@ -65,8 +65,15 @@ export const taskTargetScopeSchema = Type.Union([
   ),
   Type.Object(
     {
-      kind: Type.String({ enum: ["workspace"], maxLength: 9 }),
-      workspaceId: Type.Optional(identifierSchema),
+      kind: Type.String({ enum: ["project"], maxLength: 9 }),
+      projectId: Type.Optional(
+        Type.String({
+          minLength: 1,
+          maxLength: 128,
+          description:
+            "Defaults to the caller's project. A project spans its locations: directories on one or more hosts.",
+        }),
+      ),
     },
     { additionalProperties: false, maxProperties: 2 },
   ),
@@ -95,9 +102,9 @@ const taskOutputProperties = {
 export const nestedTaskOutputSchema = Type.Object(
   {
     ...taskOutputProperties,
-    associatedWorkspaceId: Type.Union([identifierSchema, Type.Null()], {
+    associatedProjectId: Type.Union([identifierSchema, Type.Null()], {
       description:
-        "Read-only authoritative workspace association; null only for global tasks.",
+        "Read-only project association: the task's project, or the current project of a thread task's thread; null only for global tasks.",
     }),
   },
   { additionalProperties: false, maxProperties: 11 },
@@ -111,22 +118,22 @@ export const taskOutputSchema = Type.Object(taskOutputProperties, {
 
 export function resolveTaskTargetScope(
   input: {
-    readonly kind: "global" | "workspace" | "thread";
-    readonly workspaceId?: string;
+    readonly kind: "global" | "project" | "thread";
+    readonly projectId?: string;
     readonly threadId?: string;
   },
   caller: {
     readonly defaults: {
-      readonly workspaceId?: string;
+      readonly projectId?: string;
       readonly threadId?: string;
     };
   },
 ) {
   if (input.kind === "global") return { kind: "global" as const };
-  if (input.kind === "workspace") {
-    const workspaceId = input.workspaceId ?? caller.defaults.workspaceId;
-    if (!workspaceId) throw missingCallerDefault();
-    return { kind: "workspace" as const, workspaceId };
+  if (input.kind === "project") {
+    const projectId = input.projectId ?? caller.defaults.projectId;
+    if (!projectId) throw missingCallerDefault();
+    return { kind: "project" as const, projectId };
   }
   const threadId = input.threadId ?? caller.defaults.threadId;
   if (!threadId) throw missingCallerDefault();

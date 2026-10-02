@@ -14,6 +14,8 @@ type Delta = Exclude<NormalizedApplicationEvent, { type: "snapshot" }>;
 const generation = "00000000-0000-4000-8000-000000000001";
 const workspaceId = "00000000-0000-4000-8000-000000000002";
 const threadId = "00000000-0000-4000-8000-000000000003";
+const projectId = "00000000-0000-4000-8000-000000000901";
+const otherProjectId = "00000000-0000-4000-8000-000000000902";
 const now = "2026-09-18T00:00:00.000Z";
 const uuid = (index: number) =>
   `10000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
@@ -61,7 +63,7 @@ function task(index = 1, patch: Partial<AssociatedTask> = {}): AssociatedTask {
   return {
     id: uuid(index),
     scope: { kind: "global" },
-    associatedWorkspaceId: null,
+    associatedProjectId: null,
     title: "Task",
     details: "",
     pinned: false,
@@ -84,12 +86,12 @@ function snapshot(): Snapshot {
         directoryBrowsing: "available",
       },
     ],
-    projects: [{ id: "project-1", name: "Project", revision: 0 }],
+    projects: [{ id: projectId, name: "Project", revision: 0 }],
     workspaces: [
       {
         id: workspaceId,
         environmentId: "environment",
-        projectId: "project-1",
+        projectId,
         label: { text: "Workspace" },
         displayPath: { text: "/workspace" },
         available: true,
@@ -320,8 +322,8 @@ describe("indexed application projection", () => {
         type: "task_upsert",
         generation,
         task: task(1, {
-          scope: { kind: "workspace", workspaceId: uuid(99) },
-          associatedWorkspaceId: uuid(99),
+          scope: { kind: "project", projectId: uuid(99) },
+          associatedProjectId: uuid(99),
         }),
       },
     ];
@@ -350,7 +352,12 @@ describe("indexed application projection", () => {
   it("rejects regressing Task revisions and mismatched thread associations", () => {
     const seed = snapshot();
     seed.tasks = [task(1, { revision: 2 })];
-    seed.workspaces.push({ ...seed.workspaces[0]!, id: uuid(2) });
+    seed.projects.push({ id: otherProjectId, name: "Other", revision: 0 });
+    seed.workspaces.push({
+      ...seed.workspaces[0]!,
+      id: uuid(2),
+      projectId: otherProjectId,
+    });
     const projection = new ApplicationProjection(seed);
     expect(() =>
       projection.prepare({
@@ -365,7 +372,7 @@ describe("indexed application projection", () => {
         generation,
         task: task(2, {
           scope: { kind: "thread", threadId },
-          associatedWorkspaceId: uuid(2),
+          associatedProjectId: otherProjectId,
         }),
       }),
     ).toThrow("application_inventory_reference_invalid");
@@ -374,7 +381,7 @@ describe("indexed application projection", () => {
       generation,
       task: task(2, {
         scope: { kind: "thread", threadId },
-        associatedWorkspaceId: workspaceId,
+        associatedProjectId: projectId,
       }),
     })();
     expect(() => update(projection, thread({ workspaceId: uuid(2) }))).toThrow(
@@ -387,7 +394,7 @@ describe("indexed application projection", () => {
     seed.tasks = Array.from({ length: 100 }, (_, index) =>
       task(index, {
         scope: { kind: "thread", threadId },
-        associatedWorkspaceId: workspaceId,
+        associatedProjectId: projectId,
       }),
     );
     const projection = new ApplicationProjection(seed);
@@ -442,7 +449,7 @@ describe("indexed application projection", () => {
     seed.tasks = Array.from({ length: 64 }, (_, index) =>
       task(index, {
         scope: { kind: "thread", threadId },
-        associatedWorkspaceId: workspaceId,
+        associatedProjectId: projectId,
       }),
     );
     seed.threads = [];
@@ -452,7 +459,7 @@ describe("indexed application projection", () => {
     seed.tasks.push(
       task(64, {
         scope: { kind: "thread", threadId },
-        associatedWorkspaceId: workspaceId,
+        associatedProjectId: projectId,
       }),
     );
     const over = new ApplicationProjection(seed);
@@ -480,7 +487,7 @@ describe("indexed application projection", () => {
 
   it("indexes workspace project references and rejects unknown or duplicate projects", () => {
     const seed = snapshot();
-    seed.projects.push({ id: "project-2", name: "Other", revision: 3 });
+    seed.projects.push({ id: otherProjectId, name: "Other", revision: 3 });
     const projection = new ApplicationProjection(seed);
     const original = projection.materialize();
     expect(() =>
@@ -494,18 +501,18 @@ describe("indexed application projection", () => {
     projection.prepare({
       type: "workspace_upsert",
       generation,
-      workspace: { ...seed.workspaces[0]!, projectId: "project-2" },
+      workspace: { ...seed.workspaces[0]!, projectId: otherProjectId },
     })();
     // The independent audit rebuilds the reverse index from the moved reference.
-    expect(projection.materialize().workspaces[0]!.projectId).toBe("project-2");
+    expect(projection.materialize().workspaces[0]!.projectId).toBe(otherProjectId);
 
     expect(
       () =>
         new ApplicationProjection({
           ...snapshot(),
           projects: [
-            { id: "project-1", name: "Project", revision: 0 },
-            { id: "project-1", name: "Duplicate", revision: 0 },
+            { id: projectId, name: "Project", revision: 0 },
+            { id: projectId, name: "Duplicate", revision: 0 },
           ],
         }),
     ).toThrow();
@@ -514,9 +521,44 @@ describe("indexed application projection", () => {
     ).toThrow();
   });
 
+  it("rechecks a thread's Tasks when its location changes project", () => {
+    const seed = snapshot();
+    seed.projects.push({ id: otherProjectId, name: "Other", revision: 0 });
+    seed.tasks = [
+      task(1, {
+        scope: { kind: "thread", threadId },
+        associatedProjectId: projectId,
+      }),
+      task(2, {
+        scope: { kind: "project", projectId },
+        associatedProjectId: projectId,
+      }),
+    ];
+    const projection = new ApplicationProjection(seed);
+    const original = projection.materialize();
+    expect(() =>
+      projection.prepare({
+        type: "workspace_upsert",
+        generation,
+        workspace: { ...seed.workspaces[0]!, projectId: otherProjectId },
+      }),
+    ).toThrow("application_inventory_reference_invalid");
+    expect(projection.materialize()).toEqual(original);
+    expect(() =>
+      projection.prepare({
+        type: "task_upsert",
+        generation,
+        task: task(3, {
+          scope: { kind: "project", projectId: otherProjectId },
+          associatedProjectId: projectId,
+        }),
+      }),
+    ).toThrow();
+  });
+
   it("checks dependents when a workspace changes project but not on display edits", () => {
     const seed = snapshot();
-    seed.projects.push({ id: "project-2", name: "Other", revision: 0 });
+    seed.projects.push({ id: otherProjectId, name: "Other", revision: 0 });
     seed.threads = Array.from({ length: 65 }, (_, index) =>
       thread({ id: uuid(300 + index) }),
     );
@@ -531,7 +573,7 @@ describe("indexed application projection", () => {
       projection.prepare({
         type: "workspace_upsert",
         generation,
-        workspace: { ...seed.workspaces[0]!, projectId: "project-2" },
+        workspace: { ...seed.workspaces[0]!, projectId: otherProjectId },
       }),
     ).toThrow("application_projection_reference_budget");
   });

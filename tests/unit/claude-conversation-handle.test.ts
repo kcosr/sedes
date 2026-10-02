@@ -45,7 +45,12 @@ import {
 import { ClaudeThreadRepository } from "../../src/server/backends/claude/claude-thread-repository.js";
 import { compileBackendModelPolicy } from "../../src/server/backends/model-policy.js";
 import type { BackendModelPolicy } from "../../src/server/backends/model-policy.js";
-import { renderTaskContextsForModel } from "../../src/server/conversations/delivery-input-projection.js";
+import {
+  backendDeliveryInput,
+  renderTaskContextsForModel,
+} from "../../src/server/conversations/delivery-input-projection.js";
+import { claudeTaskContextEnvelope } from "../../src/server/backends/claude/claude-task-contexts.js";
+import { parseStoredTaskContexts } from "../../src/server/db/composer-tasks-json.js";
 import { claudeSkillId } from "../../src/server/backends/claude/claude-skills.js";
 import { parseClaudeTranscript, resolveClaudeSessionMessages } from "../../src/server/backends/claude/claude-native-transcript.js";
 import { ClaudeTranscriptFixture } from "../helpers/claude-native-transcript-fixture.js";
@@ -1566,6 +1571,174 @@ describe("ClaudeConversationHandle", () => {
     expect(
       userItem?.semanticKind === "user_message" ? userItem.content : [],
     ).not.toContainEqual({ kind: "image", omitted: true });
+    await handle.close();
+  });
+
+  it.each([
+    // Delivered before Tasks moved from workspace to project scope.
+    [
+      "legacy workspace",
+      '{"kind":"workspace","workspaceId":"dddddddd-dddd-4ddd-8ddd-dddddddddddd"}',
+    ],
+    [
+      "project",
+      '{"kind":"project","projectId":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"}',
+    ],
+  ] as const)(
+    "re-projects a resumed authenticated %s-scope Task envelope without its scope",
+    async (_label, scopeJson) => {
+      const settings = repository();
+      settings.freezeOperationSnapshot(
+        { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId },
+        {
+          applicationThreadId: BINDING.applicationThreadId,
+          applicationOperationId: OPERATION_ID,
+          now: 5,
+        },
+      );
+      const taskContexts = parseStoredTaskContexts(
+        `[{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","scope":${scopeJson},"title":"Implement task context","details":"Carry the exact task identity to Claude.","pinned":false,"files":[],"completedAt":null,"revision":3,"createdAt":"2026-08-10T00:00:00.000Z","updatedAt":"2026-08-11T00:00:00.000Z"}]`,
+      );
+      const envelope = (operationId: string) =>
+        claudeTaskContextEnvelope(
+          {
+            operationId,
+            userMessageOrdinal: 0,
+            taskContexts,
+            prompt: "Continue the task.",
+          },
+          {
+            installationKey: new Uint8Array(32).fill(7),
+            tenantId: BINDING.tenantId,
+            principalId: BINDING.ownerPrincipalId,
+            backendInstanceId: BINDING.backendInstanceId,
+          },
+        );
+      const user = (content: string): SessionMessage => ({
+        type: "user",
+        uuid: OPERATION_ID,
+        session_id: SESSION_ID,
+        parent_tool_use_id: null,
+        parent_agent_id: null,
+        message: { role: "user", content },
+      });
+      const assistant: SessionMessage = {
+        type: "assistant",
+        uuid: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        session_id: SESSION_ID,
+        parent_tool_use_id: null,
+        parent_agent_id: null,
+        message: {
+          id: "history",
+          role: "assistant",
+          content: [{ type: "text", text: "Done." }],
+          stop_reason: "end_turn",
+          usage: {
+            input_tokens: 5,
+            output_tokens: 2,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+        },
+      };
+      const userContent = async (content: string) => {
+        const { handle } = createHandle(fixture(), vi.fn(), {
+          settings,
+          initialMessages: [user(content), assistant],
+          resumeSession: true,
+        });
+        try {
+          await handle.establishProjection({
+            signal: new AbortController().signal,
+          });
+          const history = await handle.history({ limit: 10 });
+          const item = Object.values(history.itemsById).find(
+            (candidate) => candidate.semanticKind === "user_message",
+          );
+          return item?.semanticKind === "user_message" ? item.content : [];
+        } finally {
+          await handle.close();
+        }
+      };
+
+      const projected = await userContent(envelope(OPERATION_ID));
+      expect(projected).toEqual([
+        {
+          kind: "task_context",
+          task: {
+            id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            title: "Implement task context",
+            details: "Carry the exact task identity to Claude.",
+            completedAt: null,
+            revision: 3,
+          },
+        },
+        { kind: "text", text: { text: "Continue the task." } },
+      ]);
+      expect(JSON.stringify(projected)).not.toContain('"scope"');
+
+      // Altered snapshot bytes fail closed and stay visible as prompt text.
+      const tampered = envelope(OPERATION_ID).replace(
+        '"revision":3',
+        '"revision":4',
+      );
+      const visible = await userContent(tampered);
+      expect(visible.some((part) => part.kind === "task_context")).toBe(false);
+      expect(JSON.stringify(visible)).toContain("sedes-task-contexts");
+    },
+  );
+
+  it("replays a stored workspace-scope Task snapshot as the same Claude submission", async () => {
+    const provider = fixture();
+    const { handle } = createHandle(provider);
+    await handle.establishProjection({ signal: new AbortController().signal });
+    // The stored row of a snapshot delivered before Tasks had project scope.
+    const storedTaskContextsJson =
+      '[{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","scope":{"kind":"workspace","workspaceId":"dddddddd-dddd-4ddd-8ddd-dddddddddddd"},"title":"Implement task context","details":"Carry the exact task identity to Claude.","pinned":false,"files":[],"completedAt":null,"revision":3,"createdAt":"2026-08-10T00:00:00.000Z","updatedAt":"2026-08-11T00:00:00.000Z"}]';
+    const delivery = (
+      taskContexts: ReturnType<typeof parseStoredTaskContexts>,
+    ) =>
+      backendDeliveryInput({
+        applicationOperationId: OPERATION_ID,
+        mutationId: "legacy-task-mutation",
+        source: { kind: "user" },
+        reconciliationToken: "legacy-task-reconcile",
+        text: "Explain this",
+        contextExcerpts: [],
+        attachments: [],
+        taskContexts,
+      });
+
+    const submitted = handle.submit(
+      delivery(parseStoredTaskContexts(storedTaskContextsJson)),
+    );
+    const prompt = await provider.prompt()[Symbol.asyncIterator]().next();
+    expect(String((prompt.value as SDKUserMessage).message.content)).toContain(
+      `{"taskContexts":${storedTaskContextsJson}}`,
+    );
+    provider.messages.push(prompt.value as SDKMessage);
+    const receipt = await submitted;
+    expect(receipt).toMatchObject({ accepted: true });
+
+    await expect(
+      handle.submit(delivery(parseStoredTaskContexts(storedTaskContextsJson))),
+    ).resolves.toEqual(receipt);
+    const [stored] = parseStoredTaskContexts(storedTaskContextsJson);
+    await expect(
+      handle.submit(
+        delivery([
+          {
+            ...stored!,
+            scope: {
+              kind: "project",
+              projectId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+            },
+          },
+        ]),
+      ),
+    ).rejects.toMatchObject({
+      backendCode: "claude_submission_replay_mismatch",
+    });
     await handle.close();
   });
 

@@ -20,6 +20,7 @@ const agentAuthority = {
     kind: "thread_agent",
     environmentId: "environment-1",
     workspaceId,
+    projectId: "project-1",
     threadId: "source-thread",
   },
   policyIdentity: {
@@ -588,6 +589,7 @@ describe("SavedAgentApplicationService", () => {
               kind: "thread_agent",
               environmentId: "environment-1",
               workspaceId,
+              projectId: "project-1",
               threadId: "source-thread",
             },
             policyIdentity: {

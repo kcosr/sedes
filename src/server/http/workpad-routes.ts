@@ -31,14 +31,14 @@ const pageQuerySchema = z.strictObject({
   cursor: z.string().min(1).max(256).optional(),
 });
 const listQuerySchema = pageQuerySchema.extend({
-  scopeKind: z.enum(["global", "workspace", "thread"]),
-  workspaceId: z.string().optional(),
+  scopeKind: z.enum(["global", "project", "thread"]),
+  projectId: z.string().optional(),
   threadId: z.string().optional(),
   scopeMode: z.enum(["exact", "subtree"]).optional(),
   query: z.string().optional(),
   archived: z.enum(["true", "false"]).transform(value => value === "true").optional(),
 }).superRefine((query, context) => {
-  if ((query.scopeKind !== "workspace" && query.workspaceId !== undefined) ||
+  if ((query.scopeKind !== "project" && query.projectId !== undefined) ||
       (query.scopeKind !== "thread" && query.threadId !== undefined)) {
     context.addIssue({ code: "custom", message: "Scope identifiers must match the selected scope." });
   }
@@ -55,8 +55,8 @@ export function registerWorkpadRoutes(
     const query = listQuerySchema.parse(request.query);
     const selectedScope = query.scopeKind === "global"
       ? { kind: "global" as const }
-      : query.scopeKind === "workspace"
-        ? { kind: "workspace" as const, workspaceId: query.workspaceId }
+      : query.scopeKind === "project"
+        ? { kind: "project" as const, projectId: query.projectId }
         : { kind: "thread" as const, threadId: query.threadId };
     const input = listWorkpadsRequestSchema.parse({
       scope: selectedScope, scopeMode: query.scopeMode, query: query.query,

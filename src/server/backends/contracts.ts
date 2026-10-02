@@ -15,7 +15,7 @@ import type {
 } from "../../shared/protocol/conversation.js";
 import type { BoundedDisplayText } from "../../shared/protocol/payload.js";
 import type { ContextExcerpt } from "../../shared/protocol/context-excerpts.js";
-import type { MaterializedTaskContext } from "../../shared/protocol/tasks.js";
+import type { MaterializedTaskContext } from "../domain/materialized-task-contexts.js";
 import { composerAttachmentDescriptorSchema } from "../../shared/protocol/composer-attachments.js";
 import type {
   ExecutionScope,

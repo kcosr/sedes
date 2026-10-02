@@ -468,7 +468,7 @@ function makeThreadTask({
   return {
     id,
     scope: { kind: "thread", threadId },
-    associatedWorkspaceId: "workspace-1",
+    associatedProjectId: "project-1",
     title: `Task ${id}`,
     details: "",
     pinned: false,
@@ -487,7 +487,7 @@ describe("PanelLayout singleton surfaces", () => {
       makeThreadTask({ id: "open-2" }),
       makeThreadTask({ id: "completed", completed: true }),
       makeThreadTask({ id: "other-thread", threadId: "thread-2" }),
-      { ...makeThreadTask({ id: "project" }), scope: { kind: "workspace", workspaceId: "workspace-1" } },
+      { ...makeThreadTask({ id: "project" }), scope: { kind: "project", projectId: "project-1" } },
       { ...makeThreadTask({ id: "global" }), scope: { kind: "global" } },
     ] } };
     setup({ extraTenants: [tasksTenant] });

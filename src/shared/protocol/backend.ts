@@ -55,7 +55,7 @@ import {
   requireUniqueComposerAttachmentContentParts,
 } from "./composer-attachments.js";
 import {
-  materializedTaskContextSchema,
+  messageTaskContextSchema,
   requireUniqueTaskContextContentParts,
 } from "./tasks.js";
 
@@ -179,7 +179,7 @@ const backendMessageContentPartSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     kind: z.literal("task_context"),
-    task: materializedTaskContextSchema,
+    task: messageTaskContextSchema,
   }),
   z.strictObject({
     kind: z.literal("image"),

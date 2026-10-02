@@ -4,10 +4,7 @@ import {
   AGENT_TOOL_JSON_SCHEMA_DIALECT,
   normalizeCanonicalAgentToolSchema,
 } from "../schema/canonical-json-schema.js";
-import type {
-  AgentSourceContext,
-  AgentToolApplicationReader,
-} from "./agent-tool-readers.js";
+import type { AgentSourceContext } from "./agent-tool-readers.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
 
 const manifest = CANONICAL_AGENT_TOOL_MANIFEST["agent.context"];
@@ -86,30 +83,28 @@ export const agentContextToolContract = {
   "execute" | "reconstructCompleted"
 >;
 
-export function createAgentContextToolDefinition(
-  reader: AgentToolApplicationReader,
-): AgentToolDefinition<AgentContextInput, AgentContextResult> {
-  return {
-    ...agentContextToolContract,
-    async execute(_input, context) {
-      if (
-        context.defaults.kind !== "thread_agent" ||
-        context.subject.kind !== "thread_agent"
-      ) {
-        throw new Error("agent_source_context_unavailable");
-      }
-      const projectId = await reader.readWorkspaceProjectId(
-        { tenantId: context.tenantId, principalId: context.principalId },
-        context.defaults.workspaceId,
-        context.abortSignal,
-      );
-      if (!projectId) throw new Error("agent_source_context_unavailable");
-      return {
-        threadId: context.defaults.threadId,
-        workspaceId: context.defaults.workspaceId,
-        projectId,
-        backend: context.subject.backendKind,
-      };
-    },
-  };
-}
+/**
+ * Reports the caller's project as admission read it for this invocation,
+ * the same project its authority decisions used. It is read live because a
+ * location can move between projects while its threads run.
+ */
+export const agentContextToolDefinition: AgentToolDefinition<
+  AgentContextInput,
+  AgentContextResult
+> = {
+  ...agentContextToolContract,
+  async execute(_input, context) {
+    if (
+      context.defaults.kind !== "thread_agent" ||
+      context.subject.kind !== "thread_agent"
+    ) {
+      throw new Error("agent_source_context_unavailable");
+    }
+    return {
+      threadId: context.defaults.threadId,
+      workspaceId: context.defaults.workspaceId,
+      projectId: context.defaults.projectId,
+      backend: context.subject.backendKind,
+    };
+  },
+};

@@ -265,6 +265,6 @@ function ConflictAlert({ conflict, destination, pending, onMoveHere, onRestoreLo
     </span>}>
     {conflict.locationRemoved
       ? <>This directory is a removed location of {name}. Move it to {destination} and restore it there, or restore it in {name}.</>
-      : <>This directory is a location of {name}. Move it to {destination}; its threads, tasks, and workpads move with it.</>}
+      : <>This directory is a location of {name}. Move it to {destination}; its threads move with their tasks and workpads, and the project’s own tasks and workpads stay in {name}.</>}
   </DialogAlert>;
 }

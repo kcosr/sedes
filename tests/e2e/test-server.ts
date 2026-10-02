@@ -5063,7 +5063,7 @@ async function main(): Promise<void> {
             message: {
               text: "This tool wants to access Review environment for the review workspace.",
             },
-            code: { text: "workspace.open@2 · write" },
+            code: { text: "workspace.open@3 · write" },
             destructive: false,
           },
           signal: controller.signal,
@@ -5841,7 +5841,7 @@ async function main(): Promise<void> {
       createPrincipalAgentToolClientEligibility(),
     ),
     new CanonicalInlineAgentToolService({
-      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+      application: { readThreadStatus: async () => undefined },
     }),
     new AgentToolEnvironmentAuthorityResolver(e2eAgentToolSourceAuthority),
     Date.now,

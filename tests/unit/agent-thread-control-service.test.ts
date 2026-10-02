@@ -38,6 +38,7 @@ describe("AgentThreadControlService", () => {
             kind: "thread_agent",
             environmentId: "environment-1",
             workspaceId: "workspace-1",
+            projectId: "project-1",
             threadId: "thread-1",
           },
           policyIdentity: {
@@ -85,6 +86,7 @@ describe("AgentThreadControlService", () => {
         kind: "thread_agent" as const,
         environmentId: "environment-1",
         workspaceId: "workspace-1",
+        projectId: "project-1",
         threadId: "thread-1",
       },
       policyIdentity: {

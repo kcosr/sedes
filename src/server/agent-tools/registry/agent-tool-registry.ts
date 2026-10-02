@@ -255,12 +255,23 @@ function validateEnvironmentAuthority(definition: AgentToolDefinition): void {
         !/^[a-z][A-Za-z0-9]{0,63}$/.test(authority.inputField)) ||
       (authority.defaultToSource !== undefined &&
         typeof authority.defaultToSource !== "boolean") ||
+      // Only an environment resource may also name a project the operation targets.
+      ("projectInputField" in authority &&
+        (authority.resource !== "environment" ||
+          typeof authority.projectInputField !== "string" ||
+          !/^[a-z][A-Za-z0-9]{0,63}$/.test(authority.projectInputField))) ||
       ((authority.resource === "thread_family" ||
         authority.resource === "task" || authority.resource === "workpad" || authority.resource === "saved_agent") &&
         authority.defaultToSource !== undefined) ||
       Object.keys(authority).some(
         (key) =>
-          !["kind", "resource", "inputField", "defaultToSource"].includes(key),
+          ![
+            "kind",
+            "resource",
+            "inputField",
+            "defaultToSource",
+            "projectInputField",
+          ].includes(key),
       )
     ) {
       throw new Error("agent_tool_environment_authority_invalid");

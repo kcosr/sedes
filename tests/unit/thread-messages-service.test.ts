@@ -29,6 +29,7 @@ const environmentAuthority: TrustedEnvironmentAuthorityGrant = Object.freeze({
     kind: "thread_agent",
     environmentId: "environment-1",
     workspaceId: "workspace-1",
+    projectId: "project-1",
     threadId: "thread-1",
   }),
   policyIdentity: Object.freeze({

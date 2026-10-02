@@ -18,8 +18,10 @@ import { deterministicJson } from "../../canonical-json.js";
 import {
   AgentToolEnvironmentAuthorityResolver,
   createTrustedEnvironmentAuthorityGrant,
+  reachesOutsideEveryEnvironment,
   type ResolvedEnvironmentAuthority,
 } from "../environment/environment-authority.js";
+import type { TrustedAgentToolCallerDefaults } from "../contracts/agent-tool-contracts.js";
 import type {
   ApplicationDecisionPresentation,
   InteractionBroker,
@@ -138,9 +140,10 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
         ? !isWithinSourceThread(admitted.resolved, source.sourceThreadId,
             admitted.definition.environmentAuthority.kind)
         : admitted.policy.accessBoundary === "environment" &&
-          admitted.resolved.targetEnvironmentIds.some(
+          (admitted.resolved.targetEnvironmentIds.some(
             (environmentId) => environmentId !== source.sourceEnvironmentId,
-          );
+          ) ||
+            reachesOutsideEveryEnvironment(admitted.resolved));
       if (needsApproval) {
         sourceAuthority = await input.accessDecisionAuthority?.acquire(input.signal);
         if (sourceAuthority && !sourceAuthority.isCurrent()) throw new CanonicalAgentToolRequestError(
@@ -217,6 +220,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
         return await this.#execute<Output>(
           input,
           refreshedSource,
+          refreshed.defaults,
           refreshed.policy.revision,
           refreshed.resolved,
           signal,
@@ -225,6 +229,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
       return await this.#execute<Output>(
         input,
         source,
+        admitted.defaults,
         admitted.policy.revision,
         admitted.resolved,
         input.signal,
@@ -312,19 +317,34 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
       "thread_agent",
       input.request,
     );
+    // The caller's project is read live: a location can move between
+    // projects while its runtime keeps the source it captured at start.
+    const projectId = this.environmentAuthority.reader.resolveWorkspaceProject(
+      source.scope,
+      source.sourceWorkspaceId,
+    );
+    if (!projectId) {
+      throw new CanonicalAgentToolRequestError(
+        "not_found",
+        "The source thread was not found.",
+      );
+    }
+    const defaults = Object.freeze({
+      kind: "thread_agent" as const,
+      environmentId: source.sourceEnvironmentId,
+      workspaceId: source.sourceWorkspaceId,
+      projectId,
+      threadId: source.sourceThreadId,
+    });
     return {
       policy,
       definition,
+      defaults,
       resolved: this.environmentAuthority.resolve({
         tool: definition,
         input: input.request.input,
         scope: source.scope,
-        defaults: {
-          kind: "thread_agent",
-          environmentId: source.sourceEnvironmentId,
-          workspaceId: source.sourceWorkspaceId,
-          threadId: source.sourceThreadId,
-        },
+        defaults,
       }),
     };
   }
@@ -332,6 +352,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
   #execute<Output>(
     input: BackendAgentToolInvocationInput,
     source: TrustedAgentToolSource,
+    defaults: Extract<TrustedAgentToolCallerDefaults, { kind: "thread_agent" }>,
     policyRevision: number,
     resolved: ResolvedEnvironmentAuthority,
     signal: AbortSignal,
@@ -343,12 +364,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
         schemaVersion: input.request.schemaVersion,
       },
       callerKind: "thread_agent",
-      defaults: {
-        kind: "thread_agent",
-        environmentId: source.sourceEnvironmentId,
-        workspaceId: source.sourceWorkspaceId,
-        threadId: source.sourceThreadId,
-      },
+      defaults,
       policyIdentity: {
         ownerKind: "thread",
         ownerId: source.sourceThreadId,
@@ -439,13 +455,20 @@ function approvalPresentation(
         ? []
         : [resolved.display.targetEnvironmentLabels[index] ?? environmentId],
   );
-  const targets = otherTargetLabels.join(", ");
-  const resources = resolved.display.resourceLabels
-    .filter(
-      (_label, index) =>
-        resolved.resolvedResourceRefs[index]?.kind !== "environment",
-    )
-    .join(", ");
+  const outside = reachesOutsideEveryEnvironment(resolved)
+    ? ["a project with no active location"]
+    : [];
+  const targets = [...otherTargetLabels, ...outside].join(", ");
+  // A project resource reached through several environments has one ref per
+  // environment; name it once.
+  const resources = [
+    ...new Set(
+      resolved.display.resourceLabels.filter(
+        (_label, index) =>
+          resolved.resolvedResourceRefs[index]?.kind !== "environment",
+      ),
+    ),
+  ].join(", ");
   const consequences = approvalConsequences(definition.effects);
   const argumentsSummary = approvalArgumentSummary(input);
   return {

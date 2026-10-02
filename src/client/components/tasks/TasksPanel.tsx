@@ -401,8 +401,14 @@ export function TasksPanelContent({
         ? groupTasks(
             mainTasks,
             {
-              workspaces: destinations.workspaceLabels,
-              threads: destinations.threadTitles,
+              projects: destinations.projectLabels,
+              // A thread in a project with several locations says where it runs.
+              threads: new Map(
+                [...destinations.threadTitles].map(([threadId, title]) => {
+                  const location = destinations.threadLocation(threadId);
+                  return [threadId, location ? `${title} · ${location}` : title];
+                }),
+              ),
             },
             context,
           )
@@ -538,8 +544,8 @@ export function TasksPanelContent({
     }
     const scope = scopeKey(task.scope);
     const parent =
-      task.scope.kind === "thread" && task.associatedWorkspaceId
-        ? `workspace:${task.associatedWorkspaceId}`
+      task.scope.kind === "thread" && task.associatedProjectId
+        ? `project:${task.associatedProjectId}`
         : undefined;
     setCollapsedGroups((current) => {
       if (!current.has(scope) && (!parent || !current.has(parent))) {
@@ -631,17 +637,22 @@ export function TasksPanelContent({
     (task: AssociatedTask, scope: TaskScope) => {
       if (sameScope(task.scope, scope)) return;
       if (pendingRef.current.get(task.id)?.has("move")) return;
+      const targetWorkspaceId =
+        scope.kind === "thread"
+          ? snapshot?.threads.find(({ id }) => id === scope.threadId)
+              ?.workspaceId
+          : undefined;
       const targetProject =
         scope.kind === "global"
           ? null
-          : scope.kind === "workspace"
-            ? scope.workspaceId
-            : (snapshot?.threads.find(({ id }) => id === scope.threadId)
-                ?.workspaceId ?? null);
+          : scope.kind === "project"
+            ? scope.projectId
+            : (snapshot?.workspaces.find(({ id }) => id === targetWorkspaceId)
+                ?.projectId ?? null);
       if (
         task.files.length > 0 &&
-        task.associatedWorkspaceId !== null &&
-        task.associatedWorkspaceId !== targetProject
+        task.associatedProjectId !== null &&
+        task.associatedProjectId !== targetProject
       ) {
         setPendingMove({ task, scope });
         return;
@@ -650,7 +661,7 @@ export function TasksPanelContent({
         setError(`Couldn't move “${task.title}”: ${errorMessage(cause)}`),
       );
     },
-    [moveNow, snapshot?.threads],
+    [moveNow, snapshot?.threads, snapshot?.workspaces],
   );
 
   const addToPrompt = useCallback(
@@ -969,21 +980,14 @@ export function TasksPanelContent({
     if (candidate === "all" || !draggedTask) return undefined;
     const scope = destinationScope(candidate, context);
     if (!scope || sameScope(draggedTask.scope, scope)) return undefined;
-    const workspaceId =
+    // A thread segment's scope is the followed thread, in the current project.
+    const projectId =
       scope.kind === "global"
         ? null
-        : scope.kind === "workspace"
-          ? scope.workspaceId
-          : (context.thread?.workspaceId ?? null);
-    return {
-      scope,
-      label: destinations.label(scope),
-      workspaceId,
-      workspaceLabel:
-        workspaceId === null
-          ? destinations.label({ kind: "global" })
-          : destinations.label({ kind: "workspace", workspaceId }),
-    };
+        : scope.kind === "project"
+          ? scope.projectId
+          : (context.project?.id ?? null);
+    return { scope, label: destinations.label(scope), projectId };
   };
 
   // ── Rendering ────────────────────────────────────────────────────────────
@@ -995,15 +999,17 @@ export function TasksPanelContent({
     (view === "project" && options.includeThreadTasks);
   const locationOf = (task: AssociatedTask) => {
     const label = destinations.label(task.scope);
+    if (task.scope.kind !== "thread") return { kind: task.scope.kind, label };
+    // A thread task names its thread, its project in All, and where the
+    // thread runs when the project has several locations.
     const project =
-      view === "all" &&
-      task.scope.kind === "thread" &&
-      task.associatedWorkspaceId !== null
-        ? destinations.workspaceLabels.get(task.associatedWorkspaceId)
+      view === "all" && task.associatedProjectId !== null
+        ? destinations.projectLabels.get(task.associatedProjectId)
         : undefined;
+    const location = destinations.threadLocation(task.scope.threadId);
     return {
       kind: task.scope.kind,
-      label: project ? `${label} · ${project}` : label,
+      label: [label, project, location].filter(Boolean).join(" · "),
     };
   };
   const filters = viewFilters(options);

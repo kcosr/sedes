@@ -51,6 +51,10 @@ export const projectSummarySchema = z
     /** Changes whenever a location is added, removed, restored, or moved. */
     membershipRevision: revisionSchema,
     removed: z.boolean(),
+    /** Direct project tasks, including completed tasks. */
+    taskCount: z.number().int().nonnegative(),
+    /** Direct project workpads, including archived workpads. */
+    workpadCount: z.number().int().nonnegative(),
     locations: z.array(projectLocationSchema).max(MAXIMUM_PROJECT_LOCATIONS),
   })
   .refine(

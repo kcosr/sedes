@@ -615,6 +615,25 @@ directory, including `overlay.sqlite`, before upgrading. Afterwards review
 **Settings → Projects**, which notes names that several projects share, and
 merge or move locations as needed.
 
+Migration 127 shares Tasks and Workpads across a project's locations. Every
+Task and Workpad scoped to a location moves to that location's project, and
+the Tasks table loses its environment and workspace columns. The same rewrite
+applies to the scope recorded in Task mutation receipts, in every Workpad
+revision, and in Task snapshots that no provider has received yet: pending,
+never-retried queued input and creation attempts not yet submitted. Every
+other stored Task snapshot, including delivered and dispatching ones, stays
+byte-identical so provider history keeps verifying. The migration refuses to
+run, leaving the database unchanged, when saved work refers to a location
+record that no longer exists. Afterwards, a Task update or move whose response
+was lost before the upgrade cannot be replayed: its retry reports that the
+mutation ID was reused, so read the Task again before deciding. Project Tasks
+and Workpads of removed locations reappear while their project is active. The
+Task, Workpad, archive, and workspace-open agent tools change version at the
+same time; a Native MCP session that a sidecar kept across the upgrade lists
+the previous schemas until its runtime restarts, while each call is checked
+against the current version. The migration is one-way, so back up the state
+directory, including `overlay.sqlite`, before upgrading.
+
 Before an upgrade:
 
 1. Settle active work and resolve or explicitly review uncertain creation,
