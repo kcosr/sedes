@@ -112,7 +112,7 @@ export const configurationTargetSchema = z.discriminatedUnion("kind", [
 ]);
 export const configurationDocumentSchema = z.strictObject({
   executionEnvironments: z.array(configurationEnvironmentSchema).max(16),
-  backends: z.array(configurationBackendSchema).max(32),
+  backends: z.array(configurationBackendSchema).max(64),
   targets: z.array(configurationTargetSchema).max(64),
   defaultTargetId: configurationIdSchema.nullable(),
   webSearch: z.strictObject({ provider: z.literal("grok_cli"), grokHome: absolutePath.optional() }).nullable(),

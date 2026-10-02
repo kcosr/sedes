@@ -393,7 +393,7 @@ export function ExecutionSettings({ controls }: {
     { label: "View activity", onSelect: () => viewActivity("backends", backend.id) },
     { label: "Remove…", destructive: true, disabled: !snapshot, onSelect: () => snapshot && requestConfirmation({ kind: "remove-backend", id: backend.id, label: backend.label, revision: snapshot.revision }) },
   ];
-  const canAddBackend = Boolean(configuration && configuration.backends.length < 32 && configuration.executionEnvironments.length > 0);
+  const canAddBackend = Boolean(configuration && configuration.backends.length < 64 && configuration.executionEnvironments.length > 0);
   const addBackend = (environmentId?: string) => { backendSeed.current = environmentId; navigate(settingsPath("backends", { mode: "new" })); };
   const renderEnvironmentBackends = (environment: EnvironmentDefinition) => {
     if (!snapshot) return null;
@@ -505,7 +505,7 @@ export function ExecutionSettings({ controls }: {
             onClick={addEnvironment}><Plus />Add environment</Button>
           : <Button type="button" variant="outline" aria-label="Add backend" disabled={!configuration || pending || !canAddBackend}
             title={configuration && !configuration.executionEnvironments.length ? "Add an execution environment first."
-              : configuration && configuration.backends.length >= 32 ? "An account holds at most 32 backends." : undefined}
+              : configuration && configuration.backends.length >= 64 ? "An account holds at most 64 backends." : undefined}
             onClick={() => addBackend(currentFilters.environment || undefined)}><Plus />Add backend</Button>}
       </>}>
       {state.loading && !snapshot ? <div className="execution-loading" role="status" aria-label="Loading execution configuration">

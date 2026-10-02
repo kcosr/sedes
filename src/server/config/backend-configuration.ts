@@ -270,7 +270,7 @@ const backendConfigurationFileSchema = z
     schemaVersion: z.literal(10),
     packagedClients: packagedClientsSchema.default([]),
     executionEnvironments: z.array(executionEnvironmentSchema).min(1).max(16),
-    backends: z.array(backendSchema).min(1).max(32),
+    backends: z.array(backendSchema).min(1).max(64),
     targets: z.array(targetSchema).min(1).max(64),
     defaultTargetId: configuredIdSchema,
     webSearch: webSearchConfigurationSchema.optional(),
