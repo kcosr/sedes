@@ -867,6 +867,42 @@ describe("principal agent-tool client persistence and admission", () => {
     }
   });
 
+  it("treats a removed default workspace as unavailable", () => {
+    const value = fixture();
+    try {
+      const created = createClient(value, { toolIds: ["thread.status", "thread.list"] });
+      const inventory = new InventoryRepository(value.database);
+      inventory.removeWorkspace(value.scope, value.workspace.id, {
+        expectedRevision: inventory.getWorkspace(value.scope, value.workspace.id).revision,
+        expectedThreadIds: inventory.listThreadIdsForWorkspace(value.scope, value.workspace.id),
+        now: 200,
+      });
+      expect(value.service().get(value.scope, created.client.id)).toMatchObject({
+        availability: "needs_attention",
+        defaultWorkspaceAvailable: false,
+      });
+      expect(() =>
+        value.service().admitInvocation(created.credential, {
+          toolId: "thread.list",
+          schemaVersion: 5,
+          requestId: "principal-client-removed-default-workspace",
+          input: { scope: { kind: "default_workspace" } },
+        }),
+      ).toThrowError(expect.objectContaining({ code: "not_found" }));
+      expect(() =>
+        value.service().replaceForManagement(value.scope, created.client.id, replacement(created.client)),
+      ).toThrowError(expect.objectContaining({
+        code: "invalid_transition",
+        message: "The default workspace is unavailable.",
+      }));
+      expect(() => createClient(value)).toThrowError(
+        expect.objectContaining({ message: "The default workspace is unavailable." }),
+      );
+    } finally {
+      value.database.close();
+    }
+  });
+
   it("retains a removed environment while invalidating its admission authority", () => {
     const value = fixture();
     try {

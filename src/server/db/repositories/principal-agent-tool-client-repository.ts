@@ -506,7 +506,7 @@ export class PrincipalAgentToolClientRepository {
         .prepare(
           `SELECT availability FROM workspaces
            WHERE tenant_id = ? AND owner_principal_id = ?
-             AND environment_id = ? AND id = ?`,
+             AND environment_id = ? AND id = ? AND removed_at IS NULL`,
         )
         .get(
           scope.tenantId,
