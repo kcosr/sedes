@@ -86,7 +86,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   expect(secondThreadPath).not.toBe(threadPath);
   await expect(panel.locator(".workpad-document")).toContainText("15-minute timeout");
   expect(await panel.evaluate(node => (window as typeof window & { __retainedWorkpad?: Element }).__retainedWorkpad === node)).toBe(true);
-  await expect(page.getByTestId("workspace-workbench-bar").getByRole("button", { name: "Open Workpads panel", exact: true })).toBeVisible();
+  await expect(page.getByTestId("workspace-workbench-bar").getByRole("button", { name: "Close Workpads panel", exact: true })).toBeVisible();
   await page.goBack();
   await expect(page).toHaveURL(threadPath);
   await expect(panel.locator(".workpad-document")).toContainText("15-minute timeout");
@@ -100,7 +100,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await page.getByRole("menuitemradio", { name: "Right", exact: true }).click();
   await page.getByRole("button", { name: "Collapse Workpads panel", exact: true }).click();
   await expect(panel).toBeHidden();
-  await page.getByTestId("workspace-workbench-bar").getByRole("button", { name: "Open Workpads panel", exact: true }).click();
+  await page.getByTestId("workspace-workbench-bar").getByRole("button", { name: "Show collapsed Workpads panel", exact: true }).click();
   await expect(panel.locator(".workpad-document")).toContainText("15-minute timeout");
   await panel.getByRole("button", { name: "Show attribution", exact: true }).click();
   const marks = panel.locator("[data-workpad-attribution]");
@@ -277,6 +277,6 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await page.waitForTimeout(5_500);
   page.off("request", countIdleReads);
   expect(idleWorkpadReads).toBe(0);
-  await page.getByRole("button", { name: "Close Workpads panel", exact: true }).click();
+  await pane.getByRole("button", { name: "Close Workpads panel", exact: true }).click();
   await expect(panel).toHaveCount(0);
 });

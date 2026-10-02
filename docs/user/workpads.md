@@ -6,12 +6,14 @@ They belong to your Sedes account and survive restarts.
 
 ## Find and organize workpads
 
-Open **Workpads** from the application header’s **Panels** menu. It shares the
-workspace layout with **Chat** and **Files**. Resize the split, use **Workpads
-panel actions** to dock it on another edge, or collapse and restore it from
-the panel shortcuts. Its open state and selected document stay with you when
-you switch threads. On narrow
-screens, switch between full-stage panels using the panel shortcuts or menu.
+In a thread, select the **Workpads** button (the notepad icon, beside
+**Tasks**) to open or close Workpads, or open it from the **Panels** menu. It
+shares the workspace layout with **Chat** and **Files**. Resize the split, use
+**Workpads panel actions** to dock it on another edge, or collapse it; when it
+is collapsed, the button keeps an outline, and selecting it shows Workpads
+again. Its open state and selected document stay with you when you switch
+threads. On narrow screens, switch between full-stage panels using the
+buttons, the panel shortcuts, or the menu.
 Draft text stays mounted while the panel is collapsed, another panel is shown,
 or you switch threads. The document's scope does not change when you navigate.
 

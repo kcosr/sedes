@@ -666,6 +666,31 @@ describe("PanelLayout singleton surfaces", () => {
     }
   });
 
+  it("toggles Workpads from the workbench bar beside Tasks, outside the shortcut group", () => {
+    const store = setup({ extraTenants: [tasksTenant, { ...filesTenant(), id: "workpads", title: "Workpads", scope: "global" }] });
+    const bar = within(screen.getByTestId("workspace-workbench-bar"));
+    const toggle = bar.getByTestId("workpads-panel-toggle");
+    expect(toggle.previousElementSibling).toBe(bar.getByTestId("tasks-panel-toggle"));
+    expect(toggle).toHaveAccessibleName("Open Workpads panel");
+
+    fireEvent.click(toggle);
+    expect(store.isVisible("workpads")).toBe(true);
+    expect(toggle).toHaveAccessibleName("Close Workpads panel");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(
+      within(bar.getByRole("group", { name: "Panel shortcuts" })).queryByRole("button", { name: "Open Workpads panel" }),
+    ).toBeNull();
+
+    act(() => { store.collapsePanel("workpads"); });
+    expect(toggle).toHaveAccessibleName("Show collapsed Workpads panel");
+    fireEvent.click(toggle);
+    expect(store.isVisible("workpads")).toBe(true);
+
+    fireEvent.click(toggle);
+    expect(store.hasPanel("workpads")).toBe(false);
+    expect(toggle).toHaveAccessibleName("Open Workpads panel");
+  });
+
   it("hosts Workpads through docking and collapse without losing dirty text", async () => {
     const unmounted = vi.fn();
     function WorkpadFixture({ context }: { context: Parameters<WorkspacePanelTenant["render"]>[0] }) {
@@ -686,7 +711,7 @@ describe("PanelLayout singleton surfaces", () => {
     expect(await screen.findByRole("textbox", { name: "Workpad draft" })).toBe(draft);
     expect(draft).toHaveValue("Keep this draft");
     expect(unmounted).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Close Workpads panel" }));
+    fireEvent.click(within(screen.getByRole("region", { name: "Workpads panel" })).getByRole("button", { name: "Close Workpads panel" }));
     expect(await screen.findByRole("dialog", { name: "Discard unsaved changes?" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(draft).toHaveValue("Keep this draft");
@@ -707,7 +732,7 @@ describe("PanelLayout singleton surfaces", () => {
     fireEvent.change(draft, { target: { value: "Retain this across workspaces" } });
     store.rerenderWorkspace("workspace-2");
     expect(screen.getByRole("textbox", { name: "Workpad draft" })).toBe(draft);
-    fireEvent.click(screen.getByRole("button", { name: "Close Workpads panel" }));
+    fireEvent.click(within(screen.getByRole("region", { name: "Workpads panel" })).getByRole("button", { name: "Close Workpads panel" }));
     const closeDialog = await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
     fireEvent.click(within(closeDialog).getByRole("button", { name: "Keep editing" }));
     expect(draft).toHaveValue("Retain this across workspaces");

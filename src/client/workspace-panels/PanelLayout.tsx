@@ -28,6 +28,7 @@ import { ApiError } from "../api/ApiClient.js";
 import { Button } from "../components/ui/button.js";
 import { BackendBrandIcon } from "../components/brand-icons.js";
 import { TasksPanelToggle } from "../components/tasks/TasksPanelToggle.js";
+import { WorkbenchPanelToggle } from "../components/WorkbenchPanelToggle.js";
 import {
   usePublishTasksDock,
   useTasksHost,
@@ -1144,6 +1145,24 @@ function PanelLayoutReady({
     if (tasksPanel && tasksVisible) closePanel(tasksPanel, invoker);
     else openTasksPanel(true);
   };
+  const workpadsVisible =
+    workpadsPanel !== undefined &&
+    actuallyVisible(workpadsPanel.panelInstanceId);
+  const toggleWorkpadsPanel = (invoker?: HTMLElement) => {
+    if (workpadsPanel && workpadsVisible) {
+      closePanel(workpadsPanel, invoker);
+      return;
+    }
+    // Like Tasks, Workpads docks beside the current surfaces.
+    if (
+      store.openPanel("workpads", {
+        availableWidth: availableSize.width,
+        availableHeight: availableSize.height,
+        presentation: "split",
+      })
+    )
+      setMobilePanelId("workpads");
+  };
   usePublishTasksDock(
     tenants.has("tasks")
       ? {
@@ -1738,14 +1757,25 @@ function PanelLayoutReady({
             }
             count={openThreadTaskCount}
           />
+          {tenants.has("workpads") && (
+            <WorkbenchPanelToggle
+              title="Workpads"
+              icon={NotepadText}
+              open={workpadsVisible}
+              collapsed={desktop && workpadsPanel !== undefined && !workpadsVisible}
+              onToggle={toggleWorkpadsPanel}
+              className="workpads-panel-toggle"
+              testId="workpads-panel-toggle"
+            />
+          )}
           <div className="workspace-panel-open-menu">
             <div
               className="workspace-panel-open-icons"
               role="group"
               aria-label="Panel shortcuts"
             >
-              {/* The Tasks toggle beside this group stands for Tasks. */}
-              {panels.filter((panel) => panel.kind !== "tasks").map((panel) => (
+              {/* The Tasks and Workpads toggles beside this group stand for them. */}
+              {panels.filter((panel) => panel.kind !== "tasks" && panel.kind !== "workpads").map((panel) => (
                 <Button
                   key={panel.panelInstanceId}
                   variant="ghost"

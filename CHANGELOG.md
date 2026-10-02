@@ -320,6 +320,11 @@
   open, dock, or resize the panel.
   ([#37](https://github.com/kcosr/sedes/pull/37))
 
+- Workpads has its own button in the thread workbench bar, beside **Tasks**,
+  and behaves like it: select it to open, show, or close Workpads. Workpads no
+  longer appears among the open-panel shortcuts.
+  ([#37](https://github.com/kcosr/sedes/pull/37))
+
 - A project's Tasks and Workpads are shared by every location of the project,
   on every host. Tasks' **Project** view and Workpads' **Project** scope
   follow the current thread's project, adding a Task there never asks for a
