@@ -297,4 +297,77 @@ describe("WorkpadsPanel", () => {
     expect(editor).toHaveValue("My pending changes");
   });
 
+
+  // Two same-named projects are told apart by their hosts; acme-web has two locations.
+  const projectCatalog = {
+    environments: [
+      { id: "local", kind: "local", label: { text: "Local" }, available: true },
+      { id: "build", kind: "ssh", label: { text: "Build host" }, available: true },
+    ],
+    projects: [
+      { id: "project-web", name: "acme-web", revision: 0 },
+      { id: "project-docs", name: "docs", revision: 0 },
+      { id: "project-docs-build", name: "docs", revision: 0 },
+    ],
+    workspaces: [
+      { id: "web-local", environmentId: "local", projectId: "project-web", label: { text: "acme-web" }, displayPath: { text: "/src/acme-web" }, available: true },
+      { id: "web-build", environmentId: "build", projectId: "project-web", label: { text: "acme-web" }, displayPath: { text: "/srv/acme-web" }, available: true },
+      { id: "docs-local", environmentId: "local", projectId: "project-docs", label: { text: "docs" }, displayPath: { text: "/src/docs" }, available: true },
+      { id: "docs-build", environmentId: "build", projectId: "project-docs-build", label: { text: "docs" }, displayPath: { text: "/srv/docs" }, available: true },
+    ],
+  };
+  /** A store whose snapshot can arrive after the panel mounts. */
+  function withSnapshot(store: ApplicationClientStore, snapshot: object | undefined) {
+    let state = { snapshot, visibleThreads: [{ id: "thread-build", title: { text: "Build thread" } }] };
+    const listeners = new Set<() => void>();
+    return {
+      store: { ...store, getSnapshot: () => state, subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; } } as unknown as ApplicationClientStore,
+      publish: (next: object) => { state = { ...state, snapshot: next }; act(() => listeners.forEach(listener => listener())); },
+    };
+  }
+
+  it("scopes Project to the thread's project and lists each project once by its label", async () => {
+    const { store: base, api } = fixture();
+    const { store } = withSnapshot(base, projectCatalog);
+    // The thread runs in acme-web's build-host location.
+    render(<WorkpadsPanel context={{ ...panelContext(store), threadId: "thread-build", workspaceId: "web-build" }} />);
+    await waitFor(() => expect(api.listWorkpads).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("radio", { name: "Project" }));
+    const select = screen.getByRole("combobox", { name: "Workpad project" });
+    expect(select).toHaveValue("project-web");
+    expect([...select.querySelectorAll("option")].map(option => option.textContent)).toEqual([
+      "acme-web", "docs", "docs · Build host",
+    ]);
+    await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({
+      scope: { kind: "project", projectId: "project-web" }, scopeMode: "exact",
+    })));
+  });
+
+  it("adopts the thread's project when the snapshot arrives after the panel", async () => {
+    const { store: base, api } = fixture();
+    const { store, publish } = withSnapshot(base, undefined);
+    render(<WorkpadsPanel context={{ ...panelContext(store), threadId: "thread-build", workspaceId: "docs-build" }} />);
+    publish(projectCatalog);
+    fireEvent.click(screen.getByRole("radio", { name: "Project" }));
+    expect(screen.getByRole("combobox", { name: "Workpad project" })).toHaveValue("project-docs-build");
+    await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({
+      scope: { kind: "project", projectId: "project-docs-build" },
+    })));
+  });
+
+  it("names a project workpad's project in its row and header", async () => {
+    const projectPad: Workpad = { ...pad, scope: { kind: "project", projectId: "project-docs-build" } };
+    const { store: base } = fixture({
+      listWorkpads: vi.fn(async () => ({ items: [projectPad] })),
+      getWorkpad: vi.fn(async () => projectPad),
+      getWorkpadRevision: vi.fn(async () => ({ ...revision, scope: projectPad.scope })),
+    });
+    const { store } = withSnapshot(base, projectCatalog);
+    render(<WorkpadsPanel context={panelContext(store)} />);
+    const row = await screen.findByRole("button", { name: /Integration/ });
+    expect(row).toHaveTextContent("Project · docs · Build host · You");
+    fireEvent.click(row);
+    await screen.findByRole("button", { name: "Edit workpad" });
+    expect(document.querySelector(".workpads-title")).toHaveTextContent("IntegrationProject · docs · Build host");
+  });
 });

@@ -15,7 +15,6 @@ import { WorkpadDocument } from "./WorkpadDocument.js";
 import { useWorkpadDraft } from "./use-workpad-draft.js";
 import "./workpads-panel.css";
 
-const scopeLabel = (scope: WorkpadScope) => scope.kind === "project" ? "Project" : scope.kind === "thread" ? "Thread" : "Global";
 const message = (error: unknown) => error instanceof Error ? error.message : "Unable to update workpad.";
 export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const { applicationStore: store, visible: open, threadId, workspaceId, host } = context;
@@ -240,11 +239,18 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     if (selected) { const next = await store.api.getWorkpadRevision(selected.id, number); revisionRef.current = next; setRevision(next); }
   };
   const snapshot = application.snapshot;
+  // Each project once, named as everywhere else: same-named projects carry a host or path hint.
   const projects = useMemo(() => {
     const list = snapshot?.projects ?? [];
     const locations = describeProjectLocations({ projects: list, workspaces: snapshot?.workspaces ?? [], environments: snapshot?.environments ?? [] });
-    return list.map(project => ({ id: project.id, label: locations.projectLabel(project.id) ?? project.name }));
+    return list.map(project => ({ id: project.id, label: locations.projectLabel(project.id) ?? project.name }))
+      .sort((left, right) => left.label.localeCompare(right.label, undefined, { numeric: true }) || left.id.localeCompare(right.id));
   }, [snapshot?.projects, snapshot?.workspaces, snapshot?.environments]);
+  const scopeLabel = (value: WorkpadScope) => {
+    if (value.kind !== "project") return value.kind === "thread" ? "Thread" : "Global";
+    const project = projects.find(({ id }) => id === value.projectId);
+    return project ? `Project · ${project.label}` : "Project";
+  };
   const threads = application.visibleThreads;
   const renderScopeTargets = (value: WorkpadScope, onChange: (scope: WorkpadScope) => void) => <>
     <SegmentedControl aria-label="Destination scope" value={value.kind} onValueChange={kind => onChange(kind === "global" ? { kind: "global" } : kind === "project" ? { kind: "project", projectId: contextProjectId ?? projects[0]?.id ?? "" } : { kind: "thread", threadId: threadId ?? threads[0]?.id ?? "" })}><SegmentedControlItem value="global">Global</SegmentedControlItem><SegmentedControlItem value="project" disabled={!projects.length}>Project</SegmentedControlItem><SegmentedControlItem value="thread" disabled={!threads.length}>Thread</SegmentedControlItem></SegmentedControl>
@@ -255,7 +261,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     {(error || refreshError) && <div className="workpads-error" role="alert">{error || refreshError}<Button variant="ghost" size="icon-sm" aria-label="Dismiss error" onClick={() => { setError(""); setRefreshError(""); }}><X size={14} /></Button></div>}
     {!selected ? <>
       <div className="workpads-filters">
-        <SegmentedControl aria-label="Workpad scope" className="w-full" value={scopeKind} onValueChange={value => { setScopeKind(value as WorkpadScope["kind"]); if (!projectId) setProjectId(projects[0]?.id ?? ""); if (!selectedThread) setSelectedThread(threads[0]?.id ?? ""); }}><SegmentedControlItem value="global">Global</SegmentedControlItem><SegmentedControlItem value="project" disabled={!projects.length}>Project</SegmentedControlItem><SegmentedControlItem value="thread" disabled={!threads.length}>Thread</SegmentedControlItem></SegmentedControl>
+        <SegmentedControl aria-label="Workpad scope" className="w-full" value={scopeKind} onValueChange={value => { setScopeKind(value as WorkpadScope["kind"]); if (!projectId) setProjectId(contextProjectId ?? projects[0]?.id ?? ""); if (!selectedThread) setSelectedThread(threads[0]?.id ?? ""); }}><SegmentedControlItem value="global">Global</SegmentedControlItem><SegmentedControlItem value="project" disabled={!projects.length}>Project</SegmentedControlItem><SegmentedControlItem value="thread" disabled={!threads.length}>Thread</SegmentedControlItem></SegmentedControl>
         {scopeKind === "project" && <select aria-label="Workpad project" value={projectId} onChange={event => setProjectId(event.target.value)}>{projects.map(project => <option key={project.id} value={project.id}>{project.label}</option>)}</select>}
         {scopeKind === "thread" && <select aria-label="Workpad thread" value={selectedThread} onChange={event => setSelectedThread(event.target.value)}>{threads.map(thread => <option key={thread.id} value={thread.id}>{thread.title.text}</option>)}</select>}
         <div className="workpads-toolbar"><Input aria-label="Search workpads" placeholder="Search workpads" value={query} maxLength={240} onChange={event => setQuery(event.target.value)} /><Button variant="secondary" size="sm" disabled={!scopeValid} onClick={() => { setCreating(true); setTitle(""); }}><Plus size={15} />New workpad</Button></div>
