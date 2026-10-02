@@ -627,6 +627,61 @@ describe("InventorySidebar view modes", () => {
     expect(onSelectThread).toHaveBeenCalledWith(newer.id, "split");
   });
 
+  it.each(["pointerleave", "blur"])("keeps the roster through a closing dialog's portaled %s, then closes on a real roster leave", async (eventType) => {
+    const computed = window.getComputedStyle.bind(window);
+    const motion = vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
+      const style = computed(element, pseudo);
+      if (!(element instanceof HTMLElement) || element.dataset.slot !== "dialog-content") return style;
+      return new Proxy(style, {
+        get(target, property) {
+          if (property === "animationName") return element.dataset.state === "closed" ? "ui-dialog-out" : "ui-dialog-in";
+          const value = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    });
+    try {
+      const user = userEvent.setup();
+      seedViewPreferences({ groupBy: "time", stackBy: "group" });
+      renderSidebar([
+        makeThread("thread-older", "Older member", { groupId, lastActivityAt: isoAtNoon(-2) }),
+        makeThread("thread-newer", "Newer member", { groupId, lastActivityAt: isoAtNoon(0) }),
+      ], { groups: [group] });
+      fireEvent.pointerEnter(screen.getByTestId("thread-group-stack"), { pointerType: "mouse" });
+      const roster = await screen.findByTestId("thread-group-roster");
+      const member = within(roster).getAllByTestId("thread-group-member")[0]!;
+      const rowLink = within(member).getByTestId("thread-row-link");
+      fireEvent.contextMenu(rowLink, { button: 2 });
+      await user.click(await screen.findByRole("menuitem", { name: "Snooze…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Snooze this thread" });
+      expect(dialog).toContainElement(document.activeElement as HTMLElement);
+      vi.useFakeTimers();
+      fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+      expect(dialog).toHaveAttribute("data-state", "closed");
+      // Closed content remains mounted for its 240ms exit. React forwards
+      // portal events to the roster even though this dialog is outside it.
+      if (eventType === "pointerleave") fireEvent.pointerLeave(dialog, { pointerType: "mouse" });
+      else fireEvent.blur(dialog);
+      await act(async () => { await vi.advanceTimersByTimeAsync(200); });
+      expect(roster).toBeInTheDocument();
+      expect(dialog).toBeInTheDocument();
+      const end = new Event("animationend");
+      Object.defineProperty(end, "animationName", { value: "ui-dialog-out" });
+      fireEvent(dialog, end);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(dialog).not.toBeInTheDocument();
+      expect(rowLink).toHaveFocus();
+      expect(roster).toBeInTheDocument();
+
+      fireEvent.pointerLeave(roster, { pointerType: "mouse" });
+      await act(async () => { await vi.advanceTimersByTimeAsync(141); });
+      expect(roster).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+      motion.mockRestore();
+    }
+  });
+
   it("renames a group in a form dialog and deletes it through a confirmation", async () => {
     const user = userEvent.setup();
     seedViewPreferences({ groupBy: "time", stackBy: "group" });

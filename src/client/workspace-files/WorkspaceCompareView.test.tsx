@@ -1092,7 +1092,12 @@ describe("WorkspaceCompareView", () => {
   });
 
   it("keeps file count with filtering and previous/next controls within file headers", async () => {
-    const dataSource = createDataSource(2);
+    const completions: Array<() => void> = [];
+    const dataSource = createDataSource(2, {
+      loadPatch: (file) => new Promise((resolve) => {
+        completions.push(() => resolve(availablePatch(file)));
+      }),
+    });
     render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
     const compare = await configureComparison();
     await waitFor(() => expect(compare).toBeEnabled());
@@ -1103,10 +1108,18 @@ describe("WorkspaceCompareView", () => {
         .getByLabelText("2 changed files")
         .closest(".workspace-compare-navigator-search"),
     ).not.toBeNull();
-    const next = within(screen.getByTestId("code-view")).getByRole("button", {
+    const nextButton = () => within(screen.getByTestId("code-view")).getByRole("button", {
       name: "Next changed file after src/file-1.ts",
     });
-    expect(next.closest(".workspace-compare-file-header")).not.toBeNull();
+    // A started request still shows a loading card; wait for its result to
+    // render the diff header before asserting the loaded navigation layout.
+    expect(nextButton().closest(".workspace-compare-status-card")).not.toBeNull();
+    await act(async () => { completions.forEach((complete) => complete()); });
+    const next = await waitFor(() => {
+      const button = nextButton();
+      expect(button.closest(".workspace-compare-file-header")).not.toBeNull();
+      return button;
+    });
     expect(
       document.querySelector(
         '.workspace-compare-toolbar [aria-label^="Next changed file"]',

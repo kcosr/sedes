@@ -1836,6 +1836,7 @@ export function TasksPanel({
   const [announcement, setAnnouncement] = useState("");
   const [dock, publishDock] = useState<TasksDock>();
   const [bodyTarget] = useState(createBodyTarget);
+  const [sheetContent, setSheetContent] = useState<HTMLDivElement | null>(null);
   // Settings unmounts the sheet; its focus restoration must not pull focus
   // back into the hidden workspace.
   const activeRef = useRef(active);
@@ -1940,6 +1941,7 @@ export function TasksPanel({
         }}
       >
         <DialogContent
+          ref={setSheetContent}
           layout="sheet"
           showClose={false}
           className="tasks-sheet"
@@ -2011,6 +2013,9 @@ export function TasksPanel({
               active={
                 active &&
                 placement !== undefined &&
+                // Restore the modal host before its retained body's dialogs;
+                // mounting the sheet later would hide their accessibility tree.
+                (placement !== "sheet" || sheetContent !== null) &&
                 (placement !== "panel" || dock?.visible === true)
               }
               presentation={placement ?? lastPlacement.current}
