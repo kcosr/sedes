@@ -270,6 +270,17 @@ describe("ProjectsSettingsPage", () => {
     expect(api.removeProject).toHaveBeenCalledTimes(2);
   });
 
+  it("removes an empty project without counting locations", async () => {
+    const user = userEvent.setup();
+    const { api } = setup([empty]);
+    await screen.findByText("Empty");
+    await chooseAction(user, "Empty", "Remove project…");
+    const dialog = screen.getByRole("dialog", { name: "Remove project “Empty”?" });
+    expect(dialog).toHaveTextContent(/^Remove project “Empty”\?Hide this project from the working inventory\./u);
+    await user.click(within(dialog).getByRole("button", { name: "Remove project" }));
+    expect(api.removeProject).toHaveBeenCalledWith("project-empty", { expectedRevision: 0, expectedMembershipRevision: 0 });
+  });
+
   it("restores a project with the locations its removal took on available environments", async () => {
     const user = userEvent.setup();
     const { api } = setup();

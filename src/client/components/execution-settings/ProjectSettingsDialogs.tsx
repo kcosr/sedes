@@ -174,7 +174,7 @@ export function RemoveProjectDialog({ open, onOpenChange, context, project }: Di
   const threads = active.reduce((total, location) => total + location.threadCount, 0);
   return <ConfirmDialog open={open} onOpenChange={(next) => { if (!next) removal.reset(); onOpenChange(next); }}
     title={`Remove project “${project.name}”?`} confirmLabel="Remove project" pendingLabel="Removing…"
-    description={`Hide this project, its ${countLabel(active.length, "active location")}, and their ${countLabel(threads, "thread")} from the working inventory. Files, conversation history, and saved application data are retained, and you can restore the project here.`}
+    description={`Hide this project${active.length > 0 ? `, its ${countLabel(active.length, "active location")}, and their ${countLabel(threads, "thread")}` : ""} from the working inventory. Files, conversation history, and saved application data are retained, and you can restore the project here.`}
     errorDetail={removal.errorDetail} onConfirm={removal.remove} {...focusReturn} />;
 }
 
