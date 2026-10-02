@@ -213,7 +213,9 @@ environments under [Project resources](#project-resources).
   approval or allowlisted member as reaching it; a removed project is not
   found. A known directory keeps its project, and naming a different project
   for it is a conflict, never a move: an active location is revalidated, and a
-  removed location of an active project is restored into it. A location whose
+  removed location of an active project is restored only when the call names
+  that project, authorized against its current membership; without
+  `projectId` the call is a conflict that names the project. A location whose
   project was removed is a conflict, so neither thread agents nor Tool clients
   can restore a removed project.
 - `task.list@4`, `task.get@2`, `task.create@2`, `task.update@2`, and

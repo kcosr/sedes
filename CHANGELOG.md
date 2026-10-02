@@ -16,7 +16,9 @@
   take `{ kind: "project", projectId? }`, defaulting to the caller's project,
   instead of a workspace scope; `thread.archive` names its disposition
   `move_to_project`; `workspace.open` accepts an optional `projectId` to add a
-  directory to an existing project. Callers must describe these tools again;
+  directory to an existing project, and restores a removed location only when
+  the call names that location's project, authorized like reaching it.
+  Callers must describe these tools again;
   the previous versions and earlier `task.list` cursors are rejected. An
   individual native MCP session retained across the upgrade, such as a
   sidecar-retained Claude query, keeps the old schemas until its runtime
@@ -54,8 +56,8 @@
 
 - Agents and Tool clients can no longer restore a removed project:
   `workspace.open` of a directory whose project was removed is a conflict.
-  Restore the project in **Settings → Projects**. Opening a removed location
-  of an active project still restores it.
+  Restore the project in **Settings → Projects**. A removed location of an
+  active project is restored only when the call names that project.
   ([#33](https://github.com/kcosr/sedes/pull/33))
 
 - Claude now requires Claude Code 2.1.287 or newer and uses Agent SDK 0.3.287.
