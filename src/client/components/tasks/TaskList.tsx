@@ -71,8 +71,6 @@ export interface TaskListEnvironment {
   readonly touch: boolean;
   /** Menus open only while the surface is shown (it can be retained hidden). */
   readonly surfaceActive: boolean;
-  /** Why Add to prompt cannot run now, if it cannot. */
-  readonly promptUnavailable?: string;
   readonly filesOpenable: boolean;
   readonly taskDrag?: TaskDragController;
   pending(taskId: string): ReadonlySet<TaskAction>;
@@ -197,7 +195,7 @@ export function TaskRowMenu({
   /** Replaces the row's ⋯ button (the phone detail header). */
   readonly trigger?: ReactNode;
 }): React.JSX.Element {
-  const { actions, touch, surfaceActive, promptUnavailable } = useTaskList();
+  const { actions, touch, surfaceActive } = useTaskList();
   const [open, setOpen] = useState(false);
   return (
     <DropdownMenu
@@ -229,15 +227,9 @@ export function TaskRowMenu({
         )}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" sheetTitle={task.title}>
-        <DropdownMenuItem
-          disabled={promptUnavailable !== undefined}
-          onSelect={() => actions.addToPrompt(task)}
-        >
+        <DropdownMenuItem onSelect={() => actions.addToPrompt(task)}>
           <CornerDownLeft />
           <span>Add to prompt</span>
-          {promptUnavailable !== undefined && (
-            <DropdownMenuValue>No prompt</DropdownMenuValue>
-          )}
         </DropdownMenuItem>
         <DropdownMenuItem aria-keyshortcuts="E" onSelect={() => actions.edit(task)}>
           <Pencil />
@@ -456,19 +448,14 @@ function InlineDetail({
   readonly moveOpen: boolean;
   readonly onMoveOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
-  const { actions, promptUnavailable } = useTaskList();
+  const { actions } = useTaskList();
   return (
     <div className="tasks-detail" id={id} role="group" aria-label={`${task.title} details`}>
       <TaskNotes task={task} />
       <TaskFileChips task={task} />
       <TaskFacts task={task} />
       <div className="tasks-detail-actions">
-        <Button
-          size="sm"
-          disabled={promptUnavailable !== undefined}
-          title={promptUnavailable}
-          onClick={() => actions.addToPrompt(task)}
-        >
+        <Button size="sm" onClick={() => actions.addToPrompt(task)}>
           <CornerDownLeft aria-hidden="true" />
           Add to prompt
         </Button>
@@ -495,7 +482,7 @@ export interface TaskRowProps {
   readonly location?: TaskRowLocation;
   /** The roving tab stop of the list. */
   readonly focusable: boolean;
-  /** Render the detail inline under the row (panel and popover). */
+  /** Render the detail inline under the row (the docked panel). */
   readonly inlineDetail: boolean;
   readonly moveOpen: boolean;
   readonly onMoveOpenChange: (open: boolean) => void;

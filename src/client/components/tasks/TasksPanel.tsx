@@ -9,11 +9,6 @@ import {
   DialogTitle,
 } from "@client/components/ui/dialog";
 import {
-  Popover,
-  PopoverAnchor,
-  PopoverContent,
-} from "@client/components/ui/popover";
-import {
   useCallback,
   useEffect,
   useId,
@@ -24,7 +19,6 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
-  type RefObject,
 } from "react";
 import {
   AlignLeft,
@@ -156,7 +150,7 @@ import "./tasks-panel.css";
 // ───────────────────────────────────────────────────────────────────────────
 
 export interface TasksPanelContentProps {
-  /** Where the content is hosted: a docked workspace panel, a popover, or a phone sheet. */
+  /** Where the content is hosted: a docked workspace panel or a phone sheet. */
   readonly presentation: TasksPresentation;
   readonly store: ApplicationClientStore;
   readonly panelLayoutStore: PanelLayoutStore;
@@ -168,8 +162,8 @@ export interface TasksPanelContentProps {
    */
   readonly active: boolean;
   /**
-   * Closes a popover or sheet: its ×, Escape, and on a phone the actions
-   * that continue elsewhere (Add to prompt, opening a file or a thread).
+   * Closes the phone sheet: its ×, Escape, and the actions that continue
+   * elsewhere (Add to prompt, opening a file or a thread).
    * An announcement is made by the host, since this content (and its live
    * region) goes with the surface.
    */
@@ -255,11 +249,11 @@ const KEYBOARD_SHORTCUTS: readonly { key: string; action: string }[] = [
 ];
 
 /**
- * The Tasks header and body, for a docked panel, a popover or a phone
- * sheet: count and actions, one scope control that follows the current
- * chat, the add row, search, the list (grouped in All) with inline detail,
- * and the Completed section. Pending state is per task and action, so
- * nothing else is ever disabled and focus is never dropped.
+ * The Tasks header and body, for a docked panel or a phone sheet: count and
+ * actions, one scope control that follows the current chat, the add row,
+ * search, the list (grouped in All) with inline detail, and the Completed
+ * section. Pending state is per task and action, so nothing else is ever
+ * disabled and focus is never dropped.
  */
 export function TasksPanelContent({
   presentation,
@@ -661,7 +655,6 @@ export function TasksPanelContent({
 
   const addToPrompt = useCallback(
     (task: AssociatedTask) => {
-      if (threadId === undefined) return;
       const result = composerDraft?.stageTaskReference({
         taskId: task.id,
         titleSnapshot: task.title,
@@ -679,7 +672,7 @@ export function TasksPanelContent({
       if (sheet) onRequestClose(message);
       else announce(message);
     },
-    [announce, composerDraft, onRequestClose, sheet, threadId],
+    [announce, composerDraft, onRequestClose, sheet],
   );
 
   const openFile = useCallback(
@@ -752,14 +745,11 @@ export function TasksPanelContent({
       destinations,
       touch,
       surfaceActive: active,
-      ...(threadId === undefined
-        ? { promptUnavailable: "Open a thread to add this task to its prompt." }
-        : {}),
       filesOpenable: Boolean(workspace?.available),
       ...(taskDrag ? { taskDrag } : {}),
       pending: (taskId: string) => pending.get(taskId) ?? NO_PENDING,
     }),
-    [actions, active, destinations, pending, taskDrag, threadId, touch, workspace?.available],
+    [actions, active, destinations, pending, taskDrag, touch, workspace?.available],
   );
 
   const addTask = (title: string, notes: string) => {
@@ -933,9 +923,9 @@ export function TasksPanelContent({
 
   /**
    * Escape inside the content closes one layer at a time: the expanded row
-   * (or the phone detail), then search, then a popover or sheet. Fields
-   * that use Escape themselves (search, the add row) stop it first. The
-   * host leaves Escape from inside the content to this handler.
+   * (or the phone detail), then search, then the sheet. Fields that use
+   * Escape themselves (search, the add row) stop it first. The host leaves
+   * Escape from inside the content to this handler.
    */
   const onRootKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     // Menus and dialogs portal elsewhere but bubble here through React.
@@ -949,7 +939,7 @@ export function TasksPanelContent({
         setMoveMenuId(null);
       } else if (searchOpen) {
         closeSearch();
-      } else if (presentation !== "panel") {
+      } else if (sheet) {
         onRequestClose();
       }
       return;
@@ -1237,8 +1227,9 @@ export function TasksPanelContent({
     </Button>
   );
 
-  // Phones have no room for it: the sheet's ⋯ carries the View options.
-  const viewOptionsMenu = !sheet && (
+  // Docked only. Phones have no room for it: the sheet's ⋯ carries the
+  // View options.
+  const viewOptionsMenu = (
     <DropdownMenu open={active && viewMenuOpen} onOpenChange={setViewMenuOpen}>
       <DropdownMenuTrigger asChild>
         <Button
@@ -1396,6 +1387,8 @@ export function TasksPanelContent({
       controls={{ ...panelControls, renderMenuItems: moreItems }}
     />
   ) : (
+    // The sheet's header, whose ⋯ also carries the View options. A docked
+    // panel retained without a surface (an open editor) draws it unseen.
     <header className="tasks-header">
       <h2 className="tasks-title">
         Tasks
@@ -1403,7 +1396,6 @@ export function TasksPanelContent({
       </h2>
       <div className="tasks-header-actions">
         {searchButton}
-        {viewOptionsMenu}
         <DropdownMenu
           presentation={touch ? "sheet" : "menu"}
           open={active && headerMenuOpen}
@@ -1421,12 +1413,8 @@ export function TasksPanelContent({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" sheetTitle="Tasks">
-            {sheet && (
-              <>
-                <TaskViewOptionsItems view={view} options={options} onChange={setOptions} />
-                <DropdownMenuSeparator />
-              </>
-            )}
+            <TaskViewOptionsItems view={view} options={options} onChange={setOptions} />
+            <DropdownMenuSeparator />
             {moreItems}
           </DropdownMenuContent>
         </DropdownMenu>
@@ -1591,11 +1579,7 @@ export function TasksPanelContent({
                 <Pencil aria-hidden="true" />
                 Edit
               </Button>
-              <Button
-                size="lg"
-                disabled={threadId === undefined}
-                onClick={() => actions.addToPrompt(expandedTask)}
-              >
+              <Button size="lg" onClick={() => actions.addToPrompt(expandedTask)}>
                 <CornerDownLeft aria-hidden="true" />
                 Add to prompt
               </Button>
@@ -1820,21 +1804,14 @@ function createBodyTarget(): HTMLElement {
   return target;
 }
 
-/** Interaction inside a menu, picker or dialog layered above the popover. */
-function insideOtherLayer(target: EventTarget | null): boolean {
-  return (
-    target instanceof Element &&
-    target.closest(
-      '[role="menu"], [role="listbox"], [role="dialog"], [role="alertdialog"], [data-slot="popover-content"], [data-slot="dropdown-menu-content"]',
-    ) !== null
-  );
-}
-
 /**
- * The Tasks host: one retained body, shown docked beside Chat in a thread
- * workspace, as a popover on pages without panels, and as a sheet on phones.
- * It wraps the workbench so its toggles and the `tasks` panel tenant reach
- * it through context.
+ * The Tasks host: one retained body, shown beside a thread, docked beside
+ * Chat on desktop and as a sheet on phones. Other pages (Home, Archived,
+ * Usage) show no Tasks surface, and the Tasks shortcut leaves them alone.
+ * It wraps the workbench so the workbench bar's toggle and the `tasks`
+ * panel tenant reach it through context. The application shell mounts a
+ * fresh host when it moves between a thread and another page, so its state
+ * carries over only from one thread to the next.
  */
 export function TasksPanel({
   active = true,
@@ -1854,43 +1831,41 @@ export function TasksPanel({
   const route = retainedRoute ?? currentRoute;
   const threadWorkspace = route.name === "thread";
   const routeKey = threadWorkspace ? `thread:${route.threadId}` : route.name;
-  const [overlayOpen, setOverlayOpen] = useState(false);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [announcement, setAnnouncement] = useState("");
   const [dock, publishDock] = useState<TasksDock>();
   const [bodyTarget] = useState(createBodyTarget);
   const [sheetContent, setSheetContent] = useState<HTMLDivElement | null>(null);
-  const popoverAnchor = useRef<HTMLElement | null>(null);
-  const dismissedOutside = useRef(false);
-  // Settings unmounts the popover and the sheet; their focus restoration
-  // must not pull focus back into the hidden workspace.
+  // Settings unmounts the sheet; its focus restoration must not pull focus
+  // back into the hidden workspace.
   const activeRef = useRef(active);
   activeRef.current = active;
 
-  const placement: TasksPresentation | undefined = mobile
-    ? overlayOpen
-      ? "sheet"
-      : undefined
-    : threadWorkspace
-      ? dock?.present
-        ? "panel"
+  const placement: TasksPresentation | undefined = !threadWorkspace
+    ? undefined
+    : mobile
+      ? sheetOpen
+        ? "sheet"
         : undefined
-      : overlayOpen
-        ? "popover"
+      : dock?.present
+        ? "panel"
         : undefined;
 
-  const latest = useRef({ mobile, threadWorkspace, dock, placement, editing });
-  latest.current = { mobile, threadWorkspace, dock, placement, editing };
-  // The presentation the content keeps while retained without a surface.
-  const lastPlacement = useRef<TasksPresentation>("popover");
+  const latest = useRef({ mobile, threadWorkspace, dock, editing });
+  latest.current = { mobile, threadWorkspace, dock, editing };
+  // The presentation the content keeps while it has no surface: an open
+  // editor stays mounted, hidden, when the sheet closes under it on a move
+  // to another thread, and while the breakpoint changes its surface.
+  const lastPlacement = useRef<TasksPresentation>("panel");
   if (placement) lastPlacement.current = placement;
 
-  // The popover and the sheet are transient: navigating or crossing the
-  // phone breakpoint closes them. The docked panel's open state is the
-  // panel layout's. An open editor is the exception at the breakpoint: so
-  // its unsaved edits survive, Tasks shows in the new presentation instead
-  // (the sheet, the popover, or the dock opened for it). While no surface
-  // shows an open editor, the content stays mounted, hidden, until one does.
+  // The sheet is transient: moving to another thread or crossing the phone
+  // breakpoint closes it. The docked panel's open state is the panel
+  // layout's. An open editor is the exception at the breakpoint: so its
+  // unsaved edits survive, Tasks shows in the new presentation instead (the
+  // sheet, or the dock opened for it). While no surface shows an open
+  // editor, the content stays mounted, hidden, until one does.
   const crossed = useRef({ routeKey, mobile });
   useEffect(() => {
     const before = crossed.current;
@@ -1898,41 +1873,33 @@ export function TasksPanel({
     if (before.routeKey === routeKey && before.mobile === mobile) return;
     const { editing, dock } = latest.current;
     if (before.routeKey !== routeKey || !editing) {
-      setOverlayOpen(false);
+      setSheetOpen(false);
       return;
     }
     if (mobile) {
-      setOverlayOpen(true);
-    } else if (threadWorkspace) {
-      setOverlayOpen(false);
+      setSheetOpen(true);
+    } else {
+      setSheetOpen(false);
       if (dock && !dock.visible) dock.open({ focus: false });
     }
-  }, [routeKey, mobile, threadWorkspace]);
+  }, [routeKey, mobile]);
 
-  const toggleOverlay = useCallback(
-    () => setOverlayOpen((open) => !open),
-    [],
-  );
+  const toggleSheet = useCallback(() => setSheetOpen((open) => !open), []);
+  // Only the sheet asks to close: the docked panel has the layout's controls.
   const requestClose = useCallback((message?: string) => {
-    if (latest.current.placement === "panel") latest.current.dock?.close();
-    else setOverlayOpen(false);
+    setSheetOpen(false);
     if (message === undefined) return;
     setAnnouncement("");
     window.setTimeout(() => setAnnouncement(message), 0);
   }, []);
-  const toggle = useCallback(() => {
-    const { mobile, threadWorkspace, dock } = latest.current;
-    if (!mobile && threadWorkspace) dock?.toggle();
-    else toggleOverlay();
-  }, [toggleOverlay]);
 
   useEffect(
     () =>
       subscribeReveal(() => {
-        const { mobile, threadWorkspace, dock } = latest.current;
+        const { mobile, dock } = latest.current;
         // The content switches view and expands the task itself.
-        if (!mobile && threadWorkspace) dock?.open({ focus: false });
-        else setOverlayOpen(true);
+        if (mobile) setSheetOpen(true);
+        else dock?.open({ focus: false });
       }),
     [],
   );
@@ -1943,6 +1910,9 @@ export function TasksPanel({
       if (event.defaultPrevented || event.isComposing || event.repeat) return;
       if (!matchesKeyboardShortcut(event, TASKS_TOGGLE_COMMAND.defaultBinding))
         return;
+      // Only a thread shows Tasks; elsewhere the key is not ours.
+      const { mobile, threadWorkspace, dock } = latest.current;
+      if (!threadWorkspace) return;
       // A dialog above the workbench keeps its keys, unless it is Tasks.
       const dialog =
         event.target instanceof Element
@@ -1950,87 +1920,24 @@ export function TasksPanel({
           : null;
       if (dialog && !dialog.querySelector('[data-slot="tasks-panel"]')) return;
       event.preventDefault();
-      toggle();
+      if (mobile) toggleSheet();
+      else dock?.toggle();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [active, toggle]);
+  }, [active, toggleSheet]);
 
   const host = useMemo<TasksHost>(
-    () => ({
-      bodyTarget,
-      placement,
-      overlayOpen,
-      toggleOverlay,
-      setPopoverAnchor: (element) => {
-        popoverAnchor.current = element;
-      },
-      publishDock,
-    }),
-    [bodyTarget, placement, overlayOpen, toggleOverlay],
+    () => ({ bodyTarget, placement, sheetOpen, toggleSheet, publishDock }),
+    [bodyTarget, placement, sheetOpen, toggleSheet],
   );
 
-  // The anchor is the corner controls; its button is the toggle.
-  const focusToggle = () =>
-    popoverAnchor.current?.querySelector("button")?.focus();
-
   const surface =
-    placement === "popover" ? (
-      <Popover
-        open
-        onOpenChange={(open) => {
-          if (!open) setOverlayOpen(false);
-        }}
-      >
-        <PopoverAnchor virtualRef={popoverAnchor as RefObject<HTMLElement>} />
-        <PopoverContent
-          side="bottom"
-          align="end"
-          aria-label="Tasks"
-          className="max-h-[min(var(--radix-popover-content-available-height),680px)] w-[min(400px,calc(100vw-16px))] gap-0 overflow-hidden p-0"
-          onEscapeKeyDown={(event) => {
-            // Escape from inside the content closes one of its own layers
-            // first (an expanded row, search), then asks to close.
-            if (bodyTarget.contains(event.target as Node)) event.preventDefault();
-          }}
-          onOpenAutoFocus={(event) => {
-            dismissedOutside.current = false;
-            // The content marks its add row as the docked panel's focus
-            // target; the popover honours the same marker.
-            const preferred = (
-              event.currentTarget as HTMLElement
-            ).querySelector<HTMLElement>("[data-panel-autofocus]");
-            if (!preferred) return;
-            event.preventDefault();
-            preferred.focus();
-          }}
-          onInteractOutside={(event) => {
-            const target = event.detail.originalEvent.target;
-            // The toggle closes the popover itself, and menus or pickers
-            // opened from the retained body live outside this layer.
-            if (
-              (target instanceof Node &&
-                popoverAnchor.current?.contains(target)) ||
-              insideOtherLayer(target)
-            ) {
-              event.preventDefault();
-              return;
-            }
-            dismissedOutside.current = true;
-          }}
-          onCloseAutoFocus={(event) => {
-            event.preventDefault();
-            if (activeRef.current && !dismissedOutside.current) focusToggle();
-          }}
-        >
-          <TasksSurface presentation="popover" target={bodyTarget} />
-        </PopoverContent>
-      </Popover>
-    ) : placement === "sheet" ? (
+    placement === "sheet" ? (
       <Dialog
         open
         onOpenChange={(open) => {
-          if (!open) setOverlayOpen(false);
+          if (!open) setSheetOpen(false);
         }}
       >
         <DialogContent
@@ -2077,9 +1984,9 @@ export function TasksPanel({
   return (
     <TasksHostContext.Provider value={host}>
       {children}
-      {/* Settings suspends the popover and the sheet but keeps the body
-          (and any unsaved edit in it) mounted; the docked panel stays in
-          the retained workbench. */}
+      {/* Settings suspends the sheet but keeps the body (and any unsaved
+          edit in it) mounted; the docked panel stays in the retained
+          workbench. */}
       {active ? (
         surface
       ) : surface ? (
@@ -2087,9 +1994,9 @@ export function TasksPanel({
           <StablePaneSlot target={bodyTarget} />
         </div>
       ) : null}
-      {/* Outlives the popover and the sheet, for what is announced as
-          they close. Mounted on every page, so it takes the status role only
-          while it has something to say. */}
+      {/* Outlives the sheet, for what is announced as it closes. Mounted
+          on every page, so it takes the status role only while it has
+          something to say. */}
       <div
         className="sr-only"
         role={announcement.length > 0 ? "status" : undefined}

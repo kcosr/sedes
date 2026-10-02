@@ -1,6 +1,6 @@
-/* Tasks surfaces. One retained body is shown docked beside Chat (a
-   workspace panel), as a popover on pages without panels, or as a phone
-   sheet; `.tasks-surface` is the element that adopts it in each. */
+/* Tasks surfaces. One retained body is shown beside a thread, docked
+   beside Chat (a workspace panel) or as a phone sheet; `.tasks-surface` is
+   the element that adopts it in each. */
 
 .tasks-surface {
   display: flex;
@@ -57,8 +57,9 @@
   }
 }
 
-/* ── Header: title and open count, then ⌕, View options, ⋯ and × on the
-   panel-header control steps. */
+/* ── Sheet header: title and open count, then ⌕, ⋯ (which carries the View
+   options) and × on the panel-header control steps. Docked, Tasks draws the
+   panel family's header instead. */
 .tasks-header {
   display: flex;
   flex: none;
@@ -1060,15 +1061,4 @@ button.tasks-file-chip:hover {
   font-family: var(--font-mono);
   font-size: var(--text-meta);
   white-space: nowrap;
-}
-
-/* Home/archived routes have no thread header; the toggle floats in the pane
-   corner where the thread route's `.thread-controls` cluster would sit. */
-.tasks-corner-controls {
-  position: absolute;
-  top: 8px;
-  right: 12px;
-  z-index: calc(var(--z-sticky) + 4);
-  display: flex;
-  align-items: center;
 }

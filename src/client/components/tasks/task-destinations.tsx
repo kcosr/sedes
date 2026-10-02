@@ -84,7 +84,9 @@ export function useTaskDestinations(
               workspaceId: currentThread.workspaceId,
             },
           }
-        : {}),
+        : routeThread
+          ? { threadArchived: true as const }
+          : {}),
       ...(currentWorkspace
         ? {
             project: {

@@ -3,11 +3,10 @@ import { Button } from "@client/components/ui/button";
 import { CountBadge } from "@client/components/ui/count-badge";
 
 /**
- * The Tasks toggle in the workbench bar and in the pane corner of pages
- * without panels. Its host decides what opening means there: the docked
- * panel, the popover or the phone sheet. `count` is the open-task count of
- * the current context; a neutral badge shows it beside the icon. The icon
- * itself is never tinted.
+ * The Tasks toggle in a thread's workbench bar. Its host decides what
+ * opening means there: the docked panel, or the sheet on phones. `count` is
+ * the current thread's open-task count; a neutral badge shows it beside the
+ * icon. The icon itself is never tinted.
  *
  * Docked Tasks can also be open but off stage: collapsed by hand, or to
  * make room for another panel. The toggle then shows the pressed chip's
@@ -19,12 +18,12 @@ export function TasksPanelToggle({
   onToggle,
   count = 0,
 }: {
-  /** Whether Tasks is shown in this page's presentation. */
+  /** Whether Tasks is shown: docked on stage, or the sheet open. */
   readonly open: boolean;
   /** Whether docked Tasks is open but off stage. */
   readonly collapsed?: boolean;
   readonly onToggle: (invoker: HTMLButtonElement) => void;
-  /** Open tasks in the current context. */
+  /** Open tasks in the current thread. */
   readonly count?: number;
 }): React.JSX.Element {
   const state = open ? "open" : collapsed ? "collapsed" : "closed";

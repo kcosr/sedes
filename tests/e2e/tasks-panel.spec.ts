@@ -78,68 +78,21 @@ async function selectScope(
 }
 
 test.describe.serial("Tasks panel", () => {
-  test("global tasks from home, per-scope creation, completion, and re-scope from a thread", async ({
+  test("Tasks beside a thread: per-scope creation, Global from the thread, completion, and re-scope", async ({
     page,
   }, testInfo) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openTaskWorkspace(page);
 
-    // Home has no panels and no chat to follow: Tasks is a popover anchored
-    // to the corner toggle, with no pin and no resize, and only Global and
-    // All apply.
-    const homeTasksToggle = page.getByTestId("tasks-panel-toggle").first();
-    await homeTasksToggle.click();
+    // Home has no Tasks: no toggle, no surface, and the Tasks shortcut is
+    // left to the page.
     const panel = page.locator('[data-slot="tasks-panel"]');
-    await expect(panel).toBeVisible();
-    await expect(panel).toHaveAttribute("data-presentation", "popover");
-    await expect(homeTasksToggle).toHaveAttribute("aria-expanded", "true");
-    const tasks = tasksContent(page);
-    const popoverBox = await panel.boundingBox();
-    const toggleBox = await homeTasksToggle.boundingBox();
-    expect(popoverBox!.y).toBeGreaterThanOrEqual(toggleBox!.y + toggleBox!.height);
-    expect(popoverBox!.x + popoverBox!.width).toBeLessThanOrEqual(1440);
-    await expect(panel.getByRole("button", { name: /Pin Tasks panel/ })).toHaveCount(0);
-    await expect(page.getByRole("separator", { name: "Resize Tasks panel" })).toHaveCount(0);
-    await tasks.getByRole("button", { name: "Close Tasks panel" }).click();
-    await expect(panel).toHaveCount(0);
-    await expect(homeTasksToggle).toBeFocused();
-    await homeTasksToggle.click();
-    await expect(panel).toBeVisible();
-    // An outside press dismisses the popover; the toggle reopens it.
-    await page
-      .getByRole("heading", { name: "What should the agent work on?" })
-      .click();
-    await expect(panel).toHaveCount(0);
-    await homeTasksToggle.click();
-    await expect(panel).toBeVisible();
-
-    const scopes = tasks.getByRole("radiogroup", { name: "Task scope view" });
-    await expect(scopes.getByRole("radio", { name: "Thread" })).toBeDisabled();
-    await expect(scopes.getByRole("radio", { name: "Project" })).toBeDisabled();
-    await expect(scopes.getByRole("radio", { name: "Global" })).toHaveAttribute("aria-checked", "true");
-    await tasks.getByRole("button", { name: "View options" }).click();
-    // Search matches titles until Search notes is on; choices keep the menu open.
-    const searchNotes = page.getByRole("menuitemcheckbox", { name: "Search notes" });
-    await expect(searchNotes).not.toBeChecked();
-    await searchNotes.click();
-    await expect(searchNotes).toBeChecked();
-    await searchNotes.click();
-    await expect(searchNotes).not.toBeChecked();
-    await page.keyboard.press("Escape");
-    await expect(page.getByRole("menu")).toHaveCount(0);
-    await expect(tasks.getByRole("textbox", { name: "Add a task" })).toHaveAttribute(
-      "placeholder",
-      "Add a global task…",
-    );
-    await addTask(tasks, "Global errand");
-    await expect(taskRow(tasks, "Global errand")).toBeVisible({
-      timeout: TASK_MUTATION_TIMEOUT_MS,
-    });
-    // Pages without panels count the open Global tasks on their toggle.
     await expect(
-      homeTasksToggle.locator('[data-slot="count-badge"]'),
-    ).toHaveText("1");
-    await capture(page, testInfo, "tasks-panel-home-global.png");
+      page.getByRole("heading", { name: "What should the agent work on?" }),
+    ).toBeVisible();
+    await expect(page.getByTestId("tasks-panel-toggle")).toHaveCount(0);
+    await page.keyboard.press("Control+Shift+L");
+    await expect(panel).toHaveCount(0);
 
     // Thread route: Tasks docks beside Chat; every view applies and Thread
     // follows the chat.
@@ -183,6 +136,35 @@ test.describe.serial("Tasks panel", () => {
     const sidebarThread = page
       .getByTestId("desktop-sidebar")
       .locator(`[data-thread-id="${threadId}"]`);
+    const tasks = tasksContent(page);
+    const scopes = tasks.getByRole("radiogroup", { name: "Task scope view" });
+
+    // Global tasks are reached from the Global scope of any thread's Tasks.
+    await selectScope(tasks, "Global");
+    await tasks.getByRole("button", { name: "View options" }).click();
+    // Search matches titles until Search notes is on; choices keep the menu open.
+    const searchNotes = page.getByRole("menuitemcheckbox", { name: "Search notes" });
+    await expect(searchNotes).not.toBeChecked();
+    await searchNotes.click();
+    await expect(searchNotes).toBeChecked();
+    await searchNotes.click();
+    await expect(searchNotes).not.toBeChecked();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    await expect(tasks.getByRole("textbox", { name: "Add a task" })).toHaveAttribute(
+      "placeholder",
+      "Add a global task…",
+    );
+    await addTask(tasks, "Global errand");
+    await expect(taskRow(tasks, "Global errand")).toBeVisible({
+      timeout: TASK_MUTATION_TIMEOUT_MS,
+    });
+    // The toggle counts only the thread's own open tasks.
+    await expect(
+      threadTasksToggle.locator('[data-slot="count-badge"]'),
+    ).toHaveCount(0);
+    await capture(page, testInfo, "tasks-panel-thread-global.png");
+
     await expect(scopes.getByRole("radio", { name: "Thread" })).toBeEnabled();
     await selectScope(tasks, "Thread");
     await addTask(tasks, "Verify endpoint");
@@ -197,6 +179,28 @@ test.describe.serial("Tasks panel", () => {
     await expect(
       threadTasksToggle.locator('[data-slot="count-badge"]'),
     ).toHaveText("1");
+
+    // Archived has no Tasks either; returning to the thread finds its docked
+    // Tasks as it was left.
+    await page
+      .getByTestId("desktop-sidebar")
+      .getByRole("button", { name: "More" })
+      .click();
+    await page.getByRole("menuitem", { name: "Archived threads" }).click();
+    await expect(page).toHaveURL("/archived");
+    await expect(page.getByTestId("tasks-panel-toggle")).toHaveCount(0);
+    await expect(panel).toHaveCount(0);
+    await page.keyboard.press("Control+Shift+L");
+    await expect(panel).toHaveCount(0);
+    await sidebarThread.getByTestId("thread-row-link").click();
+    await expect(page).toHaveURL(threadPath);
+    await expect(
+      page.getByRole("textbox", { name: "Message Scripted agent", exact: true }),
+    ).toBeFocused();
+    await expect(panel).toHaveAttribute("data-presentation", "panel");
+    await expect(threadTasksToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(scopes.getByRole("radio", { name: "Thread" })).toHaveAttribute("aria-checked", "true");
+    await expect(threadTask).toBeVisible();
 
     // Docked Tasks is a panel of its own and stays on stage when Chat collapses.
     await page.getByRole("button", { name: "Collapse Chat panel" }).click();
@@ -464,7 +468,7 @@ test.describe.serial("Tasks panel", () => {
     const archivedThreadPath = await createDraftThread(page);
 
     // Create one open thread task on the second draft.
-    await page.getByTestId("tasks-panel-toggle").first().click();
+    await page.getByTestId("tasks-panel-toggle").click();
     const panel = page.locator('[data-slot="tasks-panel"]');
     const tasks = tasksContent(page);
     await selectScope(tasks, "Thread");
@@ -565,6 +569,9 @@ for (const action of ["Settle", "Archive"] as const) {
 test("mobile task destinations remain usable with long lists and short viewports", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openTaskWorkspace(page);
+  // Tasks appears beside a thread: open one in the task workspace before
+  // the chooser projects exist.
+  await createDraftThread(page);
   const response = await page.request.get("/api/application/snapshot");
   expect(response.ok()).toBe(true);
   const snapshot = await response.json();
@@ -589,7 +596,10 @@ test("mobile task destinations remain usable with long lists and short viewports
   }
   await page.reload();
   await page.setViewportSize({ width: 412, height: 915 });
-  await page.getByTestId("tasks-panel-toggle").first().click();
+  await page
+    .getByTestId("workspace-workbench-bar")
+    .getByTestId("tasks-panel-toggle")
+    .click();
   const sheet = page.getByRole("dialog", { name: "Tasks", exact: true });
   await sheet.getByRole("radio", { name: "Global", exact: true }).click();
 

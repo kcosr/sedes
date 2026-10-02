@@ -8,7 +8,7 @@ import type { WorkspacePanelTenant } from "../workspace-panels/registry.js";
  * follows the current chat. The content renders the panel header itself
  * (with the layout's collapse, dock and close controls), so the layout adds
  * no `PanelChrome` of its own. The retained body lives in the Tasks host,
- * which also presents it as a popover or a phone sheet.
+ * which also presents it as a phone sheet.
  */
 export const tasksTenant: WorkspacePanelTenant = {
   id: "tasks",

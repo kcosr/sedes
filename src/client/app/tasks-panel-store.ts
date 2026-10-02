@@ -6,8 +6,7 @@ import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
  * "Ownership and tenancy").
  *
  * Whether Tasks is open is not a preference: the panel layout store owns the
- * docked panel, and the popover and phone sheet keep a local open state in
- * their host.
+ * docked panel, and the phone sheet keeps a local open state in its host.
  */
 export type TasksView = "thread" | "project" | "global" | "all";
 
@@ -299,9 +298,9 @@ let pendingReveal: TasksRevealRequest | undefined;
 const revealListeners = new Set<(request: TasksRevealRequest) => void>();
 
 /**
- * Opens Tasks in the current presentation (the docked panel in a thread
- * workspace, the popover elsewhere, the sheet on phones), then has the
- * content switch to a view containing the task and expand it.
+ * Opens Tasks beside the current thread (the docked panel, or the sheet on
+ * phones), then has the content switch to a view containing the task and
+ * expand it. Pages without a thread have no Tasks to open.
  *
  * The request stays pending until the content consumes it, so content that
  * mounts because of this reveal still receives it.

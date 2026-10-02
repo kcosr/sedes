@@ -17,19 +17,16 @@ vi.mock("./NewThreadControl.js", () => ({
 vi.mock("./SidebarNavTrigger.js", () => ({
   SidebarNavTrigger: () => null,
 }));
-vi.mock("./tasks/TasksPanelToggle.js", () => ({
-  TasksPanelToggle: ({ count }: { readonly count?: number }) => (
-    <output aria-label="Tasks toggle count">{count ?? "none"}</output>
-  ),
-}));
 vi.mock("../workspace-panels/PanelLayout.js", () => ({
   PanelLayout: () => <div data-testid="panel-layout" />,
 }));
 
 import { Workbench } from "./Workbench.js";
+import { TasksPanel } from "./tasks/TasksPanel.js";
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   captured.props = undefined;
   window.localStorage.clear();
   window.dispatchEvent(
@@ -320,10 +317,26 @@ describe("Workbench new-thread creation scope", () => {
     );
   });
 
-  it.each(["home", "archived", "usage"] as const)(
-    "counts open global tasks on the %s corner toggle",
-    (name) => {
-      const task = (id: string, scope: unknown, completedAt: string | null = null) => ({ id, scope, completedAt });
+  it.each([
+    ["home", false],
+    ["archived", false],
+    ["usage", false],
+    ["home", true],
+    ["archived", true],
+    ["usage", true],
+  ] as const)(
+    "shows no Tasks on %s, where the Tasks shortcut does nothing (phone: %s)",
+    (name, phone) => {
+      vi.stubGlobal(
+        "matchMedia",
+        vi.fn((query: string) => ({
+          matches: phone && query === "(max-width: 819px)",
+          media: query,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+        })),
+      );
+      const task = (id: string, scope: unknown) => ({ id, scope, completedAt: null });
       const state = {
         experimentalUsageEnabled: false,
         search: "",
@@ -338,9 +351,6 @@ describe("Workbench new-thread creation scope", () => {
           lineagePlacements: [],
           tasks: [
             task("global-open", { kind: "global" }),
-            task("global-open-2", { kind: "global" }),
-            task("global-done", { kind: "global" }, "2026-08-01T10:00:00.000Z"),
-            task("project-open", { kind: "workspace", workspaceId: "workspace-1" }),
             task("thread-open", { kind: "thread", threadId: "thread-1" }),
           ],
         },
@@ -350,18 +360,33 @@ describe("Workbench new-thread creation scope", () => {
         api: { getUsageAnalytics: vi.fn() },
         subscribe: () => () => undefined,
         getSnapshot: () => state,
+        getTasks: () => state.snapshot.tasks,
         workspaceIdForThread: () => undefined,
       };
       render(
-        <Workbench
+        <TasksPanel
           route={{ name }}
-          applicationStore={applicationStore as never}
-          threadRegistry={{} as never}
+          store={applicationStore as never}
           panelLayoutStore={{} as never}
-          panelTenants={{} as never}
-        />,
+        >
+          <Workbench
+            route={{ name }}
+            applicationStore={applicationStore as never}
+            threadRegistry={{} as never}
+            panelLayoutStore={{} as never}
+            panelTenants={{} as never}
+          />
+        </TasksPanel>,
       );
-      expect(screen.getByRole("status", { name: "Tasks toggle count" })).toHaveTextContent("2");
+
+      expect(screen.queryByTestId("tasks-panel-toggle")).toBeNull();
+      expect(screen.queryByRole("button", { name: /Tasks panel/ })).toBeNull();
+      // Nothing to toggle: the key stays the page's.
+      expect(
+        fireEvent.keyDown(document.body, { key: "L", ctrlKey: true, shiftKey: true }),
+      ).toBe(true);
+      expect(screen.queryByRole("region", { name: "Tasks" })).toBeNull();
+      expect(screen.queryByRole("dialog")).toBeNull();
     },
   );
 });

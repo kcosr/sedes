@@ -107,11 +107,11 @@
   removable chips under the scope control, and the header then counts the
   Tasks shown, such as "1 of 3".
 
-- Ctrl+Shift+L (Command+Shift+L on macOS) opens and closes Tasks. Inside
-  Tasks, N adds, `/` searches, and the arrow keys move between Tasks; on a
-  Task, Enter expands it, Space completes it, E edits, P pins, M moves, Delete
-  deletes, and Ctrl/Command+Enter adds it to the prompt. **Keyboard
-  shortcuts** in the Tasks menu lists them.
+- Ctrl+Shift+L (Command+Shift+L on macOS) opens and closes Tasks in a
+  thread. Inside Tasks, N adds, `/` searches, and the arrow keys move between
+  Tasks; on a Task, Enter expands it, Space completes it, E edits, P pins, M
+  moves, Delete deletes, and Ctrl/Command+Enter adds it to the prompt.
+  **Keyboard shortcuts** in the Tasks menu lists them.
 
 - Pasting several lines into the Tasks add row creates one Task per line, up
   to 50, after a confirmation that previews them. List bullets, numbers, and
@@ -238,8 +238,7 @@
 
 - In a thread, Tasks docks beside Chat as a workspace panel instead of a
   floating card, and resizes, collapses, docks on another edge, and closes
-  like Files and Workpads. Home, Archived, and Usage open Tasks as a popover
-  from the corner button, and phones keep a bottom sheet. The card's pin is
+  like Files and Workpads. Phones keep a bottom sheet. The card's pin is
   gone. Docked Tasks opens at about a third of the stage, and its button keeps
   an outline while Tasks is collapsed, by hand or to make room for another
   panel.
@@ -274,8 +273,8 @@
 - Tasks in the composer are compact pills above the message box; a completed
   or deleted Task shows a muted or warning pill with a tooltip. The
   transcript's Task card shows a short notes preview and keeps the Task ID and
-  revision under **Details**. The Tasks button shows a count of open Tasks:
-  the thread's in a thread, and Global Tasks elsewhere.
+  revision under **Details**. The Tasks button shows a count of the thread's
+  open Tasks.
 
 - Stored Tasks preferences migrate on first load. Tasks starts closed after
   the upgrade, even if the card was open or pinned, and then opens on the view
@@ -771,6 +770,10 @@
   only the four most recent earlier daemon PIDs. Diagnostics remain opt-in.
 
 ### Removed
+
+- Tasks on Home and Archived, including their corner Tasks button. Tasks now
+  appears only beside a thread. To see Global Tasks, open any thread and
+  choose **Global** in Tasks. (#31)
 
 - The `/agents`, `/agents/new`, and `/agents/<id>` addresses. They now open
   the workspace without a redirect; update bookmarks to `/settings/agents`. (#21)
