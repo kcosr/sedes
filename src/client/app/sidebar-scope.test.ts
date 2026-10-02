@@ -320,6 +320,21 @@ describe("legacy project-name filters", () => {
     expect(resolveLegacyProjectFilterName(contested, "Notes")).toBeNull();
   });
 
+  it("clears a project name whose same-named folders span several projects", () => {
+    // Another client renamed one of two "Sedes" projects before this one saw
+    // an upgraded snapshot: the folders still name both.
+    // "Sedes" folders already belong to project-1, which keeps the name.
+    expect(resolveLegacyProjectFilterName(legacyCatalog, "Sedes")).toBe("project-1");
+    const renamedTwin = {
+      ...legacyCatalog,
+      workspaces: [
+        ...legacyCatalog.workspaces,
+        { ...catalog.workspaces[0]!, id: "sedes-renamed-folder", projectId: "project-3", label: { text: "Sedes" } },
+      ],
+    };
+    expect(resolveLegacyProjectFilterName(renamedTwin, "Sedes")).toBeNull();
+  });
+
   it("resolves the hint only as a repair, which retires it either way", () => {
     const matched = deriveSidebarInventoryScope(
       legacyCatalog,

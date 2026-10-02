@@ -70,24 +70,22 @@ export function sidebarScopeRepairAtCursor(
 
 /**
  * A project-name filter saved before projects had identity names the project
- * it can only mean: the one project with that name, or the one project every
- * location with that folder name belongs to. Anything else is ambiguous.
+ * it can only mean: the one project that carries the name and holds every
+ * location with that folder name. A name that projects or folders spread
+ * across several projects is ambiguous, even when one project still has it.
  */
 export function resolveLegacyProjectFilterName(
   catalog: Pick<SidebarScopeCatalog, "projects" | "workspaces">,
   name: string,
 ): string | null {
-  const matches = new Set(
-    catalog.projects
+  const matches = new Set([
+    ...catalog.projects
       .filter((project) => project.name === name)
       .map(({ id }) => id),
-  );
-  const locationProjects = new Set(
-    catalog.workspaces
+    ...catalog.workspaces
       .filter((workspace) => workspace.label.text === name)
       .map(({ projectId }) => projectId),
-  );
-  if (locationProjects.size === 1) matches.add([...locationProjects][0]!);
+  ]);
   return matches.size === 1 ? [...matches][0]! : null;
 }
 
