@@ -894,6 +894,9 @@ export function InventorySidebar({
   /** A card's project label: the project name and, when needed, the folder. */
   const projectLabelFor = (workspaceId: string) =>
     projectLocations.projectFolderLabel(workspaceId);
+  /** The folder alone, for cards whose project Scope or a stack implies. */
+  const folderLabelFor = (workspaceId: string) =>
+    projectLocations.folderLabel(workspaceId);
   /** A Projects-view row's tag: what distinguishes its location in its project. */
   const locationTagFor = (thread: NormalizedApplicationThreadSummary) =>
     projectLocations.locationTag(thread.workspaceId, {
@@ -1693,6 +1696,7 @@ export function InventorySidebar({
               }
               selectedThreadId={selectedThreadId}
               projectLabelFor={projectLabelFor}
+              folderLabelFor={folderLabelFor}
               environmentLabelFor={environmentLabelFor}
               showProjectLabel={locationSuppression.showProject}
               showEnvironmentLabel={locationSuppression.showEnvironment}
@@ -1784,6 +1788,7 @@ export function InventorySidebar({
                     }
                     selectedThreadId={selectedThreadId}
                     projectLabelFor={projectLabelFor}
+                    folderLabelFor={folderLabelFor}
                     locationTagFor={locationTagFor}
                     environmentLabelFor={environmentLabelFor}
                     showProjectLabel={false}
@@ -3080,6 +3085,7 @@ function FlatGroupList({
   onExpandGroup,
   selectedThreadId,
   projectLabelFor,
+  folderLabelFor,
   locationTagFor,
   environmentLabelFor,
   showProjectLabel,
@@ -3114,6 +3120,8 @@ function FlatGroupList({
   readonly onExpandGroup: (groupKey: string) => void;
   readonly selectedThreadId?: string;
   readonly projectLabelFor: (workspaceId: string) => string | undefined;
+  /** The folder that tells a location apart within its project. */
+  readonly folderLabelFor: (workspaceId: string) => string | undefined;
   /** Rows grouped by project tag their location within it. */
   readonly locationTagFor?: (
     thread: NormalizedApplicationThreadSummary,
@@ -3216,6 +3224,7 @@ function FlatGroupList({
             projectLabel={
               options.projectLabel ?? projectLabelFor(thread.workspaceId)
             }
+            folderLabel={folderLabelFor(thread.workspaceId)}
             locationTag={locationTagFor?.(thread)}
             environmentLabel={environmentLabelFor(thread.workspaceId)}
             showProjectLabel={options.showProjectLabel ?? showProjectLabel}
@@ -3372,6 +3381,7 @@ function FlatRowItemContent(
     showBackendBrand,
     selected,
     projectLabel,
+    folderLabel,
     locationTag,
     environmentLabel,
     showProjectLabel,
@@ -3405,6 +3415,7 @@ function FlatRowItemContent(
     readonly showBackendBrand: boolean;
     readonly selected: boolean;
     readonly projectLabel?: string;
+    readonly folderLabel?: string;
     readonly locationTag?: string;
     readonly environmentLabel?: string;
     readonly showProjectLabel: boolean;
@@ -3685,6 +3696,7 @@ function FlatRowItemContent(
       futureTimes={futureTimes}
       selected={selected}
       projectLabel={projectLabel}
+      folderLabel={folderLabel}
       locationTag={locationTag}
       environmentLabel={environmentLabel}
       showProjectLabel={showProjectLabel}

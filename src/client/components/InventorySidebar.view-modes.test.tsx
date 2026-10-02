@@ -1595,6 +1595,60 @@ describe("InventorySidebar view modes", () => {
     )).toEqual(["sedes-context"]);
   });
 
+  it("keeps folder distinctions on cards when Scope or a stack names the project", async () => {
+    const workspaces: NonNullable<StateOptions["workspaces"]> = [
+      {
+        id: "workspace-1",
+        environmentId: "environment-1",
+        projectId: "project-sedes",
+        label: { text: "sedes" },
+        displayPath: { text: "/workspace/sedes" },
+        available: true,
+      },
+      {
+        id: "workspace-context",
+        environmentId: "environment-1",
+        projectId: "project-sedes",
+        label: { text: "sedes-context" },
+        displayPath: { text: "/workspace/sedes-context" },
+        available: true,
+      },
+    ];
+    const threads = [
+      makeThread("thread-main", "Main thread", { lastActivityAt: isoAtNoon(-1) }),
+      makeThread("thread-context", "Context thread", {
+        workspaceId: "workspace-context",
+      }),
+    ];
+    const cardFor = (title: string) =>
+      screen.getByText(title).closest<HTMLElement>("[data-testid='flat-thread-row']")!;
+
+    seedViewPreferences({
+      groupBy: "time",
+      modes: { time: { density: "card" } },
+      projectFilterId: "project-sedes",
+    });
+    renderSidebar(threads, { workspaces });
+    expect(within(cardFor("Context thread")).queryByTestId("flat-row-project")).toBeNull();
+    expect(within(cardFor("Context thread")).getByTestId("flat-row-folder")).toHaveTextContent(/^sedes-context$/u);
+    expect(within(cardFor("Main thread")).queryByTestId("flat-row-folder")).toBeNull();
+    cleanup();
+
+    seedViewPreferences({
+      groupBy: "none",
+      stackBy: "project",
+      modes: { none: { density: "card" } },
+    });
+    renderSidebar(threads, { workspaces }, true);
+    const stack = screen.getByTestId("project-stack");
+    fireEvent.pointerEnter(stack, { pointerType: "mouse" });
+    const roster = await screen.findByTestId("thread-group-roster");
+    const member = within(roster).getByText("Context thread")
+      .closest<HTMLElement>("[data-testid='flat-thread-row']")!;
+    expect(within(member).queryByTestId("flat-row-project")).toBeNull();
+    expect(within(member).getByTestId("flat-row-folder")).toHaveTextContent(/^sedes-context$/u);
+  });
+
   it("tags rows by folder in a project with several folders on one host", () => {
     const workspaces: NonNullable<StateOptions["workspaces"]> = [
       {

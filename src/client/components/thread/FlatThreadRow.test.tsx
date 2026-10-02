@@ -970,6 +970,52 @@ describe("compact vs card structure", () => {
     expect(screen.queryByTestId("flat-row-location")).toBeNull();
   });
 
+  it("keeps a card's folder when Scope or a stack implies the project", () => {
+    render(
+      <FlatThreadRow
+        showBackendBrand
+        thread={makeThread()}
+        density="card"
+        projectLabel="sedes › sedes-context"
+        folderLabel="sedes-context"
+        showProjectLabel={false}
+      />,
+    );
+    expect(screen.queryByTestId("flat-row-project")).toBeNull();
+    expect(screen.getByTestId("flat-row-folder")).toHaveTextContent(
+      /^sedes-context$/u,
+    );
+    expect(screen.getByTestId("flat-row-location")).toBeVisible();
+    cleanup();
+
+    // The project label already carries the folder.
+    render(
+      <FlatThreadRow
+        showBackendBrand
+        thread={makeThread()}
+        density="card"
+        projectLabel="sedes › sedes-context"
+        folderLabel="sedes-context"
+      />,
+    );
+    expect(screen.getByTestId("flat-row-project")).toHaveTextContent(
+      "sedes › sedes-context",
+    );
+    expect(screen.queryByTestId("flat-row-folder")).toBeNull();
+    cleanup();
+
+    render(
+      <FlatThreadRow
+        showBackendBrand
+        thread={makeThread()}
+        density="compact"
+        folderLabel="sedes-context"
+        showProjectLabel={false}
+      />,
+    );
+    expect(screen.queryByTestId("flat-row-folder")).toBeNull();
+  });
+
   it("hides the project label when suppressed or unlabeled", () => {
     render(
       <FlatThreadRow

@@ -332,6 +332,7 @@ export function FlatThreadRow({
   futureTimes = false,
   selected = false,
   projectLabel,
+  folderLabel,
   locationTag,
   environmentLabel,
   targetLabel,
@@ -371,6 +372,12 @@ export function FlatThreadRow({
    * environment ("sedes › sedes-context"); renders only when provided.
    */
   readonly projectLabel?: string;
+  /**
+   * The folder that tells this row's location apart within its project
+   * ("sedes-context"). A card shows it on its own when the project label is
+   * suppressed because Scope or a stack already names the project.
+   */
+  readonly folderLabel?: string;
   /**
    * Compact rows grouped by project: what distinguishes this row's location
    * within its project, styled like the Projects-view row tag.
@@ -618,11 +625,13 @@ export function FlatThreadRow({
 
   // Compact rows skip the project label — it is rarely needed when most
   // installs use one project. Card density shows it on line 2 with the same
-  // folder icon and muted styling as the thread header's project row.
+  // folder icon and muted styling as the thread header's project row; where
+  // Scope or a stack already names the project, only the folder remains.
   const projectIsInteractive = clickNamesToFilter && onProjectSelect !== undefined;
   const ProjectLabel = projectIsInteractive ? "button" : "span";
-  const projectMeta =
-    density === "card" && showProjectLabel && projectLabel !== undefined ? (
+  const projectShown =
+    density === "card" && showProjectLabel && projectLabel !== undefined;
+  const projectMeta = projectShown ? (
       <ProjectLabel
         type={projectIsInteractive ? "button" : undefined}
         onClick={projectIsInteractive ? onProjectSelect : undefined}
@@ -640,6 +649,15 @@ export function FlatThreadRow({
         <Folder size={13} strokeWidth={1.8} aria-hidden="true" />
         <span className="thread-project-name flat-row-filter-name">{projectLabel}</span>
       </ProjectLabel>
+    ) : density === "card" && folderLabel !== undefined ? (
+      <span
+        className="thread-project flat-row-project"
+        data-testid="flat-row-folder"
+        title={folderLabel}
+      >
+        <Folder size={13} strokeWidth={1.8} aria-hidden="true" />
+        <span className="thread-project-name">{folderLabel}</span>
+      </span>
     ) : undefined;
   const environmentIsInteractive = clickNamesToFilter && onEnvironmentSelect !== undefined;
   const EnvironmentLabel = environmentIsInteractive ? "button" : "span";
@@ -789,7 +807,7 @@ export function FlatThreadRow({
   }
 
   const separateLocationControls =
-    (projectIsInteractive && projectMeta !== undefined) ||
+    (projectIsInteractive && projectShown) ||
     (environmentIsInteractive && environmentMeta !== undefined);
   const cardMetadata = (
     <span className="flat-row-line2">
