@@ -9,9 +9,11 @@
   `claude_runtime@3` and upgrade Claude sidecars for
   `claude_persistent_runtime@4`, which preserves skill command classification
   and the updated history behavior.
+  ([#29](https://github.com/kcosr/sedes/pull/29))
 
 - Browser and packaged clients require client protocol 132 for searchable
   skill aliases. Upgrade clients together with the server.
+  ([#29](https://github.com/kcosr/sedes/pull/29))
 
 - Codex uses the generated 0.160.0 app-server profile. Rebuild the server,
   execution sidecars, and Electron Local together; mismatched compiled Codex
@@ -90,6 +92,7 @@
 - Find Claude skills by their safe native aliases in the skill picker,
   including directory names supplied for renamed skills. Selecting a match
   invokes the canonical skill.
+  ([#29](https://github.com/kcosr/sedes/pull/29))
 
 - Show Claude and OpenCode context occupancy in the composer and Session stats,
   and OpenCode transcript counters across the retained active branch. These
@@ -220,6 +223,7 @@
 - Claude imports and sessions whose saved permission mode is no longer
   allowed launch with an explicit allowed mode, preferring `default`.
   Native defaults cannot silently broaden the initial permission mode.
+  ([#29](https://github.com/kcosr/sedes/pull/29))
 
 - **Archived** follows the sidebar's Scope and shares its search, with a status
   line showing the match count, Scope, search, and **Clear scope**. View options
@@ -437,6 +441,7 @@
 - Claude history retains eligible external-origin messages and chooses queued
   inputs using native delivery evidence, matching the updated SDK while
   keeping internal startup markers hidden.
+  ([#29](https://github.com/kcosr/sedes/pull/29))
 
 - Searching **Archived** no longer lists non-matching fork parents, and the
   page no longer re-renders for unrelated application events, which made large
