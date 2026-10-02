@@ -3,22 +3,32 @@
 This page defines the small set of names needed to understand Sedes. For a
 walkthrough, continue to [Conversations and the composer](conversations.md).
 
-## Project
+## Project and location
 
-A **project** is a directory Sedes has remembered as a workspace. It is usually
-a source repository, but it can be any allowed directory. A project provides
-the working directory for a thread and, when supported, the root for Files,
-Git status, skills, and native-conversation discovery.
+A **project** is the work you do in one or more directories, usually a source
+repository. Its directories are its **locations**: each location is one allowed
+directory on one execution environment, and belongs to exactly one project. The
+same repository checked out on this computer and on an SSH host can be one
+project with two locations, and several related directories can share a
+project too. A project's name is a label you can change; it never renames a
+directory.
 
-Use **Add project** to choose an execution environment and an allowed absolute
-path. Opening a project does not move files or copy a repository. Sedes scans
-only remembered projects for eligible provider conversations; it does not
-search arbitrary directories.
+A thread runs in one location, which provides its working directory and, when
+supported, the root for Files, Git status, skills, and native-conversation
+discovery. Where a project has several locations, sidebar rows say which one a
+thread runs in.
+
+Use **Add project** to choose an execution environment, an allowed absolute
+path, and the project it belongs to. Adding a location does not move files or
+copy a repository. Sedes scans only known locations for eligible provider
+conversations; it does not search arbitrary directories. Manage projects and
+their locations in **Settings → Projects**; see
+[Manage projects](organize-work.md#manage-projects).
 
 ## Execution environment
 
-An **execution environment** is the machine or managed environment where the
-project is located. The most common environment is the same computer that runs
+An **execution environment** is the machine or managed environment where a
+location's directory is. The most common environment is the same computer that runs
 Sedes. **Settings → Environments** also configures supported SSH environments
 for this Sedes account.
 

@@ -64,25 +64,71 @@ has stopped.
 
 ## Manage projects
 
-Open **Settings → Projects** to list remembered directories,
-filter by environment, add projects, or remove them from active use. The list
-includes unavailable environments. Allowed workspace roots remain separate:
-adding a project remembers a directory within existing access grants.
+A project groups the directories you work in, across your environments. Each
+directory on one environment is a **location** of exactly one project, such as
+the same repository checked out on this computer and on an SSH host, or
+several related repositories on one host. Open **Settings → Projects** to see
+every project with its locations underneath. A project row shows its name and
+location count; a location row shows its environment, path, availability, and
+thread count. Removed projects and locations stay listed with a **Removed**
+tag. Allowed workspace roots remain separate: adding a location remembers a
+directory within existing access grants.
 
-**Remove** hides a project and its threads from ordinary inventory and creation
-pickers. Its directory, Git worktrees, provider history, drafts, Tasks, and other
-saved records remain intact. Thread inventory states are preserved. End live or
-interrupted terminals, resolve running/queued/uncertain work, and pause enabled
-schedules before removing the project. Removal stops new work and conversation
-discovery for that registration.
+Filter by environment, status, or search text. The filters apply to
+locations, and a project is shown when any of its locations matches, with only
+the matching locations under it. A project without locations is listed under
+**All statuses** until you add one.
 
-Choose **Removed projects** in the project status filter to restore a project. Adding the same
-canonical directory in the same environment also restores the original project
-and its associations automatically. Adding an already remembered directory
-selects the existing project without duplicating it. The same directory spelling
-on another environment is a separate project. Restoration rechecks current
-access to the directory; paused schedules remain paused until explicitly enabled.
-Removal retains storage; it is not a permanent data purge.
+**Add project** asks for a directory and the project it joins: a new project,
+named after the folder and editable, or an existing project, listed with the
+environments that host it ("sedes — on Local, aw-personal +1"). An existing
+project is preselected only when exactly one project has the folder's name and
+it has no location on the chosen environment, which is the same repository on
+another host; otherwise a new project is the default. A project's **Add
+location…** action opens the same dialog for that project. Adding a directory
+that is already a location never duplicates it:
+
+- an active location is selected in its project, and a removed one is restored
+  into its project;
+- when you chose a different existing project, **Move here** moves the
+  location there instead, restoring it if it was removed;
+- a location of a removed project offers **Restore project** or **Add to
+  another project**, which moves the location to the project you chose and
+  restores it.
+
+The same directory spelling on another environment is a separate location.
+
+Use a project's menu to **Rename** it, to **Merge into** another project, or to
+remove or restore it. Use a location's menu to **Move to project**, which can
+also split it into a new project, or to remove or restore it. Moving or merging
+carries a location's threads, Tasks, Workpads, and other saved records with it.
+A merge moves every location of the project, removed ones included, and then
+deletes the merged project; it can't be undone. Running, queued, or uncertain
+work blocks moving and merging.
+
+When several projects share a name, an inline note above the list names them
+with a **Merge** action, so separately added checkouts of the same work can be
+combined.
+
+**Remove location** hides one location and its threads from ordinary inventory
+and creation pickers. Its directory, Git worktrees, provider history, drafts,
+Tasks, and other saved records remain intact, and thread inventory states are
+preserved. End live or interrupted terminals, resolve running, queued, or
+uncertain work, and pause enabled schedules first. Removal stops new work and
+conversation discovery for that location. When it is the project's last active
+location, you can also remove the project in the same step.
+
+**Remove project** removes every active location of the project at once. If
+anything blocks it, Sedes lists every blocker by location, such as running
+work, enabled schedules, terminals, or busy agents, with the affected threads.
+**Restore project** restores the project and lets you choose which removed
+locations to restore with it; the locations its removal took on available
+environments are preselected, and each one reports whether it was restored. A
+location of a removed project can only be restored with its project.
+
+Restoration rechecks current access to each directory; paused schedules remain
+paused until explicitly enabled. Removal retains storage; it is not a permanent
+data purge.
 
 ## Narrow the sidebar with Scope
 
