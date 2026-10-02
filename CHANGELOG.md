@@ -7,6 +7,7 @@
 - Browser and packaged clients require client protocol 133, which adds
   projects to the application snapshot and a `projectId` to every workspace.
   Upgrade clients together with the server.
+  ([#33](https://github.com/kcosr/sedes/pull/33))
 
 - Agent tools `workspace.open@2`, `workspace.list@5`, and `agent.context@3`
   replace their previous versions: `workspace.open` returns `projectId`,
@@ -15,16 +16,19 @@
   and earlier `workspace.list` cursors are rejected. An individual native MCP
   session retained across the upgrade, such as a sidecar-retained Claude
   query, keeps the old schemas until its runtime restarts.
+  ([#33](https://github.com/kcosr/sedes/pull/33))
 
 - `GET /api/workspaces` is removed; use `GET /api/projects`, which lists every
   project with its locations, including removed ones.
   `POST /api/workspaces/open` requires a `project` assignment and returns the
   location's `projectId`.
+  ([#33](https://github.com/kcosr/sedes/pull/33))
 
 - Agents and Tool clients can no longer restore a removed project:
   `workspace.open` of a directory whose project was removed is a conflict.
   Restore the project in **Settings → Projects**. Opening a removed location
   of an active project still restores it.
+  ([#33](https://github.com/kcosr/sedes/pull/33))
 
 - Claude now requires Claude Code 2.1.287 or newer and uses Agent SDK 0.3.287.
   Update Claude Code on every execution host. Rebuild local workers for
@@ -116,6 +120,7 @@
   repository on this computer and on an SSH host. A project's name is
   editable and independent of its directories. Project Tasks and Workpads
   still belong to the location they were created in.
+  ([#33](https://github.com/kcosr/sedes/pull/33))
 
 - **Settings → Projects** lists each project with its locations. Rename a
   project, add a location, move a location to another or a new project, merge
@@ -124,11 +129,13 @@
   lets you choose which removed locations to restore and reports each. A note
   lists names that several active projects share, with a **Merge** action.
   Merging deletes the merged project and can't be undone.
+  ([#33](https://github.com/kcosr/sedes/pull/33))
 
 - **Add project** asks which project a directory joins: a new project named
   after the folder, or an existing one described by the environments it is
   on. A directory that is already a location can be moved here or restored,
   and one whose project was removed can restore that project.
+  ([#33](https://github.com/kcosr/sedes/pull/33))
 
 - Find Claude skills by their safe native aliases in the skill picker,
   including directory names supplied for renamed skills. Selecting a match
@@ -265,15 +272,18 @@
   with a location on the scoped environment. A saved project-name filter
   becomes a project filter when exactly one project matches; otherwise it is
   cleared.
+  ([#33](https://github.com/kcosr/sedes/pull/33))
 
 - The Projects view, project stacks, and Archived group threads by project.
   Rows of a project with several locations are tagged with what tells their
   location apart, and cards, thread headers, and pickers name the project and,
   where needed, the folder or location ("Project · Location"). Usage's
   per-directory dimension and the Tool client default are labelled Location.
+  ([#33](https://github.com/kcosr/sedes/pull/33))
 
 - **New thread** asks for a Project, then a Location, then a Target on that
   location's environment, prefilled from Scope.
+  ([#33](https://github.com/kcosr/sedes/pull/33))
 
 - Migration 126 groups existing directories into projects by display name:
   same-named directories form one project when each environment has at most
@@ -281,6 +291,7 @@
   directories join only when unambiguous. The migration is one-way; back up
   the state directory, including `overlay.sqlite`, before upgrading, then
   review **Settings → Projects** and merge separate checkouts of the same work.
+  ([#33](https://github.com/kcosr/sedes/pull/33))
 
 - Raise the per-account backend limit from 32 to 64. ([#32](https://github.com/kcosr/sedes/pull/32))
 
@@ -504,14 +515,17 @@
 - Removing a project or location while terminal work blocked it could return
   an internal server error. Terminal conflicts now return their own error from
   every route.
+  ([#33](https://github.com/kcosr/sedes/pull/33))
 
 - A Tool client whose default location was removed now shows **needs
   attention** and refuses requests that use that default, instead of treating
   the removed location as available.
+  ([#33](https://github.com/kcosr/sedes/pull/33))
 
 - **New thread** on the welcome page now follows the sidebar's current Scope
   rather than raw saved preferences, so a stale filter no longer narrows its
   choices.
+  ([#33](https://github.com/kcosr/sedes/pull/33))
 
 - Reopening a dialog while it closes now keeps the new opening visible and
   focused. Closing dialog surfaces let clicks through, including when quickly
