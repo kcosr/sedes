@@ -636,6 +636,42 @@ describe("projectArchivedThreads projects", () => {
     ]);
   });
 
+  it("names a single-host project's remote environment in its header", () => {
+    const remoteOnly = snapshot(
+      [
+        thread("remote", { workspaceId: "ws-remote", targetId: "t-ssh" }),
+        thread("main", { stateChangedAt: hoursAgo(2) }),
+      ],
+      {
+        projects: [
+          { id: "project-sedes", name: "sedes", revision: 1 },
+          { id: "project-tools", name: "tools", revision: 1 },
+        ],
+        workspaces: [
+          catalog.workspaces![0]!,
+          { ...catalog.workspaces![2]!, projectId: "project-tools", label: { text: "tools" } },
+        ],
+      },
+    );
+    const headers = (options: Parameters<typeof project>[1] = {}) =>
+      project(remoteOnly, { groupBy: "project", ...options }).groups.map(
+        ({ label }) => label,
+      );
+    // As the per-location header did; a Local-only project names no host.
+    expect(headers()).toEqual(["sedes", "tools · build-box"]);
+    // Scope already implies the environment.
+    expect(
+      headers({ preferences: { environmentFilterId: "env-ssh" } }),
+    ).toEqual(["tools"]);
+    expect(headers({ preferences: { targetFilterId: "t-ssh" } })).toEqual([
+      "tools",
+    ]);
+    // A project on several environments leaves the host to its rows.
+    expect(
+      project(snap, { groupBy: "project" }).groups.map(({ label }) => label),
+    ).toEqual(["Acme website", "sedes"]);
+  });
+
   it("qualifies same-named projects in headers and rows", () => {
     const twins = snapshot(
       [

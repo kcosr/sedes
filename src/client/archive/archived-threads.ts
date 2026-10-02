@@ -234,8 +234,13 @@ interface CatalogIndex {
   /** Row labels by workspace ID: the project, and the folder where needed. */
   readonly projectLabels: ReadonlyMap<string, string>;
   readonly locationTags: ReadonlyMap<string, string>;
-  /** Group headers by project ID, qualified among same-named projects. */
+  /**
+   * Group headers by project ID, qualified among same-named projects, with
+   * the one remote environment of a single-host project.
+   */
   readonly projectGroupLabels: ReadonlyMap<string, string>;
+  /** Group headers when Scope already implies the environment. */
+  readonly scopedProjectGroupLabels: ReadonlyMap<string, string>;
   readonly targetLabels: ReadonlyMap<string, string>;
 }
 
@@ -261,10 +266,17 @@ function indexCatalog(catalog: SidebarScopeCatalog): CatalogIndex {
     if (tag !== undefined) locationTags.set(workspace.id, tag);
   }
   const projectGroupLabels = new Map<string, string>();
+  const scopedProjectGroupLabels = new Map<string, string>();
   for (const project of projects) {
     projectGroupLabels.set(
       project.id,
-      locations.projectLabel(project.id) ?? project.name,
+      locations.projectHeaderLabel(project.id, {
+        includeEnvironment: environments.length > 1,
+      }) ?? project.name,
+    );
+    scopedProjectGroupLabels.set(
+      project.id,
+      locations.projectHeaderLabel(project.id) ?? project.name,
     );
   }
   // The brand mark already names the backend, so a Target shows its own
@@ -300,6 +312,7 @@ function indexCatalog(catalog: SidebarScopeCatalog): CatalogIndex {
     projectLabels,
     locationTags,
     projectGroupLabels,
+    scopedProjectGroupLabels,
     targetLabels,
   };
 }
@@ -596,7 +609,12 @@ export function projectArchivedThreads(
       .sort(([, left], [, right]) => left.order - right.order)
       .map(([key, { label, rows }]) => ({ key: `date:${key}`, label, rows }));
   } else {
-    const groupLabels = catalogIndexFor(base.catalog).projectGroupLabels;
+    const index = catalogIndexFor(base.catalog);
+    // A scoped Environment or Target already names the environment.
+    const groupLabels =
+      scope.environmentId !== null || scope.targetId !== null
+        ? index.scopedProjectGroupLabels
+        : index.projectGroupLabels;
     const projects = new Map<
       string,
       { label: string; rows: ArchivedThreadRow[] }

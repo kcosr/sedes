@@ -1558,6 +1558,90 @@ describe("InventorySidebar view modes", () => {
     );
   });
 
+  it("names a single remote host in project headers unless Scope implies it", () => {
+    const environments: NonNullable<StateOptions["environments"]> = [
+      {
+        id: "environment-local",
+        kind: "local" as const,
+        label: { text: "Local" },
+        available: true,
+        directoryBrowsing: "unavailable",
+      },
+      {
+        id: "environment-remote",
+        kind: "ssh" as const,
+        label: { text: "aw-personal" },
+        available: true,
+        directoryBrowsing: "unavailable",
+      },
+    ];
+    const workspaces: NonNullable<StateOptions["workspaces"]> = [
+      {
+        id: "workspace-1",
+        environmentId: "environment-local",
+        projectId: "project-notes",
+        label: { text: "notes" },
+        displayPath: { text: "/workspace/notes" },
+        available: true,
+      },
+      {
+        id: "workspace-remote",
+        environmentId: "environment-remote",
+        projectId: "project-sedes",
+        label: { text: "sedes" },
+        displayPath: { text: "/srv/sedes" },
+        available: true,
+      },
+    ];
+    const executionTargets: NonNullable<StateOptions["executionTargets"]> = [
+      {
+        id: "target-1",
+        environmentId: "environment-local",
+        label: { text: "Pi" },
+        backend: { label: { text: "Pi" }, brand: "pi" as const },
+        workspaceExecution: { kind: "direct_only" },
+        available: true,
+      },
+      {
+        id: "target-remote",
+        environmentId: "environment-remote",
+        label: { text: "Codex" },
+        backend: { label: { text: "Codex" }, brand: "codex" as const },
+        workspaceExecution: { kind: "direct_only" },
+        available: true,
+      },
+    ];
+    const threads = [
+      makeThread("thread-local", "Local thread"),
+      makeThread("thread-remote", "Remote thread", {
+        workspaceId: "workspace-remote",
+        targetId: "target-remote",
+      }),
+    ];
+    const options = { environments, workspaces, executionTargets };
+
+    renderSidebar(threads, options);
+    expect(
+      screen.getAllByTestId("project-row").map((row) => row.textContent),
+    ).toEqual(["notes", "sedes · aw-personal"]);
+    cleanup();
+
+    seedViewPreferences({ groupBy: "project", stackBy: "group" });
+    renderSidebar(threads, options);
+    expect(
+      screen.getAllByTestId("flat-group").map((group) =>
+        group.querySelector(".shelf-trigger span")?.firstChild?.textContent?.trim(),
+      ),
+    ).toEqual(["notes", "sedes · aw-personal"]);
+    cleanup();
+
+    seedViewPreferences({ groupBy: "project", environmentFilterId: "environment-remote" });
+    renderSidebar(threads, options);
+    expect(
+      screen.getAllByTestId("project-row").map((row) => row.textContent),
+    ).toEqual(["sedes"]);
+  });
+
   it("tags compact rows when the Projects view stacks threads", () => {
     seedViewPreferences({ groupBy: "project", stackBy: "group" });
     renderSidebar(

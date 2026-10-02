@@ -822,7 +822,10 @@ export function InventorySidebar({
       if (threads.length === 0) continue;
       groups.push({
         key: bucket,
-        label: projectLocations.projectLabel(project.id) ?? project.name,
+        label:
+          projectLocations.projectHeaderLabel(project.id, {
+            includeEnvironment: locationSuppression.showEnvironment,
+          }) ?? project.name,
         kind: "state",
         futureTimes: false,
         threads,
@@ -868,6 +871,7 @@ export function InventorySidebar({
     return groups;
   }, [
     groupBy,
+    locationSuppression.showEnvironment,
     modePreferences,
     projectFilterId,
     projectLocations,
@@ -1859,8 +1863,10 @@ export function InventorySidebar({
                     )
                     .map((project, projectIndex) => {
                       const projectDisplayLabel =
-                        projectLocations.projectLabel(project.id) ??
-                        project.name;
+                        projectLocations.projectHeaderLabel(project.id, {
+                          includeEnvironment:
+                            locationSuppression.showEnvironment,
+                        }) ?? project.name;
                       const isActive = project.id === projectFilterId;
                       const expanded =
                         projectExpanded[project.id] ??

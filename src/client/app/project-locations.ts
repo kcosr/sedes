@@ -56,6 +56,16 @@ export interface ProjectLocations {
    */
   readonly folderLabel: (workspaceId: string) => string | undefined;
   /**
+   * A project group header: the project label and, when `includeEnvironment`
+   * is set and every active location is on one non-Local environment, that
+   * environment ("sedes · Build host"). A project on several environments
+   * shows only its label; its rows say where they run.
+   */
+  readonly projectHeaderLabel: (
+    projectId: string,
+    options?: { readonly includeEnvironment?: boolean },
+  ) => string | undefined;
+  /**
    * "sedes › sedes-context": the project label and, when needed, the folder.
    * `includeEnvironment` appends a non-Local environment: "sedes · Build host",
    * unless the label's hint already names that one environment alone.
@@ -199,6 +209,23 @@ export function describeProjectLocations(
     locationsOf,
     projectLabel: (projectId) => projectLabels.get(projectId),
     folderLabel: (workspaceId) => folderLabels.get(workspaceId),
+    projectHeaderLabel: (projectId, options) => {
+      const label = projectLabels.get(projectId);
+      if (label === undefined || !options?.includeEnvironment) return label;
+      const environmentIds = new Set(
+        locationsOf(projectId).map(({ environmentId }) => environmentId),
+      );
+      const [environmentId] = environmentIds;
+      const environment =
+        environmentIds.size === 1 && environmentId !== undefined
+          ? environmentById.get(environmentId)
+          : undefined;
+      return environment &&
+        environment.kind !== "local" &&
+        labelEnvironment.get(projectId) !== environment.id
+        ? `${label} · ${environmentDisplayLabel(environment, environments)}`
+        : label;
+    },
     projectFolderLabel: (workspaceId, options) => {
       const workspace = workspaceById.get(workspaceId);
       const project = workspace

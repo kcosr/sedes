@@ -248,6 +248,82 @@ describe("project location presentation", () => {
     );
   });
 
+  it("names a project header's one remote host unless Scope implies it", () => {
+    const projects = describeProjectLocations(
+      catalog(
+        [
+          { id: "remote-only", name: "sedes" },
+          { id: "local-only", name: "notes" },
+          { id: "spread", name: "tools" },
+          { id: "empty", name: "empty" },
+          { id: "folders", name: "web" },
+        ],
+        [
+          location("r", "remote-only", "remote", "sedes"),
+          location("l", "local-only", "local", "notes"),
+          location("s-local", "spread", "local", "tools"),
+          location("s-remote", "spread", "remote", "tools"),
+          location("f-api", "folders", "remote", "api"),
+          location("f-site", "folders", "remote", "site"),
+        ],
+      ),
+    );
+    const header = (id: string) =>
+      projects.projectHeaderLabel(id, { includeEnvironment: true });
+    // As the per-location header did: "sedes · aw-personal".
+    expect(header("remote-only")).toBe("sedes · aw-personal");
+    expect(header("folders")).toBe("web · aw-personal");
+    // Local is never named; several hosts leave it to the rows.
+    expect(header("local-only")).toBe("notes");
+    expect(header("spread")).toBe("tools");
+    expect(header("empty")).toBe("empty");
+    // Scope already implies the environment.
+    expect(projects.projectHeaderLabel("remote-only")).toBe("sedes");
+    expect(
+      projects.projectHeaderLabel("remote-only", { includeEnvironment: false }),
+    ).toBe("sedes");
+    expect(projects.projectHeaderLabel("missing")).toBeUndefined();
+  });
+
+  it("does not repeat a host a same-named project's header already names", () => {
+    const byHost = describeProjectLocations(
+      catalog(
+        [
+          { id: "local-sedes", name: "sedes" },
+          { id: "remote-sedes", name: "sedes" },
+          { id: "spread-sedes", name: "sedes" },
+        ],
+        [
+          location("a", "local-sedes", "local", "sedes"),
+          location("b", "remote-sedes", "remote", "sedes"),
+          location("c", "spread-sedes", "remote", "sedes"),
+          location("d", "spread-sedes", "ci", "sedes"),
+        ],
+      ),
+    );
+    const header = (id: string) =>
+      byHost.projectHeaderLabel(id, { includeEnvironment: true });
+    expect(header("local-sedes")).toBe("sedes");
+    expect(header("remote-sedes")).toBe("sedes · aw-personal");
+    expect(header("spread-sedes")).toBe("sedes · aw-personal, CI");
+
+    const byPath = describeProjectLocations(
+      catalog(
+        [
+          { id: "first", name: "sedes" },
+          { id: "second", name: "sedes" },
+        ],
+        [
+          location("a", "first", "ci", "sedes", "/srv/a"),
+          location("b", "second", "ci", "sedes", "/srv/b"),
+        ],
+      ),
+    );
+    expect(
+      byPath.projectHeaderLabel("first", { includeEnvironment: true }),
+    ).toBe("sedes · CI · /srv/a");
+  });
+
   it("describes locations for pickers with their environment and path", () => {
     const projects = describeProjectLocations(
       catalog(
