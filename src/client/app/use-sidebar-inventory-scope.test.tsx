@@ -42,6 +42,7 @@ const catalog: SidebarScopeCatalog = {
       available: true,
     },
   ],
+  projects: [{ id: "project-1", name: "Sedes", revision: 0 }],
   workspaces: [
     {
       id: "ws-a",
@@ -66,7 +67,7 @@ const catalog: SidebarScopeCatalog = {
 const none = {
   environmentId: null,
   targetId: null,
-  projectName: null,
+  projectId: null,
   groupId: null,
   ungrouped: false,
 };
@@ -91,11 +92,11 @@ describe("sidebarScopeSummary", () => {
         ...none,
         environmentId: "env-a",
         targetId: "target-a",
-        projectName: "sedes",
+        projectId: "project-1",
         groupId: "group-1",
       }),
     ).toEqual({
-      fullLabel: "Host A · Socket A · Codex · sedes · Launch",
+      fullLabel: "Host A · Socket A · Codex · Sedes · Launch",
       visibleLabel: "Host A · Socket A · Codex +1 · Launch",
     });
     expect(sidebarScopeSummary(catalog, { ...none, ungrouped: true })).toEqual({
@@ -112,7 +113,7 @@ describe("sidebarScopeSummary", () => {
 describe("useSidebarInventoryScope", () => {
   it("derives the shared scope and clears only scope facets", () => {
     setSidebarInventoryScope({
-      projectFilterName: "sedes",
+      projectFilterId: "project-1",
       groupFilterId: "group-1",
     });
     setSidebarShowFilter("settled", false);
@@ -120,13 +121,13 @@ describe("useSidebarInventoryScope", () => {
       const view = useSidebarInventoryScope(catalog);
       return (
         <button type="button" onClick={view.clearScope}>
-          {`${view.active}|${view.scope.projectName}|${view.summary.visibleLabel}`}
+          {`${view.active}|${view.scope.projectId}|${view.summary.visibleLabel}`}
         </button>
       );
     }
     render(<Probe />);
     expect(screen.getByRole("button")).toHaveTextContent(
-      "true|sedes|sedes · Launch",
+      "true|project-1|Sedes · Launch",
     );
     act(() => screen.getByRole("button").click());
     expect(screen.getByRole("button")).toHaveTextContent(
@@ -137,7 +138,7 @@ describe("useSidebarInventoryScope", () => {
     expect(
       JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!),
     ).toMatchObject({
-      projectFilterName: null,
+      projectFilterId: null,
       groupFilterId: null,
       ungroupedFilter: false,
     });
@@ -156,5 +157,27 @@ describe("useSidebarInventoryScope", () => {
     expect(getSidebarViewPreferences().targetFilterId).toBe("retired-target");
     clearSidebarInventoryScope();
     expect(getSidebarViewPreferences().targetFilterId).toBeNull();
+  });
+
+  it("leaves a legacy project-name hint unapplied until the sidebar migrates it", () => {
+    localStorage.setItem(
+      SIDEBAR_VIEW_STORAGE_KEY,
+      JSON.stringify({
+        ...getSidebarViewPreferences(),
+        projectFilterName: "Sedes",
+      }),
+    );
+    window.dispatchEvent(new StorageEvent("storage", { key: null }));
+    function Probe() {
+      const view = useSidebarInventoryScope(catalog);
+      return (
+        <span>{`${view.active}|${view.scope.projectId}|${view.scope.repair?.projectFilterId}`}</span>
+      );
+    }
+    render(<Probe />);
+    expect(screen.getByText("false|null|project-1")).toBeInTheDocument();
+    expect(getSidebarViewPreferences().projectFilterName).toBe("Sedes");
+    act(() => clearSidebarInventoryScope());
+    expect(getSidebarViewPreferences()).not.toHaveProperty("projectFilterName");
   });
 });

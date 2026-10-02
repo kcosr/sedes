@@ -63,8 +63,8 @@ import {
 import {
   environmentDisplayLabel,
   targetDisplayLabel,
-  workspaceDisplayLabel,
 } from "../app/sidebar-scope-presentation.js";
+import { describeProjectLocations } from "../app/project-locations.js";
 import type {
   ApplicationClientState,
   ApplicationClientStore,
@@ -156,6 +156,7 @@ import {
 
 import {
   deriveSidebarLineage,
+  sidebarProjectBucket,
   type DescendantAggregate,
   type SidebarLineageNode,
 } from "../lineage/sidebar-lineage.js";
@@ -224,7 +225,6 @@ const UPCOMING_VISIBLE_CAP = 5;
 /** Large flat groups stay bounded until the reader explicitly expands them. */
 const FLAT_GROUP_VISIBLE_CAP = 20;
 const ALL_PROJECTS_FILTER_VALUE = "__all_projects__";
-const PROJECT_NAME_FILTER_PREFIX = "project-name:";
 const ALL_ENVIRONMENTS_FILTER_VALUE = "__all_environments__";
 const ALL_TARGETS_FILTER_VALUE = "__all_targets__";
 const ALL_GROUPS_FILTER_VALUE = "__all_groups__";
@@ -406,6 +406,7 @@ export function InventorySidebar({
   scrollPosition?: { current: number };
 }): React.JSX.Element {
   const snapshot = state.snapshot;
+  const projects = snapshot?.projects ?? [];
   const workspaces = snapshot?.workspaces ?? [];
   const environments = snapshot?.environments ?? [];
   const nonLocalEnvironments = environments.filter(
@@ -424,9 +425,21 @@ export function InventorySidebar({
   } = useSidebarInventoryScope({
     environments,
     executionTargets,
+    projects,
     workspaces,
     groups: threadGroups,
   });
+  const scopeCatalog = {
+    environments,
+    executionTargets,
+    projects,
+    workspaces,
+    groups: threadGroups,
+  };
+  const projectLocations = useMemo(
+    () => describeProjectLocations({ projects, workspaces, environments }),
+    [environments, projects, workspaces],
+  );
   const environmentPalette = useEnvironmentPalette();
   const environmentPaletteTones = useMemo(
     () =>
@@ -451,31 +464,46 @@ export function InventorySidebar({
     environmentTintMode === "sidebar" && sidebarEnvironmentTone
       ? environmentTintStyle(sidebarEnvironmentTone)
       : undefined;
-  const projectFilterName = scope.projectName;
+  const projectFilterId = scope.projectId;
   const groupFilter = threadGroups.find(({ id }) => id === scope.groupId);
-  const projectNameOptions = [...new Set([
-    ...scope.projectOptions.map((workspace) => workspace.label.text),
-    ...(scope.projectName === null ? [] : [scope.projectName]),
-  ])].map((name) => {
-    const matching = scope.projectOptions.filter((workspace) => workspace.label.text === name);
+  // A selected project stays listed even when no location of it is on the
+  // scoped environment: the empty intersection is shown, never widened.
+  const projectFilterOptions = [
+    ...scope.projectOptions,
+    ...projects.filter(
+      ({ id }) =>
+        id === projectFilterId &&
+        !scope.projectOptions.some((option) => option.id === id),
+    ),
+  ].map((project) => {
+    const locations = projectLocations
+      .locationsOf(project.id)
+      .filter(
+        (location) =>
+          scope.effectiveEnvironmentId === null ||
+          location.environmentId === scope.effectiveEnvironmentId,
+      );
     return {
-      id: `${PROJECT_NAME_FILTER_PREFIX}${name}`,
-      label: name,
-      available: matching.some((workspace) => workspace.available &&
-        environments.find(({ id }) => id === workspace.environmentId)?.available !== false),
-      searchTerms: matching.flatMap((workspace) => [
-        workspace.displayPath.text,
-        environments.find(({ id }) => id === workspace.environmentId)?.label.text ?? "",
+      id: project.id,
+      label: projectLocations.projectLabel(project.id) ?? project.name,
+      available: locations.some((location) => location.available &&
+        environments.find(({ id }) => id === location.environmentId)?.available !== false),
+      searchTerms: locations.flatMap((location) => [
+        location.label.text,
+        location.displayPath.text,
+        environments.find(({ id }) => id === location.environmentId)?.label.text ?? "",
       ]),
     };
   });
   const scopePreferenceKey = [
     viewPreferences.environmentFilterId,
     viewPreferences.targetFilterId,
-    viewPreferences.projectFilterName,
+    viewPreferences.projectFilterId,
     viewPreferences.groupFilterId,
     viewPreferences.ungroupedFilter,
   ].join("\0");
+  // Project groups' disclosure, keyed by project ID.
+  const [projectExpanded, setProjectExpanded] = useSidebarDisclosures("projects");
   const [pendingOpenedWorkspace, setPendingOpenedWorkspace] = useState<
     | {
         readonly id: string;
@@ -493,16 +521,20 @@ export function InventorySidebar({
     if (openedWorkspace) {
       const eventId = store.normalized.replayCursor;
       setSidebarInventoryScope(
-        { projectFilterName: openedWorkspace.label.text },
+        { projectFilterId: openedWorkspace.projectId },
         eventId
           ? {
               projectFilterPublication: {
-                projectName: openedWorkspace.label.text,
+                projectId: openedWorkspace.projectId,
                 eventId,
               },
             }
           : undefined,
       );
+      setProjectExpanded((current) => ({
+        ...current,
+        [openedWorkspace.projectId]: true,
+      }));
       setPendingOpenedWorkspace(undefined);
       return;
     }
@@ -701,20 +733,17 @@ export function InventorySidebar({
     () => new Map(workspaces.map((workspace) => [workspace.id, workspace])),
     [workspaces],
   );
-  const workspaceStackLabels = useMemo(
+  const projectsByWorkspace = useMemo(
     () =>
       new Map(
-        workspaces.map((workspace) => [
-          workspace.id,
-          workspaceDisplayLabel({
-            workspace,
-            workspaces,
-            environments: environments.filter(({ kind }) => kind !== "local"),
-            includeEnvironment: false,
-          }),
-        ]),
+        workspaces.flatMap((workspace) => {
+          const label = projectLocations.projectLabel(workspace.projectId);
+          return label === undefined
+            ? []
+            : [[workspace.id, { id: workspace.projectId, label }] as const];
+        }),
       ),
-    [environments, workspaces],
+    [projectLocations, workspaces],
   );
   const effectiveStackBy =
     state.search.trim() ||
@@ -728,9 +757,9 @@ export function InventorySidebar({
         groups: flatGroups,
         stackBy: effectiveStackBy,
         threadGroups,
-        workspaceLabels: workspaceStackLabels,
+        projectsByWorkspace,
       }),
-    [effectiveStackBy, flatGroups, threadGroups, workspaceStackLabels],
+    [effectiveStackBy, flatGroups, projectsByWorkspace, threadGroups],
   );
   const environmentById = useMemo(
     () =>
@@ -779,28 +808,21 @@ export function InventorySidebar({
   const projectOrganizationGroups = useMemo<readonly SidebarFlatGroup[]>(() => {
     if (groupBy !== "project" || !projection) return [];
     const groups: SidebarFlatGroup[] = [];
-    for (const workspace of scope.projectOptions) {
-      if (
-        projectFilterName !== null &&
-        workspace.label.text !== projectFilterName
-      ) {
+    for (const project of scope.projectOptions) {
+      if (projectFilterId !== null && project.id !== projectFilterId) {
         continue;
       }
+      const bucket = sidebarProjectBucket(project.id);
       const threads = flattenProjectNodes(
         sortProjectNodes(
-          projection.rootsByBucket.get(`workspace:${workspace.id}`) ?? [],
+          projection.rootsByBucket.get(bucket) ?? [],
           compareProjectRoots(modePreferences),
         ),
       );
       if (threads.length === 0) continue;
       groups.push({
-        key: `workspace:${workspace.id}`,
-        label: workspaceDisplayLabel({
-          workspace,
-          workspaces: scope.projectOptions,
-          environments: environments.filter(({ kind }) => kind !== "local"),
-          includeEnvironment: locationSuppression.showEnvironment,
-        }),
+        key: bucket,
+        label: projectLocations.projectLabel(project.id) ?? project.name,
         kind: "state",
         futureTimes: false,
         threads,
@@ -845,11 +867,10 @@ export function InventorySidebar({
     }
     return groups;
   }, [
-    environments,
     groupBy,
-    locationSuppression.showEnvironment,
     modePreferences,
-    projectFilterName,
+    projectFilterId,
+    projectLocations,
     projection,
     scope.projectOptions,
     viewPreferences.show.settled,
@@ -861,29 +882,23 @@ export function InventorySidebar({
         groups: projectOrganizationGroups,
         stackBy: effectiveStackBy,
         threadGroups,
-        workspaceLabels: workspaceStackLabels,
+        projectsByWorkspace,
       }),
     [
       effectiveStackBy,
       projectOrganizationGroups,
+      projectsByWorkspace,
       threadGroups,
-      workspaceStackLabels,
     ],
   );
-  const workspaceLabelFor = (
-    workspaceId: string,
-    includeEnvironment = false,
-  ) => {
-    const workspace = workspaceById.get(workspaceId);
-    return workspace
-      ? workspaceDisplayLabel({
-          workspace,
-          workspaces,
-          environments: nonLocalEnvironments,
-          includeEnvironment,
-        })
-      : undefined;
-  };
+  /** A card's project label: the project name and, when needed, the folder. */
+  const projectLabelFor = (workspaceId: string) =>
+    projectLocations.projectFolderLabel(workspaceId);
+  /** A Projects-view row's tag: what distinguishes its location in its project. */
+  const locationTagFor = (thread: NormalizedApplicationThreadSummary) =>
+    projectLocations.locationTag(thread.workspaceId, {
+      includeEnvironment: !locationSuppression.environmentImplied,
+    });
   const environmentLabelFor = (workspaceId: string) => {
     const workspace = workspaceById.get(workspaceId);
     const environment = workspace
@@ -904,18 +919,18 @@ export function InventorySidebar({
         })
       : undefined;
   };
+  /**
+   * Shelves mix projects: a row names its project (and folder), with a remote
+   * environment while several are in view. Under a project filter only the
+   * location tag remains.
+   */
   const shelfLocationLabelFor = (
     thread: NormalizedApplicationThreadSummary,
   ) => {
-    const parts: string[] = [];
-    if (scope.projectName === null) {
-      const workspaceLabel = workspaceLabelFor(
-        thread.workspaceId,
-        locationSuppression.showEnvironment,
-      );
-      if (workspaceLabel) parts.push(workspaceLabel);
-    }
-    return parts.length > 0 ? parts.join(" · ") : undefined;
+    if (scope.projectId !== null) return locationTagFor(thread);
+    return projectLocations.projectFolderLabel(thread.workspaceId, {
+      includeEnvironment: locationSuppression.showEnvironment,
+    });
   };
   /**
    * Fork context for the flat rows' quiet ⑂ affordance, archive impact, and
@@ -1321,16 +1336,17 @@ export function InventorySidebar({
     ({ id }) => id === selectedThreadId,
   );
   const [addProjectOpen, setAddProjectOpen] = useState(false);
-  const [projectExpanded, setProjectExpanded] = useSidebarDisclosures("projects");
+  const selectedProjectId = selectedThread
+    ? workspaceById.get(selectedThread.workspaceId)?.projectId
+    : undefined;
   useEffect(() => {
-    if (projectFilterName !== null || !selectedThread?.workspaceId)
-      return;
+    if (projectFilterId !== null || selectedProjectId === undefined) return;
     setProjectExpanded((current) =>
-      current[selectedThread.workspaceId] !== undefined
+      current[selectedProjectId] !== undefined
         ? current
-        : { ...current, [selectedThread.workspaceId]: true },
+        : { ...current, [selectedProjectId]: true },
     );
-  }, [projectFilterName, selectedThreadId, selectedThread?.workspaceId, setProjectExpanded]);
+  }, [projectFilterId, selectedProjectId, setProjectExpanded]);
   const shownThreads = threads.filter(keepShownThread);
   const active = shownThreads.filter(
     ({ inventoryState, automation }) =>
@@ -1439,12 +1455,7 @@ export function InventorySidebar({
                   onChange={(value) =>
                     setSidebarInventoryScope(
                       transitionSidebarInventoryScope(
-                        {
-                          environments,
-                          executionTargets,
-                          workspaces,
-                          groups: threadGroups,
-                        },
+                        scopeCatalog,
                         viewPreferences,
                         {
                           environmentFilterId:
@@ -1495,12 +1506,7 @@ export function InventorySidebar({
                   onChange={(value) =>
                     setSidebarInventoryScope(
                       transitionSidebarInventoryScope(
-                        {
-                          environments,
-                          executionTargets,
-                          workspaces,
-                          groups: threadGroups,
-                        },
+                        scopeCatalog,
                         viewPreferences,
                         {
                           targetFilterId:
@@ -1514,24 +1520,19 @@ export function InventorySidebar({
               <ScopeSelect
                 label="Project"
                 icon={<Folder size={14} strokeWidth={1.8} />}
-                value={scope.projectName === null ? ALL_PROJECTS_FILTER_VALUE : `${PROJECT_NAME_FILTER_PREFIX}${scope.projectName}`}
+                value={scope.projectId ?? ALL_PROJECTS_FILTER_VALUE}
                 allValue={ALL_PROJECTS_FILTER_VALUE}
                 allLabel="All projects"
                 testId="project-filter"
-                options={projectNameOptions}
+                options={projectFilterOptions}
                 onChange={(value) =>
                   setSidebarInventoryScope(
                     transitionSidebarInventoryScope(
-                      {
-                        environments,
-                        executionTargets,
-                        workspaces,
-                        groups: threadGroups,
-                      },
+                      scopeCatalog,
                       viewPreferences,
                       {
-                        projectFilterName:
-                          value === ALL_PROJECTS_FILTER_VALUE ? null : value.slice(PROJECT_NAME_FILTER_PREFIX.length),
+                        projectFilterId:
+                          value === ALL_PROJECTS_FILTER_VALUE ? null : value,
                       },
                     ),
                   )
@@ -1582,13 +1583,14 @@ export function InventorySidebar({
           <div className="sidebar-create-actions">
             <NewThreadControl
               store={store}
+              projects={projects}
               workspaces={workspaces}
               environments={environments}
               executionTargets={executionTargets}
               creationScope={{
                 environmentId: scope.environmentId,
                 targetId: scope.targetId,
-                projectName: scope.projectName,
+                projectId: scope.projectId,
               }}
               className="sidebar-create-action"
               onCreated={(threadId) => {
@@ -1690,9 +1692,7 @@ export function InventorySidebar({
                 }))
               }
               selectedThreadId={selectedThreadId}
-              workspaceLabelFor={(workspaceId) =>
-                workspaceLabelFor(workspaceId)
-              }
+              projectLabelFor={projectLabelFor}
               environmentLabelFor={environmentLabelFor}
               showProjectLabel={locationSuppression.showProject}
               showEnvironmentLabel={locationSuppression.showEnvironment}
@@ -1783,9 +1783,8 @@ export function InventorySidebar({
                       }))
                     }
                     selectedThreadId={selectedThreadId}
-                    workspaceLabelFor={(workspaceId) =>
-                      workspaceLabelFor(workspaceId)
-                    }
+                    projectLabelFor={projectLabelFor}
+                    locationTagFor={locationTagFor}
                     environmentLabelFor={environmentLabelFor}
                     showProjectLabel={false}
                     showEnvironmentLabel={locationSuppression.showEnvironment}
@@ -1849,40 +1848,36 @@ export function InventorySidebar({
                 ) : (
                   scope.projectOptions
                     .filter(
-                      (workspace) =>
-                        projectFilterName === null ||
-                        workspace.label.text === projectFilterName,
+                      (project) =>
+                        projectFilterId === null ||
+                        project.id === projectFilterId,
                     )
-                    .map((workspace, workspaceIndex) => {
-                      const projectDisplayLabel = workspaceDisplayLabel({
-                        workspace,
-                        workspaces: scope.projectOptions,
-                        environments: nonLocalEnvironments,
-                        includeEnvironment: locationSuppression.showEnvironment,
-                      });
-                      const isActive =
-                        workspace.label.text === projectFilterName;
+                    .map((project, projectIndex) => {
+                      const projectDisplayLabel =
+                        projectLocations.projectLabel(project.id) ??
+                        project.name;
+                      const isActive = project.id === projectFilterId;
                       const expanded =
-                        projectExpanded[workspace.id] ??
+                        projectExpanded[project.id] ??
                         (isActive ||
-                          workspace.id === selectedThread?.workspaceId ||
+                          project.id === selectedProjectId ||
                           (selectedThread === undefined &&
-                            workspaceIndex === 0));
+                            projectIndex === 0));
                       const projectNodes = sortProjectNodes(
                         projection?.rootsByBucket.get(
-                          `workspace:${workspace.id}`,
+                          sidebarProjectBucket(project.id),
                         ) ?? [],
                         compareProjectRoots(modePreferences),
                       );
                       return (
                         <Collapsible.Root
-                          key={workspace.id}
+                          key={project.id}
                           className="project-group"
                           open={expanded}
                           onOpenChange={(open) => {
                             setProjectExpanded((previous) => ({
                               ...previous,
-                              [workspace.id]: open,
+                              [project.id]: open,
                             }));
                           }}
                         >
@@ -1890,6 +1885,7 @@ export function InventorySidebar({
                             <Collapsible.Trigger
                               className="project-row"
                               data-testid="project-row"
+                              data-project-id={project.id}
                               data-active={isActive ? "true" : "false"}
                             >
                               <Folder size={14} strokeWidth={1.8} />
@@ -1907,36 +1903,31 @@ export function InventorySidebar({
                               className="project-filter-shortcut"
                               aria-label={
                                 isActive
-                                  ? `Clear ${workspace.label.text} filter`
-                                  : `Filter to ${workspace.label.text}`
+                                  ? `Clear ${projectDisplayLabel} filter`
+                                  : `Filter to ${projectDisplayLabel}`
                               }
                               aria-pressed={isActive}
                               title={
                                 isActive
-                                  ? `Clear ${workspace.label.text} filter`
-                                  : `Filter to ${workspace.label.text}`
+                                  ? `Clear ${projectDisplayLabel} filter`
+                                  : `Filter to ${projectDisplayLabel}`
                               }
                               onClick={() => {
                                 setSidebarInventoryScope(
                                   transitionSidebarInventoryScope(
-                                    {
-                                      environments,
-                                      executionTargets,
-                                      workspaces,
-                                      groups: threadGroups,
-                                    },
+                                    scopeCatalog,
                                     viewPreferences,
                                     {
-                                      projectFilterName: isActive
+                                      projectFilterId: isActive
                                         ? null
-                                        : workspace.label.text,
+                                        : project.id,
                                     },
                                   ),
                                 );
                                 if (!isActive) {
                                   setProjectExpanded((current) => ({
                                     ...current,
-                                    [workspace.id]: true,
+                                    [project.id]: true,
                                   }));
                                 }
                               }}
@@ -1957,7 +1948,7 @@ export function InventorySidebar({
                               showBackendBrand={
                                 viewPreferences.showBackendIcons
                               }
-                              locationLabelFor={() => undefined}
+                              locationLabelFor={locationTagFor}
                               taskSummaryFor={(threadId) =>
                                 taskSummaryByThreadId.get(threadId)
                               }
@@ -2119,13 +2110,13 @@ export function InventorySidebar({
             backgroundWorkCurrent={
               state.authoritative && state.connection === "connected"
             }
-            workspaceLabel={
-              workspaceLabelFor(peekTarget.thread.workspaceId) ?? "Workspace"
+            projectLabel={
+              projectLabelFor(peekTarget.thread.workspaceId) ?? "Project"
             }
-            workspacePath={
+            locationPath={
               workspaceById.get(peekTarget.thread.workspaceId)?.displayPath.text
             }
-            workspaceAvailable={
+            locationAvailable={
               workspaceById.get(peekTarget.thread.workspaceId)?.available
             }
             environmentLabel={environmentLabelFor(
@@ -2155,9 +2146,9 @@ export function InventorySidebar({
           environmentLocked={scope.effectiveEnvironmentId !== null}
           onClose={() => setAddProjectOpen(false)}
           onAdded={(workspaceId) => {
-            // Wait for the authoritative catalog before persisting the new filter.
+            // Wait for the authoritative catalog before persisting the new
+            // filter and opening the location's project group.
             setPendingOpenedWorkspace({ id: workspaceId, scopePreferenceKey });
-            setProjectExpanded((current) => ({ ...current, [workspaceId]: true }));
           }}
         />}
       </div>
@@ -2482,7 +2473,9 @@ interface GroupModeRowOptions {
   readonly containerClassName?: string;
   readonly containerTestId?: string;
   readonly stackGroupId?: string;
-  readonly stackWorkspaceId?: string;
+  readonly stackProjectId?: string;
+  /** Replaces the row's own project label, as a project stack face does. */
+  readonly projectLabel?: string;
   readonly showProjectLabel?: boolean;
   readonly representativeThreadId?: string;
   readonly onInteractionOpenChange?: (open: boolean) => void;
@@ -2951,7 +2944,8 @@ function ThreadStackItem({
     containerTestId:
       stack.kind === "group" ? "thread-group-stack" : "project-stack",
     stackGroupId: stack.kind === "group" ? stack.id : undefined,
-    stackWorkspaceId: stack.kind === "project" ? stack.id : undefined,
+    stackProjectId: stack.kind === "project" ? stack.id : undefined,
+    projectLabel: stack.kind === "project" ? stack.label : undefined,
     representativeThreadId: entry.representative.id,
     peekBindings: stackBindings,
     stackFace: {
@@ -3085,7 +3079,8 @@ function FlatGroupList({
   expanded,
   onExpandGroup,
   selectedThreadId,
-  workspaceLabelFor,
+  projectLabelFor,
+  locationTagFor,
   environmentLabelFor,
   showProjectLabel,
   showEnvironmentLabel,
@@ -3118,7 +3113,11 @@ function FlatGroupList({
   readonly expanded: Readonly<Record<string, boolean>>;
   readonly onExpandGroup: (groupKey: string) => void;
   readonly selectedThreadId?: string;
-  readonly workspaceLabelFor: (workspaceId: string) => string | undefined;
+  readonly projectLabelFor: (workspaceId: string) => string | undefined;
+  /** Rows grouped by project tag their location within it. */
+  readonly locationTagFor?: (
+    thread: NormalizedApplicationThreadSummary,
+  ) => string | undefined;
   readonly environmentLabelFor: (workspaceId: string) => string | undefined;
   readonly showProjectLabel: boolean;
   readonly showEnvironmentLabel: boolean;
@@ -3214,7 +3213,10 @@ function FlatGroupList({
             density={density}
             showBackendBrand={showBackendBrand}
             selected={options.selected}
-            workspaceLabel={workspaceLabelFor(thread.workspaceId)}
+            projectLabel={
+              options.projectLabel ?? projectLabelFor(thread.workspaceId)
+            }
+            locationTag={locationTagFor?.(thread)}
             environmentLabel={environmentLabelFor(thread.workspaceId)}
             showProjectLabel={options.showProjectLabel ?? showProjectLabel}
             showEnvironmentLabel={showEnvironmentLabel}
@@ -3238,7 +3240,7 @@ function FlatGroupList({
             containerClassName={options.containerClassName}
             containerTestId={options.containerTestId}
             stackGroupId={options.stackGroupId}
-            stackWorkspaceId={options.stackWorkspaceId}
+            stackProjectId={options.stackProjectId}
             representativeThreadId={options.representativeThreadId}
             onInteractionOpenChange={options.onInteractionOpenChange}
             stackFace={options.stackFace}
@@ -3369,7 +3371,8 @@ function FlatRowItemContent(
     density,
     showBackendBrand,
     selected,
-    workspaceLabel,
+    projectLabel,
+    locationTag,
     environmentLabel,
     showProjectLabel,
     showEnvironmentLabel,
@@ -3391,7 +3394,7 @@ function FlatRowItemContent(
     containerClassName,
     containerTestId,
     stackGroupId,
-    stackWorkspaceId,
+    stackProjectId,
     representativeThreadId,
     onInteractionOpenChange,
     stackFace,
@@ -3401,7 +3404,8 @@ function FlatRowItemContent(
     readonly density: SidebarDensity;
     readonly showBackendBrand: boolean;
     readonly selected: boolean;
-    readonly workspaceLabel?: string;
+    readonly projectLabel?: string;
+    readonly locationTag?: string;
     readonly environmentLabel?: string;
     readonly showProjectLabel: boolean;
     readonly showEnvironmentLabel: boolean;
@@ -3425,7 +3429,7 @@ function FlatRowItemContent(
     readonly containerClassName?: string;
     readonly containerTestId?: string;
     readonly stackGroupId?: string;
-    readonly stackWorkspaceId?: string;
+    readonly stackProjectId?: string;
     readonly representativeThreadId?: string;
     readonly onInteractionOpenChange?: (open: boolean) => void;
     readonly stackFace?: GroupModeRowOptions["stackFace"];
@@ -3680,7 +3684,8 @@ function FlatRowItemContent(
       showBackendBrand={showBackendBrand}
       futureTimes={futureTimes}
       selected={selected}
-      workspaceLabel={workspaceLabel}
+      projectLabel={projectLabel}
+      locationTag={locationTag}
       environmentLabel={environmentLabel}
       showProjectLabel={showProjectLabel}
       showEnvironmentLabel={showEnvironmentLabel}
@@ -3688,7 +3693,7 @@ function FlatRowItemContent(
       taskSummary={taskSummary}
       quickSwitchHint={quickSwitchHint}
       showCompactGroupLabel={Boolean(stackGroupId)}
-      showCompactProjectLabel={Boolean(stackWorkspaceId)}
+      showCompactProjectLabel={Boolean(stackProjectId)}
       groupLabel={
         !showGroupLabel || thread.groupId === null
           ? undefined
@@ -3705,10 +3710,13 @@ function FlatRowItemContent(
       }}
       clickNamesToFilter={clickNamesToFilter}
       onProjectSelect={() => {
-        const workspace = store.getSnapshot().snapshot?.workspaces.find(
-          ({ id }) => id === (stackWorkspaceId ?? thread.workspaceId),
-        );
-        if (workspace) setSidebarInventoryScope({ projectFilterName: workspace.label.text });
+        const projectId =
+          stackProjectId ??
+          store
+            .getSnapshot()
+            .snapshot?.workspaces.find(({ id }) => id === thread.workspaceId)
+            ?.projectId;
+        if (projectId) setSidebarInventoryScope({ projectFilterId: projectId });
       }}
       onEnvironmentSelect={() => {
         const environmentId = store.getSnapshot().snapshot?.workspaces.find(
@@ -3826,9 +3834,9 @@ function FlatRowItemContent(
     "data-testid": containerTestId,
     "data-thread-id": thread.id,
     "data-group-id": stackGroupId,
-    "data-workspace-id": stackWorkspaceId,
+    "data-project-id": stackProjectId,
     "data-representative-thread-id": representativeThreadId,
-    "data-density": stackGroupId || stackWorkspaceId ? density : undefined,
+    "data-density": stackGroupId || stackProjectId ? density : undefined,
     "data-environment-tint": environmentTintStyle ? "true" : undefined,
     style: environmentTintStyle,
     ...peekBindings,

@@ -5,11 +5,12 @@ import type {
 
 type SearchCatalog = Pick<
   NormalizedApplicationSnapshot,
-  "workspaces" | "environments" | "executionTargets"
+  "projects" | "workspaces" | "environments" | "executionTargets"
 >;
 
 /** The resolved catalog entries a thread's search text is drawn from. */
 export interface ThreadSearchContext {
+  readonly project?: SearchCatalog["projects"][number];
   readonly workspace?: SearchCatalog["workspaces"][number];
   readonly environment?: SearchCatalog["environments"][number];
   readonly target?: SearchCatalog["executionTargets"][number];
@@ -26,10 +27,11 @@ export function normalizeThreadSearchQuery(search: string): string {
  */
 export function threadSearchValues(
   thread: NormalizedApplicationThreadSummary,
-  { workspace, environment, target }: ThreadSearchContext,
+  { project, workspace, environment, target }: ThreadSearchContext,
 ): readonly (string | undefined)[] {
   return [
     thread.title.text,
+    project?.name,
     workspace?.label.text,
     workspace?.displayPath.text,
     environment?.label.text,
@@ -63,9 +65,9 @@ export function threadSearchValuesMatch(
 }
 
 /**
- * Build one indexed matcher for a search pass. Workspace and environment
- * metadata are resolved once instead of scanning both collections for every
- * thread rendered or projected.
+ * Build one indexed matcher for a search pass. Project, location, and
+ * environment metadata are resolved once instead of scanning the collections
+ * for every thread rendered or projected.
  */
 export function createThreadSearchMatcher(
   search: string,
@@ -74,6 +76,9 @@ export function createThreadSearchMatcher(
   const query = normalizeThreadSearchQuery(search);
   if (!query) return () => true;
 
+  const projectById = new Map(
+    snapshot?.projects.map((project) => [project.id, project]) ?? [],
+  );
   const workspaceById = new Map(
     snapshot?.workspaces.map((workspace) => [workspace.id, workspace]) ?? [],
   );
@@ -92,8 +97,14 @@ export function createThreadSearchMatcher(
     const environment = workspace
       ? environmentById.get(workspace.environmentId)
       : undefined;
+    const project = workspace ? projectById.get(workspace.projectId) : undefined;
     const target = targetById.get(thread.targetId);
-    return threadSearchValues(thread, { workspace, environment, target }).some(
+    return threadSearchValues(thread, {
+      project,
+      workspace,
+      environment,
+      target,
+    }).some(
       (value) => value?.toLocaleLowerCase().includes(query),
     );
   };

@@ -30,7 +30,8 @@ export interface SidebarTargetPresentation {
 
 const COLLISION_TOKEN_MIN_LENGTH = 6;
 
-function uniqueCollisionToken(
+/** The shortest ID suffix that tells colliding labels apart. */
+export function uniqueCollisionToken(
   id: string,
   collidingIds: readonly string[],
 ): string {
@@ -136,13 +137,22 @@ export function targetDisplayLabel(options: {
   return label;
 }
 
+export interface SidebarScopedProjectPresentation {
+  /** The collision-qualified project label. */
+  readonly label: string;
+  /** The project's locations, for availability on the scoped environment. */
+  readonly locations: readonly Pick<
+    SidebarWorkspacePresentation,
+    "environmentId" | "available"
+  >[];
+}
+
 export function scopeSummaryLabel(options: {
   readonly environment?: SidebarEnvironmentPresentation;
   readonly target?: SidebarTargetPresentation;
-  readonly projectName?: string | null;
+  readonly project?: SidebarScopedProjectPresentation;
   readonly environments: readonly SidebarEnvironmentPresentation[];
   readonly targets: readonly SidebarTargetPresentation[];
-  readonly workspaces: readonly SidebarWorkspacePresentation[];
 }): string {
   return scopeSummaryPresentation(options).fullLabel;
 }
@@ -150,14 +160,12 @@ export function scopeSummaryLabel(options: {
 export function scopeSummaryPresentation(options: {
   readonly environment?: SidebarEnvironmentPresentation;
   readonly target?: SidebarTargetPresentation;
-  readonly projectName?: string | null;
+  readonly project?: SidebarScopedProjectPresentation;
   readonly environments: readonly SidebarEnvironmentPresentation[];
   readonly targets: readonly SidebarTargetPresentation[];
-  readonly workspaces: readonly SidebarWorkspacePresentation[];
   readonly maxVisibleParts?: number;
 }): { readonly fullLabel: string; readonly visibleLabel: string } {
-  const { environment, target, projectName, environments, targets, workspaces } =
-    options;
+  const { environment, target, project, environments, targets } = options;
   const parts: string[] = [];
   if (environment) {
     parts.push(
@@ -181,15 +189,17 @@ export function scopeSummaryPresentation(options: {
     }
     parts.push(label);
   }
-  if (projectName) {
+  if (project) {
     const environmentId = environment?.id ?? target?.environmentId;
-    const matching = workspaces.filter((workspace) =>
-      workspace.label.text === projectName &&
-      (environmentId === undefined || workspace.environmentId === environmentId),
+    const available = project.locations.some(
+      (location) =>
+        (environmentId === undefined ||
+          location.environmentId === environmentId) &&
+        location.available &&
+        environments.find(({ id }) => id === location.environmentId)
+          ?.available !== false,
     );
-    const available = matching.some((workspace) => workspace.available &&
-      environments.find(({ id }) => id === workspace.environmentId)?.available !== false);
-    parts.push(`${projectName}${available ? "" : " — Unavailable"}`);
+    parts.push(`${project.label}${available ? "" : " — Unavailable"}`);
   }
   const fullLabel = parts.join(" · ");
   const maxVisibleParts = Math.max(1, options.maxVisibleParts ?? 2);

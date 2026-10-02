@@ -49,9 +49,9 @@ describe("ThreadPeekCard location", () => {
     render(
       <ThreadPeekCard
         thread={thread()}
-        workspaceLabel="agent-workspaces"
-        workspacePath="/srv/agent-workspaces"
-        workspaceAvailable={false}
+        projectLabel="agent-workspaces"
+        locationPath="/srv/agent-workspaces"
+        locationAvailable={false}
         environmentLabel="aw-rocky8-sip"
         showEnvironment
         environmentAvailable={false}
@@ -76,7 +76,7 @@ describe("ThreadPeekCard location", () => {
     render(
       <ThreadPeekCard
         thread={thread()}
-        workspaceLabel="sedes"
+        projectLabel="sedes"
         environmentLabel="Local"
         showEnvironment={false}
         targetLabel="Codex UDS"
@@ -92,21 +92,21 @@ describe("ThreadPeekCard background state", () => {
   it("shares the row's completion, agent, command and idle priority", () => {
     const base = thread();
     const active = { ...base, backgroundWork: { agents: 1, commands: 0, other: 0 } };
-    const view = render(<ThreadPeekCard thread={active} workspaceLabel="Sedes" position={{ top: 10, left: 20 }} />);
+    const view = render(<ThreadPeekCard thread={active} projectLabel="Sedes" position={{ top: 10, left: 20 }} />);
     const stateRow = () => view.container.querySelector('[data-row="state"]')!;
     expect(stateRow()).toHaveTextContent("Waiting for subagent");
     expect(stateRow().querySelector('[data-glyph="background-agents"] .comet-spinner')).not.toBeNull();
 
-    view.rerender(<ThreadPeekCard thread={{ ...active, attention: { ...base.attention, unseenCompletion: true } }} workspaceLabel="Sedes" position={{ top: 10, left: 20 }} />);
+    view.rerender(<ThreadPeekCard thread={{ ...active, attention: { ...base.attention, unseenCompletion: true } }} projectLabel="Sedes" position={{ top: 10, left: 20 }} />);
     expect(stateRow()).toHaveTextContent("Finished while you were away · 1 subagent still running");
     expect(stateRow().querySelector('[data-glyph="unseen"] .flat-row-unseen-dot')).not.toBeNull();
     expect(view.container.querySelector('[data-row="unseen"]')).toBeNull();
 
-    view.rerender(<ThreadPeekCard thread={{ ...base, backgroundWork: { agents: 0, commands: 2, other: 0 } }} workspaceLabel="Sedes" position={{ top: 10, left: 20 }} />);
+    view.rerender(<ThreadPeekCard thread={{ ...base, backgroundWork: { agents: 0, commands: 2, other: 0 } }} projectLabel="Sedes" position={{ top: 10, left: 20 }} />);
     expect(stateRow()).toHaveTextContent("Background work · 2 commands");
     expect(stateRow().querySelector('[data-glyph="background-commands"] .flat-row-background-dot')).not.toBeNull();
 
-    view.rerender(<ThreadPeekCard thread={active} backgroundWorkCurrent={false} workspaceLabel="Sedes" position={{ top: 10, left: 20 }} />);
+    view.rerender(<ThreadPeekCard thread={active} backgroundWorkCurrent={false} projectLabel="Sedes" position={{ top: 10, left: 20 }} />);
     expect(stateRow()).toHaveTextContent("Idle");
     expect(stateRow().querySelector(".comet-spinner")).toBeNull();
   });
@@ -179,7 +179,7 @@ describe("ThreadPeekCard detail beneath attention and background glyphs", () => 
       const view = render(
         <ThreadPeekCard
           thread={{ ...base, ...overrides, attention: { ...base.attention, unseenCompletion: unseen } }}
-          workspaceLabel="Sedes"
+          projectLabel="Sedes"
           position={{ top: 10, left: 20 }}
         />,
       );

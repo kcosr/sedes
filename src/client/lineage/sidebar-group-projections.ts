@@ -44,7 +44,13 @@ export interface ProjectSidebarStacksInput {
   readonly groups: readonly SidebarFlatGroup[];
   readonly stackBy: SidebarStackBy;
   readonly threadGroups: readonly NormalizedThreadGroup[];
-  readonly workspaceLabels: ReadonlyMap<string, string>;
+  /** Each location's project and its collision-qualified label, by workspace ID. */
+  readonly projectsByWorkspace: ReadonlyMap<string, SidebarStackProject>;
+}
+
+export interface SidebarStackProject {
+  readonly id: string;
+  readonly label: string;
 }
 
 type StackDefinition =
@@ -72,7 +78,7 @@ export function projectSidebarStacks({
   groups,
   stackBy,
   threadGroups,
-  workspaceLabels,
+  projectsByWorkspace,
 }: ProjectSidebarStacksInput): SidebarStackedGroup[] {
   const groupById = new Map(threadGroups.map((group) => [group.id, group]));
   const definitionsByThreadId = new Map<string, StackDefinition>();
@@ -84,7 +90,7 @@ export function projectSidebarStacks({
         thread,
         stackBy,
         groupById,
-        workspaceLabels,
+        projectsByWorkspace,
       );
       if (!definition) continue;
       definitionsByThreadId.set(thread.id, definition);
@@ -151,7 +157,7 @@ function stackDefinitionFor(
   thread: NormalizedApplicationThreadSummary,
   stackBy: SidebarStackBy,
   groupById: ReadonlyMap<string, NormalizedThreadGroup>,
-  workspaceLabels: ReadonlyMap<string, string>,
+  projectsByWorkspace: ReadonlyMap<string, SidebarStackProject>,
 ): StackDefinition | undefined {
   if (stackBy === "none") return undefined;
   if (stackBy === "group") {
@@ -167,13 +173,13 @@ function stackDefinitionFor(
         }
       : undefined;
   }
-  const label = workspaceLabels.get(thread.workspaceId);
-  return label
+  const project = projectsByWorkspace.get(thread.workspaceId);
+  return project
     ? {
-        key: `project:${thread.workspaceId}`,
+        key: `project:${project.id}`,
         stackBy,
-        stackId: thread.workspaceId,
-        label,
+        stackId: project.id,
+        label: project.label,
       }
     : undefined;
 }

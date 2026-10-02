@@ -41,7 +41,7 @@ export interface SidebarShowFilters {
 }
 
 export interface SidebarProjectFilterPublication {
-  readonly projectName: string;
+  readonly projectId: string;
   readonly eventId: string;
 }
 
@@ -52,12 +52,18 @@ export interface SidebarViewPreferences {
   /** Viewer-local exact execution-target scope; `null` means all. */
   readonly targetFilterId: string | null;
   /**
-   * Viewer-local exact project-name filter shared by every sidebar grouping mode.
+   * Viewer-local project filter shared by every sidebar grouping mode.
    * `null` is the explicit "All projects" state.
    */
-  readonly projectFilterName: string | null;
-  /** Causal application event that first published a newly opened project. */
+  readonly projectFilterId: string | null;
+  /** Causal application event that first published a newly added location's project. */
   readonly projectFilterPublication: SidebarProjectFilterPublication | null;
+  /**
+   * A project-name filter saved before projects had identity. It filters
+   * nothing; the sidebar resolves it once against an authoritative snapshot,
+   * and any write of `projectFilterId` removes it.
+   */
+  readonly projectFilterName?: string;
   /** Viewer-local persistent group filter; mutually exclusive with ungrouped. */
   readonly groupFilterId: string | null;
   readonly ungroupedFilter: boolean;
@@ -86,7 +92,7 @@ export type SidebarInventoryScopePatch = Partial<
     SidebarViewPreferences,
     | "environmentFilterId"
     | "targetFilterId"
-    | "projectFilterName"
+    | "projectFilterId"
     | "groupFilterId"
     | "ungroupedFilter"
   >
@@ -123,7 +129,7 @@ export const SIDEBAR_VIEW_DEFAULTS: SidebarViewPreferences = {
   version: 2,
   environmentFilterId: null,
   targetFilterId: null,
-  projectFilterName: null,
+  projectFilterId: null,
   projectFilterPublication: null,
   groupFilterId: null,
   ungroupedFilter: false,

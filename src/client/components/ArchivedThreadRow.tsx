@@ -74,7 +74,10 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
 }: {
   readonly row: ArchivedThreadRowModel;
   readonly store: ApplicationClientStore;
-  /** False when the grouping or the Scope already names the project. */
+  /**
+   * False when the grouping or the Scope already names the project; the row
+   * then shows only its location tag.
+   */
   readonly showProject: boolean;
   /** False when the Scope already names the target. */
   readonly showTarget: boolean;
@@ -87,16 +90,17 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
   const busy =
     restoreStatus?.kind === "pending" || restoreStatus?.kind === "restored";
   const environmentUnavailable = !row.environmentAvailable;
-  const projectMarker = !row.projectAvailable
+  const projectMarker = !row.locationAvailable
     ? environmentUnavailable
-      ? "Project and environment"
-      : "Project"
+      ? "Location and environment"
+      : "Location"
     : environmentUnavailable
       ? "Environment"
       : undefined;
   const targetText =
     row.targetLabel ?? (row.targetAvailable ? null : row.backendLabel);
-  const projectPart = showProject || projectMarker !== undefined;
+  const projectText = showProject ? row.projectLabel : row.locationTag;
+  const projectPart = projectText !== null || projectMarker !== undefined;
   const targetPart =
     targetText !== null && (showTarget || !row.targetAvailable);
   const worktreePart = row.worktreeLabel !== null;
@@ -163,9 +167,9 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
                   <span className="archive-row-part" data-part="project">
                     {/* The folder stays with a lone marker so it reads as the project's. */}
                     <Folder size={13} strokeWidth={1.8} aria-hidden="true" />
-                    {showProject && (
+                    {projectText !== null && (
                       <span className="archive-row-part-text">
-                        {row.projectLabel}
+                        {projectText}
                       </span>
                     )}
                     {projectMarker && (

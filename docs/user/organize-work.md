@@ -15,7 +15,7 @@ Open **View options** and choose one layout:
 
 | View | Best for |
 | --- | --- |
-| **Projects** | Browsing by repository or workspace, with optional fork-family nesting |
+| **Projects** | Browsing by project, with optional fork-family nesting |
 | **Timeline** | Seeing recent activity and future snooze or automation deadlines |
 | **State** | Separating attention, running, scheduled, idle, snoozed, and settled work |
 | **Flat list** | A compact working set without time or state headings |
@@ -30,6 +30,14 @@ stay collapsed even when they contain the current thread.
 Large groups initially show a bounded recent set, with an expander for older
 rows. An active search shows all matches, and the selected thread remains
 visible.
+
+The Projects view shows one group per project. When a project has more than
+one location, each row is tagged with only what tells its location apart: a
+remote environment when the project spans environments (Local is never named),
+and the folder when the project has several folders on that environment and
+the folder name differs from the project's. Cards in Timeline, State, and Flat
+list name the project the same way, for example `sedes › sedes-context`.
+Search matches project names as well as location paths and environment names.
 
 ## Thread activity indicators
 
@@ -92,28 +100,31 @@ change Scope until you choose an option. Use Up/Down to move through results,
 Enter to select, or Escape to close without changing the selection. **All** and
 **Ungrouped** choices remain available while searching.
 
-Project Scope lists each base project name once. Selecting a name includes
-all remembered projects with that exact name across environments, including
-unavailable projects' historical threads. Environment and Target narrow those
-results. A selected name stays selected when you change environments; a
-combination with no matching projects shows an empty result.
+Project Scope lists the projects with a location on the scoped environment, or
+every project when neither an Environment nor a Target is selected. Selecting a
+project includes all of its locations, including unavailable locations'
+historical threads. Environment and Target narrow those results. A selected
+project stays selected when you change environments; a combination where the
+project has no location shows an empty result. Projects with the same name
+are told apart by their environments or paths.
+
+A project-name filter saved by an earlier version of Sedes becomes a project
+filter once the sidebar has a current inventory, when exactly one project
+matches the name; otherwise it is cleared.
 
 With **Click project and environment names to filter** enabled in
-**Settings → General**,
-project-name links on sidebar cards apply the same combined name filter.
-Environment links narrow by the specific environment. Project stacks and the
-Projects view still keep each registered directory separate, and Tasks, files,
-and agent permissions retain their existing project and environment boundaries.
+**Settings → General**, project links on sidebar cards filter to that project.
+Environment links narrow by the specific environment. Tasks, files, and agent
+permissions keep their existing location and environment boundaries.
 
 Changing Environment clears an incompatible Target. Choose **Ungrouped** to see threads without a Group, or
 **Clear** to reset the entire Scope without changing search or visibility
 toggles.
 
-Environment, Target, and Project Scope can prefill compatible values in **New
-thread**. When a project name matches several eligible environments, choose
-an Environment in the existing creation form. The Project dropdown then
-resolves a directory within that environment; duplicate names include paths.
-An explicit Environment or Target scope already determines the machine.
+Environment, Target, and Project Scope prefill **New thread**: the scoped
+project is preselected, its locations are limited to the scoped environment or
+target, and a scoped target is preselected. When the scoped project has no
+location there, choose another project.
 Group Scope only filters inventory; creating a thread while a Group
 is selected does not assign that thread to the Group. Use the new thread's
 context menu to add or move its Group membership.

@@ -19,7 +19,10 @@ import {
   SIDEBAR_VIEW_DEFAULTS,
   SIDEBAR_VIEW_STORAGE_KEY,
 } from "../app/sidebar-view-model.js";
-import { ARCHIVE_VIEW_STORAGE_KEY } from "../archive/archive-view-preferences.js";
+import {
+  ARCHIVE_VIEW_STORAGE_KEY,
+  setArchiveGroupBy,
+} from "../archive/archive-view-preferences.js";
 import { ArchivedView } from "./ArchivedView.js";
 import { installThreadPanelOpenRequestListener } from "../workspace-panels/thread-panel-navigation.js";
 
@@ -130,11 +133,15 @@ function makeSnapshot(
         directoryBrowsing: "available",
       },
     ],
+    projects: [
+      { id: "project-sedes", name: "sedes", revision: 1 },
+      { id: "project-acme", name: "acme-web", revision: 1 },
+    ],
     workspaces: [
       {
         id: "ws-sedes",
         environmentId: "env-local",
-        projectId: "project-1",
+        projectId: "project-sedes",
         label: { text: "sedes" },
         displayPath: { text: "/src/sedes" },
         available: true,
@@ -142,7 +149,7 @@ function makeSnapshot(
       {
         id: "ws-acme",
         environmentId: "env-local",
-        projectId: "project-1",
+        projectId: "project-acme",
         label: { text: "acme-web" },
         displayPath: { text: "/src/acme-web" },
         available: true,
@@ -255,7 +262,7 @@ describe("ArchivedView rows", () => {
           {
             id: "workspace-1",
             environmentId: "environment-1",
-            projectId: "project-1",
+            projectId: "project-sedes",
             label: { text: "sedes" },
             displayPath: { text: "/srv/sedes" },
             available: false,
@@ -286,8 +293,8 @@ describe("ArchivedView rows", () => {
     expect(row).not.toHaveTextContent("Local");
     expect(row).not.toHaveTextContent("Retired host");
     expect(
-      within(row).getByTitle("Project and environment unavailable"),
-    ).toHaveTextContent("Project and environment Unavailable");
+      within(row).getByTitle("Location and environment unavailable"),
+    ).toHaveTextContent("Location and environment Unavailable");
     expect(row).toHaveTextContent("Codex SSH");
     expect(row).not.toHaveTextContent("Codex SSH · Codex");
     expect(within(row).getByTitle("Target unavailable")).toBeInTheDocument();
@@ -298,7 +305,7 @@ describe("ArchivedView rows", () => {
     const open = screen.getByRole("button", { name: "Archived work" });
     expect(open.title).toMatch(/^Archived work\nArchived .+ · Last active .+$/u);
     expect(open).toHaveAccessibleDescription(
-      /sedes.*Project and environment.*Unavailable.*Codex SSH.*Target.*Unavailable.*Codex\. Archived .+ · Last active/u,
+      /sedes.*Location and environment.*Unavailable.*Codex SSH.*Target.*Unavailable.*Codex\. Archived .+ · Last active/u,
     );
     fireEvent.click(open, {
       shiftKey: true,
@@ -386,7 +393,7 @@ describe("ArchivedView scope and search", () => {
   ];
 
   it("honors the sidebar scope and clears it from the status line", async () => {
-    seedScope({ projectFilterName: "acme-web" });
+    seedScope({ projectFilterId: "project-acme" });
     const { store } = createStore(makeSnapshot(threads));
     render(<ArchivedView store={store} />);
     expect(rowTitles()).toEqual(["Acme alpha"]);
@@ -400,7 +407,7 @@ describe("ArchivedView scope and search", () => {
     expect(rowTitles()).toHaveLength(3);
     expect(
       JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!)
-        .projectFilterName,
+        .projectFilterId,
     ).toBeNull();
     expect(
       screen.getByRole("searchbox", { name: "Search archived threads" }),
@@ -409,7 +416,7 @@ describe("ArchivedView scope and search", () => {
   });
 
   it("offers Clear scope when nothing archived is in scope", async () => {
-    seedScope({ projectFilterName: "acme-web" });
+    seedScope({ projectFilterId: "project-acme" });
     const { store } = createStore(makeSnapshot(threads.slice(0, 2)));
     render(<ArchivedView store={store} />);
     expect(screen.getByText("No archived threads in this scope")).toBeVisible();
@@ -465,6 +472,119 @@ describe("ArchivedView scope and search", () => {
     expect(store.setSearch).toHaveBeenLastCalledWith("");
     expect(rowTitles()).toHaveLength(2);
     expect(input).toHaveFocus();
+  });
+
+  it("keeps only the location tag once the project is implied", () => {
+    // One project in three locations: its checkout and a sibling folder on
+    // this machine, and a second checkout on a remote host.
+    const snapshot = makeSnapshot(
+      [
+        makeThread("main", "Main work", { stateChangedAt: hoursAgo(1) }),
+        makeThread("context", "Context work", {
+          workspaceId: "ws-context",
+          stateChangedAt: hoursAgo(2),
+        }),
+        makeThread("remote", "Remote work", {
+          workspaceId: "ws-remote",
+          targetId: "t-remote",
+          stateChangedAt: hoursAgo(3),
+        }),
+      ],
+      {
+        environments: [
+          {
+            id: "env-local",
+            kind: "local",
+            label: { text: "Local" },
+            available: true,
+            directoryBrowsing: "available",
+          },
+          {
+            id: "env-remote",
+            kind: "ssh",
+            label: { text: "aw-personal" },
+            available: true,
+            directoryBrowsing: "available",
+          },
+        ],
+        projects: [{ id: "project-sedes", name: "sedes", revision: 3 }],
+        workspaces: [
+          {
+            id: "ws-sedes",
+            environmentId: "env-local",
+            projectId: "project-sedes",
+            label: { text: "sedes" },
+            displayPath: { text: "/src/sedes" },
+            available: true,
+          },
+          {
+            id: "ws-context",
+            environmentId: "env-local",
+            projectId: "project-sedes",
+            label: { text: "sedes-context" },
+            displayPath: { text: "/src/sedes-context" },
+            available: true,
+          },
+          {
+            id: "ws-remote",
+            environmentId: "env-remote",
+            projectId: "project-sedes",
+            label: { text: "sedes" },
+            displayPath: { text: "/srv/sedes" },
+            available: true,
+          },
+        ],
+        executionTargets: [
+          {
+            id: "t-codex",
+            environmentId: "env-local",
+            label: { text: "Codex" },
+            backend: { label: { text: "Codex" }, brand: "codex" },
+            workspaceExecution: { kind: "direct_only" },
+            available: true,
+          },
+          {
+            id: "t-remote",
+            environmentId: "env-remote",
+            label: { text: "Codex" },
+            backend: { label: { text: "Codex" }, brand: "codex" },
+            workspaceExecution: { kind: "direct_only" },
+            available: true,
+          },
+        ],
+      },
+    );
+    const projectTexts = () =>
+      screen
+        .getAllByTestId("archive-row")
+        .map(
+          (row) =>
+            row.querySelector('[data-part="project"]')?.textContent ?? null,
+        );
+    const { store } = createStore(snapshot);
+    render(<ArchivedView store={store} />);
+    expect(projectTexts()).toEqual([
+      "sedes",
+      "sedes › sedes-context",
+      "sedes · aw-personal",
+    ]);
+    act(() => setArchiveGroupBy("project"));
+    expect(
+      screen
+        .getAllByRole("heading", { level: 2 })
+        .map((heading) => heading.textContent),
+    ).toEqual(["sedes · 3"]);
+    expect(projectTexts()).toEqual([null, "sedes-context", "aw-personal"]);
+    expect(
+      screen.getByRole("button", { name: "Remote work" }),
+    ).toHaveAccessibleDescription(/^aw-personal/u);
+    // A project Scope implies the project just as its group header does.
+    act(() => setArchiveGroupBy("date"));
+    act(() => seedScope({ projectFilterId: "project-sedes" }));
+    expect(screen.getByTestId("archive-status")).toHaveTextContent(
+      "Scope: sedes",
+    );
+    expect(projectTexts()).toEqual([null, "sedes-context", "aw-personal"]);
   });
 
   it("explains an empty archive", () => {

@@ -5,6 +5,7 @@ import {
   type SidebarScopeCatalog,
 } from "./sidebar-scope.js";
 import { scopeSummaryPresentation } from "./sidebar-scope-presentation.js";
+import { describeProjectLocations } from "./project-locations.js";
 import {
   setSidebarInventoryScope,
   useSidebarViewPreferences,
@@ -28,7 +29,7 @@ export function sidebarScopeSummary(
   catalog: SidebarScopeCatalog,
   scope: Pick<
     SidebarInventoryScope,
-    "environmentId" | "targetId" | "projectName" | "groupId" | "ungrouped"
+    "environmentId" | "targetId" | "projectId" | "groupId" | "ungrouped"
   >,
 ): SidebarInventoryScopeSummary {
   const environment = catalog.environments.find(
@@ -38,13 +39,20 @@ export function sidebarScopeSummary(
     ({ id }) => id === scope.targetId,
   );
   const group = catalog.groups.find(({ id }) => id === scope.groupId);
+  const project = (() => {
+    if (scope.projectId === null) return undefined;
+    const projects = describeProjectLocations(catalog);
+    const label = projects.projectLabel(scope.projectId);
+    return label === undefined
+      ? undefined
+      : { label, locations: projects.locationsOf(scope.projectId) };
+  })();
   const location = scopeSummaryPresentation({
     environment,
     target,
-    projectName: scope.projectName,
+    project,
     environments: catalog.environments,
     targets: catalog.executionTargets,
-    workspaces: catalog.workspaces,
   });
   const groupLabel = scope.ungrouped ? "Ungrouped" : group?.name;
   return {
@@ -60,7 +68,7 @@ export function clearSidebarInventoryScope(): void {
   setSidebarInventoryScope({
     environmentFilterId: null,
     targetFilterId: null,
-    projectFilterName: null,
+    projectFilterId: null,
     groupFilterId: null,
     ungroupedFilter: false,
   });
@@ -85,22 +93,23 @@ export function useSidebarInventoryScope(
   catalog: SidebarScopeCatalog,
 ): SidebarInventoryScopeView {
   const preferences = useSidebarViewPreferences();
-  const { environments, executionTargets, workspaces, groups } = catalog;
+  const { environments, executionTargets, projects, workspaces, groups } =
+    catalog;
   const scope = useMemo(
     () =>
       deriveSidebarInventoryScope(
-        { environments, executionTargets, workspaces, groups },
+        { environments, executionTargets, projects, workspaces, groups },
         preferences,
       ),
-    [environments, executionTargets, groups, preferences, workspaces],
+    [environments, executionTargets, groups, preferences, projects, workspaces],
   );
   const summary = useMemo(
     () =>
       sidebarScopeSummary(
-        { environments, executionTargets, workspaces, groups },
+        { environments, executionTargets, projects, workspaces, groups },
         scope,
       ),
-    [environments, executionTargets, groups, scope, workspaces],
+    [environments, executionTargets, groups, projects, scope, workspaces],
   );
   const clearScope = useCallback(() => clearSidebarInventoryScope(), []);
   return {

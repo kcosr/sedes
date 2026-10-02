@@ -8,9 +8,11 @@ import { projectSidebarStacks } from "./sidebar-group-projections.js";
 
 const GROUP_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const GROUP_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-const WORKSPACE_LABELS = new Map([
-  ["workspace-1", "Sedes"],
-  ["workspace-2", "Console"],
+const SEDES = { id: "project-sedes", label: "Sedes" };
+const PROJECTS_BY_WORKSPACE = new Map([
+  ["workspace-1", SEDES],
+  ["workspace-2", { id: "project-console", label: "Console" }],
+  ["workspace-1-remote", SEDES],
 ]);
 
 function group(id: string, name: string): NormalizedThreadGroup {
@@ -71,7 +73,7 @@ describe("projectSidebarStacks", () => {
       groups: [bucket("Today", [thread("second"), thread("first")])],
       stackBy: "none",
       threadGroups: [],
-      workspaceLabels: WORKSPACE_LABELS,
+      projectsByWorkspace: PROJECTS_BY_WORKSPACE,
     });
 
     expect(groups[0]?.entries.map(({ key }) => key)).toEqual([
@@ -88,7 +90,7 @@ describe("projectSidebarStacks", () => {
       groups: [bucket("Today", [first, between]), bucket("Yesterday", [later])],
       stackBy: "group",
       threadGroups: [group(GROUP_A, "Alpha")],
-      workspaceLabels: WORKSPACE_LABELS,
+      projectsByWorkspace: PROJECTS_BY_WORKSPACE,
     });
 
     expect(groups.map(({ key }) => key)).toEqual(["Today"]);
@@ -116,7 +118,7 @@ describe("projectSidebarStacks", () => {
       groups: [bucket("ordered", [first, newer])],
       stackBy: "group",
       threadGroups: [group(GROUP_A, "Alpha")],
-      workspaceLabels: WORKSPACE_LABELS,
+      projectsByWorkspace: PROJECTS_BY_WORKSPACE,
     });
     const entry = groups[0]?.entries[0];
     if (entry?.kind !== "stack") throw new Error("expected stack");
@@ -135,7 +137,7 @@ describe("projectSidebarStacks", () => {
       ],
       stackBy: "group",
       threadGroups: [group(GROUP_A, "Alpha")],
-      workspaceLabels: WORKSPACE_LABELS,
+      projectsByWorkspace: PROJECTS_BY_WORKSPACE,
     });
     expect(groups[0]?.entries.map(({ key }) => key)).toEqual([
       "thread:known-singleton",
@@ -155,22 +157,37 @@ describe("projectSidebarStacks", () => {
       ],
       stackBy: "project",
       threadGroups: [],
-      workspaceLabels: WORKSPACE_LABELS,
+      projectsByWorkspace: PROJECTS_BY_WORKSPACE,
     });
 
     expect(groups.map(({ key }) => key)).toEqual(["Active"]);
     expect(groups[0]?.entries.map(({ key }) => key)).toEqual([
-      "project:workspace-1",
+      "project:project-sedes",
       "thread:console",
     ]);
     const entry = groups[0]?.entries[0];
     if (entry?.kind !== "stack") throw new Error("expected stack");
     expect(entry).toMatchObject({
       stackBy: "project",
-      stackId: "workspace-1",
+      stackId: "project-sedes",
       label: "Sedes",
       representative: { id: "sedes-first" },
     });
+  });
+
+  it("stacks every location of one project together", () => {
+    const local = thread("local");
+    const remote = thread("remote", { workspaceId: "workspace-1-remote" });
+    const groups = projectSidebarStacks({
+      groups: [bucket("Active", [local, remote])],
+      stackBy: "project",
+      threadGroups: [],
+      projectsByWorkspace: PROJECTS_BY_WORKSPACE,
+    });
+    const entry = groups[0]?.entries[0];
+    if (entry?.kind !== "stack") throw new Error("expected stack");
+    expect(entry.members.map(({ id }) => id)).toEqual(["local", "remote"]);
+    expect(groups[0]?.entries).toHaveLength(1);
   });
 
   it("omits buckets emptied by members anchored in an earlier bucket", () => {
@@ -181,7 +198,7 @@ describe("projectSidebarStacks", () => {
       ],
       stackBy: "group",
       threadGroups: [group(GROUP_A, "Alpha")],
-      workspaceLabels: WORKSPACE_LABELS,
+      projectsByWorkspace: PROJECTS_BY_WORKSPACE,
     });
     expect(groups).toHaveLength(1);
     expect(groups[0]).toMatchObject({ key: "Today", threadCount: 1 });

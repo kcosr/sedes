@@ -271,9 +271,9 @@ export function threadStateInWords(
 export function ThreadPeekCard({
   thread,
   backgroundWorkCurrent = true,
-  workspaceLabel,
-  workspacePath,
-  workspaceAvailable,
+  projectLabel,
+  locationPath,
+  locationAvailable,
   environmentLabel,
   environmentAvailable,
   showEnvironment = false,
@@ -287,9 +287,9 @@ export function ThreadPeekCard({
 }: {
   readonly thread: NormalizedApplicationThreadSummary;
   readonly backgroundWorkCurrent?: boolean;
-  readonly workspaceLabel: string;
-  readonly workspacePath?: string;
-  readonly workspaceAvailable?: boolean;
+  readonly projectLabel: string;
+  readonly locationPath?: string;
+  readonly locationAvailable?: boolean;
   readonly environmentLabel?: string;
   readonly environmentAvailable?: boolean;
   readonly showEnvironment?: boolean;
@@ -340,15 +340,15 @@ export function ThreadPeekCard({
         </span>
       </div>
       <div className="thread-peek-rows">
-        <div className="thread-peek-row" data-row="workspace">
+        <div className="thread-peek-row" data-row="project">
           <span className="thread-peek-row-icon">
             <Folder size={13} strokeWidth={1.8} aria-hidden="true" />
           </span>
           <span className="thread-peek-row-text">
-            {workspaceLabel}
-            {workspaceAvailable === false ? " · Unavailable" : ""}
-            {workspacePath !== undefined && (
-              <span className="thread-peek-path">{workspacePath}</span>
+            {projectLabel}
+            {locationAvailable === false ? " · Unavailable" : ""}
+            {locationPath !== undefined && (
+              <span className="thread-peek-path">{locationPath}</span>
             )}
           </span>
         </div>

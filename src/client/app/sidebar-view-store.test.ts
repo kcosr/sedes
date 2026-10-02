@@ -15,7 +15,7 @@ import {
   setSidebarGroupBy,
   setSidebarGroupForks,
   setSidebarInventoryScope,
-  setSidebarProjectFilterName,
+  setSidebarProjectFilterId,
   setSidebarScopeCollapsed,
   setSidebarShowBackendIcons,
   setSidebarShowFilter,
@@ -100,7 +100,7 @@ describe("sidebar view preferences read path", () => {
       version: 2,
       environmentFilterId: null,
       targetFilterId: null,
-      projectFilterName: null,
+      projectFilterId: null,
       projectFilterPublication: null,
       groupFilterId: null,
       ungroupedFilter: false,
@@ -122,7 +122,7 @@ describe("sidebar view preferences read path", () => {
         ...SIDEBAR_VIEW_DEFAULTS,
         environmentFilterId: "environment-1",
         targetFilterId: "target-1",
-        projectFilterName: "workspace-1",
+        projectFilterId: "project-1",
         groupBy: "time",
         modes: {
           time: {
@@ -141,7 +141,7 @@ describe("sidebar view preferences read path", () => {
       version: 2,
       environmentFilterId: "environment-1",
       targetFilterId: "target-1",
-      projectFilterName: "workspace-1",
+      projectFilterId: "project-1",
       groupBy: "time",
       modes: {
         time: {
@@ -317,12 +317,12 @@ describe("sidebar view preference mutations", () => {
     setSidebarInventoryScope({
       environmentFilterId: "environment-2",
       targetFilterId: "target-2",
-      projectFilterName: "workspace-2",
+      projectFilterId: "project-2",
     });
     expect(getSidebarViewPreferences()).toMatchObject({
       environmentFilterId: "environment-2",
       targetFilterId: "target-2",
-      projectFilterName: "workspace-2",
+      projectFilterId: "project-2",
     });
     expect(listener).toHaveBeenCalledTimes(1);
     window.removeEventListener(changedEvent, listener);
@@ -330,38 +330,38 @@ describe("sidebar view preference mutations", () => {
 
   it("persists a causal project publication and clears it on direct selection", () => {
     const publication = {
-      projectName: "workspace-2",
+      projectId: "project-2",
       eventId: "00000000-0000-4000-8000-000000000001.7",
     };
     setSidebarInventoryScope(
-      { projectFilterName: "workspace-2" },
+      { projectFilterId: "project-2" },
       { projectFilterPublication: publication },
     );
 
     expect(getSidebarViewPreferences()).toMatchObject({
-      projectFilterName: "workspace-2",
+      projectFilterId: "project-2",
       projectFilterPublication: publication,
     });
     expect(readBlob()).toMatchObject({
-      projectFilterName: "workspace-2",
+      projectFilterId: "project-2",
       projectFilterPublication: publication,
     });
 
-    setSidebarProjectFilterName("workspace-3");
+    setSidebarProjectFilterId("project-3");
     expect(getSidebarViewPreferences()).toMatchObject({
-      projectFilterName: "workspace-3",
+      projectFilterId: "project-3",
       projectFilterPublication: null,
     });
   });
 
-  it("discards malformed or mismatched causal project publications", () => {
+  it("discards malformed, mismatched, or name-keyed causal project publications", () => {
     localStorage.setItem(
       SIDEBAR_VIEW_STORAGE_KEY,
       JSON.stringify({
         ...SIDEBAR_VIEW_DEFAULTS,
-        projectFilterName: "workspace-2",
+        projectFilterId: "project-2",
         projectFilterPublication: {
-          projectName: "another-workspace",
+          projectId: "another-project",
           eventId: "not-an-application-event",
         },
       }),
@@ -369,9 +369,94 @@ describe("sidebar view preference mutations", () => {
     invalidateSnapshot();
 
     expect(getSidebarViewPreferences()).toMatchObject({
-      projectFilterName: "workspace-2",
+      projectFilterId: "project-2",
       projectFilterPublication: null,
     });
+
+    localStorage.setItem(
+      SIDEBAR_VIEW_STORAGE_KEY,
+      JSON.stringify({
+        ...SIDEBAR_VIEW_DEFAULTS,
+        projectFilterName: "sedes",
+        projectFilterPublication: {
+          projectName: "sedes",
+          eventId: "00000000-0000-4000-8000-000000000001.7",
+        },
+      }),
+    );
+    invalidateSnapshot();
+    expect(getSidebarViewPreferences()).toMatchObject({
+      projectFilterId: null,
+      projectFilterPublication: null,
+      projectFilterName: "sedes",
+    });
+  });
+
+  it("keeps a saved project-name filter as a migration hint without a version change", () => {
+    const { projectFilterId: _id, ...older } = SIDEBAR_VIEW_DEFAULTS;
+    localStorage.setItem(
+      SIDEBAR_VIEW_STORAGE_KEY,
+      JSON.stringify({
+        ...older,
+        projectFilterName: "sedes",
+        groupBy: "state",
+        show: { snoozed: false, settled: true, drafts: true },
+      }),
+    );
+    invalidateSnapshot();
+    expect(getSidebarViewPreferences()).toMatchObject({
+      version: 2,
+      projectFilterId: null,
+      projectFilterName: "sedes",
+      groupBy: "state",
+      show: { snoozed: false, settled: true, drafts: true },
+    });
+
+    // Unrelated writes keep the pending hint.
+    setSidebarScopeCollapsed(true);
+    expect(readBlob()).toMatchObject({ projectFilterName: "sedes" });
+  });
+
+  it("treats a pending legacy hint as no filter, and clearing filters drops it", () => {
+    localStorage.setItem(
+      SIDEBAR_VIEW_STORAGE_KEY,
+      JSON.stringify({ ...SIDEBAR_VIEW_DEFAULTS, projectFilterName: "sedes" }),
+    );
+    invalidateSnapshot();
+    expect(hasActiveSidebarFilters()).toBe(false);
+
+    setSidebarEnvironmentFilterId("environment-2");
+    clearActiveSidebarFilters();
+    expect(readBlob()).not.toHaveProperty("projectFilterName");
+    expect(getSidebarViewPreferences().environmentFilterId).toBeNull();
+  });
+
+  it("retires the legacy hint in the same write that sets the project", () => {
+    localStorage.setItem(
+      SIDEBAR_VIEW_STORAGE_KEY,
+      JSON.stringify({ ...SIDEBAR_VIEW_DEFAULTS, projectFilterName: "sedes" }),
+    );
+    invalidateSnapshot();
+    const listener = vi.fn();
+    window.addEventListener(changedEvent, listener);
+    setSidebarInventoryScope({ projectFilterId: "project-1" });
+    window.removeEventListener(changedEvent, listener);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(getSidebarViewPreferences()).not.toHaveProperty("projectFilterName");
+    expect(readBlob()).toMatchObject({ projectFilterId: "project-1" });
+    expect(readBlob()).not.toHaveProperty("projectFilterName");
+  });
+
+  it("retires an unmatched legacy hint even though the project stays All", () => {
+    localStorage.setItem(
+      SIDEBAR_VIEW_STORAGE_KEY,
+      JSON.stringify({ ...SIDEBAR_VIEW_DEFAULTS, projectFilterName: "gone" }),
+    );
+    invalidateSnapshot();
+    setSidebarInventoryScope({ projectFilterId: null });
+    expect(readBlob()).toMatchObject({ projectFilterId: null });
+    expect(readBlob()).not.toHaveProperty("projectFilterName");
   });
 
   it("persists individual Environment and Target filter changes", () => {
@@ -398,19 +483,19 @@ describe("sidebar view preference mutations", () => {
   });
 
   it("persists and clears the project filter independently of the view mode", () => {
-    setSidebarProjectFilterName("workspace-2");
+    setSidebarProjectFilterId("project-2");
     setSidebarGroupBy("time");
 
     expect(getSidebarViewPreferences()).toMatchObject({
-      projectFilterName: "workspace-2",
+      projectFilterId: "project-2",
       groupBy: "time",
     });
     expect(readBlob()).toMatchObject({
-      projectFilterName: "workspace-2",
+      projectFilterId: "project-2",
     });
 
-    setSidebarProjectFilterName(null);
-    expect(getSidebarViewPreferences().projectFilterName).toBeNull();
+    setSidebarProjectFilterId(null);
+    expect(getSidebarViewPreferences().projectFilterId).toBeNull();
   });
 
   it("normalizes invalid project filter values to All projects", () => {
@@ -418,14 +503,16 @@ describe("sidebar view preference mutations", () => {
       SIDEBAR_VIEW_STORAGE_KEY,
       JSON.stringify({
         ...SIDEBAR_VIEW_DEFAULTS,
+        projectFilterId: 42,
         projectFilterName: 42,
       }),
     );
     invalidateSnapshot();
-    expect(getSidebarViewPreferences().projectFilterName).toBeNull();
+    expect(getSidebarViewPreferences().projectFilterId).toBeNull();
+    expect(getSidebarViewPreferences()).not.toHaveProperty("projectFilterName");
 
-    setSidebarProjectFilterName("");
-    expect(getSidebarViewPreferences().projectFilterName).toBeNull();
+    setSidebarProjectFilterId("");
+    expect(getSidebarViewPreferences().projectFilterId).toBeNull();
   });
 
   it("normalizes invalid environment and target IDs and defaults omitted fields", () => {
@@ -551,7 +638,7 @@ describe("sidebar view preference mutations", () => {
     setSidebarInventoryScope({
       environmentFilterId: "environment-2",
       targetFilterId: "target-2",
-      projectFilterName: "workspace-2",
+      projectFilterId: "project-2",
       groupFilterId: "group-2",
     });
     setSidebarShowFilter("snoozed", false);
@@ -571,7 +658,7 @@ describe("sidebar view preference mutations", () => {
     expect(preferences).toMatchObject({
       environmentFilterId: null,
       targetFilterId: null,
-      projectFilterName: null,
+      projectFilterId: null,
       groupFilterId: null,
       ungroupedFilter: false,
       groupBy: "time",

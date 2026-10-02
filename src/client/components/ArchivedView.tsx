@@ -242,7 +242,7 @@ export const ArchivedView = memo(function ArchivedView({
     deferredSearch.trim(),
     scope.environmentId,
     scope.targetId,
-    scope.projectName,
+    scope.projectId,
     scope.groupId,
     scope.ungrouped,
     sort,
@@ -430,8 +430,10 @@ export const ArchivedView = memo(function ArchivedView({
 
   const searching = deferredSearch.trim().length > 0;
   const filtered = searching || scopeActive;
+  // Rows name their project unless the grouping or the Scope already does;
+  // then they keep only their location tag.
   const showProject =
-    projection.groupBy !== "project" && scope.projectName === null;
+    projection.groupBy !== "project" && scope.projectId === null;
   const showTarget = scope.targetId === null;
   const clearSearch = () => {
     store.setSearch("");

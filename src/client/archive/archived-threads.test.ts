@@ -88,11 +88,18 @@ function snapshot(
         directoryBrowsing: "unavailable",
       },
     ],
+    // Project names are independent of folder names: acme-web is the
+    // Acme website project.
+    projects: [
+      { id: "project-sedes", name: "sedes", revision: 1 },
+      { id: "project-acme", name: "Acme website", revision: 1 },
+      { id: "project-infra", name: "infra", revision: 1 },
+    ],
     workspaces: [
       {
         id: "ws-sedes",
         environmentId: "env-local",
-        projectId: "project-1",
+        projectId: "project-sedes",
         label: { text: "sedes" },
         displayPath: { text: "~/src/sedes" },
         available: true,
@@ -100,7 +107,7 @@ function snapshot(
       {
         id: "ws-acme",
         environmentId: "env-local",
-        projectId: "project-1",
+        projectId: "project-acme",
         label: { text: "acme-web" },
         displayPath: { text: "~/src/acme-web" },
         available: true,
@@ -108,7 +115,7 @@ function snapshot(
       {
         id: "ws-infra",
         environmentId: "env-ssh",
-        projectId: "project-1",
+        projectId: "project-infra",
         label: { text: "infra" },
         displayPath: { text: "/srv/infra" },
         available: false,
@@ -230,7 +237,9 @@ describe("selectArchiveBase", () => {
     expect(a).toMatchObject({
       title: "Thread a",
       brand: "claude",
+      projectId: "project-sedes",
       projectLabel: "sedes",
+      locationTag: null,
       targetLabel: "Claude Code",
       forkSourceTitle: "Thread active",
       configurationCopyPending: false,
@@ -240,7 +249,7 @@ describe("selectArchiveBase", () => {
     expect(b).toMatchObject({
       title: "Untitled thread",
       projectLabel: "infra · build-box",
-      projectAvailable: false,
+      locationAvailable: false,
       environmentAvailable: false,
       targetLabel: "Codex on build-box",
       targetAvailable: false,
@@ -286,9 +295,10 @@ describe("selectArchiveBase", () => {
     const snap = snapshot([thread("a"), thread("b")]);
     const first = selectArchiveBase(snap, []);
     const relabelled = clone(snap);
-    relabelled.workspaces[0] = {
-      ...relabelled.workspaces[0]!,
-      label: { text: "sedes-renamed" },
+    relabelled.projects[0] = {
+      ...relabelled.projects[0]!,
+      name: "sedes-renamed",
+      revision: 2,
     };
     const second = selectArchiveBase(relabelled, [], first);
     expect(second.catalog).not.toBe(first.catalog);
@@ -340,13 +350,13 @@ describe("projectArchivedThreads scope", () => {
   });
 
   it.each([
-    [{ projectFilterName: "sedes" }, ["sedes-codex", "sedes-claude"]],
+    [{ projectFilterId: "project-sedes" }, ["sedes-codex", "sedes-claude"]],
     [{ targetFilterId: "t-claude" }, ["sedes-claude"]],
     [{ environmentFilterId: "env-ssh" }, ["infra-ssh"]],
     [{ groupFilterId: "group-1" }, ["sedes-claude"]],
     [{ ungroupedFilter: true }, ["sedes-codex", "acme-codex", "infra-ssh"]],
     [
-      { environmentFilterId: "env-local", projectFilterName: "acme-web" },
+      { environmentFilterId: "env-local", projectFilterId: "project-acme" },
       ["acme-codex"],
     ],
   ])("applies the sidebar scope %j", (preferences, expected) => {
@@ -424,6 +434,19 @@ describe("projectArchivedThreads search", () => {
       groups: [],
     });
   });
+
+  it("matches the project name, which no folder or path carries", () => {
+    const snap = snapshot([
+      thread("site", { workspaceId: "ws-acme", title: "Hero banner" }),
+      thread("other", { title: "Release notes" }),
+    ]);
+    expect(ids(project(snap, { search: "WEBSITE" }))).toEqual(["site"]);
+    expect(
+      snap.threads
+        .filter(createThreadSearchMatcher("website", snap))
+        .map(({ id }) => id),
+    ).toEqual(["site"]);
+  });
 });
 
 describe("projectArchivedThreads order and grouping", () => {
@@ -495,7 +518,7 @@ describe("projectArchivedThreads order and grouping", () => {
         rows.map(({ id }) => id),
       ]),
     ).toEqual([
-      ["acme-web", ["c"]],
+      ["Acme website", ["c"]],
       ["sedes", ["a", "b", "d"]],
     ]);
     const titleByDate = project(snap, { groupBy: "date", sort: "title" });
@@ -503,6 +526,217 @@ describe("projectArchivedThreads order and grouping", () => {
     expect(titleByDate.groups).toHaveLength(1);
     expect(titleByDate.groups[0]!.label).toBeNull();
     expect(effectiveArchiveGroupBy("activity", "date")).toBe("date");
+  });
+});
+
+describe("projectArchivedThreads projects", () => {
+  // One project in three locations: its checkout and a sibling folder on this
+  // machine, and a second checkout on build-box.
+  const catalog: Partial<NormalizedApplicationSnapshot> = {
+    projects: [
+      { id: "project-sedes", name: "sedes", revision: 3 },
+      { id: "project-acme", name: "Acme website", revision: 1 },
+    ],
+    workspaces: [
+      {
+        id: "ws-sedes",
+        environmentId: "env-local",
+        projectId: "project-sedes",
+        label: { text: "sedes" },
+        displayPath: { text: "~/src/sedes" },
+        available: true,
+      },
+      {
+        id: "ws-context",
+        environmentId: "env-local",
+        projectId: "project-sedes",
+        label: { text: "sedes-context" },
+        displayPath: { text: "~/src/sedes-context" },
+        available: true,
+      },
+      {
+        id: "ws-remote",
+        environmentId: "env-ssh",
+        projectId: "project-sedes",
+        label: { text: "sedes" },
+        displayPath: { text: "/srv/sedes" },
+        available: false,
+      },
+      {
+        id: "ws-acme",
+        environmentId: "env-local",
+        projectId: "project-acme",
+        label: { text: "acme-web" },
+        displayPath: { text: "~/src/acme-web" },
+        available: true,
+      },
+    ],
+  };
+  const snap = snapshot(
+    [
+      thread("main", { stateChangedAt: hoursAgo(1) }),
+      thread("context", {
+        workspaceId: "ws-context",
+        stateChangedAt: hoursAgo(2),
+      }),
+      thread("remote", {
+        workspaceId: "ws-remote",
+        targetId: "t-ssh",
+        stateChangedAt: hoursAgo(3),
+      }),
+      thread("site", { workspaceId: "ws-acme", stateChangedAt: hoursAgo(4) }),
+    ],
+    catalog,
+  );
+
+  it("labels rows by project and folder, and tags where they ran", () => {
+    const rows = new Map(
+      selectArchiveBase(snap, []).rows.map((row) => [row.id, row]),
+    );
+    const labels = (id: string) => {
+      const { projectId, projectLabel, locationTag } = rows.get(id)!;
+      return { projectId, projectLabel, locationTag };
+    };
+    // The folder that shares the project's name adds nothing; a sibling
+    // folder is named, and a remote checkout names its environment.
+    expect(labels("main")).toEqual({
+      projectId: "project-sedes",
+      projectLabel: "sedes",
+      locationTag: null,
+    });
+    expect(labels("context")).toEqual({
+      projectId: "project-sedes",
+      projectLabel: "sedes › sedes-context",
+      locationTag: "sedes-context",
+    });
+    expect(labels("remote")).toEqual({
+      projectId: "project-sedes",
+      projectLabel: "sedes · build-box",
+      locationTag: "build-box",
+    });
+    // A single-location project shows its name, never its folder.
+    expect(labels("site")).toEqual({
+      projectId: "project-acme",
+      projectLabel: "Acme website",
+      locationTag: null,
+    });
+  });
+
+  it("groups every location of a project under one header", () => {
+    const byProject = project(snap, { groupBy: "project" });
+    expect(
+      byProject.groups.map(({ key, label, rows }) => [
+        key,
+        label,
+        rows.map(({ id }) => id),
+      ]),
+    ).toEqual([
+      ["project:project-acme", "Acme website", ["site"]],
+      ["project:project-sedes", "sedes", ["main", "context", "remote"]],
+    ]);
+  });
+
+  it("qualifies same-named projects in headers and rows", () => {
+    const twins = snapshot(
+      [
+        thread("original"),
+        thread("copy", { workspaceId: "ws-copy", stateChangedAt: hoursAgo(2) }),
+      ],
+      {
+        projects: [
+          { id: "project-sedes", name: "sedes", revision: 1 },
+          { id: "project-copy", name: "sedes", revision: 1 },
+        ],
+        workspaces: [
+          catalog.workspaces![0]!,
+          {
+            id: "ws-copy",
+            environmentId: "env-local",
+            projectId: "project-copy",
+            label: { text: "sedes" },
+            displayPath: { text: "~/work/sedes" },
+            available: true,
+          },
+        ],
+      },
+    );
+    const byProject = project(twins, { groupBy: "project" });
+    expect(
+      byProject.groups.map(({ label, rows }) => [
+        label,
+        rows.map(({ id }) => id),
+      ]),
+    ).toEqual([
+      ["sedes · ~/src/sedes", ["original"]],
+      ["sedes · ~/work/sedes", ["copy"]],
+    ]);
+    expect(
+      project(twins).groups[0]!.rows.map(({ projectLabel }) => projectLabel),
+    ).toEqual(["sedes · ~/src/sedes", "sedes · ~/work/sedes"]);
+  });
+
+  it("scopes to a project by ID across its locations", () => {
+    expect(
+      ids(project(snap, { preferences: { projectFilterId: "project-sedes" } })),
+    ).toEqual(["main", "context", "remote"]);
+    expect(
+      ids(
+        project(snap, {
+          preferences: {
+            environmentFilterId: "env-ssh",
+            projectFilterId: "project-sedes",
+          },
+        }),
+      ),
+    ).toEqual(["remote"]);
+  });
+
+  it("keeps a stable group for a location the catalog lacks", () => {
+    const base = selectArchiveBase(
+      snapshot([thread("lost", { workspaceId: "ws-gone" })], catalog),
+      [],
+    );
+    expect(base.rows[0]).toMatchObject({
+      projectId: null,
+      projectLabel: "Project",
+      locationTag: null,
+    });
+    const scope = deriveSidebarInventoryScope(snap, SIDEBAR_VIEW_DEFAULTS);
+    expect(
+      projectArchivedThreads(base, {
+        scope,
+        search: "",
+        sort: "archived",
+        groupBy: "project",
+        now: NOW,
+      }).groups.map(({ key, label }) => [key, label]),
+    ).toEqual([["location:ws-gone", "Project"]]);
+  });
+
+  it("rebuilds rows when a project gains a location", () => {
+    const single = snapshot([thread("main")], {
+      projects: catalog.projects,
+      workspaces: [catalog.workspaces![0]!],
+    });
+    const first = selectArchiveBase(single, []);
+    expect(first.rows[0]!.locationTag).toBeNull();
+    const second = selectArchiveBase(
+      snapshot([thread("main")], catalog),
+      [],
+      first,
+    );
+    expect(second.catalog).not.toBe(first.catalog);
+    // The same folder, now one of several: still nothing to tell apart on
+    // this machine, so the row object is kept.
+    expect(second.rows[0]).toBe(first.rows[0]);
+    // Renamed away from its folders, the project names each local folder.
+    const renamed = clone(snapshot([thread("main")], catalog));
+    renamed.projects[0] = { ...renamed.projects[0]!, name: "Sedes app" };
+    const third = selectArchiveBase(renamed, [], second);
+    expect(third.rows[0]).toMatchObject({
+      projectLabel: "Sedes app › sedes",
+      locationTag: "sedes",
+    });
   });
 });
 

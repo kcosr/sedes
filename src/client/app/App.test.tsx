@@ -80,6 +80,10 @@ import {
 } from "../operations/blocking-operation.js";
 import { navigate } from "./router.js";
 import {
+  SIDEBAR_VIEW_DEFAULTS,
+  SIDEBAR_VIEW_STORAGE_KEY,
+} from "./sidebar-view-model.js";
+import {
   getSidebarViewPreferences,
   setSidebarInventoryScope,
 } from "./sidebar-view-store.js";
@@ -1655,7 +1659,7 @@ describe("application endpoint startup", () => {
   it("keeps the application shell mounted while repairing stale sidebar scope", async () => {
     FakeEventSource.automaticApplicationSnapshots = 1;
     setSidebarInventoryScope({
-      projectFilterName: "Missing project",
+      projectFilterId: "missing-project",
     });
     vi.stubGlobal(
       "fetch",
@@ -1670,10 +1674,37 @@ describe("application endpoint startup", () => {
       }),
     ).toBeInTheDocument();
     await waitFor(() =>
-      expect(getSidebarViewPreferences().projectFilterName).toBeNull(),
+      expect(getSidebarViewPreferences().projectFilterId).toBeNull(),
     );
     expect(document.querySelector(".application-shell")).toBeInTheDocument();
     expect(FakeEventSource.instances).toHaveLength(1);
+  });
+
+  it("migrates a saved project-name filter once the authoritative snapshot arrives", async () => {
+    FakeEventSource.automaticApplicationSnapshots = 1;
+    localStorage.setItem(
+      SIDEBAR_VIEW_STORAGE_KEY,
+      JSON.stringify({
+        ...SIDEBAR_VIEW_DEFAULTS,
+        projectFilterName: "Project",
+      }),
+    );
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: SIDEBAR_VIEW_STORAGE_KEY }),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(applicationSession)),
+    );
+
+    render(<App />);
+
+    await waitFor(() =>
+      expect(getSidebarViewPreferences().projectFilterId).toBe("project-1"),
+    );
+    expect(
+      JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!),
+    ).not.toHaveProperty("projectFilterName");
   });
 
   it("unwinds sidebar search and filters before returning to the thread", async () => {
@@ -1775,7 +1806,7 @@ describe("application endpoint startup", () => {
 
     act(() =>
       setSidebarInventoryScope({
-        projectFilterName: "Back test workspace",
+        projectFilterId: "project-1",
       }),
     );
     expect(

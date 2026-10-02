@@ -38,6 +38,7 @@ const thread: NormalizedApplicationThreadSummary = {
 };
 
 const snapshot = {
+  projects: [{ id: "project-1", name: "Orchestrator", revision: 0 }],
   workspaces: [
     {
       id: "workspace-1",
@@ -72,6 +73,7 @@ const snapshot = {
 describe("createThreadSearchMatcher", () => {
   it.each([
     "queues",
+    "orchestrator",
     "sedes",
     "/WORK/SIDEBAR",
     "build machine",
