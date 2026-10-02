@@ -12,6 +12,7 @@ import { type UsageObservation } from "../../src/server/usage/contracts.js";
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { PiUsageAccounting } from "../../src/server/backends/pi/pi-usage-accounting.js";
 import {
+  appendFile,
   chmod,
   mkdir,
   mkdtemp,
@@ -2007,6 +2008,82 @@ describe("Pi conversation backend driver", () => {
         .rejects.toMatchObject({ backendCode: "pi_history_invalidated", retryable: true });
     } finally { read.mockRestore(); }
   });
+
+  it.each(["malformed", "oversized", "unreadable", "unresolvable workspace"] as const)(
+    "reads bound history when a sibling has an %s header probe",
+    async (failure) => {
+      const fixture = await workspace();
+      const store = new PiSessionStore({ sessionDirectory: fixture.sessions });
+      const reserved = await store.reserve(fixture.workspace, "bound-history");
+      appendBranchableSessionTurn(reserved.manager, "Persisted history");
+      const before = await readFile(reserved.manager.getSessionFile()!);
+      const sibling = path.join(fixture.sessions, "unrelated.jsonl");
+      const header = { ...reserved.manager.getHeader()!, id: "unrelated-history" };
+      if (failure === "unresolvable workspace") {
+        header.id = "bound-history";
+        header.cwd = path.join(fixture.root, "looping-workspace");
+        await symlink(header.cwd, header.cwd);
+      }
+      await writeFile(sibling, failure === "malformed" ? "{bad-json}\n"
+        : failure === "oversized" ? "x".repeat(1024 * 1024 + 1)
+        : `${JSON.stringify(header)}\n`);
+      if (failure === "unreadable") await chmod(sibling, 0o000);
+      try {
+        const manager = await store.readHistory(fixture.workspace, "bound-history", reserved.opaqueBindingDetail, new AbortController().signal);
+        expect(manager.getEntries()).toEqual(reserved.manager.getEntries());
+        expect(await readFile(reserved.manager.getSessionFile()!)).toEqual(before);
+      } finally {
+        if (failure === "unreadable") await chmod(sibling, 0o600);
+      }
+    },
+  );
+
+  it.each(["different ID", "different workspace", "duplicate", "cancelled"] as const)(
+    "preserves sibling identity checks during an append (%s)",
+    async (scenario) => {
+      const fixture = await workspace();
+      const store = new PiSessionStore({ sessionDirectory: fixture.sessions });
+      const reserved = await store.reserve(fixture.workspace, "bound-history");
+      appendBranchableSessionTurn(reserved.manager, "Persisted history");
+      const sibling = path.join(fixture.sessions, "active-sibling.jsonl");
+      const siblingTimestamp = "2000-01-01T00:00:00.000Z";
+      await writeFile(sibling, `${JSON.stringify({
+        ...reserved.manager.getHeader()!,
+        id: scenario === "different ID" ? "unrelated-history" : "bound-history",
+        cwd: scenario === "different workspace" ? fixture.root : fixture.workspace.canonicalPath,
+        timestamp: siblingTimestamp,
+      })}\n`);
+      const handle = await open(sibling, "r");
+      const prototype = Object.getPrototypeOf(handle) as { read(...args: unknown[]): Promise<{ bytesRead: number }> };
+      const original = prototype.read;
+      await handle.close();
+      const controller = new AbortController();
+      const cancelled = new Error("sibling_probe_cancelled");
+      let appended = false;
+      const read = vi.spyOn(prototype, "read").mockImplementation(async function(this: unknown, ...args: unknown[]) {
+        const result = await original.apply(this, args);
+        if (!appended && Buffer.isBuffer(args[0]) &&
+          args[0].subarray(0, result.bytesRead).includes(Buffer.from(siblingTimestamp))) {
+          appended = true;
+          await appendFile(sibling, `${JSON.stringify({ type: "session_info", id: "active-info", parentId: null,
+            timestamp: siblingTimestamp, name: "Active sibling" })}\n`);
+          if (scenario === "cancelled") controller.abort(cancelled);
+        }
+        return result;
+      });
+      try {
+        const acquisition = store.readHistory(fixture.workspace, "bound-history", reserved.opaqueBindingDetail, controller.signal);
+        if (scenario === "duplicate") {
+          await expect(acquisition).rejects.toMatchObject({ backendCode: "pi_session_id_ambiguous" });
+        } else if (scenario === "cancelled") {
+          await expect(acquisition).rejects.toBe(cancelled);
+        } else {
+          expect((await acquisition).getEntries()).toEqual(reserved.manager.getEntries());
+        }
+        expect(appended).toBe(true);
+      } finally { read.mockRestore(); }
+    },
+  );
 
   it("keeps throughput only in the resident handle with accounting disabled, across refresh, history and targeted lookup", async () => {
     const fixture = await workspace();

@@ -389,14 +389,23 @@ browser history, and agent-tool message reads. It must not acquire an execution
 lease, attach/resume/load an agent, issue source credentials, replay settings,
 load executable extensions, acknowledge provider inputs, or mutate native
 transcripts. Connecting provider infrastructure to read its store is permitted.
+Archived presentation and skill catalogs use durable or cached data; catalog
+refresh must not indirectly create an SDK agent or load executable extensions.
 An immutable cut or validated native boundary must keep pages and lookups
-coherent; reject stale cursors rather than mixing generations. Closing a reader
+coherent; reject stale cursors rather than mixing generations. A retryable
+reader failure invalidates its retained owner, so the next acquire opens a fresh
+cut rather than repeatedly using a dead transport or provider generation.
+Caller cancellation alone does not invalidate that owner. Closing a reader
 owns no native execution and must not interrupt external work. Restore replaces
 the reader and its projection generation before executing again. Open browser
 subscribers receive that replacement baseline without a reload; restoring a
 dormant thread does not itself attach an agent. The archived source-agent
 credential prohibition remains enforced independently of target history
 authorization; wrong owner/thread/namespace still fails closed.
+Transient history borrowers are not browser viewers. If a subscribed restore
+cannot open execution, publish the current inventory with a disconnected
+snapshot using cached presentation. Retirement must also release a passive
+runtime that completed establishment concurrently with cancellation.
 
 All five backends implement this split: Claude reads native session messages;
 Codex uses detached thread and turn/item reads; Pi parses its exact stored
@@ -407,6 +416,12 @@ also permits reads without its worker or deleted isolated checkout. Pi v1 files
 requiring randomized-ID migration are explicitly refused without rewriting them.
 Provider unavailability, missing data, unsupported native versions and bounded
 capture failures remain truthful read errors, never reasons to start an agent.
+Definitive native-history failures do not hide authorized archived inventory:
+thread snapshots and status remain available with disconnected conversation
+state, while explicit transcript reads retain their safe error. Pi sibling
+header probes ignore unrelated unreadable or malformed files; only a parsed
+exact ID/workspace collision proves ambiguity, and unrelated appends do not
+invalidate the selected transcript's stable capture.
 Regression coverage must prove paging, lookup, scope denial, cleanup,
 archive/restore generation changes, and absence of execution side effects.
 

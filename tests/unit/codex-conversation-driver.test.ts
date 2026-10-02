@@ -1,4 +1,5 @@
 import { readConversationHistory } from "../helpers/read-conversation-history.js";
+import { historyConversationHandle } from "../../src/server/conversations/history-conversation-handle.js";
 import { usageSubagentRecoveryIndexesMigration } from "../../src/server/db/migrations/114-usage-subagent-recovery-indexes.js";
 import Database from "better-sqlite3";
 import { durableUsageAccountingMigration } from "../../src/server/db/migrations/110-durable-usage-accounting.js";
@@ -4996,6 +4997,28 @@ describe("Codex archived history reader", () => {
     expect(await reader.locateTurn({ matchesBackendTurnId: () => true, maximumTurnCandidates: 1 })).toEqual({ status: "not_found" });
     expect(harness.calls.map(({ method }) => method)).toEqual(["thread/read", "thread/turns/list", "thread/read"]);
     await reader.close();
+  });
+
+  it("invalidates its passive handle after a client generation change so the next reader can recover", async () => {
+    const harness = new RpcHarness();
+    const target = driver(harness);
+    const first = historyConversationHandle(binding(), await target.openHistory(attachInput()));
+    const invalidated = vi.fn();
+    first.subscribe(invalidated);
+    enqueueHead(harness, Array.from({ length: 10 }, (_, index) => 11 - index), "older");
+    const snapshot = await first.establishProjection(snapshotInput());
+    harness.lifecycle("ready", 2);
+    await expect(first.history({ cursor: snapshot.history.previousCursor, limit: 1 }))
+      .rejects.toMatchObject({ backendCode: "codex_history_reconciliation_required", retryable: true });
+    expect(invalidated).toHaveBeenCalledWith({ type: "resnapshot_required", reason: "provider_handle_closed" });
+    await first.close();
+    const second = historyConversationHandle(binding(), await target.openHistory(attachInput()));
+    enqueueHead(harness, [1, 0]);
+    try {
+      expect((await second.establishProjection(snapshotInput())).snapshot.orderedBackendTurnIds).toHaveLength(2);
+      expect((await second.history({ limit: 1 })).orderedBackendTurnIds).toHaveLength(1);
+      expect(harness.calls.some(({ method }) => method === "thread/resume")).toBe(false);
+    } finally { await second.close(); }
   });
 
   it.each(["abort", "close"] as const)("settles a blocked read promptly on %s", async action => {

@@ -593,7 +593,10 @@
   browser and agent tools, without resuming an agent or issuing tool credentials.
   Older pages and turn lookups remain available; restoring a thread permits
   normal execution again. Backend read failures report safe, actionable tool
-  errors instead of a generic internal error.
+  errors instead of a generic internal error. Unreadable native history still
+  leaves archived thread details available, and retryable history failures
+  acquire a fresh reader on the next attempt. Open viewers receive restored
+  inventory even when the provider cannot reconnect.
 
 - Removing a project or location while terminal work blocked it could return
   an internal server error. Terminal conflicts now return their own error from

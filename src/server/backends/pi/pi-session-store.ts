@@ -120,6 +120,10 @@ async function readHistoryEntries(
       }
     };
     const finish = async () => {
+      signal.throwIfAborted();
+      // Sibling probes only establish header identity. Appending to another
+      // conversation must not invalidate this transcript's immutable capture.
+      if (headerOnly) return entries;
       const current = await handle.stat({ bigint: true });
       signal.throwIfAborted();
       if (current.size !== metadata.size || current.mtimeNs !== metadata.mtimeNs || current.ctimeNs !== metadata.ctimeNs) {
@@ -970,18 +974,21 @@ export class PiSessionStore {
       if (!file.name.endsWith(".jsonl")) continue;
       const candidate = await realpath(path.join(path.dirname(canonicalFile), file.name)).catch(() => undefined);
       if (!candidate || candidate === canonicalFile || !isWithin(canonicalStore, candidate)) continue;
-      let candidateHeader: FileEntry | undefined;
+      let candidateWorkspace: string | undefined;
       try {
-        [candidateHeader] = await readHistoryEntries(candidate, signal, true);
-      } catch (cause) {
+        const [candidateHeader] = await readHistoryEntries(candidate, signal, true);
+        if (candidateHeader?.type !== "session" ||
+          candidateHeader.id !== backendConversationId ||
+          typeof candidateHeader.cwd !== "string") continue;
+        candidateWorkspace = await this.#historyWorkspacePath(candidateHeader.cwd);
+      } catch {
         signal.throwIfAborted();
-        if (cause instanceof BackendError && cause.backendCode === "pi_history_file_invalid") continue;
-        throw cause;
+        // An unrelated malformed, oversized, or unreadable file cannot prove
+        // an exact identity collision or make the bound transcript unreadable.
+        continue;
       }
-      if (candidateHeader?.type === "session" &&
-        candidateHeader.id === backendConversationId &&
-        typeof candidateHeader.cwd === "string" &&
-        await this.#historyWorkspacePath(candidateHeader.cwd) === workspace.canonicalPath) {
+      signal.throwIfAborted();
+      if (candidateWorkspace === workspace.canonicalPath) {
         throw backendError("rejected", "The Pi conversation ID is ambiguous.", "pi_session_id_ambiguous");
       }
     }

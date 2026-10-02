@@ -125,10 +125,11 @@ export class ActorBackedThreadApplicationConversationReader implements ThreadApp
     scope: RequestScope,
     applicationThreadId: string,
   ): Promise<ThreadConversationCapture> {
-    let target: AcquireConversationActorInput;
+    let authorizedHistoryTarget = false;
     try {
-      target = await this.#targets.resolve(scope, applicationThreadId);
+      const target = await this.#targets.resolve(scope, applicationThreadId);
       assertActorTargetScope(scope, applicationThreadId, target);
+      authorizedHistoryTarget = target.access === "history";
       const acquired = await this.#actors.acquire(target, {
         idleRelease: "retain",
       });
@@ -141,9 +142,18 @@ export class ActorBackedThreadApplicationConversationReader implements ThreadApp
         acquired.release();
       }
     } catch (error) {
+      // Native history failure must not hide authorized archived inventory.
+      // Resolver and scope failures never establish this permission.
       if (
         error instanceof BackendError &&
-        (error.category === "unavailable" || error.category === "overloaded")
+        (error.category === "unavailable" || error.category === "overloaded" ||
+          (authorizedHistoryTarget && (
+            error.category === "not_found" ||
+            error.category === "rejected" ||
+            error.category === "invalid_state" ||
+            error.category === "incompatible_protocol" ||
+            error.category === "permission_denied"
+          )))
       ) {
         return { status: "disconnected" };
       }
@@ -318,8 +328,10 @@ export class ThreadApplicationService {
     scope: RequestScope,
     applicationThreadId: string,
   ): Promise<ComposerSkillCatalog> {
-    await this.#authorize(scope, applicationThreadId);
-    const presentation = await this.#presentation.read(
+    const inventory = await this.#authorize(scope, applicationThreadId);
+    const presentation = await this.#presentation[
+      inventory.thread.inventoryState === "archived" ? "readCached" : "read"
+    ](
       scope,
       applicationThreadId,
     );
@@ -341,6 +353,21 @@ export class ThreadApplicationService {
       applicationThreadId,
       inventory,
       capture,
+    );
+  }
+
+  /** Publishes durable state after a failed attachment without retrying the provider. */
+  async disconnectedSnapshot(
+    scope: RequestScope,
+    applicationThreadId: string,
+  ): Promise<NormalizedThreadSnapshot> {
+    const inventory = await this.#authorize(scope, applicationThreadId);
+    return this.#composeSnapshot(
+      scope,
+      applicationThreadId,
+      inventory,
+      { status: "disconnected" },
+      "cached",
     );
   }
 
@@ -494,7 +521,8 @@ export class ThreadApplicationService {
     const [queue, presentation, recovery, exclusivePendingSteer] = await Promise.all([
       this.#queue.list(scope, applicationThreadId),
       this.#presentation[
-        presentationSource === "fresh" ? "read" : "readCached"
+        presentationSource === "fresh" && inventory.thread.inventoryState !== "archived"
+          ? "read" : "readCached"
       ](
         scope,
         applicationThreadId,
@@ -599,6 +627,7 @@ export class ThreadApplicationService {
     applicationThreadId: string,
     inventory: AuthorizedThreadApplicationState,
     capture: ThreadConversationCapture,
+    presentationSource: "fresh" | "cached" = "fresh",
   ): Promise<NormalizedThreadSnapshot> {
     const {
       queue,
@@ -615,6 +644,7 @@ export class ThreadApplicationService {
       applicationThreadId,
       inventory,
       capture,
+      presentationSource,
     );
     const timeline = actor?.timeline;
     const snapshotWithoutHistory = normalizedThreadSnapshotSchema.parse({

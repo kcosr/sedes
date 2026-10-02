@@ -1,7 +1,7 @@
 import type { ConversationBindingRepository } from "../db/repositories/conversation-binding-repository.js";
 import type { ThreadApplicationService } from "../conversations/thread-application-service.js";
 import type { RequestScope } from "../identity/identity-provider.js";
-import type { ThreadRuntimeCoordinator } from "./thread-runtime-coordinator.js";
+import { ThreadRuntimeRestoreFailedError, type ThreadRuntimeCoordinator } from "./thread-runtime-coordinator.js";
 import { isDeepStrictEqual } from "node:util";
 import type {
   NormalizedThreadEvent,
@@ -33,6 +33,7 @@ export class ThreadSnapshotPublisher {
     readonly application: Pick<
       ThreadApplicationService,
       | "snapshot"
+      | "disconnectedSnapshot"
       | "applicationState"
       | "applicationStateFromActorCapture"
       | "retainedOverlay"
@@ -133,6 +134,22 @@ export class ThreadSnapshotPublisher {
               ThreadSnapshotPublisher.applicationChangeIncrementals,
             );
           } catch (error) {
+            if (error instanceof ThreadRuntimeRestoreFailedError) {
+              const quiet = this.runtimes.quiet(scope, applicationThreadId);
+              try {
+                if (quiet.hub.subscriberCount > 0) {
+                  const snapshot = await this.application.disconnectedSnapshot(
+                    scope,
+                    applicationThreadId,
+                  );
+                  // A concurrent successful acquire owns its own baseline.
+                  quiet.publishIfUnowned(snapshot);
+                }
+              } finally {
+                quiet.release();
+              }
+              return;
+            }
             if (!isProjectionGuardFailure(error)) throw error;
             const runtime = await this.runtimes.acquire(
               scope,

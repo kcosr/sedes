@@ -228,6 +228,13 @@ export class ThreadRuntimeRetirementUnprovenError extends Error {
   }
 }
 
+export class ThreadRuntimeRestoreFailedError extends Error {
+  constructor(cause: unknown) {
+    super("The restored thread runtime could not be opened.", { cause });
+    this.name = "ThreadRuntimeRestoreFailedError";
+  }
+}
+
 /**
  * Owns exactly one bridge and interaction binding for each process-wide actor.
  * Browser subscribers and mutations borrow that owner. When the actor becomes
@@ -326,9 +333,17 @@ export class ThreadRuntimeCoordinator {
             await this.#retireForReplacement(key, entry, runtime);
           } else {
             entry.establishmentAbort.abort(new Error("thread_history_restored"));
-            try { await entry.promise; }
+            let established: EstablishedRuntime | undefined;
+            try { established = await entry.promise; }
             catch (error) { if (error !== entry.establishmentAbort.signal.reason) throw error; }
-            if (this.#entries.get(key) === entry) this.#entries.delete(key);
+            // Establishment may already have crossed its final await when
+            // the abort arrives. Release that successful owner as well.
+            if (established) {
+              await established.actor.close();
+              await this.#retireForReplacement(key, entry, established);
+            } else if (this.#entries.get(key) === entry) {
+              this.#entries.delete(key);
+            }
           }
           continue;
         }
@@ -857,20 +872,24 @@ export class ThreadRuntimeCoordinator {
     if (!entry || entry.eviction) return false;
     if (
       (entry.access === "history" || entry.runtime?.actor.readOnly) &&
-      (entry.references > 0 || (entry.runtime?.hub.subscriberCount ?? 0) > 0)
+      (entry.runtime?.hub.subscriberCount ?? 0) > 0
     ) {
       const target = await this.#targets.resolve(scope, applicationThreadId);
       if (this.#closed || this.#entries.get(key) !== entry || entry.eviction) return false;
       if (
         target.access !== "history" &&
-        (entry.references > 0 || (entry.runtime?.hub.subscriberCount ?? 0) > 0)
+        (entry.runtime?.hub.subscriberCount ?? 0) > 0
       ) {
         // Restore changes provider authority, not just inventory. An open
         // viewer needs the execution actor's new capability baseline. Reuse
-        // ordinary acquisition so pending history is cancelled and the same
-        // subscribed hub survives replacement. Dormant readers stay dormant.
-        const restored = await this.acquire(scope, applicationThreadId);
-        restored.release();
+        // ordinary acquisition so the same subscribed hub survives
+        // replacement. Transient history borrowers do not represent viewers.
+        try {
+          const restored = await this.acquire(scope, applicationThreadId);
+          restored.release();
+        } catch (cause) {
+          throw new ThreadRuntimeRestoreFailedError(cause);
+        }
         return true;
       }
     }

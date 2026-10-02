@@ -36,6 +36,7 @@ import {
   ThreadRuntimeNotIdleError,
   ThreadRuntimeMaintenanceStaleError,
   ThreadRuntimeRetirementUnprovenError,
+  ThreadRuntimeRestoreFailedError,
   ThreadRuntimeCoordinator,
 } from "../../src/server/events/thread-runtime-coordinator.js";
 import type {
@@ -441,6 +442,66 @@ describe("passive archived history", () => {
     historical.release(); restored.release(); await manager.close();
   });
 
+  it.each(["history", "locateTurn"] as const)("replaces a failed passive reader on the next acquire after %s invalidation", async (operation) => {
+    const current = historyFixture();
+    const coordinator = new ThreadRuntimeCoordinator({
+      actors: current.actorManager,
+      targets: { resolve: async () => current.input },
+      bridge: { bind: () => ({ ready: Promise.resolve(), release: vi.fn(async () => undefined) }) } as unknown as ConversationEventBridge,
+      interactions: { bind: () => ({ publishPending: vi.fn(), release: vi.fn(async () => undefined) }) } as never,
+      hubs: new ScopedThreadEventHubRegistry(), retentionMilliseconds: 60_000,
+    });
+    const first = await coordinator.acquire(scope, binding.applicationThreadId);
+    const firstGeneration = first.actor.timeline.generation;
+    const subscriber = first.hub.subscribe(() => undefined);
+    const invalidated = new BackendError({
+      category: "unavailable", retryable: true, crossedSubmissionBoundary: false,
+      backendCode: "native_history_generation_changed", safeMessage: "Reload the history.",
+    });
+    vi.mocked(current.reader[operation]).mockRejectedValueOnce(invalidated);
+    try {
+      await expect(operation === "history"
+        ? first.actor.history({ cursor: "older", limit: 1 })
+        : first.actor.locateTurn({ targetTurnId: projectedTurnId })).rejects.toBe(invalidated);
+      expect(first.actor.replacementRequired).toBe(true);
+      first.release();
+      const next = await coordinator.acquire(scope, binding.applicationThreadId);
+      expect(next.actor).not.toBe(first.actor);
+      expect(next.hub).toBe(first.hub);
+      expect(next.actor.timeline.generation).not.toBe(firstGeneration);
+      expect(current.reader.close).toHaveBeenCalledOnce();
+      expect(current.openHistory).toHaveBeenCalledTimes(2);
+      expect((await next.actor.history({ limit: 1 })).page.orderedTurnIds).toBeDefined();
+      expect(current.driver.attach).not.toHaveBeenCalled();
+      expect(current.environments.acquireLease).not.toHaveBeenCalled();
+      next.release();
+    } finally { subscriber.close(); first.release(); await coordinator.close(); await current.manager.close(); }
+  });
+
+  it("keeps a passive reader after caller cancellation or a rejected cursor", async () => {
+    const current = historyFixture();
+    const acquired = await current.manager.acquire(current.input);
+    const controller = new AbortController();
+    const cancellation = new BackendError({
+      category: "unavailable", retryable: true, crossedSubmissionBoundary: false,
+      safeMessage: "Read cancelled.",
+    });
+    vi.mocked(current.reader.history).mockImplementationOnce(async () => {
+      controller.abort(cancellation);
+      throw cancellation;
+    });
+    try {
+      await expect(acquired.actor.history({ limit: 1, signal: controller.signal })).rejects.toBe(cancellation);
+      expect(acquired.actor.replacementRequired).toBe(false);
+      vi.mocked(current.reader.history).mockRejectedValueOnce(new BackendError({
+        category: "rejected", retryable: false, crossedSubmissionBoundary: false,
+        safeMessage: "Invalid cursor.",
+      }));
+      await expect(acquired.actor.history({ cursor: "invalid", limit: 1 })).rejects.toMatchObject({ category: "rejected" });
+      expect(acquired.actor.replacementRequired).toBe(false);
+    } finally { acquired.release(); await current.manager.close(); }
+  });
+
   it("replaces the coordinator's retained history when inventory is restored", async () => {
     const current = historyFixture();
     let target: AcquireConversationActorInput = current.input;
@@ -530,24 +591,58 @@ describe("passive archived history", () => {
     } finally { await current.close(); }
   });
 
-  it("cancels pending history on restore publication while a viewer is acquiring it", async () => {
+  it("releases a subscribed history owner and exposes restore attachment failure for disconnected publication", async () => {
     const current = historyPublicationFixture();
-    vi.mocked(current.reader.readSnapshot).mockImplementation(async ({ signal }) => {
-      signal.throwIfAborted();
-      return new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    const archived = await current.coordinator.acquire(scope, binding.applicationThreadId);
+    const subscriber = archived.hub.subscribe(() => undefined);
+    archived.release();
+    const failure = new BackendError({
+      category: "unavailable", retryable: true, crossedSubmissionBoundary: false,
+      safeMessage: "The provider is unavailable.",
     });
-    const opening = current.coordinator.acquire(scope, binding.applicationThreadId).catch(error => error);
+    vi.mocked(current.driver.attach).mockRejectedValueOnce(failure);
     try {
-      await vi.waitFor(() => expect(current.reader.readSnapshot).toHaveBeenCalledOnce());
       current.restore();
-      expect(await current.publish()).toBe(true);
-      expect(await opening).toBeInstanceOf(Error);
+      await expect(current.publish()).rejects.toBeInstanceOf(ThreadRuntimeRestoreFailedError);
       expect(current.reader.close).toHaveBeenCalledOnce();
-      expect(current.driver.attach).toHaveBeenCalledOnce();
+      expect(await current.coordinator.captureLoadedRuntime(scope, binding.applicationThreadId)).toBeUndefined();
+      const quiet = current.coordinator.quiet(scope, binding.applicationThreadId);
+      expect(quiet.hub).toBe(archived.hub);
+      expect(quiet.hub.subscriberCount).toBe(1);
+      quiet.release();
+      const retry = await current.coordinator.acquire(scope, binding.applicationThreadId);
+      expect(retry.actor.readOnly).toBe(false);
+      expect(retry.hub).toBe(archived.hub);
+      retry.release();
+    } finally { subscriber.close(); await current.close(); }
+  });
+
+  it("does not attach or cancel a transient history borrower solely for restore publication", async () => {
+    const current = historyPublicationFixture();
+    const borrowed = await current.coordinator.acquire(scope, binding.applicationThreadId);
+    let complete!: () => void;
+    const pending = new Promise<void>(resolve => { complete = resolve; });
+    vi.mocked(current.reader.history).mockImplementationOnce(async ({ signal }) => {
+      await pending;
+      signal?.throwIfAborted();
+      const { runState: _runState, ...page } = snapshot();
+      return page;
+    });
+    const reading = borrowed.actor.history({ cursor: "older", limit: 1 });
+    try {
+      await vi.waitFor(() => expect(current.reader.history).toHaveBeenCalledOnce());
+      current.restore();
+      expect(await current.publish()).toBe(false);
+      expect(current.reader.close).not.toHaveBeenCalled();
+      expect(current.driver.attach).not.toHaveBeenCalled();
+      complete();
+      expect((await reading).page.orderedTurnIds).toEqual([projectedTurnId]);
+      expect(borrowed.actor.readOnly).toBe(true);
+      // An acquired REST/MCP history read is still not an SSE viewer.
+      await current.publish();
+      expect(current.driver.attach).not.toHaveBeenCalled();
       expect(current.baselines).toHaveLength(1);
-      expect(current.baselines[0]!.state.backendCapabilities.deliveryModes).toContain("submit");
-      expect(current.capture).not.toHaveBeenCalled();
-    } finally { await current.close(); }
+    } finally { complete(); borrowed.release(); await current.close(); }
   });
 
   it.each(["manager", "coordinator"] as const)("cancels pending history before restore through the %s", async (kind) => {

@@ -7,12 +7,29 @@ import {
 
 /**
  * Feeds passive native history into the ordinary normalized projector. It has
- * no execution owner, subscriptions, interactions, or mutation authority.
+ * no execution owner, live projection, interactions, or mutation authority.
  */
 export function historyConversationHandle(
   binding: ConversationBinding,
   reader: ConversationHistoryReader,
 ): ConversationHandle {
+  const listeners = new Set<Parameters<ConversationHandle["subscribe"]>[0]>();
+  const read = async <T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> => {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!signal?.aborted && error instanceof BackendError && error.retryable) {
+        // Retrying a failed immutable cut must acquire a fresh reader. In
+        // particular, a provider generation or transport cannot be repaired
+        // inside the reader that captured it. Caller cancellation alone does
+        // not invalidate the retained cut.
+        for (const listener of listeners) {
+          listener({ type: "resnapshot_required", reason: "provider_handle_closed" });
+        }
+      }
+      throw error;
+    }
+  };
   const refuse = async (): Promise<never> => {
     throw new BackendError({
       category: "invalid_state",
@@ -27,14 +44,14 @@ export function historyConversationHandle(
     automaticEviction: "client_detach",
     async establishProjection(input) {
       input.signal.throwIfAborted();
-      const projection = await reader.readSnapshot(input);
+      const projection = await read(() => reader.readSnapshot(input), input.signal);
       input.signal.throwIfAborted();
       return { ...projection, handleSequence: 0, subscribeFromNext: () => () => {} };
     },
-    history: (input) => reader.history(input),
-    locateTurn: (input) => reader.locateTurn(input),
+    history: (input) => read(() => reader.history(input), input.signal),
+    locateTurn: (input) => read(() => reader.locateTurn(input), input.signal),
     async backendCapabilities() {
-      const capabilities = await reader.backendCapabilities();
+      const capabilities = await read(() => reader.backendCapabilities());
       return {
         ...capabilities,
         actions: [],
@@ -46,7 +63,7 @@ export function historyConversationHandle(
         branching: { availability: "unavailable", reason: { text: "Archived threads cannot be forked." } },
       };
     },
-    usage: () => reader.usage(),
+    usage: () => read(() => reader.usage()),
     captureSubmissionRetryAnchor: refuse,
     submit: refuse,
     steer: refuse,
@@ -56,7 +73,13 @@ export function historyConversationHandle(
     reconcileAction: refuse,
     respond: refuse,
     reconcileInteractionResponse: refuse,
-    subscribe: () => () => {},
-    close: () => reader.close(),
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+    async close() {
+      listeners.clear();
+      await reader.close();
+    },
   };
 }
