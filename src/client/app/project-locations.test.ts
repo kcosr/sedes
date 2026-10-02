@@ -324,6 +324,43 @@ describe("project location presentation", () => {
     ).toBe("sedes · CI · /srv/a");
   });
 
+  it("describes projects in pickers by up to two hosts", () => {
+    const projects = describeProjectLocations({
+      ...catalog(
+        [
+          { id: "sedes", name: "sedes" },
+          { id: "notes", name: "notes" },
+          { id: "empty", name: "empty" },
+        ],
+        [
+          location("ci", "sedes", "ci", "sedes"),
+          location("build", "sedes", "build", "sedes"),
+          location("remote", "sedes", "remote", "sedes"),
+          location("local", "sedes", "local", "sedes"),
+          location("remote-2", "sedes", "remote", "sedes-context"),
+          location("notes", "notes", "remote", "notes"),
+        ],
+      ),
+      environments: [
+        ...environments,
+        { id: "build", kind: "ssh", label: { text: "build-box" }, available: true },
+      ],
+    });
+    expect(projects.projectChoice("sedes")).toEqual({
+      label: "sedes — on Local, aw-personal +2",
+      title: "sedes — on Local, aw-personal, build-box, CI",
+    });
+    expect(projects.projectChoice("notes")).toEqual({
+      label: "notes — on aw-personal",
+      title: "notes — on aw-personal",
+    });
+    expect(projects.projectChoice("empty")).toEqual({
+      label: "empty — no locations",
+      title: "empty — no locations",
+    });
+    expect(projects.projectChoice("missing")).toBeUndefined();
+  });
+
   it("describes locations for pickers with their environment and path", () => {
     const projects = describeProjectLocations(
       catalog(

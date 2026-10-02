@@ -84,6 +84,13 @@ export interface ProjectLocations {
     workspaceId: string,
     options?: { readonly includeEnvironment?: boolean },
   ) => string | undefined;
+  /**
+   * A project in a picker, described by the environments that host it:
+   * "sedes — on Local, aw-personal +1", with every host in `title`.
+   */
+  readonly projectChoice: (
+    projectId: string,
+  ) => { readonly label: string; readonly title: string } | undefined;
   /** "Build host · /srv/sedes": the environment (when several exist) and path. */
   readonly locationLabel: (workspaceId: string) => string | undefined;
   /** "sedes · Build host · /srv/sedes", for pickers that choose a location. */
@@ -93,6 +100,7 @@ export interface ProjectLocations {
 }
 
 const HINT_ENVIRONMENT_LIMIT = 2;
+const CHOICE_HOST_LIMIT = 2;
 
 /** Labels are resolved once per catalog; callers memoize on the catalog. */
 export function describeProjectLocations(
@@ -261,6 +269,40 @@ export function describeProjectLocations(
         folderLabels.get(workspaceId),
       ].filter((part): part is string => part !== undefined);
       return parts.length > 0 ? parts.join(" · ") : undefined;
+    },
+    projectChoice: (projectId) => {
+      const label = projectLabels.get(projectId);
+      if (label === undefined) return undefined;
+      // Local hosts first, then by name.
+      const hosts = [
+        ...new Set(
+          locationsOf(projectId).flatMap(({ environmentId }) => {
+            const environment = environmentById.get(environmentId);
+            return environment ? [environment] : [];
+          }),
+        ),
+      ]
+        .sort(
+          (left, right) =>
+            Number(right.kind === "local") - Number(left.kind === "local") ||
+            environmentDisplayLabel(left, environments).localeCompare(
+              environmentDisplayLabel(right, environments),
+            ),
+        )
+        .map((environment) => environmentDisplayLabel(environment, environments));
+      if (hosts.length === 0) {
+        const empty = `${label} — no locations`;
+        return { label: empty, title: empty };
+      }
+      const shown = hosts.slice(0, CHOICE_HOST_LIMIT).join(", ");
+      const more =
+        hosts.length > CHOICE_HOST_LIMIT
+          ? ` +${hosts.length - CHOICE_HOST_LIMIT}`
+          : "";
+      return {
+        label: `${label} — on ${shown}${more}`,
+        title: `${label} — on ${hosts.join(", ")}`,
+      };
     },
     locationLabel,
     projectLocationLabel: (workspaceId) => {
