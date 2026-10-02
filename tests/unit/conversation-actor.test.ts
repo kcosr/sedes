@@ -645,6 +645,34 @@ describe("passive archived history", () => {
     } finally { complete(); borrowed.release(); await current.close(); }
   });
 
+  it("returns an execution baseline when restore completes while the opening viewer awaits history", async () => {
+    const current = historyPublicationFixture();
+    let complete!: () => void;
+    const pending = new Promise<void>(resolve => { complete = resolve; });
+    vi.mocked(current.reader.readSnapshot).mockImplementationOnce(async ({ signal }) => {
+      await pending;
+      signal.throwIfAborted();
+      return { snapshot: snapshot(), history: { operational: true } };
+    });
+    const opening = current.coordinator.acquire(scope, binding.applicationThreadId);
+    try {
+      await vi.waitFor(() => expect(current.reader.readSnapshot).toHaveBeenCalledOnce());
+      current.restore();
+      expect(current.driver.attach).not.toHaveBeenCalled();
+      complete();
+      const opened = await opening;
+      expect(opened.actor.readOnly).toBe(false);
+      expect(current.baselines).toHaveLength(2);
+      expect(current.baselines[1]!.state.backendCapabilities.deliveryModes).toContain("submit");
+      expect(current.baselines[1]!.state.timeline.generation).not.toBe(current.baselines[0]!.state.timeline.generation);
+      expect(current.reader.close).toHaveBeenCalledOnce();
+      expect(current.driver.attach).toHaveBeenCalledOnce();
+      const subscriber = opened.hub.subscribe(() => undefined);
+      opened.release();
+      subscriber.close();
+    } finally { complete(); await current.close(); }
+  });
+
   it.each(["manager", "coordinator"] as const)("cancels pending history before restore through the %s", async (kind) => {
     const current = historyFixture();
     let target: AcquireConversationActorInput = current.input;

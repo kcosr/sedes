@@ -441,6 +441,20 @@ export class ThreadRuntimeCoordinator {
       try {
         runtime = await entry.promise;
         await runtime.actor.ensureProjectionCurrent();
+        if (runtime.actor.readOnly) {
+          // An opening viewer has not subscribed yet. Restore publication
+          // cannot hand it off, so validate access again after the pending
+          // history establishment before exposing a passive baseline.
+          const target = await this.#targets.resolve(scope, applicationThreadId);
+          if (
+            this.#closed || this.#maintenance.has(key) ||
+            this.#entries.get(key) !== entry || entry.eviction ||
+            target.access !== "history"
+          ) {
+            this.#release(key, entry);
+            continue;
+          }
+        }
       } catch (error) {
         this.#release(key, entry);
         if (runtime?.actor.replacementRequired) {
