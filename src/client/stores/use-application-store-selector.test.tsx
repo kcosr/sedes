@@ -75,6 +75,29 @@ describe("useApplicationStoreSelector", () => {
     expect(seen[1]).toEqual(["a"]);
   });
 
+  it("re-derives the selection when the equality function changes", () => {
+    const { store, publish } = fakeStore({ search: "alpha" });
+    const always = () => true;
+    function Probe({
+      isEqual,
+    }: {
+      isEqual: (left: string, right: string) => boolean;
+    }) {
+      return (
+        <span data-testid="value">
+          {useApplicationStoreSelector(store, selectSearch, isEqual)}
+        </span>
+      );
+    }
+    const { rerender } = render(<Probe isEqual={always} />);
+    publish({ search: "beta" });
+    // The permissive equality keeps the first selection.
+    expect(screen.getByTestId("value")).toHaveTextContent("alpha");
+    // A stricter equality applies at once, without another store event.
+    rerender(<Probe isEqual={Object.is} />);
+    expect(screen.getByTestId("value")).toHaveTextContent("beta");
+  });
+
   it("passes the previous selection to the selector", () => {
     const { store, publish } = fakeStore({ search: "one" });
     const selector = vi.fn(

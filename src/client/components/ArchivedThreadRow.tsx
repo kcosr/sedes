@@ -21,12 +21,21 @@ import { ThreadContextMenu } from "./ThreadContextMenu.js";
 /**
  * A restore's progress for one row. Pending and restored statuses carry the
  * inventory revision they were started against, so a row that changed since
- * (for example, archived again elsewhere) is not left busy.
+ * (for example, archived again elsewhere) is not left busy, and the attempt
+ * that set them, so only that attempt's response settles them.
  */
 export type ArchiveRestoreStatus =
-  | { readonly kind: "pending"; readonly revision: number }
+  | {
+      readonly kind: "pending";
+      readonly revision: number;
+      readonly attempt: number;
+    }
   /** Accepted; the row stays busy until the stream removes it. */
-  | { readonly kind: "restored"; readonly revision: number }
+  | {
+      readonly kind: "restored";
+      readonly revision: number;
+      readonly attempt: number;
+    }
   | { readonly kind: "error"; readonly message: string };
 
 /** A muted marker that names what is unavailable for assistive technology. */
@@ -62,6 +71,7 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
   ageDateTime,
   restoreStatus,
   onRestore,
+  onMenuRequested,
   onMenuRestored,
 }: {
   readonly row: ArchivedThreadRowModel;
@@ -75,6 +85,8 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
   readonly ageDateTime: string;
   readonly restoreStatus?: ArchiveRestoreStatus;
   readonly onRestore: (row: ArchivedThreadRowModel) => void;
+  /** A right-click, touch press, or menu key may open the actions menu. */
+  readonly onMenuRequested: (row: ArchivedThreadRowModel) => void;
   /** The thread actions menu's Restore was accepted. */
   readonly onMenuRestored: (row: ArchivedThreadRowModel) => void;
 }): React.JSX.Element {
@@ -105,7 +117,14 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
   const detailsId = `${id}-details`;
   const hasMeta = projectPart || targetPart || worktreePart;
   return (
-    <li className="archive-list-item">
+    <li
+      className="archive-list-item"
+      onContextMenuCapture={() => onMenuRequested(row)}
+      onPointerDownCapture={(event) => {
+        // A touch long-press opens the menu without a contextmenu event.
+        if (event.pointerType !== "mouse") onMenuRequested(row);
+      }}
+    >
       <ThreadContextMenu
         thread={row.thread}
         store={store}

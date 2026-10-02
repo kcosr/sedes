@@ -31,12 +31,19 @@ function resetStorage() {
   window.dispatchEvent(new StorageEvent("storage", { key: null }));
 }
 
+// Date groups follow the local calendar. Pin the clock to a local afternoon
+// so fixtures an hour or two old are always Today and 30 hours old Yesterday,
+// whenever and wherever the tests run. Only Date is faked; timers stay real.
+const NOW = new Date(2026, 8, 30, 14, 0, 0).getTime();
+
 afterEach(() => {
   cleanup();
   resetStorage();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"], now: NOW });
   vi.stubGlobal(
     "matchMedia",
     vi.fn(() => ({
@@ -61,8 +68,10 @@ beforeEach(() => {
   });
 });
 
+// Relative to the pinned clock, so fixtures built while tests are collected
+// agree with the component's clock.
 const hoursAgo = (hours: number) =>
-  new Date(Date.now() - hours * 3_600_000).toISOString();
+  new Date(NOW - hours * 3_600_000).toISOString();
 
 function makeThread(
   id: string,
@@ -597,6 +606,109 @@ describe("ArchivedView restore", () => {
       },
     });
     expect(rowTitles()).toEqual(["First", "Third"]);
+  });
+
+  it("moves focus on after a menu Restore whose row left before the response", async () => {
+    const snapshot = makeSnapshot(threads);
+    const { store, publish } = createStore(snapshot);
+    let accept!: () => void;
+    store.mutateInventory.mockImplementation(
+      () => new Promise<void>((resolve) => (accept = resolve)),
+    );
+    render(<ArchivedView store={store} />);
+    const row = screen
+      .getAllByTestId("archive-row")
+      .find((candidate) => candidate.textContent?.includes("Second"))!;
+    fireEvent.contextMenu(row);
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("menuitem", { name: "Restore to Active" }));
+    // The stream removes the row before the server's response arrives.
+    publish({
+      snapshot: {
+        ...snapshot,
+        threads: [
+          threads[0]!,
+          { ...threads[1]!, inventoryState: "active", inventoryRevision: 2 },
+          threads[2]!,
+        ],
+      },
+    });
+    (document.activeElement as HTMLElement | null)?.blur();
+    await act(async () => accept());
+    expect(document.activeElement).toHaveClass("archive-row-open");
+    expect(document.activeElement).toHaveTextContent("Third");
+  });
+
+  it("ignores a late failure from a restore that a newer one replaced", async () => {
+    const snapshot = makeSnapshot(threads);
+    const { store, publish } = createStore(snapshot);
+    const settlers: Array<{
+      resolve: () => void;
+      reject: (error: Error) => void;
+    }> = [];
+    store.mutateInventory.mockImplementation(
+      () =>
+        new Promise<void>((resolve, reject) =>
+          settlers.push({ resolve, reject }),
+        ),
+    );
+    render(<ArchivedView store={store} />);
+    fireEvent.click(screen.getByRole("button", { name: "Restore Second" }));
+    // Another client restores and re-archives the thread while the first
+    // request is outstanding, so the row can be restored again.
+    publish({
+      snapshot: {
+        ...snapshot,
+        threads: [
+          threads[0]!,
+          { ...threads[1]!, inventoryState: "active", inventoryRevision: 2 },
+          threads[2]!,
+        ],
+      },
+    });
+    const rearchived = { ...threads[1]!, inventoryRevision: 3 };
+    publish({
+      snapshot: {
+        ...snapshot,
+        threads: [threads[0]!, rearchived, threads[2]!],
+      },
+    });
+    const restore = screen.getByRole("button", { name: "Restore Second" });
+    fireEvent.click(restore);
+    expect(store.mutateInventory).toHaveBeenLastCalledWith(
+      rearchived,
+      "restore",
+    );
+    await act(async () => settlers[0]!.reject(new Error("Stale revision.")));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(restore).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(restore);
+    expect(store.mutateInventory).toHaveBeenCalledTimes(2);
+    await act(async () => settlers[1]!.resolve());
+    expect(screen.getByRole("status")).toHaveTextContent("Restored Second");
+  });
+
+  it("announces consecutive restores of threads with the same title", async () => {
+    const twins = [
+      makeThread("n1", "New thread", { stateChangedAt: hoursAgo(1) }),
+      makeThread("n2", "New thread", { stateChangedAt: hoursAgo(2) }),
+    ];
+    const { store } = createStore(makeSnapshot(twins));
+    render(<ArchivedView store={store} />);
+    const [first, second] = screen.getAllByRole("button", {
+      name: "Restore New thread",
+    });
+    fireEvent.click(first!);
+    await act(async () => undefined);
+    const region = screen.getByRole("status");
+    const firstMessage = region.firstElementChild;
+    expect(region).toHaveTextContent("Restored New thread");
+    fireEvent.click(second!);
+    await act(async () => undefined);
+    // A new node, so assistive technology announces the repeated message.
+    expect(region.firstElementChild).not.toBe(firstMessage);
+    expect(region).toHaveTextContent("Restored New thread");
   });
 
   it("reports a failed restore inline without a pop-up", async () => {

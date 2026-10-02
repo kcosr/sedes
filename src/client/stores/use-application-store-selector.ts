@@ -17,7 +17,8 @@ import type {
  * `useSyncExternalStore` skips the render.
  *
  * Pass a stable `selector` and `isEqual` (module-level functions or memoized
- * callbacks): a different selector re-derives its selection on the next read.
+ * callbacks): a different selector or equality re-derives the selection on
+ * the next read.
  */
 export function useApplicationStoreSelector<Selection>(
   store: Pick<ApplicationClientStore, "subscribe" | "getSnapshot">,
@@ -31,6 +32,7 @@ export function useApplicationStoreSelector<Selection>(
     | {
         readonly state: ApplicationClientState;
         readonly selector: typeof selector;
+        readonly isEqual: typeof isEqual;
         readonly selection: Selection;
       }
     | undefined
@@ -38,7 +40,12 @@ export function useApplicationStoreSelector<Selection>(
   const getSelection = useCallback((): Selection => {
     const state = store.getSnapshot();
     const cached = cache.current;
-    if (cached && cached.state === state && cached.selector === selector) {
+    if (
+      cached &&
+      cached.state === state &&
+      cached.selector === selector &&
+      cached.isEqual === isEqual
+    ) {
       return cached.selection;
     }
     const next = selector(state, cached?.selection);
@@ -46,7 +53,7 @@ export function useApplicationStoreSelector<Selection>(
       cached !== undefined && isEqual(cached.selection, next)
         ? cached.selection
         : next;
-    cache.current = { state, selector, selection };
+    cache.current = { state, selector, isEqual, selection };
     return selection;
   }, [isEqual, selector, store]);
   return useSyncExternalStore(store.subscribe, getSelection, getSelection);

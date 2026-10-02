@@ -279,7 +279,17 @@ export const ArchivedView = memo(function ArchivedView({
   >(() => new Map());
   const [focusAfterRestore, setFocusAfterRestore] =
     useState<FocusAfterRestore>();
-  const [announcement, setAnnouncement] = useState("");
+  // Keyed so a repeated message (two threads with one title) still replaces
+  // the live region's content and is announced again.
+  const [announcement, setAnnouncement] = useState<{
+    readonly key: number;
+    readonly text: string;
+  }>({ key: 0, text: "" });
+  const announce = useCallback(
+    (text: string) =>
+      setAnnouncement((current) => ({ key: current.key + 1, text })),
+    [],
+  );
   const pageRowsRef = useRef(page.rows);
   pageRowsRef.current = page.rows;
   const restoreStatusRef = useRef(restoreStatus);
@@ -313,34 +323,65 @@ export const ArchivedView = memo(function ArchivedView({
         ];
   }, []);
 
+  // Each restore of a row supersedes the previous one: only the row's latest
+  // attempt may settle its status, announce, or move focus, so a late
+  // response from an older attempt (say, before another client restored and
+  // re-archived the thread) cannot override a newer one.
+  const restoreAttempts = useRef(0);
+  const latestRestoreAttempt = useRef(new Map<string, number>());
+  const startRestoreAttempt = (threadId: string): number => {
+    const attempt = ++restoreAttempts.current;
+    latestRestoreAttempt.current.set(threadId, attempt);
+    return attempt;
+  };
+  const isLatestRestoreAttempt = (threadId: string, attempt: number) =>
+    latestRestoreAttempt.current.get(threadId) === attempt;
+
   const restore = useCallback(
     (row: ArchivedThreadRowModel) => {
       const status = restoreStatusRef.current.get(row.id);
       if (status?.kind === "pending" || status?.kind === "restored") return;
       const candidates = focusCandidates(row.id);
       const revision = row.thread.inventoryRevision;
-      setStatus(row.id, { kind: "pending", revision });
+      const attempt = startRestoreAttempt(row.id);
+      // Settles this attempt's pending status, unless the stream already
+      // removed the row (dropping the status) or a newer attempt replaced it.
+      const settle = (next: ArchiveRestoreStatus) =>
+        setRestoreStatus((current) => {
+          const pending = current.get(row.id);
+          if (pending?.kind !== "pending" || pending.attempt !== attempt)
+            return current;
+          return new Map(current).set(row.id, next);
+        });
+      setStatus(row.id, { kind: "pending", revision, attempt });
       store.mutateInventory(row.thread, "restore").then(
         () => {
-          // The stream may already have removed the row (and its pending
-          // status); a late response must not mark a row that is no longer
-          // this restore's.
-          setRestoreStatus((current) => {
-            const pending = current.get(row.id);
-            if (pending?.kind !== "pending" || pending.revision !== revision)
-              return current;
-            const next = new Map(current);
-            next.set(row.id, { kind: "restored", revision });
-            return next;
-          });
-          setAnnouncement(`Restored ${row.title}`);
+          if (!isLatestRestoreAttempt(row.id, attempt)) return;
+          settle({ kind: "restored", revision, attempt });
+          announce(`Restored ${row.title}`);
           setFocusAfterRestore({ threadId: row.id, candidates });
         },
-        (error: unknown) =>
-          setStatus(row.id, { kind: "error", message: messageFrom(error) }),
+        (error: unknown) => {
+          if (!isLatestRestoreAttempt(row.id, attempt)) return;
+          settle({ kind: "error", message: messageFrom(error) });
+        },
       );
     },
-    [focusCandidates, setStatus, store],
+    [announce, focusCandidates, setStatus, store],
+  );
+
+  // The menu reports a Restore only once the server accepted it, by which
+  // time the stream may have removed the row; its focus candidates are taken
+  // when the menu is requested instead.
+  const menuIntent = useRef<FocusAfterRestore>(undefined);
+  const menuRequested = useCallback(
+    (row: ArchivedThreadRowModel) => {
+      menuIntent.current = {
+        threadId: row.id,
+        candidates: focusCandidates(row.id),
+      };
+    },
+    [focusCandidates],
   );
 
   // A Restore accepted from the thread actions menu gets the same busy row,
@@ -348,19 +389,25 @@ export const ArchivedView = memo(function ArchivedView({
   const menuRestored = useCallback(
     (row: ArchivedThreadRowModel) => {
       const revision = row.thread.inventoryRevision;
+      const attempt = startRestoreAttempt(row.id);
       setRestoreStatus((current) => {
         if (!archivedRevisionsRef.current.has(row.id)) return current;
-        const next = new Map(current);
-        next.set(row.id, { kind: "restored", revision });
-        return next;
+        return new Map(current).set(row.id, {
+          kind: "restored",
+          revision,
+          attempt,
+        });
       });
-      setAnnouncement(`Restored ${row.title}`);
+      announce(`Restored ${row.title}`);
       setFocusAfterRestore({
         threadId: row.id,
-        candidates: focusCandidates(row.id),
+        candidates:
+          menuIntent.current?.threadId === row.id
+            ? menuIntent.current.candidates
+            : focusCandidates(row.id),
       });
     },
-    [focusCandidates],
+    [announce, focusCandidates],
   );
 
   // Forget statuses of rows that left the archive or changed since their
@@ -562,6 +609,7 @@ export const ArchivedView = memo(function ArchivedView({
                       ageDateTime={new Date(timestamp).toISOString()}
                       restoreStatus={restoreStatus.get(row.id)}
                       onRestore={restore}
+                      onMenuRequested={menuRequested}
                       onMenuRestored={menuRestored}
                     />
                   );
@@ -604,7 +652,7 @@ export const ArchivedView = memo(function ArchivedView({
         </div>
       </div>
       <div className="sr-only" role="status" aria-live="polite">
-        {announcement}
+        <span key={announcement.key}>{announcement.text}</span>
       </div>
     </section>
   );
