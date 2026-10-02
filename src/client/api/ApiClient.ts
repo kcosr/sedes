@@ -8,9 +8,15 @@ import {
   type EnvironmentVariablesPreviewResult,
   type ThreadEnvironmentVariablesResult,
 } from "../../shared/protocol/environment-variables.js";
-import { listProjectsResultSchema, openWorkspaceRequestSchema, openWorkspaceResultSchema,
-  projectSummarySchema, removeLocationRequestSchema, type ListProjectsResult,
-  type ProjectAssignment, type ProjectSummary, type RemoveLocationRequest } from "../../shared/index.js";
+import { listProjectsResultSchema, locationConflictErrorSchema, mergeProjectRequestSchema,
+  moveLocationRequestSchema, openWorkspaceRequestSchema, openWorkspaceResultSchema,
+  projectRemovalBlockedErrorSchema, projectSummarySchema, removeLocationRequestSchema,
+  removeProjectRequestSchema, renameProjectRequestSchema, restoreProjectRequestSchema,
+  restoreProjectResultSchema, type ListProjectsResult, type LocationConflict,
+  type MergeProjectRequest, type MoveLocationRequest, type ProjectAssignment,
+  type ProjectRemovalBlocker, type ProjectSummary, type RemoveLocationRequest,
+  type RemoveProjectRequest, type RenameProjectRequest, type RestoreProjectRequest,
+  type RestoreProjectResult } from "../../shared/index.js";
 import { authenticatedFetch } from "../authentication/auth-transport.js";
 import {
   workpadSchema, workpadRevisionSchema, workpadDraftSchema, workpadListPageSchema, workpadRevisionPageSchema,
@@ -378,6 +384,42 @@ export class ApiError extends Error {
     this.code = code;
     this.retryable = retryable;
     this.details = details;
+  }
+}
+
+/** A project removal refused with every blocker across its active locations. */
+export class ProjectRemovalBlockedApiError extends ApiError {
+  readonly blockers: readonly ProjectRemovalBlocker[];
+
+  constructor(
+    status: number,
+    message: string,
+    retryable: boolean,
+    blockers: readonly ProjectRemovalBlocker[],
+  ) {
+    super(status, "invalid_transition", message, retryable);
+    this.name = "ProjectRemovalBlockedApiError";
+    this.blockers = blockers;
+  }
+}
+
+/**
+ * An added directory that is already a location of another project, or of a
+ * removed one; the conflict names the location and its project.
+ */
+export class LocationConflictApiError extends ApiError {
+  readonly conflict: LocationConflict;
+
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    retryable: boolean,
+    conflict: LocationConflict,
+  ) {
+    super(status, code, message, retryable);
+    this.name = "LocationConflictApiError";
+    this.conflict = conflict;
   }
 }
 
@@ -1764,6 +1806,36 @@ export class ApiClient {
     return this.#request("/api/projects", { signal }, listProjectsResultSchema);
   }
 
+  renameProject(projectId: string, input: RenameProjectRequest): Promise<ProjectSummary> {
+    const request = renameProjectRequestSchema.parse(input);
+    return this.#mutation(`/api/projects/${encodeURIComponent(projectId)}`, projectSummarySchema,
+      { method: "PATCH", body: JSON.stringify(request) });
+  }
+
+  /**
+   * Removes the project with every active location. A refusal lists every
+   * blocker as a {@link ProjectRemovalBlockedApiError}.
+   */
+  removeProject(projectId: string, input: RemoveProjectRequest): Promise<ProjectSummary> {
+    const request = removeProjectRequestSchema.parse(input);
+    return this.#mutation(`/api/projects/${encodeURIComponent(projectId)}/remove`, projectSummarySchema,
+      { method: "POST", body: JSON.stringify(request) });
+  }
+
+  /** Restores the project, then each requested location, reporting each one. */
+  restoreProject(projectId: string, input: RestoreProjectRequest): Promise<RestoreProjectResult> {
+    const request = restoreProjectRequestSchema.parse(input);
+    return this.#mutation(`/api/projects/${encodeURIComponent(projectId)}/restore`, restoreProjectResultSchema,
+      { method: "POST", body: JSON.stringify(request) });
+  }
+
+  /** Moves every location into the target and deletes the source; the response is the target. */
+  mergeProject(projectId: string, input: MergeProjectRequest): Promise<ProjectSummary> {
+    const request = mergeProjectRequestSchema.parse(input);
+    return this.#mutation(`/api/projects/${encodeURIComponent(projectId)}/merge`, projectSummarySchema,
+      { method: "POST", body: JSON.stringify(request) });
+  }
+
   /** Removes one location; the response is its project. */
   removeLocation(workspaceId: string, input: RemoveLocationRequest): Promise<ProjectSummary> {
     const request = removeLocationRequestSchema.parse(input);
@@ -1771,6 +1843,18 @@ export class ApiClient {
       { method: "POST", body: JSON.stringify(request) });
   }
 
+  /** Moves one location into another or a new project; the response is its new project. */
+  moveLocation(workspaceId: string, input: MoveLocationRequest): Promise<ProjectSummary> {
+    const request = moveLocationRequestSchema.parse(input);
+    return this.#mutation(`/api/workspaces/${encodeURIComponent(workspaceId)}/move`, projectSummarySchema,
+      { method: "POST", body: JSON.stringify(request) });
+  }
+
+  /**
+   * Adds a directory as a location, or selects or restores the location it
+   * already is. A directory in another or a removed project is refused with a
+   * {@link LocationConflictApiError}.
+   */
   async openWorkspace(path: string, environmentId: string, project: ProjectAssignment): Promise<string> {
     const request = openWorkspaceRequestSchema.parse({ path, environmentId, project });
     const result = await this.#mutation(
@@ -2421,6 +2505,25 @@ export class ApiClient {
     });
     const body = (await response.json().catch(() => undefined)) as unknown;
     if (!response.ok) {
+      const removalBlocked = projectRemovalBlockedErrorSchema.safeParse(body);
+      if (removalBlocked.success) {
+        throw new ProjectRemovalBlockedApiError(
+          response.status,
+          removalBlocked.data.error.message,
+          removalBlocked.data.error.retryable,
+          removalBlocked.data.blockers,
+        );
+      }
+      const locationConflict = locationConflictErrorSchema.safeParse(body);
+      if (locationConflict.success) {
+        throw new LocationConflictApiError(
+          response.status,
+          locationConflict.data.error.code,
+          locationConflict.data.error.message,
+          locationConflict.data.error.retryable,
+          locationConflict.data.conflict,
+        );
+      }
       if (response.status === 409) {
         const creationConflict =
           toolClientCreationConflictSchema.safeParse(body);
