@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import {
   materializedTaskContextsSchema,
   type MaterializedTaskContext,
-} from "../../../shared/protocol/tasks.js";
+} from "../../domain/materialized-task-contexts.js";
 import type { ClaudeForkBoundaryAuthentication } from "./claude-fork-context-boundary.js";
 
 const HEADER = '<sedes-task-contexts version="1">';

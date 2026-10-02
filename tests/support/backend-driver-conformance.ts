@@ -8,7 +8,7 @@ import {
 } from "../../src/shared/protocol/backend.js";
 import { usageSnapshotSchema } from "../../src/shared/protocol/conversation.js";
 import type { ContextExcerpt } from "../../src/shared/protocol/context-excerpts.js";
-import type { MaterializedTaskContext } from "../../src/shared/protocol/tasks.js";
+import type { MaterializedTaskContext } from "../../src/server/domain/materialized-task-contexts.js";
 import {
   BackendError,
   type ConversationBackendDriver,
@@ -71,8 +71,8 @@ const steeredContextExcerpt = {
 const submittedTaskContext = {
   id: "10000000-0000-4000-8000-000000000003",
   scope: {
-    kind: "workspace",
-    workspaceId: "20000000-0000-4000-8000-000000000002",
+    kind: "project",
+    projectId: "20000000-0000-4000-8000-000000000002",
   },
   title: "Implement task-context delivery",
   details: "Preserve this exact immutable Task snapshot.",
@@ -82,6 +82,15 @@ const submittedTaskContext = {
   revision: 7,
   createdAt: "2026-07-30T17:00:00.000Z",
   updatedAt: "2026-07-30T17:30:00.000Z",
+} satisfies MaterializedTaskContext;
+// Delivered before Tasks moved from workspace to project scope; replays of
+// such operations still carry this exact snapshot.
+const legacySubmittedTaskContext = {
+  ...submittedTaskContext,
+  scope: {
+    kind: "workspace",
+    workspaceId: "20000000-0000-4000-8000-000000000002",
+  },
 } satisfies MaterializedTaskContext;
 
 async function closeAll(
@@ -549,64 +558,98 @@ export function describeBackendDriverConformance(
       await closeAll([handle], fixture);
     });
 
-    it("accepts task-only input and projects its immutable Task snapshot", async () => {
-      const fixture = await createFixture();
-      const created = await fixture.driver.create({
-        scope: fixture.scope,
-        workspace: fixture.workspace,
-        applicationThreadId: "task-context-create",
-        applicationOperationId: "task-context-create",
-        source: { kind: "user" },
-      });
-      const handle = await fixture.driver.attach({
-        scope: fixture.scope,
-        binding: fixture.binding(created),
-        workspace: fixture.workspace,
-        opaqueBindingDetail: created.opaqueBindingDetail,
-      });
-      const submitted = await handle.submit({
-        applicationOperationId: "task-context-submit",
-        source: { kind: "user" },
-        mutationId: "task-context-mutation",
-        reconciliationToken: "task-context-mutation",
-        text: "",
-        contextExcerpts: EMPTY_CONTEXT_EXCERPTS,
-        taskContexts: [submittedTaskContext],
-        attachments: [],
-      });
-      const page = await handle.history({ limit: 10 });
-      const turn = page.turnsById[submitted.backendTurnId!];
-      const message = turn?.orderedBackendItemIds
-        .map((itemId) => page.itemsById[itemId])
-        .find((item) => item?.semanticKind === "user_message");
-      expect(message).toMatchObject({
-        semanticKind: "user_message",
-        deliveryOperationId: "task-context-submit",
-        content: [{ kind: "task_context", task: submittedTaskContext }],
-      });
-
-      let mismatch: unknown;
-      try {
-        await handle.submit({
+    for (const [label, taskContext] of [
+      ["project", submittedTaskContext],
+      ["legacy workspace", legacySubmittedTaskContext],
+    ] as const) {
+      it(`accepts task-only input and projects its immutable ${label}-scope Task snapshot without its scope`, async () => {
+        const fixture = await createFixture();
+        const created = await fixture.driver.create({
+          scope: fixture.scope,
+          workspace: fixture.workspace,
+          applicationThreadId: "task-context-create",
+          applicationOperationId: "task-context-create",
+          source: { kind: "user" },
+        });
+        const handle = await fixture.driver.attach({
+          scope: fixture.scope,
+          binding: fixture.binding(created),
+          workspace: fixture.workspace,
+          opaqueBindingDetail: created.opaqueBindingDetail,
+        });
+        const input = {
           applicationOperationId: "task-context-submit",
           source: { kind: "user" },
           mutationId: "task-context-mutation",
           reconciliationToken: "task-context-mutation",
           text: "",
           contextExcerpts: EMPTY_CONTEXT_EXCERPTS,
-          taskContexts: [{ ...submittedTaskContext, revision: 8 }],
+          taskContexts: [taskContext],
           attachments: [],
+        } as const;
+        const submitted = await handle.submit(input);
+        const page = await handle.history({ limit: 10 });
+        const turn = page.turnsById[submitted.backendTurnId!];
+        const message = turn?.orderedBackendItemIds
+          .map((itemId) => page.itemsById[itemId])
+          .find((item) => item?.semanticKind === "user_message");
+        expect(message).toMatchObject({
+          semanticKind: "user_message",
+          deliveryOperationId: "task-context-submit",
         });
-      } catch (error) {
-        mismatch = error;
-      }
-      expectBackendError(mismatch, "rejected");
-      await handle.interrupt({
-        applicationOperationId: "task-context-interrupt",
-        deadlineAt: interruptDeadlineAt,
+        expect(
+          message?.semanticKind === "user_message" ? message.content : [],
+        ).toEqual([
+          {
+            kind: "task_context",
+            task: {
+              id: taskContext.id,
+              title: taskContext.title,
+              details: taskContext.details,
+              completedAt: taskContext.completedAt,
+              revision: taskContext.revision,
+            },
+          },
+        ]);
+
+        // A replay of the stored snapshot is the same operation.
+        await expect(
+          handle.submit({
+            ...input,
+            taskContexts: JSON.parse(JSON.stringify([taskContext])),
+          }),
+        ).resolves.toEqual(submitted);
+        for (const changed of [
+          { ...taskContext, revision: 8 },
+          {
+            ...taskContext,
+            scope:
+              taskContext.scope.kind === "workspace"
+                ? {
+                    kind: "project" as const,
+                    projectId: taskContext.scope.workspaceId,
+                  }
+                : {
+                    kind: "workspace" as const,
+                    workspaceId: "20000000-0000-4000-8000-000000000002",
+                  },
+          },
+        ]) {
+          let mismatch: unknown;
+          try {
+            await handle.submit({ ...input, taskContexts: [changed] });
+          } catch (error) {
+            mismatch = error;
+          }
+          expectBackendError(mismatch, "rejected");
+        }
+        await handle.interrupt({
+          applicationOperationId: "task-context-interrupt",
+          deadlineAt: interruptDeadlineAt,
+        });
+        await closeAll([handle], fixture);
       });
-      await closeAll([handle], fixture);
-    });
+    }
 
     it("reports capabilities, applies actions, and exposes usage and paged history", async () => {
       const fixture = await createFixture();

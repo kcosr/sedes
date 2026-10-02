@@ -33,6 +33,7 @@ import {
 } from "../../conversations/payload-policy.js";
 import { inspectClaudeContextExcerptEnvelope } from "./claude-context-excerpts.js";
 import { inspectClaudeTaskContextEnvelope } from "./claude-task-contexts.js";
+import { presentMessageTaskContext } from "../../domain/materialized-task-contexts.js";
 import {
   inspectClaudeAttachmentEnvelope,
   isClaudeAttachmentEnvelopeText,
@@ -1762,7 +1763,10 @@ function addUserMessage(
           authenticatedTaskInspection.operationId,
         );
         for (const task of authenticatedTaskInspection.taskContexts) {
-          content.push({ kind: "task_context", task });
+          content.push({
+            kind: "task_context",
+            task: presentMessageTaskContext(task),
+          });
         }
       }
       const inspection = authentication

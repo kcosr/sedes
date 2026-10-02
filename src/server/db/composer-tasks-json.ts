@@ -1,10 +1,12 @@
 import type Database from "better-sqlite3";
 import {
   composerTaskReferencesSchema,
-  materializedTaskContextsSchema,
   type ComposerTaskReference,
-  type MaterializedTaskContext,
 } from "../../shared/protocol/tasks.js";
+import {
+  materializedTaskContextsSchema,
+  type MaterializedTaskContext,
+} from "../domain/materialized-task-contexts.js";
 import { presentTask } from "../application/task-presentation.js";
 import { DomainError } from "../domain/errors.js";
 import type { RequestScope } from "../identity/identity-provider.js";

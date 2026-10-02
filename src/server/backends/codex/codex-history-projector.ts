@@ -50,6 +50,7 @@ import {
 import { displayFileName } from "../../output-artifacts/display-file-name.js";
 import { inspectCodexContextExcerptCarrier } from "./codex-context-excerpts.js";
 import { inspectCodexTaskContextCarrier } from "./codex-task-contexts.js";
+import { presentMessageTaskContext } from "../../domain/materialized-task-contexts.js";
 import { inspectStagedAttachmentManifest } from "../staged-attachment-manifest.js";
 import { USER_FORK_CONTEXT_BOUNDARY_TEXT } from "../fork-context-boundary.js";
 import { MAXIMUM_PROVIDER_FRAME_BYTES } from "../../provider-protocol/transport/framed-message-limits.js";
@@ -1374,7 +1375,7 @@ function projectUserContent(
       projected.push(
         ...taskCarrier.taskContexts.map((task) => ({
           kind: "task_context" as const,
-          task,
+          task: presentMessageTaskContext(task),
         })),
       );
       taskCarrierConsumed = true;

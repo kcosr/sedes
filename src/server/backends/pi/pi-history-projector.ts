@@ -30,7 +30,7 @@ import {
   readPiContextExcerptMarker,
 } from "./pi-context-excerpt-marker.js";
 import type { ContextExcerpt } from "../../../shared/protocol/context-excerpts.js";
-import type { MaterializedTaskContext } from "../../../shared/protocol/tasks.js";
+import type { MaterializedTaskContext } from "../../domain/materialized-task-contexts.js";
 import {
   isPiTaskContextMarkerType,
   piTaskContextMarkerType,

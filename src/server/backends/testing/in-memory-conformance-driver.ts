@@ -15,6 +15,7 @@ import type { UsageSnapshot } from "../../../shared/protocol/conversation.js";
 import type { ContextExcerpt } from "../../../shared/protocol/context-excerpts.js";
 import { boundText } from "../../conversations/payload-policy.js";
 import type { ValidatedWorkspace } from "../../execution/contracts.js";
+import { presentMessageTaskContext } from "../../domain/materialized-task-contexts.js";
 import {
   BackendError,
   type AgentBackendInstance,
@@ -2287,7 +2288,7 @@ class InMemoryConversationHandle implements ConversationHandle {
         ),
         ...input.taskContexts.map((task) => ({
           kind: "task_context" as const,
-          task: structuredClone(task),
+          task: presentMessageTaskContext(task),
         })),
         ...input.contextExcerpts.map((excerpt) => ({
           kind: "context_excerpt" as const,

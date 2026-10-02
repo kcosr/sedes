@@ -3,7 +3,7 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
   materializedTaskContextsSchema,
   type MaterializedTaskContext,
-} from "../../../shared/protocol/tasks.js";
+} from "../../domain/materialized-task-contexts.js";
 import {
   assertPiToolIdentityAuthentication,
   type PiToolIdentityAuthentication,

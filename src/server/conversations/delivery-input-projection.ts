@@ -5,8 +5,9 @@ import type {
 } from "../../shared/protocol/conversation.js";
 import {
   materializedTaskContextsSchema,
+  presentMessageTaskContext,
   type MaterializedTaskContext,
-} from "../../shared/protocol/tasks.js";
+} from "../domain/materialized-task-contexts.js";
 import type { SteerTurnInput, SubmitTurnInput } from "../backends/contracts.js";
 import type { DeliveryInputSnapshot } from "../db/repositories/delivery-input-snapshot-repository.js";
 
@@ -114,7 +115,7 @@ export function canonicalUserMessageContent(input: {
     })),
     ...input.snapshot.taskContexts.map((task) => ({
       kind: "task_context" as const,
-      task,
+      task: presentMessageTaskContext(task),
     })),
     ...input.snapshot.contextExcerpts.map((excerpt) => ({
       kind: "context_excerpt" as const,

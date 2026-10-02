@@ -1,10 +1,13 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
   correlatePiSubmissions,
   createPiSubmissionMarker,
+  piSubmissionFingerprint,
   piSubmissionMarkerType,
 } from "../../src/server/backends/pi/pi-submission-marker.js";
+import { parseStoredTaskContexts } from "../../src/server/db/composer-tasks-json.js";
 
 function custom(
   id: string,
@@ -130,6 +133,40 @@ describe("Pi submission markers", () => {
     });
     expect(first.requestFingerprint).not.toBe(changed.requestFingerprint);
     expect(first.textFingerprint).toBe(changed.textFingerprint);
+  });
+
+  it("reproduces the fingerprint of a stored workspace-scope task snapshot", () => {
+    // Exact bytes stored before Tasks moved from workspace to project scope.
+    const legacyTaskJson =
+      '{"id":"10000000-0000-4000-8000-000000000001","scope":{"kind":"workspace","workspaceId":"20000000-0000-4000-8000-000000000001"},"title":"Exact task","details":"Use this revision.","pinned":false,"files":[],"completedAt":null,"revision":2,"createdAt":"2026-08-11T12:00:00.000Z","updatedAt":"2026-08-11T13:00:00.000Z"}';
+    const stored = parseStoredTaskContexts(`[${legacyTaskJson}]`);
+    const expected = createHash("sha256")
+      .update(
+        `["operation-1","token-1","mutation-1","steer","Use the exact durable input",[${legacyTaskJson}]]`,
+      )
+      .digest("hex");
+
+    expect(piSubmissionFingerprint({ ...input, taskContexts: stored })).toBe(
+      expected,
+    );
+    expect(
+      createPiSubmissionMarker({ ...input, taskContexts: stored })
+        .requestFingerprint,
+    ).toBe(expected);
+    expect(
+      piSubmissionFingerprint({
+        ...input,
+        taskContexts: [
+          {
+            ...stored[0]!,
+            scope: {
+              kind: "project",
+              projectId: "30000000-0000-4000-8000-000000000001",
+            },
+          },
+        ],
+      }),
+    ).not.toBe(expected);
   });
 
   it("correlates the next user entry when Pi persists transformed input", () => {

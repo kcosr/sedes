@@ -1,8 +1,9 @@
 import type { BackendItem } from "../../../shared/protocol/backend.js";
 import {
   materializedTaskContextsSchema,
+  presentMessageTaskContext,
   type MaterializedTaskContext,
-} from "../../../shared/protocol/tasks.js";
+} from "../../domain/materialized-task-contexts.js";
 
 type BackendUserMessageContent = Extract<
   BackendItem,
@@ -63,7 +64,7 @@ export function projectAuthenticatedPiTaskContexts(
     userText: value.slice(prefix.length),
     content: taskContexts.map((task) => ({
       kind: "task_context" as const,
-      task,
+      task: presentMessageTaskContext(task),
     })),
   };
 }

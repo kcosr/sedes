@@ -15,6 +15,7 @@ import {
 } from "./pi-task-context-marker.js";
 import { findPiContextExcerptsForSubmission } from "./pi-context-excerpt-marker.js";
 import { projectPiUserMessageContent } from "./pi-skill-message.js";
+import { presentMessageTaskContext } from "../../domain/materialized-task-contexts.js";
 
 export const piSubmissionAttestationType =
   "sedes.backend_submission_attestation.v1";
@@ -308,12 +309,17 @@ export function recoverPiTaskSubmissionAttestations(
       },
       taskEvidence.marker.taskContexts,
     );
+    // The envelope is recognized only against the marker's full snapshot
+    // bytes, so the projected parts must be exactly the marker's snapshots in
+    // their message projection.
     const projectedTasks = projected.flatMap((part) =>
       part.kind === "task_context" ? [part.task] : [],
     );
     if (
       JSON.stringify(projectedTasks) !==
-      JSON.stringify(taskEvidence.marker.taskContexts)
+      JSON.stringify(
+        taskEvidence.marker.taskContexts.map(presentMessageTaskContext),
+      )
     ) {
       continue;
     }

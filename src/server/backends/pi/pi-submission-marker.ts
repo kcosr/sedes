@@ -8,7 +8,7 @@ import type { StagedComposerAttachment } from "../contracts.js";
 import {
   materializedTaskContextsSchema,
   type MaterializedTaskContext,
-} from "../../../shared/protocol/tasks.js";
+} from "../../domain/materialized-task-contexts.js";
 
 export const piSubmissionMarkerType = "sedes.backend_submission.v1";
 const legacyPiSubmissionMarkerType = "harness.backend_submission.v1";

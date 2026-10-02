@@ -94,6 +94,8 @@ import {
 import { ConversationProjector } from "../../src/server/conversations/conversation-projector.js";
 import type { OutputArtifactPublisher } from "../../src/server/output-artifacts/contracts.js";
 import { renderTaskContextsForModel } from "../../src/server/conversations/delivery-input-projection.js";
+import { codexTaskContextCarrier } from "../../src/server/backends/codex/codex-task-contexts.js";
+import { parseStoredTaskContexts } from "../../src/server/db/composer-tasks-json.js";
 import {
   unavailableCodexAgentToolCliEnvironmentProvider,
   type CodexAgentToolCliEnvironmentProvider,
@@ -3141,6 +3143,101 @@ describe("CodexConversationBackendDriver", () => {
       retryable: true,
     });
   });
+
+  it.each([
+    // Delivered before Tasks moved from workspace to project scope.
+    [
+      "legacy workspace",
+      '{"kind":"workspace","workspaceId":"0e7c2b8a-1d4f-4a6e-9b3c-5d8f7a2e1c40"}',
+    ],
+    [
+      "project",
+      '{"kind":"project","projectId":"0e7c2b8a-1d4f-4a6e-9b3c-5d8f7a2e1c41"}',
+    ],
+  ] as const)(
+    "reconciles and reads a submission whose authenticated Task carrier has %s scope",
+    async (_label, scopeJson) => {
+      const harness = new RpcHarness();
+      const target = driver(harness);
+      const taskJson = `{"id":"84f9a3b0-9c14-456d-b08d-58d325d869d0","scope":${scopeJson},"title":"Carried task","details":"Exact delivered snapshot.","pinned":false,"files":[],"completedAt":null,"revision":7,"createdAt":"2026-08-11T12:00:00.000Z","updatedAt":"2026-08-11T13:00:00.000Z"}`;
+      const clientId = codexClientUserMessageId({
+        toolProvenanceKey,
+        tenantId: scope.tenantId,
+        principalId: scope.principalId,
+        backendInstanceId: instance.id,
+        nativeThreadId: "thread-1",
+        correlationAncestorThreadIds: [],
+        applicationOperationId: "task-carrier-operation",
+        reconciliationToken: "task-carrier-token",
+      });
+      const carrier = codexTaskContextCarrier({
+        toolProvenanceKey,
+        clientUserMessageId: clientId,
+        taskContexts: parseStoredTaskContexts(`[${taskJson}]`),
+      });
+      expect(carrier.split("\n")[2]).toBe(`{"taskContexts":[${taskJson}]}`);
+      const accepted = nativeThread({
+        turns: [
+          nativeTurn(0),
+          {
+            ...nativeTurn(1),
+            items: [
+              {
+                ...nativeTurn(1).items[0],
+                clientId,
+                content: [
+                  { type: "text", text: carrier, text_elements: [] },
+                  { type: "text", text: "Work this task.", text_elements: [] },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+
+      enqueueCompleteLegacyRead(harness, accepted);
+      const reconciliation = await target.reconcileSubmission({
+        scope,
+        binding: binding(),
+        opaqueBindingDetail: attachInput().opaqueBindingDetail,
+        workspace,
+        applicationOperationId: "task-carrier-operation",
+        reconciliationToken: "task-carrier-token",
+      });
+      // Reconciliation projects the correlated turn through the history projector.
+      expect(reconciliation).toMatchObject({
+        status: "accepted",
+        backendTurn: {
+          status: "completed",
+          completionCorrelations: ["task-carrier-operation"],
+        },
+        completionIdentity: expect.stringMatching(/:completed$/u),
+      });
+
+      enqueueCompleteLegacyRead(harness, accepted);
+      const read = await target.read(attachInput());
+      const message = Object.values(read.snapshot.itemsById).find(
+        (item) =>
+          item.semanticKind === "user_message" &&
+          item.deliveryOperationId === "task-carrier-operation",
+      );
+      expect(
+        message?.semanticKind === "user_message" ? message.content : [],
+      ).toEqual([
+        {
+          kind: "task_context",
+          task: {
+            id: "84f9a3b0-9c14-456d-b08d-58d325d869d0",
+            title: "Carried task",
+            details: "Exact delivered snapshot.",
+            completedAt: null,
+            revision: 7,
+          },
+        },
+        { kind: "text", text: { text: "Work this task." } },
+      ]);
+    },
+  );
 
   it("reconciles submissions by durable client identity without blind retry", async () => {
     const harness = new RpcHarness();
@@ -14109,6 +14206,70 @@ describe("CodexConversationHandle", () => {
       ],
     });
 
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
+  it("replays a stored workspace-scope Task snapshot under the same submit identity", async () => {
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness);
+    await establish(harness, handle);
+    harness.enqueue(
+      "turn/start",
+      new CodexRpcDeliveryError({
+        code: "codex_generation_closed",
+        delivery: "sent_outcome_unknown",
+        generation: 1,
+        method: "turn/start",
+      }),
+    );
+    // The stored row of a snapshot delivered before Tasks had project scope.
+    const storedTaskContextsJson =
+      '[{"id":"84f9a3b0-9c14-456d-b08d-58d325d869d0","scope":{"kind":"workspace","workspaceId":"0e7c2b8a-1d4f-4a6e-9b3c-5d8f7a2e1c40"},"title":"Legacy task","details":"Exact delivered snapshot.","pinned":false,"files":[],"completedAt":null,"revision":7,"createdAt":"2026-08-11T12:00:00.000Z","updatedAt":"2026-08-11T13:00:00.000Z"}]';
+    const input = {
+      applicationOperationId: "legacy-task-operation",
+      mutationId: "legacy-task-mutation",
+      source: { kind: "user" as const },
+      reconciliationToken: "legacy-task-token",
+      taskContexts: parseStoredTaskContexts(storedTaskContextsJson),
+      contextExcerpts: [],
+      attachments: [],
+      text: "hello",
+    };
+    await expect(handle.submit(input)).rejects.toMatchObject({
+      category: "submission_unknown",
+    });
+    // A fresh parse of the same row is the same operation, not a mismatch.
+    await expect(
+      handle.submit({
+        ...input,
+        taskContexts: parseStoredTaskContexts(storedTaskContextsJson),
+      }),
+    ).rejects.toMatchObject({
+      category: "submission_unknown",
+      crossedSubmissionBoundary: true,
+    });
+    const [stored] = parseStoredTaskContexts(storedTaskContextsJson);
+    await expect(
+      handle.submit({
+        ...input,
+        taskContexts: [
+          {
+            ...stored!,
+            scope: {
+              kind: "project",
+              projectId: "0e7c2b8a-1d4f-4a6e-9b3c-5d8f7a2e1c41",
+            },
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
+      category: "rejected",
+      backendCode: "codex_submission_replay_mismatch",
+    });
+    expect(
+      harness.calls.filter(({ method }) => method === "turn/start"),
+    ).toHaveLength(1);
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
   });
