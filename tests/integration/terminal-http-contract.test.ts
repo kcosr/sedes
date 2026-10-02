@@ -9,10 +9,8 @@ import type { IdentityProvider } from "../../src/server/identity/identity-provid
 import { errorMiddleware } from "../../src/server/http/errors.js";
 import type { TerminalAdmissionTokens } from "../../src/server/terminals/terminal-carrier.js";
 import { createTerminalRouter } from "../../src/server/terminals/terminal-http.js";
-import {
-  TerminalServiceError,
-  type TerminalService,
-} from "../../src/server/terminals/terminal-service.js";
+import type { TerminalService } from "../../src/server/terminals/terminal-service.js";
+import { TerminalServiceError } from "../../src/server/terminals/terminal-service-error.js";
 
 describe("terminal HTTP contract", () => {
   it("returns a created terminal in the receipted mutation envelope consumed by ApiClient", async () => {

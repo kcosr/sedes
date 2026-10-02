@@ -16,25 +16,8 @@ import { InteractiveTerminalStartUncertainError } from "../execution/interactive
 import type { RequestScope } from "../identity/identity-provider.js";
 import { TerminalActor, type TerminalViewerSession } from "./terminal-actor.js";
 import { TerminalJournalStore } from "./terminal-journal.js";
+import { TerminalServiceError } from "./terminal-service-error.js";
 import { TerminalRepository } from "./terminal-repository.js";
-
-export type TerminalServiceErrorCode =
-  | "not_found"
-  | "conflict"
-  | "invalid_transition"
-  | "environment_unavailable"
-  | "runtime_unavailable";
-
-export class TerminalServiceError extends Error {
-  constructor(
-    readonly code: TerminalServiceErrorCode,
-    message: string,
-    readonly retryable = false,
-  ) {
-    super(message);
-    this.name = "TerminalServiceError";
-  }
-}
 
 export class TerminalService {
   readonly #environmentVariables: (scope: RequestScope, environmentId: string) => EnvironmentVariableOverrides;
