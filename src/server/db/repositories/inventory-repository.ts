@@ -1153,6 +1153,13 @@ export class InventoryRepository {
       }
       if (blockers.length > 0) throw new ProjectRemovalBlockedError(blockers);
       if (project.removedAt !== null) return;
+      // Only this removal's locations stay marked: an earlier removal's marks
+      // on locations a partial restore left removed are stale.
+      const unmarked = this.database.prepare(`UPDATE workspaces SET removed_with_project = 0,
+        revision = revision + 1, updated_at = ?
+        WHERE tenant_id = ? AND owner_principal_id = ? AND project_id = ?
+          AND removed_at IS NOT NULL AND removed_with_project = 1`)
+        .run(input.now, scope.tenantId, scope.principalId, projectId);
       const removed = this.database.prepare(`UPDATE workspaces SET removed_at = ?, removed_with_project = 1,
         revision = revision + 1, updated_at = ?
         WHERE tenant_id = ? AND owner_principal_id = ? AND project_id = ? AND removed_at IS NULL`)
@@ -1160,7 +1167,8 @@ export class InventoryRepository {
       this.database.prepare(`UPDATE projects SET removed_at = ?, revision = revision + 1,
         membership_revision = membership_revision + ?, updated_at = ?
         WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
-        .run(input.now, removed.changes > 0 ? 1 : 0, input.now, scope.tenantId, scope.principalId, projectId);
+        .run(input.now, removed.changes + unmarked.changes > 0 ? 1 : 0, input.now,
+          scope.tenantId, scope.principalId, projectId);
       this.#bumpGeneration(scope);
     })();
     return this.getProject(scope, projectId);

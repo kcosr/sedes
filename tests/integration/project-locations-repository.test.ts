@@ -442,4 +442,29 @@ describe("project and location repository", () => {
     expect(f.project(a.projectId).locations.find(({ id }) => id === a.id)).toMatchObject({ removedAt: null, removedWithProject: false });
     expect(f.inventory.listThreadIdsForWorkspace(f.scope, a.id)).toHaveLength(2);
   });
+
+  it("marks only the latest removal's locations after a partial restore", () => {
+    const f = fixture();
+    const a = f.open("/srv/a");
+    const b = f.open("/home/me/a", { environmentId: f.remote, project: { kind: "existing", projectId: a.projectId } });
+    const marked = () => f.project(a.projectId).locations
+      .filter(({ removedWithProject }) => removedWithProject).map(({ id }) => id).sort();
+    f.removeProject(a.projectId);
+    expect(marked()).toEqual([a.id, b.id].sort());
+    const removedB = f.project(a.projectId).locations.find(({ id }) => id === b.id)!;
+
+    // Restore the project and only A; B stays removed with its old mark.
+    f.inventory.restoreProject(f.scope, a.projectId, { expectedRevision: f.project(a.projectId).revision, now: f.now() });
+    f.open("/srv/a", { restoreRemoved: true });
+    expect(marked()).toEqual([b.id]);
+
+    const removed = f.removeProject(a.projectId);
+    expect(marked()).toEqual([a.id]);
+    // B keeps its original removal time; only its mark changed.
+    expect(removed.locations.find(({ id }) => id === b.id)).toMatchObject({
+      removedAt: removedB.removedAt, removedWithProject: false, revision: removedB.revision + 1,
+    });
+    const restored = f.inventory.restoreProject(f.scope, a.projectId, { expectedRevision: removed.revision, now: f.now() });
+    expect(restored.locations.filter(({ removedWithProject }) => removedWithProject).map(({ id }) => id)).toEqual([a.id]);
+  });
 });
