@@ -42,7 +42,15 @@ import {
   WORKSPACE_FILE_MAX_DOWNLOAD_BYTES,
   WORKSPACE_FILE_MAX_IMAGE_CONTENT_BYTES,
 } from "../../src/shared/protocol/workspace-files.js";
-import { createNormalizedApp } from "../../src/server/normalized-app.js";
+import { createNormalizedApp, type NormalizedAppDependencies } from "../../src/server/normalized-app.js";
+import {
+  locationConflictErrorSchema,
+  projectRemovalBlockedErrorSchema,
+  restoreProjectResultSchema,
+} from "../../src/shared/protocol/projects.js";
+import type { TerminalService } from "../../src/server/terminals/terminal-service.js";
+import { TerminalServiceError } from "../../src/server/terminals/terminal-service-error.js";
+import type { TerminalAdmissionTokens } from "../../src/server/terminals/terminal-carrier.js";
 import { BackendError } from "../../src/server/backends/contracts.js";
 import {
   ApplicationDrainController,
@@ -111,7 +119,7 @@ import type { ConversationLifecycleService } from "../../src/server/conversation
 import type { ThreadApplicationService } from "../../src/server/conversations/thread-application-service.js";
 import type { ThreadAttentionService } from "../../src/server/domain/thread-attention-service.js";
 import type { AutomationPrecheckExecutor } from "../../src/server/runtime/automation-precheck-executor.js";
-import type { ThreadRuntimeCoordinator } from "../../src/server/events/thread-runtime-coordinator.js";
+import type { ThreadRuntimeCoordinator, ThreadRuntimeObservation } from "../../src/server/events/thread-runtime-coordinator.js";
 import type { ThreadSnapshotPublisher } from "../../src/server/events/thread-snapshot-publisher.js";
 import { unavailableAgentToolRouterDependencies } from "../support/agent-tool-http.js";
 import { SEDES_AGENT_TOOL_SOURCE_CAPABILITY_HEADER } from "../../src/server/agent-tools/http/agent-tool-http-contracts.js";
@@ -235,6 +243,7 @@ function threadSnapshot(
     workspace: {
       id: workspace.id,
       environmentId: workspace.environmentId,
+      projectId: workspace.projectId,
       label: { text: workspace.displayName },
       displayPath: { text: workspace.canonicalPath },
       available: workspace.availability === "available",
@@ -571,6 +580,7 @@ async function fixture(
     readonly agentTools?: AgentToolRouterDependencies;
     readonly providerPulseEnabled?: boolean;
     readonly experimentalUsageEnabled?: boolean;
+    readonly terminals?: NormalizedAppDependencies["terminals"];
   } = {},
 ) {
   const root = await mkdtemp(path.join(os.tmpdir(), "sedes-normalized-http-"));
@@ -806,9 +816,15 @@ async function fixture(
             directoryBrowsing: "available",
           },
         ],
+        projects: repository.listActiveProjects(scope).map((project) => ({
+          id: project.id,
+          name: project.name,
+          revision: project.revision,
+        })),
         workspaces: workspaces.map((workspace) => ({
           id: workspace.id,
           environmentId: workspace.environmentId,
+          projectId: workspace.projectId,
           label: { text: workspace.displayName },
           displayPath: { text: workspace.canonicalPath },
           available: workspace.availability === "available",
@@ -854,6 +870,30 @@ async function fixture(
   const threadRuntimes = {
     async captureLoadedState() {
       return undefined;
+    },
+    observeRuntimes(
+      _scope: RequestScope,
+      threadIds: readonly string[],
+    ): ReadonlyMap<string, ThreadRuntimeObservation> {
+      return new Map(
+        threadIds.flatMap((threadId) => {
+          const snapshot = boundHubs.get(threadId)?.snapshot;
+          return snapshot
+            ? [[threadId, {
+                kind: "loaded" as const,
+                runState: snapshot.runState,
+                retirable: snapshot.runState === "idle" || snapshot.runState === "failed",
+              }] as const]
+            : [];
+        }),
+      );
+    },
+    async commitWithRuntimesObserved<Result>(
+      scope: RequestScope,
+      threadIds: readonly string[],
+      commit: (runtimes: ReadonlyMap<string, ThreadRuntimeObservation>) => Result,
+    ): Promise<Result> {
+      return commit(this.observeRuntimes(scope, threadIds));
     },
     async runWithRuntimeRetired<Result>(
       _scope: RequestScope,
@@ -970,6 +1010,9 @@ async function fixture(
   const threadSnapshots = {
     schedule(scope: RequestScope, threadId: string) {
       void this.publish(scope, threadId);
+    },
+    scheduleMany(scope: RequestScope, threadIds: readonly string[]) {
+      for (const threadId of threadIds) this.schedule(scope, threadId);
     },
     async publishAuthoritativeReplacement(
       scope: RequestScope,
@@ -1123,6 +1166,7 @@ async function fixture(
     onOpened: () => undefined,
   });
   const app = createNormalizedApp({
+    ...(options.terminals ? { terminals: options.terminals } : {}),
     usage: new UsageService(database, {enabled: options.experimentalUsageEnabled ?? false}),
     workpads: {} as never,
     questions,
@@ -1608,7 +1652,7 @@ describe("normalized HTTP application contract", () => {
   it("reads durable usage and known empty turns without acquiring a provider", async () => {
     const current=await fixture({experimentalUsageEnabled: true});
     try {
-      const workspace=await current.mutate(request(current.app).post("/api/workspaces/open")).send({environmentId:current.environmentId,path:current.workspacePath}).expect(201);
+      const workspace=await current.mutate(request(current.app).post("/api/workspaces/open")).send({environmentId:current.environmentId,path:current.workspacePath,project:{kind:"new",name:"workspace"}}).expect(201);
       const created=await current.mutate(request(current.app).post("/api/threads")).send({workspaceId:workspace.body.id,configuration:{kind:"custom",targetId:current.profile.id},executionWorkspace:{kind:"direct"},title:"Usage"}).expect(201);
       const threadId=created.body.threadId;
       const usage=new UsageService(current.database, {enabled: true});
@@ -1633,7 +1677,7 @@ describe("normalized HTTP application contract", () => {
   it("aggregates principal usage analytics with labels from the real schema", async () => {
     const current=await fixture({experimentalUsageEnabled: true});
     try {
-      const workspace=await current.mutate(request(current.app).post("/api/workspaces/open")).send({environmentId:current.environmentId,path:current.workspacePath}).expect(201);
+      const workspace=await current.mutate(request(current.app).post("/api/workspaces/open")).send({environmentId:current.environmentId,path:current.workspacePath,project:{kind:"new",name:"workspace"}}).expect(201);
       const created=await current.mutate(request(current.app).post("/api/threads")).send({workspaceId:workspace.body.id,configuration:{kind:"custom",targetId:current.profile.id},executionWorkspace:{kind:"direct"},title:"Analytics"}).expect(201);
       const threadId=created.body.threadId as string;
       const thread=current.database.prepare("SELECT backend_instance_id AS backend, environment_id AS environment FROM application_threads WHERE id=?").get(threadId) as {backend:string;environment:string};
@@ -1665,33 +1709,198 @@ describe("normalized HTTP application contract", () => {
     } finally {await current.close();}
   });
 
-  it("manages retained projects and restores the same identity through Add project", async () => {
+  it("manages locations and restores the same identity through Add project", async () => {
     const current = await fixture();
     try {
+      const newProject = { kind: "new", name: "workspace" };
       const opened = await current.mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: current.workspacePath }).expect(201);
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: newProject }).expect(201);
       const id = opened.body.id;
-      const projects = await current.withHost(request(current.app).get("/api/workspaces")).expect(200);
-      const project = projects.body.projects.find((entry: { id: string }) => entry.id === id);
-      expect(project).toMatchObject({ removed: false, path: current.workspacePath });
+      const projectId = opened.body.projectId;
+      expect(opened.body).toEqual({ id, projectId: current.repository.getWorkspace(current.owner, id).projectId });
+      await current.mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: current.workspacePath }).expect(400);
+      await current.withHost(request(current.app).get("/api/workspaces")).expect(404);
+      const listed = await current.withHost(request(current.app).get("/api/projects")).expect(200);
+      const project = listed.body.projects.find((entry: { id: string }) => entry.id === projectId);
+      expect(project).toMatchObject({ name: "workspace", removed: false, locations: [{ id, removed: false, removedWithProject: false, path: current.workspacePath, environmentId: current.environmentId }] });
+      const location = project.locations[0];
       await current.withHost(request(current.app).post(`/api/workspaces/${id}/remove`))
-        .send({ expectedRevision: project.revision }).expect(403);
+        .send({ expectedRevision: location.revision }).expect(403);
       await current.mutate(request(current.app).post(`/api/workspaces/${id}/remove`))
-        .send({ expectedRevision: project.revision, principalId: "forged" }).expect(400);
+        .send({ expectedRevision: location.revision, principalId: "forged" }).expect(400);
       await current.mutate(request(current.app).post(`/api/workspaces/${id}/remove`))
-        .send({ expectedRevision: project.revision + 1 }).expect(409);
+        .send({ expectedRevision: location.revision + 1 }).expect(409);
       const removed = await current.mutate(request(current.app).post(`/api/workspaces/${id}/remove`))
-        .send({ expectedRevision: project.revision }).expect(200);
-      expect(removed.body).toMatchObject({ id, removed: true });
+        .send({ expectedRevision: location.revision }).expect(200);
+      expect(removed.body).toMatchObject({ id: projectId, removed: false, locations: [{ id, removed: true }] });
       const snapshot = await current.withHost(request(current.app).get("/api/application/snapshot")).expect(200);
       expect(snapshot.body.workspaces.some((entry: { id: string }) => entry.id === id)).toBe(false);
+      // The emptied project stays active and listed.
+      expect(snapshot.body.projects).toContainEqual(expect.objectContaining({ id: projectId, name: "workspace" }));
       const restored = await current.mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: current.workspacePath }).expect(201);
-      expect(restored.body.id).toBe(id);
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: newProject }).expect(201);
+      expect(restored.body).toEqual({ id, projectId });
       const repeated = await current.mutate(request(current.app).post("/api/workspaces/open"))
-        .send({ environmentId: current.environmentId, path: current.workspacePath }).expect(201);
-      expect(repeated.body.id).toBe(id);
-      expect(current.repository.listProjects(current.owner).filter(entry => entry.id === id)).toHaveLength(1);
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: newProject }).expect(201);
+      expect(repeated.body).toEqual({ id, projectId });
+      expect(current.repository.listProjects(current.owner).flatMap(({ locations }) => locations).filter(entry => entry.id === id)).toHaveLength(1);
+      const reopened = await current.mutate(request(current.app).post(`/api/workspaces/${id}/open`)).expect(200);
+      expect(reopened.body).toEqual({ id, projectId });
+    } finally { current.close(); }
+  });
+
+  it("serves project rename, move, merge, removal blockers, and per-location restore", async () => {
+    const current = await fixture();
+    try {
+      const open = async (directory: string, project: unknown) => (await current.mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: directory, project }).expect(201)).body as { id: string; projectId: string };
+      const projects = async () => (await current.withHost(request(current.app).get("/api/projects")).expect(200)).body.projects as Array<{
+        id: string; name: string; revision: number; membershipRevision: number; removed: boolean;
+        locations: Array<{ id: string; revision: number; removed: boolean; removedWithProject: boolean }>;
+      }>;
+      const projectOf = async (projectId: string) => (await projects()).find(({ id }) => id === projectId)!;
+      const primary = await open(current.workspacePath, { kind: "new", name: "  Primary  " });
+      const second = await open(current.secondWorkspacePath, { kind: "existing", projectId: primary.projectId });
+      expect(second.projectId).toBe(primary.projectId);
+      const supplemental = await open(current.supplementalPath, { kind: "new", name: "Supplemental" });
+      // A known directory keeps its project; naming another one is a conflict, never a move.
+      // The conflict names the location and its project, so Add project can offer the move.
+      const elsewhere = await current.mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: current.secondWorkspacePath, project: { kind: "existing", projectId: supplemental.projectId } })
+        .expect(409);
+      const primaryListing = await projectOf(primary.projectId);
+      expect(elsewhere.body).toEqual({
+        error: { code: "conflict", message: "This directory already belongs to another project. Move it instead.", retryable: false },
+        conflict: {
+          reason: "other_project", workspaceId: second.id,
+          locationRevision: primaryListing.locations.find(({ id }) => id === second.id)!.revision, locationRemoved: false,
+          projectId: primary.projectId, projectName: "Primary", projectRevision: primaryListing.revision,
+        },
+      });
+      expect(locationConflictErrorSchema.safeParse(elsewhere.body).success).toBe(true);
+      await current.mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: " " } })
+        .expect(400);
+
+      let project = await projectOf(primary.projectId);
+      expect(project.name).toBe("Primary");
+      await current.mutate(request(current.app).patch(`/api/projects/${project.id}`))
+        .send({ name: "Renamed", expectedRevision: project.revision + 1 }).expect(409);
+      const renamed = await current.mutate(request(current.app).patch(`/api/projects/${project.id}`))
+        .send({ name: " Renamed ", expectedRevision: project.revision }).expect(200);
+      expect(renamed.body).toMatchObject({ id: project.id, name: "Renamed", revision: project.revision + 1 });
+      expect((await current.withHost(request(current.app).get("/api/application/snapshot")).expect(200)).body.projects)
+        .toContainEqual({ id: project.id, name: "Renamed", revision: project.revision + 1 });
+
+      // Moving a location into a new project splits it off.
+      const secondLocation = (await projectOf(primary.projectId)).locations.find(({ id }) => id === second.id)!;
+      await current.mutate(request(current.app).post(`/api/workspaces/${second.id}/move`))
+        .send({ target: { kind: "new", name: "Split" }, expectedRevision: secondLocation.revision + 1 }).expect(409);
+      const split = await current.mutate(request(current.app).post(`/api/workspaces/${second.id}/move`))
+        .send({ target: { kind: "new", name: "Split" }, expectedRevision: secondLocation.revision }).expect(200);
+      expect(split.body).toMatchObject({ name: "Split", locations: [{ id: second.id }] });
+
+      // Merging moves every location and deletes the source.
+      const source = await projectOf(split.body.id);
+      const target = await projectOf(supplemental.projectId);
+      const merged = await current.mutate(request(current.app).post(`/api/projects/${source.id}/merge`))
+        .send({ targetProjectId: target.id, expectedSourceMembershipRevision: source.membershipRevision, expectedTargetMembershipRevision: target.membershipRevision })
+        .expect(200);
+      expect(merged.body.locations.map(({ id }: { id: string }) => id).sort()).toEqual([second.id, supplemental.id].sort());
+      expect((await projects()).some(({ id }) => id === source.id)).toBe(false);
+
+      // Every blocker across the project's locations is reported together.
+      const thread = (await current.mutate(request(current.app).post("/api/threads"))
+        .send({ workspaceId: second.id, configuration: { kind: "custom", targetId: current.profile.id }, executionWorkspace: { kind: "direct" }, title: "Queued" })
+        .expect(201)).body.threadId as string;
+      current.bindThread(thread);
+      new QueuedInputRepository(current.database).enqueue(current.owner, thread, {
+        mutationId: randomUUID(), text: "Queued", contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        source: { kind: "agent_control", expectedThreadRevision: current.repository.getThread(current.owner, thread).thread.revision, initiatingAgentThreadId: thread },
+        now: Date.now(),
+      });
+      // A loaded runtime with a turn in progress is reported alongside.
+      const running = (await current.mutate(request(current.app).post("/api/threads"))
+        .send({ workspaceId: supplemental.id, configuration: { kind: "custom", targetId: current.profile.id }, executionWorkspace: { kind: "direct" }, title: "Running" })
+        .expect(201)).body.threadId as string;
+      current.bindThread(running);
+      const runningHub = await current.loadBoundHub(running);
+      runningHub.publish({ type: "run_state", generation: runningHub.projectionGeneration!, state: "running" });
+      project = await projectOf(target.id);
+      const blocked = await current.mutate(request(current.app).post(`/api/projects/${project.id}/remove`))
+        .send({ expectedRevision: project.revision, expectedMembershipRevision: project.membershipRevision }).expect(400);
+      const blockersByLocation = {
+        [second.id]: { locationId: second.id, environmentId: current.environmentId, kind: "durable_work", threadIds: [thread] },
+        [supplemental.id]: { locationId: supplemental.id, environmentId: current.environmentId, kind: "busy_runtime", threadIds: [running] },
+      };
+      expect(blocked.body).toEqual({
+        error: { code: "invalid_transition", message: expect.stringContaining("before removing it"), retryable: false },
+        blockers: [second.id, supplemental.id].sort().map((id) => blockersByLocation[id]),
+      });
+      expect(projectRemovalBlockedErrorSchema.safeParse(blocked.body).success).toBe(true);
+      await current.mutate(request(current.app).post(`/api/projects/${project.id}/remove`))
+        .send({ expectedRevision: project.revision, expectedMembershipRevision: project.membershipRevision + 1 }).expect(409);
+
+      // An unblocked project is removed with its locations and restored per location.
+      project = await projectOf(primary.projectId);
+      const removed = await current.mutate(request(current.app).post(`/api/projects/${project.id}/remove`))
+        .send({ expectedRevision: project.revision, expectedMembershipRevision: project.membershipRevision }).expect(200);
+      expect(removed.body).toMatchObject({ removed: true, locations: [{ id: primary.id, removed: true, removedWithProject: true }] });
+      expect((await current.withHost(request(current.app).get("/api/application/snapshot")).expect(200)).body.projects
+        .some(({ id }: { id: string }) => id === project.id)).toBe(false);
+      // Restoring the location alone reports a plain error; adding its directory again names the removed project.
+      expect((await current.mutate(request(current.app).post(`/api/workspaces/${primary.id}/open`)).expect(400)).body)
+        .toEqual({ error: { code: "invalid_transition", message: expect.any(String), retryable: false } });
+      const again = await current.mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "Again" } }).expect(400);
+      expect(again.body).toEqual({
+        error: { code: "invalid_transition", message: "The project was removed. Restore it before restoring its locations.", retryable: false },
+        conflict: {
+          reason: "project_removed", workspaceId: primary.id,
+          locationRevision: removed.body.locations[0].revision, locationRemoved: true,
+          projectId: project.id, projectName: "Renamed", projectRevision: removed.body.revision,
+        },
+      });
+      // A removed project takes precedence over a request naming another project.
+      expect((await current.mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "existing", projectId: target.id } })
+        .expect(400)).body.conflict).toMatchObject({ reason: "project_removed", projectId: project.id });
+      await current.mutate(request(current.app).post(`/api/projects/${project.id}/restore`))
+        .send({ expectedRevision: removed.body.revision, locationIds: [second.id] }).expect(400);
+      await current.mutate(request(current.app).post(`/api/projects/${project.id}/restore`))
+        .send({ expectedRevision: removed.body.revision, locationIds: [primary.id, primary.id] }).expect(400);
+      await rm(current.workspacePath, { recursive: true, force: true });
+      const failed = await current.mutate(request(current.app).post(`/api/projects/${project.id}/restore`))
+        .send({ expectedRevision: removed.body.revision, locationIds: [primary.id] }).expect(200);
+      expect(failed.body).toEqual({
+        project: expect.objectContaining({ id: project.id, removed: false }),
+        locations: [{ id: primary.id, status: "failed", error: { code: expect.any(String), message: expect.any(String), retryable: expect.any(Boolean) } }],
+      });
+      expect(restoreProjectResultSchema.safeParse(failed.body).success).toBe(true);
+      await mkdir(current.workspacePath);
+      const reopened = await current.mutate(request(current.app).post(`/api/workspaces/${primary.id}/open`)).expect(200);
+      expect(reopened.body).toEqual({ id: primary.id, projectId: project.id });
+    } finally { current.close(); }
+  });
+
+  it("returns terminal fence conflicts from location and project removal as conflicts", async () => {
+    const runWithWorkspaceRetired = vi.fn(async () => {
+      throw new TerminalServiceError("conflict", "Terminal admission is already suspended for this project.", true);
+    });
+    const current = await fixture({
+      terminals: { service: { runWithWorkspaceRetired } as unknown as TerminalService, admissions: {} as TerminalAdmissionTokens },
+    });
+    try {
+      const opened = await current.mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" } }).expect(201);
+      const project = current.repository.getProject(current.owner, opened.body.projectId);
+      const terminalConflict = { error: { code: "conflict", message: "Terminal admission is already suspended for this project.", retryable: true } };
+      expect((await current.mutate(request(current.app).post(`/api/workspaces/${opened.body.id}/remove`))
+        .send({ expectedRevision: project.locations[0]!.revision }).expect(409)).body).toEqual(terminalConflict);
+      expect((await current.mutate(request(current.app).post(`/api/projects/${project.id}/remove`))
+        .send({ expectedRevision: project.revision, expectedMembershipRevision: project.membershipRevision }).expect(409)).body).toEqual(terminalConflict);
+      expect(current.repository.isWorkspaceRemoved(current.owner, opened.body.id)).toBe(false);
     } finally { current.close(); }
   });
 
@@ -1703,6 +1912,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const threadIds: string[] = [];
@@ -1848,6 +2058,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const createdThread = await current
@@ -1952,6 +2163,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const created = await current
@@ -2036,6 +2248,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const created = await current
@@ -2363,6 +2576,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const workspaceId = opened.body.id as string;
@@ -2446,6 +2660,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const workspaceId = opened.body.id as string;
@@ -3088,6 +3303,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const workspaceId = opened.body.id as string;
@@ -3284,6 +3500,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const workspaceId = opened.body.id as string;
@@ -3609,6 +3826,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const workspaceId = opened.body.id as string;
@@ -3695,6 +3913,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const workspaceId = opened.body.id as string;
@@ -3777,6 +3996,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const workspaceId = opened.body.id as string;
@@ -3952,6 +4172,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const workspaceId = opened.body.id as string;
@@ -4189,6 +4410,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const workspaceId = opened.body.id as string;
@@ -4372,6 +4594,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const workspaceId = opened.body.id as string;
@@ -4415,6 +4638,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const workspaceId = opened.body.id as string;
@@ -4475,7 +4699,7 @@ describe("normalized HTTP application contract", () => {
       .set(SEDES_AGENT_TOOL_SOURCE_CAPABILITY_HEADER, sourceCapability)
       .send({
         toolId: "agent.context",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "request-1",
         input: {},
       })
@@ -4501,6 +4725,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const created = await current
@@ -4594,6 +4819,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const threadIds: string[] = [];
@@ -4693,6 +4919,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const created = await current
@@ -4780,6 +5007,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const created = await current
@@ -4885,6 +5113,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const created = await current
@@ -5368,6 +5597,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
 
@@ -5406,6 +5636,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       for (const body of [
@@ -5478,6 +5709,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       expect(current.discoveryCalls).toEqual([workspace.body.id]);
@@ -5540,6 +5772,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.secondWorkspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const moveMutationId = randomUUID();
@@ -5777,6 +6010,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const created = await current
@@ -6057,6 +6291,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const created = await current
@@ -6144,6 +6379,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const created = await current
@@ -6235,6 +6471,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const created = await current
@@ -6376,6 +6613,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const created = await current
@@ -6492,6 +6730,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const created = await current
@@ -6572,6 +6811,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const created = await current
@@ -6628,6 +6868,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const created = await current
@@ -6692,6 +6933,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const created = await current
@@ -6765,6 +7007,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const created = await current
@@ -7003,6 +7246,7 @@ describe("normalized HTTP application contract", () => {
         .send({
           environmentId: current.environmentId,
           path: current.workspacePath,
+          project: { kind: "new", name: "workspace" },
         })
         .expect(201);
       const created = await current

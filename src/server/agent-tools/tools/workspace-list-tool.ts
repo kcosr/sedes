@@ -125,8 +125,20 @@ export function createWorkspaceListToolDefinition(
                       "Execution-environment identity and safe display label; no host or transport topology is exposed.",
                   },
                 ),
+                project: Type.Object(
+                  {
+                    id: identifierSchema,
+                    name: Type.String({ minLength: 1, maxLength: 240 }),
+                  },
+                  {
+                    additionalProperties: false,
+                    maxProperties: 2,
+                    description:
+                      "The project this workspace is a location of. A project can span several workspaces and environments.",
+                  },
+                ),
               },
-              { additionalProperties: false, maxProperties: 5 },
+              { additionalProperties: false, maxProperties: 6 },
             ),
             { maxItems: 100 },
           ),

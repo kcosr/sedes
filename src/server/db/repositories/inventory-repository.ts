@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
-import type { ProjectSummary } from "../../../shared/protocol/projects.js";
+import { MAXIMUM_PROJECT_NAME_LENGTH } from "../../../shared/protocol/domain.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import type { ContextExcerpt } from "../../../shared/protocol/context-excerpts.js";
@@ -46,6 +46,7 @@ export type InventoryWorkspaceRecord = {
   readonly ownerPrincipalId: string;
   readonly environmentId: string;
   readonly id: string;
+  readonly projectId: string;
   readonly canonicalPath: string;
   readonly displayName: string;
   readonly availability: "available" | "unavailable";
@@ -55,6 +56,169 @@ export type InventoryWorkspaceRecord = {
   readonly lastOpenedAt: number;
   readonly createdAt: number;
   readonly updatedAt: number;
+};
+
+/** The project a location joins when it is first admitted. */
+export type InventoryProjectAssignment =
+  | { readonly kind: "existing"; readonly projectId: string }
+  | { readonly kind: "new"; readonly name: string };
+
+type WorkspaceObservation = {
+  readonly environmentId: string;
+  readonly canonicalPath: string;
+  readonly displayName: string;
+  readonly available: boolean;
+  readonly trustState: "trusted" | "untrusted";
+  readonly environmentConfigurationRevision: number;
+  readonly now: number;
+};
+
+export type InventoryWorkspaceUpsert = WorkspaceObservation &
+  (
+    | {
+        /** Admission may insert the location; only a new row uses this. */
+        readonly project: InventoryProjectAssignment;
+        readonly id?: string;
+        /** Only explicit user open/restore may revive a removed location. */
+        readonly restoreRemoved?: true;
+        readonly expectedProjectId?: never;
+      }
+    | {
+        /** Revalidation refreshes this known location and never inserts or revives one. */
+        readonly id: string;
+        readonly project?: never;
+        readonly restoreRemoved?: never;
+        readonly expectedProjectId?: never;
+      }
+    | {
+        /** Explicit user restore revives this known location in its own project. */
+        readonly id: string;
+        readonly project?: never;
+        readonly restoreRemoved: true;
+        /** The project the restore was validated for; a move since then fails it. */
+        readonly expectedProjectId: string;
+      }
+  );
+
+export type InventoryProjectRecord = {
+  readonly tenantId: string;
+  readonly ownerPrincipalId: string;
+  readonly id: string;
+  readonly name: string;
+  readonly revision: number;
+  /** Changes whenever a location is added, removed, restored, or moved. */
+  readonly membershipRevision: number;
+  readonly removedAt: number | null;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+};
+
+export type InventoryProjectLocationRecord = {
+  readonly id: string;
+  readonly environmentId: string;
+  readonly environmentLabel: string;
+  readonly displayName: string;
+  readonly canonicalPath: string;
+  readonly available: boolean;
+  readonly removedAt: number | null;
+  readonly removedWithProject: boolean;
+  readonly revision: number;
+  readonly threadCount: number;
+};
+
+export type InventoryProjectListing = InventoryProjectRecord & {
+  readonly locations: readonly InventoryProjectLocationRecord[];
+};
+
+/** Removal blockers recorded in the database. */
+export type DurableProjectRemovalBlockerKind =
+  "durable_work" | "enabled_schedule" | "live_terminal";
+
+/** A busy runtime is observed in memory by the service, not recorded here. */
+export type ProjectRemovalBlockerKind = DurableProjectRemovalBlockerKind | "busy_runtime";
+
+export type ProjectRemovalBlocker<Kind extends ProjectRemovalBlockerKind = ProjectRemovalBlockerKind> = {
+  readonly workspaceId: string;
+  readonly environmentId: string;
+  readonly kind: Kind;
+  readonly threadIds: readonly string[];
+};
+
+/** An active location as a removal precheck observed it. */
+export type ProjectRemovalLocation = {
+  readonly workspaceId: string;
+  readonly environmentId: string;
+  readonly threadIds: readonly string[];
+};
+
+export type ProjectRemovalInspection = {
+  readonly project: InventoryProjectRecord;
+  /** Active locations in the fixed order their fences must run. */
+  readonly locations: readonly ProjectRemovalLocation[];
+  /** Every durable blocker across every active location, not only the first. */
+  readonly blockers: readonly ProjectRemovalBlocker<DurableProjectRemovalBlockerKind>[];
+};
+
+export class ProjectRemovalBlockedError extends DomainError {
+  constructor(readonly blockers: readonly ProjectRemovalBlocker[]) {
+    super(
+      "invalid_transition",
+      "Resolve running or queued work, enabled schedules, and live terminals in this project's locations before removing it.",
+    );
+    this.name = "ProjectRemovalBlockedError";
+  }
+}
+
+/** The known location a directory resolved to when it cannot simply be opened. */
+export type InventoryLocationConflict = {
+  /** `other_project`: joining the requested project is a move; `project_removed`: its project was removed. */
+  readonly reason: "other_project" | "project_removed";
+  readonly workspaceId: string;
+  readonly locationRevision: number;
+  readonly locationRemoved: boolean;
+  readonly projectId: string;
+  readonly projectName: string;
+  readonly projectRevision: number;
+};
+
+export class LocationConflictError extends DomainError {
+  constructor(readonly conflict: InventoryLocationConflict) {
+    super(
+      conflict.reason === "other_project" ? "conflict" : "invalid_transition",
+      conflict.reason === "other_project"
+        ? "This directory already belongs to another project. Move it instead."
+        : "The project was removed. Restore it before restoring its locations.",
+    );
+    this.name = "LocationConflictError";
+  }
+}
+
+function assertProjectName(name: string): void {
+  // SQLite length() counts code points, as does string iteration.
+  if (name.trim().length === 0 || [...name].length > MAXIMUM_PROJECT_NAME_LENGTH) {
+    throw new DomainError(
+      "bad_request",
+      `A project name must contain 1 to ${MAXIMUM_PROJECT_NAME_LENGTH} characters.`,
+    );
+  }
+}
+
+function sameRemovalLocations(
+  left: readonly ProjectRemovalLocation[],
+  right: readonly ProjectRemovalLocation[],
+): boolean {
+  const key = (locations: readonly ProjectRemovalLocation[]) =>
+    JSON.stringify(locations.map((location) => [
+      location.workspaceId, location.environmentId, location.threadIds,
+    ]));
+  return key(left) === key(right);
+}
+
+// The single-location removal path reports the first blocker in this order.
+const locationRemovalMessages: Readonly<Record<DurableProjectRemovalBlockerKind, string>> = {
+  durable_work: "Resolve running, queued, or uncertain work before removing this project.",
+  enabled_schedule: "Pause scheduled work before removing this project. Restore will leave schedules paused.",
+  live_terminal: "End live or interrupted terminals before removing this project.",
 };
 
 export type InventoryThreadRecord = {
@@ -164,11 +328,20 @@ const workspaceColumns = `
   tenant_id AS tenantId,
   owner_principal_id AS ownerPrincipalId,
   environment_id AS environmentId,
-  id, canonical_path AS canonicalPath,
+  id, project_id AS projectId,
+  canonical_path AS canonicalPath,
   display_name AS displayName,
   availability, trust_state AS trustState, revision,
   environment_configuration_revision AS environmentConfigurationRevision,
   last_opened_at AS lastOpenedAt,
+  created_at AS createdAt, updated_at AS updatedAt
+`;
+const projectColumns = `
+  tenant_id AS tenantId,
+  owner_principal_id AS ownerPrincipalId,
+  id, name, revision,
+  membership_revision AS membershipRevision,
+  removed_at AS removedAt,
   created_at AS createdAt, updated_at AS updatedAt
 `;
 const threadColumns = `
@@ -633,18 +806,7 @@ export class InventoryRepository {
 
   upsertWorkspace(
     scope: RequestScope,
-    input: {
-      readonly id?: string;
-      /** Only explicit user open/restore may revive a removed project. */
-      readonly restoreRemoved?: true;
-      readonly environmentId: string;
-      readonly canonicalPath: string;
-      readonly displayName: string;
-      readonly available: boolean;
-      readonly trustState: "trusted" | "untrusted";
-      readonly environmentConfigurationRevision: number;
-      readonly now: number;
-    },
+    input: InventoryWorkspaceUpsert,
   ): InventoryWorkspaceRecord {
     this.getEnvironment(scope, input.environmentId);
     return this.database.transaction(() => {
@@ -664,17 +826,21 @@ export class InventoryRepository {
           input.canonicalPath,
         ) as InventoryWorkspaceRecord | undefined;
       if (!existing) {
+        if (!input.project) {
+          throw new DomainError("not_found", "The workspace was not found.");
+        }
+        const projectId = this.#admitProject(scope, input.project, input.now);
         const id = input.id ?? randomUUID();
         this.database
           .prepare(
             `
               INSERT INTO workspaces(
-                tenant_id, owner_principal_id, environment_id, id,
+                tenant_id, owner_principal_id, environment_id, id, project_id,
                 canonical_path, display_name, availability, trust_state,
                 revision, environment_configuration_revision,
                 last_opened_at, created_at, updated_at
               )
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
             `,
           )
           .run(
@@ -682,6 +848,7 @@ export class InventoryRepository {
             scope.principalId,
             input.environmentId,
             id,
+            projectId,
             input.canonicalPath,
             input.displayName,
             input.available ? "available" : "unavailable",
@@ -691,11 +858,47 @@ export class InventoryRepository {
             input.now,
             input.now,
           );
+        this.#touchProjectMembership(scope, projectId, input.now);
         this.#bumpGeneration(scope);
         return this.getWorkspace(scope, id);
       }
+      if (!input.project && existing.id !== input.id) {
+        throw new DomainError(
+          "conflict",
+          "The validated workspace identity changed.",
+        );
+      }
+      if (
+        input.expectedProjectId !== undefined &&
+        existing.projectId !== input.expectedProjectId
+      ) {
+        throw new DomainError(
+          "conflict",
+          "The location moved to another project. Refresh and try again.",
+        );
+      }
       const removed = this.isWorkspaceRemoved(scope, existing.id);
       if (removed && !input.restoreRemoved) this.assertWorkspaceActive(scope, existing.id);
+      const project = this.#project(scope, existing.projectId);
+      const conflict = (reason: InventoryLocationConflict["reason"]) =>
+        new LocationConflictError({
+          reason,
+          workspaceId: existing.id,
+          locationRevision: existing.revision,
+          locationRemoved: removed,
+          projectId: project.id,
+          projectName: project.name,
+          projectRevision: project.revision,
+        });
+      // Only a removed location can belong to a removed project.
+      if (project.removedAt !== null) throw conflict("project_removed");
+      // An existing location keeps its project; joining another one is a move.
+      if (
+        input.project?.kind === "existing" &&
+        input.project.projectId !== existing.projectId
+      ) {
+        throw conflict("other_project");
+      }
       const availability = input.available ? "available" : "unavailable";
       const changed =
         removed ||
@@ -708,7 +911,8 @@ export class InventoryRepository {
         .prepare(
           `
             UPDATE workspaces
-            SET removed_at = NULL, display_name = ?, availability = ?, trust_state = ?,
+            SET removed_at = NULL, removed_with_project = 0,
+              display_name = ?, availability = ?, trust_state = ?,
               environment_configuration_revision = ?,
               last_opened_at = ?, updated_at = ?,
               revision = revision + ?
@@ -727,6 +931,7 @@ export class InventoryRepository {
           scope.principalId,
           existing.id,
         );
+      if (removed) this.#touchProjectMembership(scope, existing.projectId, input.now);
       if (changed) this.#bumpGeneration(scope);
       return this.getWorkspace(scope, existing.id);
     })();
@@ -772,28 +977,9 @@ export class InventoryRepository {
       .all(scope.tenantId, scope.principalId) as InventoryWorkspaceRecord[];
   }
 
-  listProjects(scope: RequestScope): ProjectSummary[] {
-    return (this.database.prepare(`SELECT workspace.id, workspace.environment_id AS environmentId,
-      environment.label AS environmentLabel, workspace.display_name AS label,
-      workspace.canonical_path AS path, workspace.removed_at IS NOT NULL AS removed,
-      workspace.availability = 'available' AND environment.availability = 'available' AS available,
-      workspace.revision,
-      (SELECT COUNT(*) FROM application_threads AS thread WHERE thread.tenant_id = workspace.tenant_id
-        AND thread.owner_principal_id = workspace.owner_principal_id AND thread.workspace_id = workspace.id) AS threadCount
-      FROM workspaces AS workspace JOIN execution_environments AS environment
-        ON environment.tenant_id = workspace.tenant_id AND environment.owner_principal_id = workspace.owner_principal_id
-        AND environment.id = workspace.environment_id
-      WHERE workspace.tenant_id = ? AND workspace.owner_principal_id = ?
-      ORDER BY workspace.display_name COLLATE NOCASE, workspace.id`)
-      .all(scope.tenantId, scope.principalId) as Array<Omit<ProjectSummary, "removed" | "available"> & { removed: number; available: number }> )
-      .map(row => ({ ...row, removed: row.removed === 1, available: row.available === 1 }));
-  }
-
   listThreadIdsForWorkspace(scope: RequestScope, workspaceId: string): string[] {
     this.getWorkspace(scope, workspaceId);
-    return (this.database.prepare(`SELECT id FROM application_threads
-      WHERE tenant_id = ? AND owner_principal_id = ? AND workspace_id = ? ORDER BY id`)
-      .all(scope.tenantId, scope.principalId, workspaceId) as Array<{ id: string }>).map(row => row.id);
+    return this.#threadIdsForWorkspace(scope, workspaceId);
   }
 
   assertWorkspaceRemovable(scope: RequestScope, workspaceId: string, input: {
@@ -809,22 +995,13 @@ export class InventoryRepository {
     if (JSON.stringify(threadIds) !== JSON.stringify(input.expectedThreadIds)) {
       throw new DomainError("conflict", "The project's threads changed. Refresh and try again.");
     }
-    if (this.findArchiveDurablyBlockedThreadIds(scope, threadIds).size > 0) {
-      throw new DomainError("invalid_transition", "Resolve running, queued, or uncertain work before removing this project.");
-    }
-    const enabledSchedule = this.database.prepare(`SELECT 1 FROM automation_definitions AS automation
-      JOIN application_threads AS thread ON thread.tenant_id = automation.tenant_id
-        AND thread.owner_principal_id = automation.owner_principal_id AND thread.id = automation.anchor_thread_id
-      WHERE thread.tenant_id = ? AND thread.owner_principal_id = ? AND thread.workspace_id = ?
-        AND automation.enabled = 1 AND automation.deleted_at IS NULL AND automation.completed_at IS NULL LIMIT 1`)
-      .get(scope.tenantId, scope.principalId, workspaceId);
-    if (enabledSchedule) throw new DomainError("invalid_transition", "Pause scheduled work before removing this project. Restore will leave schedules paused.");
-    const liveTerminal = this.database.prepare(`SELECT 1 FROM terminals
-      WHERE tenant_id = ? AND owner_principal_id = ? AND workspace_id = ?
-        AND lifecycle NOT IN ('exited', 'failed') LIMIT 1`).get(scope.tenantId, scope.principalId, workspaceId);
-    if (liveTerminal) throw new DomainError("invalid_transition", "End live or interrupted terminals before removing this project.");
+    const [blocker] = this.#locationRemovalBlockers(scope, {
+      workspaceId, environmentId: workspace.environmentId, threadIds,
+    });
+    if (blocker) throw new DomainError("invalid_transition", locationRemovalMessages[blocker.kind]);
   }
 
+  /** Removes one location; its project stays active even when it was the last. */
   removeWorkspace(scope: RequestScope, workspaceId: string, input: {
     readonly expectedRevision: number;
     readonly expectedThreadIds: readonly string[];
@@ -833,11 +1010,225 @@ export class InventoryRepository {
     this.database.transaction(() => {
       this.assertWorkspaceRemovable(scope, workspaceId, input);
       if (this.isWorkspaceRemoved(scope, workspaceId)) return;
-      this.database.prepare(`UPDATE workspaces SET removed_at = ?, revision = revision + 1, updated_at = ?
+      this.database.prepare(`UPDATE workspaces SET removed_at = ?, removed_with_project = 0,
+        revision = revision + 1, updated_at = ?
         WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
         .run(input.now, input.now, scope.tenantId, scope.principalId, workspaceId);
+      this.#touchProjectMembership(scope, this.getWorkspace(scope, workspaceId).projectId, input.now);
       this.#bumpGeneration(scope);
     })();
+  }
+
+  /** Active projects, including empty ones, without their locations. */
+  listActiveProjects(scope: RequestScope): InventoryProjectRecord[] {
+    return this.database.prepare(`SELECT ${projectColumns} FROM projects
+      WHERE tenant_id = ? AND owner_principal_id = ? AND removed_at IS NULL
+      ORDER BY name COLLATE NOCASE, id`)
+      .all(scope.tenantId, scope.principalId) as InventoryProjectRecord[];
+  }
+
+  /** Every project with every location, including removed ones. */
+  listProjects(scope: RequestScope): InventoryProjectListing[] {
+    return this.#projectListings(scope);
+  }
+
+  getProject(scope: RequestScope, projectId: string): InventoryProjectListing {
+    const [project] = this.#projectListings(scope, projectId);
+    if (!project) throw new DomainError("not_found", "The project was not found.");
+    return project;
+  }
+
+  /** Thread IDs of the project's active locations, in ID order. */
+  listActiveThreadIdsForProject(scope: RequestScope, projectId: string): string[] {
+    this.#project(scope, projectId);
+    return (this.database.prepare(`SELECT thread.id FROM application_threads AS thread
+      JOIN workspaces AS workspace ON workspace.tenant_id = thread.tenant_id
+        AND workspace.owner_principal_id = thread.owner_principal_id AND workspace.id = thread.workspace_id
+      WHERE thread.tenant_id = ? AND thread.owner_principal_id = ?
+        AND workspace.project_id = ? AND workspace.removed_at IS NULL
+      ORDER BY thread.id`)
+      .all(scope.tenantId, scope.principalId, projectId) as Array<{ id: string }>).map(row => row.id);
+  }
+
+  renameProject(scope: RequestScope, projectId: string, input: {
+    readonly name: string;
+    readonly expectedRevision: number;
+    readonly now: number;
+  }): InventoryProjectListing {
+    assertProjectName(input.name);
+    this.database.transaction(() => {
+      const project = this.#project(scope, projectId);
+      this.#assertProjectRevision(project, input.expectedRevision);
+      if (project.removedAt !== null) {
+        throw new DomainError("invalid_transition", "Restore the project before renaming it.");
+      }
+      if (project.name === input.name) return;
+      this.database.prepare(`UPDATE projects SET name = ?, revision = revision + 1, updated_at = ?
+        WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
+        .run(input.name, input.now, scope.tenantId, scope.principalId, projectId);
+      this.#bumpGeneration(scope);
+    })();
+    return this.getProject(scope, projectId);
+  }
+
+  /**
+   * Moves one location, active or removed, into another project. Runtime and
+   * active-turn checks belong to the caller; this commit rechecks the
+   * location's revision and thread set and its durable work.
+   */
+  moveWorkspaceToProject(scope: RequestScope, workspaceId: string, input: {
+    readonly target: InventoryProjectAssignment;
+    readonly expectedRevision: number;
+    readonly expectedThreadIds: readonly string[];
+    readonly now: number;
+  }): InventoryWorkspaceRecord {
+    if (input.target.kind === "new") assertProjectName(input.target.name);
+    return this.database.transaction(() => {
+      const workspace = this.getWorkspace(scope, workspaceId);
+      if (workspace.revision !== input.expectedRevision) {
+        throw new DomainError("conflict", "The location changed. Refresh and try again.");
+      }
+      const threadIds = this.#threadIdsForWorkspace(scope, workspaceId);
+      if (JSON.stringify(threadIds) !== JSON.stringify(input.expectedThreadIds)) {
+        throw new DomainError("conflict", "The location's threads changed. Refresh and try again.");
+      }
+      if (input.target.kind === "existing" && input.target.projectId === workspace.projectId) {
+        throw new DomainError("bad_request", "The location already belongs to that project.");
+      }
+      if (
+        !this.isWorkspaceRemoved(scope, workspaceId) &&
+        this.findArchiveDurablyBlockedThreadIds(scope, threadIds).size > 0
+      ) {
+        throw new DomainError("invalid_transition", "Resolve running, queued, or uncertain work before moving this location.");
+      }
+      const projectId = this.#admitProject(scope, input.target, input.now);
+      this.database.prepare(`UPDATE workspaces SET project_id = ?, removed_with_project = 0,
+        revision = revision + 1, updated_at = ?
+        WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
+        .run(projectId, input.now, scope.tenantId, scope.principalId, workspaceId);
+      this.#touchProjectMembership(scope, workspace.projectId, input.now);
+      this.#touchProjectMembership(scope, projectId, input.now);
+      this.#bumpGeneration(scope);
+      return this.getWorkspace(scope, workspaceId);
+    })();
+  }
+
+  /**
+   * Moves every location of the source, active and removed, into the target
+   * and deletes the emptied source. This cannot be undone. Runtime and
+   * active-turn checks belong to the caller.
+   */
+  mergeProject(scope: RequestScope, sourceProjectId: string, input: {
+    readonly targetProjectId: string;
+    readonly expectedSourceMembershipRevision: number;
+    readonly expectedTargetMembershipRevision: number;
+    /** Threads of the source's active locations, as listActiveThreadIdsForProject returns them. */
+    readonly expectedThreadIds: readonly string[];
+    readonly now: number;
+  }): InventoryProjectListing {
+    if (sourceProjectId === input.targetProjectId) {
+      throw new DomainError("bad_request", "A project cannot be merged into itself.");
+    }
+    this.database.transaction(() => {
+      const source = this.#project(scope, sourceProjectId);
+      const target = this.#project(scope, input.targetProjectId);
+      this.#assertProjectMembershipRevision(source, input.expectedSourceMembershipRevision);
+      this.#assertProjectMembershipRevision(target, input.expectedTargetMembershipRevision);
+      if (target.removedAt !== null) {
+        throw new DomainError("invalid_transition", "The project was removed. Restore it before adding locations to it.");
+      }
+      const threadIds = this.listActiveThreadIdsForProject(scope, sourceProjectId);
+      if (JSON.stringify(threadIds) !== JSON.stringify(input.expectedThreadIds)) {
+        throw new DomainError("conflict", "The project's threads changed. Refresh and try again.");
+      }
+      if (this.findArchiveDurablyBlockedThreadIds(scope, threadIds).size > 0) {
+        throw new DomainError("invalid_transition", "Resolve running, queued, or uncertain work before merging this project.");
+      }
+      this.database.prepare(`UPDATE workspaces SET project_id = ?, removed_with_project = 0,
+        revision = revision + 1, updated_at = ?
+        WHERE tenant_id = ? AND owner_principal_id = ? AND project_id = ?`)
+        .run(target.id, input.now, scope.tenantId, scope.principalId, source.id);
+      this.#touchProjectMembership(scope, target.id, input.now);
+      this.database.prepare(`DELETE FROM projects
+        WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
+        .run(scope.tenantId, scope.principalId, source.id);
+      this.#bumpGeneration(scope);
+    })();
+    return this.getProject(scope, input.targetProjectId);
+  }
+
+  /**
+   * Removal precheck: verifies the expected revisions and reports the active
+   * locations to fence plus every blocker across all of them.
+   */
+  inspectProjectRemoval(scope: RequestScope, projectId: string, input: {
+    readonly expectedRevision: number;
+    readonly expectedMembershipRevision: number;
+  }): ProjectRemovalInspection {
+    const project = this.#project(scope, projectId);
+    this.#assertProjectRevision(project, input.expectedRevision);
+    this.#assertProjectMembershipRevision(project, input.expectedMembershipRevision);
+    const locations = this.#activeLocations(scope, projectId);
+    return {
+      project,
+      locations,
+      blockers: locations.flatMap((location) => this.#locationRemovalBlockers(scope, location)),
+    };
+  }
+
+  /**
+   * Removal commit, run after the caller has fenced every location the
+   * precheck returned. Removes those locations with the project.
+   */
+  removeProject(scope: RequestScope, projectId: string, input: {
+    readonly expectedRevision: number;
+    readonly expectedMembershipRevision: number;
+    readonly expectedLocations: readonly ProjectRemovalLocation[];
+    readonly now: number;
+  }): InventoryProjectListing {
+    this.database.transaction(() => {
+      const { project, locations, blockers } = this.inspectProjectRemoval(scope, projectId, input);
+      if (!sameRemovalLocations(locations, input.expectedLocations)) {
+        throw new DomainError("conflict", "The project's locations or threads changed. Refresh and try again.");
+      }
+      if (blockers.length > 0) throw new ProjectRemovalBlockedError(blockers);
+      if (project.removedAt !== null) return;
+      // Only this removal's locations stay marked: an earlier removal's marks
+      // on locations a partial restore left removed are stale.
+      const unmarked = this.database.prepare(`UPDATE workspaces SET removed_with_project = 0,
+        revision = revision + 1, updated_at = ?
+        WHERE tenant_id = ? AND owner_principal_id = ? AND project_id = ?
+          AND removed_at IS NOT NULL AND removed_with_project = 1`)
+        .run(input.now, scope.tenantId, scope.principalId, projectId);
+      const removed = this.database.prepare(`UPDATE workspaces SET removed_at = ?, removed_with_project = 1,
+        revision = revision + 1, updated_at = ?
+        WHERE tenant_id = ? AND owner_principal_id = ? AND project_id = ? AND removed_at IS NULL`)
+        .run(input.now, input.now, scope.tenantId, scope.principalId, projectId);
+      this.database.prepare(`UPDATE projects SET removed_at = ?, revision = revision + 1,
+        membership_revision = membership_revision + ?, updated_at = ?
+        WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
+        .run(input.now, removed.changes + unmarked.changes > 0 ? 1 : 0, input.now,
+          scope.tenantId, scope.principalId, projectId);
+      this.#bumpGeneration(scope);
+    })();
+    return this.getProject(scope, projectId);
+  }
+
+  /** Restores the project only; its locations restore individually. */
+  restoreProject(scope: RequestScope, projectId: string, input: {
+    readonly expectedRevision: number;
+    readonly now: number;
+  }): InventoryProjectListing {
+    this.database.transaction(() => {
+      const project = this.#project(scope, projectId);
+      this.#assertProjectRevision(project, input.expectedRevision);
+      if (project.removedAt === null) return;
+      this.database.prepare(`UPDATE projects SET removed_at = NULL, revision = revision + 1, updated_at = ?
+        WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
+        .run(input.now, scope.tenantId, scope.principalId, projectId);
+      this.#bumpGeneration(scope);
+    })();
+    return this.getProject(scope, projectId);
   }
 
   listThreadIdsForEnvironment(
@@ -3028,6 +3419,130 @@ export class InventoryRepository {
         JSON.stringify(result),
         now,
       );
+  }
+
+  #project(scope: RequestScope, projectId: string): InventoryProjectRecord {
+    const row = this.database.prepare(`SELECT ${projectColumns} FROM projects
+      WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
+      .get(scope.tenantId, scope.principalId, projectId) as InventoryProjectRecord | undefined;
+    if (!row) throw new DomainError("not_found", "The project was not found.");
+    return row;
+  }
+
+  #assertProjectRevision(project: InventoryProjectRecord, expectedRevision: number): void {
+    if (project.revision !== expectedRevision) {
+      throw new DomainError("conflict", "The project changed. Refresh and try again.");
+    }
+  }
+
+  #assertProjectMembershipRevision(project: InventoryProjectRecord, expectedMembershipRevision: number): void {
+    if (project.membershipRevision !== expectedMembershipRevision) {
+      throw new DomainError("conflict", "The project's locations changed. Refresh and try again.");
+    }
+  }
+
+  /** Resolves the project a location joins, creating a new one when asked. */
+  #admitProject(scope: RequestScope, assignment: InventoryProjectAssignment, now: number): string {
+    if (assignment.kind === "new") {
+      assertProjectName(assignment.name);
+      const id = randomUUID();
+      this.database.prepare(`INSERT INTO projects(
+          tenant_id, owner_principal_id, id, name, revision, membership_revision,
+          removed_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 0, 0, NULL, ?, ?)`)
+        .run(scope.tenantId, scope.principalId, id, assignment.name, now, now);
+      return id;
+    }
+    const project = this.#project(scope, assignment.projectId);
+    if (project.removedAt !== null) {
+      throw new DomainError("invalid_transition", "The project was removed. Restore it before adding locations to it.");
+    }
+    return project.id;
+  }
+
+  #touchProjectMembership(scope: RequestScope, projectId: string, now: number): void {
+    const result = this.database.prepare(`UPDATE projects
+      SET membership_revision = membership_revision + 1, revision = revision + 1, updated_at = ?
+      WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
+      .run(now, scope.tenantId, scope.principalId, projectId);
+    if (result.changes !== 1) throw new DomainError("not_found", "The project was not found.");
+  }
+
+  #threadIdsForWorkspace(scope: RequestScope, workspaceId: string): string[] {
+    return (this.database.prepare(`SELECT id FROM application_threads
+      WHERE tenant_id = ? AND owner_principal_id = ? AND workspace_id = ? ORDER BY id`)
+      .all(scope.tenantId, scope.principalId, workspaceId) as Array<{ id: string }>).map(row => row.id);
+  }
+
+  #activeLocations(scope: RequestScope, projectId: string): ProjectRemovalLocation[] {
+    return (this.database.prepare(`SELECT id AS workspaceId, environment_id AS environmentId FROM workspaces
+      WHERE tenant_id = ? AND owner_principal_id = ? AND project_id = ? AND removed_at IS NULL ORDER BY id`)
+      .all(scope.tenantId, scope.principalId, projectId) as Array<{ workspaceId: string; environmentId: string }>)
+      .map(location => ({ ...location, threadIds: this.#threadIdsForWorkspace(scope, location.workspaceId) }));
+  }
+
+  /** Durable blockers to removing one location, in a fixed kind order. */
+  #locationRemovalBlockers(
+    scope: RequestScope,
+    location: ProjectRemovalLocation,
+  ): ProjectRemovalBlocker<DurableProjectRemovalBlockerKind>[] {
+    const blocker = (
+      kind: DurableProjectRemovalBlockerKind,
+      threadIds: readonly string[],
+    ): ProjectRemovalBlocker<DurableProjectRemovalBlockerKind>[] =>
+      threadIds.length === 0 ? [] : [{ workspaceId: location.workspaceId, environmentId: location.environmentId, kind, threadIds }];
+    const ids = (rows: unknown[]) => (rows as Array<{ threadId: string }>).map(row => row.threadId);
+    const durable = this.findArchiveDurablyBlockedThreadIds(scope, location.threadIds);
+    const scheduled = ids(this.database.prepare(`SELECT DISTINCT thread.id AS threadId FROM automation_definitions AS automation
+      JOIN application_threads AS thread ON thread.tenant_id = automation.tenant_id
+        AND thread.owner_principal_id = automation.owner_principal_id AND thread.id = automation.anchor_thread_id
+      WHERE thread.tenant_id = ? AND thread.owner_principal_id = ? AND thread.workspace_id = ?
+        AND automation.enabled = 1 AND automation.deleted_at IS NULL AND automation.completed_at IS NULL
+      ORDER BY thread.id`).all(scope.tenantId, scope.principalId, location.workspaceId));
+    const terminals = ids(this.database.prepare(`SELECT DISTINCT thread_id AS threadId FROM terminals
+      WHERE tenant_id = ? AND owner_principal_id = ? AND workspace_id = ?
+        AND lifecycle NOT IN ('exited', 'failed') ORDER BY thread_id`)
+      .all(scope.tenantId, scope.principalId, location.workspaceId));
+    return [
+      ...blocker("durable_work", location.threadIds.filter(id => durable.has(id))),
+      ...blocker("enabled_schedule", scheduled),
+      ...blocker("live_terminal", terminals),
+    ];
+  }
+
+  #projectListings(scope: RequestScope, projectId?: string): InventoryProjectListing[] {
+    const only = projectId === undefined ? [] : [projectId];
+    const projects = this.database.prepare(`SELECT ${projectColumns} FROM projects
+      WHERE tenant_id = ? AND owner_principal_id = ? ${projectId === undefined ? "" : "AND id = ?"}
+      ORDER BY name COLLATE NOCASE, id`)
+      .all(scope.tenantId, scope.principalId, ...only) as InventoryProjectRecord[];
+    const rows = this.database.prepare(`SELECT workspace.project_id AS projectId, workspace.id,
+        workspace.environment_id AS environmentId, environment.label AS environmentLabel,
+        workspace.display_name AS displayName, workspace.canonical_path AS canonicalPath,
+        workspace.availability = 'available' AND environment.availability = 'available' AS available,
+        workspace.removed_at AS removedAt, workspace.removed_with_project AS removedWithProject,
+        workspace.revision,
+        (SELECT COUNT(*) FROM application_threads AS thread WHERE thread.tenant_id = workspace.tenant_id
+          AND thread.owner_principal_id = workspace.owner_principal_id AND thread.workspace_id = workspace.id) AS threadCount
+      FROM workspaces AS workspace JOIN execution_environments AS environment
+        ON environment.tenant_id = workspace.tenant_id AND environment.owner_principal_id = workspace.owner_principal_id
+        AND environment.id = workspace.environment_id
+      WHERE workspace.tenant_id = ? AND workspace.owner_principal_id = ?
+        ${projectId === undefined ? "" : "AND workspace.project_id = ?"}
+      ORDER BY environment.label COLLATE NOCASE, workspace.canonical_path, workspace.id`)
+      .all(scope.tenantId, scope.principalId, ...only) as Array<
+        Omit<InventoryProjectLocationRecord, "available" | "removedWithProject"> & {
+          readonly projectId: string;
+          readonly available: number;
+          readonly removedWithProject: number;
+        }>;
+    const locations = new Map<string, InventoryProjectLocationRecord[]>();
+    for (const { projectId: owner, available, removedWithProject, ...location } of rows) {
+      const group = locations.get(owner) ?? [];
+      group.push({ ...location, available: available === 1, removedWithProject: removedWithProject === 1 });
+      locations.set(owner, group);
+    }
+    return projects.map(project => ({ ...project, locations: locations.get(project.id) ?? [] }));
   }
 
   #bumpGeneration(scope: RequestScope): void {

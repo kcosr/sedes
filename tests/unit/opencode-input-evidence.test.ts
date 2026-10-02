@@ -6,7 +6,7 @@ import { OpenCodeInputEvidenceRepository, openCodeOperationFingerprint, openCode
 import { OpenCodeMutationEvidenceRepository } from "../../src/server/backends/opencode/opencode-mutation-evidence.js";
 import { OpenCodeThreadRepository, type OpenCodeOperationKind } from "../../src/server/backends/opencode/opencode-thread-repository.js";
 import { createOpenCodeConversationFixture, scope, threadID } from "../support/opencode-conversation-fixture.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { insertPreProjectWorkspace, savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); vi.restoreAllMocks(); });
@@ -181,7 +181,7 @@ describe("OpenCode durable private input and mutation evidence", () => {
     const { database, scope: owner } = savedAgentDatabase(123);
     try {
       const inventory = new InventoryRepository(database); const environment = inventory.getLocalEnvironment(owner);
-      const workspace = inventory.upsertWorkspace(owner, { environmentId: environment.id, canonicalPath: "/tmp/retirement-migration",
+      const workspace = insertPreProjectWorkspace(database, owner, { environmentId: environment.id, canonicalPath: "/tmp/retirement-migration",
         displayName: "Migration", available: true, trustState: "trusted", environmentConfigurationRevision: environment.configurationRevision, now: 200 });
       database.prepare(`INSERT INTO agent_backend_instances
         (tenant_id,owner_principal_id,id,kind,label,enabled,protocol_release,created_at,updated_at)

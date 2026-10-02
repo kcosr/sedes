@@ -1240,6 +1240,8 @@ export type NormalizedEnvironmentSummary = z.infer<
 export const normalizedWorkspaceSummarySchema = z.strictObject({
   id: z.string().min(1).max(160),
   environmentId: z.string().min(1).max(160),
+  /** The project this location belongs to. */
+  projectId: z.string().min(1).max(160),
   label: boundedDisplayTextSchema,
   displayPath: boundedDisplayTextSchema,
   available: z.boolean(),

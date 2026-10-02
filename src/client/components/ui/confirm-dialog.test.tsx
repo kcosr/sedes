@@ -123,6 +123,34 @@ describe("ConfirmDialog", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus());
   });
 
+  it("keeps the action disabled while a required choice is missing", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    const { rerender } = render(<Harness onConfirm={onConfirm} confirmDisabled />);
+    const confirm = screen.getByRole("button", { name: "Remove environment" });
+    expect(confirm).toBeDisabled();
+    expect(screen.queryByText("Resolve these first")).toBeNull();
+    rerender(<Harness onConfirm={onConfirm} confirmDisabled={false} />);
+    await user.click(screen.getByRole("button", { name: "Remove environment" }));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows failure detail inside the error alert", async () => {
+    const user = userEvent.setup();
+    render(
+      <Harness
+        onConfirm={() => Promise.reject(new Error("Resolve running work first."))}
+        errorDetail={<ul><li>2 threads are running.</li></ul>}
+      />,
+    );
+    expect(screen.queryByText("2 threads are running.")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Remove environment" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Resolve running work first.");
+    expect(alert).toHaveTextContent("2 threads are running.");
+    expect(screen.getByRole("button", { name: "Remove environment" })).toBeEnabled();
+  });
+
   it("cancels without running the action", async () => {
     const user = userEvent.setup();
     const onConfirm = vi.fn();

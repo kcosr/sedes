@@ -149,7 +149,7 @@ describe("SSH execution environment persistence", () => {
       fixture.inventory.updateEnvironmentAvailability(fixture.scope, sshEnvironmentId, { available: true, now: 250 });
       const before = fixture.inventory.getEnvironment(fixture.scope, sshEnvironmentId);
       const workspace = fixture.inventory.upsertWorkspace(fixture.scope, {
-        environmentId: sshEnvironmentId, canonicalPath: "/home/operator/projects/sedes", displayName: "Sedes", available: true,
+        environmentId: sshEnvironmentId, canonicalPath: "/home/operator/projects/sedes", displayName: "Sedes", project: { kind: "new", name: "Sedes" }, available: true,
         trustState: "untrusted", environmentConfigurationRevision: before.configurationRevision, now: 275,
       });
       const operations: SshEnvironment["operations"] = { kind: "sidecar", enabledCapabilities: ["agent_tools_cli"] };
@@ -214,7 +214,7 @@ describe("SSH execution environment persistence", () => {
       fixture.save(remoteDocument());
       fixture.inventory.updateEnvironmentAvailability(fixture.scope, sshEnvironmentId, { available: true, now: 200 });
       const workspace = fixture.inventory.upsertWorkspace(fixture.scope, {
-        environmentId: sshEnvironmentId, canonicalPath: "/home/operator/projects/sedes", displayName: "Sedes", available,
+        environmentId: sshEnvironmentId, canonicalPath: "/home/operator/projects/sedes", displayName: "Sedes", project: { kind: "new", name: "Sedes" }, available,
         trustState: "trusted", environmentConfigurationRevision: 0, now: 210,
       });
       const reader = new BackendConfigurationRepository(fixture.database);
@@ -253,7 +253,7 @@ describe("SSH execution environment persistence", () => {
       }, document => fixture.administration!.projection.project(other, document));
       const otherEnvironment = fixture.inventory.getEnvironment(other, sshEnvironmentId);
       fixture.inventory.upsertWorkspace(other, {
-        environmentId: sshEnvironmentId, canonicalPath: "/home/operator/projects/sedes", displayName: "Other tenant workspace", available: false,
+        environmentId: sshEnvironmentId, canonicalPath: "/home/operator/projects/sedes", displayName: "Other tenant workspace", project: { kind: "new", name: "Other tenant workspace" }, available: false,
         trustState: "trusted", environmentConfigurationRevision: 0, now: 200,
       });
       fixture.save(localDocument());

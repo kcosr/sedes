@@ -96,7 +96,7 @@ async function persistedInvocationFixture() {
     VALUES (?,?,?,?,?,'opencode',?,'opencode_http','OpenCode',1,1,100,100)`)
     .run(scope.tenantId, scope.principalId, connection.id, connection.templateId, instance.id, environmentId);
   const workspace = new InventoryRepository(database).upsertWorkspace(scope, {
-    environmentId, canonicalPath: wire.directory, displayName: "Persisted OpenCode", available: true,
+    environmentId, canonicalPath: wire.directory, displayName: "Persisted OpenCode", project: { kind: "new", name: "Persisted OpenCode" }, available: true,
     trustState: "trusted", environmentConfigurationRevision: 1, now: 100,
   });
   const bindings = new ConversationBindingRepository(database);

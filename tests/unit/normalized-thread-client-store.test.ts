@@ -172,6 +172,7 @@ function snapshot(): NormalizedThreadSnapshot {
     workspace: {
       id: "workspace-1",
       environmentId: "environment-1",
+      projectId: "project-1",
       label: { text: "Workspace" },
       displayPath: { text: "/workspace" },
       available: true,

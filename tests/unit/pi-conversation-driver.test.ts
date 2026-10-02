@@ -104,7 +104,7 @@ import type {
   BackendAgentToolInvocationInput,
 } from "../../src/server/agent-tools/adapters/backend-facade.js";
 import { AgentToolRegistry } from "../../src/server/agent-tools/registry/agent-tool-registry.js";
-import { agentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
+import { createAgentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
 import { ConversationProjector } from "../../src/server/conversations/conversation-projector.js";
 import { renderTaskContextsForModel } from "../../src/server/conversations/delivery-input-projection.js";
 import {
@@ -113,6 +113,11 @@ import {
 } from "../../src/server/backends/model-policy.js";
 import { createFakeAgentToolSourceCapabilities } from "../helpers/fake-agent-tool-source-capabilities.js";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
+
+const agentContextToolDefinition = createAgentContextToolDefinition({
+  readWorkspaceProjectId: async () => "project-1",
+  readThreadStatus: async () => undefined,
+});
 
 const roots: string[] = [];
 const toolProvenanceKey = new Uint8Array(32).fill(0x42);
@@ -1973,7 +1978,7 @@ describe("Pi conversation backend driver", () => {
     const bindExtensions=vi.spyOn(AgentSession.prototype,"bindExtensions");
     const current=savedAgentDatabase(), database=current.database, owner=current.scope;
     const profile=new BackendConfigurationRepository(database).listProfiles(owner)[0]!;
-    const dbWorkspace=new InventoryRepository(database).upsertWorkspace(owner,{environmentId:profile.executionEnvironmentId,canonicalPath:fixture.workspace.canonicalPath,displayName:"Usage fixture",available:true,trustState:"trusted",environmentConfigurationRevision:0,now:1});
+    const dbWorkspace=new InventoryRepository(database).upsertWorkspace(owner,{environmentId:profile.executionEnvironmentId,canonicalPath:fixture.workspace.canonicalPath,displayName:"Usage fixture",project:{kind:"new",name:"Usage fixture"},available:true,trustState:"trusted",environmentConfigurationRevision:0,now:1});
     const thread=new ConversationBindingRepository(database).createUnboundThread(owner,{workspaceId:dbWorkspace.id,connectionProfileId:profile.id,title:"Usage fixture",now:1});
     const sdkWorkspace={...fixture.workspace,summary:{...fixture.workspace.summary,id:dbWorkspace.id,environmentId:profile.executionEnvironmentId}};
     const usage=new UsageService(database, {enabled: true}), observations:UsageObservation[]=[];

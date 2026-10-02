@@ -4,7 +4,7 @@ import { applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/
 import { durableUsageAccountingMigration } from "../../src/server/db/migrations/110-durable-usage-accounting.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { insertPreProjectWorkspace, savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 it("upgrades deployed usage accounting while preserving historical session gaps", () => {
   // This checksum was already deployed. Editing migration 110 prevents upgrades.
@@ -14,7 +14,7 @@ it("upgrades deployed usage accounting while preserving historical session gaps"
   try {
     const inventory = new InventoryRepository(database);
     const environment = inventory.getLocalEnvironment(scope);
-    const workspace = inventory.upsertWorkspace(scope, {
+    const workspace = insertPreProjectWorkspace(database, scope, {
       environmentId: environment.id, canonicalPath: "/tmp/usage-migration",
       displayName: "Migration", available: true, trustState: "trusted",
       environmentConfigurationRevision: environment.configurationRevision, now: 110,

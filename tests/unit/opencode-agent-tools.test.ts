@@ -53,7 +53,7 @@ function fixture(options: { inventory?: unknown; beforeInventory?: () => Promise
     ...(options.retentionMilliseconds === undefined ? {} : { retentionMilliseconds: options.retentionMilliseconds }) });
   // Creation provenance itself is covered by repository tests. Exercise the manager lifecycle here.
   vi.spyOn(f.repository, "hasCreatedRoot").mockReturnValue(true);
-  const canonical = new CanonicalInlineAgentToolService({ application: { readThreadStatus: async () => undefined } });
+  const canonical = new CanonicalInlineAgentToolService({ application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined } });
   const facade = { eligibleCatalog: () => canonical.catalog("mcp", "thread_agent"),
     catalogSummaries: vi.fn(() => canonical.catalogSummaries("mcp", "thread_agent")),
     describeMany: vi.fn((_source, _adapter, ids) => canonical.describeMany("mcp", "thread_agent", ids)),
@@ -212,7 +212,7 @@ describe("OpenCode MCP runtime admission", () => {
       : new Promise<"allow" | "deny">((_resolve, reject) => {
         signal.addEventListener("abort", () => reject(signal.reason), { once: true });
       }));
-    const facade = new SourceScopedAgentToolService(new CanonicalInlineAgentToolService({ application: { readThreadStatus } }),
+    const facade = new SourceScopedAgentToolService(new CanonicalInlineAgentToolService({ application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus } }),
       { get: () => ({ enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "native", mode: "progressive" },
         accessBoundary: "thread", revision: 1 }) } as unknown as ThreadAgentToolPolicyRepository,
       new AgentToolEnvironmentAuthorityResolver({

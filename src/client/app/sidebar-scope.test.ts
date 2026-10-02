@@ -4,6 +4,7 @@ import {
   deriveSidebarInventoryScope,
   deriveSidebarLocationSuppression,
   filterThreadsBySidebarScope,
+  resolveLegacyProjectFilterName,
   sidebarScopeRepairAtCursor,
   transitionSidebarInventoryScope,
   type SidebarScopeCatalog,
@@ -55,10 +56,15 @@ const catalog: SidebarScopeCatalog = {
       unavailableReason: { text: "Host is offline" },
     },
   ],
+  projects: [
+    { id: "project-1", name: "Sedes", revision: 0 },
+    { id: "project-2", name: "Notes", revision: 0 },
+  ],
   workspaces: [
     {
       id: "workspace-a",
       environmentId: "env-a",
+      projectId: "project-1",
       label: { text: "Sedes" },
       displayPath: { text: "/work/sedes" },
       available: true,
@@ -66,6 +72,7 @@ const catalog: SidebarScopeCatalog = {
     {
       id: "workspace-b",
       environmentId: "env-b",
+      projectId: "project-1",
       label: { text: "Sedes" },
       displayPath: { text: "/work/sedes" },
       available: false,
@@ -85,7 +92,7 @@ const catalog: SidebarScopeCatalog = {
 describe("sidebar causal scope repair", () => {
   const preferences = {
     projectFilterPublication: {
-      projectName: "New project",
+      projectId: "project-new",
       eventId: `${applicationGeneration}.5`,
     },
   };
@@ -93,7 +100,7 @@ describe("sidebar causal scope repair", () => {
   it("preserves a project selected by an application event this tab has not reached", () => {
     expect(
       sidebarScopeRepairAtCursor(
-        { environmentFilterId: null, projectFilterName: null },
+        { environmentFilterId: null, projectFilterId: null },
         preferences,
         `${applicationGeneration}.4`,
         true,
@@ -104,19 +111,19 @@ describe("sidebar causal scope repair", () => {
   it("repairs a project once the causal application event has been reached", () => {
     expect(
       sidebarScopeRepairAtCursor(
-        { projectFilterName: null },
+        { projectFilterId: null },
         preferences,
         `${applicationGeneration}.5`,
         true,
       ),
-    ).toEqual({ projectFilterName: null });
+    ).toEqual({ projectFilterId: null });
   });
 
   it("requires a connected replacement before trusting a different generation", () => {
     const nextGeneration = "00000000-0000-4000-8000-000000000002";
     expect(
       sidebarScopeRepairAtCursor(
-        { projectFilterName: null },
+        { projectFilterId: null },
         preferences,
         `${nextGeneration}.0`,
         false,
@@ -124,12 +131,12 @@ describe("sidebar causal scope repair", () => {
     ).toBeNull();
     expect(
       sidebarScopeRepairAtCursor(
-        { projectFilterName: null },
+        { projectFilterId: null },
         preferences,
         `${nextGeneration}.0`,
         true,
       ),
-    ).toEqual({ projectFilterName: null });
+    ).toEqual({ projectFilterId: null });
   });
 });
 
@@ -137,7 +144,8 @@ function preferences(
   overrides: Partial<{
     environmentFilterId: string | null;
     targetFilterId: string | null;
-    projectFilterName: string | null;
+    projectFilterId: string | null;
+    projectFilterName: string;
     groupFilterId: string | null;
     ungroupedFilter: boolean;
   }> = {},
@@ -145,7 +153,7 @@ function preferences(
   return {
     environmentFilterId: null,
     targetFilterId: null,
-    projectFilterName: null,
+    projectFilterId: null,
     groupFilterId: null,
     ungroupedFilter: false,
     ...overrides,
@@ -203,13 +211,21 @@ describe("deriveSidebarInventoryScope", () => {
     expect(scope).toMatchObject({
       environmentId: null,
       targetId: "target-b",
-      projectName: null,
+      projectId: null,
       effectiveEnvironmentId: "env-b",
       repair: null,
       activeFilterCount: 1,
     });
     expect(scope.targetOptions.map(({ id }) => id)).toEqual(["target-b"]);
-    expect(scope.projectOptions.map(({ id }) => id)).toEqual(["workspace-b"]);
+    expect(scope.projectOptions.map(({ id }) => id)).toEqual(["project-1"]);
+  });
+
+  it("offers every active project, including empty ones, without a location in scope", () => {
+    const scope = deriveSidebarInventoryScope(catalog, preferences());
+    expect(scope.projectOptions.map(({ id }) => id)).toEqual([
+      "project-1",
+      "project-2",
+    ]);
   });
 
   it("repairs stale IDs and incompatible descendants without substitution", () => {
@@ -218,13 +234,13 @@ describe("deriveSidebarInventoryScope", () => {
       preferences({
         environmentFilterId: "env-a",
         targetFilterId: "target-b",
-        projectFilterName: "Sedes",
+        projectFilterId: "project-1",
       }),
     );
     expect(stale).toMatchObject({
       environmentId: "env-a",
       targetId: null,
-      projectName: "Sedes",
+      projectId: "project-1",
       repair: {
         targetFilterId: null,
       },
@@ -235,13 +251,13 @@ describe("deriveSidebarInventoryScope", () => {
       preferences({
         environmentFilterId: "gone",
         targetFilterId: "target-gone",
-        projectFilterName: "workspace-gone",
+        projectFilterId: "project-gone",
       }),
     );
     expect(missing.repair).toEqual({
       environmentFilterId: null,
       targetFilterId: null,
-      projectFilterName: null,
+      projectFilterId: null,
     });
   });
 
@@ -251,7 +267,7 @@ describe("deriveSidebarInventoryScope", () => {
       preferences({
         environmentFilterId: "env-b",
         targetFilterId: "target-b",
-        projectFilterName: "Sedes",
+        projectFilterId: "project-1",
       }),
     );
     expect(scope.repair).toBeNull();
@@ -259,10 +275,95 @@ describe("deriveSidebarInventoryScope", () => {
   });
 });
 
-describe("project-name scope", () => {
-  it("matches same-name workspaces across environments without implying a location", () => {
-    const scope = deriveSidebarInventoryScope(catalog, preferences({ projectFilterName: "Sedes" }));
-    expect(scope.projectName).toBe("Sedes");
+describe("legacy project-name filters", () => {
+  const legacyCatalog: SidebarScopeCatalog = {
+    ...catalog,
+    projects: [
+      ...catalog.projects,
+      { id: "project-3", name: "Renamed", revision: 1 },
+      { id: "project-4", name: "Twin", revision: 0 },
+      { id: "project-5", name: "Twin", revision: 0 },
+    ],
+    workspaces: [
+      ...catalog.workspaces,
+      { ...catalog.workspaces[0]!, id: "renamed-folder", projectId: "project-3", label: { text: "old-name" } },
+      { ...catalog.workspaces[0]!, id: "split-a", projectId: "project-4", label: { text: "split" } },
+      { ...catalog.workspaces[0]!, id: "split-b", projectId: "project-5", label: { text: "split" } },
+    ],
+  };
+
+  it("maps a name that exactly one project carries", () => {
+    expect(resolveLegacyProjectFilterName(legacyCatalog, "Sedes")).toBe("project-1");
+  });
+
+  it("maps a folder name whose locations all belong to one project", () => {
+    expect(resolveLegacyProjectFilterName(legacyCatalog, "old-name")).toBe("project-3");
+  });
+
+  it("clears an ambiguous name", () => {
+    expect(resolveLegacyProjectFilterName(legacyCatalog, "Twin")).toBeNull();
+    expect(resolveLegacyProjectFilterName(legacyCatalog, "split")).toBeNull();
+  });
+
+  it("clears a name nothing matches", () => {
+    expect(resolveLegacyProjectFilterName(legacyCatalog, "Gone")).toBeNull();
+  });
+
+  it("clears a name that a project and another project's folders both claim", () => {
+    const contested = {
+      ...legacyCatalog,
+      workspaces: [
+        ...legacyCatalog.workspaces,
+        { ...catalog.workspaces[0]!, id: "notes-folder", projectId: "project-3", label: { text: "Notes" } },
+      ],
+    };
+    expect(resolveLegacyProjectFilterName(contested, "Notes")).toBeNull();
+  });
+
+  it("clears a project name whose same-named folders span several projects", () => {
+    // Another client renamed one of two "Sedes" projects before this one saw
+    // an upgraded snapshot: the folders still name both.
+    // "Sedes" folders already belong to project-1, which keeps the name.
+    expect(resolveLegacyProjectFilterName(legacyCatalog, "Sedes")).toBe("project-1");
+    const renamedTwin = {
+      ...legacyCatalog,
+      workspaces: [
+        ...legacyCatalog.workspaces,
+        { ...catalog.workspaces[0]!, id: "sedes-renamed-folder", projectId: "project-3", label: { text: "Sedes" } },
+      ],
+    };
+    expect(resolveLegacyProjectFilterName(renamedTwin, "Sedes")).toBeNull();
+  });
+
+  it("resolves the hint only as a repair, which retires it either way", () => {
+    const matched = deriveSidebarInventoryScope(
+      legacyCatalog,
+      preferences({ projectFilterName: "Renamed" }),
+    );
+    // The hint filters nothing until the repair is applied.
+    expect(matched.projectId).toBeNull();
+    expect(matched.activeFilterCount).toBe(0);
+    expect(matched.repair).toEqual({ projectFilterId: "project-3" });
+
+    const unmatched = deriveSidebarInventoryScope(
+      legacyCatalog,
+      preferences({ projectFilterName: "Twin" }),
+    );
+    expect(unmatched.repair).toEqual({ projectFilterId: null });
+
+    const superseded = deriveSidebarInventoryScope(
+      legacyCatalog,
+      preferences({ projectFilterId: "project-2", projectFilterName: "Sedes" }),
+    );
+    expect(superseded.projectId).toBe("project-2");
+    expect(superseded.repair).toEqual({ projectFilterId: "project-2" });
+  });
+});
+
+describe("project scope", () => {
+  it("matches every location of the project without implying a location", () => {
+    const scope = deriveSidebarInventoryScope(catalog, preferences({ projectFilterId: "project-1" }));
+    expect(scope.projectId).toBe("project-1");
     expect(scope.effectiveEnvironmentId).toBeNull();
     expect(scope.targetOptions).toEqual(catalog.executionTargets);
     expect(filterThreadsBySidebarScope([
@@ -273,30 +374,30 @@ describe("project-name scope", () => {
       .toMatchObject({ showEnvironment: true, showProject: false });
   });
 
-  it("preserves an unmatched name across explicit environment changes without broadening results", () => {
-    const namedCatalog = { ...catalog, workspaces: catalog.workspaces.map((workspace) =>
-      workspace.id === "workspace-b" ? { ...workspace, label: { text: "Remote only" } } : workspace) };
-    const next = transitionSidebarInventoryScope(namedCatalog,
-      preferences({ projectFilterName: "Remote only" }), { environmentFilterId: "env-a" });
-    expect(next.projectFilterName).toBe("Remote only");
-    const scope = deriveSidebarInventoryScope(namedCatalog, preferences(next));
+  it("preserves a project across explicit environment changes without broadening results", () => {
+    const splitCatalog = { ...catalog, workspaces: catalog.workspaces.map((workspace) =>
+      workspace.id === "workspace-b" ? { ...workspace, projectId: "project-2" } : workspace) };
+    const next = transitionSidebarInventoryScope(splitCatalog,
+      preferences({ projectFilterId: "project-2" }), { environmentFilterId: "env-a" });
+    expect(next.projectFilterId).toBe("project-2");
+    const scope = deriveSidebarInventoryScope(splitCatalog, preferences(next));
     expect(scope.repair).toBeNull();
+    expect(scope.projectOptions.map(({ id }) => id)).toEqual(["project-1"]);
     expect(filterThreadsBySidebarScope([
       thread("local", "workspace-a", "target-a1"), thread("remote", "workspace-b", "target-b"),
-    ], namedCatalog.workspaces, scope)).toEqual([]);
+    ], splitCatalog.workspaces, scope)).toEqual([]);
   });
 
-  it("uses exact names including case and punctuation", () => {
+  it("filters by project identity, never by a shared folder name", () => {
     const namedCatalog = { ...catalog, workspaces: [
       ...catalog.workspaces,
-      { ...catalog.workspaces[0]!, id: "lower", label: { text: "sedes" } },
-      { ...catalog.workspaces[0]!, id: "suffix", label: { text: "Sedes-worktree" } },
-      { ...catalog.workspaces[0]!, id: "second-local" },
+      { ...catalog.workspaces[0]!, id: "same-name-other-project", projectId: "project-2" },
+      { ...catalog.workspaces[0]!, id: "other-folder", label: { text: "Sedes-worktree" } },
     ] };
-    const scope = deriveSidebarInventoryScope(namedCatalog, preferences({ projectFilterName: "Sedes" }));
+    const scope = deriveSidebarInventoryScope(namedCatalog, preferences({ projectFilterId: "project-1" }));
     expect(filterThreadsBySidebarScope(namedCatalog.workspaces.map((workspace) =>
       thread(workspace.id, workspace.id, "target-a1")), namedCatalog.workspaces, scope)
-      .map(({ id }) => id)).toEqual(["workspace-a", "workspace-b", "second-local"]);
+      .map(({ id }) => id)).toEqual(["workspace-a", "workspace-b", "other-folder"]);
   });
 });
 
@@ -307,14 +408,14 @@ describe("transitionSidebarInventoryScope", () => {
         catalog,
         preferences({
           targetFilterId: "target-b",
-          projectFilterName: "Sedes",
+          projectFilterId: "project-1",
         }),
         { environmentFilterId: "env-a" },
       ),
     ).toEqual({
       environmentFilterId: "env-a",
       targetFilterId: null,
-      projectFilterName: "Sedes",
+      projectFilterId: "project-1",
       groupFilterId: null,
       ungroupedFilter: false,
     });
@@ -324,13 +425,13 @@ describe("transitionSidebarInventoryScope", () => {
     expect(
       transitionSidebarInventoryScope(
         catalog,
-        preferences({ projectFilterName: "Sedes" }),
+        preferences({ projectFilterId: "project-1" }),
         { targetFilterId: "target-a2" },
       ),
     ).toEqual({
       environmentFilterId: null,
       targetFilterId: "target-a2",
-      projectFilterName: "Sedes",
+      projectFilterId: "project-1",
       groupFilterId: null,
       ungroupedFilter: false,
     });
@@ -344,12 +445,12 @@ describe("sidebar scope projection and suppression", () => {
     thread("b", "workspace-b", "target-b"),
   ];
 
-  it("intersects exact Environment and Target IDs with Project name", () => {
+  it("intersects exact Environment, Target, and Project IDs", () => {
     expect(
       filterThreadsBySidebarScope(threads, catalog.workspaces, {
         environmentId: "env-a",
         targetId: "target-a2",
-        projectName: "Sedes",
+        projectId: "project-1",
         groupId: null,
         ungrouped: false,
       }).map(({ id }) => id),
@@ -363,7 +464,7 @@ describe("sidebar scope projection and suppression", () => {
       filterThreadsBySidebarScope([...threads, grouped], catalog.workspaces, {
         environmentId: "env-a",
         targetId: null,
-        projectName: null,
+        projectId: null,
         groupId,
         ungrouped: false,
       }).map(({ id }) => id),
@@ -372,7 +473,7 @@ describe("sidebar scope projection and suppression", () => {
       filterThreadsBySidebarScope([...threads, grouped], catalog.workspaces, {
         environmentId: null,
         targetId: null,
-        projectName: null,
+        projectId: null,
         groupId: null,
         ungrouped: true,
       }).map(({ id }) => id),
@@ -385,7 +486,7 @@ describe("sidebar scope projection and suppression", () => {
         {
           effectiveEnvironmentId: "env-a",
           targetId: null,
-          projectName: null,
+          projectId: null,
         },
         threads.slice(0, 2),
         { projectGrouped: true, environmentCount: 2 },

@@ -65,6 +65,9 @@ function orphanArtifactFilenames(onDisk: readonly string[]): readonly string[] {
 }
 
 const artifactReader: AgentToolApplicationReader = {
+  async readWorkspaceProjectId() {
+    throw new Error("agent_tool_artifact_reader_unavailable");
+  },
   async readThreadStatus() {
     throw new Error("agent_tool_artifact_reader_unavailable");
   },

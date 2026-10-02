@@ -68,7 +68,7 @@ export const test = base.extend<{
               // on close/selection change; mutation failures remain visible.
               (request.method() === "GET" &&
                 (/^\/api\/configuration(?:\/|$)/u.test(new URL(request.url()).pathname) ||
-                  new URL(request.url()).pathname === "/api/workspaces" ||
+                  new URL(request.url()).pathname === "/api/projects" ||
                   new URL(request.url()).pathname === "/api/host-registrations" ||
                   new URL(request.url()).pathname === "/api/environment-variables/preview"))) &&
             request.failure()?.errorText.includes("ERR_ABORTED")

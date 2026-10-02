@@ -527,6 +527,7 @@ describeRealPiCli("real Pi repository-skill CLI verification", () => {
         environmentId,
         canonicalPath: canonicalWorkspacePath,
         displayName: "Real Pi CLI workspace",
+        project: { kind: "new", name: "Real Pi CLI workspace" },
         available: true,
         trustState: "trusted",
         environmentConfigurationRevision: environment.configurationRevision,

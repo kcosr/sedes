@@ -71,6 +71,25 @@ export class DatabaseAgentToolApplicationReader
     );
   }
 
+  async readWorkspaceProjectId(
+    scope: RequestScope,
+    workspaceId: string,
+    signal: AbortSignal,
+  ): Promise<string | undefined> {
+    this.#assertOpen(signal);
+    const row = this.database
+      .prepare(
+        `
+          SELECT project_id AS projectId
+          FROM workspaces
+          WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
+        `,
+      )
+      .get(scope.tenantId, scope.principalId, workspaceId) as
+      { readonly projectId: string } | undefined;
+    return row?.projectId;
+  }
+
   async readThreadStatus(
     scope: RequestScope,
     threadId: string,

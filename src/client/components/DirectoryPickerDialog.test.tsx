@@ -65,6 +65,7 @@ function picker(
     readonly path?: string;
     readonly onPathChange?: (path: string) => void;
     readonly onSubmit?: () => void;
+    readonly submitting?: boolean;
   } = {},
 ) {
   return (
@@ -80,6 +81,7 @@ function picker(
       onPathChange={options.onPathChange ?? vi.fn()}
       api={api}
       submitLabel="Choose"
+      submitting={options.submitting ?? false}
       onSubmit={options.onSubmit ?? vi.fn()}
     />
   );
@@ -126,6 +128,46 @@ describe("DirectoryPickerDialog", () => {
     expect(screen.getByRole("navigation", { name: "Directory breadcrumbs" })).toHaveTextContent(
       "Rootsworktrees",
     );
+  });
+
+  it("cannot choose or browse another directory while the chosen one is submitted", async () => {
+    const onPathChange = vi.fn();
+    const browseExecutionEnvironmentDirectories = vi
+      .fn()
+      .mockResolvedValueOnce({
+        location: { kind: "roots" },
+        entries: [{ name: "worktrees", path: "/home/me/worktrees" }],
+        truncated: false,
+      })
+      .mockResolvedValueOnce({
+        location: {
+          kind: "directory",
+          path: "/home/me/worktrees",
+          parentPath: "/home/me",
+        },
+        entries: [{ name: "sedes", path: "/home/me/worktrees/sedes" }],
+        truncated: false,
+      });
+    const api = { browseExecutionEnvironmentDirectories };
+    const { rerender } = render(picker(api, { onPathChange }));
+    fireEvent.click(await screen.findByRole("button", { name: /worktrees/ }));
+    const sedes = await screen.findByRole("button", { name: /sedes/ });
+
+    rerender(
+      picker(api, { onPathChange, path: "/home/me/worktrees", submitting: true }),
+    );
+    expect(sedes).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Back one directory" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Roots" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Browse" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Absolute directory path" })).toBeDisabled();
+    fireEvent.click(sedes);
+    expect(onPathChange).toHaveBeenCalledTimes(1);
+    expect(browseExecutionEnvironmentDirectories).toHaveBeenCalledTimes(2);
+
+    rerender(picker(api, { onPathChange, path: "/home/me/worktrees" }));
+    expect(sedes).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Back one directory" })).toBeEnabled();
   });
 
   it("disambiguates configured roots that share a basename", async () => {

@@ -4,7 +4,7 @@ import { createThreadAgentToolPolicyDependencies } from "../../src/server/conver
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { ThreadAgentToolPolicyRepository } from "../../src/server/db/repositories/thread-agent-tool-policy-repository.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { insertPreProjectWorkspace, savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 describe("OpenCode v2 identity migration", () => {
   it("upgrades schema 121 so a new OpenCode thread has a readable Native/Progressive tool policy", () => {
@@ -12,7 +12,7 @@ describe("OpenCode v2 identity migration", () => {
     try {
       const inventory = new InventoryRepository(database);
       const environment = inventory.getLocalEnvironment(scope);
-      const workspace = inventory.upsertWorkspace(scope, {
+      const workspace = insertPreProjectWorkspace(database, scope, {
         environmentId: environment.id,
         canonicalPath: "/tmp/opencode-policy-migration",
         displayName: "OpenCode policy migration",

@@ -1,6 +1,7 @@
 import { runThreadCreation, runThreadFork } from "../operations/thread-creation.js";
 import { useEffect, useRef, useState } from "react";
 import type {
+  NormalizedApplicationSnapshot,
   NormalizedApplicationThreadSummary,
   NormalizedThreadForkOrigin,
   NormalizedThreadLineagePlacement,
@@ -18,6 +19,10 @@ import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry.js";
 import { useTouchDensity } from "../app/use-touch-density.js";
 import { shortRelativeTime } from "../lib/time.js";
 import { latestTurnForkDecision } from "../lineage/latest-turn-fork.js";
+import {
+  describeProjectLocations,
+  type ProjectLocations,
+} from "../app/project-locations.js";
 import {
   AlarmClock,
   AlarmClockOff,
@@ -125,7 +130,48 @@ function catalogEntry<T extends CatalogEntry>(
   return index.get(id) as T | undefined;
 }
 
-/** "sedes · Claude · updated 12m ago": the row's project, backend and age. */
+const projectLocationsByCatalog = new WeakMap<
+  NormalizedApplicationSnapshot["workspaces"],
+  {
+    readonly projects: NormalizedApplicationSnapshot["projects"];
+    readonly environments: NormalizedApplicationSnapshot["environments"];
+    readonly locations: ProjectLocations;
+  }
+>();
+
+/**
+ * The snapshot's projects and locations, described once for every row that
+ * renders against the same catalog arrays.
+ */
+function catalogProjectLocations(
+  snapshot: Partial<NormalizedApplicationSnapshot> | undefined,
+): ProjectLocations | undefined {
+  const { projects, workspaces, environments } = snapshot ?? {};
+  if (!projects || !workspaces || !environments) return undefined;
+  const cached = projectLocationsByCatalog.get(workspaces);
+  if (
+    cached?.projects === projects &&
+    cached.environments === environments
+  ) {
+    return cached.locations;
+  }
+  const locations = describeProjectLocations({
+    projects,
+    workspaces,
+    environments,
+  });
+  projectLocationsByCatalog.set(workspaces, {
+    projects,
+    environments,
+    locations,
+  });
+  return locations;
+}
+
+/**
+ * "sedes › sedes-context · Claude · updated 12m ago": the row's project (with
+ * its folder when the project needs one), backend and age.
+ */
 function threadMetaLine(
   thread: NormalizedApplicationThreadSummary,
   projectLabel: string | undefined,
@@ -212,10 +258,9 @@ export function ThreadContextMenu({
     application?.snapshot?.executionTargets,
     thread.targetId,
   )?.workspaceExecution.kind;
-  const projectLabel = catalogEntry(
-    application?.snapshot?.workspaces,
-    thread.workspaceId,
-  )?.label.text;
+  const projectLabel = catalogProjectLocations(
+    application?.snapshot,
+  )?.projectFolderLabel(thread.workspaceId);
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [forceResetOpen, setForceResetOpen] = useState(false);
   const [settleChoicesOpen, setSettleChoicesOpen] = useState(false);

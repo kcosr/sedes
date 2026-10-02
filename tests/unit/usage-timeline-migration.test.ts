@@ -5,7 +5,7 @@ import { usageSubagentsMigration } from "../../src/server/db/migrations/112-usag
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { UsageService } from "../../src/server/usage/usage-service.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { insertPreProjectWorkspace, savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 it("upgrades schema 112 by scheduling existing sources for a timeline rebuild without touching evidence", () => {
   const {database, scope} = savedAgentDatabase(112);
@@ -13,7 +13,7 @@ it("upgrades schema 112 by scheduling existing sources for a timeline rebuild wi
     expect(createHash("sha256").update(usageSubagentsMigration.sql).digest("hex")).toBe("97d2669688afb7e5b24c97ac42184f86c9ca059646c3ca8ac3fcace56c8d1300");
     const applied = database.prepare("SELECT * FROM schema_migrations WHERE version=112").get();
     const inventory = new InventoryRepository(database), environment = inventory.getLocalEnvironment(scope);
-    const workspace = inventory.upsertWorkspace(scope, {environmentId: environment.id, canonicalPath: "/tmp/timeline-migration", displayName: "Timeline",
+    const workspace = insertPreProjectWorkspace(database, scope, {environmentId: environment.id, canonicalPath: "/tmp/timeline-migration", displayName: "Timeline",
       available: true, trustState: "trusted", environmentConfigurationRevision: environment.configurationRevision, now: 100});
     const profile = database.prepare("SELECT id, backend_instance_id FROM agent_connection_profiles LIMIT 1").get() as {id: string; backend_instance_id: string};
     const thread = new ConversationBindingRepository(database).createUnboundThread(scope, {workspaceId: workspace.id, connectionProfileId: profile.id, title: "Timeline", now: 110});

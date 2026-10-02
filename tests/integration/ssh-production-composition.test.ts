@@ -336,6 +336,7 @@ describe.skipIf(!openSshAvailable)(
             body: JSON.stringify({
               environmentId: SSH_ENVIRONMENT_ID,
               path: fixture.workspaceRoot,
+              project: { kind: "new", name: "workspace" },
             }),
           },
         );

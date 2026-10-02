@@ -9,7 +9,7 @@ import { InventoryRepository } from "../../src/server/db/repositories/inventory-
 import { PrincipalAgentToolClientRepository } from "../../src/server/db/repositories/principal-agent-tool-client-repository.js";
 import { QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
 import { createPrincipalAgentToolClientEligibility } from "../../src/server/conversations/thread-agent-tool-policy-dependencies.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { insertPreProjectWorkspace, savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 describe("principal tool-client provenance migration", () => {
   it("copies legacy provenance and enforces exact principal-client initiators", () => {
@@ -17,7 +17,7 @@ describe("principal tool-client provenance migration", () => {
     try {
       const inventory = new InventoryRepository(database);
       const environment = inventory.getLocalEnvironment(scope);
-      const workspace = inventory.upsertWorkspace(scope, {
+      const workspace = insertPreProjectWorkspace(database, scope, {
         environmentId: environment.id,
         canonicalPath: "/tmp/principal-provenance-migration",
         displayName: "Principal provenance",

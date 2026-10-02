@@ -58,7 +58,7 @@ describe("agent management tool definitions", () => {
       "task.create",
       "task.update",
     ]);
-    expect(registry.get("workspace.list", 4).schemaVersion).toBe(4);
+    expect(registry.get("workspace.list", 5).schemaVersion).toBe(5);
     expect(registry.get("thread.list", 5).schemaVersion).toBe(5);
     expect(registry.get("thread.create", 5).schemaVersion).toBe(5);
     expect(() => registry.get("thread.create", 4)).toThrow();
@@ -69,18 +69,18 @@ describe("agent management tool definitions", () => {
     const registry = new AgentToolRegistry();
     for (const definition of definitions) registry.register(definition);
     expect(
-      registry.validatesInput("workspace.list", 4, { pageSize: 100 }),
+      registry.validatesInput("workspace.list", 5, { pageSize: 100 }),
     ).toBe(true);
     expect(
-      registry.validatesInput("workspace.list", 4, { pageSize: 101 }),
+      registry.validatesInput("workspace.list", 5, { pageSize: 101 }),
     ).toBe(false);
     expect(
-      registry.validatesInput("workspace.list", 4, {
+      registry.validatesInput("workspace.list", 5, {
         scope: { kind: "environment", environmentId: "environment-a" },
       }),
     ).toBe(true);
     expect(
-      registry.validatesInput("workspace.list", 4, {
+      registry.validatesInput("workspace.list", 5, {
         scope: { kind: "environment" },
       }),
     ).toBe(false);
@@ -106,15 +106,57 @@ describe("agent management tool definitions", () => {
       registry.validatesInput("environment.list", 1, { environmentId: "x" }),
     ).toBe(false);
     expect(
-      registry.validatesInput("workspace.open", 1, {
+      registry.validatesInput("workspace.open", 2, {
         environmentId: "environment-a",
         path: "/srv/projects/sedes",
       }),
     ).toBe(true);
     expect(
-      registry.validatesInput("workspace.open", 1, {
+      registry.validatesInput("workspace.open", 2, {
         environmentId: "environment-a",
         path: "x".repeat(4_097),
+      }),
+    ).toBe(false);
+    // Joining an existing project needs project authority; agents cannot
+    // choose one yet.
+    expect(
+      registry.validatesInput("workspace.open", 2, {
+        environmentId: "environment-a",
+        path: "/srv/projects/sedes",
+        projectId: "project-a",
+      }),
+    ).toBe(false);
+    const opened = {
+      workspaceId: "workspace-a",
+      environmentId: "environment-a",
+      label: "sedes",
+      availability: "available",
+    };
+    expect(registry.validatesOutput("workspace.open", 2, opened)).toBe(false);
+    expect(
+      registry.validatesOutput("workspace.open", 2, {
+        ...opened,
+        projectId: "project-a",
+      }),
+    ).toBe(true);
+    const listed = {
+      id: "workspace-a",
+      label: "sedes",
+      availability: "available",
+      lastOpenedAt: "2026-10-02T00:00:00.000Z",
+      environment: { id: "environment-a", label: "Local" },
+    };
+    expect(
+      registry.validatesOutput("workspace.list", 5, { items: [listed] }),
+    ).toBe(false);
+    expect(
+      registry.validatesOutput("workspace.list", 5, {
+        items: [{ ...listed, project: { id: "project-a", name: "😀".repeat(240) } }],
+      }),
+    ).toBe(true);
+    expect(
+      registry.validatesOutput("workspace.list", 5, {
+        items: [{ ...listed, project: { id: "project-a", name: "x".repeat(241) } }],
       }),
     ).toBe(false);
     expect(
@@ -165,6 +207,7 @@ describe("agent management tool definitions", () => {
     const openWorkspaceForAgent = vi.fn(async () => ({
       workspaceId: "workspace-a",
       environmentId: "environment-a",
+      projectId: "project-a",
       label: "sedes",
       availability: "available" as const,
     }));
@@ -188,7 +231,13 @@ describe("agent management tool definitions", () => {
         { environmentId: "environment-a", path: "/srv/projects/sedes" },
         context,
       ),
-    ).resolves.toMatchObject({ workspaceId: "workspace-a" });
+    ).resolves.toEqual({
+      workspaceId: "workspace-a",
+      environmentId: "environment-a",
+      projectId: "project-a",
+      label: "sedes",
+      availability: "available",
+    });
     await expect(
       createWorkspaceListToolDefinition(scoped).execute({}, context),
     ).resolves.toEqual({ items: [] });

@@ -1576,6 +1576,7 @@ function fixture(
     snapshot: {
       advisories: [],
       environments: [snapshot.environment],
+      projects: [{ id: "project-1", name: "Workspace", revision: 0 }],
       workspaces: [snapshot.workspace],
       threads: [],
       forkOrigins: [],
@@ -1774,6 +1775,7 @@ function makeSnapshot(
     workspace: {
       id: "workspace-1",
       environmentId: "environment-1",
+      projectId: "project-1",
       label: { text: "Workspace" },
       displayPath: { text: "/workspace" },
       available: true,

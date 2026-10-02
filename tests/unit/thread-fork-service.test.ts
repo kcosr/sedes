@@ -210,6 +210,7 @@ function fixture(withEnvironmentVariables = false) {
       summary: {
         id: workspace.id,
         environmentId: environment.id,
+        projectId: "project-1",
         label: { text: "Fork service" },
         displayPath: { text: workspace.canonicalPath },
         available: true,

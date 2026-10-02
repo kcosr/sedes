@@ -10,6 +10,7 @@ import {
   type ExecutionWorkspaceSelection,
   type NormalizedEnvironmentSummary,
   type NormalizedExecutionTargetDescriptor,
+  type NormalizedProjectSummary,
   type NormalizedWorkspaceSummary,
   type ResolveSavedAgentResult,
   type SavedAgentSummary,
@@ -25,8 +26,8 @@ import { useTouchDensity } from "../app/use-touch-density.js";
 import {
   environmentDisplayLabel,
   targetDisplayLabel,
-  workspaceDisplayLabel,
 } from "../app/sidebar-scope-presentation.js";
+import { describeProjectLocations } from "../app/project-locations.js";
 import { Button } from "@client/components/ui/button";
 import { Callout } from "@client/components/ui/callout";
 import { Field } from "@client/components/ui/field";
@@ -95,11 +96,31 @@ function executionWorkspacesMatch(
 export interface NewThreadCreationScope {
   readonly environmentId: string | null;
   readonly targetId: string | null;
-  readonly projectName: string | null;
+  readonly projectId: string | null;
 }
+
+interface LocationChoice {
+  readonly workspace: NormalizedWorkspaceSummary;
+  /** Why a thread cannot start here now; absent when it can. */
+  readonly unavailable?: string;
+}
+
+/** A project as the picker offers it: its locations within the scope. */
+interface ProjectChoice {
+  readonly project: NormalizedProjectSummary;
+  /** Locations on the scoped environment, or every location without one. */
+  readonly locations: readonly LocationChoice[];
+  /** The locations a thread can start in now. */
+  readonly creatable: readonly NormalizedWorkspaceSummary[];
+  /** Why none of them can; absent when one can. */
+  readonly unavailable?: string;
+}
+
+const NO_LOCATIONS: readonly NormalizedWorkspaceSummary[] = [];
 
 export function NewThreadControl({
   store,
+  projects,
   workspaces,
   environments,
   executionTargets,
@@ -110,10 +131,13 @@ export function NewThreadControl({
 }: {
   readonly store: ApplicationClientStore;
   readonly environments: readonly NormalizedEnvironmentSummary[];
+  /** Active projects, including empty ones. */
+  readonly projects: readonly NormalizedProjectSummary[];
+  /** Active locations. */
   readonly workspaces: readonly NormalizedWorkspaceSummary[];
   /** Complete inventory, including targets that cannot currently create. */
   readonly executionTargets: readonly NormalizedExecutionTargetDescriptor[];
-  /** Viewer-local inventory scope. Project names and exact environment/target ids constrain creation, not authority. */
+  /** Viewer-local inventory scope. Exact project/environment/target ids constrain creation, not authority. */
   readonly creationScope: NewThreadCreationScope;
   readonly className?: string;
   readonly children: React.ReactNode;
@@ -134,10 +158,12 @@ export function NewThreadControl({
   const templateSelectionGeneration = useRef(0);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
-  const [pendingProject, setPendingProject] = useState<{ id: string; environmentId: string }>();
+  // The location Add project created, until the snapshot publishes it.
+  /** An added location, until the catalog lists it in its project. */
+  const [pendingLocation, setPendingLocation] = useState<{ readonly id: string; readonly projectId: string }>();
   const [projectScopeReleased, setProjectScopeReleased] = useState(false);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>();
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>();
-  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<string>();
   const [requiresWorkspaceReselection, setRequiresWorkspaceReselection] =
     useState(false);
   const [requiresTargetReselection, setRequiresTargetReselection] =
@@ -181,17 +207,17 @@ export function NewThreadControl({
   const mobileShell = useTouchDensity();
   // Sidebar scope is an initial manual-selection preference. A template owns
   // its complete scope and must remain selectable from any sidebar filter.
-  const selectionScope = selectedTemplate
-    ? { environmentId: null, targetId: null, projectName: null }
-    : {
-        ...creationScope,
-        projectName: projectScopeReleased ? null : creationScope.projectName,
-      };
+  const selectionScope: NewThreadCreationScope = selectedTemplate
+    ? { environmentId: null, targetId: null, projectId: null }
+    : creationScope;
   const scopedTarget = executionTargets.find(
     ({ id }) => id === selectionScope.targetId,
   );
   const scopedEnvironmentId =
     selectionScope.environmentId ?? scopedTarget?.environmentId;
+  const scopedEnvironment = environments.find(
+    ({ id }) => id === scopedEnvironmentId,
+  );
   const scopeConflict = Boolean(
     selectionScope.environmentId &&
       scopedTarget &&
@@ -203,13 +229,6 @@ export function NewThreadControl({
         (environment) =>
           environment.available &&
           (!scopedEnvironmentId || environment.id === scopedEnvironmentId) &&
-          (selectionScope.projectName === null ||
-            workspaces.some(
-              (workspace) =>
-                workspace.available &&
-                workspace.environmentId === environment.id &&
-                workspace.label.text === selectionScope.projectName,
-            )) &&
           executionTargets.some(
             (target) =>
               target.available &&
@@ -220,38 +239,105 @@ export function NewThreadControl({
       ),
     [
       selectionScope.targetId,
-      selectionScope.projectName,
       environments,
       executionTargets,
       scopedEnvironmentId,
-      workspaces,
     ],
   );
-  const explicitlySelectedEnvironment = creatableEnvironments.find(
-    ({ id }) => id === selectedEnvironmentId,
+  const projectLocations = useMemo(
+    () => describeProjectLocations({ projects, workspaces, environments }),
+    [environments, projects, workspaces],
   );
-  const selectedEnvironment =
-    explicitlySelectedEnvironment ??
-    (selectedEnvironmentId === undefined && creatableEnvironments.length === 1
-      ? creatableEnvironments[0]
-      : undefined);
-  const effectiveEnvironmentId = scopedEnvironmentId ?? selectedEnvironment?.id;
-  const workspaceOptions = useMemo(
+  // A location is compatible with the scope when it is on the scoped
+  // environment (a scoped target's environment included). It can start a
+  // thread when it, its environment and a Target there are available.
+  const projectEntries = useMemo((): readonly ProjectChoice[] => {
+    const creatableEnvironmentIds = new Set(
+      creatableEnvironments.map(({ id }) => id),
+    );
+    const environmentById = new Map(
+      environments.map((environment) => [environment.id, environment]),
+    );
+    const locationsByProject = new Map<string, LocationChoice[]>();
+    for (const workspace of workspaces) {
+      if (
+        scopedEnvironmentId &&
+        workspace.environmentId !== scopedEnvironmentId
+      ) {
+        continue;
+      }
+      const locations = locationsByProject.get(workspace.projectId) ?? [];
+      locations.push({
+        workspace,
+        ...(!workspace.available ||
+        !environmentById.get(workspace.environmentId)?.available
+          ? { unavailable: "Unavailable" }
+          : !creatableEnvironmentIds.has(workspace.environmentId)
+            ? { unavailable: "No available target" }
+            : {}),
+      });
+      locationsByProject.set(workspace.projectId, locations);
+    }
+    return projects.map((project) => {
+      const locations = locationsByProject.get(project.id) ?? [];
+      const creatable = locations
+        .filter(({ unavailable }) => unavailable === undefined)
+        .map(({ workspace }) => workspace);
+      const unavailable =
+        locations.length === 0
+          ? "No locations"
+          : locations.every(({ unavailable }) => unavailable === "Unavailable")
+            ? "Unavailable"
+            : "No available target";
+      return {
+        project,
+        locations,
+        creatable,
+        ...(creatable.length === 0 ? { unavailable } : {}),
+      };
+    });
+  }, [
+    creatableEnvironments,
+    environments,
+    projects,
+    scopedEnvironmentId,
+    workspaces,
+  ]);
+  // An empty match (the scoped project has no location to start in here)
+  // releases only the project facet; the environment and target still hold.
+  const requestedProject = projectEntries.find(
+    ({ project }) => project.id === selectionScope.projectId,
+  );
+  const scopedProjectUnmatched =
+    selectionScope.projectId !== null &&
+    (requestedProject?.creatable.length ?? 0) === 0;
+  const scopedProjectId =
+    projectScopeReleased || scopedProjectUnmatched
+      ? null
+      : selectionScope.projectId;
+  const projectChoices = useMemo(
     () =>
-      effectiveEnvironmentId
-        ? workspaces.filter(
-            (option) =>
-              (selectionScope.projectName === null ||
-                option.label.text === selectionScope.projectName) &&
-              option.environmentId === effectiveEnvironmentId,
-          )
-        : [],
-    [selectionScope.projectName, effectiveEnvironmentId, workspaces],
+      scopedProjectId !== null
+        ? projectEntries.filter(({ project }) => project.id === scopedProjectId)
+        : // With an environment, only projects that have a location there.
+          projectEntries.filter(
+            ({ locations }) => locations.length > 0 || !scopedEnvironmentId,
+          ),
+    [projectEntries, scopedEnvironmentId, scopedProjectId],
   );
-  const creatableWorkspaces = useMemo(
-    () => workspaceOptions.filter((option) => option.available),
-    [workspaceOptions],
+  const creatableProjects = projectChoices.filter(
+    ({ creatable }) => creatable.length > 0,
   );
+  const selectedProject =
+    selectedProjectId === undefined
+      ? creatableProjects.length === 1
+        ? creatableProjects[0]
+        : undefined
+      : creatableProjects.find(
+          ({ project }) => project.id === selectedProjectId,
+        );
+  const locationOptions = selectedProject?.locations ?? [];
+  const creatableWorkspaces = selectedProject?.creatable ?? NO_LOCATIONS;
   const explicitlySelectedWorkspace = creatableWorkspaces.find(
     ({ id }) => id === selectedWorkspaceId,
   );
@@ -264,6 +350,24 @@ export function NewThreadControl({
         ? creatableWorkspaces[0]
         : undefined
       : undefined);
+  // Targets follow the location's environment. Before one is chosen, an
+  // environment every remaining choice shares lets the Target come first.
+  const locationEnvironmentIds = new Set(
+    creatableWorkspaces.map(({ environmentId }) => environmentId),
+  );
+  const effectiveEnvironmentId =
+    selectedWorkspace?.environmentId ??
+    scopedEnvironmentId ??
+    (selectedProject
+      ? locationEnvironmentIds.size === 1
+        ? [...locationEnvironmentIds][0]
+        : undefined
+      : creatableEnvironments.length === 1
+        ? creatableEnvironments[0]!.id
+        : undefined);
+  const effectiveEnvironment = environments.find(
+    ({ id }) => id === effectiveEnvironmentId,
+  );
   const eligibleTargets = useMemo(
     () =>
       effectiveEnvironmentId
@@ -299,15 +403,14 @@ export function NewThreadControl({
       : [];
   const needsTargetPicker =
     selectionScope.targetId === null && effectiveEnvironmentId !== undefined;
-  const needsWorkspacePicker =
-    (selectionScope.projectName === null ||
-      workspaceOptions.length > 1 ||
-      requiresWorkspaceReselection) &&
-    effectiveEnvironmentId !== undefined;
-  const needsEnvironmentPicker =
-    !scopedEnvironmentId &&
-    (creatableEnvironments.length > 1 ||
-      (selectedEnvironmentId !== undefined && !explicitlySelectedEnvironment));
+  // A project the scope fixes needs no picker, nor does its one location.
+  const needsProjectPicker = scopedProjectId === null;
+  const needsLocationPicker =
+    selectedProject !== undefined &&
+    (needsProjectPicker ||
+      locationOptions.length > 1 ||
+      requiresWorkspaceReselection ||
+      explicitWorkspaceBecameIneligible);
   const resolvedTargets = resolution?.candidates ?? [];
   const selectedResolvedTarget = resolvedTargets.find(
     ({ target }) => target.id === selectedTarget?.id,
@@ -328,9 +431,8 @@ export function NewThreadControl({
   const effectiveVariableCount = variablesSnapshot ? variableRows(Object.entries(variablesSnapshot.layers).map(([scope, values]) => ({ scope: scope as "environment" | "backend" | "agent" | "thread", values }))).filter(row => row.entry.kind !== "unset").length : 0;
   const canCreate = Boolean(
     variablesPreview.result &&
-    !pendingProject &&
+    !pendingLocation &&
     !scopeConflict &&
-    selectedEnvironment?.available &&
     selectedWorkspace?.available &&
     selectedTarget?.available &&
     selectedExecutionWorkspace &&
@@ -373,7 +475,7 @@ export function NewThreadControl({
   );
   const unavailableScopeMessage = (() => {
     if (scopeConflict) {
-      return "The selected Environment, Target, and Project do not belong to the same execution scope.";
+      return "The selected Environment and Target do not belong to the same execution scope.";
     }
     const requestedEnvironment = environments.find(
       ({ id }) => id === selectionScope.environmentId,
@@ -401,15 +503,20 @@ export function NewThreadControl({
         })} is unavailable.`
       );
     }
-    if (
-      selectionScope.projectName !== null &&
-      !workspaces.some(
-        (workspace) => workspace.label.text === selectionScope.projectName,
-      )
-    ) {
-      return "The selected Project is no longer remembered.";
+    return "No Target is available in this execution scope.";
+  })();
+  // Why the scoped project gave way, when the sidebar names one.
+  const scopedProjectNote = (() => {
+    if (!scopedProjectUnmatched || projectScopeReleased || !requestedProject) {
+      return undefined;
     }
-    return "No available Project and Target share this execution scope.";
+    const project = projectLocations.projectLabel(requestedProject.project.id);
+    const where = scopedEnvironment
+      ? ` on ${environmentDisplayLabel(scopedEnvironment, environments)}`
+      : "";
+    return requestedProject.locations.length === 0
+      ? `${project} has no location${where || "s"}.`
+      : `${project} has no available location${where}.`;
   })();
   const agentChoices = useMemo(
     () => ["custom", ...agents.map(({ id }) => id)],
@@ -429,10 +536,10 @@ export function NewThreadControl({
     templateSelectionGeneration.current += 1;
     agentRequest.current?.abort();
     resolutionRequest.current?.abort();
+    setSelectedProjectId(undefined);
     setSelectedWorkspaceId(undefined);
-    setSelectedEnvironmentId(undefined);
     setAddProjectOpen(false);
-    setPendingProject(undefined);
+    setPendingLocation(undefined);
     setProjectScopeReleased(false);
     setRequiresWorkspaceReselection(false);
     setRequiresTargetReselection(false);
@@ -458,14 +565,35 @@ export function NewThreadControl({
     setError("");
   };
 
+  // A location on another environment clears the Target and its Agent, as
+  // choosing another environment does; a still-compatible Target is kept.
+  const releaseTargetOutside = (environmentId: string) => {
+    const targetId = selectedTargetId ?? selectedTarget?.id;
+    const target = executionTargets.find(({ id }) => id === targetId);
+    if (!target || target.environmentId === environmentId) return;
+    setSelectedTargetId(undefined);
+    setRequiresTargetReselection(false);
+    setExecutionWorkspace(undefined);
+    setSelection({ kind: "custom" });
+    setSelectedAgentSummary(undefined);
+    setResolution(undefined);
+    setAgents([]);
+    setNextAgentCursor(undefined);
+    setAgentsLoaded(false);
+  };
+
   useEffect(() => {
-    if (!pendingProject || !workspaces.some(({ id }) => id === pendingProject.id)) return;
+    // A moved location is already listed; wait until it is in its new project.
+    const added = workspaces.find(({ id, projectId }) =>
+      id === pendingLocation?.id && projectId === pendingLocation.projectId);
+    if (!added || !projects.some(({ id }) => id === added.projectId)) return;
     setProjectScopeReleased(true);
-    setSelectedWorkspaceId(pendingProject.id);
-    setSelectedEnvironmentId(pendingProject.environmentId);
+    setSelectedProjectId(added.projectId);
+    setSelectedWorkspaceId(added.id);
     setRequiresWorkspaceReselection(false);
-    setPendingProject(undefined);
-  }, [pendingProject, workspaces]);
+    releaseTargetOutside(added.environmentId);
+    setPendingLocation(undefined);
+  }, [pendingLocation, projects, workspaces]);
 
   // Templates belong to the API's principal, not the currently selected
   // project. Once started, keep the catalog read across scope/picker changes.
@@ -517,7 +645,7 @@ export function NewThreadControl({
   }, [
     creationScope.environmentId,
     creationScope.targetId,
-    creationScope.projectName,
+    creationScope.projectId,
   ]);
 
   useEffect(() => {
@@ -528,19 +656,20 @@ export function NewThreadControl({
   }, [canOpen]);
 
   // Once a draft is open, retain even inferred destinations by identity so
-  // inventory changes cannot silently move it to another machine or directory.
+  // inventory changes cannot silently move it to another project, machine or
+  // directory.
   useEffect(() => {
     if (!pickerOpen) return;
-    if (selectedEnvironmentId === undefined && selectedEnvironment)
-      setSelectedEnvironmentId(selectedEnvironment.id);
+    if (selectedProjectId === undefined && selectedProject)
+      setSelectedProjectId(selectedProject.project.id);
     if (selectedWorkspaceId === undefined && selectedWorkspace)
       setSelectedWorkspaceId(selectedWorkspace.id);
     if (selectedTargetId === undefined && selectedTarget)
       setSelectedTargetId(selectedTarget.id);
   }, [
     pickerOpen,
-    selectedEnvironmentId,
-    selectedEnvironment,
+    selectedProjectId,
+    selectedProject,
     selectedWorkspaceId,
     selectedWorkspace,
     selectedTargetId,
@@ -713,6 +842,36 @@ export function NewThreadControl({
     );
   };
 
+  const chooseProject = (projectId: string) => {
+    if (projectId === selectedProject?.project.id) return;
+    const choice = projectChoices.find(({ project }) => project.id === projectId);
+    setSelectedProjectId(projectId);
+    setSelectedWorkspaceId(undefined);
+    setRequiresWorkspaceReselection(false);
+    setExecutionWorkspace(undefined);
+    setSelection({ kind: "custom" });
+    setSelectedAgentSummary(undefined);
+    setResolution(undefined);
+    setError("");
+    const environmentIds = new Set(
+      choice?.creatable.map(({ environmentId }) => environmentId),
+    );
+    if (environmentIds.size === 1) releaseTargetOutside([...environmentIds][0]!);
+  };
+
+  const chooseLocation = (workspaceId: string) => {
+    const workspace = creatableWorkspaces.find(({ id }) => id === workspaceId);
+    if (!workspace || workspace.id === selectedWorkspace?.id) return;
+    setSelectedWorkspaceId(workspace.id);
+    setRequiresWorkspaceReselection(false);
+    setExecutionWorkspace(undefined);
+    setSelection({ kind: "custom" });
+    setSelectedAgentSummary(undefined);
+    setResolution(undefined);
+    setError("");
+    releaseTargetOutside(workspace.environmentId);
+  };
+
   const applyManualDefaults = () => {
     templateSelectionGeneration.current += 1;
     const target = executionTargets.find(
@@ -720,7 +879,7 @@ export function NewThreadControl({
     );
     setSelectedTemplate(undefined);
     setEnvironmentVariables({});
-    setSelectedEnvironmentId(creationScope.environmentId ?? target?.environmentId);
+    setSelectedProjectId(undefined);
     setSelectedWorkspaceId(undefined);
     setSelectedTargetId(target?.available ? target.id : undefined);
     setExecutionWorkspace(undefined);
@@ -742,7 +901,7 @@ export function NewThreadControl({
     const workspace = workspaces.find(({ id }) => id === template.workspaceId);
     setSelectedTemplate(template);
     setEnvironmentVariables(template.environmentVariables ?? {});
-    setSelectedEnvironmentId(target?.environmentId ?? workspace?.environmentId);
+    setSelectedProjectId(workspace?.projectId);
     setSelectedWorkspaceId(workspace?.available ? workspace.id : undefined);
     setSelectedTargetId(target?.available ? target.id : undefined);
     setExecutionWorkspace(template.executionWorkspace);
@@ -1150,42 +1309,85 @@ export function NewThreadControl({
               }}
             />
             </Field>
-            {needsEnvironmentPicker && (
-              <Field label="Environment" id={`${pickerId}-environment`}>
+            {needsProjectPicker && (
+              <Field
+                label="Project"
+                id={`${pickerId}-project`}
+                description={scopedProjectNote}
+              >
                 <SearchableSelect
-                  label="Environment"
-                  searchLabel="Search environments"
-                  emptyLabel="No matching environments"
-                  value={selectedEnvironment?.id ?? ""}
-                  placeholder="Choose an environment"
+                  label="Project"
+                  searchLabel="Search projects"
+                  emptyLabel="No matching projects"
+                  value={selectedProject?.project.id ?? ""}
+                  placeholder="Choose a project"
                   disabled={pending}
                   triggerProps={{
-                    "data-environment-id": selectedEnvironment?.id ?? "",
+                    "data-project-id": selectedProject?.project.id ?? "",
                   }}
-                  options={creatableEnvironments.map((environment) => ({
-                    value: environment.id,
-                    label: environmentDisplayLabel(environment, environments),
-                    icon: <EnvironmentScopeIcon kind={environment.kind} />,
-                    searchTerms: [environment.kind],
+                  options={projectChoices.map(({ project, locations, unavailable }) => ({
+                    value: project.id,
+                    label: projectLocations.projectLabel(project.id) ?? project.name,
+                    icon: <Folder size={14} />,
+                    searchTerms: locations.flatMap(({ workspace }) => [
+                      workspace.label.text,
+                      workspace.displayPath.text,
+                      environments.find(({ id }) => id === workspace.environmentId)
+                        ?.label.text ?? "",
+                    ]),
+                    ...(unavailable ? { disabled: true, unavailable } : {}),
                   }))}
-                  onValueChange={(value) => {
-                    setSelectedEnvironmentId(value);
-                    setSelectedWorkspaceId(undefined);
-                    setRequiresWorkspaceReselection(false);
-                    setSelectedTargetId(undefined);
-                    setRequiresTargetReselection(false);
-                    setExecutionWorkspace(undefined);
-                    setSelection({ kind: "custom" });
-                    setSelectedAgentSummary(undefined);
-                    setResolution(undefined);
-                    setAgents([]);
-                    setNextAgentCursor(undefined);
-                    setAgentsLoaded(false);
-                    setError("");
-                  }}
+                  onValueChange={chooseProject}
                 />
               </Field>
             )}
+            {needsLocationPicker && (
+              <Field label="Location" id={`${pickerId}-location`}>
+                <SearchableSelect
+                  label="Location"
+                  searchLabel="Search locations"
+                  emptyLabel="No matching locations"
+                  value={selectedWorkspace?.id ?? ""}
+                  placeholder="Choose a location"
+                  disabled={pending}
+                  triggerProps={{
+                    "data-workspace-id": selectedWorkspace?.id ?? "",
+                  }}
+                  options={locationOptions.map(({ workspace, unavailable }) => {
+                    const environment = environments.find(
+                      ({ id }) => id === workspace.environmentId,
+                    );
+                    return {
+                      value: workspace.id,
+                      label:
+                        projectLocations.locationLabel(workspace.id) ??
+                        workspace.displayPath.text,
+                      icon: environment ? (
+                        <EnvironmentScopeIcon kind={environment.kind} />
+                      ) : (
+                        <Folder size={14} />
+                      ),
+                      searchTerms: [
+                        workspace.label.text,
+                        environment?.label.text ?? "",
+                      ],
+                      ...(unavailable ? { disabled: true, unavailable } : {}),
+                    };
+                  })}
+                  onValueChange={chooseLocation}
+                />
+              </Field>
+            )}
+            <Button type="button" size="sm" variant="outline" className="new-thread-add-project"
+              disabled={pending || Boolean(pendingLocation)} onClick={() => setAddProjectOpen(true)}>
+              <Plus size={14} /> {pendingLocation ? "Adding project…" : "Add project"}
+            </Button>
+            {addProjectOpen && <AddProjectDialog store={store} environments={environments}
+              projects={projects} workspaces={workspaces}
+              initialEnvironmentId={effectiveEnvironmentId}
+              environmentLocked={scopedEnvironmentId !== undefined}
+              onClose={() => setAddProjectOpen(false)}
+              onAdded={({ id, projectId }) => setPendingLocation({ id, projectId })} />}
             {needsTargetPicker && (
               <Field label="Target" id={`${pickerId}-target`}>
                 <SearchableSelect
@@ -1209,7 +1411,7 @@ export function NewThreadControl({
                     icon: <TargetScopeIcon brand={target.backend.brand} />,
                     searchTerms: [
                       target.backend.label.text,
-                      selectedEnvironment?.label.text ?? "",
+                      effectiveEnvironment?.label.text ?? "",
                     ],
                   }))}
                   onValueChange={(value) => {
@@ -1227,53 +1429,6 @@ export function NewThreadControl({
                 />
               </Field>
             )}
-            {needsWorkspacePicker && (
-              <Field label="Project" id={`${pickerId}-workspace`}>
-                <SearchableSelect
-                  label="Project"
-                  searchLabel="Search projects"
-                  emptyLabel="No matching projects"
-                  value={selectedWorkspace?.id ?? ""}
-                  placeholder="Choose a project"
-                  disabled={pending}
-                  triggerProps={{
-                    "data-workspace-id": selectedWorkspace?.id ?? "",
-                  }}
-                  options={creatableWorkspaces.map((workspace) => ({
-                    value: workspace.id,
-                    label: workspaceDisplayLabel({
-                      workspace,
-                      workspaces: creatableWorkspaces,
-                      environments,
-                      includeEnvironment: false,
-                    }),
-                    icon: <Folder size={14} />,
-                    searchTerms: [
-                      workspace.displayPath.text,
-                      selectedEnvironment?.label.text ?? "",
-                    ],
-                  }))}
-                  onValueChange={(value) => {
-                    setSelectedWorkspaceId(value);
-                    setRequiresWorkspaceReselection(false);
-                    setExecutionWorkspace(undefined);
-                    setSelection({ kind: "custom" });
-                    setSelectedAgentSummary(undefined);
-                    setResolution(undefined);
-                    setError("");
-                  }}
-                />
-              </Field>
-            )}
-            <Button type="button" size="sm" variant="outline" className="new-thread-add-project"
-              disabled={pending || Boolean(pendingProject)} onClick={() => setAddProjectOpen(true)}>
-              <Plus size={14} /> {pendingProject ? "Adding project…" : "Add project"}
-            </Button>
-            {addProjectOpen && <AddProjectDialog store={store} environments={environments}
-              initialEnvironmentId={effectiveEnvironmentId}
-              environmentLocked={effectiveEnvironmentId !== undefined}
-              onClose={() => setAddProjectOpen(false)}
-              onAdded={(id, environmentId) => setPendingProject({ id, environmentId })} />}
             {selectedTarget?.workspaceExecution.kind === "selectable" && (
               <>
                 <Field label="Workspace execution" id={`${pickerId}-workspace-execution`}>
@@ -1382,7 +1537,7 @@ export function NewThreadControl({
                   <span className="searchable-select-value">
                     {selection.kind === "custom" ? "Custom" : selectedAgentSummary?.name ??
                       (templateAgentMissing && selectedTemplate ? `${selectedTemplate.capturedAgentName} (deleted)` :
-                        !selectedTarget || !selectedWorkspace ? "Choose Target and Project first" :
+                        !selectedTarget || !selectedWorkspace ? "Choose Project, Location and Target first" :
                           agentsLoading ? "Loading Agents…" : "Choose an Agent")}
                   </span>
                   <ChevronDown size={14} aria-hidden="true" />
@@ -1626,8 +1781,8 @@ export function NewThreadControl({
                     </strong>
                     {templateNeedsAttention && (
                       <small>
-                        Choose an available Project, Target, and saved Agent,
-                        then update the template.
+                        Choose an available Project, Location, Target, and
+                        saved Agent, then update the template.
                       </small>
                     )}
                   </div>
@@ -1826,7 +1981,7 @@ export function NewThreadControl({
         </DialogContent>
       )}
       {variablesOpen && variablesSnapshot && <EnvironmentVariablesDialog open onOpenChange={setVariablesOpen} snapshot={variablesSnapshot}
-        description="Review values before creating this thread." context={<p className="environment-variable-help">{selectedEnvironment?.label.text} · {selectedTarget?.label.text} · {selectedAgentSummary?.name ?? "Custom"}</p>}
+        description="Review values before creating this thread." context={<p className="environment-variable-help">{effectiveEnvironment?.label.text} · {selectedTarget?.label.text} · {selectedAgentSummary?.name ?? "Custom"}</p>}
         startupReason={variablesPreview.result?.startup.reason} returnFocusRef={variablesTrigger}
         onApply={next => { setEnvironmentVariables(next); setVariablesOpen(false); }} />}
       {!canOpen && (

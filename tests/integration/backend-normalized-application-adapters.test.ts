@@ -2034,8 +2034,9 @@ describe("backend-normalized application adapters", () => {
       const prepare = vi.spyOn(current.database, "prepare");
       const snapshot = await application.capture(current.scope);
 
-      // One additional bounded read captures fork-selector saturation.
-      expect(prepare).toHaveBeenCalledTimes(5);
+      // Additional bounded reads capture active projects and fork-selector
+      // saturation.
+      expect(prepare).toHaveBeenCalledTimes(6);
       expect(captureLoadedState).toHaveBeenCalledTimes(50);
       expect(snapshot.threads).toHaveLength(50);
       expect(snapshot.counts).toEqual({

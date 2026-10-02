@@ -61,7 +61,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
     expect(pending).toMatchObject({ state: "pending", connected: true });
     expect((await fixture.configuration()).configuration.executionEnvironments).toHaveLength(0);
     expect(await lstat(path.join(fixture.hostHome, ".local/state/sedes/sidecar")).catch(() => undefined)).toBeUndefined();
-    const forbidden = await fixture.request("/api/workspaces/open", "POST", { path: fixture.workspace, environmentId: pending.connectorId });
+    const forbidden = await fixture.request("/api/workspaces/open", "POST", { path: fixture.workspace, environmentId: pending.connectorId, project: { kind: "new", name: "workspace" } });
     expect(forbidden.status).not.toBe(200);
     expect(await rejectUnissuedRuntime(fixture.url, identity.credential)).toBe(true);
 
@@ -77,7 +77,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
     await fixture.readBinding();
     const original = await fixture.serviceStatus();
     expect(original?.state).toBe("ready");
-    const workspace = await fixture.json("/api/workspaces/open", "POST", { path: fixture.workspace, environmentId: fixture.environmentId }) as { id: string };
+    const workspace = await fixture.json("/api/workspaces/open", "POST", { path: fixture.workspace, environmentId: fixture.environmentId, project: { kind: "new", name: "workspace" } }) as { id: string };
     const fileUrl = `/api/workspaces/${workspace.id}/files`;
     const listed = workspaceFileListResultSchema.parse(await fixture.json(`${fileUrl}?rootId=primary`));
     expect(JSON.stringify(listed)).toContain("example.txt");
@@ -218,7 +218,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")("
     await fixture.waitFor(async () => (await fixture.snapshot()).environments.some(environment => environment.id === fixture.environmentId && environment.available));
     const original = await fixture.serviceStatus();
     const targetId = await fixture.addClaudeBackend();
-    const workspace = await fixture.json("/api/workspaces/open", "POST", { path: fixture.workspace, environmentId: fixture.environmentId }) as { id: string };
+    const workspace = await fixture.json("/api/workspaces/open", "POST", { path: fixture.workspace, environmentId: fixture.environmentId, project: { kind: "new", name: "workspace" } }) as { id: string };
     const created = await fixture.json("/api/threads", "POST", { workspaceId: workspace.id, title: "Outbound Claude permission", executionWorkspace: { kind: "direct" }, configuration: { kind: "custom", targetId } }) as { threadId: string };
     let snapshot = await fixture.thread(created.threadId);
     expect(snapshot.thread.targetId).toBe(targetId);

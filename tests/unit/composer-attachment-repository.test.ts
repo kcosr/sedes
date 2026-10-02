@@ -28,6 +28,7 @@ function fixture() {
   const workspace = inventory.upsertWorkspace(current.scope, {
     id: "0198aa10-0000-7000-8000-000000000003", environmentId: environment.id,
     canonicalPath: "/tmp/attachment-query-workspace", displayName: "Attachment query",
+    project: { kind: "new", name: "Attachment query" },
     available: true, trustState: "trusted", environmentConfigurationRevision: 0, now: 200,
   });
   new ConversationBindingRepository(current.database).createUnboundThread(current.scope, {

@@ -144,7 +144,10 @@ export class ApplicationSnapshotService {
 
   async capture(scope: RequestScope): Promise<NormalizedApplicationSnapshot> {
     const environments = this.inventory.listEnvironments(scope);
+    // Read in one synchronous turn: an active location always belongs to an
+    // active project, so these two reads agree.
     const workspaces = this.inventory.listWorkspaces(scope);
+    const projects = this.inventory.listActiveProjects(scope);
     const saturation = new Map(
       environments.map(({ id }) => [
         id,
@@ -245,9 +248,15 @@ export class ApplicationSnapshotService {
           this.directoryBrowsingAvailability(scope, environment.id),
         ),
       ),
+      projects: projects.map((project) => ({
+        id: project.id,
+        name: project.name,
+        revision: project.revision,
+      })),
       workspaces: workspaces.map((workspace) => ({
         id: workspace.id,
         environmentId: workspace.environmentId,
+        projectId: workspace.projectId,
         label: boundDisplayText(workspace.displayName),
         displayPath: boundDisplayText(workspace.canonicalPath),
         available: workspace.availability === "available",

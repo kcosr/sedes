@@ -86,10 +86,12 @@ function fixture(): Snapshot {
         directoryBrowsing: "available",
       },
     ],
+    projects: [{ id: "project-1", name: "Project", revision: 0 }],
     workspaces: [
       {
         id: base.workspaceId,
         environmentId: "environment",
+        projectId: "project-1",
         label: { text: "Synthetic" },
         displayPath: { text: "/synthetic" },
         available: true,

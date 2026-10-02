@@ -51,6 +51,7 @@ function fixture() {
     environmentId: environment.id,
     canonicalPath: "/tmp/principal-agent-tool-client",
     displayName: "Principal client",
+    project: { kind: "new", name: "Principal client" },
     available: true,
     trustState: "trusted",
     environmentConfigurationRevision: environment.configurationRevision,
@@ -95,6 +96,7 @@ function fixture() {
   const management = unavailableDomainService<AgentManagementService>();
   const canonical = new CanonicalInlineAgentToolService({
     application: {
+      readWorkspaceProjectId: async () => workspace.projectId,
       readThreadStatus: async (_scope, threadId) =>
         threadId === thread.id
           ? {
@@ -293,7 +295,7 @@ describe("principal agent-tool client persistence and admission", () => {
       expect(() =>
         value.service().admitInvocation(created.credential, {
           toolId: "workspace.list",
-          schemaVersion: 4,
+          schemaVersion: 5,
           requestId: "other-environment",
           input: {
             scope: { kind: "environment", environmentId: remoteEnvironmentId },
@@ -808,6 +810,7 @@ describe("principal agent-tool client persistence and admission", () => {
         environmentId: value.environment.id,
         canonicalPath: "/tmp/principal-agent-tool-client-alternate",
         displayName: "Alternate principal client",
+        project: { kind: "new", name: "Alternate principal client" },
         available: true,
         trustState: "trusted",
         environmentConfigurationRevision:
@@ -860,6 +863,42 @@ describe("principal agent-tool client persistence and admission", () => {
           input: {},
         }),
       ).toThrowError(expect.objectContaining({ code: "not_found" }));
+    } finally {
+      value.database.close();
+    }
+  });
+
+  it("treats a removed default workspace as unavailable", () => {
+    const value = fixture();
+    try {
+      const created = createClient(value, { toolIds: ["thread.status", "thread.list"] });
+      const inventory = new InventoryRepository(value.database);
+      inventory.removeWorkspace(value.scope, value.workspace.id, {
+        expectedRevision: inventory.getWorkspace(value.scope, value.workspace.id).revision,
+        expectedThreadIds: inventory.listThreadIdsForWorkspace(value.scope, value.workspace.id),
+        now: 200,
+      });
+      expect(value.service().get(value.scope, created.client.id)).toMatchObject({
+        availability: "needs_attention",
+        defaultWorkspaceAvailable: false,
+      });
+      expect(() =>
+        value.service().admitInvocation(created.credential, {
+          toolId: "thread.list",
+          schemaVersion: 5,
+          requestId: "principal-client-removed-default-workspace",
+          input: { scope: { kind: "default_workspace" } },
+        }),
+      ).toThrowError(expect.objectContaining({ code: "not_found" }));
+      expect(() =>
+        value.service().replaceForManagement(value.scope, created.client.id, replacement(created.client)),
+      ).toThrowError(expect.objectContaining({
+        code: "invalid_transition",
+        message: "The default workspace is unavailable.",
+      }));
+      expect(() => createClient(value)).toThrowError(
+        expect.objectContaining({ message: "The default workspace is unavailable." }),
+      );
     } finally {
       value.database.close();
     }

@@ -687,7 +687,7 @@ describe("wake indicator", () => {
         showBackendBrand
         thread={makeThread({ attention: attention({ wake: true }) })}
         density="card"
-        workspaceLabel="sedes"
+        projectLabel="sedes"
       />,
     );
     expect(indicatorsOf(container)).toEqual(["wake"]);
@@ -904,7 +904,7 @@ describe("compact vs card structure", () => {
         showBackendBrand
         thread={makeThread()}
         density="compact"
-        workspaceLabel="Sedes"
+        projectLabel="Sedes"
       />,
     );
     const row = screen.getByTestId("flat-thread-row");
@@ -919,7 +919,7 @@ describe("compact vs card structure", () => {
         showBackendBrand
         thread={makeThread()}
         density="card"
-        workspaceLabel="Sedes"
+        projectLabel="Sedes"
       />,
     );
     expect(screen.getByTestId("flat-thread-row")).toHaveAttribute(
@@ -940,7 +940,7 @@ describe("compact vs card structure", () => {
         showBackendBrand
         thread={makeThread()}
         density="card"
-        workspaceLabel="agent-workspaces"
+        projectLabel="agent-workspaces"
         environmentLabel="aw-rocky8-sip"
         targetLabel="Codex SSH"
         showProjectLabel
@@ -959,7 +959,7 @@ describe("compact vs card structure", () => {
         showBackendBrand
         thread={makeThread()}
         density="card"
-        workspaceLabel="agent-workspaces"
+        projectLabel="agent-workspaces"
         environmentLabel="aw-rocky8-sip"
         targetLabel="Codex SSH"
         showProjectLabel={false}
@@ -970,13 +970,59 @@ describe("compact vs card structure", () => {
     expect(screen.queryByTestId("flat-row-location")).toBeNull();
   });
 
+  it("keeps a card's folder when Scope or a stack implies the project", () => {
+    render(
+      <FlatThreadRow
+        showBackendBrand
+        thread={makeThread()}
+        density="card"
+        projectLabel="sedes › sedes-context"
+        folderLabel="sedes-context"
+        showProjectLabel={false}
+      />,
+    );
+    expect(screen.queryByTestId("flat-row-project")).toBeNull();
+    expect(screen.getByTestId("flat-row-folder")).toHaveTextContent(
+      /^sedes-context$/u,
+    );
+    expect(screen.getByTestId("flat-row-location")).toBeVisible();
+    cleanup();
+
+    // The project label already carries the folder.
+    render(
+      <FlatThreadRow
+        showBackendBrand
+        thread={makeThread()}
+        density="card"
+        projectLabel="sedes › sedes-context"
+        folderLabel="sedes-context"
+      />,
+    );
+    expect(screen.getByTestId("flat-row-project")).toHaveTextContent(
+      "sedes › sedes-context",
+    );
+    expect(screen.queryByTestId("flat-row-folder")).toBeNull();
+    cleanup();
+
+    render(
+      <FlatThreadRow
+        showBackendBrand
+        thread={makeThread()}
+        density="compact"
+        folderLabel="sedes-context"
+        showProjectLabel={false}
+      />,
+    );
+    expect(screen.queryByTestId("flat-row-folder")).toBeNull();
+  });
+
   it("hides the project label when suppressed or unlabeled", () => {
     render(
       <FlatThreadRow
         showBackendBrand
         thread={makeThread()}
         density="compact"
-        workspaceLabel="Sedes"
+        projectLabel="Sedes"
         showProjectLabel={false}
       />,
     );
@@ -1198,7 +1244,7 @@ describe("project name filtering", () => {
     const onSelect = vi.fn();
     const onProjectSelect = vi.fn();
     const props = { thread: makeThread(), density: "card" as const,
-      showBackendBrand: true, workspaceLabel: "Sedes", onSelect, onProjectSelect };
+      showBackendBrand: true, projectLabel: "Sedes", onSelect, onProjectSelect };
     const { rerender, container } = render(<FlatThreadRow {...props} />);
     expect(screen.queryByRole("button", { name: "Filter threads by project Sedes" })).toBeNull();
     rerender(<FlatThreadRow {...props} clickNamesToFilter />);
@@ -1222,7 +1268,7 @@ describe("environment name filtering", () => {
     const onEnvironmentSelect = vi.fn();
     const props = {
       thread: makeThread(), density: "card" as const, showBackendBrand: true,
-      workspaceLabel: "Sedes", environmentLabel: "AW personal", showEnvironmentLabel: true,
+      projectLabel: "Sedes", environmentLabel: "AW personal", showEnvironmentLabel: true,
       showProjectLabel, onSelect, onProjectSelect, onEnvironmentSelect,
     };
     const { rerender, container } = render(<FlatThreadRow {...props} />);

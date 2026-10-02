@@ -106,10 +106,12 @@ describe("normalized application components", () => {
           directoryBrowsing: "unavailable" as const,
         },
       ],
+      projects: [{ id: "project-1", name: "Sedes", revision: 0 }],
       workspaces: [
         {
           id: "workspace-1",
           environmentId: "environment-1",
+          projectId: "project-1",
           label: { text: "Sedes" },
           displayPath: { text: "/workspace/sedes" },
           available: true as const,
@@ -293,10 +295,15 @@ describe("normalized application components", () => {
           directoryBrowsing: "unavailable" as const,
         },
       ],
+      projects: [
+        { id: "project-a", name: "A", revision: 0 },
+        { id: "project-b", name: "B", revision: 0 },
+      ],
       workspaces: [
         {
           id: "workspace-a",
           environmentId: "environment-1",
+          projectId: "project-a",
           label: { text: "A" },
           displayPath: { text: "/a" },
           available: true,
@@ -304,6 +311,7 @@ describe("normalized application components", () => {
         {
           id: "workspace-b",
           environmentId: "environment-1",
+          projectId: "project-b",
           label: { text: "B" },
           displayPath: { text: "/b" },
           available: true,
@@ -420,10 +428,12 @@ describe("normalized application components", () => {
           directoryBrowsing: "unavailable" as const,
         },
       ],
+      projects: [{ id: "project-1", name: "Project", revision: 0 }],
       workspaces: [
         {
           id: "workspace-1",
           environmentId: "environment-1",
+          projectId: "project-1",
           label: { text: "Sedes" },
           displayPath: { text: "/workspace/sedes" },
           available: true,
@@ -591,10 +601,12 @@ describe("normalized application components", () => {
           directoryBrowsing: "unavailable" as const,
         },
       ],
+      projects: [{ id: "project-1", name: "Project", revision: 0 }],
       workspaces: [
         {
           id: "workspace-1",
           environmentId: "environment-1",
+          projectId: "project-1",
           label: { text: "Sedes" },
           displayPath: { text: "/workspace/sedes" },
           available: true,
@@ -666,10 +678,12 @@ describe("normalized application components", () => {
           directoryBrowsing: "unavailable" as const,
         },
       ],
+      projects: [{ id: "project-1", name: "Project", revision: 0 }],
       workspaces: [
         {
           id: "workspace-1",
           environmentId: "environment-1",
+          projectId: "project-1",
           label: { text: "Sedes" },
           displayPath: { text: "/workspace/sedes" },
           available: true,
@@ -739,10 +753,12 @@ describe("normalized application components", () => {
           directoryBrowsing: "unavailable" as const,
         },
       ],
+      projects: [{ id: "project-1", name: "Project", revision: 0 }],
       workspaces: [
         {
           id: "workspace-1",
           environmentId: "environment-1",
+          projectId: "project-1",
           label: { text: "Sedes" },
           displayPath: { text: "/workspace/sedes" },
           available: true,
@@ -875,10 +891,12 @@ describe("normalized application components", () => {
           directoryBrowsing: "unavailable" as const,
         },
       ],
+      projects: [{ id: "project-1", name: "Project", revision: 0 }],
       workspaces: [
         {
           id: "workspace-1",
           environmentId: "environment-1",
+          projectId: "project-1",
           label: { text: "Sedes" },
           displayPath: { text: "/workspace/sedes" },
           available: true,
@@ -1021,10 +1039,12 @@ function sidebarElement(runState: "running" | "waiting_for_input") {
         directoryBrowsing: "unavailable" as const,
       },
     ],
+    projects: [{ id: "project-1", name: "Project", revision: 0 }],
     workspaces: [
       {
         id: "workspace-1",
         environmentId: "environment-1",
+        projectId: "project-1",
         label: { text: "Sedes" },
         displayPath: { text: "/workspace/sedes" },
         available: true,

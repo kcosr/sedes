@@ -13,6 +13,7 @@ import {
   MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES,
   requireSerializedByteLimit,
 } from "./payload.js";
+import { projectNameSchema } from "./domain.js";
 import { associatedTaskSchema } from "./tasks.js";
 import {
   normalizedThreadGroupSchema,
@@ -374,9 +375,20 @@ function requireUniqueIds(
   }
 }
 
+/** An active project; its locations are the workspaces that reference it. */
+export const normalizedProjectSummarySchema = z.strictObject({
+  id: applicationEntityIdSchema,
+  name: projectNameSchema,
+  revision: safeInventoryCountSchema,
+});
+export type NormalizedProjectSummary = z.infer<
+  typeof normalizedProjectSummarySchema
+>;
+
 export const normalizedApplicationSnapshotSchema = z
   .strictObject({
     environments: z.array(normalizedEnvironmentSummarySchema).max(256),
+    projects: z.array(normalizedProjectSummarySchema).max(10_000),
     workspaces: z.array(normalizedWorkspaceSummarySchema).max(10_000),
     threads: z.array(normalizedApplicationThreadSummarySchema).max(10_000),
     groups: z.array(normalizedThreadGroupSchema).max(10_000),
@@ -403,6 +415,7 @@ export const normalizedApplicationSnapshotSchema = z
       "Normalized application snapshot exceeds the serialized byte limit.",
     );
     requireUniqueIds(snapshot.environments, context, "environments");
+    requireUniqueIds(snapshot.projects, context, "projects");
     requireUniqueIds(snapshot.workspaces, context, "workspaces");
     requireUniqueIds(snapshot.threads, context, "threads");
     requireUniqueIds(snapshot.groups, context, "groups");
@@ -412,12 +425,20 @@ export const normalizedApplicationSnapshotSchema = z
     const environmentIds = new Set(
       snapshot.environments.map((environment) => environment.id),
     );
+    const projectIds = new Set(snapshot.projects.map(({ id }) => id));
     for (let index = 0; index < snapshot.workspaces.length; index += 1) {
       if (!environmentIds.has(snapshot.workspaces[index]!.environmentId)) {
         context.addIssue({
           code: "custom",
           message: "Workspace references an unknown environment.",
           path: ["workspaces", index, "environmentId"],
+        });
+      }
+      if (!projectIds.has(snapshot.workspaces[index]!.projectId)) {
+        context.addIssue({
+          code: "custom",
+          message: "Workspace references an unknown project.",
+          path: ["workspaces", index, "projectId"],
         });
       }
     }
@@ -751,7 +772,7 @@ export type ApplicationEventEnvelope = z.infer<
   typeof applicationEventEnvelopeSchema
 >;
 
-export const SEDES_CLIENT_PROTOCOL_VERSION = 132 as const;
+export const SEDES_CLIENT_PROTOCOL_VERSION = 133 as const;
 
 export const normalizedApplicationSessionSchema = z.strictObject({
   clientProtocolVersion: z.literal(SEDES_CLIENT_PROTOCOL_VERSION),

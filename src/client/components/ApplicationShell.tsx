@@ -62,6 +62,8 @@ import {
   ElectronConnectionRecovery,
   type ElectronConnectionSettingsControls,
 } from "./ElectronConnectionSettings.js";
+import type { ToolClientSettingsResources } from "./tool-clients/ToolClientsSettingsPage.js";
+import { describeProjectLocations } from "../app/project-locations.js";
 
 export function ApplicationShell({
   state,
@@ -136,21 +138,7 @@ export function ApplicationShell({
     () => ({
       api: applicationStore.api,
       endpoint: toolClientEndpoint,
-      resources: {
-        workspaces: (state.snapshot?.workspaces ?? []).map((workspace) => ({
-          id: workspace.id,
-          environmentId: workspace.environmentId,
-          label: workspace.label.text,
-          available: workspace.available,
-        })),
-        threads: (state.snapshot?.threads ?? []).map((thread) => ({
-          id: thread.id,
-          workspaceId: thread.workspaceId,
-          title: thread.title.text,
-          available: thread.available,
-          archived: thread.inventoryState === "archived",
-        })),
-      },
+      resources: toolClientResources(state.snapshot),
     }),
     [applicationStore, state.snapshot, toolClientEndpoint],
   );
@@ -500,6 +488,35 @@ export function ApplicationShell({
       </div>
     </TaskDragProvider>
   );
+}
+
+/**
+ * Tool client default choices. A location reads "Project · path": the
+ * choices are limited to the client's default environment, so the path
+ * tells them apart.
+ */
+export function toolClientResources(
+  snapshot: ApplicationClientState["snapshot"],
+): ToolClientSettingsResources {
+  if (!snapshot) return { workspaces: [], threads: [] };
+  const projectLocations = describeProjectLocations(snapshot);
+  return {
+    workspaces: snapshot.workspaces.map((workspace) => ({
+      id: workspace.id,
+      environmentId: workspace.environmentId,
+      label:
+        projectLocations.projectPathLabel(workspace.id) ??
+        workspace.displayPath.text,
+      available: workspace.available,
+    })),
+    threads: snapshot.threads.map((thread) => ({
+      id: thread.id,
+      workspaceId: thread.workspaceId,
+      title: thread.title.text,
+      available: thread.available,
+      archived: thread.inventoryState === "archived",
+    })),
+  };
 }
 
 export function openThreadChatPanel(

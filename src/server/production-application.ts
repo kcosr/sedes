@@ -237,7 +237,8 @@ import {
 import { ProductionManagedTerminalAuthority } from "./terminal/production-managed-terminal-authority.js";
 import { TerminalRepository } from "./terminals/terminal-repository.js";
 import { TerminalJournalStore } from "./terminals/terminal-journal.js";
-import { TerminalService, TerminalServiceError } from "./terminals/terminal-service.js";
+import { TerminalService } from "./terminals/terminal-service.js";
+import { TerminalServiceError } from "./terminals/terminal-service-error.js";
 import {
   TerminalAdmissionTokens,
   attachTerminalCarrier,

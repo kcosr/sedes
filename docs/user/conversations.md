@@ -92,20 +92,24 @@ opens beside the sidebar; on mobile it opens as a bottom sheet.
 
 1. Optionally choose a thread template.
 2. Choose the project where the agent should work.
-3. Choose a saved Agent or **Custom**.
-4. Choose a target when more than one compatible target is available.
-5. Review the model and other settings, enter a title, and create the thread.
+3. Choose its location: the environment and directory. A project with one
+   available location selects it for you.
+4. Choose a target on that location's environment when more than one is
+   available.
+5. Choose a saved Agent or **Custom**.
+6. Review the model and other settings, enter a title, and create the thread.
 
-Template, Environment, Target, and Project dropdowns let you search the
-available choices. Typing only filters the list; choose a result to apply it.
+Template, Project, Location, and Target dropdowns let you search the available
+choices. Typing only filters the list; choose a result to apply it.
 **Configure manually** stays available in the template dropdown while searching.
 Use Up/Down and Enter to select, or Escape to close the list and keep the form.
+A project whose locations are all unavailable is listed but cannot be chosen;
+its entry says why.
 
-A sidebar project-name filter can match projects on several machines. In that
-case, choose an Environment before choosing the concrete project directory.
-The matching project is preselected when only one is available there; when
-several directories have the same name, their paths distinguish the choices.
-An Environment or Target already selected in Scope constrains the destination.
+The sidebar Scope prefills the form. A scoped project is preselected, and an
+Environment or Target already selected in Scope limits the locations and
+targets offered. When the scoped project has no location there, choose another
+project.
 
 The result is a durable draft. Sedes has not created a provider conversation
 yet. You can navigate away, refresh, or restart Sedes without losing the

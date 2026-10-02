@@ -142,6 +142,7 @@ describe("automation CLI thread requests", () => {
         return Response.json({
           advisories: [],
           environments: [],
+          projects: [{ id: "project-1", name: "Project", revision: 0 }],
           workspaces: [],
           threads: [],
           forkOrigins: [],

@@ -35,7 +35,7 @@ describe("LateBoundBackendAgentToolFacade", () => {
         adapter: "pi_sdk",
         request: {
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "request-1",
           input: {},
         },
@@ -88,7 +88,7 @@ describe("LateBoundBackendAgentToolFacade", () => {
         adapter: "pi_sdk",
         request: {
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "request-1",
           input: {},
         },
@@ -105,7 +105,7 @@ describe("LateBoundBackendAgentToolFacade", () => {
         adapter: "pi_sdk",
         request: {
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "request-2",
           input: {},
         },

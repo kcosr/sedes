@@ -75,7 +75,7 @@ describe("agent-tool CLI Unix socket ingress", () => {
       relay: relay((request, signal) => relayAgentToolCliRequest(attachment, request, signal, capture)) });
     try {
       const request: AgentToolCliRequest = { ...listRequest(), operation: { type: "invoke", request: {
-        toolId: "agent.context", schemaVersion: 2, requestId: "955ca2ac-254e-45bc-b231-5bd438c460b6", input: {},
+        toolId: "agent.context", schemaVersion: 3, requestId: "955ca2ac-254e-45bc-b231-5bd438c460b6", input: {},
       } } };
       await expect(call(ingress.socketPath, request)).resolves.toMatchObject({ requestId: request.requestId, error: { code, retryable } });
       expect(capture).toHaveBeenCalledExactlyOnceWith(request.sourceCapability);
@@ -270,7 +270,7 @@ describe("agent-tool CLI Unix socket ingress", () => {
         type: "invoke",
         request: {
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "invocation-request",
           input: {},
         },

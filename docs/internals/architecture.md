@@ -75,11 +75,12 @@ The first design question for any state or operation is who owns it.
 | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | Listener, backend configuration, workspace roots, network boundary                                                      | Installation operator                                                                   |
 | Tenant and principal identity                                                                                           | Server-side identity provider                                                           |
-| Projects, thread inventory, drafts, stashes, prompts, tasks, automations, saved Agents, queues, receipts, and lineage   | Sedes application state, scoped to tenant and principal                                 |
+| Projects and their locations (workspaces): names, membership, and removal                                               | Sedes application state, scoped to tenant and principal                                 |
+| Thread inventory, drafts, stashes, prompts, tasks, automations, saved Agents, queues, receipts, and lineage             | Sedes application state, scoped to tenant and principal                                 |
 | Thread target and provider binding                                                                                      | Sedes application state; target is immutable after thread creation                      |
 | Provider output artifact metadata and immutable retained bytes                                                          | Sedes application state, scoped to tenant, principal, and thread                        |
 | Native conversation identity, transcript, provider settings/events, and provider process or endpoint                    | Backend/provider                                                                        |
-| Workspace paths and operations                                                                                          | Selected execution environment                                                          |
+| Location (workspace) directory paths and operations                                                                     | Selected execution environment                                                          |
 | Terminal metadata, ordered history, lifecycle, admissions, and controller lease                                         | Sedes application state, scoped to tenant, principal, thread, and execution environment |
 | Normalized IDs, ordering, revisions, pagination, capabilities, and interaction IDs                                      | Sedes server                                                                            |
 | Pane instances and layout, density, filters, expansion, scroll position, visible stack membership, and other view state | Browser presentation                                                                    |
@@ -114,6 +115,9 @@ These identities are intentionally distinct:
 - backend instance, which owns operator configuration and model policy;
 - target, which selects a backend instance, execution environment, and defaults;
 - execution environment, which defines path, process, and operation authority;
+- project, which groups locations under one principal-owned, renamable name;
+- workspace, shown as a **location**, which is one canonical directory on one
+  execution environment and belongs to exactly one project;
 - Sedes thread, which owns application overlays and an immutable target;
 - provider-native conversation, session, turn, message, call, or cursor;
 - normalized turn and item IDs, which are browser-facing identities; and
@@ -123,6 +127,39 @@ A provider-native conversation ID is unique only within its backend instance
 and execution-environment scope. Native identifiers and cursors stay inside
 the backend. They are never browser mutation authority and are persisted only
 through backend-owned binding adapters.
+
+### Projects and locations
+
+A workspace is unique per tenant by execution environment and canonical path.
+Its random ID survives removal, restore, and moves between projects, and
+everything keyed by it (threads, Tasks and Workpads scoped to it or its
+threads, drafts, file roots, diff reviews, templates, usage attribution, and
+Tool client defaults) follows it unchanged, because a move rewrites only its
+project reference. Its display name is the directory's basename and is never
+identity.
+
+A project has its own random ID, never reused from a workspace, and a name of
+1 to 240 characters that is editable, independent of any directory, and not
+unique. `revision` advances on every change to the project, membership
+included; `membershipRevision` advances only when a location is added,
+removed, restored, or moved, and removal and merge check it. Equal project or directory names
+never establish shared identity: only `workspaces.project_id` places locations
+in one project, and same-named projects stay separate until a user merges
+them. A project may be empty; it stays active and listed.
+
+Membership is a database invariant. Every workspace references exactly one
+project through a non-null composite foreign key, and an active workspace never
+belongs to a removed project. Commit-time triggers abort inserting,
+reactivating, or moving an active workspace into a removed project, and abort
+removing a project while any of its workspaces is active. Per-workspace
+`removed_at` checks therefore remain sufficient for admission without joining
+projects. The application snapshot carries only active projects, including
+empty ones, and every snapshot workspace carries its `projectId`, which must
+name a listed project.
+
+A project is a grouping and lifecycle unit, not an authority boundary. Agent
+and Tool client access remain workspace- and environment-based, and backends
+receive exact workspace and target IDs, never a project.
 
 ## Backend boundary
 

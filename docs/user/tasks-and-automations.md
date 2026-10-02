@@ -24,6 +24,11 @@ Choose scope by where you expect to find the work later:
 | **Project** | Work shared by several threads in one project |
 | **Thread** | Follow-up owned by one conversation |
 
+A Project Task currently belongs to one
+[location](concepts.md#project-and-location) of its project: the directory
+where it was created. Threads in the project's other locations don't list it,
+and it moves with its location when you move that location to another project.
+
 Complete a Task when the work is done. Completion does not send a provider
 message or settle its thread.
 

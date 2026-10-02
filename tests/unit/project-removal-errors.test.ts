@@ -2,13 +2,16 @@ import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { projectRemovalAdmissionError } from "../../src/server/db/project-removal-errors.js";
 import { projectRemovalMigration } from "../../src/server/db/migrations/099-project-removal.js";
+import { projectsAndLocationsMigration } from "../../src/server/db/migrations/126-projects-and-locations.js";
 import { projectApiError } from "../../src/server/http/errors.js";
 
 describe("project removal admission errors", () => {
-  const messages = [...new Set([...projectRemovalMigration.sql.matchAll(/RAISE\(ABORT, '([^']+)'\)/gu)].map(match => match[1]!))];
+  const raised = (sql: string) => [...new Set([...sql.matchAll(/RAISE\(ABORT, '([^']+)'\)/gu)].map(match => match[1]!))];
+  const messages = [...raised(projectRemovalMigration.sql), ...raised(projectsAndLocationsMigration.sql)];
 
   it("covers the bounded migration diagnostics", () => {
-    expect(messages).toHaveLength(5);
+    expect(raised(projectRemovalMigration.sql)).toHaveLength(5);
+    expect(raised(projectsAndLocationsMigration.sql)).toHaveLength(2);
   });
 
   it.each(messages)("projects the actual trigger rejection: %s", message => {

@@ -18,6 +18,7 @@ const applicationSession = {
 const applicationSnapshot = {
   advisories: [],
   environments: [],
+  projects: [{ id: "project-1", name: "Project", revision: 0 }],
   workspaces: [],
   executionTargets: [],
   defaultNewThreadTargetId: null,

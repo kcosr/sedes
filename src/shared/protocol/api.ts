@@ -294,11 +294,6 @@ export const automationRunRouteParametersSchema = z.strictObject({
   runId: z.uuid(),
 });
 
-export const openWorkspaceRequestSchema = z.strictObject({
-  environmentId: environmentIdSchema,
-  path: z.string().min(1).max(4096),
-});
-
 export const saveDraftRequestSchema = z
   .strictObject({
     text: z.string().max(262_144),

@@ -55,7 +55,7 @@ function fixture(
       catalogSummaries: vi.fn(() => [
         {
           id: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           label: "Agent context",
           description: "Context",
           group: { id: "context" as const, order: 10 },
@@ -225,7 +225,7 @@ describe("sidecar agent-tool relay", () => {
     const request = {
       sourceCapability,
       toolId: "agent.context",
-      schemaVersion: 2,
+      schemaVersion: 3,
       requestId: "tool-request-1",
       input: {},
     };
@@ -243,7 +243,7 @@ describe("sidecar agent-tool relay", () => {
       adapter: "cli",
       request: {
         toolId: "agent.context",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "tool-request-1",
         input: {},
       },
@@ -267,7 +267,7 @@ describe("sidecar agent-tool relay", () => {
       {
         sourceCapability,
         toolId: "agent.context",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "tool-request-1",
         input: {},
       },
@@ -336,7 +336,7 @@ describe("sidecar agent-tool relay", () => {
   });
 });
 
-function toolRequest() { return { sourceCapability, toolId: "agent.context", schemaVersion: 2, requestId: "read-only-request", input: {} }; }
+function toolRequest() { return { sourceCapability, toolId: "agent.context", schemaVersion: 3, requestId: "read-only-request", input: {} }; }
 function openCodeStamp(): OpenCodeToolInvocationStamp {
   return { authority: { ...scope, executionEnvironmentId: environmentId, backendInstanceId: "backend-1", runtimeId: "runtime", nativeGeneration: "generation",
     directory: "/workspace", session: { applicationThreadId: sourceThreadId, nativeSessionID: "ses_source", bindingFingerprint: "b".repeat(64) } },

@@ -177,10 +177,10 @@ function parsePreferences(raw: string): SidebarViewPreferences {
   if (blob.version !== SIDEBAR_VIEW_DEFAULTS.version) {
     return SIDEBAR_VIEW_DEFAULTS;
   }
-  const projectFilterName = parseFilterId(blob.projectFilterName);
+  const projectFilterId = parseFilterId(blob.projectFilterId);
   const projectFilterPublication = (() => {
     if (
-      projectFilterName === null ||
+      projectFilterId === null ||
       typeof blob.projectFilterPublication !== "object" ||
       blob.projectFilterPublication === null
     ) {
@@ -191,17 +191,22 @@ function parsePreferences(raw: string): SidebarViewPreferences {
       unknown
     >;
     const eventId = applicationEventIdSchema.safeParse(publication.eventId);
-    return publication.projectName === projectFilterName &&
-      eventId.success
-      ? { projectName: projectFilterName, eventId: eventId.data }
+    return publication.projectId === projectFilterId && eventId.success
+      ? { projectId: projectFilterId, eventId: eventId.data }
       : null;
   })();
+  // A name filter saved before projects had identity is a hint for the
+  // sidebar's one-time migration, never a filter of its own.
+  const legacyProjectFilterName = parseFilterId(blob.projectFilterName);
   return {
     version: SIDEBAR_VIEW_DEFAULTS.version,
     environmentFilterId: parseFilterId(blob.environmentFilterId),
     targetFilterId: parseFilterId(blob.targetFilterId),
-    projectFilterName,
+    projectFilterId,
     projectFilterPublication,
+    ...(legacyProjectFilterName === null
+      ? {}
+      : { projectFilterName: legacyProjectFilterName }),
     groupFilterId: parseFilterId(blob.groupFilterId),
     ungroupedFilter:
       typeof blob.ungroupedFilter === "boolean" ? blob.ungroupedFilter : false,
@@ -304,10 +309,8 @@ export function setSidebarStackBy(stackBy: SidebarStackBy): void {
   persist({ ...current, stackBy });
 }
 
-export function setSidebarProjectFilterName(
-  projectName: string | null,
-): void {
-  setSidebarInventoryScope({ projectFilterName: projectName });
+export function setSidebarProjectFilterId(projectId: string | null): void {
+  setSidebarInventoryScope({ projectFilterId: projectId });
 }
 
 export function setSidebarEnvironmentFilterId(
@@ -320,7 +323,10 @@ export function setSidebarTargetFilterId(targetId: string | null): void {
   setSidebarInventoryScope({ targetFilterId: targetId });
 }
 
-/** Persist any compatible scope transition in one write and one render. */
+/**
+ * Persist any compatible scope transition in one write and one render. Any
+ * write of the project facet also retires a legacy project-name hint.
+ */
 export function setSidebarInventoryScope(
   patch: SidebarInventoryScopePatch,
   options: {
@@ -337,10 +343,10 @@ export function setSidebarInventoryScope(
       patch.targetFilterId === undefined
         ? current.targetFilterId
         : parseFilterId(patch.targetFilterId),
-    projectFilterName:
-      patch.projectFilterName === undefined
-        ? current.projectFilterName
-        : parseFilterId(patch.projectFilterName),
+    projectFilterId:
+      patch.projectFilterId === undefined
+        ? current.projectFilterId
+        : parseFilterId(patch.projectFilterId),
     groupFilterId:
       patch.groupFilterId === undefined
         ? current.groupFilterId
@@ -353,16 +359,19 @@ export function setSidebarInventoryScope(
   if (next.groupFilterId !== null) next.ungroupedFilter = false;
   if (next.ungroupedFilter) next.groupFilterId = null;
   const projectFilterPublication =
-    patch.projectFilterName === undefined
+    patch.projectFilterId === undefined
       ? current.projectFilterPublication
-      : options.projectFilterPublication?.projectName ===
-          next.projectFilterName
+      : options.projectFilterPublication?.projectId === next.projectFilterId
         ? options.projectFilterPublication
         : null;
+  const retiresLegacyProjectName =
+    patch.projectFilterId !== undefined &&
+    current.projectFilterName !== undefined;
   if (
+    !retiresLegacyProjectName &&
     next.environmentFilterId === current.environmentFilterId &&
     next.targetFilterId === current.targetFilterId &&
-    next.projectFilterName === current.projectFilterName &&
+    next.projectFilterId === current.projectFilterId &&
     next.groupFilterId === current.groupFilterId &&
     next.ungroupedFilter === current.ungroupedFilter &&
     JSON.stringify(projectFilterPublication) ===
@@ -370,7 +379,18 @@ export function setSidebarInventoryScope(
   ) {
     return;
   }
-  persist({ ...current, ...next, projectFilterPublication });
+  persist({
+    ...(retiresLegacyProjectName ? withoutLegacyProjectName(current) : current),
+    ...next,
+    projectFilterPublication,
+  });
+}
+
+function withoutLegacyProjectName(
+  preferences: SidebarViewPreferences,
+): SidebarViewPreferences {
+  const { projectFilterName: _legacy, ...rest } = preferences;
+  return rest;
 }
 
 /** Whether the current sidebar view is narrower than its unfiltered state. */
@@ -380,7 +400,7 @@ export function hasActiveSidebarFilters(
   const scopeActive =
     preferences.environmentFilterId !== null ||
     preferences.targetFilterId !== null ||
-    preferences.projectFilterName !== null ||
+    preferences.projectFilterId !== null ||
     preferences.groupFilterId !== null ||
     preferences.ungroupedFilter;
   const showActive =
@@ -407,10 +427,11 @@ export function clearActiveSidebarFilters(): void {
     }
   }
   persist({
-    ...current,
+    ...withoutLegacyProjectName(current),
     environmentFilterId: null,
     targetFilterId: null,
-    projectFilterName: null,
+    projectFilterId: null,
+    projectFilterPublication: null,
     groupFilterId: null,
     ungroupedFilter: false,
     show: SIDEBAR_VIEW_DEFAULTS.show,

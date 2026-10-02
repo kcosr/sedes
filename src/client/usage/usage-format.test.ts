@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { UsageAnalyticsAggregate, UsageAnalyticsResponse } from "../../shared/protocol/usage-analytics.js";
 import { csvCell, exploreCsv } from "./UsageExplore.js";
-import { dimensionLabel, formatCost, formatCount, metricReported, relativeChange, tokenMix } from "./usage-format.js";
+import { DIMENSION_META, dimensionLabel, formatCost, formatCount, metricReported, relativeChange, tokenMix } from "./usage-format.js";
 
 const aggregate = (overrides: Partial<UsageAnalyticsAggregate> = {}): UsageAnalyticsAggregate => ({
   tokens: "0", input: "0", uncachedInput: "0", cacheRead: "0", cacheWrite: "0", output: "0", reasoning: "0", requests: "0",
@@ -39,6 +39,10 @@ describe("usage presentation", () => {
     expect(tokenMix({ input: 10, cacheRead: 30, cacheWrite: 5, output: 1, reasoning: 9 })).toEqual({ uncached: 0, cacheRead: 10, cacheWrite: 0, output: 0, reasoning: 1 });
   });
 
+  it("names the per-location dimension Location", () => {
+    expect(DIMENSION_META.workspace).toEqual({ label: "Location", plural: "Locations", unknown: "Unknown location" });
+  });
+
   it("labels keys from server labels and names unknown values explicitly", () => {
     expect(dimensionLabel(labels, "model", null)).toMatchObject({ label: "Unknown model", unknown: true });
     expect(dimensionLabel(labels, "effort", null).label).toBe("Not recorded");
@@ -46,6 +50,8 @@ describe("usage presentation", () => {
     expect(dimensionLabel(labels, "provider", "firstParty").label).toBe("Anthropic API");
     expect(dimensionLabel(labels, "backend", "b1")).toMatchObject({ label: "Primary Pi", brand: "pi" });
     expect(dimensionLabel(labels, "workspace", "w1").detail).toBe("Laptop · …/src/app");
+    expect(dimensionLabel(labels, "workspace", null)).toMatchObject({ label: "Unknown location", unknown: true });
+    expect(dimensionLabel(labels, "workspace", "gone")).toMatchObject({ label: "Removed location", unknown: true });
     expect(dimensionLabel(labels, "thread", "t1")).toMatchObject({ label: "Fix it", detail: "App", brand: "codex", retired: true });
     expect(dimensionLabel(labels, "thread", "gone")).toMatchObject({ label: "Removed thread", unknown: true });
   });

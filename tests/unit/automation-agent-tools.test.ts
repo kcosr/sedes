@@ -165,7 +165,7 @@ function fixture(input?: {
 describe("automation canonical tool service", () => {
   function canonical(setup: ReturnType<typeof fixture>) {
     return new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
       management: {} as never,
       automations: setup.service,
       threadCreation: {} as never,

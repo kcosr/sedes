@@ -4,15 +4,13 @@ import type {
   NormalizedThreadForkOrigin,
   NormalizedThreadLineagePlacement,
 } from "../../shared/index.js";
+import { describeProjectLocations } from "../app/project-locations.js";
 import {
   filterThreadsBySidebarScope,
   type SidebarInventoryScope,
   type SidebarScopeCatalog,
 } from "../app/sidebar-scope.js";
-import {
-  targetDisplayLabel,
-  workspaceDisplayLabel,
-} from "../app/sidebar-scope-presentation.js";
+import { targetDisplayLabel } from "../app/sidebar-scope-presentation.js";
 import { resolveTimeBucket } from "../lineage/sidebar-flat-projections.js";
 import {
   indexThreadSearchValues,
@@ -62,11 +60,20 @@ export interface ArchivedThreadRow {
   readonly title: string;
   readonly brand: NormalizedApplicationThreadSummary["backend"]["brand"];
   readonly backendLabel: string;
-  /** Raw project name: the Scope's project facet and the sort key for groups. */
-  readonly projectName: string | null;
-  /** Collision-qualified project label (adds a remote environment when several exist). */
+  /** The location's project: the Scope's project facet and the grouping key. */
+  readonly projectId: string | null;
+  /**
+   * The project and, when it has several folders on one environment, the
+   * folder ("sedes › sedes-context"); adds a remote environment when several
+   * exist.
+   */
   readonly projectLabel: string;
-  readonly projectAvailable: boolean;
+  /**
+   * What tells this location apart within a project of several locations,
+   * shown when the grouping or the Scope already names the project.
+   */
+  readonly locationTag: string | null;
+  readonly locationAvailable: boolean;
   readonly environmentAvailable: boolean;
   /** The Target's label (qualified only on collision); null when it is the backend's name. */
   readonly targetLabel: string | null;
@@ -95,6 +102,7 @@ export interface ArchiveBase {
 const EMPTY_CATALOG: SidebarScopeCatalog = {
   environments: [],
   executionTargets: [],
+  projects: [],
   workspaces: [],
   groups: [],
 };
@@ -154,27 +162,30 @@ function shareCatalog(
     previous?.executionTargets,
     snapshot.executionTargets,
   );
+  const projects = shareArray(previous?.projects, snapshot.projects);
   const workspaces = shareArray(previous?.workspaces, snapshot.workspaces);
   const groups = shareArray(previous?.groups, snapshot.groups);
   if (
     previous &&
     environments === previous.environments &&
     executionTargets === previous.executionTargets &&
+    projects === previous.projects &&
     workspaces === previous.workspaces &&
     groups === previous.groups
   ) {
     return previous;
   }
-  return { environments, executionTargets, workspaces, groups };
+  return { environments, executionTargets, projects, workspaces, groups };
 }
 
 const ROW_SCALAR_FIELDS = [
   "title",
   "brand",
   "backendLabel",
-  "projectName",
+  "projectId",
   "projectLabel",
-  "projectAvailable",
+  "locationTag",
+  "locationAvailable",
   "environmentAvailable",
   "targetLabel",
   "targetAvailable",
@@ -204,6 +215,10 @@ export function archivedRowsEqual(
 }
 
 interface CatalogIndex {
+  readonly projects: ReadonlyMap<
+    string,
+    NormalizedApplicationSnapshot["projects"][number]
+  >;
   readonly workspaces: ReadonlyMap<
     string,
     NormalizedApplicationSnapshot["workspaces"][number]
@@ -216,28 +231,52 @@ interface CatalogIndex {
     string,
     NormalizedApplicationSnapshot["executionTargets"][number]
   >;
+  /** Row labels by workspace ID: the project, and the folder where needed. */
   readonly projectLabels: ReadonlyMap<string, string>;
+  readonly locationTags: ReadonlyMap<string, string>;
+  /**
+   * Group headers by project ID, qualified among same-named projects, with
+   * the one remote environment of a single-host project.
+   */
+  readonly projectGroupLabels: ReadonlyMap<string, string>;
+  /** Group headers when Scope already implies the environment. */
+  readonly scopedProjectGroupLabels: ReadonlyMap<string, string>;
   readonly targetLabels: ReadonlyMap<string, string>;
 }
 
 /** Labels are resolved once per catalog, never once per row. */
 function indexCatalog(catalog: SidebarScopeCatalog): CatalogIndex {
-  const { environments, executionTargets, workspaces } = catalog;
+  const { environments, executionTargets, projects, workspaces } = catalog;
   const environmentById = new Map(
     environments.map((environment) => [environment.id, environment]),
   );
+  const locations = describeProjectLocations({
+    projects,
+    workspaces,
+    environments,
+  });
   const projectLabels = new Map<string, string>();
+  const locationTags = new Map<string, string>();
   for (const workspace of workspaces) {
-    const environment = environmentById.get(workspace.environmentId);
-    projectLabels.set(
-      workspace.id,
-      workspaceDisplayLabel({
-        workspace,
-        workspaces,
-        environments,
-        includeEnvironment:
-          environments.length > 1 && environment?.kind !== "local",
-      }),
+    const label = locations.projectFolderLabel(workspace.id, {
+      includeEnvironment: environments.length > 1,
+    });
+    if (label !== undefined) projectLabels.set(workspace.id, label);
+    const tag = locations.locationTag(workspace.id);
+    if (tag !== undefined) locationTags.set(workspace.id, tag);
+  }
+  const projectGroupLabels = new Map<string, string>();
+  const scopedProjectGroupLabels = new Map<string, string>();
+  for (const project of projects) {
+    projectGroupLabels.set(
+      project.id,
+      locations.projectHeaderLabel(project.id, {
+        includeEnvironment: environments.length > 1,
+      }) ?? project.name,
+    );
+    scopedProjectGroupLabels.set(
+      project.id,
+      locations.projectHeaderLabel(project.id) ?? project.name,
     );
   }
   // The brand mark already names the backend, so a Target shows its own
@@ -264,12 +303,16 @@ function indexCatalog(catalog: SidebarScopeCatalog): CatalogIndex {
     );
   }
   return {
+    projects: new Map(projects.map((project) => [project.id, project])),
     workspaces: new Map(
       workspaces.map((workspace) => [workspace.id, workspace]),
     ),
     environments: environmentById,
     targets: new Map(executionTargets.map((target) => [target.id, target])),
     projectLabels,
+    locationTags,
+    projectGroupLabels,
+    scopedProjectGroupLabels,
     targetLabels,
   };
 }
@@ -414,6 +457,9 @@ function buildArchivedRow(
   >,
 ): ArchivedThreadRow {
   const workspace = index.workspaces.get(thread.workspaceId);
+  const project = workspace
+    ? index.projects.get(workspace.projectId)
+    : undefined;
   const environment = workspace
     ? index.environments.get(workspace.environmentId)
     : undefined;
@@ -431,11 +477,10 @@ function buildArchivedRow(
     title: thread.title.text || "Untitled thread",
     brand: thread.backend.brand,
     backendLabel: thread.backend.label.text,
-    projectName: workspace?.label.text ?? null,
-    projectLabel: workspace
-      ? (index.projectLabels.get(workspace.id) ?? workspace.label.text)
-      : "Workspace",
-    projectAvailable: workspace?.available !== false,
+    projectId: workspace?.projectId ?? null,
+    projectLabel: index.projectLabels.get(thread.workspaceId) ?? "Project",
+    locationTag: index.locationTags.get(thread.workspaceId) ?? null,
+    locationAvailable: workspace?.available !== false,
     environmentAvailable: environment?.available !== false,
     targetLabel:
       targetLabel === null || targetLabel === thread.backend.label.text
@@ -449,6 +494,7 @@ function buildArchivedRow(
     archivedAt: epoch(thread.stateChangedAt),
     lastActiveAt: epoch(thread.lastActivityAt),
     searchValues: indexThreadSearchValues(thread, {
+      project,
       workspace,
       environment,
       target,
@@ -459,7 +505,7 @@ function buildArchivedRow(
 export interface ArchiveProjectionOptions {
   readonly scope: Pick<
     SidebarInventoryScope,
-    "environmentId" | "targetId" | "projectName" | "groupId" | "ungrouped"
+    "environmentId" | "targetId" | "projectId" | "groupId" | "ungrouped"
   >;
   readonly search: string;
   readonly sort: ArchiveSort;
@@ -563,15 +609,29 @@ export function projectArchivedThreads(
       .sort(([, left], [, right]) => left.order - right.order)
       .map(([key, { label, rows }]) => ({ key: `date:${key}`, label, rows }));
   } else {
+    const index = catalogIndexFor(base.catalog);
+    // A scoped Environment or Target already names the environment.
+    const groupLabels =
+      scope.environmentId !== null || scope.targetId !== null
+        ? index.scopedProjectGroupLabels
+        : index.projectGroupLabels;
     const projects = new Map<
       string,
       { label: string; rows: ArchivedThreadRow[] }
     >();
     for (const row of matching) {
-      const entry = projects.get(row.workspaceId);
+      // A row whose location the catalog lacks keeps a group of its own.
+      const key =
+        row.projectId === null
+          ? `location:${row.workspaceId}`
+          : `project:${row.projectId}`;
+      const entry = projects.get(key);
       if (entry) entry.rows.push(row);
       else
-        projects.set(row.workspaceId, { label: row.projectLabel, rows: [row] });
+        projects.set(key, {
+          label: groupLabels.get(row.projectId ?? "") ?? row.projectLabel,
+          rows: [row],
+        });
     }
     groups = [...projects]
       .sort(
@@ -579,11 +639,7 @@ export function projectArchivedThreads(
           titleCollator.compare(left.label, right.label) ||
           (leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0),
       )
-      .map(([key, { label, rows }]) => ({
-        key: `project:${key}`,
-        label,
-        rows,
-      }));
+      .map(([key, { label, rows }]) => ({ key, label, rows }));
   }
   return {
     total: base.rows.length,

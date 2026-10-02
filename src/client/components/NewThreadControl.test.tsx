@@ -13,17 +13,25 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   NormalizedExecutionTargetDescriptor,
+  NormalizedProjectSummary,
   NormalizedWorkspaceSummary,
   ThreadTemplate,
 } from "../../shared/index.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { TOUCH_DENSITY_QUERY } from "../app/use-touch-density.js";
 import { navigate } from "../app/router.js";
-import { NewThreadControl } from "./NewThreadControl.js";
+import {
+  NewThreadControl,
+  type NewThreadCreationScope,
+} from "./NewThreadControl.js";
+
+const sedesProject = { id: "project-1", name: "Sedes", revision: 0 };
+const websiteProject = { id: "project-2", name: "Website", revision: 0 };
 
 const workspace = {
   id: "workspace-1",
   environmentId: "environment-1",
+  projectId: "project-1",
   label: { text: "Sedes" },
   displayPath: { text: "/workspace/sedes" },
   available: true,
@@ -32,6 +40,7 @@ const workspace = {
 const secondWorkspace = {
   id: "workspace-2",
   environmentId: "environment-2",
+  projectId: "project-2",
   label: { text: "Website" },
   displayPath: { text: "/workspace/website" },
   available: true,
@@ -183,7 +192,17 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+/** The fixture projects the given locations belong to. */
+function projectsFor(
+  workspaces: readonly NormalizedWorkspaceSummary[],
+): readonly NormalizedProjectSummary[] {
+  return [sedesProject, websiteProject].filter(({ id }) =>
+    workspaces.some(({ projectId }) => projectId === id),
+  );
+}
+
 function control(options?: {
+  readonly projects?: readonly NormalizedProjectSummary[];
   readonly workspaces?: readonly NormalizedWorkspaceSummary[];
   readonly agents?: readonly (typeof carefulAgent)[];
   readonly resolution?: {
@@ -202,11 +221,7 @@ function control(options?: {
   readonly constrainedWorkspace?: typeof workspace;
   readonly allWorkspaces?: boolean;
   readonly executionTargets?: readonly NormalizedExecutionTargetDescriptor[];
-  readonly creationScope?: {
-    readonly environmentId: string | null;
-    readonly targetId: string | null;
-    readonly projectName: string | null;
-  };
+  readonly creationScope?: NewThreadCreationScope;
 }) {
   const createThread =
     options?.createThread ??
@@ -263,18 +278,16 @@ function control(options?: {
         sedesTools: undefined,
       }),
   };
-  const openWorkspace = vi.fn().mockResolvedValue("workspace-added");
+  const openWorkspace = vi.fn().mockResolvedValue({ id: "workspace-added", projectId: "project-added" });
   let store = { api, createThread, openWorkspace } as unknown as ApplicationClientStore;
   let workspaces = options?.workspaces ?? (options?.allWorkspaces ? [workspace, secondWorkspace] : [options?.constrainedWorkspace ?? workspace]);
+  let projects = options?.projects ?? projectsFor(workspaces);
   const onCreated = vi.fn();
-  const renderControl = (creationScope: {
-    readonly environmentId: string | null;
-    readonly targetId: string | null;
-    readonly projectName: string | null;
-  }) => (
+  const renderControl = (creationScope: NewThreadCreationScope) => (
     <>
       <NewThreadControl
         store={store}
+        projects={projects}
         environments={
           options?.allWorkspaces ? environments : [environments[0]!]
         }
@@ -288,10 +301,10 @@ function control(options?: {
       <button type="button">Outside action</button>
     </>
   );
-  const initialScope = options?.creationScope ?? {
+  const initialScope: NewThreadCreationScope = options?.creationScope ?? {
     environmentId: null,
     targetId: options?.allWorkspaces ? null : "target-pi",
-    projectName: options?.allWorkspaces ? null : workspace.label.text,
+    projectId: options?.allWorkspaces ? null : sedesProject.id,
   };
   const rendered = render(renderControl(initialScope));
   return {
@@ -304,11 +317,15 @@ function control(options?: {
       store = { ...store, api: replacementApi } as unknown as ApplicationClientStore;
       rendered.rerender(renderControl(initialScope));
     },
-    rerenderWorkspaces: (next: readonly NormalizedWorkspaceSummary[]) => {
+    rerenderWorkspaces: (
+      next: readonly NormalizedWorkspaceSummary[],
+      nextProjects = options?.projects ?? projectsFor(next),
+    ) => {
       workspaces = next;
+      projects = nextProjects;
       rendered.rerender(renderControl(initialScope));
     },
-    rerenderScope: (creationScope: typeof initialScope) =>
+    rerenderScope: (creationScope: NewThreadCreationScope) =>
       rendered.rerender(renderControl(creationScope)),
   };
 }
@@ -417,19 +434,26 @@ describe("NewThreadControl", () => {
     const dialog = screen.getByRole("dialog", { name: "Add project" });
     await user.type(within(dialog).getByLabelText("Absolute directory path"), "/workspace/added");
     await user.click(within(dialog).getByRole("button", { name: "Add project" }));
-    expect(openWorkspace).toHaveBeenCalledWith("/workspace/added", "environment-1");
+    expect(openWorkspace).toHaveBeenCalledWith("/workspace/added", "environment-1", { kind: "new", name: "added" });
     expect(screen.getByRole("textbox", { name: "Thread name" })).toHaveValue("Keep this title");
     expect(screen.getByRole("button", { name: "Adding project…" })).toBeDisabled();
-    rerenderWorkspaces([workspace, { ...workspace, id: "workspace-added", label: { text: "Added project" } }]);
-    await waitFor(() => expect(screen.getByRole("combobox", { name: "Project" })).toHaveAttribute("data-workspace-id", "workspace-added"));
+    const addedProject = { id: "project-added", name: "added", revision: 0 };
+    rerenderWorkspaces(
+      [workspace, { ...workspace, id: "workspace-added", projectId: addedProject.id, label: { text: "added" }, displayPath: { text: "/workspace/added" } }],
+      [addedProject, sedesProject],
+    );
+    // The new location's project replaces the scoped one.
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Project" })).toHaveAttribute("data-project-id", addedProject.id));
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveAttribute("data-workspace-id", "workspace-added");
     await user.click(screen.getByRole("button", { name: "Create thread" }));
     expect(createThread).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "workspace-added", configuration: { kind: "custom", targetId: "target-pi" }, title: "Keep this title" }));
   });
 
   it("offers Add project before any project exists", async () => {
     const user = userEvent.setup();
-    control({ workspaces: [], creationScope: { environmentId: "environment-1", targetId: "target-pi", projectName: null } });
+    control({ workspaces: [], creationScope: { environmentId: "environment-1", targetId: "target-pi", projectId: null } });
     await openPicker(user);
+    expect(screen.getByRole("combobox", { name: "Project" })).toHaveTextContent("Choose a project");
     expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Add project" }));
     expect(screen.getByRole("dialog", { name: "Add project" })).toBeVisible();
@@ -446,23 +470,25 @@ describe("NewThreadControl", () => {
     await user.keyboard("{Escape}");
     expect(screen.getByRole("combobox", { name: "Template" })).toHaveTextContent("Configure manually");
 
-    await user.click(screen.getByRole("combobox", { name: "Environment" }));
-    await user.type(screen.getByRole("combobox", { name: "Search environments" }), "LOCAL");
-    expect(screen.queryByRole("option", { name: "Remote" })).toBeNull();
+    // Projects match their locations' folders, paths and environments.
+    await user.click(screen.getByRole("combobox", { name: "Project" }));
+    await user.type(screen.getByRole("combobox", { name: "Search projects" }), "/WORKSPACE/sedes local");
+    expect(screen.getByRole("option", { name: "Sedes" })).toBeVisible();
+    expect(screen.queryByRole("option", { name: "Website" })).toBeNull();
     await user.keyboard("{Enter}");
-    expect(screen.getByRole("combobox", { name: "Environment" })).toHaveTextContent("Local");
+    expect(screen.getByRole("combobox", { name: "Project" })).toHaveAttribute("data-project-id", sedesProject.id);
+
+    await user.click(screen.getByRole("combobox", { name: "Location" }));
+    await user.type(screen.getByRole("combobox", { name: "Search locations" }), "LOCAL sedes");
+    expect(screen.getByRole("option", { name: "Local · /workspace/sedes" })).toBeVisible();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveAttribute("data-workspace-id", "workspace-1");
 
     await user.click(screen.getByRole("combobox", { name: "Target" }));
     await user.type(screen.getByRole("combobox", { name: "Search targets" }), "CODEX local");
     expect(screen.queryByRole("option", { name: /Website agent/ })).toBeNull();
     await user.keyboard("{Enter}");
     expect(screen.getByRole("combobox", { name: "Target" })).toHaveAttribute("data-target-id", "target-codex");
-
-    await user.click(screen.getByRole("combobox", { name: "Project" }));
-    await user.type(screen.getByRole("combobox", { name: "Search projects" }), "/WORKSPACE/sedes local");
-    expect(screen.getByRole("option", { name: "Sedes" })).toBeVisible();
-    expect(screen.queryByRole("option", { name: "Website" })).toBeNull();
-    await user.keyboard("{Enter}");
     await chooseCareful(user);
     await waitFor(() => expect(api.resolveSavedAgent).toHaveBeenCalledWith(
       carefulAgent.id,
@@ -793,22 +819,23 @@ describe("NewThreadControl", () => {
       creationScope: {
         environmentId: "environment-2",
         targetId: "target-website",
-        projectName: secondWorkspace.label.text,
+        projectId: websiteProject.id,
       },
     });
     await openPicker(user);
     await chooseTemplate(user);
 
-    expect(
-      screen.getByRole("combobox", { name: "Environment" }),
-    ).toHaveAttribute("data-environment-id", "environment-1");
+    expect(screen.getByRole("combobox", { name: "Project" })).toHaveAttribute(
+      "data-project-id",
+      sedesProject.id,
+    );
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveAttribute(
+      "data-workspace-id",
+      workspace.id,
+    );
     expect(screen.getByRole("combobox", { name: "Target" })).toHaveAttribute(
       "data-target-id",
       "target-pi",
-    );
-    expect(screen.getByRole("combobox", { name: "Project" })).toHaveAttribute(
-      "data-workspace-id",
-      workspace.id,
     );
   });
 
@@ -824,7 +851,7 @@ describe("NewThreadControl", () => {
     rerenderScope({
       environmentId: "environment-2",
       targetId: "target-website",
-      projectName: secondWorkspace.label.text,
+      projectId: websiteProject.id,
     });
 
     expect(screen.getByRole("dialog", { name: "New thread" })).toBeVisible();
@@ -932,7 +959,7 @@ describe("NewThreadControl", () => {
       creationScope: {
         environmentId: null,
         targetId: null,
-        projectName: workspace.label.text,
+        projectId: sedesProject.id,
       },
     });
     await openPicker(user);
@@ -1081,13 +1108,14 @@ describe("NewThreadControl", () => {
       creationScope: {
         environmentId: "environment-1",
         targetId: "target-codex",
-        projectName: workspace.label.text,
+        projectId: sedesProject.id,
       },
     });
     await openPicker(user);
 
     await user.click(await screen.findByRole("button", { name: "Use Custom" }));
     expect(screen.queryByRole("combobox", { name: "Project" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Location" })).toBeNull();
     expect(screen.queryByRole("combobox", { name: "Target" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Create thread" }));
 
@@ -1107,7 +1135,7 @@ describe("NewThreadControl", () => {
       creationScope: {
         environmentId: "environment-1",
         targetId: "target-codex",
-        projectName: workspace.label.text,
+        projectId: sedesProject.id,
       },
       resolution: {
         candidates: [],
@@ -1141,7 +1169,7 @@ describe("NewThreadControl", () => {
       creationScope: {
         environmentId: "environment-1",
         targetId: "target-codex",
-        projectName: workspace.label.text,
+        projectId: sedesProject.id,
       },
       executionTargets: targets.map((target) =>
         target.id === "target-codex"
@@ -1166,7 +1194,7 @@ describe("NewThreadControl", () => {
       creationScope: {
         environmentId: "environment-2",
         targetId: null,
-        projectName: null,
+        projectId: null,
       },
       executionTargets: targets.filter(
         ({ environmentId }) => environmentId === "environment-1",
@@ -1175,7 +1203,7 @@ describe("NewThreadControl", () => {
 
     expect(screen.getByRole("button", { name: "New thread" })).toBeDisabled();
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "No available Project and Target",
+      "No Target is available in this execution scope.",
     );
   });
 
@@ -1186,7 +1214,7 @@ describe("NewThreadControl", () => {
       creationScope: {
         environmentId: "environment-2",
         targetId: null,
-        projectName: null,
+        projectId: null,
       },
       resolution: {
         candidates: [candidate("target-website", "Website agent")],
@@ -1194,13 +1222,17 @@ describe("NewThreadControl", () => {
       },
     });
     await openPicker(user);
+    expect(screen.getByRole("combobox", { name: "Project" })).toHaveAttribute(
+      "data-project-id",
+      websiteProject.id,
+    );
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveAttribute(
+      "data-workspace-id",
+      "workspace-2",
+    );
     expect(screen.getByRole("combobox", { name: "Target" })).toHaveAttribute(
       "data-target-id",
       "target-website",
-    );
-    expect(screen.getByRole("combobox", { name: "Project" })).toHaveAttribute(
-      "data-workspace-id",
-      "workspace-2",
     );
     await chooseCareful(user);
     await waitFor(() =>
@@ -1333,41 +1365,341 @@ describe("NewThreadControl", () => {
     expect(picker).toHaveTextContent("Careful");
   });
 
-  it("requires an explicit environment for a project name available on two machines", async () => {
+  it("orders Project, Location and Target before the Agent", async () => {
     const user = userEvent.setup();
-    const remoteWorkspace = { ...secondWorkspace, label: workspace.label };
-    const { createThread } = control({
-      agents: [], allWorkspaces: true,
-      workspaces: [workspace, remoteWorkspace],
-      creationScope: { environmentId: null, targetId: null, projectName: "Sedes" },
+    control({
+      agents: [],
+      creationScope: { environmentId: null, targetId: null, projectId: null },
     });
     await openPicker(user);
-    expect(screen.getByRole("combobox", { name: "Environment" })).toHaveAttribute("data-environment-id", "");
-    expect(screen.getByRole("combobox", { name: "Agent" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
-    await user.click(screen.getByRole("combobox", { name: "Environment" }));
-    await user.click(screen.getByRole("option", { name: "Remote" }));
+    const fields = screen
+      .getAllByRole("combobox")
+      .map((combobox) => combobox.getAttribute("aria-label"))
+      .filter((name) =>
+        ["Project", "Location", "Target", "Agent"].includes(name ?? ""),
+      );
+    expect(fields).toEqual(["Project", "Location", "Target", "Agent"]);
+    expect(screen.getByRole("combobox", { name: "Project" })).toHaveAttribute(
+      "data-project-id",
+      sedesProject.id,
+    );
+    // One environment: the location reads as its path alone.
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveTextContent(
+      /^\/workspace\/sedes$/,
+    );
+  });
+
+  it("prefills the scoped project and its one location", async () => {
+    const user = userEvent.setup();
+    const { createThread } = control({
+      agents: [],
+      allWorkspaces: true,
+      creationScope: {
+        environmentId: null,
+        targetId: null,
+        projectId: websiteProject.id,
+      },
+    });
+    await openPicker(user);
     expect(screen.queryByRole("combobox", { name: "Project" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Location" })).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Target" })).toHaveAttribute(
+      "data-target-id",
+      "target-website",
+    );
+    await user.click(await screen.findByRole("button", { name: "Use Custom" }));
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+    await waitFor(() =>
+      expect(createThread).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceId: secondWorkspace.id,
+          configuration: { kind: "custom", targetId: "target-website" },
+        }),
+      ),
+    );
+  });
+
+  it("auto-selects a project's only available location and disables the rest", async () => {
+    const user = userEvent.setup();
+    const offline = {
+      ...workspace,
+      id: "workspace-offline",
+      displayPath: { text: "/offline/sedes" },
+      available: false,
+    };
+    control({
+      agents: [],
+      workspaces: [workspace, offline],
+      creationScope: { environmentId: null, targetId: "target-pi", projectId: null },
+    });
+    await openPicker(user);
+    const location = screen.getByRole("combobox", { name: "Location" });
+    expect(location).toHaveAttribute("data-workspace-id", workspace.id);
+    await user.click(location);
+    const offlineOption = screen.getByRole("option", { name: /\/offline\/sedes/ });
+    expect(offlineOption).toHaveAttribute("aria-disabled", "true");
+    expect(offlineOption).toHaveTextContent("Unavailable");
+    await user.click(offlineOption);
+    expect(location).toHaveAttribute("data-workspace-id", workspace.id);
+  });
+
+  it.each([
+    { environmentId: "environment-2", targetId: null },
+    { environmentId: null, targetId: "target-website" },
+  ])("offers only locations within the scope %j", async (scope) => {
+    const user = userEvent.setup();
+    const remote = (id: string, path: string) => ({
+      ...secondWorkspace,
+      id,
+      projectId: sedesProject.id,
+      displayPath: { text: path },
+    });
+    const { createThread } = control({
+      agents: [],
+      allWorkspaces: true,
+      workspaces: [workspace, remote("remote-a", "/srv/a"), remote("remote-b", "/srv/b")],
+      creationScope: { ...scope, projectId: null },
+    });
+    await openPicker(user);
+    expect(screen.getByRole("combobox", { name: "Project" })).toHaveAttribute(
+      "data-project-id",
+      sedesProject.id,
+    );
+    await user.click(screen.getByRole("combobox", { name: "Location" }));
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["Remote · /srv/a", "Remote · /srv/b"]);
+    await user.click(screen.getByRole("option", { name: "Remote · /srv/b" }));
+    await user.click(await screen.findByRole("button", { name: "Use Custom" }));
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+    await waitFor(() =>
+      expect(createThread).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceId: "remote-b",
+          configuration: { kind: "custom", targetId: "target-website" },
+        }),
+      ),
+    );
+  });
+
+  it("filters Targets to the location's environment and clears one from another", async () => {
+    const user = userEvent.setup();
+    const remoteLocation = { ...secondWorkspace, projectId: sedesProject.id };
+    control({
+      agents: [],
+      allWorkspaces: true,
+      workspaces: [workspace, remoteLocation],
+    });
+    await openPicker(user);
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveAttribute(
+      "data-workspace-id",
+      "",
+    );
+    expect(screen.queryByRole("combobox", { name: "Target" })).toBeNull();
+
+    await user.click(screen.getByRole("combobox", { name: "Location" }));
+    await user.click(screen.getByRole("option", { name: "Remote · /workspace/website" }));
+    const target = screen.getByRole("combobox", { name: "Target" });
+    expect(target).toHaveAttribute("data-target-id", "target-website");
+    await user.click(target);
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["Website agent · Pi"]);
+    await user.keyboard("{Escape}");
+
+    await user.click(screen.getByRole("combobox", { name: "Location" }));
+    await user.click(screen.getByRole("option", { name: "Local · /workspace/sedes" }));
+    expect(screen.getByRole("combobox", { name: "Target" })).toHaveAttribute(
+      "data-target-id",
+      "",
+    );
+    await user.click(screen.getByRole("combobox", { name: "Target" }));
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["Local SDK · Pi", "Local app server · Codex"]);
+  });
+
+  it("keeps a Target chosen first when the project is chosen", async () => {
+    const user = userEvent.setup();
+    const localWebsite = {
+      ...secondWorkspace,
+      id: "workspace-3",
+      environmentId: "environment-1",
+    };
+    const { createThread } = control({
+      agents: [],
+      workspaces: [workspace, localWebsite],
+      creationScope: { environmentId: null, targetId: null, projectId: null },
+    });
+    await openPicker(user);
+    expect(screen.getByRole("combobox", { name: "Project" })).toHaveTextContent(
+      "Choose a project",
+    );
+    await user.click(screen.getByRole("combobox", { name: "Target" }));
+    await user.click(screen.getByRole("option", { name: "Local app server · Codex" }));
+    await user.click(screen.getByRole("combobox", { name: "Project" }));
+    await user.click(screen.getByRole("option", { name: "Website" }));
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveAttribute(
+      "data-workspace-id",
+      localWebsite.id,
+    );
+    expect(screen.getByRole("combobox", { name: "Target" })).toHaveAttribute(
+      "data-target-id",
+      "target-codex",
+    );
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+    await waitFor(() =>
+      expect(createThread).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceId: localWebsite.id,
+          configuration: { kind: "custom", targetId: "target-codex" },
+        }),
+      ),
+    );
+  });
+
+  it("disables projects that cannot start a thread, with the reason", async () => {
+    const user = userEvent.setup();
+    const offlineProject = { id: "project-3", name: "Offline", revision: 0 };
+    const emptyProject = { id: "project-4", name: "Empty", revision: 0 };
+    control({
+      agents: [],
+      allWorkspaces: true,
+      projects: [sedesProject, websiteProject, offlineProject, emptyProject],
+      workspaces: [
+        workspace,
+        secondWorkspace,
+        {
+          ...workspace,
+          id: "workspace-offline",
+          projectId: offlineProject.id,
+          displayPath: { text: "/offline" },
+          available: false,
+        },
+      ],
+      executionTargets: targets.filter(({ id }) => id !== "target-website"),
+      creationScope: { environmentId: null, targetId: null, projectId: null },
+    });
+    await openPicker(user);
+    // The one project that can start a thread is chosen for you.
+    const project = screen.getByRole("combobox", { name: "Project" });
+    expect(project).toHaveAttribute("data-project-id", sedesProject.id);
+    await user.click(project);
+    const reasons = Object.fromEntries(
+      screen.getAllByRole("option").map((option) => [
+        option.textContent,
+        option.getAttribute("aria-disabled"),
+      ]),
+    );
+    expect(reasons).toEqual({
+      Sedes: null,
+      "Website No available target": "true",
+      "Offline Unavailable": "true",
+      "Empty No locations": "true",
+    });
+  });
+
+  it("releases a scoped project without a location there, keeping the environment", async () => {
+    const user = userEvent.setup();
+    const { createThread } = control({
+      agents: [],
+      allWorkspaces: true,
+      creationScope: {
+        environmentId: "environment-2",
+        targetId: null,
+        projectId: sedesProject.id,
+      },
+    });
+    await openPicker(user);
+    const project = screen.getByRole("combobox", { name: "Project" });
+    expect(project).toHaveAccessibleDescription("Sedes has no location on Remote.");
+    expect(project).toHaveAttribute("data-project-id", websiteProject.id);
+    await user.click(project);
+    expect(
+      screen.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["Website"]);
+    await user.keyboard("{Escape}");
+    await user.click(await screen.findByRole("button", { name: "Use Custom" }));
+    await user.click(screen.getByRole("button", { name: "Create thread" }));
+    await waitFor(() =>
+      expect(createThread).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceId: secondWorkspace.id,
+          configuration: { kind: "custom", targetId: "target-website" },
+        }),
+      ),
+    );
+  });
+
+  it("selects a template's project and location", async () => {
+    const user = userEvent.setup();
+    const remoteTemplate: ThreadTemplate = {
+      ...carefulTemplate,
+      id: "77777777-7777-4777-8777-777777777777",
+      name: "Remote launch",
+      workspaceId: secondWorkspace.id,
+      targetId: "target-website",
+      capturedWorkspaceName: secondWorkspace.label.text,
+      capturedTargetName: "Website agent",
+    };
+    control({ templates: [remoteTemplate], allWorkspaces: true });
+    await openPicker(user);
+    await chooseTemplate(user, remoteTemplate.name);
+    expect(screen.getByRole("combobox", { name: "Project" })).toHaveAttribute(
+      "data-project-id",
+      websiteProject.id,
+    );
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveAttribute(
+      "data-workspace-id",
+      secondWorkspace.id,
+    );
+    expect(screen.getByRole("combobox", { name: "Target" })).toHaveAttribute(
+      "data-target-id",
+      "target-website",
+    );
+    await waitFor(() =>
+      expect(screen.getByText("Using Remote launch")).toBeVisible(),
+    );
+  });
+
+  it("requires a location for a project on two environments", async () => {
+    const user = userEvent.setup();
+    const remoteLocation = { ...secondWorkspace, projectId: sedesProject.id };
+    const { createThread } = control({
+      agents: [], allWorkspaces: true,
+      workspaces: [workspace, remoteLocation],
+      creationScope: { environmentId: null, targetId: null, projectId: sedesProject.id },
+    });
+    await openPicker(user);
+    expect(screen.queryByRole("combobox", { name: "Project" })).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveAttribute("data-workspace-id", "");
+    expect(screen.queryByRole("combobox", { name: "Target" })).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Agent" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Agent" })).toHaveTextContent("Custom");
+    expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
+    await user.click(screen.getByRole("combobox", { name: "Location" }));
+    await user.click(screen.getByRole("option", { name: "Remote · /workspace/website" }));
+    expect(screen.getByRole("combobox", { name: "Target" })).toHaveAttribute("data-target-id", "target-website");
     await user.click(await screen.findByRole("button", { name: "Use Custom" }));
     await user.click(screen.getByRole("button", { name: "Create thread" }));
     await waitFor(() => expect(createThread).toHaveBeenCalledWith(expect.objectContaining({
-      workspaceId: remoteWorkspace.id,
+      workspaceId: remoteLocation.id,
       configuration: { kind: "custom", targetId: "target-website" },
     })));
   });
 
-  it("requires a path choice for same-name projects within one environment", async () => {
+  it("requires a location choice for a project with two folders on one environment", async () => {
     const user = userEvent.setup();
     const otherWorkspace = { ...workspace, id: "workspace-other", displayPath: { text: "/other/sedes" } };
     const { createThread } = control({
       agents: [], workspaces: [workspace, otherWorkspace],
-      creationScope: { environmentId: "environment-1", targetId: "target-pi", projectName: "Sedes" },
+      creationScope: { environmentId: "environment-1", targetId: "target-pi", projectId: sedesProject.id },
     });
     await openPicker(user);
     expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
-    await user.click(screen.getByRole("combobox", { name: "Project" }));
-    expect(screen.getByRole("option", { name: /Sedes.*\/workspace\/sedes/ })).toBeVisible();
-    await user.click(screen.getByRole("option", { name: /Sedes.*\/other\/sedes/ }));
+    await user.click(screen.getByRole("combobox", { name: "Location" }));
+    expect(screen.getByRole("option", { name: "/workspace/sedes" })).toBeVisible();
+    await user.click(screen.getByRole("option", { name: "/other/sedes" }));
     await user.click(await screen.findByRole("button", { name: "Use Custom" }));
     await user.click(screen.getByRole("button", { name: "Create thread" }));
     await waitFor(() => expect(createThread).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "workspace-other" })));
@@ -1376,15 +1708,16 @@ describe("NewThreadControl", () => {
   it.each([
     { environmentId: "environment-2", targetId: null },
     { environmentId: null, targetId: "target-website" },
-  ])("constrains grouped project creation to an explicit scope %j", async (scope) => {
+  ])("constrains a scoped project's locations to an explicit scope %j", async (scope) => {
     const user = userEvent.setup();
     const { createThread } = control({
       agents: [], allWorkspaces: true,
-      workspaces: [workspace, { ...secondWorkspace, label: workspace.label }],
-      creationScope: { ...scope, projectName: "Sedes" },
+      workspaces: [workspace, { ...secondWorkspace, projectId: sedesProject.id }],
+      creationScope: { ...scope, projectId: sedesProject.id },
     });
     await openPicker(user);
-    expect(screen.queryByRole("combobox", { name: "Environment" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Project" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Location" })).toBeNull();
     await user.click(await screen.findByRole("button", { name: "Use Custom" }));
     await user.click(screen.getByRole("button", { name: "Create thread" }));
     await waitFor(() => expect(createThread).toHaveBeenCalledWith(expect.objectContaining({
@@ -1393,92 +1726,99 @@ describe("NewThreadControl", () => {
     })));
   });
 
-  it("does not fall back to another environment when the scoped name is unavailable", () => {
-    control({
-      allWorkspaces: true,
-      workspaces: [workspace, { ...secondWorkspace, label: workspace.label, available: false }],
-      creationScope: { environmentId: "environment-2", targetId: null, projectName: "Sedes" },
-    });
-    expect(screen.getByRole("button", { name: "New thread" })).toBeDisabled();
-    expect(screen.getByRole("alert")).toHaveTextContent("No available Project and Target");
-  });
-
-  it("requires reselection when the chosen machine loses its matching project", async () => {
+  it("does not fall back to another environment when the scoped project is unavailable there", async () => {
     const user = userEvent.setup();
-    const remoteWorkspace = { ...secondWorkspace, label: workspace.label };
-    const { createThread, rerenderWorkspaces } = control({
-      agents: [], allWorkspaces: true,
-      workspaces: [workspace, remoteWorkspace],
-      creationScope: { environmentId: null, targetId: null, projectName: "Sedes" },
+    const { createThread } = control({
+      allWorkspaces: true,
+      workspaces: [workspace, { ...secondWorkspace, projectId: sedesProject.id, available: false }],
+      creationScope: { environmentId: "environment-2", targetId: null, projectId: sedesProject.id },
     });
     await openPicker(user);
-    await user.click(screen.getByRole("combobox", { name: "Environment" }));
-    await user.click(screen.getByRole("option", { name: "Remote" }));
-    await user.click(await screen.findByRole("button", { name: "Use Custom" }));
-    expect(screen.getByRole("button", { name: "Create thread" })).toBeEnabled();
-    rerenderWorkspaces([workspace]);
-    expect(screen.getByRole("combobox", { name: "Environment" })).toHaveAttribute("data-environment-id", "");
+    const project = screen.getByRole("combobox", { name: "Project" });
+    expect(project).toHaveAccessibleDescription("Sedes has no available location on Remote.");
+    expect(project).toHaveAttribute("data-project-id", "");
+    expect(screen.queryByRole("combobox", { name: "Location" })).toBeNull();
+    await user.click(project);
+    const option = screen.getByRole("option", { name: /Sedes/ });
+    expect(option).toHaveAttribute("aria-disabled", "true");
+    expect(option).toHaveTextContent("Unavailable");
     expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
     expect(createThread).not.toHaveBeenCalled();
   });
 
-  it("reveals the project picker when an inferred directory is replaced by a same-name directory", async () => {
+  it("requires reselection when the chosen location disappears", async () => {
+    const user = userEvent.setup();
+    const remoteLocation = { ...secondWorkspace, projectId: sedesProject.id };
+    const { createThread, rerenderWorkspaces } = control({
+      agents: [], allWorkspaces: true,
+      workspaces: [workspace, remoteLocation],
+      creationScope: { environmentId: null, targetId: null, projectId: sedesProject.id },
+    });
+    await openPicker(user);
+    await user.click(screen.getByRole("combobox", { name: "Location" }));
+    await user.click(screen.getByRole("option", { name: "Remote · /workspace/website" }));
+    await user.click(await screen.findByRole("button", { name: "Use Custom" }));
+    expect(screen.getByRole("button", { name: "Create thread" })).toBeEnabled();
+    rerenderWorkspaces([workspace]);
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveAttribute("data-workspace-id", "");
+    expect(screen.getByRole("combobox", { name: "Agent" })).toHaveTextContent("Choose Project, Location and Target first");
+    expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
+    expect(createThread).not.toHaveBeenCalled();
+  });
+
+  it("reveals the location picker when an inferred location is replaced", async () => {
     const user = userEvent.setup();
     const { createThread, rerenderWorkspaces } = control({ agents: [] });
     await openPicker(user);
     await user.click(await screen.findByRole("button", { name: "Use Custom" }));
-    expect(screen.queryByRole("combobox", { name: "Project" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Location" })).toBeNull();
     const replacement = { ...workspace, id: "workspace-replacement", displayPath: { text: "/replacement/sedes" } };
     rerenderWorkspaces([replacement]);
-    expect(screen.getByRole("combobox", { name: "Project" })).toHaveAttribute("data-workspace-id", "");
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveAttribute("data-workspace-id", "");
     expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
     expect(createThread).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("combobox", { name: "Project" }));
-    await user.click(screen.getByRole("option", { name: "Sedes" }));
+    await user.click(screen.getByRole("combobox", { name: "Location" }));
+    await user.click(screen.getByRole("option", { name: "/replacement/sedes" }));
     await user.click(await screen.findByRole("button", { name: "Use Custom" }));
     await user.click(screen.getByRole("button", { name: "Create thread" }));
     await waitFor(() => expect(createThread).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: replacement.id })));
   });
 
-  it("does not replace a vanished same-name directory with its remaining sibling", async () => {
+  it("does not replace a vanished location with its remaining sibling", async () => {
     const user = userEvent.setup();
     const otherWorkspace = { ...workspace, id: "workspace-other", displayPath: { text: "/other/sedes" } };
     const { createThread, rerenderWorkspaces } = control({
       agents: [], workspaces: [workspace, otherWorkspace],
-      creationScope: { environmentId: "environment-1", targetId: "target-pi", projectName: "Sedes" },
+      creationScope: { environmentId: "environment-1", targetId: "target-pi", projectId: sedesProject.id },
     });
     await openPicker(user);
-    await user.click(screen.getByRole("combobox", { name: "Project" }));
-    await user.click(screen.getByRole("option", { name: /Sedes.*\/other\/sedes/ }));
+    await user.click(screen.getByRole("combobox", { name: "Location" }));
+    await user.click(screen.getByRole("option", { name: "/other/sedes" }));
     await user.click(await screen.findByRole("button", { name: "Use Custom" }));
     rerenderWorkspaces([workspace]);
-    expect(screen.getByRole("combobox", { name: "Project" })).toHaveAttribute("data-workspace-id", "");
+    expect(screen.getByRole("combobox", { name: "Location" })).toHaveAttribute("data-workspace-id", "");
     expect(screen.getByRole("button", { name: "Create thread" })).toBeDisabled();
     expect(createThread).not.toHaveBeenCalled();
   });
 
-  it("requires an environment in an unscoped multi-environment view", async () => {
+  it("requires a project in an unscoped multi-environment view", async () => {
     const user = userEvent.setup();
     const { api } = control({ allWorkspaces: true });
     await openPicker(user);
     expect(screen.getByRole("combobox", { name: "Agent" })).toBeDisabled();
+    expect(screen.queryByRole("combobox", { name: "Location" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Target" })).toBeNull();
 
-    const environment = screen.getByRole("combobox", {
-      name: "Environment",
-    });
-    await user.click(environment);
-    const remoteOption = screen.getByRole("option", { name: "Remote" });
-    expect(
-      remoteOption.querySelector('[data-environment-kind="ssh"]'),
-    ).not.toBeNull();
-    await user.click(remoteOption);
+    const project = screen.getByRole("combobox", { name: "Project" });
+    expect(project).toHaveAttribute("data-project-id", "");
+    await user.click(project);
+    await user.click(screen.getByRole("option", { name: "Website" }));
+    const location = screen.getByRole("combobox", { name: "Location" });
+    expect(location).toHaveAttribute("data-workspace-id", "workspace-2");
+    expect(location.querySelector('[data-environment-kind="ssh"]')).not.toBeNull();
     expect(screen.getByRole("combobox", { name: "Target" })).toHaveAttribute(
       "data-target-id",
       "target-website",
-    );
-    expect(screen.getByRole("combobox", { name: "Project" })).toHaveAttribute(
-      "data-workspace-id",
-      "workspace-2",
     );
     await chooseCareful(user);
     await waitFor(() =>
@@ -1577,15 +1917,15 @@ describe("NewThreadControl", () => {
     ).toBeVisible();
   });
 
-  it("retains one pending template catalog request while a missing project filter is repaired", async () => {
+  it("retains one pending template catalog request while a missing target filter is repaired", async () => {
     const user = userEvent.setup();
     const pendingTemplates = deferredTemplateList();
     const listThreadTemplates = vi.fn().mockReturnValue(pendingTemplates.promise);
-    const scope = { environmentId: null, targetId: "target-pi", projectName: "Removed project" };
+    const scope = { environmentId: null, targetId: "target-removed", projectId: null };
     const { rerenderScope } = control({ creationScope: scope, listThreadTemplates });
     expect(listThreadTemplates).toHaveBeenCalledTimes(1);
     const signal = listThreadTemplates.mock.calls[0]![0].signal as AbortSignal;
-    rerenderScope({ ...scope, projectName: null });
+    rerenderScope({ ...scope, targetId: "target-pi" });
     expect(signal.aborted).toBe(false);
     await openPicker(user);
     await user.click(screen.getByRole("button", { name: "Cancel" }));
@@ -1601,7 +1941,7 @@ describe("NewThreadControl", () => {
   it("aborts a pending template catalog read when the control unmounts", () => {
     const listThreadTemplates = vi.fn().mockReturnValue(new Promise(() => undefined));
     const { unmount } = control({
-      creationScope: { environmentId: null, targetId: "target-pi", projectName: "Removed project" },
+      creationScope: { environmentId: null, targetId: "target-removed", projectId: null },
       listThreadTemplates,
     });
     const signal = listThreadTemplates.mock.calls[0]![0].signal as AbortSignal;
@@ -1617,7 +1957,7 @@ describe("NewThreadControl", () => {
     const oldList = vi.fn().mockReturnValue(oldTemplates.promise);
     const newList = vi.fn().mockReturnValue(newTemplates.promise);
     const { api, rerenderApi } = control({
-      creationScope: { environmentId: null, targetId: "target-pi", projectName: "Removed project" },
+      creationScope: { environmentId: null, targetId: "target-removed", projectId: null },
       listThreadTemplates: oldList,
     });
     const oldSignal = oldList.mock.calls[0]![0].signal as AbortSignal;
@@ -1708,7 +2048,7 @@ describe("NewThreadControl", () => {
       creationScope: {
         environmentId: null,
         targetId: null,
-        projectName: workspace.label.text,
+        projectId: sedesProject.id,
       },
     });
     await openPicker(user);
@@ -1731,7 +2071,7 @@ describe("NewThreadControl", () => {
       creationScope: {
         environmentId: null,
         targetId: null,
-        projectName: workspace.label.text,
+        projectId: sedesProject.id,
       },
     });
     await openPicker(user);

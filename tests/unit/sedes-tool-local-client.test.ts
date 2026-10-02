@@ -136,7 +136,7 @@ describe("SedesToolLocalClient", () => {
     await expect(
       client.invoke({
         toolId: "agent.context",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "invocation-request",
         input: {},
       }),
@@ -175,7 +175,7 @@ describe("SedesToolLocalClient", () => {
       client.invoke(
         {
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "invocation-request",
           input: {},
         },

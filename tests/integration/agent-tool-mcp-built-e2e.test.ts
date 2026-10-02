@@ -324,6 +324,10 @@ describe("built Sedes MCP server", () => {
         backend: "codex_app_server",
         threadId: source.thread.id,
         workspaceId: workspace.id,
+        projectId: database
+          .prepare("SELECT project_id FROM workspaces WHERE id = ?")
+          .pluck()
+          .get(workspace.id),
       });
       const status = await individual.callTool({
         name: "sedes_thread_status",

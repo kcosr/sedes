@@ -15,7 +15,7 @@ Open **View options** and choose one layout:
 
 | View | Best for |
 | --- | --- |
-| **Projects** | Browsing by repository or workspace, with optional fork-family nesting |
+| **Projects** | Browsing by project, with optional fork-family nesting |
 | **Timeline** | Seeing recent activity and future snooze or automation deadlines |
 | **State** | Separating attention, running, scheduled, idle, snoozed, and settled work |
 | **Flat list** | A compact working set without time or state headings |
@@ -30,6 +30,14 @@ stay collapsed even when they contain the current thread.
 Large groups initially show a bounded recent set, with an expander for older
 rows. An active search shows all matches, and the selected thread remains
 visible.
+
+The Projects view shows one group per project. When a project has more than
+one location, each row is tagged with only what tells its location apart: a
+remote environment when the project spans environments (Local is never named),
+and the folder when the project has several folders on that environment and
+the folder name differs from the project's. Cards in Timeline, State, and Flat
+list name the project the same way, for example `sedes › sedes-context`.
+Search matches project names as well as location paths and environment names.
 
 ## Thread activity indicators
 
@@ -56,25 +64,73 @@ has stopped.
 
 ## Manage projects
 
-Open **Settings → Projects** to list remembered directories,
-filter by environment, add projects, or remove them from active use. The list
-includes unavailable environments. Allowed workspace roots remain separate:
-adding a project remembers a directory within existing access grants.
+A project groups the directories you work in, across your environments. Each
+directory on one environment is a **location** of exactly one project, such as
+the same repository checked out on this computer and on an SSH host, or
+several related repositories on one host. Open **Settings → Projects** to see
+every project with its locations underneath. A project row shows its name and
+location count; a location row shows its environment, path, availability, and
+thread count. Removed projects and locations stay listed with a **Removed**
+tag. Allowed workspace roots remain separate: adding a location remembers a
+directory within existing access grants.
 
-**Remove** hides a project and its threads from ordinary inventory and creation
-pickers. Its directory, Git worktrees, provider history, drafts, Tasks, and other
-saved records remain intact. Thread inventory states are preserved. End live or
-interrupted terminals, resolve running/queued/uncertain work, and pause enabled
-schedules before removing the project. Removal stops new work and conversation
-discovery for that registration.
+Filter by environment, status, or search text. The filters apply to
+locations, and a project is shown when any of its locations matches, with only
+the matching locations under it. A project without locations stays listed
+unless you filter by environment.
 
-Choose **Removed projects** in the project status filter to restore a project. Adding the same
-canonical directory in the same environment also restores the original project
-and its associations automatically. Adding an already remembered directory
-selects the existing project without duplicating it. The same directory spelling
-on another environment is a separate project. Restoration rechecks current
-access to the directory; paused schedules remain paused until explicitly enabled.
-Removal retains storage; it is not a permanent data purge.
+**Add project** asks for a directory and the project it joins: a new project,
+named after the folder and editable, or an existing project, listed with the
+environments that host it ("sedes — on Local, aw-personal +1"). An existing
+project is preselected only when exactly one project has the folder's name and
+it has no location on the chosen environment, which is the same repository on
+another host; otherwise a new project is the default. A project's **Add
+location…** action opens the same dialog for that project. Adding a directory
+that is already a location never duplicates it:
+
+- an active location is selected in its project, and a removed one is restored
+  into its project;
+- when you chose a different existing project, **Move here** moves the
+  location there instead, restoring it if it was removed; a removed location
+  can also be restored in its own project with **Restore in**;
+- a location of a removed project offers **Restore project** or **Add to
+  another project**, which moves the location to the project you chose and
+  restores it.
+
+The same directory spelling on another environment is a separate location.
+
+Use a project's menu to **Rename** it, to **Merge into** another project, or to
+remove or restore it. Use a location's menu to **Move to project**, which can
+also split it into a new project, or to remove or restore it. Moving or merging
+carries a location's threads, Tasks, Workpads, and other saved records with it.
+A merge moves every location of the project, removed ones included, and then
+deletes the merged project; it can't be undone. Running, queued, or uncertain
+work blocks moving and merging.
+
+When several active projects share a name, an inline note above the list names them
+with a **Merge** action, so separately added checkouts of the same work can be
+combined.
+
+**Remove location** hides one location and its threads from ordinary inventory
+and creation pickers. Its directory, Git worktrees, provider history, drafts,
+Tasks, and other saved records remain intact, and thread inventory states are
+preserved. End live or interrupted terminals, resolve running, queued, or
+uncertain work, and pause enabled schedules first. Removal stops new work and
+conversation discovery for that location. When it is the project's last active
+location, you can also remove the project in the same step.
+
+**Remove project** removes every active location of the project at once. If
+anything blocks it, Sedes lists every blocker by location, such as running
+work, enabled schedules, terminals, or busy agents, with the affected threads.
+**Restore project** restores the project and lets you choose which removed
+locations to restore with it; the locations its removal took on available
+environments are preselected, and each one reports whether it was restored. A
+location of a removed project is restored with its project, or by moving it to
+another project and restoring it there.
+
+Restoration rechecks current access to each directory; paused schedules remain
+paused until explicitly enabled. Removal retains storage; it is not a permanent
+data purge.
 
 ## Narrow the sidebar with Scope
 
@@ -92,28 +148,31 @@ change Scope until you choose an option. Use Up/Down to move through results,
 Enter to select, or Escape to close without changing the selection. **All** and
 **Ungrouped** choices remain available while searching.
 
-Project Scope lists each base project name once. Selecting a name includes
-all remembered projects with that exact name across environments, including
-unavailable projects' historical threads. Environment and Target narrow those
-results. A selected name stays selected when you change environments; a
-combination with no matching projects shows an empty result.
+Project Scope lists the projects with a location on the scoped environment, or
+every project when neither an Environment nor a Target is selected. Selecting a
+project includes all of its locations, including unavailable locations'
+historical threads. Environment and Target narrow those results. A selected
+project stays selected when you change environments; a combination where the
+project has no location shows an empty result. Projects with the same name
+are told apart by their environments or paths.
+
+A project-name filter saved by an earlier version of Sedes becomes a project
+filter once the sidebar has a current inventory, when exactly one project
+matches the name; otherwise it is cleared.
 
 With **Click project and environment names to filter** enabled in
-**Settings → General**,
-project-name links on sidebar cards apply the same combined name filter.
-Environment links narrow by the specific environment. Project stacks and the
-Projects view still keep each registered directory separate, and Tasks, files,
-and agent permissions retain their existing project and environment boundaries.
+**Settings → General**, project links on sidebar cards filter to that project.
+Environment links narrow by the specific environment. Tasks, files, and agent
+permissions keep their existing location and environment boundaries.
 
 Changing Environment clears an incompatible Target. Choose **Ungrouped** to see threads without a Group, or
 **Clear** to reset the entire Scope without changing search or visibility
 toggles.
 
-Environment, Target, and Project Scope can prefill compatible values in **New
-thread**. When a project name matches several eligible environments, choose
-an Environment in the existing creation form. The Project dropdown then
-resolves a directory within that environment; duplicate names include paths.
-An explicit Environment or Target scope already determines the machine.
+Environment, Target, and Project Scope prefill **New thread**: the scoped
+project is preselected, its locations are limited to the scoped environment or
+target, and a scoped target is preselected. When the scoped project has no
+location there, choose another project.
 Group Scope only filters inventory; creating a thread while a Group
 is selected does not assign that thread to the Group. Use the new thread's
 context menu to add or move its Group membership.

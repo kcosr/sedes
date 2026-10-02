@@ -160,6 +160,12 @@ interface StateOptions {
   readonly workspaces?: NonNullable<
     ApplicationClientState["snapshot"]
   >["workspaces"];
+  /** Whether the snapshot is authoritative; defaults to true. */
+  readonly authoritative?: boolean;
+  /** Defaults to one project per workspace `projectId`, named by its first folder. */
+  readonly projects?: NonNullable<
+    ApplicationClientState["snapshot"]
+  >["projects"];
   readonly executionTargets?: NonNullable<
     ApplicationClientState["snapshot"]
   >["executionTargets"];
@@ -173,6 +179,11 @@ interface StateOptions {
     sourceThreadId: string;
     descendantCount: number;
   }[];
+}
+
+/** A Projects-view row: its title and location tag share the row's main line. */
+function rowWithTitle(title: string): HTMLElement {
+  return screen.getByText(title).closest<HTMLElement>(".lineage-row-main")!;
 }
 
 function forkOrigin(childThreadId: string, sourceThreadId: string) {
@@ -239,10 +250,32 @@ function TaskDragTestSource({ task }: { readonly task: TaskSummary }) {
   );
 }
 
+function projectsFor(
+  workspaces: NonNullable<ApplicationClientState["snapshot"]>["workspaces"],
+): NonNullable<ApplicationClientState["snapshot"]>["projects"] {
+  const projects = new Map<string, string>();
+  for (const workspace of workspaces) {
+    if (!projects.has(workspace.projectId)) {
+      projects.set(workspace.projectId, workspace.label.text);
+    }
+  }
+  return [...projects].map(([id, name]) => ({ id, name, revision: 0 }));
+}
+
 function makeState(
   threads: readonly ThreadSummary[],
   options: StateOptions = {},
 ): ApplicationClientState {
+  const workspaces = options.workspaces ?? [
+    {
+      id: "workspace-1",
+      environmentId: "environment-1",
+      projectId: "project-sedes",
+      label: { text: "Sedes" },
+      displayPath: { text: "/workspace/sedes" },
+      available: true,
+    },
+  ];
   const snapshot = {
     environments: options.environments ?? [
       {
@@ -253,15 +286,8 @@ function makeState(
         directoryBrowsing: "unavailable" as const,
       },
     ],
-    workspaces: options.workspaces ?? [
-      {
-        id: "workspace-1",
-        environmentId: "environment-1",
-        label: { text: "Sedes" },
-        displayPath: { text: "/workspace/sedes" },
-        available: true,
-      },
-    ],
+    projects: options.projects ?? projectsFor(workspaces),
+    workspaces,
     threads: [...threads],
     groups: [...(options.groups ?? [])],
     executionTargets: [
@@ -286,7 +312,7 @@ function makeState(
   return {
     status: "ready",
     connection: "connected",
-    authoritative: true,
+    authoritative: options.authoritative ?? true,
     providerPulseEnabled: false, experimentalUsageEnabled: false,
     search: options.search ?? "",
     descendantPages: options.descendantPages ?? {},
@@ -317,7 +343,7 @@ function renderSidebar(
       })),
     },
     createThread: vi.fn(),
-    openWorkspace: vi.fn().mockResolvedValue("workspace-new"),
+    openWorkspace: vi.fn().mockResolvedValue({ id: "workspace-new", projectId: "project-new-project" }),
     refresh: vi.fn().mockResolvedValue(undefined),
     subscribe: () => () => undefined,
     getSnapshot: vi.fn(() => state),
@@ -948,6 +974,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-1",
             environmentId: "environment-1",
+            projectId: "project-sedes",
             label: { text: "Sedes" },
             displayPath: { text: "/workspace/sedes" },
             available: true,
@@ -955,6 +982,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-2",
             environmentId: "environment-1",
+            projectId: "project-console",
             label: { text: "Console" },
             displayPath: { text: "/workspace/console" },
             available: true,
@@ -965,7 +993,7 @@ describe("InventorySidebar view modes", () => {
     );
 
     const stack = screen.getByTestId("project-stack");
-    expect(stack).toHaveAttribute("data-workspace-id", "workspace-1");
+    expect(stack).toHaveAttribute("data-project-id", "project-sedes");
     expect(stack).toHaveAttribute("data-representative-thread-id", recent.id);
     expect(
       within(stack).getByRole("button", {
@@ -1267,6 +1295,7 @@ describe("InventorySidebar view modes", () => {
       {
         id: "workspace-1",
         environmentId: "environment-local",
+        projectId: "project-sedes",
         label: { text: "Sedes" },
         displayPath: { text: "/workspace/sedes" },
         available: true,
@@ -1274,6 +1303,7 @@ describe("InventorySidebar view modes", () => {
       {
         id: "workspace-remote",
         environmentId: "environment-remote",
+        projectId: "project-sedes",
         label: { text: "Sedes" },
         displayPath: { text: "/workspace/sedes" },
         available: true,
@@ -1393,6 +1423,7 @@ describe("InventorySidebar view modes", () => {
         {
           id: "workspace-1",
           environmentId: "environment-local",
+          projectId: "project-sedes",
           label: { text: "Sedes" },
           displayPath: { text: "/workspace/sedes" },
           available: true,
@@ -1400,6 +1431,7 @@ describe("InventorySidebar view modes", () => {
         {
           id: "workspace-remote",
           environmentId: "environment-remote",
+          projectId: "project-sedes",
           label: { text: "Sedes" },
           displayPath: { text: "/workspace/sedes" },
           available: true,
@@ -1448,7 +1480,7 @@ describe("InventorySidebar view modes", () => {
     },
   );
 
-  it("omits Local from project folder labels while retaining remote environments", () => {
+  it("groups a multi-host project once and tags only its remote rows", () => {
     const environments: NonNullable<StateOptions["environments"]> = [
       {
         id: "environment-local",
@@ -1469,6 +1501,7 @@ describe("InventorySidebar view modes", () => {
       {
         id: "workspace-1",
         environmentId: "environment-local",
+        projectId: "project-sedes",
         label: { text: "Sedes" },
         displayPath: { text: "/workspace/sedes" },
         available: true,
@@ -1476,6 +1509,7 @@ describe("InventorySidebar view modes", () => {
       {
         id: "workspace-remote",
         environmentId: "environment-remote",
+        projectId: "project-sedes",
         label: { text: "Sedes" },
         displayPath: { text: "/workspace/sedes" },
         available: true,
@@ -1512,10 +1546,254 @@ describe("InventorySidebar view modes", () => {
     );
 
     const projectRows = screen.getAllByTestId("project-row");
-    expect(projectRows).toHaveLength(2);
-    expect(projectRows[0]).toHaveTextContent("Sedes");
-    expect(projectRows[0]).not.toHaveTextContent("Local");
-    expect(projectRows[1]).toHaveTextContent("Sedes · Remote host");
+    expect(projectRows).toHaveLength(1);
+    expect(projectRows[0]).toHaveTextContent(/^Sedes$/u);
+    const localRow = rowWithTitle("Local thread");
+    const remoteRow = rowWithTitle("Remote thread");
+    expect(
+      within(localRow).queryByTestId("thread-row-location"),
+    ).not.toBeInTheDocument();
+    expect(within(remoteRow).getByTestId("thread-row-location")).toHaveTextContent(
+      /^Remote host$/u,
+    );
+  });
+
+  it("names a single remote host in project headers unless Scope implies it", () => {
+    const environments: NonNullable<StateOptions["environments"]> = [
+      {
+        id: "environment-local",
+        kind: "local" as const,
+        label: { text: "Local" },
+        available: true,
+        directoryBrowsing: "unavailable",
+      },
+      {
+        id: "environment-remote",
+        kind: "ssh" as const,
+        label: { text: "aw-personal" },
+        available: true,
+        directoryBrowsing: "unavailable",
+      },
+    ];
+    const workspaces: NonNullable<StateOptions["workspaces"]> = [
+      {
+        id: "workspace-1",
+        environmentId: "environment-local",
+        projectId: "project-notes",
+        label: { text: "notes" },
+        displayPath: { text: "/workspace/notes" },
+        available: true,
+      },
+      {
+        id: "workspace-remote",
+        environmentId: "environment-remote",
+        projectId: "project-sedes",
+        label: { text: "sedes" },
+        displayPath: { text: "/srv/sedes" },
+        available: true,
+      },
+    ];
+    const executionTargets: NonNullable<StateOptions["executionTargets"]> = [
+      {
+        id: "target-1",
+        environmentId: "environment-local",
+        label: { text: "Pi" },
+        backend: { label: { text: "Pi" }, brand: "pi" as const },
+        workspaceExecution: { kind: "direct_only" },
+        available: true,
+      },
+      {
+        id: "target-remote",
+        environmentId: "environment-remote",
+        label: { text: "Codex" },
+        backend: { label: { text: "Codex" }, brand: "codex" as const },
+        workspaceExecution: { kind: "direct_only" },
+        available: true,
+      },
+    ];
+    const threads = [
+      makeThread("thread-local", "Local thread"),
+      makeThread("thread-remote", "Remote thread", {
+        workspaceId: "workspace-remote",
+        targetId: "target-remote",
+      }),
+    ];
+    const options = { environments, workspaces, executionTargets };
+
+    renderSidebar(threads, options);
+    expect(
+      screen.getAllByTestId("project-row").map((row) => row.textContent),
+    ).toEqual(["notes", "sedes · aw-personal"]);
+    cleanup();
+
+    seedViewPreferences({ groupBy: "project", stackBy: "group" });
+    renderSidebar(threads, options);
+    expect(
+      screen.getAllByTestId("flat-group").map((group) =>
+        group.querySelector(".shelf-trigger span")?.firstChild?.textContent?.trim(),
+      ),
+    ).toEqual(["notes", "sedes · aw-personal"]);
+    cleanup();
+
+    seedViewPreferences({ groupBy: "project", environmentFilterId: "environment-remote" });
+    renderSidebar(threads, options);
+    expect(
+      screen.getAllByTestId("project-row").map((row) => row.textContent),
+    ).toEqual(["sedes"]);
+  });
+
+  it("tags compact rows when the Projects view stacks threads", () => {
+    seedViewPreferences({ groupBy: "project", stackBy: "group" });
+    renderSidebar(
+      [
+        makeThread("thread-main", "Main thread"),
+        makeThread("thread-context", "Context thread", {
+          workspaceId: "workspace-context",
+        }),
+      ],
+      {
+        workspaces: [
+          {
+            id: "workspace-1",
+            environmentId: "environment-1",
+            projectId: "project-sedes",
+            label: { text: "sedes" },
+            displayPath: { text: "/workspace/sedes" },
+            available: true,
+          },
+          {
+            id: "workspace-context",
+            environmentId: "environment-1",
+            projectId: "project-sedes",
+            label: { text: "sedes-context" },
+            displayPath: { text: "/workspace/sedes-context" },
+            available: true,
+          },
+        ],
+      },
+    );
+    const group = screen.getByTestId("flat-group");
+    expect(group).toHaveAttribute("data-group", "project:project-sedes");
+    expect(within(group).getAllByTestId("thread-row-location").map(
+      (tag) => tag.textContent,
+    )).toEqual(["sedes-context"]);
+  });
+
+  it("keeps folder distinctions on cards when Scope or a stack names the project", async () => {
+    const workspaces: NonNullable<StateOptions["workspaces"]> = [
+      {
+        id: "workspace-1",
+        environmentId: "environment-1",
+        projectId: "project-sedes",
+        label: { text: "sedes" },
+        displayPath: { text: "/workspace/sedes" },
+        available: true,
+      },
+      {
+        id: "workspace-context",
+        environmentId: "environment-1",
+        projectId: "project-sedes",
+        label: { text: "sedes-context" },
+        displayPath: { text: "/workspace/sedes-context" },
+        available: true,
+      },
+    ];
+    const threads = [
+      makeThread("thread-main", "Main thread", { lastActivityAt: isoAtNoon(-1) }),
+      makeThread("thread-context", "Context thread", {
+        workspaceId: "workspace-context",
+      }),
+    ];
+    const cardFor = (title: string) =>
+      screen.getByText(title).closest<HTMLElement>("[data-testid='flat-thread-row']")!;
+
+    seedViewPreferences({
+      groupBy: "time",
+      modes: { time: { density: "card" } },
+      projectFilterId: "project-sedes",
+    });
+    renderSidebar(threads, { workspaces });
+    expect(within(cardFor("Context thread")).queryByTestId("flat-row-project")).toBeNull();
+    expect(within(cardFor("Context thread")).getByTestId("flat-row-folder")).toHaveTextContent(/^sedes-context$/u);
+    expect(within(cardFor("Main thread")).queryByTestId("flat-row-folder")).toBeNull();
+    cleanup();
+
+    seedViewPreferences({
+      groupBy: "none",
+      stackBy: "project",
+      modes: { none: { density: "card" } },
+    });
+    renderSidebar(threads, { workspaces }, true);
+    const stack = screen.getByTestId("project-stack");
+    fireEvent.pointerEnter(stack, { pointerType: "mouse" });
+    const roster = await screen.findByTestId("thread-group-roster");
+    const member = within(roster).getByText("Context thread")
+      .closest<HTMLElement>("[data-testid='flat-thread-row']")!;
+    expect(within(member).queryByTestId("flat-row-project")).toBeNull();
+    expect(within(member).getByTestId("flat-row-folder")).toHaveTextContent(/^sedes-context$/u);
+  });
+
+  it("tags rows by folder in a project with several folders on one host", () => {
+    const workspaces: NonNullable<StateOptions["workspaces"]> = [
+      {
+        id: "workspace-1",
+        environmentId: "environment-1",
+        projectId: "project-sedes",
+        label: { text: "sedes" },
+        displayPath: { text: "/workspace/sedes" },
+        available: true,
+      },
+      {
+        id: "workspace-context",
+        environmentId: "environment-1",
+        projectId: "project-sedes",
+        label: { text: "sedes-context" },
+        displayPath: { text: "/workspace/sedes-context" },
+        available: true,
+      },
+      {
+        id: "workspace-other",
+        environmentId: "environment-1",
+        projectId: "project-other",
+        label: { text: "other" },
+        displayPath: { text: "/workspace/other" },
+        available: true,
+      },
+    ];
+    renderSidebar(
+      [
+        makeThread("thread-main", "Main thread"),
+        makeThread("thread-context", "Context thread", {
+          workspaceId: "workspace-context",
+        }),
+        makeThread("thread-other", "Other thread", {
+          workspaceId: "workspace-other",
+        }),
+      ],
+      {
+        workspaces,
+        projects: [
+          { id: "project-sedes", name: "sedes", revision: 0 },
+          { id: "project-other", name: "other", revision: 0 },
+          { id: "project-empty", name: "Empty", revision: 0 },
+        ],
+      },
+    );
+
+    expect(
+      screen.getAllByTestId("project-row").map((row) => row.textContent),
+    ).toEqual(["sedes", "other", "Empty"]);
+    expect(
+      within(rowWithTitle("Main thread")).queryByTestId("thread-row-location"),
+    ).not.toBeInTheDocument();
+    expect(
+      within(rowWithTitle("Context thread")).getByTestId("thread-row-location"),
+    ).toHaveTextContent(/^sedes-context$/u);
+    // A one-location project needs no tag.
+    fireEvent.click(screen.getAllByTestId("project-row")[1]!);
+    expect(
+      within(rowWithTitle("Other thread")).queryByTestId("thread-row-location"),
+    ).not.toBeInTheDocument();
   });
 
   it.each(["project", "none"] as const)(
@@ -2028,6 +2306,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-remote",
             environmentId: "environment-ssh",
+            projectId: "project-sedes",
             label: { text: "Sedes" },
             displayPath: { text: "/srv/sedes" },
             available: true,
@@ -2069,7 +2348,7 @@ describe("InventorySidebar view modes", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("cascades Environment and Target while deduplicating Project names", async () => {
+  it("cascades Environment and Target while listing a multi-host project once", async () => {
     const user = userEvent.setup();
     renderSidebar(
       [
@@ -2104,6 +2383,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-1",
             environmentId: "environment-local",
+            projectId: "project-agent-workspaces",
             label: { text: "agent-workspaces" },
             displayPath: { text: "/home/me/agent-workspaces" },
             available: true,
@@ -2111,6 +2391,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-remote",
             environmentId: "environment-ssh",
+            projectId: "project-agent-workspaces",
             label: { text: "agent-workspaces" },
             displayPath: { text: "/srv/agent-workspaces" },
             available: true,
@@ -2153,13 +2434,13 @@ describe("InventorySidebar view modes", () => {
       screen.queryByRole("option", { name: "agent-workspaces · Build host" }),
     ).toBeNull();
     await user.click(screen.getByRole("option", { name: "agent-workspaces" }));
-    expect(screen.getAllByTestId("project-row")).toHaveLength(2);
+    expect(screen.getAllByTestId("project-row")).toHaveLength(1);
     expect(screen.getByText("Local work")).toBeVisible();
     expect(screen.getByText("Remote work")).toBeVisible();
     expect(screen.getByText("Remote Pi work")).toBeVisible();
     expect(document.querySelector(".sidebar-inner")).toHaveAttribute("data-environment-tint-mode", "rows");
     expect(JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!)).toMatchObject({
-      projectFilterName: "agent-workspaces", environmentFilterId: null, targetFilterId: null,
+      projectFilterId: "project-agent-workspaces", environmentFilterId: null, targetFilterId: null,
     });
 
     await user.click(screen.getByRole("combobox", { name: "Target filter" }));
@@ -2232,7 +2513,7 @@ describe("InventorySidebar view modes", () => {
     ).toBeVisible();
   });
 
-  it("filters project stack label taps by name while keeping workspace stacks separate", async () => {
+  it("filters from a project stack label and stacks every location of the project together", async () => {
     seedViewPreferences({ groupBy: "none", stackBy: "project" });
     setClickNamesToFilter(true);
     const user = userEvent.setup();
@@ -2247,31 +2528,31 @@ describe("InventorySidebar view modes", () => {
         { id: "remote-env", kind: "ssh", label: { text: "Remote host" }, available: false, directoryBrowsing: "unavailable" },
       ],
       workspaces: [
-        { id: "workspace-1", environmentId: "environment-1", label: { text: "Sedes" }, displayPath: { text: "/code/sedes" }, available: true },
-        { id: "remote", environmentId: "remote-env", label: { text: "Sedes" }, displayPath: { text: "/srv/sedes" }, available: false },
-        { id: "other", environmentId: "environment-1", label: { text: "Other" }, displayPath: { text: "/code/other" }, available: true },
+        { id: "workspace-1", environmentId: "environment-1", projectId: "project-sedes", label: { text: "Sedes" }, displayPath: { text: "/code/sedes" }, available: true },
+        { id: "remote", environmentId: "remote-env", projectId: "project-sedes", label: { text: "Sedes" }, displayPath: { text: "/srv/sedes" }, available: false },
+        { id: "other", environmentId: "environment-1", projectId: "project-other", label: { text: "Other" }, displayPath: { text: "/code/other" }, available: true },
       ],
     });
-    expect(screen.getAllByTestId("project-stack")).toHaveLength(2);
-    const remoteStack = screen.getAllByTestId("project-stack").find((stack) => stack.dataset.workspaceId === "remote")!;
-    await user.click(within(remoteStack).getByRole("button", { name: "Filter threads by project Sedes" }));
+    const stack = screen.getByTestId("project-stack");
+    expect(stack).toHaveAttribute("data-project-id", "project-sedes");
+    await user.click(within(stack).getByRole("button", { name: "Filter threads by project Sedes" }));
     expect(screen.queryByText("Unrelated project")).toBeNull();
-    expect(screen.getAllByTestId("project-stack").map((stack) => stack.dataset.workspaceId).sort())
-      .toEqual(["remote", "workspace-1"]);
+    expect(screen.getAllByTestId("project-stack")).toHaveLength(1);
     expect(screen.getByRole("combobox", { name: "Environment filter" })).toHaveTextContent("All environments");
-    expect(JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!)).toMatchObject({ projectFilterName: "Sedes" });
+    expect(JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!)).toMatchObject({ projectFilterId: "project-sedes" });
     await user.click(screen.getByRole("combobox", { name: "Environment filter" }));
     const remoteHost = screen.getByRole("option", { name: "Remote host Unavailable" });
     expect(remoteHost).toHaveAttribute("data-unavailable");
     expect(remoteHost).not.toHaveAttribute("aria-disabled");
     await user.click(remoteHost);
     expect(screen.getAllByTestId("project-stack")).toHaveLength(1);
-    expect(screen.getByTestId("project-stack")).toHaveAttribute("data-workspace-id", "remote");
-    expect(JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!)).toMatchObject({ projectFilterName: "Sedes", environmentFilterId: "remote-env" });
+    expect(screen.getByTestId("project-stack")).toHaveAttribute("data-project-id", "project-sedes");
+    expect(screen.queryByText("Local one")).toBeNull();
+    expect(JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!)).toMatchObject({ projectFilterId: "project-sedes", environmentFilterId: "remote-env" });
   });
 
-  it("retains an unmatched selected name when the environment changes", async () => {
-    seedViewPreferences({ groupBy: "none", projectFilterName: "Remote only" });
+  it("retains a selected project with no location on a newly scoped environment", async () => {
+    seedViewPreferences({ groupBy: "none", projectFilterId: "project-remote-only" });
     const user = userEvent.setup();
     renderSidebar([
       makeThread("local", "Local work"),
@@ -2282,8 +2563,8 @@ describe("InventorySidebar view modes", () => {
         { id: "remote-env", kind: "ssh", label: { text: "Remote" }, available: true, directoryBrowsing: "unavailable" },
       ],
       workspaces: [
-        { id: "workspace-1", environmentId: "environment-1", label: { text: "Local only" }, displayPath: { text: "/code/local" }, available: true },
-        { id: "remote", environmentId: "remote-env", label: { text: "Remote only" }, displayPath: { text: "/srv/remote" }, available: true },
+        { id: "workspace-1", environmentId: "environment-1", projectId: "project-local-only", label: { text: "Local only" }, displayPath: { text: "/code/local" }, available: true },
+        { id: "remote", environmentId: "remote-env", projectId: "project-remote-only", label: { text: "Remote only" }, displayPath: { text: "/srv/remote" }, available: true },
       ],
     });
     expect(screen.getByText("Remote work")).toBeVisible();
@@ -2292,7 +2573,7 @@ describe("InventorySidebar view modes", () => {
     expect(screen.getByRole("combobox", { name: "Project filter" })).toHaveTextContent("Remote only");
     expect(screen.queryByText("Local work")).toBeNull();
     expect(screen.queryByText("Remote work")).toBeNull();
-    expect(JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!)).toMatchObject({ projectFilterName: "Remote only" });
+    expect(JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!)).toMatchObject({ projectFilterId: "project-remote-only" });
   });
 
   it("keeps project names distinct from the All projects control value", async () => {
@@ -2302,8 +2583,8 @@ describe("InventorySidebar view modes", () => {
       makeThread("named", "Sentinel-named work"),
       makeThread("other", "Other work", { workspaceId: "other" }),
     ], { workspaces: [
-      { id: "workspace-1", environmentId: "environment-1", label: { text: "__all_projects__" }, displayPath: { text: "/repo/__all_projects__" }, available: true },
-      { id: "other", environmentId: "environment-1", label: { text: "Other" }, displayPath: { text: "/repo/other" }, available: true },
+      { id: "workspace-1", environmentId: "environment-1", projectId: "project-all-projects", label: { text: "__all_projects__" }, displayPath: { text: "/repo/__all_projects__" }, available: true },
+      { id: "other", environmentId: "environment-1", projectId: "project-other", label: { text: "Other" }, displayPath: { text: "/repo/other" }, available: true },
     ] });
     const picker = screen.getByRole("combobox", { name: "Project filter" });
     await user.click(picker);
@@ -2311,7 +2592,7 @@ describe("InventorySidebar view modes", () => {
     expect(picker).toHaveTextContent("__all_projects__");
     expect(screen.getByText("Sentinel-named work")).toBeVisible();
     expect(screen.queryByText("Other work")).toBeNull();
-    expect(JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!)).toMatchObject({ projectFilterName: "__all_projects__" });
+    expect(JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY)!)).toMatchObject({ projectFilterId: "project-all-projects" });
     await user.click(picker);
     await user.click(screen.getByRole("option", { name: "All projects" }));
     expect(screen.getByText("Other work")).toBeVisible();
@@ -2321,8 +2602,8 @@ describe("InventorySidebar view modes", () => {
     const user = userEvent.setup();
     renderSidebar([makeThread("thread-1", "Existing work")], {
       workspaces: [
-        { id: "workspace-1", environmentId: "environment-1", label: { text: "Sedes" }, displayPath: { text: "/srv/code/sedes" }, available: false },
-        { id: "workspace-other", environmentId: "environment-1", label: { text: "Other" }, displayPath: { text: "/srv/other" }, available: true },
+        { id: "workspace-1", environmentId: "environment-1", projectId: "project-sedes", label: { text: "Sedes" }, displayPath: { text: "/srv/code/sedes" }, available: false },
+        { id: "workspace-other", environmentId: "environment-1", projectId: "project-other", label: { text: "Other" }, displayPath: { text: "/srv/other" }, available: true },
       ],
     });
     const project = screen.getByRole("combobox", { name: "Project filter" });
@@ -2335,7 +2616,7 @@ describe("InventorySidebar view modes", () => {
     expect(unavailable).toHaveAttribute("data-unavailable");
     expect(unavailable).not.toHaveAttribute("aria-disabled", "true");
     await user.click(unavailable);
-    expect(project).toHaveAttribute("data-scope-value", "project-name:Sedes");
+    expect(project).toHaveAttribute("data-scope-value", "project-sedes");
     await user.click(project);
     expect(screen.getByRole("combobox", { name: "Search projects" })).toHaveValue("");
     await user.click(screen.getByRole("option", { name: "All projects" }));
@@ -2364,6 +2645,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-1",
             environmentId: "environment-1",
+            projectId: "project-local-project",
             label: { text: "Local project" },
             displayPath: { text: "/local" },
             available: true,
@@ -2371,6 +2653,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-remote",
             environmentId: "environment-1",
+            projectId: "project-remote-project",
             label: { text: "Remote project" },
             displayPath: { text: "/remote" },
             available: true,
@@ -2452,9 +2735,9 @@ describe("InventorySidebar view modes", () => {
       { id: "remote", kind: "ssh" as const, label: { text: "AW personal" }, available: true, directoryBrowsing: "unavailable" as const },
     ];
     const workspaces = [
-      { id: "local-one", environmentId: "local", label: { text: "One" }, displayPath: { text: "/one" }, available: true },
-      { id: "local-two", environmentId: "local", label: { text: "Two" }, displayPath: { text: "/two" }, available: true },
-      { id: "remote-one", environmentId: "remote", label: { text: "Remote" }, displayPath: { text: "/remote" }, available: true },
+      { id: "local-one", environmentId: "local", projectId: "project-one", label: { text: "One" }, displayPath: { text: "/one" }, available: true },
+      { id: "local-two", environmentId: "local", projectId: "project-two", label: { text: "Two" }, displayPath: { text: "/two" }, available: true },
+      { id: "remote-one", environmentId: "remote", projectId: "project-remote", label: { text: "Remote" }, displayPath: { text: "/remote" }, available: true },
     ];
     const executionTargets = environments.map((environment) => ({
       id: `target-${environment.id}`, environmentId: environment.id,
@@ -2504,6 +2787,7 @@ describe("InventorySidebar view modes", () => {
     const workspaces = ["Alpha", "Beta"].map((name) => ({
       id: `workspace-${name}`,
       environmentId: "environment-1",
+      projectId: `project-${name.toLowerCase()}`,
       label: { text: name },
       displayPath: { text: `/workspace/${name}` },
       available: true,
@@ -2536,6 +2820,7 @@ describe("InventorySidebar view modes", () => {
       {
         id: "workspace-a",
         environmentId: "environment-1",
+        projectId: "project-alpha",
         label: { text: "Alpha" },
         displayPath: { text: "/workspace/alpha" },
         available: true,
@@ -2543,6 +2828,7 @@ describe("InventorySidebar view modes", () => {
       {
         id: "workspace-b",
         environmentId: "environment-1",
+        projectId: "project-beta",
         label: { text: "Beta" },
         displayPath: { text: "/workspace/beta" },
         available: true,
@@ -2567,7 +2853,7 @@ describe("InventorySidebar view modes", () => {
     expect(screen.getByText("Beta thread")).toBeInTheDocument();
     expect(
       JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY) ?? "{}"),
-    ).toMatchObject({ projectFilterName: "Beta" });
+    ).toMatchObject({ projectFilterId: "project-beta" });
 
     await user.click(screen.getByTestId("view-quick-toggle"));
     expect(screen.queryByText("Alpha thread")).toBeNull();
@@ -2595,6 +2881,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-a",
             environmentId: "environment-1",
+            projectId: "project-alpha",
             label: { text: "Alpha" },
             displayPath: { text: "/workspace/alpha" },
             available: true,
@@ -2602,6 +2889,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-b",
             environmentId: "environment-1",
+            projectId: "project-beta",
             label: { text: "Beta" },
             displayPath: { text: "/workspace/beta" },
             available: true,
@@ -2641,6 +2929,7 @@ describe("InventorySidebar view modes", () => {
       {
         id: "workspace-a",
         environmentId: "environment-1",
+        projectId: "project-alpha",
         label: { text: "Alpha" },
         displayPath: { text: "/workspace/alpha" },
         available: true,
@@ -2648,6 +2937,7 @@ describe("InventorySidebar view modes", () => {
       {
         id: "workspace-b",
         environmentId: "environment-1",
+        projectId: "project-beta",
         label: { text: "Beta" },
         displayPath: { text: "/workspace/beta" },
         available: true,
@@ -2660,7 +2950,7 @@ describe("InventorySidebar view modes", () => {
       workspaceId: "workspace-a",
     });
     seedViewPreferences({
-      projectFilterName: "Beta",
+      projectFilterId: "project-beta",
     });
     const view = renderSidebar(
       [
@@ -2724,7 +3014,7 @@ describe("InventorySidebar view modes", () => {
       screen.queryByRole("button", { name: "Show all runs/forks" }),
     ).toBeNull();
 
-    seedViewPreferences({ projectFilterName: "workspace-missing" });
+    seedViewPreferences({ projectFilterId: "project-missing" });
     view.rerender(
       <InventorySidebar
         state={makeState([betaRoot], { workspaces })}
@@ -2736,11 +3026,98 @@ describe("InventorySidebar view modes", () => {
     await waitFor(() =>
       expect(
         JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY) ?? "{}"),
-      ).toMatchObject({ projectFilterName: null }),
+      ).toMatchObject({ projectFilterId: null }),
     );
     expect(
       screen.getByRole("combobox", { name: "Project filter" }),
     ).toHaveTextContent("All projects");
+  });
+
+  describe("saved project-name filters", () => {
+    const workspaces = [
+      {
+        id: "workspace-a",
+        environmentId: "environment-1",
+        projectId: "project-alpha",
+        label: { text: "alpha" },
+        displayPath: { text: "/workspace/alpha" },
+        available: true,
+      },
+      {
+        id: "workspace-b",
+        environmentId: "environment-1",
+        projectId: "project-beta",
+        label: { text: "beta" },
+        displayPath: { text: "/workspace/beta" },
+        available: true,
+      },
+      {
+        id: "workspace-b-copy",
+        environmentId: "environment-1",
+        projectId: "project-beta-copy",
+        label: { text: "beta" },
+        displayPath: { text: "/copies/beta" },
+        available: true,
+      },
+    ];
+    const projects = [
+      { id: "project-alpha", name: "Alpha", revision: 0 },
+      { id: "project-beta", name: "Beta", revision: 0 },
+      { id: "project-beta-copy", name: "Beta copy", revision: 0 },
+    ];
+    const threads = [
+      makeThread("thread-a", "Alpha thread", { workspaceId: "workspace-a" }),
+      makeThread("thread-b", "Beta thread", { workspaceId: "workspace-b" }),
+    ];
+    const stored = () =>
+      JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY) ?? "{}");
+
+    it("migrates to the one matching project only against an authoritative snapshot", async () => {
+      seedViewPreferences({ groupBy: "none", projectFilterName: "alpha" });
+      const view = renderSidebar(threads, {
+        workspaces,
+        projects,
+        authoritative: false,
+      });
+      expect(stored()).toMatchObject({ projectFilterName: "alpha", projectFilterId: null });
+      expect(screen.getByText("Alpha thread")).toBeInTheDocument();
+      expect(screen.getByText("Beta thread")).toBeInTheDocument();
+
+      view.rerender(
+        <InventorySidebar
+          state={makeState(threads, { workspaces, projects })}
+          store={view.store}
+          onNavigate={() => undefined}
+          onOpenSettings={() => undefined}
+        />,
+      );
+      await waitFor(() =>
+        expect(stored()).toMatchObject({ projectFilterId: "project-alpha" }),
+      );
+      expect(stored()).not.toHaveProperty("projectFilterName");
+      expect(screen.getByText("Alpha thread")).toBeInTheDocument();
+      expect(screen.queryByText("Beta thread")).toBeNull();
+    });
+
+    it("clears an ambiguous or unmatched name", async () => {
+      seedViewPreferences({ groupBy: "none", projectFilterName: "beta" });
+      const view = renderSidebar(threads, { workspaces, projects });
+      await waitFor(() => expect(stored()).not.toHaveProperty("projectFilterName"));
+      expect(stored()).toMatchObject({ projectFilterId: null });
+
+      seedViewPreferences({ groupBy: "none", projectFilterName: "gone" });
+      view.rerender(
+        <InventorySidebar
+          state={makeState(threads, { workspaces, projects })}
+          store={view.store}
+          onNavigate={() => undefined}
+          onOpenSettings={() => undefined}
+        />,
+      );
+      await waitFor(() => expect(stored()).not.toHaveProperty("projectFilterName"));
+      expect(stored()).toMatchObject({ projectFilterId: null });
+      expect(screen.getByText("Beta thread")).toBeInTheDocument();
+    });
   });
 
   it("opens questions from both hierarchy and flat sidebar indicators", async () => {
@@ -2918,6 +3295,7 @@ describe("InventorySidebar view modes", () => {
         {
           id: "workspace-remote",
           environmentId: "environment-ssh",
+          projectId: "project-remote-project",
           label: { text: "Remote project" },
           displayPath: { text: "/srv/project" },
           available: true,
@@ -2935,6 +3313,7 @@ describe("InventorySidebar view modes", () => {
     );
     await user.click(screen.getByRole("option", { name: "Build host" }));
     await user.type(screen.getByLabelText("Absolute directory path"), "/srv/new");
+    store.openWorkspace.mockResolvedValueOnce({ id: "workspace-new", projectId: "project-new-remote-project" });
     const published = makeState([], {
         environments: [
           {
@@ -2949,6 +3328,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-remote",
             environmentId: "environment-ssh",
+            projectId: "project-remote-project",
             label: { text: "Remote project" },
             displayPath: { text: "/srv/project" },
             available: true,
@@ -2956,6 +3336,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-new",
             environmentId: "environment-ssh",
+            projectId: "project-new-remote-project",
             label: { text: "New remote project" },
             displayPath: { text: "/srv/new" },
             available: true,
@@ -2967,15 +3348,25 @@ describe("InventorySidebar view modes", () => {
     expect(store.openWorkspace).toHaveBeenCalledWith(
       "/srv/new",
       "environment-ssh",
+      { kind: "new", name: "new" },
     );
     expect(
       JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY) ?? "{}"),
-    ).not.toMatchObject({ projectFilterName: "New remote project" });
+    ).not.toMatchObject({ projectFilterId: "project-new-remote-project" });
     rerenderSidebar(published);
     await waitFor(() =>
       expect(
         JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY) ?? "{}"),
-      ).toMatchObject({ projectFilterName: "New remote project" }),
+      ).toMatchObject({ projectFilterId: "project-new-remote-project" }),
+    );
+    // The new location's project group opens with the filter.
+    expect(screen.getByTestId("project-row")).toHaveAttribute(
+      "data-project-id",
+      "project-new-remote-project",
+    );
+    expect(screen.getByTestId("project-row")).toHaveAttribute(
+      "data-state",
+      "open",
     );
     expect(store.refresh).not.toHaveBeenCalled();
   });
@@ -3001,11 +3392,12 @@ describe("InventorySidebar view modes", () => {
     const remoteWorkspace = {
       id: "workspace-remote",
       environmentId: "environment-ssh",
+      projectId: "project-remote-project",
       label: { text: "Remote project" },
       displayPath: { text: "/srv/project" },
       available: true,
     };
-    const { rerenderSidebar } = renderSidebar([], {
+    const { store, rerenderSidebar } = renderSidebar([], {
       environments,
       workspaces: [remoteWorkspace],
     });
@@ -3016,10 +3408,11 @@ describe("InventorySidebar view modes", () => {
     );
     await user.click(screen.getByRole("option", { name: "Build host" }));
     await user.type(screen.getByLabelText("Absolute directory path"), "/srv/new");
+    store.openWorkspace.mockResolvedValueOnce({ id: "workspace-new", projectId: "project-new-remote-project" });
     await user.click(within(screen.getByRole("dialog", { name: "Add project" })).getByRole("button", { name: "Add project" }));
 
     setSidebarInventoryScope({
-      projectFilterName: "Remote project",
+      projectFilterId: "project-remote-project",
     });
     rerenderSidebar(
       makeState([], {
@@ -3029,6 +3422,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-new",
             environmentId: "environment-ssh",
+            projectId: "project-new-remote-project",
             label: { text: "New remote project" },
             displayPath: { text: "/srv/new" },
             available: true,
@@ -3040,11 +3434,51 @@ describe("InventorySidebar view modes", () => {
     await waitFor(() =>
       expect(
         JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY) ?? "{}"),
-      ).toMatchObject({ projectFilterName: "Remote project" }),
+      ).toMatchObject({ projectFilterId: "project-remote-project" }),
     );
     expect(
       JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY) ?? "{}"),
-    ).not.toMatchObject({ projectFilterName: "New remote project" });
+    ).not.toMatchObject({ projectFilterId: "project-new-remote-project" });
+  });
+
+  it("waits for a location the dialog moved to be listed in its new project", async () => {
+    const user = userEvent.setup();
+    const environment = {
+      id: "environment-local",
+      kind: "local" as const,
+      label: { text: "This machine" },
+      available: true,
+      directoryBrowsing: "unavailable" as const,
+    };
+    const location = {
+      id: "workspace-moved",
+      environmentId: environment.id,
+      projectId: "project-old-home",
+      label: { text: "Old home" },
+      displayPath: { text: "/srv/moved" },
+      available: true,
+    };
+    const { store, rerenderSidebar } = renderSidebar([], {
+      environments: [environment],
+      workspaces: [location],
+    });
+    await user.click(screen.getByRole("button", { name: "Add project" }));
+    await user.type(screen.getByRole("textbox", { name: "Absolute directory path" }), "/srv/moved");
+    store.openWorkspace.mockResolvedValueOnce({ id: "workspace-moved", projectId: "project-new-home" });
+    await user.click(within(screen.getByRole("dialog", { name: "Add project" })).getByRole("button", { name: "Add project" }));
+    // Still listed in its old project: the filter must not follow it there.
+    expect(
+      JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY) ?? "{}"),
+    ).not.toMatchObject({ projectFilterId: "project-old-home" });
+    rerenderSidebar(makeState([], {
+      environments: [environment],
+      workspaces: [{ ...location, projectId: "project-new-home" }],
+    }));
+    await waitFor(() =>
+      expect(
+        JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY) ?? "{}"),
+      ).toMatchObject({ projectFilterId: "project-new-home" }),
+    );
   });
 
   it("retains a pending opened workspace across delayed publications", async () => {
@@ -3078,6 +3512,7 @@ describe("InventorySidebar view modes", () => {
             {
               id: "workspace-new",
               environmentId: environment.id,
+              projectId: "project-new-project",
               label: { text: "New project" },
               displayPath: { text: "/srv/new" },
               available: true,
@@ -3089,7 +3524,7 @@ describe("InventorySidebar view modes", () => {
       await waitFor(() =>
         expect(
           JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY) ?? "{}"),
-        ).toMatchObject({ projectFilterName: "New project" }),
+        ).toMatchObject({ projectFilterId: "project-new-project" }),
       );
     } finally {
       now.mockRestore();

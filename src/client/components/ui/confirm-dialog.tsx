@@ -30,6 +30,10 @@ type ConfirmDialogProps = Omit<
   tone?: Extract<Tone, "neutral" | "danger">
   /** Reasons the action cannot run yet; the confirm stays disabled while any remain. */
   blockers?: readonly React.ReactNode[]
+  /** Keeps the confirm disabled while a required choice is missing or invalid. */
+  confirmDisabled?: boolean
+  /** Shown inside the failure alert under its message, such as what blocked the action. */
+  errorDetail?: React.ReactNode
   blockersTitle?: React.ReactNode
   /** Extra body content between the description and the footer. */
   children?: React.ReactNode
@@ -65,6 +69,8 @@ function ConfirmDialog({
   tone = "neutral",
   blockers = [],
   blockersTitle = "Resolve these first",
+  confirmDisabled = false,
+  errorDetail,
   children,
   onConfirm,
   ...contentProps
@@ -78,7 +84,7 @@ function ConfirmDialog({
   }, [open])
 
   const confirm = async () => {
-    if (pending || blocked) return
+    if (pending || blocked || confirmDisabled) return
     setPending(true)
     setError(undefined)
     try {
@@ -122,7 +128,12 @@ function ConfirmDialog({
                 </ul>
               </DialogAlert>
             )}
-            {error !== undefined && <DialogAlert tone="danger">{error}</DialogAlert>}
+            {error !== undefined && (
+              <DialogAlert tone="danger">
+                {error}
+                {errorDetail}
+              </DialogAlert>
+            )}
           </DialogBody>
         )}
         <DialogFooter>
@@ -137,7 +148,7 @@ function ConfirmDialog({
           <Button
             type="button"
             variant={tone === "danger" ? "destructive" : "default"}
-            disabled={pending || blocked}
+            disabled={pending || blocked || confirmDisabled}
             onClick={() => void confirm()}
           >
             {pending ? (pendingLabel ?? `${confirmLabel}…`) : confirmLabel}

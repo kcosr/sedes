@@ -7,6 +7,7 @@ import {
 import { BackendError } from "../backends/contracts.js";
 import { projectRemovalAdmissionError } from "../db/project-removal-errors.js";
 import { DomainError } from "../domain/errors.js";
+import { TerminalServiceError } from "../terminals/terminal-service-error.js";
 
 export class ApiError extends Error {
   constructor(
@@ -125,6 +126,23 @@ function projectApiErrorAt(
                     error.code === "operation_outcome_uncertain"
                   ? 409
                   : 400;
+    return projected(status, {
+      error: {
+        code: error.code,
+        message: error.message,
+        retryable: error.retryable,
+      },
+    });
+  }
+  if (error instanceof TerminalServiceError) {
+    // Terminal fences also guard inventory operations such as removal, so
+    // their conflicts surface through every route, not only terminal routes.
+    const status =
+      error.code === "not_found"
+        ? 404
+        : error.code === "conflict" || error.code === "invalid_transition"
+          ? 409
+          : 503;
     return projected(status, {
       error: {
         code: error.code,

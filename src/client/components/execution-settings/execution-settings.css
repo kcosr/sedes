@@ -245,8 +245,14 @@
   .projects-toolbar { grid-template-columns: minmax(0, 1fr) repeat(2, minmax(0, 13rem)); }
 }
 .projects-rows { display: grid; margin: 0; padding: var(--space-1); list-style: none; border: 1px solid var(--border-soft); border-radius: var(--radius-card); background: var(--card); }
+.projects-project + .projects-project { box-shadow: 0 -1px 0 var(--border-soft); }
 .projects-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-1) var(--space-3); min-height: 56px; padding: var(--space-2-5) var(--space-3); border-radius: var(--radius-ctl); }
 .projects-row + .projects-row { box-shadow: 0 -1px 0 var(--border-soft); }
+/* A project row heads its locations, which sit indented under its name. */
+.projects-project-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+.projects-project-row .projects-row-title { font-weight: var(--weight-semibold); }
+.projects-locations { display: grid; margin: 0 0 var(--space-1); padding: 0 0 0 calc(var(--icon-lg) + var(--space-3)); list-style: none; }
+.projects-location-row { min-height: 48px; padding-block: var(--space-2); }
 .projects-row-icon { display: grid; place-items: center; width: var(--icon-lg); color: var(--muted-foreground); }
 .projects-row-icon svg { width: var(--icon-md); height: var(--icon-md); }
 .projects-row[data-removed] .projects-row-icon, .projects-row[data-removed] .projects-row-title { color: var(--muted-foreground); }
@@ -258,7 +264,24 @@
   .projects-row { grid-template-columns: auto minmax(0, 1fr) auto; }
   .projects-row-status { grid-column: 2; grid-row: 2; }
   .projects-row-actions { grid-column: 3; grid-row: 1 / span 2; }
+  .projects-locations { padding-left: var(--space-3); }
 }
+/* The duplicate-name note lists each shared name with its Merge action. */
+.projects-duplicates p { margin: 0; }
+.projects-duplicates ul { display: grid; gap: var(--space-1); margin: var(--space-2) 0 0; padding: 0; list-style: none; }
+.projects-duplicates li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+/* Removal blockers sit in the failure alert, grouped by location. */
+.projects-blockers { display: grid; gap: var(--space-2); margin-top: var(--space-2); }
+.projects-blockers-location p { margin: 0; font-weight: var(--weight-medium); overflow-wrap: anywhere; }
+.projects-blockers-location ul { margin: var(--space-0-5) 0 0; padding-left: var(--space-4); }
+/* What changed while a dialog was open, under its failure message. */
+.projects-changes { margin: var(--space-1) 0 0; padding-left: var(--space-4); }
+.projects-restore-results { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.projects-restore-results li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
+.projects-restore-location { min-width: 0; flex: 1 1 12rem; overflow-wrap: anywhere; }
+.projects-restore-error { flex-basis: 100%; color: var(--muted-foreground); font-size: var(--text-meta); }
 @media (max-width: 819px), (pointer: coarse) {
-  .projects-row-actions [data-slot="button"], .execution-filter-toggle, .execution-filter-done { min-height: var(--control-default); }
+  .projects-row-actions :is([data-slot="button"], [data-slot="dropdown-menu-trigger"]), .execution-filter-toggle, .execution-filter-done { min-height: var(--control-default); }
+  .projects-row-actions :is([data-slot="button"], [data-slot="dropdown-menu-trigger"])[data-size^="icon"] { min-width: var(--control-default); }
+  .projects-duplicates li [data-slot="button"] { min-height: var(--control-default); }
 }

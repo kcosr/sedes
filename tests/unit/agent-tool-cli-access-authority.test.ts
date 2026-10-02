@@ -9,7 +9,7 @@ import { captureOpenCodeInvocation, type OpenCodeToolInvocationStamp } from "../
 
 const source: TrustedAgentToolSource = { scope: { tenantId: "tenant", principalId: "principal" }, sourceThreadId: "019196f7-a0a8-7bc4-a89b-8cf013978405",
   sourceWorkspaceId: "workspace", sourceEnvironmentId: "local", backendKind: "opencode" };
-const request = { toolId: "agent.context", schemaVersion: 2, requestId: "f4c1d10a-ef92-4114-b2b1-2d80f8c509df", input: {} };
+const request = { toolId: "agent.context", schemaVersion: 3, requestId: "f4c1d10a-ef92-4114-b2b1-2d80f8c509df", input: {} };
 describe("CLI trusted access-decision provenance", () => {
   it("forwards only the server-resolved hook through management HTTP", async () => {
     const accessDecisionAuthority = { acquire: vi.fn() };

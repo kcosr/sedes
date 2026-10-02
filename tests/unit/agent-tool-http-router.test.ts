@@ -49,6 +49,9 @@ function fixture(
   };
   const canonical = new CanonicalInlineAgentToolService({
     application: {
+      async readWorkspaceProjectId() {
+        return "project-1";
+      },
       async readThreadStatus(_scope, threadId) {
         if (threadId !== targetThreadId) return undefined;
         return {
@@ -224,7 +227,7 @@ describe("agent tool HTTP router", () => {
       await associated(request(value.app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: `${presentationMode}-request`,
           input: {},
         })
@@ -261,7 +264,7 @@ describe("agent tool HTTP router", () => {
     await associated(request(value.app).post("/api/agent-tool-invocations"))
       .send({
         toolId: "agent.context",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "mcp-request",
         input: {},
       })
@@ -280,7 +283,7 @@ describe("agent tool HTTP router", () => {
     await associated(request(value.app).post("/api/agent-tool-invocations"))
       .send({
         toolId: "agent.context",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "stale-mcp-request",
         input: {},
       })
@@ -310,7 +313,7 @@ describe("agent tool HTTP router", () => {
       await associated(request(value.app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "wrong-presentation",
           input: {},
         })
@@ -440,7 +443,7 @@ describe("agent tool HTTP router", () => {
     await associated(request(value.app).post("/api/agent-tool-invocations"))
       .send({
         toolId: "agent.context",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "request-1",
         input: {},
         principalId: "caller-selected",
@@ -476,7 +479,7 @@ describe("agent tool HTTP router", () => {
     await associated(request(value.app).post("/api/agent-tool-invocations"))
       .send({
         toolId: "agent.context",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "oversized-response",
         input: {},
       })

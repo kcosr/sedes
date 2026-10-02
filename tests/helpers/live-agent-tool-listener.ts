@@ -67,6 +67,7 @@ export async function startLiveAgentToolListener(input: {
     environmentId: input.environmentId,
     canonicalPath: input.workspace,
     displayName: "Live agent-tool workspace",
+    project: { kind: "new", name: "Live agent-tool workspace" },
     available: true,
     trustState: "trusted",
     environmentConfigurationRevision: environment.configurationRevision,

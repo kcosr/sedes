@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DomainError } from "../../src/server/domain/errors.js";
 import { projectApiError } from "../../src/server/http/errors.js";
+import { TerminalServiceError } from "../../src/server/terminals/terminal-service-error.js";
 import {
   callRuntime,
   normalizeRuntimeError,
@@ -38,6 +39,30 @@ describe("runtime error normalization", () => {
       message: "The workspace is outside the configured execution roots.",
     });
   });
+
+  it.each([
+    ["not_found", 404],
+    ["conflict", 409],
+    ["invalid_transition", 409],
+    ["environment_unavailable", 503],
+    ["runtime_unavailable", 503],
+  ] as const)(
+    "projects a terminal %s failure from any route, such as a removal fence",
+    (code, status) => {
+      expect(
+        projectApiError(new TerminalServiceError(code, "Terminal admission is suspended.", true)),
+      ).toEqual({
+        status,
+        body: {
+          error: {
+            code,
+            message: "Terminal admission is suspended.",
+            retryable: true,
+          },
+        },
+      });
+    },
+  );
 
   it("bounds cyclic aggregate causes at the public error boundary", () => {
     const cyclic = new AggregateError([], "cyclic cleanup failure");

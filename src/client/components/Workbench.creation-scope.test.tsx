@@ -44,23 +44,23 @@ describe("Workbench new-thread creation scope", () => {
     expect(screen.queryByRole("region",{name:"Usage"})).toBeNull();
     expect(getUsageAnalytics).not.toHaveBeenCalled();
   });
-  it("passes every workspace and the persisted sidebar scope to the shared control", () => {
+  function renderHome(preferences: Record<string, unknown>) {
     window.localStorage.setItem(
       SIDEBAR_VIEW_STORAGE_KEY,
-      JSON.stringify({
-        ...SIDEBAR_VIEW_DEFAULTS,
-        environmentFilterId: "environment-2",
-        targetFilterId: "target-2",
-        projectFilterName: "Second",
-      }),
+      JSON.stringify({ ...SIDEBAR_VIEW_DEFAULTS, ...preferences }),
     );
     window.dispatchEvent(
       new StorageEvent("storage", { key: SIDEBAR_VIEW_STORAGE_KEY }),
     );
+    const projects = [
+      { id: "project-1", name: "First", revision: 0 },
+      { id: "project-2", name: "Second", revision: 0 },
+    ];
     const workspaces = [
       {
         id: "workspace-1",
         environmentId: "environment-1",
+        projectId: "project-1",
         label: { text: "First" },
         displayPath: { text: "/first" },
         available: true,
@@ -68,6 +68,7 @@ describe("Workbench new-thread creation scope", () => {
       {
         id: "workspace-2",
         environmentId: "environment-2",
+        projectId: "project-2",
         label: { text: "Second" },
         displayPath: { text: "/second" },
         available: true,
@@ -87,7 +88,7 @@ describe("Workbench new-thread creation scope", () => {
       { id: "environment-2", label: { text: "Remote" }, available: true },
     ];
     const state = {
-      snapshot: { environments, workspaces, executionTargets },
+      snapshot: { environments, projects, workspaces, executionTargets, groups: [] },
       visibleThreads: [],
     };
     const applicationStore = {
@@ -106,20 +107,53 @@ describe("Workbench new-thread creation scope", () => {
         panelTenants={{} as never}
       />,
     );
+    return { environments, executionTargets, projects, workspaces };
+  }
+
+  it("passes the inventory and the derived sidebar scope to the shared control", () => {
+    const { environments, executionTargets, projects, workspaces } = renderHome({
+      environmentFilterId: "environment-2",
+      targetFilterId: "target-2",
+      projectFilterId: "project-2",
+    });
 
     expect(
       screen.getByRole("heading", { name: "What should the agent work on?" }),
     ).toBeVisible();
     expect(captured.props).toEqual(
       expect.objectContaining({
+        projects,
         workspaces,
         environments,
         executionTargets,
         creationScope: {
           environmentId: "environment-2",
           targetId: "target-2",
-          projectName: "Second",
+          projectId: "project-2",
         },
+      }),
+    );
+  });
+
+  it("does not narrow creation by stale or legacy stored selections", () => {
+    renderHome({
+      environmentFilterId: "environment-gone",
+      targetFilterId: "target-gone",
+      projectFilterId: "project-gone",
+    });
+    expect(captured.props).toEqual(
+      expect.objectContaining({
+        creationScope: { environmentId: null, targetId: null, projectId: null },
+      }),
+    );
+
+    cleanup();
+    // A legacy name is only a migration hint the sidebar resolves; it
+    // filters nothing by itself.
+    renderHome({ targetFilterId: "target-2", projectFilterName: "Second" });
+    expect(captured.props).toEqual(
+      expect.objectContaining({
+        creationScope: { environmentId: null, targetId: "target-2", projectId: null },
       }),
     );
   });
@@ -343,6 +377,7 @@ describe("Workbench new-thread creation scope", () => {
         pendingThreadConfigurationCopySourceIds: [],
         snapshot: {
           environments: [],
+          projects: [],
           workspaces: [],
           executionTargets: [],
           groups: [],

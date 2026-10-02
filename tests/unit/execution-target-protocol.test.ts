@@ -31,10 +31,12 @@ function snapshot() {
         directoryBrowsing: "unavailable" as const,
       },
     ],
+    projects: [{ id: "project-1", name: "Project", revision: 0 }],
     workspaces: [
       {
         id: WORKSPACE_ID,
         environmentId: "environment-1",
+        projectId: "project-1",
         label: { text: "Sedes" },
         displayPath: { text: "/work/sedes" },
         available: true,
@@ -130,7 +132,7 @@ function associatedTask(
 
 describe("execution-target application protocol", () => {
   it("uses the current client protocol for associated task presentation", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(132);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(133);
   });
 
   it("enforces exact associated-workspace semantics on task projections", () => {
@@ -152,6 +154,44 @@ describe("execution-target application protocol", () => {
         associatedTask({ kind: "thread", threadId: THREAD_ID }, null),
       ).success,
     ).toBe(false);
+  });
+
+  it("lists active projects, including empty ones, and requires every workspace project to be listed", () => {
+    const empty = snapshot();
+    empty.projects.push({ id: "project-empty", name: "Empty", revision: 2 });
+    expect(normalizedApplicationSnapshotSchema.safeParse(empty).success).toBe(
+      true,
+    );
+
+    const unknownProject = snapshot();
+    unknownProject.workspaces[0]!.projectId = "project-removed";
+    const unknown = normalizedApplicationSnapshotSchema.safeParse(unknownProject);
+    expect(unknown.success).toBe(false);
+    expect(unknown.error?.issues).toEqual([
+      expect.objectContaining({
+        message: "Workspace references an unknown project.",
+        path: ["workspaces", 0, "projectId"],
+      }),
+    ]);
+
+    const duplicate = snapshot();
+    duplicate.projects.push({ ...duplicate.projects[0]!, name: "Again" });
+    expect(
+      normalizedApplicationSnapshotSchema.safeParse(duplicate).error?.issues,
+    ).toEqual([
+      expect.objectContaining({ path: ["projects", 1, "id"] }),
+    ]);
+
+    const unbounded = snapshot();
+    unbounded.projects[0]!.name = "x".repeat(241);
+    expect(
+      normalizedApplicationSnapshotSchema.safeParse(unbounded).success,
+    ).toBe(false);
+    // Names are bounded in code points, not UTF-16 units.
+    unbounded.projects[0]!.name = "😀".repeat(240);
+    expect(
+      normalizedApplicationSnapshotSchema.safeParse(unbounded).success,
+    ).toBe(true);
   });
 
   it("accepts omitted threads but checks known workspace and present-thread association", () => {

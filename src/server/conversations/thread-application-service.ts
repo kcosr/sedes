@@ -343,12 +343,20 @@ export class ThreadApplicationService {
     );
   }
 
-  /** Reads saved policy without attaching or consulting the provider runtime. */
-  async agentToolPolicy(
+  /**
+   * Reads the application-owned fields that a dormant bound thread's open
+   * stream keeps current, its saved tool policy and its location, without
+   * attaching or consulting the provider runtime.
+   */
+  async retainedOverlay(
     scope: RequestScope,
     applicationThreadId: string,
-  ): Promise<NormalizedThreadAgentToolPolicy> {
-    return (await this.#authorize(scope, applicationThreadId)).agentTools;
+  ): Promise<{
+    readonly agentTools: NormalizedThreadAgentToolPolicy;
+    readonly workspace: NormalizedThreadSnapshot["workspace"];
+  }> {
+    const { agentTools, workspace } = await this.#authorize(scope, applicationThreadId);
+    return { agentTools, workspace };
   }
 
   /**

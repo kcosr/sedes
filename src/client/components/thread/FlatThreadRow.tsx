@@ -331,7 +331,9 @@ export function FlatThreadRow({
   backgroundWorkCurrent = true,
   futureTimes = false,
   selected = false,
-  workspaceLabel,
+  projectLabel,
+  folderLabel,
+  locationTag,
   environmentLabel,
   targetLabel,
   showProjectLabel = true,
@@ -365,8 +367,22 @@ export function FlatThreadRow({
   /** The row sits in a future-times group; trailing time renders absolute. */
   readonly futureTimes?: boolean;
   readonly selected?: boolean;
-  /** Workspace label for the chip; the chip renders only when provided. */
-  readonly workspaceLabel?: string;
+  /**
+   * The project, and its folder where the project has several on one
+   * environment ("sedes › sedes-context"); renders only when provided.
+   */
+  readonly projectLabel?: string;
+  /**
+   * The folder that tells this row's location apart within its project
+   * ("sedes-context"). A card shows it on its own when the project label is
+   * suppressed because Scope or a stack already names the project.
+   */
+  readonly folderLabel?: string;
+  /**
+   * Compact rows grouped by project: what distinguishes this row's location
+   * within its project, styled like the Projects-view row tag.
+   */
+  readonly locationTag?: string;
   /** Execution-environment presentation, already collision-qualified. */
   readonly environmentLabel?: string;
   /** Exact Target presentation, already collision-qualified. */
@@ -383,7 +399,7 @@ export function FlatThreadRow({
   /** Stack faces may identify their group without changing ordinary compact rows. */
   readonly showCompactGroupLabel?: boolean;
   readonly onGroupSelect?: () => void;
-  /** Project-stack faces identify and may scope to their workspace. */
+  /** Project-stack faces identify and may scope to their project. */
   readonly showCompactProjectLabel?: boolean;
   readonly onProjectSelect?: () => void;
   readonly onEnvironmentSelect?: () => void;
@@ -609,28 +625,39 @@ export function FlatThreadRow({
 
   // Compact rows skip the project label — it is rarely needed when most
   // installs use one project. Card density shows it on line 2 with the same
-  // folder icon and muted styling as the thread header's project row.
+  // folder icon and muted styling as the thread header's project row; where
+  // Scope or a stack already names the project, only the folder remains.
   const projectIsInteractive = clickNamesToFilter && onProjectSelect !== undefined;
   const ProjectLabel = projectIsInteractive ? "button" : "span";
-  const projectMeta =
-    density === "card" && showProjectLabel && workspaceLabel !== undefined ? (
+  const projectShown =
+    density === "card" && showProjectLabel && projectLabel !== undefined;
+  const projectMeta = projectShown ? (
       <ProjectLabel
         type={projectIsInteractive ? "button" : undefined}
         onClick={projectIsInteractive ? onProjectSelect : undefined}
         aria-label={
           projectIsInteractive
-            ? `Filter threads by project ${workspaceLabel}`
+            ? `Filter threads by project ${projectLabel}`
             : undefined
         }
         className={`thread-project flat-row-project${projectIsInteractive ? " flat-row-location-filter" : ""}`}
         data-testid="flat-row-project"
         title={
-          projectIsInteractive ? `Filter by ${workspaceLabel}` : workspaceLabel
+          projectIsInteractive ? `Filter by ${projectLabel}` : projectLabel
         }
       >
         <Folder size={13} strokeWidth={1.8} aria-hidden="true" />
-        <span className="thread-project-name flat-row-filter-name">{workspaceLabel}</span>
+        <span className="thread-project-name flat-row-filter-name">{projectLabel}</span>
       </ProjectLabel>
+    ) : density === "card" && folderLabel !== undefined ? (
+      <span
+        className="thread-project flat-row-project"
+        data-testid="flat-row-folder"
+        title={folderLabel}
+      >
+        <Folder size={13} strokeWidth={1.8} aria-hidden="true" />
+        <span className="thread-project-name">{folderLabel}</span>
+      </span>
     ) : undefined;
   const environmentIsInteractive = clickNamesToFilter && onEnvironmentSelect !== undefined;
   const EnvironmentLabel = environmentIsInteractive ? "button" : "span";
@@ -740,6 +767,15 @@ export function FlatThreadRow({
           {glyph}
           {brandMark}
           <span className="flat-row-title">{title}</span>
+          {locationTag && (
+            <span
+              className="thread-row-location"
+              data-testid="thread-row-location"
+              title={locationTag}
+            >
+              {locationTag}
+            </span>
+          )}
           {badgeCluster}
           {targetMeta}
         </button>
@@ -754,15 +790,15 @@ export function FlatThreadRow({
             {groupLabel}
           </button>
         )}
-        {workspaceLabel && showCompactProjectLabel && (
+        {projectLabel && showCompactProjectLabel && (
           <button
             type="button"
             className="flat-row-group"
-            title={`Filter by ${workspaceLabel}`}
-            aria-label={`Filter threads by project ${workspaceLabel}`}
+            title={`Filter by ${projectLabel}`}
+            aria-label={`Filter threads by project ${projectLabel}`}
             onClick={onProjectSelect}
           >
-            {workspaceLabel}
+            {projectLabel}
           </button>
         )}
         {trailing}
@@ -771,7 +807,7 @@ export function FlatThreadRow({
   }
 
   const separateLocationControls =
-    (projectIsInteractive && projectMeta !== undefined) ||
+    (projectIsInteractive && projectShown) ||
     (environmentIsInteractive && environmentMeta !== undefined);
   const cardMetadata = (
     <span className="flat-row-line2">

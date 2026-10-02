@@ -10,13 +10,18 @@ import { AgentToolEnvironmentAuthorityResolver } from "../../src/server/agent-to
 import { DomainError } from "../../src/server/domain/errors.js";
 import { Type } from "typebox";
 import type { AgentToolDefinition } from "../../src/server/agent-tools/contracts/agent-tool-contracts.js";
-import { agentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
+import { createAgentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
 import {
   AGENT_TOOL_JSON_SCHEMA_DIALECT,
   normalizeCanonicalAgentToolSchema,
 } from "../../src/server/agent-tools/schema/canonical-json-schema.js";
 import type { ApplicationDecisionPresentation } from "../../src/server/conversations/interaction-broker.js";
 import { createSavedAgentDeleteToolDefinition } from "../../src/server/agent-tools/tools/saved-agent-management-tools.js";
+
+const agentContextToolDefinition = createAgentContextToolDefinition({
+  readWorkspaceProjectId: async () => "project-1",
+  readThreadStatus: async () => undefined,
+});
 
 const source = Object.freeze({
   scope: { tenantId: "tenant", principalId: "principal" },
@@ -55,6 +60,7 @@ function crossEnvironmentWriteDefinition(): AgentToolDefinition {
   return {
     ...agentContextToolDefinition,
     id: "example.cross_environment",
+    schemaVersion: 2,
     description: "Exercises cross-environment approval presentation.",
     environmentAuthority: {
       kind: "direct_resource",
@@ -108,6 +114,7 @@ function allEnvironmentQueryDefinition(): AgentToolDefinition {
   return {
     ...agentContextToolDefinition,
     id: "example.all_allowed_environments",
+    schemaVersion: 2,
     description: "Exercises all-environment approval presentation.",
     environmentAuthority: { kind: "scoped_query", resource: "workspace" },
     inputSchema: normalizeCanonicalAgentToolSchema(
@@ -149,7 +156,7 @@ function service(
   } = source,
 ) {
   const canonical = new CanonicalInlineAgentToolService({
-    application: { readThreadStatus: async () => undefined },
+    application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
     invocationId: () => "invocation-1",
   });
   const policies = {
@@ -179,7 +186,7 @@ describe("SourceScopedAgentToolService", () => {
       deleted: true,
     }));
     const canonical = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
       additionalDefinitions: [
         createSavedAgentDeleteToolDefinition({ deleteAgent } as never),
       ],
@@ -230,7 +237,7 @@ describe("SourceScopedAgentToolService", () => {
 
   it("revalidates the source immediately before every invocation", async () => {
     const canonical = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
     });
     const policies = {
       get: vi.fn(() => ({
@@ -261,7 +268,7 @@ describe("SourceScopedAgentToolService", () => {
         adapter: "cli",
         request: {
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "archived-after-attach",
           input: {},
         },
@@ -283,7 +290,7 @@ describe("SourceScopedAgentToolService", () => {
   ] as const)("rejects stale attached %s authority", async (field, value) => {
     const current = new SourceScopedAgentToolService(
       new CanonicalInlineAgentToolService({
-        application: { readThreadStatus: async () => undefined },
+        application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
       }),
       {
         get: vi.fn(() => {
@@ -303,7 +310,7 @@ describe("SourceScopedAgentToolService", () => {
         adapter: "cli",
         request: {
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: `stale-${field}`,
           input: {},
         },
@@ -331,7 +338,7 @@ describe("SourceScopedAgentToolService", () => {
       }));
       const current = new SourceScopedAgentToolService(
         new CanonicalInlineAgentToolService({
-          application: { readThreadStatus },
+          application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus },
         }),
         {
           get: () => ({
@@ -418,7 +425,7 @@ describe("SourceScopedAgentToolService", () => {
     const requestApplicationDecision = vi.fn(async () => "allow" as const);
     const current = new SourceScopedAgentToolService(
       new CanonicalInlineAgentToolService({
-        application: { readThreadStatus },
+        application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus },
       }),
       policies as unknown as ThreadAgentToolPolicyRepository,
       new AgentToolEnvironmentAuthorityResolver({
@@ -499,7 +506,7 @@ describe("SourceScopedAgentToolService", () => {
         activity: "idle" as const,
       }));
       const canonical = new CanonicalInlineAgentToolService({
-        application: { readThreadStatus },
+        application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus },
       });
       const originalGet = canonical.registry.get.bind(canonical.registry);
       vi.spyOn(canonical.registry, "get").mockImplementation((id, version) => {
@@ -603,7 +610,7 @@ describe("SourceScopedAgentToolService", () => {
     };
     const current = new SourceScopedAgentToolService(
       new CanonicalInlineAgentToolService({
-        application: { readThreadStatus: async () => undefined },
+        application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
         additionalDefinitions: [crossEnvironmentWriteDefinition()],
       }),
       {
@@ -667,7 +674,7 @@ describe("SourceScopedAgentToolService", () => {
     );
     const current = new SourceScopedAgentToolService(
       new CanonicalInlineAgentToolService({
-        application: { readThreadStatus: async () => undefined },
+        application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
         additionalDefinitions: [crossEnvironmentWriteDefinition()],
       }),
       {
@@ -752,7 +759,7 @@ describe("SourceScopedAgentToolService", () => {
     );
     const current = new SourceScopedAgentToolService(
       new CanonicalInlineAgentToolService({
-        application: { readThreadStatus: async () => undefined },
+        application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
         additionalDefinitions: [allEnvironmentQueryDefinition()],
       }),
       {
@@ -818,7 +825,7 @@ describe("SourceScopedAgentToolService", () => {
     });
     const current = new SourceScopedAgentToolService(
       new CanonicalInlineAgentToolService({
-        application: { readThreadStatus: vi.fn() },
+        application: { readWorkspaceProjectId: vi.fn(), readThreadStatus: vi.fn() },
       }),
       {
         get: () => ({
@@ -870,7 +877,7 @@ describe("SourceScopedAgentToolService", () => {
     const readThreadStatus = vi.fn();
     const current = new SourceScopedAgentToolService(
       new CanonicalInlineAgentToolService({
-        application: { readThreadStatus },
+        application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus },
       }),
       {
         get: () => ({
@@ -941,7 +948,7 @@ describe("SourceScopedAgentToolService", () => {
       } as unknown as ThreadAgentToolPolicyRepository;
       const current = new SourceScopedAgentToolService(
         new CanonicalInlineAgentToolService({
-          application: { readThreadStatus: async () => undefined },
+          application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
         }),
         policies,
         environmentAuthority,
@@ -956,7 +963,7 @@ describe("SourceScopedAgentToolService", () => {
           adapter: "cli" as const,
           request: {
             toolId: "agent.context",
-            schemaVersion: 2,
+            schemaVersion: 3,
             requestId: "live-policy",
             input: {},
           },
@@ -1049,7 +1056,7 @@ describe("SourceScopedAgentToolService", () => {
         adapter: "pi_sdk",
         request: {
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "stale-native-call",
           input: {},
         },
@@ -1072,7 +1079,7 @@ describe("SourceScopedAgentToolService", () => {
           adapter: "pi_sdk",
           request: {
             toolId: "agent.context",
-            schemaVersion: 2,
+            schemaVersion: 3,
             requestId: `native-${mode}-call`,
             input: {},
           },
@@ -1098,7 +1105,7 @@ describe("SourceScopedAgentToolService", () => {
           adapter,
           request: {
             toolId: "agent.context",
-            schemaVersion: 2,
+            schemaVersion: 3,
             requestId: `native-${mode}-${adapter}-call`,
             input: {},
           },
@@ -1124,7 +1131,7 @@ describe("SourceScopedAgentToolService", () => {
           adapter,
           request: {
             toolId: "agent.context",
-            schemaVersion: 2,
+            schemaVersion: 3,
             requestId: `cli-${adapter}-call`,
             input: {},
           },
@@ -1163,7 +1170,7 @@ describe("SourceScopedAgentToolService", () => {
           adapter,
           request: {
             toolId: "agent.context",
-            schemaVersion: 2,
+            schemaVersion: 3,
             requestId: `${backendKind}-${surface}-${mode}-${adapter}`,
             input: {},
           },
@@ -1235,7 +1242,7 @@ describe("thread access boundary", () => {
       });
       const requestApplicationDecision = vi.fn(async () => "deny" as const);
       const service = new SourceScopedAgentToolService(
-        new CanonicalInlineAgentToolService({ application: { readThreadStatus: async () => undefined }, additionalDefinitions: [definition] }),
+        new CanonicalInlineAgentToolService({ application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined }, additionalDefinitions: [definition] }),
         { get: () => ({ enabled: true, enabledToolIds: [definition.id], presentation: { surface: "cli", mode: "progressive" }, accessBoundary: "thread", revision: 1 }) } as unknown as ThreadAgentToolPolicyRepository,
         new AgentToolEnvironmentAuthorityResolver({
           ...environmentAuthority.reader,
@@ -1266,7 +1273,7 @@ it.each(["saved_agent", "task", "workpad"] as const)(
       return "allow" as const;
     });
     const service = new SourceScopedAgentToolService(
-      new CanonicalInlineAgentToolService({ application: { readThreadStatus: async () => undefined }, additionalDefinitions: [definition] }),
+      new CanonicalInlineAgentToolService({ application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined }, additionalDefinitions: [definition] }),
       { get: () => ({ enabled: true, enabledToolIds: [definition.id], presentation: { surface: "cli", mode: "progressive" }, accessBoundary: "thread", revision: 1 }) } as unknown as ThreadAgentToolPolicyRepository,
       new AgentToolEnvironmentAuthorityResolver({
         ...environmentAuthority.reader,
@@ -1297,7 +1304,7 @@ describe("provider current-input access decision authority", () => {
       return "allow" as const;
     });
     const gate = new SourceScopedAgentToolService(
-      new CanonicalInlineAgentToolService({ application: { readThreadStatus } }),
+      new CanonicalInlineAgentToolService({ application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus } }),
       { get: () => ({ enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "cli", mode: "progressive" }, accessBoundary: "environment", revision: 1 }) } as unknown as ThreadAgentToolPolicyRepository,
       new AgentToolEnvironmentAuthorityResolver({ resolveEnvironment: () => undefined, resolveWorkspace: () => undefined,
         resolveThread: (_scope, id) => ({ id, environmentId: "environment-2", label: "Other thread" }),
@@ -1315,7 +1322,7 @@ describe("provider current-input access decision authority", () => {
     const gate = service({ surface: "cli", mode: "progressive" });
     const acquire = vi.fn(async () => { throw new Error("must not acquire"); });
     await expect(gate.invoke({ source, adapter: "cli", signal: new AbortController().signal,
-      request: { toolId: "agent.context", schemaVersion: 2, requestId: "inside-boundary", input: {} },
+      request: { toolId: "agent.context", schemaVersion: 3, requestId: "inside-boundary", input: {} },
       accessDecisionAuthority: { acquire } })).resolves.toMatchObject({ state: "completed" });
     expect(acquire).not.toHaveBeenCalled();
   });

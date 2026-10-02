@@ -18,7 +18,7 @@ import {
   WorkspaceFileLinkProvider,
 } from "../workspace-files/workspace-file-link-routing";
 import { UsageView } from "../usage/UsageView";
-import { useSidebarViewPreferences } from "../app/sidebar-view-store";
+import { useSidebarInventoryScope } from "../app/use-sidebar-inventory-scope";
 import { useEnvironmentColorsEnabled } from "../app/use-environment-colors-enabled";
 import {
   configuredPanelPresentation,
@@ -42,7 +42,19 @@ export function Workbench({
   panelTenants: WorkspacePanelTenantRegistry;
 }): React.JSX.Element {
   const application = useApplicationStore(applicationStore);
-  const sidebarScope = useSidebarViewPreferences();
+  const projects = application.snapshot?.projects ?? [];
+  const workspaces = application.snapshot?.workspaces ?? [];
+  const environments = application.snapshot?.environments ?? [];
+  const executionTargets = application.snapshot?.executionTargets ?? [];
+  // The sidebar's scope as it applies to this snapshot; stale persisted
+  // selections resolve to All, so creation never narrows by them.
+  const { scope: sidebarScope } = useSidebarInventoryScope({
+    environments,
+    executionTargets,
+    projects,
+    workspaces,
+    groups: application.snapshot?.groups ?? [],
+  });
   const environmentColorsEnabled = useEnvironmentColorsEnabled();
   const lastThreadRoute = useRef<string | undefined>(
     route.name === "thread" ? route.threadId : undefined,
@@ -190,13 +202,14 @@ export function Workbench({
           <div className="welcome-actions">
             <NewThreadControl
               store={applicationStore}
-              environments={application.snapshot?.environments ?? []}
-              workspaces={application.snapshot?.workspaces ?? []}
-              executionTargets={application.snapshot?.executionTargets ?? []}
+              environments={environments}
+              projects={projects}
+              workspaces={workspaces}
+              executionTargets={executionTargets}
               creationScope={{
-                environmentId: sidebarScope.environmentFilterId,
-                targetId: sidebarScope.targetFilterId,
-                projectName: sidebarScope.projectFilterName,
+                environmentId: sidebarScope.environmentId,
+                targetId: sidebarScope.targetId,
+                projectId: sidebarScope.projectId,
               }}
               onCreated={(threadId) => {
                 openThreadRoute(threadId, configuredPanelPresentation());
@@ -215,7 +228,7 @@ export function Workbench({
               </Button>
             )}
           </div>
-          {(application.snapshot?.workspaces.length ?? 0) === 0 && (
+          {workspaces.length === 0 && (
             <p className="notice warning">
               Add a project from the sidebar or while creating a new thread.
             </p>

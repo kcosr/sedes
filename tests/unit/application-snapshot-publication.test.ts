@@ -31,6 +31,7 @@ function snapshot(active: number): NormalizedApplicationSnapshot {
         directoryBrowsing: "available" as const,
       },
     ],
+    projects: [{ id: "project-1", name: "Project", revision: 0 }],
     workspaces: [],
     threads: [],
     forkOrigins: [],
@@ -166,6 +167,7 @@ function incrementalSnapshots(input: {
       ].map((id) => ({
         id,
         environmentId: "environment-1",
+        projectId: "project-1",
         label: { text: "Workspace" },
         displayPath: { text: "/workspace" },
         available: true,

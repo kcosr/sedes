@@ -28,7 +28,7 @@ function read(category: string): DisclosureState {
   }
 }
 
-/** Client-local presentation only; entity keys use canonical workspace/thread/group IDs. */
+/** Client-local presentation only; entity keys use canonical project/thread/group IDs. */
 export function useSidebarDisclosures(
   category: string,
 ): [DisclosureState, Dispatch<SetStateAction<DisclosureState>>] {

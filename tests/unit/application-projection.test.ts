@@ -84,10 +84,12 @@ function snapshot(): Snapshot {
         directoryBrowsing: "available",
       },
     ],
+    projects: [{ id: "project-1", name: "Project", revision: 0 }],
     workspaces: [
       {
         id: workspaceId,
         environmentId: "environment",
+        projectId: "project-1",
         label: { text: "Workspace" },
         displayPath: { text: "/workspace" },
         available: true,
@@ -474,6 +476,64 @@ describe("indexed application projection", () => {
         workspace: { ...seed.workspaces[0]!, environmentId: "other" },
       }),
     ).toThrow("application_inventory_reference_invalid");
+  });
+
+  it("indexes workspace project references and rejects unknown or duplicate projects", () => {
+    const seed = snapshot();
+    seed.projects.push({ id: "project-2", name: "Other", revision: 3 });
+    const projection = new ApplicationProjection(seed);
+    const original = projection.materialize();
+    expect(() =>
+      projection.prepare({
+        type: "workspace_upsert",
+        generation,
+        workspace: { ...seed.workspaces[0]!, projectId: "missing" },
+      }),
+    ).toThrow("application_inventory_reference_invalid");
+    expect(projection.materialize()).toEqual(original);
+    projection.prepare({
+      type: "workspace_upsert",
+      generation,
+      workspace: { ...seed.workspaces[0]!, projectId: "project-2" },
+    })();
+    // The independent audit rebuilds the reverse index from the moved reference.
+    expect(projection.materialize().workspaces[0]!.projectId).toBe("project-2");
+
+    expect(
+      () =>
+        new ApplicationProjection({
+          ...snapshot(),
+          projects: [
+            { id: "project-1", name: "Project", revision: 0 },
+            { id: "project-1", name: "Duplicate", revision: 0 },
+          ],
+        }),
+    ).toThrow();
+    expect(
+      () => new ApplicationProjection({ ...snapshot(), projects: [] }),
+    ).toThrow();
+  });
+
+  it("checks dependents when a workspace changes project but not on display edits", () => {
+    const seed = snapshot();
+    seed.projects.push({ id: "project-2", name: "Other", revision: 0 });
+    seed.threads = Array.from({ length: 65 }, (_, index) =>
+      thread({ id: uuid(300 + index) }),
+    );
+    seed.counts = { ...seed.counts, active: 65 };
+    const projection = new ApplicationProjection(seed);
+    projection.prepare({
+      type: "workspace_upsert",
+      generation,
+      workspace: { ...seed.workspaces[0]!, label: { text: "Renamed folder" } },
+    })();
+    expect(() =>
+      projection.prepare({
+        type: "workspace_upsert",
+        generation,
+        workspace: { ...seed.workspaces[0]!, projectId: "project-2" },
+      }),
+    ).toThrow("application_projection_reference_budget");
   });
 
   it("retains opaque identifiers containing separators in reference indexes", () => {

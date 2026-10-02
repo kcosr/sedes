@@ -551,7 +551,7 @@ describe("built Sedes agent-tool CLI", () => {
       ]);
       expect(described.tools[1]).toMatchObject({
         id: "workspace.list",
-        schemaVersion: 4,
+        schemaVersion: 5,
         execution: { waitCeilingMilliseconds: 30_000 },
       });
 

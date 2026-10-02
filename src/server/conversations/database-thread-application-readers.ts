@@ -332,6 +332,7 @@ export class DatabaseThreadApplicationInventoryReader implements ThreadApplicati
       workspace: {
         id: workspace.id,
         environmentId: workspace.environmentId,
+        projectId: workspace.projectId,
         label: boundDisplayText(workspace.displayName),
         displayPath: boundDisplayText(workspace.canonicalPath),
         available: workspace.availability === "available" && !this.#inventory.isWorkspaceRemoved(scope, workspace.id),

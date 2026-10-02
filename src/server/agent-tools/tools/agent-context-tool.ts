@@ -4,7 +4,10 @@ import {
   AGENT_TOOL_JSON_SCHEMA_DIALECT,
   normalizeCanonicalAgentToolSchema,
 } from "../schema/canonical-json-schema.js";
-import type { AgentSourceContext } from "./agent-tool-readers.js";
+import type {
+  AgentSourceContext,
+  AgentToolApplicationReader,
+} from "./agent-tool-readers.js";
 import { CANONICAL_AGENT_TOOL_MANIFEST } from "../registry/canonical-agent-tool-manifest.js";
 
 const manifest = CANONICAL_AGENT_TOOL_MANIFEST["agent.context"];
@@ -15,10 +18,7 @@ export const piAgentContextToolName = "sedes_agent_context";
 export type AgentContextInput = Readonly<Record<never, never>>;
 export type AgentContextResult = AgentSourceContext;
 
-export const agentContextToolDefinition: AgentToolDefinition<
-  AgentContextInput,
-  AgentContextResult
-> = {
+export const agentContextToolContract = {
   ...manifest,
   inputSchema: normalizeCanonicalAgentToolSchema(
     Type.Object(
@@ -35,6 +35,12 @@ export const agentContextToolDefinition: AgentToolDefinition<
       {
         threadId: Type.String({ minLength: 1, maxLength: 128 }),
         workspaceId: Type.String({ minLength: 1, maxLength: 128 }),
+        projectId: Type.String({
+          minLength: 1,
+          maxLength: 128,
+          description:
+            "The project the source workspace currently belongs to. A project can span several workspaces and environments.",
+        }),
         backend: Type.String({
           maxLength: 32,
           enum: ["pi", "codex_app_server", "claude_agent_sdk", "grok_build", "opencode"],
@@ -43,7 +49,7 @@ export const agentContextToolDefinition: AgentToolDefinition<
       {
         $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
         additionalProperties: false,
-        maxProperties: 3,
+        maxProperties: 4,
       },
     ),
   ),
@@ -75,17 +81,35 @@ export const agentContextToolDefinition: AgentToolDefinition<
     http: { invocation: "inline" },
     cli: { command: agentContextToolId },
   },
-  async execute(_input, context) {
-    if (
-      context.defaults.kind !== "thread_agent" ||
-      context.subject.kind !== "thread_agent"
-    ) {
-      throw new Error("agent_source_context_unavailable");
-    }
-    return {
-      threadId: context.defaults.threadId,
-      workspaceId: context.defaults.workspaceId,
-      backend: context.subject.backendKind,
-    };
-  },
-};
+} as const satisfies Omit<
+  AgentToolDefinition<AgentContextInput, AgentContextResult>,
+  "execute" | "reconstructCompleted"
+>;
+
+export function createAgentContextToolDefinition(
+  reader: AgentToolApplicationReader,
+): AgentToolDefinition<AgentContextInput, AgentContextResult> {
+  return {
+    ...agentContextToolContract,
+    async execute(_input, context) {
+      if (
+        context.defaults.kind !== "thread_agent" ||
+        context.subject.kind !== "thread_agent"
+      ) {
+        throw new Error("agent_source_context_unavailable");
+      }
+      const projectId = await reader.readWorkspaceProjectId(
+        { tenantId: context.tenantId, principalId: context.principalId },
+        context.defaults.workspaceId,
+        context.abortSignal,
+      );
+      if (!projectId) throw new Error("agent_source_context_unavailable");
+      return {
+        threadId: context.defaults.threadId,
+        workspaceId: context.defaults.workspaceId,
+        projectId,
+        backend: context.subject.backendKind,
+      };
+    },
+  };
+}

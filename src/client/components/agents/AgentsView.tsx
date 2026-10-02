@@ -6,6 +6,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentToolBootstrapPolicy,
   NormalizedAgentConfigurationOverrides,
+  NormalizedEnvironmentSummary,
+  NormalizedProjectSummary,
   NormalizedWorkspaceSummary,
   SavedAgent,
   SavedAgentOptionsResult,
@@ -13,6 +15,7 @@ import type {
 } from "../../../shared/index.js";
 import { navigate, navigateUp, settingsPath, useRoute } from "../../app/router.js";
 import { useDirtyNavigationGuard } from "../../app/use-dirty-navigation-guard.js";
+import { describeProjectLocations } from "../../app/project-locations.js";
 import {
   AgentClientStore,
   useAgentStore,
@@ -64,18 +67,34 @@ const agentPath = (agentId: string) => settingsPath("agents", { mode: "view", re
 
 /**
  * Settings › Agents: one Agent store while the page is shown, over the
- * principal's workspaces for validation.
+ * principal's project locations for validation.
  */
 export function AgentsSettingsPage({ applicationStore }: {
   readonly applicationStore: ApplicationClientStore;
 }): React.JSX.Element {
   const store = useMemo(() => new AgentClientStore(applicationStore.api), [applicationStore]);
   useEffect(() => () => store.dispose(), [store]);
-  const workspaces = useApplicationStore(applicationStore).snapshot?.workspaces;
-  return <AgentsView store={store} workspaces={workspaces ?? noWorkspaces} />;
+  const snapshot = useApplicationStore(applicationStore).snapshot;
+  return (
+    <AgentsView
+      store={store}
+      projects={snapshot?.projects ?? noProjects}
+      workspaces={snapshot?.workspaces ?? noWorkspaces}
+      environments={snapshot?.environments ?? noEnvironments}
+    />
+  );
 }
 
+const noProjects: readonly NormalizedProjectSummary[] = [];
 const noWorkspaces: readonly NormalizedWorkspaceSummary[] = [];
+const noEnvironments: readonly NormalizedEnvironmentSummary[] = [];
+
+/** The project locations an Agent editor validates against. */
+interface LocationCatalog {
+  readonly projects: readonly NormalizedProjectSummary[];
+  readonly workspaces: readonly NormalizedWorkspaceSummary[];
+  readonly environments: readonly NormalizedEnvironmentSummary[];
+}
 
 /**
  * Saved Agents on the settings kit's split inventory: the list beside the
@@ -84,10 +103,9 @@ const noWorkspaces: readonly NormalizedWorkspaceSummary[] = [];
  */
 export function AgentsView({
   store,
-  workspaces,
-}: {
+  ...catalog
+}: LocationCatalog & {
   readonly store: AgentClientStore;
-  readonly workspaces: readonly NormalizedWorkspaceSummary[];
 }): React.JSX.Element {
   const route = useRoute();
   const location = route.name === "settings" && route.page === "agents" ? route : undefined;
@@ -204,13 +222,13 @@ export function AgentsView({
               }
             />
           ) : creating ? (
-            <AgentEditor store={store} workspaces={workspaces} />
+            <AgentEditor store={store} {...catalog} />
           ) : agentId ? (
             <AgentDetail
               agentId={agentId}
               detail={state.detail}
               store={store}
-              workspaces={workspaces}
+              {...catalog}
             />
           ) : (
             <EmptyState
@@ -235,12 +253,11 @@ function AgentDetail({
   agentId,
   detail,
   store,
-  workspaces,
-}: {
+  ...catalog
+}: LocationCatalog & {
   readonly agentId: string;
   readonly detail: AgentDetailState;
   readonly store: AgentClientStore;
-  readonly workspaces: readonly NormalizedWorkspaceSummary[];
 }): React.JSX.Element {
   const ready = detail.status === "ready" && detail.agentId === agentId;
   // A successful retry replaces the focused Retry button with the editor;
@@ -259,7 +276,7 @@ function AgentDetail({
       <AgentEditor
         key={detail.agent.id}
         store={store}
-        workspaces={workspaces}
+        {...catalog}
         agent={detail.agent}
       />
     );
@@ -303,16 +320,21 @@ function AgentDetail({
 
 function AgentEditor({
   store,
+  projects,
   workspaces,
+  environments,
   agent,
-}: {
+}: LocationCatalog & {
   readonly store: AgentClientStore;
-  readonly workspaces: readonly NormalizedWorkspaceSummary[];
   readonly agent?: SavedAgent;
 }): React.JSX.Element {
   const availableWorkspaces = useMemo(
     () => workspaces.filter(({ available }) => available),
     [workspaces],
+  );
+  const projectLocations = useMemo(
+    () => describeProjectLocations({ projects, workspaces, environments }),
+    [projects, workspaces, environments],
   );
   const [name, setName] = useState(agent?.name ?? "");
   const [description, setDescription] = useState(agent?.description ?? "");
@@ -602,7 +624,7 @@ function AgentEditor({
         >
           <SettingsField
             label="Project"
-            description="Temporary workspace used to validate current catalogs."
+            description="Temporary location used to validate current catalogs."
           >
             <Select
               value={workspaceId}
@@ -621,7 +643,8 @@ function AgentEditor({
               <SelectContent>
                 {availableWorkspaces.map((workspace) => (
                   <SelectItem key={workspace.id} value={workspace.id}>
-                    {workspace.label.text}
+                    {projectLocations.projectLocationLabel(workspace.id) ??
+                      workspace.displayPath.text}
                   </SelectItem>
                 ))}
               </SelectContent>

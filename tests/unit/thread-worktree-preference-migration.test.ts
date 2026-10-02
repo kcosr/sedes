@@ -8,7 +8,7 @@ import { linkedWorktreeFilesRootsMigration } from "../../src/server/db/migration
 import { threadWorktreePreferenceMigration } from "../../src/server/db/migrations/084-thread-worktree-preference.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { insertPreProjectWorkspace, savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 describe("thread worktree preference migrations", () => {
   it("moves the preference to thread vocabulary and guards its workspace scope", () => {
@@ -16,7 +16,7 @@ describe("thread worktree preference migrations", () => {
     try {
       const inventory = new InventoryRepository(value.database);
       const environment = inventory.getLocalEnvironment(value.scope);
-      const workspace = inventory.upsertWorkspace(value.scope, {
+      const workspace = insertPreProjectWorkspace(value.database, value.scope, {
         environmentId: environment.id,
         canonicalPath: "/projects/main",
         displayName: "Main",

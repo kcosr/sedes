@@ -87,10 +87,12 @@ describe("ApplicationSnapshotService", () => {
           diagnosticCode: "ssh_unreachable",
         },
       ],
+      listActiveProjects: () => [{ id: "project-1", name: "Project", revision: 0 }],
       listWorkspaces: () => [
         {
           id: "workspace-local",
           environmentId: "environment-local",
+          projectId: "project-1",
           canonicalPath: "/work/local",
           displayName: "Local workspace",
           availability: "available",
@@ -98,6 +100,7 @@ describe("ApplicationSnapshotService", () => {
         {
           id: "workspace-remote",
           environmentId: "environment-ssh",
+          projectId: "project-1",
           canonicalPath: "/work/remote",
           displayName: "Remote workspace",
           availability: "available",
@@ -231,8 +234,9 @@ describe("ApplicationSnapshotService", () => {
           { id: "environment-local", kind: "local", label: "This machine", availability: "available", diagnosticCode: null },
           { id: "environment-ssh", kind: "ssh", label: "Retained host", availability: "unavailable", diagnosticCode: "configuration_removed" },
         ],
+        listActiveProjects: () => [{ id: "project-1", name: "Project", revision: 0 }],
         listWorkspaces: () => [{
-          id: "workspace-remote", environmentId: "environment-ssh", canonicalPath: "/work/retained",
+          id: "workspace-remote", environmentId: "environment-ssh", projectId: "project-1", canonicalPath: "/work/retained",
           displayName: "Retained workspace", availability: "unavailable",
         }],
         countThreadsByInventoryState: () => ({ active: 1, snoozed: 0, settled: 0, archived: 0 }),
@@ -318,10 +322,12 @@ describe("ApplicationSnapshotService", () => {
             diagnosticCode: null,
           },
         ],
+        listActiveProjects: () => [{ id: "project-1", name: "Project", revision: 0 }],
         listWorkspaces: () =>
           [initialWorkspaceId, movedWorkspaceId].map((id) => ({
             id,
             environmentId: "environment-local",
+            projectId: "project-1",
             canonicalPath: `/work/${id}`,
             displayName: id,
             availability: "available",
@@ -406,7 +412,8 @@ it("keeps scoped background counts equivalent in full snapshots and incremental 
   const assertScope = (requested: RequestScope) => expect(requested).toEqual(scope);
   const inventory = {
     listEnvironments: () => [{ id: "environment-local", kind: "local", label: "Local", availability: "available", diagnosticCode: null }],
-    listWorkspaces: () => [{ id: "workspace-local", environmentId: "environment-local", canonicalPath: "/workspace", displayName: "Workspace", availability: "available" }],
+    listActiveProjects: () => [{ id: "project-1", name: "Project", revision: 0 }],
+    listWorkspaces: () => [{ id: "workspace-local", environmentId: "environment-local", projectId: "project-1", canonicalPath: "/workspace", displayName: "Workspace", availability: "available" }],
     countThreadsByInventoryState: () => ({ active: 1, snoozed: 0, settled: 0, archived: 0 }),
     isWorkspaceRemoved: () => false,
   } as unknown as InventoryRepository;

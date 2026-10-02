@@ -499,14 +499,14 @@ export class PrincipalAgentToolClientRepository {
       invalid("The tool client environment selection is unavailable.");
     }
     if (input.defaultThreadId && !input.defaultWorkspaceId) {
-      invalid("A default thread requires a default workspace.");
+      invalid("A default thread requires a default location.");
     }
     if (input.defaultWorkspaceId) {
       const workspace = this.database
         .prepare(
           `SELECT availability FROM workspaces
            WHERE tenant_id = ? AND owner_principal_id = ?
-             AND environment_id = ? AND id = ?`,
+             AND environment_id = ? AND id = ? AND removed_at IS NULL`,
         )
         .get(
           scope.tenantId,

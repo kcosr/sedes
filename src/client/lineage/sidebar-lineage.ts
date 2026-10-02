@@ -12,7 +12,12 @@ import { createThreadSearchMatcher } from "./sidebar-search.js";
  * the sidebar: they have their own Archived page.
  */
 export type SidebarBucket =
-  `workspace:${string}` | "automations" | "snoozed" | "settled";
+  `project:${string}` | "automations" | "snoozed" | "settled";
+
+/** The Projects-view bucket of active, non-automation roots in a project. */
+export function sidebarProjectBucket(projectId: string): SidebarBucket {
+  return `project:${projectId}`;
+}
 
 export interface DescendantAggregate {
   readonly count: number;
@@ -117,6 +122,13 @@ export function deriveSidebarLineage(input: {
     ),
   );
   const loadedFamilyCounts = deriveLoadedFamilyCounts(threads, origins);
+  const projectIdByWorkspaceId = new Map(
+    input.snapshot.workspaces.map(({ id, projectId }) => [id, projectId]),
+  );
+  const projectOf = (thread: NormalizedApplicationThreadSummary) =>
+    projectIdByWorkspaceId.get(thread.workspaceId);
+  const ownBucket = (thread: NormalizedApplicationThreadSummary) =>
+    threadBucket(thread, projectOf(thread));
   const matchingIds = findSearchMatches(input.snapshot, threads, input.search);
   // Without a search every thread is visible.
   const searching = Boolean(input.search.trim());
@@ -149,7 +161,7 @@ export function deriveSidebarLineage(input: {
         (ownBucket(child) === ownBucket(parent) ||
           (parent.automation !== null &&
             child.automation === null &&
-            child.workspaceId === parent.workspaceId))
+            projectOf(child) === projectOf(parent)))
       ) {
         parentByChild.set(childId, parent.id);
       }
@@ -337,12 +349,19 @@ function deriveLoadedFamilyCounts(
   return descendantCounts;
 }
 
-function ownBucket(thread: NormalizedApplicationThreadSummary): SidebarBucket {
+/**
+ * A root's own bucket; forks nest into their root's bucket. A thread whose
+ * location is not in the catalog belongs to no rendered project.
+ */
+function threadBucket(
+  thread: NormalizedApplicationThreadSummary,
+  projectId: string | undefined,
+): SidebarBucket {
   switch (thread.inventoryState) {
     case "active":
       return thread.automation
         ? "automations"
-        : `workspace:${thread.workspaceId}`;
+        : sidebarProjectBucket(projectId ?? "");
     case "snoozed":
     case "settled":
       return thread.inventoryState;

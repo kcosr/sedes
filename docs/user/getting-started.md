@@ -160,20 +160,20 @@ to preserve target IDs and old thread bindings.
 2. Keep the **Local** execution environment.
 3. Browse to, or enter, an allowed absolute directory containing a small
    repository or project you are comfortable giving the agent access to.
-4. Choose **Add project** again in the dialog to confirm.
+4. Keep **New project**, named after the folder, and choose **Add project**
+   again in the dialog to confirm.
 
-Sedes remembers the directory as a project. It does not move the directory or
-copy its files. Only remembered projects are scanned for eligible native
-provider conversations.
+Sedes remembers the directory as the first location of a new project. It does
+not move the directory or copy its files. Only known locations are scanned for
+eligible native provider conversations.
 
 ## Create and complete the first thread
 
 1. Choose **New thread**.
 2. Enter a **Thread name** such as `Sedes smoke test`.
-3. Keep the Pi target. The form offers **Environment**, **Target**, and
-   **Project** only where more than one choice is eligible; choose explicitly
-   whenever it asks.
-4. Select the project you just added.
+3. Select the project you just added. Its only location is preselected.
+4. Keep the Pi target. A sole eligible choice is preselected; choose
+   explicitly whenever the form asks.
 5. **Custom** is selected by default; choose a saved Agent if you want its preset.
 6. Choose **Create thread**.
 7. In the thread, choose an authenticated provider/model and conservative tool

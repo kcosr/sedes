@@ -10,21 +10,22 @@ import type {
 /** The complete catalogs needed to resolve viewer-local sidebar scope. */
 export type SidebarScopeCatalog = Pick<
   NormalizedApplicationSnapshot,
-  "environments" | "executionTargets" | "workspaces" | "groups"
+  "environments" | "executionTargets" | "projects" | "workspaces" | "groups"
 >;
 
 export interface SidebarInventoryScope {
   /** Repaired explicit selections. Null retains the corresponding All state. */
   readonly environmentId: string | null;
   readonly targetId: string | null;
-  readonly projectName: string | null;
+  readonly projectId: string | null;
   readonly groupId: string | null;
   readonly ungrouped: boolean;
   /** The most-specific selected location, used to constrain dependent options. */
   readonly effectiveEnvironmentId: string | null;
   readonly environmentOptions: NormalizedApplicationSnapshot["environments"];
   readonly targetOptions: NormalizedApplicationSnapshot["executionTargets"];
-  readonly projectOptions: NormalizedApplicationSnapshot["workspaces"];
+  /** Projects with a location on the scoped environment, or every project. */
+  readonly projectOptions: NormalizedApplicationSnapshot["projects"];
   readonly groupOptions: NormalizedApplicationSnapshot["groups"];
   /** One atomic store patch when persisted selections became stale/incompatible. */
   readonly repair: SidebarInventoryScopePatch | null;
@@ -43,7 +44,7 @@ function applicationCursor(eventId: string): {
 }
 
 /**
- * A lagging tab must not clear a project-name selection published by a stream
+ * A lagging tab must not clear a project selection published by a stream
  * event it has not applied yet. Other stale scope facets remain repairable.
  */
 export function sidebarScopeRepairAtCursor(
@@ -54,7 +55,7 @@ export function sidebarScopeRepairAtCursor(
 ): SidebarInventoryScopePatch | null {
   const next = { ...repair };
   const publication = preferences.projectFilterPublication;
-  if (next.projectFilterName !== undefined && publication !== null) {
+  if (next.projectFilterId !== undefined && publication !== null) {
     const local = replayCursor ? applicationCursor(replayCursor) : undefined;
     const causal = applicationCursor(publication.eventId);
     const reached = local
@@ -62,16 +63,39 @@ export function sidebarScopeRepairAtCursor(
         ? local.sequence >= causal.sequence
         : connected
       : false;
-    if (!reached) delete next.projectFilterName;
+    if (!reached) delete next.projectFilterId;
   }
   return Object.keys(next).length > 0 ? next : null;
 }
 
 /**
+ * A project-name filter saved before projects had identity names the project
+ * it can only mean: the one project that carries the name and holds every
+ * location with that folder name. A name that projects or folders spread
+ * across several projects is ambiguous, even when one project still has it.
+ */
+export function resolveLegacyProjectFilterName(
+  catalog: Pick<SidebarScopeCatalog, "projects" | "workspaces">,
+  name: string,
+): string | null {
+  const matches = new Set([
+    ...catalog.projects
+      .filter((project) => project.name === name)
+      .map(({ id }) => id),
+    ...catalog.workspaces
+      .filter((workspace) => workspace.label.text === name)
+      .map(({ projectId }) => projectId),
+  ]);
+  return matches.size === 1 ? [...matches][0]! : null;
+}
+
+/**
  * Resolve opaque preferences only against complete normalized catalogs. Missing
- * IDs and names clear when absent from the complete catalog. Targets must fit
- * the selected environment; project names remain independent so an empty
- * intersection never broadens silently to All projects.
+ * IDs clear when absent from the complete catalog. Targets must fit the
+ * selected environment; the project remains independent so an empty
+ * intersection never broadens silently to All projects. A legacy project-name
+ * hint resolves into the project facet's repair, so it is applied only where
+ * the caller applies repairs: against an authoritative snapshot.
  */
 export function deriveSidebarInventoryScope(
   catalog: SidebarScopeCatalog,
@@ -79,6 +103,7 @@ export function deriveSidebarInventoryScope(
     SidebarViewPreferences,
     | "environmentFilterId"
     | "targetFilterId"
+    | "projectFilterId"
     | "projectFilterName"
     | "groupFilterId"
     | "ungroupedFilter"
@@ -90,6 +115,7 @@ export function deriveSidebarInventoryScope(
   const targetById = new Map(
     catalog.executionTargets.map((target) => [target.id, target]),
   );
+  const projectIds = new Set(catalog.projects.map(({ id }) => id));
   const groupById = new Map(catalog.groups.map((group) => [group.id, group]));
 
   const environmentId = environmentById.has(
@@ -105,9 +131,9 @@ export function deriveSidebarInventoryScope(
       : undefined;
   const targetId = target?.id ?? null;
   const effectiveEnvironmentId = environmentId ?? target?.environmentId ?? null;
-  const projectName = catalog.workspaces.some(
-    (workspace) => workspace.label.text === preferences.projectFilterName,
-  ) ? preferences.projectFilterName : null;
+  const projectId = projectIds.has(preferences.projectFilterId ?? "")
+    ? preferences.projectFilterId
+    : null;
   const groupId = groupById.has(preferences.groupFilterId ?? "")
     ? preferences.groupFilterId
     : null;
@@ -119,17 +145,25 @@ export function deriveSidebarInventoryScope(
       : catalog.executionTargets.filter(
           (candidate) => candidate.environmentId === effectiveEnvironmentId,
         );
-  const projectOptions =
+  const scopedProjectIds =
     effectiveEnvironmentId === null
-      ? catalog.workspaces
-      : catalog.workspaces.filter(
-          (candidate) => candidate.environmentId === effectiveEnvironmentId,
+      ? undefined
+      : new Set(
+          catalog.workspaces
+            .filter(
+              (workspace) => workspace.environmentId === effectiveEnvironmentId,
+            )
+            .map((workspace) => workspace.projectId),
         );
+  const projectOptions =
+    scopedProjectIds === undefined
+      ? catalog.projects
+      : catalog.projects.filter(({ id }) => scopedProjectIds.has(id));
 
   const repair: {
     environmentFilterId?: string | null;
     targetFilterId?: string | null;
-    projectFilterName?: string | null;
+    projectFilterId?: string | null;
     groupFilterId?: string | null;
     ungroupedFilter?: boolean;
   } = {};
@@ -139,8 +173,13 @@ export function deriveSidebarInventoryScope(
   if (targetId !== preferences.targetFilterId) {
     repair.targetFilterId = targetId;
   }
-  if (projectName !== preferences.projectFilterName) {
-    repair.projectFilterName = projectName;
+  if (preferences.projectFilterName !== undefined) {
+    // Writing the facet retires the hint, even when nothing matched.
+    repair.projectFilterId =
+      projectId ??
+      resolveLegacyProjectFilterName(catalog, preferences.projectFilterName);
+  } else if (projectId !== preferences.projectFilterId) {
+    repair.projectFilterId = projectId;
   }
   if (groupId !== preferences.groupFilterId) repair.groupFilterId = groupId;
   if (ungrouped !== preferences.ungroupedFilter) {
@@ -150,7 +189,7 @@ export function deriveSidebarInventoryScope(
   return {
     environmentId,
     targetId,
-    projectName,
+    projectId,
     groupId,
     ungrouped,
     effectiveEnvironmentId,
@@ -162,15 +201,15 @@ export function deriveSidebarInventoryScope(
     activeFilterCount:
       Number(environmentId !== null) +
       Number(targetId !== null) +
-      Number(projectName !== null) +
+      Number(projectId !== null) +
       Number(groupId !== null || ungrouped),
   };
 }
 
 /**
  * Compute a user-driven cascade transition before persisting it. A changed
- * environment clears incompatible targets atomically. A known project name
- * persists across location changes; no alternate ID or name is inferred.
+ * environment clears incompatible targets atomically. A known project
+ * persists across environment and target changes.
  */
 export function transitionSidebarInventoryScope(
   catalog: SidebarScopeCatalog,
@@ -178,7 +217,7 @@ export function transitionSidebarInventoryScope(
     SidebarViewPreferences,
     | "environmentFilterId"
     | "targetFilterId"
-    | "projectFilterName"
+    | "projectFilterId"
     | "groupFilterId"
     | "ungroupedFilter"
   >,
@@ -193,10 +232,10 @@ export function transitionSidebarInventoryScope(
       "targetFilterId" in patch
         ? (patch.targetFilterId ?? null)
         : current.targetFilterId,
-    projectFilterName:
-      "projectFilterName" in patch
-        ? (patch.projectFilterName ?? null)
-        : current.projectFilterName,
+    projectFilterId:
+      "projectFilterId" in patch
+        ? (patch.projectFilterId ?? null)
+        : current.projectFilterId,
     groupFilterId:
       "groupFilterId" in patch
         ? (patch.groupFilterId ?? null)
@@ -210,7 +249,7 @@ export function transitionSidebarInventoryScope(
   return {
     environmentFilterId: resolved.environmentId,
     targetFilterId: resolved.targetId,
-    projectFilterName: resolved.projectName,
+    projectFilterId: resolved.projectId,
     groupFilterId: resolved.groupId,
     ungroupedFilter: resolved.ungrouped,
   };
@@ -231,13 +270,13 @@ export function filterThreadsBySidebarScope<
   workspaces: SidebarScopeCatalog["workspaces"],
   scope: Pick<
     SidebarInventoryScope,
-    "environmentId" | "targetId" | "projectName" | "groupId" | "ungrouped"
+    "environmentId" | "targetId" | "projectId" | "groupId" | "ungrouped"
   >,
 ): readonly Thread[] {
   if (
     scope.environmentId === null &&
     scope.targetId === null &&
-    scope.projectName === null &&
+    scope.projectId === null &&
     scope.groupId === null &&
     !scope.ungrouped
   ) {
@@ -254,8 +293,8 @@ export function filterThreadsBySidebarScope<
       return false;
     if (scope.ungrouped && thread.groupId !== null) return false;
     if (
-      scope.projectName !== null &&
-      workspaceById.get(thread.workspaceId)?.label.text !== scope.projectName
+      scope.projectId !== null &&
+      workspaceById.get(thread.workspaceId)?.projectId !== scope.projectId
     ) {
       return false;
     }
@@ -280,7 +319,7 @@ export interface SidebarLocationSuppression {
 export function deriveSidebarLocationSuppression(
   scope: Pick<
     SidebarInventoryScope,
-    "effectiveEnvironmentId" | "targetId" | "projectName"
+    "effectiveEnvironmentId" | "targetId" | "projectId"
   >,
   representedThreads: readonly Pick<
     NormalizedApplicationThreadSummary,
@@ -295,7 +334,7 @@ export function deriveSidebarLocationSuppression(
     representedThreads.map((thread) => thread.targetId),
   );
   const environmentImplied = scope.effectiveEnvironmentId !== null;
-  const projectImplied = scope.projectName !== null || options.projectGrouped;
+  const projectImplied = scope.projectId !== null || options.projectGrouped;
   const targetImplied =
     scope.targetId !== null || representedTargetIds.size <= 1;
   return {

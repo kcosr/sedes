@@ -94,10 +94,12 @@ function snapshot(
         directoryBrowsing: "unavailable",
       },
     ],
+    projects: [{ id: "project-1", name: "Project", revision: 0 }],
     workspaces: [
       {
         id: "workspace-1",
         environmentId: "environment-1",
+        projectId: "project-1",
         label: { text: "Project" },
         displayPath: { text: "/project" },
         available: true,
@@ -125,6 +127,57 @@ function snapshot(
 }
 
 describe("deriveSidebarLineage", () => {
+  it("buckets roots by project, so forks in another location nest under their root", () => {
+    const threads = [
+      thread("root"),
+      thread("remote-fork", { workspaceId: "workspace-remote" }),
+      thread("other", { workspaceId: "workspace-other" }),
+    ];
+    const app = snapshot(threads, [origin("remote-fork", "root")], [
+      placement("remote-fork"),
+    ]);
+    const result = deriveSidebarLineage({
+      snapshot: {
+        ...app,
+        projects: [
+          ...app.projects,
+          { id: "project-2", name: "Other", revision: 0 },
+        ],
+        workspaces: [
+          ...app.workspaces,
+          {
+            id: "workspace-remote",
+            environmentId: "environment-1",
+            projectId: "project-1",
+            label: { text: "Project copy" },
+            displayPath: { text: "/copy" },
+            available: true,
+          },
+          {
+            id: "workspace-other",
+            environmentId: "environment-1",
+            projectId: "project-2",
+            label: { text: "Other" },
+            displayPath: { text: "/other" },
+            available: true,
+          },
+        ],
+      },
+      visibleThreads: threads,
+      grouped: true,
+      search: "",
+    });
+
+    expect(result.nodesById.get("remote-fork")?.parentId).toBe("root");
+    expect(result.nodesById.get("remote-fork")?.bucket).toBe("project:project-1");
+    expect(
+      result.rootsByBucket.get("project:project-1")?.map(({ thread: { id } }) => id),
+    ).toEqual(["root"]);
+    expect(
+      result.rootsByBucket.get("project:project-2")?.map(({ thread: { id } }) => id),
+    ).toEqual(["other"]);
+  });
+
   it("counts descendants with pending questions as attention until the final question resolves", () => {
     for (const pendingQuestionCount of [2, 1, 0]) {
       const threads = [
@@ -257,7 +310,7 @@ describe("deriveSidebarLineage", () => {
     ).toEqual(["automated-child"]);
     expect(
       result.rootsByBucket
-        .get("workspace:workspace-1")
+        .get("project:project-1")
         ?.map(({ thread: { id } }) => id),
     ).toEqual(["source"]);
   });
@@ -322,7 +375,7 @@ describe("deriveSidebarLineage", () => {
 
       expect(result.nodesById.get("active-child")?.parentId).toBeUndefined();
       expect(result.nodesById.get("active-child")?.bucket).toBe(
-        "workspace:workspace-1",
+        "project:project-1",
       );
       expect(result.nodesById.get("active-child")?.placement?.mode).toBe(
         "nested_under_source",
@@ -353,7 +406,7 @@ describe("deriveSidebarLineage", () => {
     });
 
     expect([...browse.nodesById.keys()].sort()).toEqual(["grandchild", "root"]);
-    expect([...browse.rootsByBucket.keys()]).toEqual(["workspace:workspace-1"]);
+    expect([...browse.rootsByBucket.keys()]).toEqual(["project:project-1"]);
     expect(browse.roots.map(({ thread: { id } }) => id)).toEqual([
       "root",
       "grandchild",

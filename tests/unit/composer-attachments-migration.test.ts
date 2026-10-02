@@ -6,7 +6,7 @@ import {
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { ComposerAttachmentRepository } from "../../src/server/db/repositories/composer-attachment-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { insertPreProjectWorkspace, savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 const latestBackendNormalizedVersion =
   backendNormalizedMigrations[backendNormalizedMigrations.length - 1]!.version;
@@ -30,7 +30,7 @@ function fixture() {
     )
     .get(current.scope.tenantId, current.scope.principalId) as { id: string };
   const inventory = new InventoryRepository(current.database);
-  const workspace = inventory.upsertWorkspace(current.scope, {
+  const workspace = insertPreProjectWorkspace(current.database, current.scope, {
     id: "0198aa10-0000-7000-8000-000000000003",
     environmentId: environment.id,
     canonicalPath: "/tmp/attachment-migration-workspace",

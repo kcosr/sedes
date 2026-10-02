@@ -22,6 +22,7 @@ const emptySnapshot = {
       directoryBrowsing: "available" as const,
     },
   ],
+  projects: [{ id: "project-1", name: "Project", revision: 0 }],
   workspaces: [],
   threads: [],
   forkOrigins: [],

@@ -15,6 +15,7 @@ const workspaces = [
   {
     id: "workspace-local",
     environmentId: "environment-local",
+    projectId: "project-1",
     label: { text: "agent-workspaces" },
     displayPath: { text: "/home/me/agent-workspaces" },
     available: true,
@@ -22,6 +23,7 @@ const workspaces = [
   {
     id: "workspace-ssh",
     environmentId: "environment-ssh",
+    projectId: "project-1",
     label: { text: "agent-workspaces" },
     displayPath: { text: "/srv/agent-workspaces" },
     available: true,
@@ -32,12 +34,29 @@ describe("sidebar scope presentation", () => {
   it("keeps a project-only scope independent of environment", () => {
     expect(
       scopeSummaryLabel({
-        projectName: workspaces[1]!.label.text,
+        project: { label: "Agent workspaces", locations: workspaces },
         environments,
         targets: [],
-        workspaces,
       }),
-    ).toBe("agent-workspaces");
+    ).toBe("Agent workspaces");
+  });
+
+  it("marks a project unavailable only by its locations in scope", () => {
+    const project = {
+      label: "Agent workspaces",
+      locations: [workspaces[0]!, { ...workspaces[1]!, available: false }],
+    };
+    expect(
+      scopeSummaryLabel({ project, environments, targets: [] }),
+    ).toBe("Agent workspaces");
+    expect(
+      scopeSummaryLabel({
+        environment: environments[1]!,
+        project,
+        environments,
+        targets: [],
+      }),
+    ).toBe("Build host · Agent workspaces — Unavailable");
   });
 
   it("does not treat an equivalent catalog copy as a label collision", () => {
@@ -53,6 +72,7 @@ describe("sidebar scope presentation", () => {
     const duplicate = {
       id: "workspace-ssh-2",
       environmentId: "environment-ssh",
+      projectId: "project-1",
       label: { text: "agent-workspaces" },
       displayPath: { text: "/opt/agent-workspaces" },
       available: true,
@@ -131,10 +151,9 @@ describe("sidebar scope presentation", () => {
         backend: { label: { text: "Codex" }, brand: "codex" },
         available: false,
       },
-      projectName: workspaces[1]!.label.text,
+      project: { label: "agent-workspaces", locations: workspaces },
       environments: [{ ...environments[1]!, available: false }],
       targets: [],
-      workspaces,
       maxVisibleParts: 2,
     });
     expect(presentation.fullLabel).toContain("Build host — Unavailable");

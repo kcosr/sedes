@@ -46,11 +46,12 @@ before the commit changes nothing; a failure inside it closes the aggregate.
 
 Environment, workspace, thread and Task upserts and removals and inventory
 counts fold incrementally; a Workpad invalidation advances the position without
-changing snapshot values. Execution targets, advisories, Groups, fork origins
-and lineage have no incremental event and change only through a full
-replacement, as do cross-collection changes one delta cannot carry, such as a
-grouped thread crossing the archived boundary, a thread moving workspaces, or a
-fork whose bounded selection membership can change. Folding is bounded work: ID,
+changing snapshot values. Projects, execution targets, advisories, Groups,
+fork origins and lineage have no incremental event and change only through a
+full replacement, as do cross-collection changes one delta cannot carry, such
+as a grouped thread crossing the archived boundary, a thread moving workspaces,
+a location moving projects, or a fork whose bounded selection membership can
+change. Folding is bounded work: ID,
 reverse-reference and lineage reference-count indexes and a per-entity byte
 ledger let a delta serialize only the incoming entity and reject a projected
 total above the 32 MiB snapshot limit. Regressed thread or Task revisions,

@@ -6,11 +6,16 @@ import {
   CanonicalInlineAgentToolService,
   mapAgentToolDomainError,
 } from "../../src/server/agent-tools/invocation/canonical-inline-agent-tool-service.js";
-import { agentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
+import { createAgentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
 import type { AgentManagementService } from "../../src/server/agent-tools/application/agent-management-service.js";
 import { createTaskUpdateToolDefinition } from "../../src/server/agent-tools/tools/task-management-tools.js";
 import { AutomationAgentToolService } from "../../src/server/agent-tools/tools/automation-agent-tool-service.js";
 import { createAutomationCreateToolDefinition } from "../../src/server/agent-tools/tools/automation-create-tool.js";
+
+const agentContextToolDefinition = createAgentContextToolDefinition({
+  readWorkspaceProjectId: async () => "project-1",
+  readThreadStatus: async () => undefined,
+});
 
 const source = {
   scope: { tenantId: "tenant-1", principalId: "principal-1" },
@@ -65,6 +70,7 @@ function writeDefinition(input: {
   return {
     ...agentContextToolDefinition,
     id: "example.write",
+    schemaVersion: 2,
     description: "Writes one bounded example.",
     effects: input.effects ?? {
       application: "write",
@@ -91,7 +97,7 @@ function writeDefinition(input: {
 describe("CanonicalInlineAgentToolService", () => {
   it("lists only explicit deterministic deployment exposure", () => {
     const service = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
     });
     expect(service.catalog("http", "thread_agent").map(({ id }) => id)).toEqual(
       ["agent.context", "thread.status"],
@@ -105,7 +111,7 @@ describe("CanonicalInlineAgentToolService", () => {
 
   it("filters and denies tools for a caller kind they do not admit", async () => {
     const service = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
     });
     const principalDefaults = {
       kind: "principal_client" as const,
@@ -147,7 +153,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "ineligible-principal-client",
           input: {},
         },
@@ -158,14 +164,14 @@ describe("CanonicalInlineAgentToolService", () => {
 
   it("returns resolved source context without accepting identity input", async () => {
     const service = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
       invocationId: () => "invocation-1",
     });
     await expect(
       service.invoke(
         {
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "request-1",
           input: {},
         },
@@ -177,6 +183,7 @@ describe("CanonicalInlineAgentToolService", () => {
       output: {
         threadId: "source-thread",
         workspaceId: "workspace-1",
+        projectId: "project-1",
         backend: "pi",
       },
     });
@@ -184,7 +191,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "request-2",
           input: { sourceThreadId: "forged" },
         },
@@ -195,13 +202,13 @@ describe("CanonicalInlineAgentToolService", () => {
 
   it("rejects mismatched caller, defaults, policy, and environment authority", async () => {
     const service = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
     });
     await expect(
       service.invoke(
         {
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "incoherent-authority",
           input: {},
         },
@@ -224,7 +231,7 @@ describe("CanonicalInlineAgentToolService", () => {
       activity: "waiting_for_input" as const,
     }));
     const service = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus },
       invocationId: () => "invocation-2",
     });
     await expect(
@@ -255,7 +262,7 @@ describe("CanonicalInlineAgentToolService", () => {
 
   it("returns stable not-found and cancellation errors", async () => {
     const service = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
     });
     await expect(
       service.invoke(
@@ -280,7 +287,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "cancelled",
           input: {},
         },
@@ -293,6 +300,7 @@ describe("CanonicalInlineAgentToolService", () => {
     let executionSignal: AbortSignal | undefined;
     const service = new CanonicalInlineAgentToolService({
       application: {
+        readWorkspaceProjectId: async () => "project-1",
         readThreadStatus: async (_scope, _threadId, _authority, signal) => {
           executionSignal = signal;
           return new Promise(() => undefined);
@@ -319,11 +327,12 @@ describe("CanonicalInlineAgentToolService", () => {
   it("aborts active execution signals and drains them before close settles", async () => {
     let executionSignal: AbortSignal | undefined;
     const service = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
       additionalDefinitions: [
         {
           ...agentContextToolDefinition,
           id: "example.shutdown-aware",
+          schemaVersion: 2,
           adapters: {
             pi: {
               name: "sedes_example_shutdown_aware",
@@ -343,6 +352,7 @@ describe("CanonicalInlineAgentToolService", () => {
             return {
               threadId: context.defaults.threadId!,
               workspaceId: context.defaults.workspaceId!,
+              projectId: "project-1",
               backend:
                 context.subject.kind === "thread_agent"
                   ? context.subject.backendKind
@@ -376,7 +386,8 @@ describe("CanonicalInlineAgentToolService", () => {
       let executionSignal: AbortSignal | undefined;
       const service = new CanonicalInlineAgentToolService({
         application: {
-          readThreadStatus: async (_scope, _threadId, _authority, signal) => {
+          readWorkspaceProjectId: async () => "project-1",
+        readThreadStatus: async (_scope, _threadId, _authority, signal) => {
             executionSignal = signal;
             return new Promise(() => undefined);
           },
@@ -407,7 +418,7 @@ describe("CanonicalInlineAgentToolService", () => {
   it("executes admitted writes once with a fresh hidden mutation id", async () => {
     const calls: Array<{ mutationId: string; requestId: string }> = [];
     const service = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
       invocationId: () => "invocation-write",
       mutationId: (() => {
         let next = 0;
@@ -423,6 +434,7 @@ describe("CanonicalInlineAgentToolService", () => {
             return {
               threadId: context.defaults.threadId!,
               workspaceId: context.defaults.workspaceId!,
+              projectId: "project-1",
               backend:
                 context.subject.kind === "thread_agent"
                   ? context.subject.backendKind
@@ -455,7 +467,7 @@ describe("CanonicalInlineAgentToolService", () => {
   it("announces invocation identity before entering domain execution", async () => {
     const order: string[] = [];
     const service = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
       invocationId: () => "invocation-before-write",
       additionalDefinitions: [
         writeDefinition({
@@ -464,6 +476,7 @@ describe("CanonicalInlineAgentToolService", () => {
             return {
               threadId: context.defaults.threadId!,
               workspaceId: context.defaults.workspaceId!,
+              projectId: "project-1",
               backend:
                 context.subject.kind === "thread_agent"
                   ? context.subject.backendKind
@@ -501,6 +514,7 @@ describe("CanonicalInlineAgentToolService", () => {
     const execute = vi.fn(async (_input, context) => ({
       threadId: context.defaults.threadId!,
       workspaceId: context.defaults.workspaceId!,
+      projectId: "project-1",
       backend:
         context.subject.kind === "thread_agent"
           ? context.subject.backendKind
@@ -508,7 +522,7 @@ describe("CanonicalInlineAgentToolService", () => {
     }));
     const onInvocationStarted = vi.fn(() => invocationStarted);
     const service = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
       additionalDefinitions: [writeDefinition({ execute })],
     });
     const invocation = service.invoke(
@@ -545,7 +559,7 @@ describe("CanonicalInlineAgentToolService", () => {
       get: () => (++signalReads === 1 ? live.signal : aborted.signal),
     });
     const service = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
       additionalDefinitions: [writeDefinition({ execute })],
     });
 
@@ -567,13 +581,14 @@ describe("CanonicalInlineAgentToolService", () => {
     const execute = vi.fn(async (_input, context) => ({
       threadId: context.defaults.threadId!,
       workspaceId: context.defaults.workspaceId!,
+      projectId: "project-1",
       backend:
         context.subject.kind === "thread_agent"
           ? context.subject.backendKind
           : "pi",
     }));
     const service = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
       additionalDefinitions: [
         writeDefinition({
           execute,
@@ -599,7 +614,7 @@ describe("CanonicalInlineAgentToolService", () => {
     expect(execute).toHaveBeenCalledTimes(1);
 
     const externalWrite = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
       additionalDefinitions: [
         writeDefinition({
           execute,
@@ -629,7 +644,7 @@ describe("CanonicalInlineAgentToolService", () => {
     const execute = vi.fn(async () => ({}));
     const destructive = writeDefinition({ execute });
     const service = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
       additionalDefinitions: [
         {
           ...destructive,
@@ -670,6 +685,7 @@ describe("CanonicalInlineAgentToolService", () => {
               resolve({
                 threadId: context.defaults.threadId!,
                 workspaceId: context.defaults.workspaceId!,
+                projectId: "project-1",
                 backend:
                   context.subject.kind === "thread_agent"
                     ? context.subject.backendKind
@@ -679,7 +695,7 @@ describe("CanonicalInlineAgentToolService", () => {
           }),
       );
       const service = new CanonicalInlineAgentToolService({
-        application: { readThreadStatus: async () => undefined },
+        application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
         mutationId: () => "late-write-mutation",
         additionalDefinitions: [writeDefinition({ execute })],
       });
@@ -729,7 +745,7 @@ describe("CanonicalInlineAgentToolService", () => {
 
   it("maps shared Zod refinements to invalid_input", async () => {
     const service = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
       additionalDefinitions: [
         createTaskUpdateToolDefinition({} as AgentManagementService),
       ],
@@ -766,7 +782,7 @@ describe("CanonicalInlineAgentToolService", () => {
       } as never,
     });
     const service = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
       additionalDefinitions: [
         createAutomationCreateToolDefinition(automations),
       ],
@@ -840,7 +856,7 @@ describe("CanonicalInlineAgentToolService", () => {
       throw Object.assign(new Error(message), { code: "SQLITE_CONSTRAINT_TRIGGER" });
     });
     const service = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
       additionalDefinitions: [writeDefinition({ execute })],
     });
     const request = { toolId: "example.write", schemaVersion: 2, requestId: "removed-project", input: {} };

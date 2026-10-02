@@ -260,33 +260,36 @@ Review a thread under **Thread actions → Environment variables…**, then use
 
 ## Projects
 
-Open **Settings → Projects** (or `/settings/projects`) to manage remembered
-directories. This page is one list; it includes removed projects and projects
-on unavailable environments. Each row shows the project's name, path,
-environment, thread count, and whether it is available, with **Remove** or
-**Restore** beside it. Search by name or path, or use the searchable
-environment and project status selectors. In a narrow list, choose **Filters**
-to open these selectors.
+Open **Settings → Projects** (or `/settings/projects`) to manage projects and
+their locations. Each project row shows its name and location count, with its
+locations underneath: each shows its environment, path, thread count, and
+whether it is available. The list includes removed projects and locations,
+marked **Removed**, and locations on unavailable environments. Search by
+project name, folder, path, or environment, or use the searchable environment
+and status selectors. In a narrow list, choose **Filters** to open these
+selectors. An inline note lists project names that several active projects
+share, each with a **Merge** action.
 
 Choose **Add project** to browse an existing directory or enter its absolute
-path. On mobile, Add project opens as a bottom sheet. The same action is available
-beside **New thread** in every sidebar view and inside the New thread form.
-Adding from the form preserves your inputs and
-selects the project after it becomes available. Allowed workspace roots are
-access grants configured separately in the environment's editor, under
-**Workspace access**.
+path, then choose the project it belongs to: a new project or an existing one.
+On mobile, Add project opens as a bottom sheet. The same action is available
+beside **New thread** in every sidebar view and inside the New thread form, and
+a project's **Add location…** action opens it for that project. Adding from the
+form preserves your inputs and selects the location after it becomes
+available. Allowed workspace roots are access grants configured separately in
+the environment's editor, under **Workspace access**.
 
-**Remove** hides the project and its threads from the working inventory and
-creation choices. The confirmation shows its thread count. Files, history,
+Each row's menu holds its actions. A project can be renamed, given another
+location, merged into another project, removed, or restored; a location can be
+moved to another or a new project, removed, or restored. Removal hides
+threads from the working inventory and creation choices; files, history,
 drafts, and saved application data remain intact. Stop running or queued work,
-resolve uncertain operations, pause schedules, and end terminals before removal.
-
-Select **Removed projects** in the status filter and choose **Restore** to use a
-project again. Adding the same directory on the same environment also restores
-its original identity and associations. Restoration rechecks current directory
-access; unavailable hosts or revoked roots may require attention first. Paused
-schedules stay paused. See [Manage projects](organize-work.md#manage-projects)
-for the retention behavior.
+resolve uncertain operations, pause schedules, and end terminals before
+removal; removing a project lists anything that still blocks it. Restoration
+rechecks current directory access; unavailable hosts or revoked roots may
+require attention first. Paused schedules stay paused. See
+[Manage projects](organize-work.md#manage-projects) for what each action moves
+or keeps.
 
 ## Agents
 
@@ -568,7 +571,7 @@ A Tool client has:
 - exact allowed tool IDs;
 - a required default execution environment;
 - an explicit set of allowed environments;
-- optional default project/thread selections; and
+- optional default location and thread selections; and
 - enabled, disabled, rotated, or revoked credential state.
 
 Creation and rotation show the bearer token exactly once. Choose **Reveal
