@@ -1,12 +1,17 @@
 import { normalizedAbsolutePath } from "../../../shared/absolute-path.js";
 import { createPiCancelledRetryMarker, readPiCancelledRetryMarker } from "./pi-cancelled-retry-marker.js";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readdir, realpath, stat, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 import path from "node:path";
 import { scheduler } from "node:timers/promises";
 import type { BackendEffectiveSettings } from "../../../shared/protocol/backend.js";
 import {
   SessionManager,
+  getAgentDir,
+  parseSessionEntries,
+  type FileEntry,
   type SessionEntry,
   type SessionInfo,
 } from "@earendil-works/pi-coding-agent";
@@ -62,6 +67,96 @@ import {
 const bindingDetailVersion = 1;
 const creationMarkerType = "sedes.creation_operation.v1";
 const legacyCreationMarkerType = "harness.creation_operation.v1";
+
+const maximumHistoryBytes = 64 * 1024 * 1024;
+const maximumHistoryEntries = 250_000;
+const maximumHeaderBytes = 1024 * 1024;
+const maximumHistoryFiles = 100_000;
+
+function historyInvalid(code: string): BackendError {
+  return backendError(
+    "rejected",
+    "The persisted Pi history is invalid or exceeds the supported read limits.",
+    code,
+  );
+}
+
+/** The SDK's native line parser, with bounds enforced before retention. */
+async function readHistoryEntries(
+  file: string,
+  signal: AbortSignal,
+  headerOnly = false,
+): Promise<FileEntry[]> {
+  signal.throwIfAborted();
+  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const metadata = await handle.stat({ bigint: true });
+    if (!metadata.isFile() || metadata.size === 0n) {
+      throw historyInvalid("pi_history_file_invalid");
+    }
+    if (!headerOnly && metadata.size > BigInt(maximumHistoryBytes)) {
+      throw historyInvalid("pi_history_capacity_exceeded");
+    }
+    const limit = headerOnly ? maximumHeaderBytes : maximumHistoryBytes;
+    const decoder = new StringDecoder("utf8");
+    const buffer = Buffer.alloc(64 * 1024);
+    const entries: FileEntry[] = [];
+    let pending = "";
+    let bytes = 0;
+    const consume = (line: string) => {
+      if (!line.trim()) return;
+      const parsed = parseSessionEntries(line);
+      // The native parser skips malformed JSON. A history reader must report
+      // corruption rather than quietly removing a message from its snapshot.
+      if (parsed.length !== 1) throw historyInvalid("pi_history_entry_invalid");
+      for (const entry of parsed) {
+        if (!entry || typeof entry !== "object" || typeof entry.type !== "string") {
+          throw historyInvalid("pi_history_entry_invalid");
+        }
+        if (entries.length >= maximumHistoryEntries) {
+          throw historyInvalid("pi_history_capacity_exceeded");
+        }
+        entries.push(entry);
+      }
+    };
+    const finish = async () => {
+      signal.throwIfAborted();
+      // Sibling probes only establish header identity. Appending to another
+      // conversation must not invalidate this transcript's immutable capture.
+      if (headerOnly) return entries;
+      const current = await handle.stat({ bigint: true });
+      signal.throwIfAborted();
+      if (current.size !== metadata.size || current.mtimeNs !== metadata.mtimeNs || current.ctimeNs !== metadata.ctimeNs) {
+        throw new BackendError({ category: "unavailable", retryable: true, crossedSubmissionBoundary: false,
+          backendCode: "pi_history_invalidated", safeMessage: "Pi history changed during acquisition. Retry the read." });
+      }
+      return entries;
+    };
+    while (true) {
+      signal.throwIfAborted();
+      const read = await handle.read(buffer, 0, Math.min(buffer.length, limit - bytes + 1), null);
+      signal.throwIfAborted();
+      bytes += read.bytesRead;
+      if (bytes > limit) throw historyInvalid("pi_history_capacity_exceeded");
+      pending += read.bytesRead === 0
+        ? decoder.end()
+        : decoder.write(buffer.subarray(0, read.bytesRead));
+      let start = 0;
+      for (let end = pending.indexOf("\n"); end >= 0; end = pending.indexOf("\n", start)) {
+        consume(pending.slice(start, end));
+        if (headerOnly && entries.length > 0) return await finish();
+        start = end + 1;
+      }
+      pending = pending.slice(start);
+      if (read.bytesRead === 0) {
+        if (pending.trim()) consume(pending);
+        return await finish();
+      }
+    }
+  } finally {
+    await handle.close();
+  }
+}
 
 function isCreationMarkerType(value: string): boolean {
   return value === creationMarkerType || value === legacyCreationMarkerType;
@@ -825,6 +920,105 @@ export class PiSessionStore {
         canonicalSessionFile,
       ),
     };
+  }
+
+  /**
+   * Reads one exact durable binding without creating an SDK session or opening
+   * a writable SessionManager. The workspace identity may outlive its checkout.
+   */
+  async readHistory(
+    workspace: ValidatedWorkspace,
+    backendConversationId: string,
+    opaqueBindingDetail: string,
+    signal: AbortSignal,
+  ): Promise<SessionManager> {
+    this.#assertWorkspacePath(workspace.canonicalPath);
+    const detail = parsePiBindingDetail(opaqueBindingDetail, backendConversationId);
+    if (!detail.sessionFile) {
+      throw backendError("not_found", "The persisted Pi conversation was not found.", "pi_session_unavailable");
+    }
+    const [canonicalStore, canonicalFile] = await Promise.all([
+      realpath(this.#sessionDirectory ?? path.join(getAgentDir(), "sessions")),
+      realpath(detail.sessionFile),
+    ]).catch((cause: NodeJS.ErrnoException) => {
+      if (cause.code !== "ENOENT") throw cause;
+      throw backendError("not_found", "The persisted Pi conversation was not found.", "pi_session_unavailable");
+    });
+    signal.throwIfAborted();
+    if (!isWithin(canonicalStore, canonicalFile) || canonicalStore === canonicalFile) {
+      throw backendError("rejected", "The Pi conversation path does not match its binding.", "pi_binding_path_mismatch");
+    }
+    const entries = await readHistoryEntries(canonicalFile, signal);
+    const header = entries[0];
+    if (header?.type === "session" && (header.version ?? 1) === 1) {
+      throw backendError(
+        "rejected",
+        "This Pi history uses native format v1. Migrate it with Pi before reading it in Sedes; Sedes does not rewrite archived transcripts.",
+        "pi_history_native_migration_required",
+      );
+    }
+    if (header?.type !== "session" ||
+      header.id !== backendConversationId ||
+      !sessionIdValid(header.id) ||
+      typeof header.cwd !== "string" ||
+      (header.version !== 2 && header.version !== 3) ||
+      await this.#historyWorkspacePath(header.cwd) !== workspace.canonicalPath ||
+      entries.slice(1).some((entry) => entry.type === "session")) {
+      throw backendError("rejected", "The Pi history does not match its conversation binding.", "pi_history_binding_mismatch");
+    }
+    // Preserve exact-ID ambiguity rejection without reading other transcripts.
+    const files = await readdir(path.dirname(canonicalFile), { withFileTypes: true });
+    if (files.length > maximumHistoryFiles) throw historyInvalid("pi_history_capacity_exceeded");
+    for (const file of files) {
+      signal.throwIfAborted();
+      if (!file.name.endsWith(".jsonl")) continue;
+      const candidate = await realpath(path.join(path.dirname(canonicalFile), file.name)).catch(() => undefined);
+      if (!candidate || candidate === canonicalFile || !isWithin(canonicalStore, candidate)) continue;
+      let candidateWorkspace: string | undefined;
+      try {
+        const [candidateHeader] = await readHistoryEntries(candidate, signal, true);
+        if (candidateHeader?.type !== "session" ||
+          candidateHeader.id !== backendConversationId ||
+          typeof candidateHeader.cwd !== "string") continue;
+        candidateWorkspace = await this.#historyWorkspacePath(candidateHeader.cwd);
+      } catch {
+        signal.throwIfAborted();
+        // An unrelated malformed, oversized, or unreadable file cannot prove
+        // an exact identity collision or make the bound transcript unreadable.
+        continue;
+      }
+      signal.throwIfAborted();
+      if (candidateWorkspace === workspace.canonicalPath) {
+        throw backendError("rejected", "The Pi conversation ID is ambiguous.", "pi_session_id_ambiguous");
+      }
+    }
+    signal.throwIfAborted();
+    const manager = SessionManager.inMemory(workspace.canonicalPath, undefined, entries);
+    const seen = new Set<string>();
+    // Parent links point backwards in Pi's append-only tree. Validate them
+    // before getBranch(), which assumes native tree integrity.
+    for (const entry of manager.getEntries()) {
+      if (!entry.id || seen.has(entry.id) ||
+        (entry.parentId !== null && !seen.has(entry.parentId))) {
+        throw historyInvalid("pi_history_entry_invalid");
+      }
+      seen.add(entry.id);
+    }
+    return manager;
+  }
+
+  async #historyWorkspacePath(cwd: string): Promise<string | undefined> {
+    if (this.#workspacePathMode === "remote_semantic") return canonicalRemoteSemanticPath(cwd);
+    try {
+      return await realpath(cwd);
+    } catch (cause) {
+      // Durable canonical identity survives explicit checkout removal; a live
+      // symlink still has to resolve to the exact bound workspace.
+      if ((cause as NodeJS.ErrnoException).code === "ENOENT") {
+        return normalizedAbsolutePath(cwd) ? cwd : undefined;
+      }
+      throw cause;
+    }
   }
 
   async open(

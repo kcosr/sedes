@@ -156,7 +156,7 @@ class NeutralDriver {
         return this.create(input);
       },
       attach: this.attach,
-      read: async () => {
+      openHistory: async () => {
         throw new Error("not used");
       },
       resolveBranchCheckpoint: this.resolveCheckpoint,

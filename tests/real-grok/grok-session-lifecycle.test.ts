@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { parseGrokBackendConfiguration } from "../../src/server/backends/grok/grok-backend-configuration.js";
-import { grokNativeNamespaceKey } from "../../src/server/backends/grok/grok-native-namespace.js";
+import { effectiveGrokNativeHome, grokNativeNamespaceKey } from "../../src/server/backends/grok/grok-native-namespace.js";
+import { BackendError } from "../../src/server/backends/contracts.js";
+import { GrokHistoryReader } from "../../src/server/backends/grok/grok-history-reader.js";
+import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import { GrokOwnedStdioTransportFactory } from "../../src/server/backends/grok/grok-owned-stdio-transport.js";
 import {
   GROK_ACP_REVIEWED_PROFILE_FLOOR,
@@ -320,12 +323,65 @@ describe.sequential("real Grok native-account lifecycle", () => {
       await lifecycle.close("real_grok_first_process_complete");
       lifecycle = undefined;
 
+      const passiveFactory = new GrokOwnedStdioTransportFactory({ runtime, channels });
+      const passiveTransport = await passiveFactory.open(2, controller.signal);
+      const passiveMethods: string[] = [];
+      lifecycle = await GrokSessionLifecycle.open({
+        transport: {
+          maximumFrameBytes: passiveTransport.maximumFrameBytes,
+          assurance: passiveTransport.assurance,
+          frames: passiveTransport.frames,
+          closed: passiveTransport.closed,
+          send: async (text, options) => {
+            passiveMethods.push((JSON.parse(text) as { method: string }).method);
+            return await passiveTransport.send(text, options);
+          },
+          close: reason => passiveTransport.close(reason),
+        },
+        owner: { scope: passiveFactory.scope,
+          nativeNamespaceKey: grokNativeNamespaceKey(executionEnvironmentId, ambientEnvironment),
+          workspace, connectionGeneration: 2, processOwnerId: randomUUID() },
+        registry, inlineSessionUpdates: true, signal: controller.signal,
+      });
+      const reader = new GrokHistoryReader({
+        lifecycle, sessionId, workspace,
+        nativeNamespaceKey: grokNativeNamespaceKey(executionEnvironmentId, ambientEnvironment),
+        correlation: { installationKey: new Uint8Array(32).fill(7), ...scope,
+          backendInstanceId, connectionProfileId, executionEnvironmentId,
+          nativeNamespaceKey: grokNativeNamespaceKey(executionEnvironmentId, ambientEnvironment),
+          canonicalWorkspacePath: workspace, sessionId },
+        generatedImages: { scope, applicationThreadId: randomUUID(),
+          outputArtifacts: createInMemoryOutputArtifactPublisher(),
+          authority: { nativeHome: effectiveGrokNativeHome(ambientEnvironment), canonicalWorkspacePath: workspace, sessionId } },
+        mapError: error => error instanceof BackendError ? error : new BackendError({
+          category: "unavailable", safeMessage: "Live Grok passive history failed.",
+          backendCode: "real_grok_passive_history_failed", retryable: false, crossedSubmissionBoundary: false,
+        }, { cause: error }),
+        onClosed: () => {},
+      });
+      try {
+        const head = await reader.readSnapshot({ signal: controller.signal });
+        const expectedIds = projectGrokLatestHistory(reviewed.history).snapshot.orderedBackendTurnIds;
+        expect(head.snapshot.orderedBackendTurnIds).toEqual(expectedIds);
+        const page = await reader.history({ limit: 1, signal: controller.signal });
+        expect(page.orderedBackendTurnIds).toEqual(expectedIds.slice(-1));
+        expect((await reader.history({ cursor: page.previousCursor, limit: 2, signal: controller.signal })).orderedBackendTurnIds)
+          .toEqual(expectedIds.slice(0, -1));
+        expect(await reader.locateTurn({ maximumTurnCandidates: 10, matchesBackendTurnId: id => id === expectedIds[0], signal: controller.signal }))
+          .toMatchObject({ status: "found", page: { orderedBackendTurnIds: [expectedIds[0]] } });
+        expect(await reader.readSnapshot({ signal: controller.signal })).toEqual(head);
+      } finally {
+        await reader.close();
+        lifecycle = undefined;
+      }
+      expect(passiveMethods.every(method => ["initialize", "authenticate", "session/list", "_x.ai/session/updates"].includes(method))).toBe(true);
+
       const secondFactory = new GrokOwnedStdioTransportFactory({
         runtime,
         channels,
       });
       const secondTransport = observePrivateCarrierShapes(
-        await secondFactory.open(2, controller.signal),
+        await secondFactory.open(3, controller.signal),
         privateCarrierShapes,
       );
       lifecycle = await GrokSessionLifecycle.open({
@@ -337,7 +393,7 @@ describe.sequential("real Grok native-account lifecycle", () => {
             ambientEnvironment,
           ),
           workspace,
-          connectionGeneration: 2,
+          connectionGeneration: 3,
           processOwnerId: randomUUID(),
         },
         registry,
@@ -423,7 +479,7 @@ describe.sequential("real Grok native-account lifecycle", () => {
         channels,
       });
       const thirdTransport = observePrivateCarrierShapes(
-        await thirdFactory.open(3, controller.signal),
+        await thirdFactory.open(4, controller.signal),
         privateCarrierShapes,
       );
       lifecycle = await GrokSessionLifecycle.open({
@@ -432,7 +488,7 @@ describe.sequential("real Grok native-account lifecycle", () => {
           scope: thirdFactory.scope,
           nativeNamespaceKey,
           workspace,
-          connectionGeneration: 3,
+          connectionGeneration: 4,
           processOwnerId: randomUUID(),
         },
         registry,

@@ -1,3 +1,4 @@
+import { readConversationHistory } from "../helpers/read-conversation-history.js";
 // Shared immutable operation deadline keeps replays identical throughout this local suite.
 const interruptDeadlineAt = Date.now() + 3_600_000;
 import { describe, expect, it } from "vitest";
@@ -265,7 +266,7 @@ describe("in-memory conformance fault boundaries", () => {
       requestedBackendConversationId: "active-fork-native-child",
       inheritedSettings: {},
     });
-    const childRead = await current.driver.read({
+    const childRead = await readConversationHistory(current.driver, {
       scope: current.scope,
       binding: current.binding(child, "active-fork-child"),
       workspace: current.workspace,
@@ -275,7 +276,7 @@ describe("in-memory conformance fault boundaries", () => {
       orderedBackendTurnIds: [selectedBackendTurnId],
       runState: "idle",
     });
-    const sourceRead = await current.driver.read({
+    const sourceRead = await readConversationHistory(current.driver, {
       scope: current.scope,
       binding: sourceBinding,
       workspace: current.workspace,
@@ -444,7 +445,7 @@ describe("in-memory conformance fault boundaries", () => {
       backendTurn: { status: "interrupted" },
       completionIdentity: expect.any(String),
     });
-    const read = await current.driver.read({
+    const read = await readConversationHistory(current.driver, {
       scope: current.scope,
       binding,
       workspace: current.workspace,

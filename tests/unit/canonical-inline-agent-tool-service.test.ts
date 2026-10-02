@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { BackendError } from "../../src/server/backends/contracts.js";
 import { DomainError } from "../../src/server/domain/errors.js";
 import type { AgentToolDefinition } from "../../src/server/agent-tools/contracts/agent-tool-contracts.js";
 import {
@@ -843,6 +844,24 @@ describe("CanonicalInlineAgentToolService", () => {
         new DomainError("operation_outcome_uncertain", "secret"),
       ),
     ).toMatchObject({ code: "uncertain_outcome", retryable: false });
+  });
+
+  it.each([
+    ["not_found", "not_found"], ["permission_denied", "permission_denied"],
+    ["invalid_state", "conflict"], ["unavailable", "unavailable"], ["internal", "internal_error"],
+  ] as const)("maps %s backend failures to safe tool errors", async (category, code) => {
+    const safeMessage = "The native conversation history is unavailable.";
+    const failure = new BackendError({ category, retryable: category === "unavailable",
+      crossedSubmissionBoundary: false, safeMessage, backendCode: "native_private_code" },
+      { cause: new Error("private provider credential diagnostic") });
+    const service = new CanonicalInlineAgentToolService({
+      application: { readThreadStatus: async () => undefined },
+      additionalDefinitions: [writeDefinition({ execute: async () => { throw failure; } })],
+    });
+    await expect(service.invoke({ toolId: "example.write", schemaVersion: 2, requestId: `backend-${category}`, input: {} }, source))
+      .rejects.toMatchObject({ code, message: category === "internal" ? "The tool invocation failed." : safeMessage,
+        retryable: category === "unavailable" });
+    await service.close();
   });
 
   it("explains a removed-project write rejection without exposing other database errors", async () => {

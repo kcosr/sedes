@@ -1,3 +1,4 @@
+import { readConversationHistory } from "../helpers/read-conversation-history.js";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -511,8 +512,12 @@ function submit(handle: ConversationHandle, name: string) {
   });
 }
 
+async function readLiveHistory(handle: ConversationHandle) {
+  return { snapshot: await handle.history({ limit: 10 }) };
+}
+
 /** Item kinds of one turn in order, with the viewed pairs spelled out. */
-function turnShape(snapshot: BackendConversationSnapshot, backendTurnId: string) {
+function turnShape(snapshot: Pick<BackendConversationSnapshot, "itemsById" | "turnsById">, backendTurnId: string) {
   return snapshot.turnsById[backendTurnId]!.orderedBackendItemIds.map((id) => {
     const item = snapshot.itemsById[id]!;
     return item.semanticKind === "viewed_image"
@@ -621,7 +626,8 @@ describe("Pi viewed-image publication", () => {
         .filter(({ event }) => event.type === "turn_updated" || event.type === "turn_started"),
     ).toEqual([]);
 
-    const current = await driver.read(conversation.attach);
+    followed.unsubscribe();
+    const current = await handle.establishProjection({ signal: new AbortController().signal });
     expect(turnShape(current.snapshot, turnId)).toEqual([
       "user_message",
       "assistant_message",
@@ -686,9 +692,9 @@ describe("Pi viewed-image publication", () => {
     const followed = await follow(handle, conversation.backendConversationId);
     const submitted = await submit(handle, "look");
     await vi.waitFor(async () =>
-      expect(childImages((await driver.read(conversation.attach)).snapshot.itemsById)).toHaveLength(1),
+      expect(childImages((await readLiveHistory(handle)).snapshot.itemsById)).toHaveLength(1),
     );
-    const live = (await driver.read(conversation.attach)).snapshot;
+    const live = (await readLiveHistory(handle)).snapshot;
     followed.unsubscribe();
     await handle.close();
 
@@ -786,7 +792,7 @@ describe("Pi viewed-image publication", () => {
     followed.unsubscribe();
     await handle.close();
 
-    const { snapshot } = await driver.read(conversation.attach);
+    const { snapshot } = await readConversationHistory(driver, conversation.attach);
     const sourceTurn = snapshot.orderedBackendTurnIds.at(-1)!;
     const checkpoint = await driver.resolveBranchCheckpoint({
       ...conversation.attach,
@@ -811,7 +817,7 @@ describe("Pi viewed-image publication", () => {
     };
     const fork = await driver.attach(forkAttach);
     await vi.waitFor(async () =>
-      expect(childImages((await driver.read(forkAttach)).snapshot.itemsById)).toHaveLength(1),
+      expect(childImages((await readLiveHistory(fork)).snapshot.itemsById)).toHaveLength(1),
     );
     expect(recorder.published.map(({ threadId }) => threadId)).toEqual(["source", "child"]);
     expect(recorder.published[1]!.publicationKey).not.toBe(recorder.published[0]!.publicationKey);
@@ -835,7 +841,7 @@ describe("Pi viewed-image publication", () => {
     const established = await handle.establishProjection({ signal: new AbortController().signal });
     expect(established.snapshot.orderedBackendTurnIds).toHaveLength(10);
     await vi.waitFor(async () =>
-      expect(childImages((await driver.read(conversation.attach)).snapshot.itemsById)).toHaveLength(10),
+      expect(childImages((await readLiveHistory(handle)).snapshot.itemsById)).toHaveLength(10),
     );
     expect(recorder.published).toHaveLength(10);
 
@@ -992,7 +998,7 @@ describe("Pi viewed-image publication", () => {
       expect(followed.events.some(({ event }) => event.type === "turn_completed")).toBe(true),
     );
     await new Promise((resolve) => setTimeout(resolve, 10));
-    const current = (await driver.read(conversation.attach)).snapshot;
+    const current = (await readLiveHistory(handle)).snapshot;
     expect(turnShape(current, submitted.backendTurnId!)).toEqual([
       "user_message",
       "viewed:failed:missing.png",
@@ -1031,16 +1037,16 @@ describe("Pi viewed-image publication", () => {
     const conversation = await created(driver, fixture);
     const manager = await persisted(fixture, conversation.backendConversationId);
     appendImageReadTurn(manager, conversation.backendConversationId, 1);
-    const unpublished = await driver.read(conversation.attach);
+    const unpublished = await readConversationHistory(driver, conversation.attach);
     expect(childImages(unpublished.snapshot.itemsById)).toEqual([]);
     expect(recorder.published).toEqual([]);
 
     const handle = await driver.attach(conversation.attach);
     await vi.waitFor(async () =>
-      expect(childImages((await driver.read(conversation.attach)).snapshot.itemsById)).toHaveLength(1),
+      expect(childImages((await readLiveHistory(handle)).snapshot.itemsById)).toHaveLength(1),
     );
     await handle.close();
-    const published = await driver.read(conversation.attach);
+    const published = await readConversationHistory(driver, conversation.attach);
     expect(childImages(published.snapshot.itemsById)).toHaveLength(1);
     expect(recorder.published).toHaveLength(1);
   });
@@ -1092,7 +1098,7 @@ describe("Pi viewed-image backfill bounds", () => {
           }),
         ),
     );
-    expect(childImages((await driver.read(conversation.attach)).snapshot.itemsById)).toHaveLength(32);
+    expect(childImages((await handle.establishProjection({ signal: new AbortController().signal })).snapshot.itemsById)).toHaveLength(32);
     await handle.close();
   });
 
@@ -1152,7 +1158,7 @@ describe("Pi viewed-image publication failures", () => {
     recorder.fail(false);
     const reopened = await driver.attach(conversation.attach);
     await vi.waitFor(async () =>
-      expect(childImages((await driver.read(conversation.attach)).snapshot.itemsById)).toHaveLength(1),
+      expect(childImages((await readLiveHistory(reopened)).snapshot.itemsById)).toHaveLength(1),
     );
     expect(recorder.published).toHaveLength(2);
     await reopened.close();
@@ -1235,11 +1241,11 @@ describe("Pi viewed images seeded before their results persist", () => {
       expect(second.events.some(({ event }) => event.type === "turn_completed")).toBe(true),
     );
     await vi.waitFor(async () =>
-      expect(childImages((await driver.read(conversation.attach)).snapshot.itemsById)).toHaveLength(1),
+      expect(childImages((await readLiveHistory(handle)).snapshot.itemsById)).toHaveLength(1),
     );
 
     expect(second.results.filter(({ kind }) => kind === "resnapshot_required")).toEqual([]);
-    const current = (await driver.read(conversation.attach)).snapshot;
+    const current = (await readLiveHistory(handle)).snapshot;
     expect(turnShape(current, submitted.backendTurnId!)).toEqual([
       "user_message",
       "viewed:completed:shown.png",
@@ -1292,13 +1298,13 @@ describe("Pi viewed images seeded before their results persist", () => {
     expect(Math.min(...seededOrders)).toBeGreaterThan(2_001);
     pause.resume();
     await vi.waitFor(async () =>
-      expect(childImages((await driver.read(conversation.attach)).snapshot.itemsById)).toHaveLength(1),
+      expect(childImages((await readLiveHistory(handle)).snapshot.itemsById)).toHaveLength(1),
     );
     await vi.waitFor(() =>
       expect(second.events.some(({ event }) => event.type === "turn_completed")).toBe(true),
     );
     expect(second.results.filter(({ kind }) => kind === "resnapshot_required")).toEqual([]);
-    const current = (await driver.read(conversation.attach)).snapshot;
+    const current = (await readLiveHistory(handle)).snapshot;
     expect(turnShape(current, submitted.backendTurnId!)).toEqual([
       "user_message",
       "viewed:completed:shown.png",
@@ -1336,7 +1342,7 @@ describe("Pi viewed images seeded before their results persist", () => {
       expect(second.events.some(({ event }) => event.type === "turn_completed")).toBe(true),
     );
     expect(second.results.filter(({ kind }) => kind === "resnapshot_required")).toEqual([]);
-    const current = (await driver.read(conversation.attach)).snapshot;
+    const current = (await readLiveHistory(handle)).snapshot;
     const rows = current.turnsById[submitted.backendTurnId!]!.orderedBackendItemIds
       .map((id) => current.itemsById[id]!)
       .filter((item) => item.semanticKind === "viewed_image");
@@ -1458,7 +1464,7 @@ describe("Pi viewed images near the per-turn item bound", () => {
     manager.appendMessage(assistantMessage([{ type: "text", text: "done" }], "stop") as never);
     const publishedBefore = recorder.published.length;
 
-    const unattached = await driver.read(conversation.attach);
+    const unattached = await readConversationHistory(driver, conversation.attach);
     expect(unattached.snapshot.turnsById[turnId]!.orderedBackendItemIds).toHaveLength(1_302);
     const handle = await driver.attach(conversation.attach);
     const established = await handle.establishProjection({ signal: new AbortController().signal });

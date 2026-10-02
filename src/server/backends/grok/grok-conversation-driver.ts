@@ -46,7 +46,7 @@ import {
   type ConversationBinding,
   type ConversationHandle,
   type ConversationControl,
-  type ConversationReadResult,
+  type ConversationHistoryReader,
   type CanonicalComposerAttachmentEvidence,
   type CreateConversationInput,
   type CreateConversationResult,
@@ -72,6 +72,7 @@ import {
   type Unsubscribe,
 } from "../contracts.js";
 import { GROK_ACP_COMPATIBILITY_RELEASE } from "./grok-release-guard.js";
+import { GrokHistoryReader } from "./grok-history-reader.js";
 import {
   AcpBindingError,
   AcpDeliveryError,
@@ -218,6 +219,7 @@ export class GrokConversationBackendDriver implements ConversationBackendDriver 
     number | undefined;
   readonly #handles = new Map<string, GrokConversationHandle | null>();
   readonly #operations = new Set<Promise<void>>();
+  readonly #historyReaders = new Set<ConversationHistoryReader>();
   readonly #runtimeVersionCache = new GrokRuntimeVersionCache();
   readonly #runtimeImageInputSupport = new WeakMap<
     GrokSessionLifecycle,
@@ -673,57 +675,44 @@ export class GrokConversationBackendDriver implements ConversationBackendDriver 
     }
   }
 
-  async read(input: ReadConversationInput): Promise<ConversationReadResult> {
+  async openHistory(input: ReadConversationInput): Promise<ConversationHistoryReader> {
+    input.signal?.throwIfAborted();
     const detail = this.#assertConversationInput(input);
     this.#assertOperational();
-    const resident = this.#handles.get(this.#ownershipKey(detail));
-    if (resident) {
-      const projection = await resident.establishProjection({
-        signal: new AbortController().signal,
-      });
-      return {
-        snapshot: projection.snapshot,
-        usage: await resident.usage(),
-      };
-    }
-    if (resident === null) {
-      throw grokError(
-        "invalid_state",
-        "This Grok conversation is still attaching.",
-        "grok_conversation_attach_in_progress",
-        true,
-      );
-    }
-    const handle = await this.attach(input);
-    let result: ConversationReadResult | undefined;
-    let failure: unknown;
+    const releaseOperation = this.#beginOperation();
+    let lifecycle: GrokSessionLifecycle | undefined;
     try {
-      const projection = await handle.establishProjection({
-        signal: new AbortController().signal,
+      const signal = AbortSignal.any([AbortSignal.timeout(60_000), ...(input.signal ? [input.signal] : [])]);
+      lifecycle = await this.#openLifecycle(input.workspace, signal);
+      signal.throwIfAborted();
+      this.#assertOperational();
+      const reader = new GrokHistoryReader({
+        lifecycle,
+        sessionId: detail.sessionId,
+        nativeNamespaceKey: this.#nativeNamespaceKey,
+        workspace: detail.canonicalWorkspacePath,
+        correlation: this.#submissionCorrelationScope(detail),
+        generatedImages: {
+          scope: this.#threadScope(), applicationThreadId: input.binding.applicationThreadId,
+          outputArtifacts: this.#outputArtifacts,
+          authority: { nativeHome: this.#nativeHome, canonicalWorkspacePath: detail.canonicalWorkspacePath, sessionId: detail.sessionId },
+        },
+        mapError: mapReadError,
+        onClosed: () => { this.#historyReaders.delete(reader); },
       });
-      result = {
-        snapshot: projection.snapshot,
-        usage: await handle.usage(),
-      };
+      this.#historyReaders.add(reader);
+      return reader;
     } catch (error) {
-      failure = error;
-    }
-    try {
-      await handle.close();
-    } catch (cleanupError) {
-      if (failure !== undefined) {
-        throw grokError(
-          "unavailable",
-          "Grok read failed and its native session could not be unloaded safely.",
-          "grok_read_cleanup_failed",
-          true,
-          new AggregateError([failure, cleanupError]),
-        );
+      try {
+        await lifecycle?.close("grok_history_open_failed");
+      } catch (cleanupError) {
+        throw grokError("unavailable", "Grok history acquisition failed and its owned process could not be cleaned up safely.", "grok_history_open_cleanup_failed", true, new AggregateError([error, cleanupError]));
       }
-      throw cleanupError;
+      input.signal?.throwIfAborted();
+      throw mapReadError(error, "Grok history is unavailable.");
+    } finally {
+      releaseOperation();
     }
-    if (failure !== undefined) throw failure;
-    return result!;
   }
 
   async resolveBranchCheckpoint(
@@ -886,9 +875,11 @@ export class GrokConversationBackendDriver implements ConversationBackendDriver 
       await Promise.all([...this.#operations]);
       this.#snapshots.close();
       const closures = await Promise.allSettled(
-        [...this.#handles.values()]
-          .filter((handle): handle is GrokConversationHandle => handle !== null)
-          .map(async (handle) => await handle.close()),
+        [
+          ...[...this.#handles.values()]
+            .filter((handle): handle is GrokConversationHandle => handle !== null),
+          ...this.#historyReaders,
+        ].map(async (handle) => await handle.close()),
       );
       this.#handles.clear();
       const failures = closures.flatMap((closure) =>

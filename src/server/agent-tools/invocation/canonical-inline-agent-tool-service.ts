@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import { deterministicJson } from "../../canonical-json.js";
 import { DomainError } from "../../domain/errors.js";
+import { BackendError } from "../../backends/contracts.js";
 import { projectRemovalAdmissionError } from "../../db/project-removal-errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import type {
@@ -540,6 +541,16 @@ export class CanonicalInlineAgentToolService {
         );
       }
       if (cause instanceof DomainError) throw mapAgentToolDomainError(cause);
+      if (cause instanceof BackendError && cause.category !== "internal") {
+        const code = cause.category === "not_found" ? "not_found"
+          : cause.category === "permission_denied" ? "permission_denied"
+          : cause.category === "invalid_state" || cause.category === "rejected" ? "conflict"
+          : cause.category === "submission_unknown" ? "uncertain_outcome"
+          : "unavailable";
+        throw new CanonicalAgentToolRequestError(
+          code, cause.safeMessage, cause.retryable, { cause },
+        );
+      }
       throw new CanonicalAgentToolRequestError(
         "internal_error",
         "The tool invocation failed.",

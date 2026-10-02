@@ -337,6 +337,24 @@ distinct outcomes.
 
 ## Persistence and recovery
 
+Archived history uses a detached native reader. It reads the exact scoped
+binding from the Pi session namespace into an in-memory session manager and
+uses the same history projector, page bounds, markers, and targeted lookup as
+live history. It does not create an agent session, issue tool credentials, load
+extensions, connect remote workspace tools, acquire an isolated worker, or
+rewrite native data. Remote Pi history remains in its management-host store;
+isolated history validates the durable allocation path even after the checkout
+has been deleted. Existing published viewed-image artifacts remain available.
+
+One reader retains one native snapshot, bounded to 64 MiB, 250,000 entries and
+a 60-second acquisition. Cursors are private to that reader's lifetime.
+Malformed records and files changed during acquisition fail explicitly.
+Native format v2 is normalized to v3 only in memory.
+Unmigrated v1 files require migration using Pi before Sedes can read them:
+Pi assigns new entry identities during that migration, so doing it afresh in
+memory would make application turn identities unstable. Recovery attestations
+needed for projection are derived only in the reader's in-memory copy.
+
 Discovery uses one SDK metadata listing per scan. It reads child ancestry,
 groups authenticated checkpoint references by canonical parent file, and opens
 each referenced parent once more to resolve those checkpoints. Only compact

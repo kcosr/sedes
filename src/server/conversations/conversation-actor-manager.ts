@@ -17,6 +17,7 @@ import { callRuntime } from "../runtime/runtime-errors.js";
 import type { ComposerAttachmentDeliveryService } from "../composer-attachments/composer-attachment-delivery-service.js";
 import { ConversationActor } from "./conversation-actor.js";
 import { ConversationProjector } from "./conversation-projector.js";
+import { historyConversationHandle } from "./history-conversation-handle.js";
 import { assertConversationRetentionMilliseconds } from "./conversation-retention-policy.js";
 import { assertConversationRuntimeBudget } from "./conversation-runtime-budget-policy.js";
 import type { DeliveryInputSnapshotRepository } from "../db/repositories/delivery-input-snapshot-repository.js";
@@ -28,6 +29,8 @@ export interface AcquireConversationActorInput {
   readonly workspace: ValidatedWorkspace;
   readonly opaqueBindingDetail: string;
   readonly driver: ConversationBackendDriver;
+  /** Server-derived inventory state selects passive history for archived threads. */
+  readonly access?: "execution" | "history";
 }
 
 export interface AcquiredConversationActor {
@@ -110,6 +113,7 @@ export type AuthoritativeSubmissionObserver = (
 ) => void | Promise<void>;
 
 interface ActorEntry {
+  readonly access: "execution" | "history";
   readonly nativeEffects: ConversationNativeEffectFence;
   readonly unprojectedGeneration: string;
   promise: Promise<ConversationActor>;
@@ -319,6 +323,7 @@ export class ConversationActorManager {
         const admission = this.#reserveRuntimeSlot(budgetScope);
         const creationAbort = new AbortController();
         const createdEntry = {
+          access: input.access ?? "execution",
           nativeEffects: new ConversationNativeEffectFence(),
           unprojectedGeneration: randomUUID(),
           fingerprint,
@@ -364,6 +369,32 @@ export class ConversationActorManager {
         }
         if (entry.fingerprint !== fingerprint) {
           throw new Error("conversation_actor_binding_conflict");
+        }
+        if (entry.access !== (input.access ?? "execution")) {
+          if (entry.access !== "history") {
+            throw new BackendError({ category: "unavailable", retryable: true,
+              crossedSubmissionBoundary: false,
+              safeMessage: "The thread changed while its history was opening. Retry the read.",
+              backendCode: "conversation_actor_admission_invalidated" });
+          }
+          // Restore can replace a history reader even while an old browser
+          // retains it. Closing this acquisition never interrupts agent work.
+          let historyActor: ConversationActor;
+          if (!entry.actor) {
+            entry.creationAbort.abort(new ConversationActorCreationAbortedError());
+            try { historyActor = await entry.promise; }
+            catch (error) {
+              // Failed establishment owns reader cleanup. An unproven close
+              // must still fence replacement, even for a passive reader.
+              if (error instanceof ConversationActorCreationCleanupError) throw error;
+              if (this.#entries.get(key) === entry) this.#entries.delete(key);
+              continue;
+            }
+          } else historyActor = entry.actor;
+          await historyActor.close();
+          if (!historyActor.replacementSafe) throw new Error("conversation_actor_close_unproven");
+          if (this.#entries.get(key) === entry) this.#entries.delete(key);
+          continue;
         }
       }
       if (entry.poisoned) {
@@ -1143,6 +1174,42 @@ export class ConversationActorManager {
     signal: AbortSignal,
     onStateChanged: () => void,
   ): Promise<ConversationActor> {
+    if (input.access === "history") {
+      const reader = await input.driver.openHistory({
+        scope: input.scope,
+        binding: input.binding,
+        workspace: input.workspace,
+        opaqueBindingDetail: input.opaqueBindingDetail,
+        signal,
+      }).catch((error: unknown) => {
+        if (signal.aborted) throw new ConversationActorCreationAbortedError({ cause: error });
+        throw error;
+      });
+      const actor = new ConversationActor({
+        handle: historyConversationHandle(input.binding, reader),
+        nativeEffects: entry.nativeEffects,
+        attachmentDelivery: this.#attachmentDelivery,
+        initialObserver: onStateChanged,
+        projector: new ConversationProjector({
+          backendInstanceId: input.binding.backendInstanceId,
+          bindingIdentity: input.binding.applicationThreadId,
+          ...(this.#deliveryInputSnapshots ? {
+            resolveDeliveryInputSnapshot: (operationId: string) => this.#deliveryInputSnapshots!.find(
+              input.scope, input.binding.applicationThreadId, operationId,
+            ),
+          } : {}),
+        }),
+      });
+      try {
+        await actor.start({ signal });
+        return actor;
+      } catch (error) {
+        try { await actor.close(); }
+        catch (cleanup) { throw new ConversationActorCreationCleanupError([error, cleanup]); }
+        if (signal.aborted) throw new ConversationActorCreationAbortedError({ cause: error });
+        throw error;
+      }
+    }
     const lease = await callRuntime(() =>
       this.#environments.acquireLease(input.scope, {
         environmentId: input.binding.executionEnvironmentId,

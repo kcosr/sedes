@@ -13,6 +13,7 @@ import type { OpenCodeRuntimeLease } from "./opencode-runtime.js";
 import { acquireOpenCodeInputObserver } from "./opencode-input-observer.js";
 import { createOpenCodeConversation } from "./opencode-conversation-creation.js";
 import { openCodeRuntimeDiagnostic } from "./opencode-runtime-diagnostic.js";
+import { OpenCodeConversationHistory } from "./opencode-conversation-history.js";
 
 const cursorSchema = z.strictObject({ v: z.literal(1), scope: z.string().length(43), native: z.string().min(1).max(16_384) });
 
@@ -133,13 +134,12 @@ export class OpenCodeConversationBackendDriver implements ConversationBackendDri
     }
   }
 
-  async read(input: ReadConversationInput) {
-    const handle = await this.attach(input);
+  async openHistory(input: ReadConversationInput) {
     try {
-      const result = await handle.establishProjection({ signal: handle.control.lifetime });
-      return { snapshot: result.snapshot, usage: await handle.usage() };
+      input.signal?.throwIfAborted();
+      requireOpenCodeBinding(this.input, input);
+      return new OpenCodeConversationHistory(this.input, input);
     } catch (error) { throw mapOpenCodeConversationError(error); }
-    finally { await handle.close(); }
   }
 
   async releaseConversationResidency(input: ReleaseConversationResidencyInput): Promise<"released" | "busy" | "undelivered"> {

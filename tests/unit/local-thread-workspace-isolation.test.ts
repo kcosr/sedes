@@ -59,6 +59,24 @@ function allocation(
 }
 
 describe("local thread workspace isolation composition", () => {
+  it.each(["local", "unavailable"] as const)("resolves %s durable history identity after checkout deletion without runtime policy", (kind) => {
+    const persisted = { ...allocation("deleted", "execution_host"), retention: "delete_requested" as const };
+    const materialize = vi.fn();
+    const acquire = vi.fn();
+    const resolver = kind === "local"
+      ? new LocalThreadWorkspaceIsolationResolver({
+          allocations: { getForThread: () => persisted }, materializer: { materialize }, runtime: { acquire },
+          backendInstanceId: "backend-1", admittedNetworkProfiles: new Set(["isolated"]),
+        })
+      : new UnavailableThreadWorkspaceIsolationResolver({ getForThread: () => persisted });
+    const input = { scope, applicationThreadId: persisted.applicationThreadId, sourceWorkspace: workspace };
+    expect(resolver.historyWorkspace(input)).toMatchObject({ canonicalPath: persisted.workspacePath });
+    expect(() => resolver.historyWorkspace({ ...input, scope: { ...scope, principalId: "other" } })).toThrow("does not match");
+    expect(() => resolver.historyWorkspace({ ...input, applicationThreadId: "other-thread" })).toThrow("does not match");
+    expect(materialize).not.toHaveBeenCalled();
+    expect(acquire).not.toHaveBeenCalled();
+  });
+
   it("resolves ready and retained passive paths without materialization or a worker", async () => {
     const root = await mkdtemp(
       path.join(tmpdir(), "sedes-passive-isolation-"),

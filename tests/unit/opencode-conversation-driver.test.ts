@@ -6,6 +6,7 @@ import { OpenCodeHistoryError } from "../../src/server/backends/opencode/opencod
 import { OpenCodeNativeProtocolError, OpenCodeNativeReadLimitError } from "../../src/server/backends/opencode/opencode-native-api.js";
 import { OpenCodeRuntimeError } from "../../src/server/backends/opencode/opencode-release.js";
 import { createOpenCodeConversationFixture, scope } from "../support/opencode-conversation-fixture.js";
+import { readConversationHistory } from "../helpers/read-conversation-history.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const close of cleanup.splice(0).reverse()) await close(); });
@@ -31,7 +32,7 @@ describe("OpenCode read error classification", () => {
       503, { message: "sensitive provider diagnostic" });
     const read = operation === "discover"
       ? current.driver.discover({ scope, workspace: current.target.workspace, limit: 10, signal: new AbortController().signal })
-      : current.driver[operation](current.target);
+      : operation === "read" ? readConversationHistory(current.driver, current.target) : current.driver.attach(current.target);
     await expect(read).rejects.toMatchObject({ name: "BackendError", category: "unavailable", retryable: true,
       crossedSubmissionBoundary: false, backendCode: "opencode_request_failed" });
     expect(current.runtime.snapshot().references).toBe(0);

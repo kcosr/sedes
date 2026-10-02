@@ -22,6 +22,7 @@ import {
 import { GrokConversationBackendDriver } from "../../src/server/backends/grok/grok-conversation-driver.js";
 import { GrokSessionLifecycle } from "../../src/server/backends/grok/grok-session-lifecycle.js";
 import { GrokAcpConnection } from "../../src/server/backends/grok/grok-acp-connection.js";
+import { readConversationHistory } from "../helpers/read-conversation-history.js";
 import { AcpBindingError, AcpDeliveryError } from "../../src/server/provider-protocol/bindings/acp-v1/index.js";
 import {
   parseGrokConversationBindingDetail,
@@ -597,7 +598,7 @@ describe("normalized Grok conversation driver", () => {
     }
   });
 
-  it("loads correlated native history with stable IDs and unloads ephemeral reads", async () => {
+  it("loads correlated native history with stable IDs without loading ephemeral reads", async () => {
     const sessionId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
     const fixtureState = await openDriver([
       { ...session(sessionId, "History"), history: "correlated" },
@@ -649,7 +650,7 @@ describe("normalized Grok conversation driver", () => {
         (await handle.history({ limit: 10 })).orderedBackendTurnIds,
       ).toEqual(firstIds.turns);
 
-      const residentRead = await fixtureState.driver.read({
+      const residentRead = await readConversationHistory(fixtureState.driver, {
         scope,
         workspace: fixtureState.workspace,
         binding,
@@ -663,7 +664,7 @@ describe("normalized Grok conversation driver", () => {
       ).toMatchObject({ closeCount: 0 });
       await handle.close();
 
-      const read = await fixtureState.driver.read({
+      const read = await readConversationHistory(fixtureState.driver, {
         scope,
         workspace: fixtureState.workspace,
         binding,
@@ -674,7 +675,7 @@ describe("normalized Grok conversation driver", () => {
       expect(
         (await readState(fixtureState.workspace.canonicalPath)).sessions[0],
       ).toMatchObject({
-        closeCount: 2,
+        closeCount: 1,
       });
     } finally {
       await fixtureState.close();
@@ -2905,6 +2906,154 @@ describe("normalized Grok conversation driver", () => {
   });
 });
 
+describe("Grok archived history reader", () => {
+  it("reads persisted turns without native session ownership, settings, recovery, or source credentials", async () => {
+    const sessionId = "archived-history";
+    const issue = vi.fn(() => { throw new Error("archived_agent_tools_forbidden"); });
+    const fixtureState = await openDriver([{ ...session(sessionId, "Archived"), history: "correlated" }], {
+      agentToolCli: { availability: "available", endpoint: "http://127.0.0.1:4321", executableDirectory: "/tools", inheritedPath: process.env.PATH ?? "" },
+      issueSourceCapability: issue,
+    });
+    const forbidden = [
+      vi.spyOn(GrokSessionLifecycle.prototype, "loadSession"),
+      vi.spyOn(GrokSessionLifecycle.prototype, "resumeSession"),
+      vi.spyOn(GrokSessionLifecycle.prototype, "closeSession"),
+      vi.spyOn(GrokSessionLifecycle.prototype, "recoverInterruptedSedesPrompt"),
+      vi.spyOn(fixtureState.settings, "get"),
+      vi.spyOn(fixtureState.settings, "confirmEffective"),
+    ];
+    try {
+      const persisted = await readState(fixtureState.workspace.canonicalPath);
+      persisted.sessions[0].submissions = [{
+        promptId: fixtureState.submissionPromptId(sessionId, "interrupted-operation", "a".repeat(32)),
+        text: "interrupted before completion", completed: false,
+      }];
+      await writeState(fixtureState.workspace.canonicalPath, persisted);
+      const before = (await readState(fixtureState.workspace.canonicalPath)).sessions;
+      const reader = await fixtureState.driver.openHistory({ scope, workspace: fixtureState.workspace, binding: conversationBinding(sessionId), opaqueBindingDetail: fixtureState.bindingDetail(sessionId) });
+      const captured = await reader.readSnapshot({ signal: new AbortController().signal });
+      expect(Object.values(captured.snapshot.itemsById).map(item => item.semanticKind)).toEqual(["user_message", "reasoning", "assistant_message", "user_message", "reasoning"]);
+      expect(await reader.backendCapabilities()).toMatchObject({ actions: [], deliveryModes: [], supportsHistory: true });
+      expect(await reader.usage()).toEqual({});
+      await reader.close();
+      const after = await readState(fixtureState.workspace.canonicalPath);
+      expect(after.sessions).toEqual(before);
+      expect(after.observedSedesAuthority).toEqual([{ endpointPresent: false, sourceCapabilityPresent: false, clientTokenPresent: false }]);
+      expect(issue).not.toHaveBeenCalled();
+      for (const spy of forbidden) expect(spy).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of forbidden) spy.mockRestore();
+      await fixtureState.close();
+    }
+  });
+
+  it("pins a bounded head and pages and seeks older turns with reader-scoped cursors", async () => {
+    const sessionId = "archived-pages";
+    const submissions = Array.from({ length: 24 }, (_, index) => ({ promptId: `prompt-${index}`, text: `question-${index}`, answer: `answer-${index}`, completed: true }));
+    const fixtureState = await openDriver([{ ...session(sessionId, "Archived"), submissions }]);
+    const input = { scope, workspace: fixtureState.workspace, binding: conversationBinding(sessionId), opaqueBindingDetail: fixtureState.bindingDetail(sessionId) };
+    try {
+      const reader = await fixtureState.driver.openHistory(input);
+      const first = await reader.readSnapshot({ signal: new AbortController().signal });
+      expect(first.snapshot.orderedBackendTurnIds).toHaveLength(10);
+      expect(first.history.previousCursor).toBeDefined();
+      const short = await reader.history({ limit: 2 });
+      expect(short.orderedBackendTurnIds).toEqual(first.snapshot.orderedBackendTurnIds.slice(-2));
+      const earlierHead = await reader.history({ cursor: short.previousCursor, limit: 3 });
+      expect(earlierHead.orderedBackendTurnIds).toEqual(first.snapshot.orderedBackendTurnIds.slice(-5, -2));
+      const older = await reader.history({ cursor: first.history.previousCursor, limit: 7 });
+      expect(older.orderedBackendTurnIds).toHaveLength(7);
+      expect(older.orderedBackendTurnIds.some(id => first.snapshot.orderedBackendTurnIds.includes(id))).toBe(false);
+      const target = older.orderedBackendTurnIds[0]!;
+      expect(await reader.locateTurn({ maximumTurnCandidates: 10, matchesBackendTurnId: id => id === target })).toEqual({ status: "search_limit_reached" });
+      expect(await reader.locateTurn({ maximumTurnCandidates: 24, matchesBackendTurnId: id => id === target })).toMatchObject({ status: "found", page: { orderedBackendTurnIds: [target] } });
+      expect(await reader.locateTurn({ maximumTurnCandidates: 24, matchesBackendTurnId: () => false })).toEqual({ status: "not_found" });
+
+      const another = await fixtureState.driver.openHistory(input);
+      await expect(another.history({ cursor: first.history.previousCursor, limit: 2 })).rejects.toMatchObject({ backendCode: "grok_native_history_cursor_invalid" });
+      await another.close();
+      const state = await readState(fixtureState.workspace.canonicalPath);
+      state.sessions[0].submissions.push({ promptId: "appended", text: "new", answer: "new answer", completed: true });
+      await writeState(fixtureState.workspace.canonicalPath, state);
+      expect(await reader.readSnapshot({ signal: new AbortController().signal })).toEqual(first);
+      expect(await reader.history({ cursor: first.history.previousCursor, limit: 7 })).toEqual(older);
+      state.sessions[0].submissions = state.sessions[0].submissions.slice(0, 15);
+      await writeState(fixtureState.workspace.canonicalPath, state);
+      await expect(reader.history({ cursor: first.history.previousCursor, limit: 7 })).rejects.toMatchObject({ backendCode: "grok_native_history_cursor_invalid" });
+    } finally {
+      await fixtureState.close();
+    }
+  });
+
+  it("distinguishes valid empty history from a missing native session", async () => {
+    const fixtureState = await openDriver([session("empty", "Empty")]);
+    try {
+      const empty = await readConversationHistory(fixtureState.driver, { scope, workspace: fixtureState.workspace, binding: conversationBinding("empty"), opaqueBindingDetail: fixtureState.bindingDetail("empty") });
+      expect(empty.snapshot.orderedBackendTurnIds).toEqual([]);
+      await expect(readConversationHistory(fixtureState.driver, { scope, workspace: fixtureState.workspace, binding: conversationBinding("missing"), opaqueBindingDetail: fixtureState.bindingDetail("missing") })).rejects.toMatchObject({ category: "not_found", backendCode: "grok_history_session_not_found" });
+    } finally {
+      await fixtureState.close();
+    }
+  });
+
+  it("retains continuation and bounds seek when native prompts have no normalized turns", async () => {
+    const sessionId = "ignored-prompts";
+    const fixtureState = await openDriver([{ ...session(sessionId, "Ignored prompts"), submissions: [
+      { promptId: "visible", text: "oldest visible", answer: "old answer", completed: true },
+      ...Array.from({ length: 15 }, (_, index) => ({ promptId: `ignored-${index}`, ignored: true })),
+    ] }]);
+    try {
+      const reader = await fixtureState.driver.openHistory({ scope, workspace: fixtureState.workspace, binding: conversationBinding(sessionId), opaqueBindingDetail: fixtureState.bindingDetail(sessionId) });
+      const snapshot = await reader.readSnapshot({ signal: new AbortController().signal });
+      expect(snapshot.snapshot.orderedBackendTurnIds).toEqual([]);
+      expect(snapshot.history.previousCursor).toBeDefined();
+      expect((await reader.history({ limit: 10 })).previousCursor).toBe(snapshot.history.previousCursor);
+      expect(await reader.locateTurn({ maximumTurnCandidates: 12, matchesBackendTurnId: () => true })).toEqual({ status: "search_limit_reached" });
+      expect(await reader.locateTurn({ maximumTurnCandidates: 16, matchesBackendTurnId: () => true })).toMatchObject({ status: "found" });
+    } finally {
+      await fixtureState.close();
+    }
+  });
+
+  it.each(["abort", "close", "deadline"] as const)("cancels blocked native acquisition on %s", async mode => {
+    const fixtureState = await openDriver([session("blocked", "Blocked")]);
+    const reader = await fixtureState.driver.openHistory({ scope, workspace: fixtureState.workspace, binding: conversationBinding("blocked"), opaqueBindingDetail: fixtureState.bindingDetail("blocked") });
+    const read = vi.spyOn(GrokAcpConnection.prototype, "readNativeHistory").mockImplementation(async () => await new Promise(() => {}));
+    try {
+      if (mode === "deadline") vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const cancellation = new AbortController();
+      const pending = reader.readSnapshot({ signal: cancellation.signal });
+      const failure = mode === "deadline"
+        ? expect(pending).rejects.toMatchObject({ category: "unavailable", backendCode: "grok_history_deadline", retryable: true })
+        : expect(pending).rejects.toThrow();
+      await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+      if (mode === "abort") cancellation.abort(new Error("cancelled"));
+      else if (mode === "deadline") await vi.advanceTimersByTimeAsync(60_000);
+      else await reader.close();
+      await failure;
+      vi.useRealTimers();
+      await reader.close();
+      await expect(reader.history({ limit: 10 })).rejects.toMatchObject({ backendCode: "grok_history_reader_closed" });
+    } finally {
+      vi.useRealTimers();
+      read.mockRestore();
+      await fixtureState.close();
+    }
+  });
+
+  it("rejects scope mismatches and pre-aborted opens before starting a process", async () => {
+    const fixtureState = await openDriver([session("scoped", "Scoped")]);
+    const input = { scope, workspace: fixtureState.workspace, binding: conversationBinding("scoped"), opaqueBindingDetail: fixtureState.bindingDetail("scoped") };
+    try {
+      await expect(fixtureState.driver.openHistory({ ...input, scope: { ...scope, principalId: "another" } })).rejects.toMatchObject({ category: "permission_denied" });
+      await expect(fixtureState.driver.openHistory({ ...input, signal: AbortSignal.abort(new Error("cancelled")) })).rejects.toThrow("cancelled");
+      expect((await readState(fixtureState.workspace.canonicalPath)).processStarts).toBe(0);
+    } finally {
+      await fixtureState.close();
+    }
+  });
+});
+
 async function openDriver(
   sessions: Record<string, unknown>[],
   options: {
@@ -3036,6 +3185,7 @@ async function openDriver(
     root,
     workspace,
     driver,
+    settings,
     bindingDetail: (sessionId: string) =>
       serializeGrokConversationBindingDetail({
         version: 1,

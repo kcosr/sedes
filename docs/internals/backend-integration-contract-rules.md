@@ -381,6 +381,50 @@ deletes provider-native durable conversation history. Audit this close
 disposition for Pi, Codex, Claude, Grok and OpenCode whenever archive or runtime
 ownership changes.
 
+Archived transcript access is a separate backend contract: `openHistory` returns
+an owned `ConversationHistoryReader` supporting a bounded initial snapshot,
+older pages, targeted turn lookup, capabilities, usage, cancellation, and close.
+The scoped inventory state selects this path for browser snapshots/events,
+browser history, and agent-tool message reads. It must not acquire an execution
+lease, attach/resume/load an agent, issue source credentials, replay settings,
+load executable extensions, acknowledge provider inputs, or mutate native
+transcripts. Connecting provider infrastructure to read its store is permitted.
+Archived presentation and skill catalogs use durable or cached data; catalog
+refresh must not indirectly create an SDK agent or load executable extensions.
+An immutable cut or validated native boundary must keep pages and lookups
+coherent; reject stale cursors rather than mixing generations. A retryable
+reader failure invalidates its retained owner, so the next acquire opens a fresh
+cut rather than repeatedly using a dead transport or provider generation.
+Caller cancellation alone does not invalidate that owner. Closing a reader
+owns no native execution and must not interrupt external work. Restore replaces
+the reader and its projection generation before executing again. Open browser
+subscribers receive that replacement baseline without a reload; restoring a
+dormant thread does not itself attach an agent. The archived source-agent
+credential prohibition remains enforced independently of target history
+authorization; wrong owner/thread/namespace still fails closed.
+Transient history borrowers are not browser viewers. If a subscribed restore
+cannot open execution, publish the current inventory with a disconnected
+snapshot using cached presentation. Retirement must also release a passive
+runtime that completed establishment concurrently with cancellation.
+
+All five backends implement this split: Claude reads native session messages;
+Codex uses detached thread and turn/item reads; Pi parses its exact stored
+session into an in-memory tree; Grok reads persisted session updates without
+loading a session; OpenCode captures native messages under a temporary observation
+and releases its infrastructure lease. Pi's locally retained remote session store
+also permits reads without its worker or deleted isolated checkout. Pi v1 files
+requiring randomized-ID migration are explicitly refused without rewriting them.
+Provider unavailability, missing data, unsupported native versions and bounded
+capture failures remain truthful read errors, never reasons to start an agent.
+Definitive native-history failures do not hide authorized archived inventory:
+thread snapshots and status remain available with disconnected conversation
+state, while explicit transcript reads retain their safe error. Pi sibling
+header probes ignore unrelated unreadable or malformed files; only a parsed
+exact ID/workspace collision proves ambiguity, and unrelated appends do not
+invalidate the selected transcript's stable capture.
+Regression coverage must prove paging, lookup, scope denial, cleanup,
+archive/restore generation changes, and absence of execution side effects.
+
 Provider residency can outlive Sedes' handle, as a Claude query owned by a
 persistent sidecar service does. A backend with such residency implements the
 optional driver method `releaseConversationResidency`. Inside each thread's
@@ -485,7 +529,9 @@ do not retain durable state from catalog preparation. This keeps attention
 publication and publisher shutdown independent of stalled provider reads.
 Retain cache-only actor reads for application updates, and recheck runtime or
 binding ownership after asynchronous composition. Detaching a binding must
-release both preparation and composition waits.
+release both preparation and composition waits. Archived snapshot preparation
+skips provider catalog refresh entirely; failed-restore disconnected snapshots
+also capture and publish inside this shared queue.
 Pi, Codex, Claude, Grok and OpenCode all use this shared application boundary;
 their native protocols and browser wire shapes are unchanged.
 

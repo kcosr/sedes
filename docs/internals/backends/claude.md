@@ -267,6 +267,16 @@ from this telemetry is persisted as historical usage.
 
 ## Authoritative history and paging
 
+Archived threads use `openHistory`, which reads a bounded native transcript
+without creating or resuming a Claude query, obtaining source-tool credentials,
+or applying settings. Browser snapshots/events, older pages, turn lookup and
+agent-tool message reads share this passive path. Each acquisition retains one
+immutable transcript cut and private cursors until closed; reads are cancellable
+and have a bounded deadline. Viewed images retain their scoped publication
+behavior. Native-store access can still require the configured host to be
+reachable. Restoring a thread replaces the passive reader before normal execution.
+
+
 On attach, Claude first arms the resumed SDK stream and publishes an
 existing-owner control lease before acquiring a complete provider-history
 baseline. A stalled or failed initial history read does not prevent Stop or
