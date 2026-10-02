@@ -87,6 +87,7 @@ import {
   PanelChrome,
   type PanelChromeControls,
 } from "../../workspace-panels/PanelChrome.js";
+import type { EnvironmentTintStyle } from "../../app/environment-palette.js";
 import { resolvePanelPresentation } from "../../workspace-panels/panel-presentation.js";
 import { getPanelPresentation } from "../../app/settings.js";
 import { createWorkspaceFilesOpenIntent } from "../../workspace-files/open-intent.js";
@@ -174,6 +175,8 @@ export interface TasksPanelContentProps {
    * own ⋯ items folded into the panel's actions menu.
    */
   readonly panelControls?: PanelChromeControls;
+  /** Docked only: the thread environment's tint for the panel header. */
+  readonly panelEnvironmentTint?: EnvironmentTintStyle;
   /** Whether a task is open in the editor, whose unsaved edits the host keeps. */
   readonly onEditingChange?: (editing: boolean) => void;
 }
@@ -263,6 +266,7 @@ export function TasksPanelContent({
   active,
   onRequestClose,
   panelControls,
+  panelEnvironmentTint,
   onEditingChange,
 }: TasksPanelContentProps): React.JSX.Element {
   const sheet = presentation === "sheet";
@@ -1378,6 +1382,7 @@ export function TasksPanelContent({
     <PanelChrome
       className="tasks-header-chrome"
       panelTitle="Tasks"
+      environmentTintStyle={panelEnvironmentTint}
       leading={
         <div className="workspace-panel-title">
           <span>Tasks</span>
@@ -2027,6 +2032,9 @@ export function TasksPanel({
               presentation={placement ?? lastPlacement.current}
               onRequestClose={requestClose}
               panelControls={placement === "panel" ? dock?.controls : undefined}
+              panelEnvironmentTint={
+                placement === "panel" ? dock?.environmentTintStyle : undefined
+              }
               onEditingChange={setEditing}
             />,
             bodyTarget,

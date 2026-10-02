@@ -500,24 +500,26 @@ describe("PanelLayout singleton surfaces", () => {
   });
 
   it("keeps a fixed panel list and marks collapsed panels open", async () => {
-    const store = setup({ extraTenants: [{ ...filesTenant(), id: "workpads", title: "Workpads", scope: "thread" }] });
+    const store = setup({ extraTenants: [tasksTenant, { ...filesTenant(), id: "workpads", title: "Workpads", scope: "thread" }] });
     act(() => {
       store.openPanel("workpads");
-      store.openPanel("workspace-files");
+      store.openPanel("workspace-files", { focus: false });
       store.dockPanel("workspace-files", "left");
-      store.collapsePanel("workpads");
+      store.collapsePanel("workspace-files");
     });
     await openPanelsMenu();
     const entries = screen.getAllByRole("menuitem").filter(item => item.hasAttribute("data-panel-open"));
-    expect(entries.map(item => item.textContent?.split(" —")[0])).toEqual(["Chat", "Files", "WorkpadsCollapsed", "Terminals"]);
-    expect(entries.map(item => item.getAttribute("aria-description"))).toEqual(["Open", "Open", "Open", "Closed"]);
-    expect(entries.map(item => Boolean(item.querySelector(".lucide-check")))).toEqual([true, true, true, false]);
+    // Tasks and Workpads have their own toggles beside the menu.
+    expect(entries.map(item => item.textContent?.split(" —")[0])).toEqual(["Chat", "Files", "Terminals"]);
+    expect(entries.map(item => item.getAttribute("data-collapsed"))).toEqual(["false", "true", "false"]);
+    expect(entries.map(item => item.getAttribute("aria-description"))).toEqual(["Open", "Open", "Closed"]);
+    expect(entries.map(item => Boolean(item.querySelector(".lucide-check")))).toEqual([true, true, false]);
     // An open panel takes the checked row's look: weight 500 and a trailing check.
-    expect(entries.map(item => item.getAttribute("data-state"))).toEqual(["checked", "checked", "checked", "unchecked"]);
+    expect(entries.map(item => item.getAttribute("data-state"))).toEqual(["checked", "checked", "unchecked"]);
     expect(entries[0]).toHaveClass("data-[state=checked]:font-medium");
-    expect(entries[3]).not.toHaveAttribute("data-disabled");
-    fireEvent.click(entries[2]!);
-    expect(store.isCollapsed("workpads")).toBe(false);
+    expect(entries[2]).not.toHaveAttribute("data-disabled");
+    fireEvent.click(entries[1]!);
+    expect(store.isCollapsed("workspace-files")).toBe(false);
   });
 
   it("keeps Files expanded across thread switches and reload after restoring from Panels", async () => {
@@ -544,13 +546,15 @@ describe("PanelLayout singleton surfaces", () => {
     const store = setup({ extraTenants: [{ ...filesTenant(), id: "workpads", title: "Workpads", scope: "thread" }] });
     act(() => store.closePanel("chat"));
     expect(screen.getByTestId("workspace-panel-empty")).toBeInTheDocument();
-    for (const [title, id] of [["Chat", "chat"], ["Files", "workspace-files"], ["Workpads", "workpads"]]) {
+    for (const [title, id] of [["Chat", "chat"], ["Files", "workspace-files"]]) {
       await openPanelsMenu();
       const item = screen.getByRole("menuitem", { name: title });
       expect(item).toHaveAttribute("aria-description", "Closed");
       fireEvent.click(item);
       await waitFor(() => expect(store.isVisible(id!)).toBe(true));
     }
+    fireEvent.click(screen.getByTestId("workpads-panel-toggle"));
+    await waitFor(() => expect(store.isVisible("workpads")).toBe(true));
   });
 
   it("reopens an existing terminal from the panel list without creating a shell", async () => {
@@ -640,7 +644,7 @@ describe("PanelLayout singleton surfaces", () => {
     expect(createTerminal).toHaveBeenCalledTimes(1);
   });
 
-  it.each([false, true])("focuses Workpads content from the panels menu (mobile: %s)", async (narrow) => {
+  it.each([false, true])("focuses Workpads content from its toggle (mobile: %s)", async (narrow) => {
     mobile = narrow;
     const store = setup({ extraTenants: [{
       ...filesTenant(),
@@ -649,8 +653,7 @@ describe("PanelLayout singleton surfaces", () => {
       scope: "thread",
       render: () => <input aria-label="Workpad draft" />,
     }] });
-    await openPanelsMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Workpads" }));
+    fireEvent.click(screen.getByTestId("workpads-panel-toggle"));
     const draft = await screen.findByRole("textbox", { name: "Workpad draft" });
     const target = narrow
       ? screen.getByRole("region", { name: "Workpads panel content" })
@@ -699,8 +702,7 @@ describe("PanelLayout singleton surfaces", () => {
       return <input aria-label="Workpad draft" value={text} onChange={event => { setText(event.target.value); context.host.setDirty(true); }} />;
     }
     const store = setup({ extraTenants: [{ ...filesTenant(), id: "workpads", title: "Workpads", scope: "thread", render: context => <WorkpadFixture context={context} /> }] });
-    await openPanelsMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Workpads(?: —|$)/ }));
+    fireEvent.click(screen.getByTestId("workpads-panel-toggle"));
     const draft = await screen.findByRole("textbox", { name: "Workpad draft" });
     fireEvent.change(draft, { target: { value: "Keep this draft" } });
     act(() => { store.dockPanel("workpads", "bottom"); });
@@ -956,8 +958,7 @@ describe("PanelLayout singleton surfaces", () => {
       ...filesTenant(), id: "workpads", title: "Workpads", scope: "thread",
       render: (context) => <WorkpadFixture context={context} />,
     }] });
-    await openPanelsMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Workpads(?: —|$)/ }));
+    fireEvent.click(screen.getByTestId("workpads-panel-toggle"));
     const draft = await screen.findByRole("textbox", { name: "Workpad draft" });
     fireEvent.change(draft, { target: { value: "Unsynced draft" } });
     const tree = store.getSnapshot().tree;
@@ -2904,12 +2905,12 @@ describe("PanelLayout Tasks tenant", () => {
     expect(store.isVisible("chat")).toBe(true);
   });
 
-  it("lists Tasks in the Panels menu but not among the panel shortcuts", async () => {
+  it("keeps Tasks out of the Panels menu and the panel shortcuts", async () => {
     const store = setup({ extraTenants: [tasksTenant] });
     await openPanelsMenu();
-    const row = screen.getByRole("menuitem", { name: /^Tasks/ });
-    expect(row).toHaveAttribute("aria-description", "Closed");
-    fireEvent.click(row);
+    expect(screen.queryByRole("menuitem", { name: /^Tasks/ })).toBeNull();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.click(tasksToggle());
     expect(store.isVisible("tasks")).toBe(true);
     expect(
       screen.queryByRole("button", { name: "Open Tasks panel" }),

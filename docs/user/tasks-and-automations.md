@@ -41,8 +41,8 @@ open any thread and choose **Global**.
 
 On desktop, Tasks docks beside Chat as a workspace panel, on the right by
 default. Like Files and Workpads, you can resize it, collapse it, dock it on
-another edge from **Tasks panel actions**, close it, or open it from the
-**Panels** menu. It stays open or collapsed as you switch threads, and its
+another edge from **Tasks panel actions**, or close it; the **Tasks** button
+opens it again. It stays open or collapsed as you switch threads, and its
 content follows the current chat. When Tasks is collapsed, by you or to make
 room for another panel, the button keeps an outline; select it to show Tasks
 again, which makes room in turn.

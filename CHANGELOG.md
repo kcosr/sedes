@@ -321,12 +321,17 @@
   ([#37](https://github.com/kcosr/sedes/pull/37))
 
 - Workpads has its own button in the thread workbench bar, beside **Tasks**,
-  and behaves like it: select it to open, show, or close Workpads. Workpads no
-  longer appears among the open-panel shortcuts.
+  and behaves like it: select it to open, show, or close Workpads. Tasks and
+  Workpads no longer appear in the **Panels** menu or among the open-panel
+  shortcuts; the menu keeps Chat, Files, and Terminals.
   ([#37](https://github.com/kcosr/sedes/pull/37))
 
 - The Tasks, Files, Workpads, and Terminals panel headers use the chat
   header's smaller action icons, with the same hit areas.
+  ([#37](https://github.com/kcosr/sedes/pull/37))
+
+- The docked Tasks header shows the thread environment's color, like the other
+  panel headers.
   ([#37](https://github.com/kcosr/sedes/pull/37))
 
 - A project's Tasks and Workpads are shared by every location of the project,

@@ -74,11 +74,12 @@ test.describe("panel-instance workbench", () => {
     await capture(page, testInfo, "singleton-chat-default.png");
 
     await openPanelsTrigger(page).click();
-    const panelItems = page.getByRole("menuitem").filter({ hasText: /^(Chat|Files|Workpads|Terminals)( —|$)/ });
-    await expect(panelItems).toHaveCount(4);
-    expect((await panelItems.allTextContents()).map(text => text.split(" —")[0])).toEqual(["Chat", "Files", "Workpads", "Terminals"]);
+    // Tasks and Workpads open from their own toggles, not this menu.
+    const panelItems = page.getByRole("menuitem").filter({ hasText: /^(Chat|Files|Workpads|Tasks|Terminals)( —|$)/ });
+    await expect(panelItems).toHaveCount(3);
+    expect((await panelItems.allTextContents()).map(text => text.split(" —")[0])).toEqual(["Chat", "Files", "Terminals"]);
     await expect(panelItems.nth(0)).toHaveAttribute("aria-description", "Open");
-    for (const item of [1, 2, 3]) await expect(panelItems.nth(item)).toHaveAttribute("aria-description", "Closed");
+    for (const item of [1, 2]) await expect(panelItems.nth(item)).toHaveAttribute("aria-description", "Closed");
     await capture(page, testInfo, "panels-menu-open-and-closed.png");
     await panelItems.nth(1).click();
     const files = page.getByRole("region", { name: "Workspace files" });

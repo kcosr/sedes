@@ -548,17 +548,18 @@ attended, including during automations. For exact behavior, see
 
 ## Navigate Chat and Files
 
-Chat and Files are the main workbench surfaces; Tasks, Workpads, and
-Terminals dock beside them as panels. **Collapse** keeps a surface mounted,
-preserving scroll, selections, and unsaved editor content. **Close** removes it
-and asks before discarding dirty Files content. The **Panels** menu restores or
-focuses a surface and offers **Show all** on desktop.
+Chat and Files are the main workbench surfaces; Tasks, Workpads, and Terminals
+dock beside them as panels. **Collapse** keeps a surface mounted, preserving
+scroll, selections, and unsaved editor content. **Close** removes it and asks
+before discarding dirty Files content. The **Panels** menu restores or focuses
+Chat, Files, or Terminals and offers **Show all** on desktop; Tasks and
+Workpads have their own buttons beside it.
 
 On desktop, each panel keeps a minimum width. When you open or restore a panel
 and the visible panels no longer fit, Sedes collapses the side panels you used
 least recently to make room and announces which. Chat and the panel you opened
-stay; restore the others from the **Panels** menu. Resizing the window or
-switching threads never collapses a panel.
+stay; restore the others from the **Panels** menu or their buttons. Resizing
+the window or switching threads never collapses a panel.
 
 Each side panel keeps one size in every thread. Resize Tasks in one thread
 and it is that wide in every thread; opening, collapsing, or closing another

@@ -29,10 +29,9 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await openWorkspaceDirectory(page, workspace);
   const threadPath = await createDraftThread(page);
   const threadId = threadPath.split("/").at(-1)!;
-  await page.getByRole("button", { name: "Panels", exact: true }).click();
-  const workpadsMenuItem = page.getByRole("menuitem", { name: "Workpads", exact: true });
-  await expect(workpadsMenuItem).toHaveAttribute("aria-description", "Closed");
-  await workpadsMenuItem.click();
+  const workpadsToggle = page.getByTestId("workpads-panel-toggle");
+  await expect(workpadsToggle).toHaveAccessibleName("Open Workpads panel");
+  await workpadsToggle.click();
   const panel = page.getByRole("region", { name: "Workpads", exact: true });
   const pane = page.locator('[data-panel-instance-id="workpads"]');
   await expect(pane).toBeVisible();
@@ -133,8 +132,7 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   const other = await otherContext.newPage();
   try {
     await other.goto(page.url());
-    await other.getByRole("button", { name: "Panels", exact: true }).click();
-    await other.getByRole("menuitem", { name: "Workpads", exact: true }).click();
+    await other.getByTestId("workpads-panel-toggle").click();
     const otherPanel = other.getByRole("region", { name: "Workpads", exact: true });
     await otherPanel.getByRole("radio", { name: "Thread", exact: true }).click();
     await otherPanel.getByRole("button", { name: /^Authentication integration/ }).click();

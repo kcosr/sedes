@@ -1175,6 +1175,7 @@ function PanelLayoutReady({
             onDock: (edge) => store.dockPanel("tasks", edge),
             dockEdge: panelDockEdge(tree, "tasks"),
           },
+          ...(tint ? { environmentTintStyle: tint } : {}),
           open: ({ focus }) => openTasksPanel(focus),
           toggle: toggleTasksPanel,
           close: () => tasksPanel && closePanel(tasksPanel),
@@ -1749,25 +1750,27 @@ function PanelLayoutReady({
       >
         <SidebarNavTrigger />
         <div className="workspace-workbench-actions">
-          <TasksPanelToggle
-            open={desktop ? tasksVisible : (tasksHost?.sheetOpen ?? false)}
-            collapsed={desktop && tasksPanel !== undefined && !tasksVisible}
-            onToggle={(invoker) =>
-              desktop ? toggleTasksPanel(invoker) : tasksHost?.toggleSheet()
-            }
-            count={openThreadTaskCount}
-          />
-          {tenants.has("workpads") && (
-            <WorkbenchPanelToggle
-              title="Workpads"
-              icon={NotepadText}
-              open={workpadsVisible}
-              collapsed={desktop && workpadsPanel !== undefined && !workpadsVisible}
-              onToggle={toggleWorkpadsPanel}
-              className="workpads-panel-toggle"
-              testId="workpads-panel-toggle"
+          <div className="workspace-workbench-toggles">
+            <TasksPanelToggle
+              open={desktop ? tasksVisible : (tasksHost?.sheetOpen ?? false)}
+              collapsed={desktop && tasksPanel !== undefined && !tasksVisible}
+              onToggle={(invoker) =>
+                desktop ? toggleTasksPanel(invoker) : tasksHost?.toggleSheet()
+              }
+              count={openThreadTaskCount}
             />
-          )}
+            {tenants.has("workpads") && (
+              <WorkbenchPanelToggle
+                title="Workpads"
+                icon={NotepadText}
+                open={workpadsVisible}
+                collapsed={desktop && workpadsPanel !== undefined && !workpadsVisible}
+                onToggle={toggleWorkpadsPanel}
+                className="workpads-panel-toggle"
+                testId="workpads-panel-toggle"
+              />
+            )}
+          </div>
           <div className="workspace-panel-open-menu">
             <div
               className="workspace-panel-open-icons"
@@ -1822,9 +1825,6 @@ function PanelLayoutReady({
                 {([
                   { id: "chat", title: "Chat", panel: chatPanel, icon: <MessageSquare size={16} />, available: true },
                   { id: "workspace-files", title: "Files", panel: filesPanel, icon: <Files size={16} />, available: tenants.has("workspace-files") },
-                  { id: "workpads", title: "Workpads", panel: workpadsPanel, icon: <NotepadText size={16} />, available: tenants.has("workpads") },
-                  // Phones show Tasks as a sheet from the toggle instead.
-                  { id: "tasks", title: "Tasks", panel: desktop ? tasksPanel : undefined, icon: <ListChecks size={16} />, available: desktop && tenants.has("tasks") },
                   { id: "terminals", title: "Terminals", panel: terminalsPanel, icon: <TerminalIcon size={16} />, available: true },
                 ]).filter(({ available, panel }) => available || panel).map(({ id, title, panel, icon }) => {
                   const status = panel ? statuses.get(panel.panelInstanceId) : undefined;

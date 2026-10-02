@@ -374,7 +374,8 @@ already identifies the environment.
 
 ### Opening panels
 
-The **Panels** menu lists Chat, Files, Workpads, and Terminals in a fixed order.
+The **Panels** menu lists Chat, Files, and Terminals in a fixed order; Tasks
+and Workpads have their own buttons beside it.
 A checkmark means the panel is already open, including when it is collapsed.
 Select an open panel to focus or restore it, or a closed panel to open it.
 

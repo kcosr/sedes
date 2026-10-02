@@ -2496,6 +2496,13 @@ textarea:disabled {
   gap: 8px;
 }
 
+/* The panel toggles sit together, like the panels group's icons. */
+.workspace-workbench-toggles {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
 .workspace-panel-open-menu {
   display: flex;
   min-width: 0;
