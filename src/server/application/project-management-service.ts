@@ -16,7 +16,10 @@ import {
   type ProjectRemovalLocation,
 } from "../db/repositories/inventory-repository.js";
 import { DomainError } from "../domain/errors.js";
-import type { ThreadRuntimeCoordinator } from "../events/thread-runtime-coordinator.js";
+import {
+  ThreadRuntimeRetirementUnprovenError,
+  type ThreadRuntimeCoordinator,
+} from "../events/thread-runtime-coordinator.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import { runWithArchivedThreadRuntimesRetired, type ArchivedThreadRuntimeRetirement } from "../domain/thread-runtime-archive-retirement.js";
 import type { WorkspaceApplicationPublication, WorkspaceApplicationService } from "./workspace-application-service.js";
@@ -31,6 +34,7 @@ export type RestoredLocationOutcome =
   | { readonly id: string; readonly status: "failed"; readonly cause: unknown };
 
 // A loaded runtime in one of these states may be in or settling a turn.
+// `disconnected` does not block, so offline hosts can still be reorganized.
 const BUSY_RUN_STATES: ReadonlySet<ThreadRunState> = new Set([
   "starting",
   "running",
@@ -70,7 +74,7 @@ function presentProject(project: InventoryProjectListing): ProjectSummary {
 export class ProjectManagementService {
   constructor(readonly input: {
     inventory: InventoryRepository;
-    runtimes: ArchivedThreadRuntimeRetirement & Pick<ThreadRuntimeCoordinator, "captureLoadedState">;
+    runtimes: ArchivedThreadRuntimeRetirement & Pick<ThreadRuntimeCoordinator, "commitWithRuntimesObserved">;
     files: WorkspaceRetirement;
     terminals?: WorkspaceRetirement;
     locations: Pick<WorkspaceApplicationService, "restoreLocation">;
@@ -152,12 +156,13 @@ export class ProjectManagementService {
    */
   async moveLocation(scope: RequestScope, workspaceId: string, request: MoveLocationRequest): Promise<ProjectSummary> {
     const threadIds = this.input.inventory.listThreadIdsForWorkspace(scope, workspaceId);
-    if (!this.input.inventory.isWorkspaceRemoved(scope, workspaceId)) {
-      await this.#assertThreadsIdle(scope, threadIds, "Resolve running, queued, or uncertain work before moving this location.");
-    }
-    const moved = this.input.inventory.moveWorkspaceToProject(scope, workspaceId, {
-      ...request, expectedThreadIds: threadIds, now: this.#now(),
-    });
+    // A removed location's runtimes were retired with it and are not checked.
+    const checked = this.input.inventory.isWorkspaceRemoved(scope, workspaceId) ? [] : threadIds;
+    const moved = await this.#commitWhileIdle(scope, checked,
+      "Resolve running, queued, or uncertain work before moving this location.",
+      () => this.input.inventory.moveWorkspaceToProject(scope, workspaceId, {
+        ...request, expectedThreadIds: threadIds, now: this.#now(),
+      }));
     this.input.publications.handoffAuthoritativeReplacement(scope);
     return presentProject(this.input.inventory.getProject(scope, moved.projectId));
   }
@@ -165,10 +170,11 @@ export class ProjectManagementService {
   /** Moves every location into the target and deletes the source; it cannot be undone. */
   async merge(scope: RequestScope, sourceProjectId: string, request: MergeProjectRequest): Promise<ProjectSummary> {
     const threadIds = this.input.inventory.listActiveThreadIdsForProject(scope, sourceProjectId);
-    await this.#assertThreadsIdle(scope, threadIds, "Resolve running, queued, or uncertain work before merging this project.");
-    const merged = this.input.inventory.mergeProject(scope, sourceProjectId, {
-      ...request, expectedThreadIds: threadIds, now: this.#now(),
-    });
+    const merged = await this.#commitWhileIdle(scope, threadIds,
+      "Resolve running, queued, or uncertain work before merging this project.",
+      () => this.input.inventory.mergeProject(scope, sourceProjectId, {
+        ...request, expectedThreadIds: threadIds, now: this.#now(),
+      }));
     this.input.publications.handoffAuthoritativeReplacement(scope);
     return presentProject(merged);
   }
@@ -199,10 +205,37 @@ export class ProjectManagementService {
     return fence(0);
   }
 
-  async #assertThreadsIdle(scope: RequestScope, threadIds: readonly string[], message: string): Promise<void> {
-    const loaded = await Promise.all(threadIds.map((threadId) => this.input.runtimes.captureLoadedState(scope, threadId)));
-    if (loaded.some((state) => state !== undefined && BUSY_RUN_STATES.has(state.runState))) {
-      throw new DomainError("invalid_transition", message);
+  /**
+   * Runs a synchronous commit only while no runtime of the threads is busy or
+   * still being established. The final runtime check and the commit happen
+   * in one turn, so a turn admitted or reported by the provider just before
+   * the commit is never missed; idle runtimes stay loaded.
+   */
+  async #commitWhileIdle<Result>(
+    scope: RequestScope,
+    threadIds: readonly string[],
+    message: string,
+    commit: () => Result,
+  ): Promise<Result> {
+    try {
+      return await this.input.runtimes.commitWithRuntimesObserved(scope, threadIds, (runtimes) => {
+        for (const runtime of runtimes.values()) {
+          if (runtime.kind === "establishing" || BUSY_RUN_STATES.has(runtime.runState)) {
+            throw new DomainError("invalid_transition", message);
+          }
+        }
+        return commit();
+      });
+    } catch (error) {
+      if (error instanceof ThreadRuntimeRetirementUnprovenError) {
+        throw new DomainError(
+          "operation_outcome_uncertain",
+          "Sedes could not prove that a thread runtime stopped. Restart Sedes before retrying the inventory operation.",
+          false,
+          { cause: error },
+        );
+      }
+      throw error;
     }
   }
 

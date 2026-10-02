@@ -13,8 +13,7 @@ import { WorkspaceApplicationService } from "../../src/server/application/worksp
 import { DatabaseApplicationThreadSummaryReader } from "../../src/server/application/database-application-summary-reader.js";
 import { ApplicationSnapshotService } from "../../src/server/application/application-snapshot-service.js";
 import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
-import { ThreadRuntimeNotIdleError } from "../../src/server/events/thread-runtime-coordinator.js";
-import type { ThreadRunState } from "../../src/shared/protocol/conversation.js";
+import { ThreadRuntimeNotIdleError, ThreadRuntimeRetirementUnprovenError, type ThreadRuntimeObservation } from "../../src/server/events/thread-runtime-coordinator.js";
 import { createTrustedEnvironmentAuthorityGrant } from "../../src/server/agent-tools/environment/environment-authority.js";
 import path from "node:path";
 
@@ -23,6 +22,7 @@ afterEach(() => cleanups.splice(0).forEach(close => close()));
 
 type Retirement = import("../../src/server/application/project-management-service.js").WorkspaceRetirement["runWithWorkspaceRetired"];
 type RuntimeRetirement = import("../../src/server/domain/thread-runtime-archive-retirement.js").ArchivedThreadRuntimeRetirement["runWithRuntimeRetired"];
+type RuntimeCommit = import("../../src/server/events/thread-runtime-coordinator.js").ThreadRuntimeCoordinator["commitWithRuntimesObserved"];
 
 function fixture() {
   const { database, scope } = savedAgentDatabase();
@@ -43,7 +43,10 @@ function fixture() {
   const runWithRuntimeRetired = vi.fn(async <T>(_scope: typeof scope, _id: string, operation: () => Promise<T>) => operation());
   const runWithWorkspaceRetired = vi.fn(async <T>(_scope: typeof scope, _id: string, operation: () => Promise<T>) => operation());
   const runWithTerminalsRetired = vi.fn(async <T>(_scope: typeof scope, _id: string, operation: () => Promise<T>) => operation());
-  const captureLoadedState = vi.fn(async (_scope: typeof scope, _threadId: string): Promise<{ readonly runState: ThreadRunState } | undefined> => undefined);
+  // Loaded runtimes by thread; a test sets one to make it busy or establishing.
+  const runtimeStates = new Map<string, ThreadRuntimeObservation>();
+  const commitWithRuntimesObserved = vi.fn(async <T>(_scope: typeof scope, threadIds: readonly string[], commit: (runtimes: ReadonlyMap<string, ThreadRuntimeObservation>) => T) =>
+    commit(new Map(threadIds.flatMap((id) => runtimeStates.has(id) ? [[id, runtimeStates.get(id)!] as const] : []))));
   const handoffAuthoritativeReplacement = vi.fn();
   // Validation echoes the requested directory unless a test makes it resolve elsewhere.
   const resolvesTo = new Map<string, string>();
@@ -54,7 +57,7 @@ function fixture() {
   });
   const open = new WorkspaceApplicationService({inventory, execution: {validateWorkspace}, publications: {handoffAuthoritativeReplacement} });
   const service = new ProjectManagementService({ inventory,
-    runtimes: {runWithRuntimeRetired: runWithRuntimeRetired as RuntimeRetirement, releaseProviderResidency: async () => undefined, captureLoadedState},
+    runtimes: {runWithRuntimeRetired: runWithRuntimeRetired as RuntimeRetirement, releaseProviderResidency: async () => undefined, commitWithRuntimesObserved: commitWithRuntimesObserved as RuntimeCommit},
     files: {runWithWorkspaceRetired: runWithWorkspaceRetired as Retirement},
     terminals: {runWithWorkspaceRetired: runWithTerminalsRetired as Retirement},
     locations: open, publications: {handoffAuthoritativeReplacement} });
@@ -66,7 +69,7 @@ function fixture() {
   const queue = new QueuedInputRepository(database);
   const summaries = new DatabaseApplicationThreadSummaryReader({ inventory, queue, completion: new SubmissionCompletionRepository(database) });
   return {database,scope,inventory,environment,workspace,thread,bindings,create,createIn,service,remove,open,location,project,queue,summaries,resolvesTo,validateWorkspace,
-    runWithRuntimeRetired,runWithWorkspaceRetired,runWithTerminalsRetired,captureLoadedState,handoffAuthoritativeReplacement};
+    runWithRuntimeRetired,runWithWorkspaceRetired,runWithTerminalsRetired,runtimeStates,commitWithRuntimesObserved,handoffAuthoritativeReplacement};
 }
 
 const newProject = { kind: "new", name: "Project" } as const;
@@ -415,8 +418,14 @@ describe("project and location management", () => {
     const move = (target: Parameters<Fixture["service"]["moveLocation"]>[2]["target"]) => f.service.moveLocation(f.scope, f.workspace.id, {
       target, expectedRevision: f.inventory.getWorkspace(f.scope, f.workspace.id).revision,
     });
-    f.captureLoadedState.mockResolvedValueOnce({ runState: "running" });
-    await expect(move({ kind: "new", name: "Split" })).rejects.toMatchObject({ code: "invalid_transition" });
+    for (const runtime of [{ kind: "loaded", runState: "running" }, { kind: "establishing" }] as const) {
+      f.runtimeStates.set(f.thread.id, runtime);
+      await expect(move({ kind: "new", name: "Split" })).rejects.toMatchObject({ code: "invalid_transition" });
+    }
+    f.runtimeStates.set(f.thread.id, { kind: "loaded", runState: "disconnected" });
+    f.commitWithRuntimesObserved.mockRejectedValueOnce(new ThreadRuntimeRetirementUnprovenError(new Error("close failed")));
+    await expect(move({ kind: "new", name: "Split" })).rejects.toMatchObject({ code: "operation_outcome_uncertain" });
+    expect(f.inventory.getWorkspace(f.scope, f.workspace.id).projectId).toBe(f.workspace.projectId);
     enqueue(f, f.thread.id);
     await expect(move({ kind: "new", name: "Split" })).rejects.toMatchObject({ code: "invalid_transition" });
     expect(f.inventory.getWorkspace(f.scope, f.workspace.id).projectId).toBe(f.workspace.projectId);
@@ -427,10 +436,13 @@ describe("project and location management", () => {
   it("moves an idle location with a live terminal and leaves the emptied project active", async () => {
     const f = fixture();
     terminal(f, f.workspace, f.thread.id);
+    // An offline host's disconnected runtime does not block reorganizing it.
+    f.runtimeStates.set(f.thread.id, { kind: "loaded", runState: "disconnected" });
     const source = f.project(f.workspace.projectId);
     const destination = await f.service.moveLocation(f.scope, f.workspace.id, {
       target: { kind: "new", name: "Split" }, expectedRevision: f.workspace.revision,
     });
+    expect(f.commitWithRuntimesObserved).toHaveBeenCalledWith(f.scope, [f.thread.id], expect.any(Function));
     expect(destination).toMatchObject({ name: "Split", removed: false, locations: [{ id: f.workspace.id, removed: false }] });
     expect(f.project(source.id)).toMatchObject({ removedAt: null, locations: [], membershipRevision: source.membershipRevision + 1 });
     expect(f.runWithRuntimeRetired).not.toHaveBeenCalled();
@@ -452,8 +464,9 @@ describe("project and location management", () => {
       expectedSourceMembershipRevision: f.project(f.workspace.projectId).membershipRevision,
       expectedTargetMembershipRevision: f.project(target.projectId).membershipRevision,
     });
-    f.captureLoadedState.mockResolvedValueOnce({ runState: "waiting_for_input" });
+    f.runtimeStates.set(f.thread.id, { kind: "loaded", runState: "waiting_for_input" });
     await expect(merge()).rejects.toMatchObject({ code: "invalid_transition" });
+    f.runtimeStates.set(f.thread.id, { kind: "loaded", runState: "idle" });
     await expect(f.service.merge(f.scope, f.workspace.projectId, {
       targetProjectId: target.projectId, expectedSourceMembershipRevision: 99, expectedTargetMembershipRevision: 0,
     })).rejects.toMatchObject({ code: "conflict" });

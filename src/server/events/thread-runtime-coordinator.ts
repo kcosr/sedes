@@ -179,6 +179,12 @@ export interface ThreadRuntimeRetirement {
   ): Promise<Result>;
 }
 
+/** One thread's runtime as the coordinator holds it at a single instant. */
+export type ThreadRuntimeObservation =
+  /** Still being established; its run state is not known yet. */
+  | { readonly kind: "establishing" }
+  | { readonly kind: "loaded"; readonly runState: ThreadRunState };
+
 export class ThreadRuntimeNotIdleError extends Error {
   constructor() {
     super("The thread runtime is not idle.");
@@ -955,6 +961,75 @@ export class ThreadRuntimeCoordinator {
       return { runState, ...(backgroundWork ? { backgroundWork } : {}) };
     } finally {
       this.#release(key, entry);
+    }
+  }
+
+  /**
+   * Reads each thread's runtime as it stands, without borrowing, attaching,
+   * or waiting. A thread with no runtime, or one being evicted, retired, or
+   * closed, is absent.
+   */
+  observeRuntimes(
+    scope: RequestScope,
+    applicationThreadIds: readonly string[],
+  ): ReadonlyMap<string, ThreadRuntimeObservation> {
+    const observed = new Map<string, ThreadRuntimeObservation>();
+    for (const applicationThreadId of new Set(applicationThreadIds)) {
+      const entry = this.#entries.get(scopedKey(scope, applicationThreadId));
+      if (!entry || entry.eviction) continue;
+      const runtime = entry.runtime;
+      if (!runtime) {
+        observed.set(applicationThreadId, { kind: "establishing" });
+        continue;
+      }
+      if (runtime.actor.closed || this.#detached.has(runtime)) continue;
+      observed.set(applicationThreadId, {
+        kind: "loaded",
+        runState: runtime.actor.timeline.runState,
+      });
+    }
+    return observed;
+  }
+
+  /**
+   * Runs a synchronous commit, such as a database transaction, with every
+   * thread's runtime observed in the same turn. Neither a Sedes admission nor
+   * provider output can change a runtime between that observation and the
+   * commit, so the caller's runtime check and its commit are one operation.
+   * Maintenance or eviction already under way for any of the threads settles
+   * first. Loaded runtimes are never retired.
+   */
+  async commitWithRuntimesObserved<Result>(
+    scope: RequestScope,
+    applicationThreadIds: readonly string[],
+    commit: (runtimes: ReadonlyMap<string, ThreadRuntimeObservation>) => Result,
+  ): Promise<Result> {
+    const keys = [...new Set(applicationThreadIds)].map((applicationThreadId) =>
+      scopedKey(scope, applicationThreadId),
+    );
+    while (true) {
+      if (this.#closed) throw new Error("thread_runtime_coordinator_closed");
+      const maintenance = keys.flatMap((key) => this.#maintenance.get(key) ?? []);
+      if (maintenance.length > 0) {
+        const settled = await Promise.allSettled(maintenance);
+        for (const [index, result] of settled.entries()) {
+          // An unproven retirement keeps its rejected fence installed: that
+          // runtime may still be running, so nothing can be committed past it.
+          if (
+            result.status === "rejected" &&
+            keys.some((key) => this.#maintenance.get(key) === maintenance[index])
+          ) {
+            throw result.reason;
+          }
+        }
+        continue;
+      }
+      const evictions = keys.flatMap((key) => this.#entries.get(key)?.eviction ?? []);
+      if (evictions.length > 0) {
+        await Promise.allSettled(evictions);
+        continue;
+      }
+      return commit(this.observeRuntimes(scope, applicationThreadIds));
     }
   }
 

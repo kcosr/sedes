@@ -7,6 +7,7 @@ import {
   ThreadRuntimeNotIdleError,
   ThreadRuntimeRetirementUnprovenError,
   ThreadRuntimeCoordinator,
+  type ThreadRuntimeObservation,
 } from "../../src/server/events/thread-runtime-coordinator.js";
 import type { ConversationActor } from "../../src/server/conversations/conversation-actor.js";
 import { runWithArchivedThreadRuntimesRetired } from "../../src/server/domain/thread-runtime-archive-retirement.js";
@@ -2798,6 +2799,101 @@ describe("loaded sidebar background work", () => {
     state.closed = true;
     expect(await coordinator.captureLoadedState(scope, "background-thread")).toBeUndefined();
     runtime.release();
+    await coordinator.close();
+  });
+});
+
+describe("runtime observation for atomic commits", () => {
+  it("commits with each runtime observed in the same turn and keeps loaded runtimes loaded", async () => {
+    const loaded = resettableActor({ generation: "generation-1", canEvict: true });
+    const { coordinator, actorRelease } = resetCoordinator([loaded.actor]);
+    (await coordinator.acquire(scope, "thread-loaded")).release();
+
+    const observed = await coordinator.commitWithRuntimesObserved(
+      scope,
+      ["thread-loaded", "thread-absent", "thread-loaded"],
+      (runtimes) => new Map(runtimes),
+    );
+    expect(observed).toEqual(new Map([["thread-loaded", { kind: "loaded", runState: "idle" }]]));
+    expect(loaded.close).not.toHaveBeenCalled();
+    expect(actorRelease[0]).not.toHaveBeenCalled();
+    const again = await coordinator.acquire(scope, "thread-loaded");
+    expect(again.actor).toBe(loaded.actor);
+    again.release();
+    await coordinator.close();
+  });
+
+  it("settles maintenance before observing, so a turn that starts meanwhile is seen at commit", async () => {
+    const state: { generation: string; runState: "idle" | "running"; canEvict: boolean } = {
+      generation: "generation-1", runState: "idle", canEvict: true,
+    };
+    const loaded = resettableActor(state);
+    const { coordinator } = resetCoordinator([loaded.actor]);
+    (await coordinator.acquire(scope, "thread-loaded")).release();
+    const gate = deferred<void>();
+    let maintained = false;
+    const maintenance = coordinator.runWithRuntimeRetired(scope, "thread-maintained", async () => {
+      maintained = true;
+      await gate.promise;
+    });
+    await vi.waitFor(() => expect(maintained).toBe(true));
+
+    const commit = vi.fn((runtimes: ReadonlyMap<string, ThreadRuntimeObservation>) => runtimes.get("thread-loaded"));
+    const committing = coordinator.commitWithRuntimesObserved(scope, ["thread-loaded", "thread-maintained"], commit);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(commit).not.toHaveBeenCalled();
+    state.runState = "running";
+    gate.resolve();
+    await maintenance;
+
+    await expect(committing).resolves.toEqual({ kind: "loaded", runState: "running" });
+    expect(commit).toHaveBeenCalledOnce();
+    expect(loaded.close).not.toHaveBeenCalled();
+    await coordinator.close();
+  });
+
+  it("reports a runtime that is still being established", async () => {
+    const target = deferred<AcquireConversationActorInput>();
+    const resolve = vi.fn(() => target.promise);
+    const coordinator = new ThreadRuntimeCoordinator({
+      actors: {
+        acquireExistingControl: vi.fn(() => undefined),
+        captureUnprojectedGeneration: vi.fn(() => undefined),
+        acquire: vi.fn(),
+        runWithRuntimesStopped: async () => { throw new Error("unexpected_explicit_runtime_stop"); },
+        runWithRuntimeRetired: passThroughActorRetirement,
+      },
+      targets: { resolve } as never,
+      bridge: {} as never,
+      interactions: {} as never,
+      hubs: new ScopedThreadEventHubRegistry(),
+      retentionMilliseconds: 60_000,
+    });
+    const establishing = coordinator.acquire(scope, "thread-establishing");
+    await vi.waitFor(() => expect(resolve).toHaveBeenCalledOnce());
+
+    expect(coordinator.observeRuntimes(scope, ["thread-establishing"]))
+      .toEqual(new Map([["thread-establishing", { kind: "establishing" }]]));
+    await expect(coordinator.commitWithRuntimesObserved(scope, ["thread-establishing"], (runtimes) => runtimes.get("thread-establishing")))
+      .resolves.toEqual({ kind: "establishing" });
+    await coordinator.runWithRuntimeRetired(scope, "thread-establishing", async () => undefined);
+    await expect(establishing).rejects.toThrow("thread_runtime_maintenance");
+    await coordinator.close();
+  });
+
+  it("refuses to commit past a retirement that could not be proven", async () => {
+    const failure = new Error("maintenance close failed");
+    const unproven = resettableActor({ generation: "generation-1", canEvict: true, closeFailure: failure });
+    const { coordinator } = resetCoordinator([unproven.actor]);
+    const acquired = await coordinator.acquire(scope, "thread-unproven");
+    await expect(coordinator.runWithRuntimeRetired(scope, "thread-unproven", async () => undefined))
+      .rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+
+    const commit = vi.fn();
+    await expect(coordinator.commitWithRuntimesObserved(scope, ["thread-unproven"], commit))
+      .rejects.toBeInstanceOf(ThreadRuntimeRetirementUnprovenError);
+    expect(commit).not.toHaveBeenCalled();
+    acquired.release();
     await coordinator.close();
   });
 });

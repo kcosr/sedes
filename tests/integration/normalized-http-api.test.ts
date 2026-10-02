@@ -118,7 +118,7 @@ import type { ConversationLifecycleService } from "../../src/server/conversation
 import type { ThreadApplicationService } from "../../src/server/conversations/thread-application-service.js";
 import type { ThreadAttentionService } from "../../src/server/domain/thread-attention-service.js";
 import type { AutomationPrecheckExecutor } from "../../src/server/runtime/automation-precheck-executor.js";
-import type { ThreadRuntimeCoordinator } from "../../src/server/events/thread-runtime-coordinator.js";
+import type { ThreadRuntimeCoordinator, ThreadRuntimeObservation } from "../../src/server/events/thread-runtime-coordinator.js";
 import type { ThreadSnapshotPublisher } from "../../src/server/events/thread-snapshot-publisher.js";
 import { unavailableAgentToolRouterDependencies } from "../support/agent-tool-http.js";
 import { SEDES_AGENT_TOOL_SOURCE_CAPABILITY_HEADER } from "../../src/server/agent-tools/http/agent-tool-http-contracts.js";
@@ -869,6 +869,26 @@ async function fixture(
   const threadRuntimes = {
     async captureLoadedState() {
       return undefined;
+    },
+    observeRuntimes(
+      _scope: RequestScope,
+      threadIds: readonly string[],
+    ): ReadonlyMap<string, ThreadRuntimeObservation> {
+      return new Map(
+        threadIds.flatMap((threadId) => {
+          const snapshot = boundHubs.get(threadId)?.snapshot;
+          return snapshot
+            ? [[threadId, { kind: "loaded" as const, runState: snapshot.runState }] as const]
+            : [];
+        }),
+      );
+    },
+    async commitWithRuntimesObserved<Result>(
+      scope: RequestScope,
+      threadIds: readonly string[],
+      commit: (runtimes: ReadonlyMap<string, ThreadRuntimeObservation>) => Result,
+    ): Promise<Result> {
+      return commit(this.observeRuntimes(scope, threadIds));
     },
     async runWithRuntimeRetired<Result>(
       _scope: RequestScope,
