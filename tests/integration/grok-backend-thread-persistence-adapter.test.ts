@@ -95,6 +95,7 @@ describe("Grok backend thread persistence adapter", () => {
       environmentId: connection.executionEnvironmentId,
       canonicalPath: "/tmp/grok-persistence-adapter",
       displayName: "Grok persistence adapter",
+      project: { kind: "new", name: "Grok persistence adapter" },
       available: true,
       trustState: "trusted",
       environmentConfigurationRevision: 0,

@@ -6,7 +6,7 @@ import {
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { TaskRepository } from "../../src/server/db/repositories/task-repository.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { insertPreProjectWorkspace, savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 const THREAD_ID = "0198bb10-0000-7000-8000-000000000001";
 
@@ -25,7 +25,7 @@ function fixture() {
     )
     .get(current.scope.tenantId, current.scope.principalId) as { id: string };
   const inventory = new InventoryRepository(current.database);
-  const workspace = inventory.upsertWorkspace(current.scope, {
+  const workspace = insertPreProjectWorkspace(current.database, current.scope, {
     id: "0198bb10-0000-7000-8000-000000000002",
     environmentId: environment.id,
     canonicalPath: "/tmp/task-reference-migration-workspace",

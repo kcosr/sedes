@@ -24,7 +24,7 @@ function fixture() {
   const current = configuration.get(scope);
   const environmentId = current.configuration.executionEnvironments[0]!.id;
   const targetId = (database.prepare("SELECT id FROM agent_connection_profiles LIMIT 1").get() as { id: string }).id;
-  const workspace = inventory.upsertWorkspace(scope, { environmentId, canonicalPath: "/tmp/environment-vars", displayName: "Variables", available: true, trustState: "trusted", environmentConfigurationRevision: 0, now: 100 });
+  const workspace = inventory.upsertWorkspace(scope, { environmentId, canonicalPath: "/tmp/environment-vars", displayName: "Variables", project: { kind: "new", name: "Variables" }, available: true, trustState: "trusted", environmentConfigurationRevision: 0, now: 100 });
   const thread = () => bindings.createUnboundThread(scope, { workspaceId: workspace.id, connectionProfileId: targetId, title: "Variables", now: 100 }).id;
   const save = (edit: (doc: typeof current.configuration) => void) => {
     const latest = configuration.get(scope);

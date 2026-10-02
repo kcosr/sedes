@@ -6,7 +6,7 @@ import {
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { SavedAgentRepository } from "../../src/server/db/repositories/saved-agent-repository.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { insertPreProjectWorkspace, savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 describe("thread Saved Agent origins migration", () => {
   it("preserves immutable captured provenance after its Agent is deleted", () => {
@@ -14,7 +14,7 @@ describe("thread Saved Agent origins migration", () => {
     try {
       const inventory = new InventoryRepository(current.database);
       const environment = inventory.getLocalEnvironment(current.scope);
-      const workspace = inventory.upsertWorkspace(current.scope, {
+      const workspace = insertPreProjectWorkspace(current.database, current.scope, {
         environmentId: environment.id,
         canonicalPath: "/tmp/thread-agent-origin",
         displayName: "Thread origin",

@@ -5,7 +5,7 @@ import {
 } from "../../src/server/db/migrate.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { insertPreProjectWorkspace, savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 const latestBackendNormalizedVersion =
   backendNormalizedMigrations[backendNormalizedMigrations.length - 1]!.version;
@@ -16,7 +16,7 @@ describe("migration 062 thread pinning", () => {
     try {
       const inventory = new InventoryRepository(value.database);
       const environment = inventory.getLocalEnvironment(value.scope);
-      const workspace = inventory.upsertWorkspace(value.scope, {
+      const workspace = insertPreProjectWorkspace(value.database, value.scope, {
         environmentId: environment.id,
         canonicalPath: "/tmp/thread-pinning-migration",
         displayName: "Thread pinning migration",

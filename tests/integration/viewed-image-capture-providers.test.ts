@@ -52,7 +52,7 @@ async function fixture(kind: "local" | "ssh" | "outbound",
   // perform the same kind-specific policy admission as production composition.
   database.prepare("UPDATE execution_environments SET kind = ? WHERE id = ?").run(kind, environment.id);
   const workspace = inventory.upsertWorkspace(scope, { environmentId: environment.id,
-    canonicalPath: project, displayName: "Capture", available: true, trustState: "trusted",
+    canonicalPath: project, displayName: "Capture", project: { kind: "new", name: "Capture" }, available: true, trustState: "trusted",
     environmentConfigurationRevision: environment.configurationRevision, now: 10 });
   const profile = database.prepare("SELECT id FROM agent_connection_profiles LIMIT 1").get() as { id: string };
   const bindings = new ConversationBindingRepository(database);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { insertPreProjectWorkspace, savedAgentDatabase } from "../support/saved-agent-fixture.js";
 import { applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/server/db/migrate.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { ConversationOperationRepository } from "../../src/server/db/repositories/conversation-operation-repository.js";
@@ -9,11 +9,14 @@ function fixture(version?: number) {
   const current = savedAgentDatabase(version);
   const environment = current.database.prepare("SELECT id FROM execution_environments WHERE kind = 'local'").get() as { id: string };
   const profile = current.database.prepare("SELECT id FROM agent_connection_profiles").get() as { id: string };
-  const workspace = new InventoryRepository(current.database).upsertWorkspace(current.scope, {
+  const seed = {
     id: "0198bb10-0000-7000-8000-000000000001", environmentId: environment.id,
     canonicalPath: "/tmp/stop-receipts", displayName: "Stop receipts", available: true,
     trustState: "trusted", environmentConfigurationRevision: 0, now: 100,
-  });
+  } as const;
+  const workspace = version === undefined
+    ? new InventoryRepository(current.database).upsertWorkspace(current.scope, { ...seed, project: { kind: "new", name: seed.displayName } })
+    : insertPreProjectWorkspace(current.database, current.scope, seed);
   const threadId = "0198bb10-0000-7000-8000-000000000002";
   new ConversationBindingRepository(current.database).createUnboundThread(current.scope, {
     id: threadId, workspaceId: workspace.id, connectionProfileId: profile.id, title: "Stop receipts", now: 101,

@@ -2,14 +2,14 @@ import { InventoryRepository } from "../../src/server/db/repositories/inventory-
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { expect, it } from "vitest";
 import { applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/server/db/migrate.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { insertPreProjectWorkspace, savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 it("adds optional Claude diagnostics without changing existing terminal evidence", () => {
   const { database, scope } = savedAgentDatabase(108);
   try {
     const inventory = new InventoryRepository(database);
     const environment = inventory.getLocalEnvironment(scope);
-    const workspace = inventory.upsertWorkspace(scope, {
+    const workspace = insertPreProjectWorkspace(database, scope, {
       environmentId: environment.id, canonicalPath: "/tmp/failure-migration",
       displayName: "Migration", available: true, trustState: "trusted",
       environmentConfigurationRevision: environment.configurationRevision, now: 110,

@@ -19,7 +19,7 @@ export class ProjectManagementService {
   }) {}
 
   list(scope: RequestScope): { projects: ProjectSummary[] } {
-    return { projects: this.input.inventory.listProjects(scope) };
+    return { projects: this.input.inventory.listWorkspaceRegistrations(scope) };
   }
 
   async remove(scope: RequestScope, workspaceId: string, request: RemoveProjectRequest): Promise<ProjectSummary> {
@@ -35,6 +35,6 @@ export class ProjectManagementService {
       ? this.input.terminals.runWithWorkspaceRetired(scope, workspaceId, retireThreads)
       : retireThreads());
     this.input.publications.handoffAuthoritativeReplacement(scope);
-    return this.input.inventory.listProjects(scope).find(project => project.id === workspaceId)!;
+    return this.input.inventory.listWorkspaceRegistrations(scope).find(project => project.id === workspaceId)!;
   }
 }

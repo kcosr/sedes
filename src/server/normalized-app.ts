@@ -1796,7 +1796,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
   });
 
   routes.get("/api/workspaces", async (request, response) => {
-    response.json(listProjectsResultSchema.parse({ projects: dependencies.inventory.repository.listProjects(await scope(request)) }));
+    response.json(listProjectsResultSchema.parse({ projects: dependencies.inventory.repository.listWorkspaceRegistrations(await scope(request)) }));
   });
 
   routes.post("/api/workspaces/:workspaceId/remove", async (request, response) => {

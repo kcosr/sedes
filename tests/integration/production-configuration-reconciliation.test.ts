@@ -292,7 +292,7 @@ describe("production configuration reconciliation", () => {
     // attachment when this collection has no published runtime to replace.
     const database = service.repository.database;
     const workspace = new InventoryRepository(database).upsertWorkspace(scope, { environmentId, canonicalPath: directory!,
-      displayName: "Retained", available: true, trustState: "trusted", environmentConfigurationRevision: 1, now });
+      displayName: "Retained", project: { kind: "new", name: "Retained" }, available: true, trustState: "trusted", environmentConfigurationRevision: 1, now });
     const connection = database.prepare("SELECT id FROM agent_connection_profiles WHERE tenant_id = ? AND owner_principal_id = ? AND template_id = ?")
       .get(scope.tenantId, scope.principalId, "background-opencode-target") as { id: string };
     const thread = new ConversationBindingRepository(database).createUnboundThread(scope, { workspaceId: workspace.id,

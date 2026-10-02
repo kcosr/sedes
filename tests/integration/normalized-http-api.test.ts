@@ -1691,7 +1691,7 @@ describe("normalized HTTP application contract", () => {
       const repeated = await current.mutate(request(current.app).post("/api/workspaces/open"))
         .send({ environmentId: current.environmentId, path: current.workspacePath }).expect(201);
       expect(repeated.body.id).toBe(id);
-      expect(current.repository.listProjects(current.owner).filter(entry => entry.id === id)).toHaveLength(1);
+      expect(current.repository.listProjects(current.owner).flatMap(({ locations }) => locations).filter(entry => entry.id === id)).toHaveLength(1);
     } finally { current.close(); }
   });
 

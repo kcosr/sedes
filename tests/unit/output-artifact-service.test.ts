@@ -50,6 +50,7 @@ async function fixture() {
     environmentId: environment.id,
     canonicalPath: root,
     displayName: "Output artifacts",
+    project: { kind: "new", name: "Output artifacts" },
     available: true,
     trustState: "trusted",
     environmentConfigurationRevision: environment.configurationRevision,

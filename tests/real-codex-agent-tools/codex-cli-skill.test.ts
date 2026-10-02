@@ -311,6 +311,7 @@ describe("real Codex Sedes CLI skill", () => {
           environmentId,
           canonicalPath: workspace,
           displayName: "Real Codex agent-tool workspace",
+          project: { kind: "new", name: "Real Codex agent-tool workspace" },
           available: true,
           trustState: "trusted",
           environmentConfigurationRevision: environment.configurationRevision,

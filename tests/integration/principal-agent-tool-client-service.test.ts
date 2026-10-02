@@ -51,6 +51,7 @@ function fixture() {
     environmentId: environment.id,
     canonicalPath: "/tmp/principal-agent-tool-client",
     displayName: "Principal client",
+    project: { kind: "new", name: "Principal client" },
     available: true,
     trustState: "trusted",
     environmentConfigurationRevision: environment.configurationRevision,
@@ -808,6 +809,7 @@ describe("principal agent-tool client persistence and admission", () => {
         environmentId: value.environment.id,
         canonicalPath: "/tmp/principal-agent-tool-client-alternate",
         displayName: "Alternate principal client",
+        project: { kind: "new", name: "Alternate principal client" },
         available: true,
         trustState: "trusted",
         environmentConfigurationRevision:

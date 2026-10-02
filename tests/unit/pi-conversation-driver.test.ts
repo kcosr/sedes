@@ -1973,7 +1973,7 @@ describe("Pi conversation backend driver", () => {
     const bindExtensions=vi.spyOn(AgentSession.prototype,"bindExtensions");
     const current=savedAgentDatabase(), database=current.database, owner=current.scope;
     const profile=new BackendConfigurationRepository(database).listProfiles(owner)[0]!;
-    const dbWorkspace=new InventoryRepository(database).upsertWorkspace(owner,{environmentId:profile.executionEnvironmentId,canonicalPath:fixture.workspace.canonicalPath,displayName:"Usage fixture",available:true,trustState:"trusted",environmentConfigurationRevision:0,now:1});
+    const dbWorkspace=new InventoryRepository(database).upsertWorkspace(owner,{environmentId:profile.executionEnvironmentId,canonicalPath:fixture.workspace.canonicalPath,displayName:"Usage fixture",project:{kind:"new",name:"Usage fixture"},available:true,trustState:"trusted",environmentConfigurationRevision:0,now:1});
     const thread=new ConversationBindingRepository(database).createUnboundThread(owner,{workspaceId:dbWorkspace.id,connectionProfileId:profile.id,title:"Usage fixture",now:1});
     const sdkWorkspace={...fixture.workspace,summary:{...fixture.workspace.summary,id:dbWorkspace.id,environmentId:profile.executionEnvironmentId}};
     const usage=new UsageService(database, {enabled: true}), observations:UsageObservation[]=[];

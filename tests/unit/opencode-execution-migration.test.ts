@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import { applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/server/db/migrate.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { insertPreProjectWorkspace, savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 function fixture() {
   const { database, scope } = savedAgentDatabase(122);
   const inventory = new InventoryRepository(database);
   const environment = inventory.getLocalEnvironment(scope);
-  const workspace = inventory.upsertWorkspace(scope, { environmentId: environment.id,
+  const workspace = insertPreProjectWorkspace(database, scope, { environmentId: environment.id,
     canonicalPath: "/tmp/opencode-migration", displayName: "Migration", available: true,
     trustState: "trusted", environmentConfigurationRevision: environment.configurationRevision, now: 150 });
   database.prepare(`INSERT INTO agent_backend_instances

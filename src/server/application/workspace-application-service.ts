@@ -131,6 +131,7 @@ export class WorkspaceApplicationService {
       });
     }
     const workspace = this.input.inventory.upsertWorkspace(scope, {
+      project: { kind: "new", name: validated.summary.displayName },
       restoreRemoved: true,
       environmentId: validated.summary.environmentId,
       canonicalPath: validated.canonicalPath,

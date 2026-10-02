@@ -23,6 +23,7 @@ function fixture() {
   const environment = inventory.getLocalEnvironment(scope);
   const workspace = inventory.upsertWorkspace(scope, {
     environmentId: environment.id, canonicalPath: "/tmp/project-management", displayName: "Project",
+    project: { kind: "new", name: "Project" },
     available: true, trustState: "trusted", environmentConfigurationRevision: environment.configurationRevision, now: 200,
   });
   const bindings = new ConversationBindingRepository(database);

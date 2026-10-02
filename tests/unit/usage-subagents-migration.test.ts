@@ -4,7 +4,7 @@ import { applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/
 import { usageGapSessionScopeMigration } from "../../src/server/db/migrations/111-usage-gap-session-scope.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { insertPreProjectWorkspace, savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 it("upgrades schema 111 without changing existing evidence or previously applied migration checksums", () => {
   const {database,scope}=savedAgentDatabase(111);
@@ -13,7 +13,7 @@ it("upgrades schema 111 without changing existing evidence or previously applied
     expect(checksum).toBe("e449c83095bf6d0334f81c861d8fe1d00623dce6418e830fc96f86b0f219221c");
     const applied=database.prepare("SELECT * FROM schema_migrations WHERE version=111").get();
     const inventory=new InventoryRepository(database), environment=inventory.getLocalEnvironment(scope);
-    const workspace=inventory.upsertWorkspace(scope,{environmentId:environment.id,canonicalPath:"/tmp/subagent-migration",displayName:"Migration",available:true,trustState:"trusted",environmentConfigurationRevision:environment.configurationRevision,now:100});
+    const workspace=insertPreProjectWorkspace(database,scope,{environmentId:environment.id,canonicalPath:"/tmp/subagent-migration",displayName:"Migration",available:true,trustState:"trusted",environmentConfigurationRevision:environment.configurationRevision,now:100});
     const profile=database.prepare("SELECT id FROM agent_connection_profiles LIMIT 1").get() as {id:string};
     const thread=new ConversationBindingRepository(database).createUnboundThread(scope,{workspaceId:workspace.id,connectionProfileId:profile.id,title:"Migration",now:110});
     database.prepare("INSERT INTO usage_thread_state(tenant_id,principal_id,thread_id,revision,report_json) VALUES(?,?,?,7,'{}')").run(scope.tenantId,scope.principalId,thread.id);

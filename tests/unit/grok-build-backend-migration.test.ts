@@ -4,8 +4,7 @@ import {
   backendNormalizedMigrations,
 } from "../../src/server/db/migrate.js";
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
-import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { insertPreProjectWorkspace, savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 const EMPTY_CONFIGURATION_FINGERPRINT =
   "24668c7a96a190bd6dcd0a35b773fa05901690fc5cef5c6dd37a59fbf0e6b5ae";
@@ -183,7 +182,8 @@ describe("migration 063 Grok Build backend", () => {
           environment.id,
           EMPTY_CONFIGURATION_FINGERPRINT,
         );
-      const workspace = new InventoryRepository(value.database).upsertWorkspace(
+      const workspace = insertPreProjectWorkspace(
+        value.database,
         value.scope,
         {
           environmentId: environment.id,

@@ -3,13 +3,13 @@ import { applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/
 import { ConversationBindingRepository } from "../../src/server/db/repositories/conversation-binding-repository.js";
 import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { SavedAgentRepository } from "../../src/server/db/repositories/saved-agent-repository.js";
-import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
+import { insertPreProjectWorkspace, savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
 function fixture() {
   const current = savedAgentDatabase(90);
   const inventory = new InventoryRepository(current.database);
   const environment = inventory.getLocalEnvironment(current.scope);
-  const workspace = inventory.upsertWorkspace(current.scope, {
+  const workspace = insertPreProjectWorkspace(current.database, current.scope, {
     environmentId: environment.id, canonicalPath: "/tmp/access-boundary", displayName: "Boundary",
     available: true, trustState: "trusted", environmentConfigurationRevision: environment.configurationRevision, now: 110,
   });
