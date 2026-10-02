@@ -984,7 +984,9 @@ test.describe.serial("normalized composer state", () => {
     );
     await expect(archivedRow).toContainText("New thread");
     await capture(page, testInfo, "restored-inventory-lifecycle.png");
-    await archivedRow.getByRole("button", { name: "Restore" }).click();
+    await archivedRow
+      .getByRole("button", { name: "Restore New thread", exact: true })
+      .click();
     await expect(archivedRow).toBeHidden();
     const restoredResponse = await page.request.get(
       "/api/application/snapshot",

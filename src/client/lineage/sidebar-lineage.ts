@@ -7,8 +7,12 @@ import type {
 } from "../../shared/index.js";
 import { createThreadSearchMatcher } from "./sidebar-search.js";
 
+/**
+ * Where a root shows in the Projects view. Archived threads are not part of
+ * the sidebar: they have their own Archived page.
+ */
 export type SidebarBucket =
-  `workspace:${string}` | "automations" | "snoozed" | "settled" | "archived";
+  `workspace:${string}` | "automations" | "snoozed" | "settled";
 
 export interface DescendantAggregate {
   readonly count: number;
@@ -68,6 +72,14 @@ const emptyAggregate = (): DescendantAggregate => ({
   attention: 0,
 });
 
+/**
+ * The Projects view's lineage forest. Archived threads are not projected as
+ * nodes: nesting joins only threads in the same inventory state, so they form
+ * separate trees in a bucket the sidebar never shows. They still count where
+ * they are observable from projected threads: loaded family descendant
+ * counts, search matches, and the nested-ancestor walk that keeps a match's
+ * lineage context.
+ */
 export function deriveSidebarLineage(input: {
   readonly snapshot: NormalizedApplicationSnapshot;
   readonly visibleThreads: readonly NormalizedApplicationThreadSummary[];
@@ -106,10 +118,10 @@ export function deriveSidebarLineage(input: {
   );
   const loadedFamilyCounts = deriveLoadedFamilyCounts(threads, origins);
   const matchingIds = findSearchMatches(input.snapshot, threads, input.search);
+  // Without a search every thread is visible.
+  const searching = Boolean(input.search.trim());
   const visibleIds = new Set(input.visibleThreads.map(({ id }) => id));
-  if (!input.search.trim()) {
-    for (const id of threads.keys()) visibleIds.add(id);
-  } else {
+  if (searching) {
     includeSearchAncestors(
       visibleIds,
       matchingIds,
@@ -123,6 +135,8 @@ export function deriveSidebarLineage(input: {
   if (input.grouped) {
     for (const [childId, origin] of origins) {
       const child = threads.get(childId);
+      // An archived child could nest only under an archived source.
+      if (!child || child.inventoryState === "archived") continue;
       const parent = origin.sourceThreadId
         ? threads.get(origin.sourceThreadId)
         : undefined;
@@ -145,7 +159,8 @@ export function deriveSidebarLineage(input: {
 
   const nodes = new Map<string, MutableNode>();
   for (const thread of threads.values()) {
-    if (!visibleIds.has(thread.id)) continue;
+    if (thread.inventoryState === "archived") continue;
+    if (searching && !visibleIds.has(thread.id)) continue;
     nodes.set(thread.id, {
       thread,
       ...(origins.get(thread.id) ? { origin: origins.get(thread.id)! } : {}),
@@ -323,12 +338,17 @@ function deriveLoadedFamilyCounts(
 }
 
 function ownBucket(thread: NormalizedApplicationThreadSummary): SidebarBucket {
-  if (thread.inventoryState === "active") {
-    return thread.automation
-      ? "automations"
-      : `workspace:${thread.workspaceId}`;
+  switch (thread.inventoryState) {
+    case "active":
+      return thread.automation
+        ? "automations"
+        : `workspace:${thread.workspaceId}`;
+    case "snoozed":
+    case "settled":
+      return thread.inventoryState;
+    case "archived":
+      throw new Error("Archived threads have no sidebar bucket.");
   }
-  return thread.inventoryState;
 }
 
 function ownAggregate(

@@ -420,6 +420,22 @@ describe("ApplicationClientStore lineage", () => {
     ).toEqual(["child", "root"]);
   });
 
+  it("lists a matching nested ancestor once, in inventory order", async () => {
+    const api = {
+      session: vi.fn(async () => session()),
+    } as unknown as ApiClient;
+    const store = new ApplicationClientStore(api, transport);
+    await store.initialize();
+
+    // Both titles match, and "root" is also the nested child's ancestor.
+    store.setSearch("e");
+
+    expect(store.getSnapshot().visibleThreads.map(({ id }) => id)).toEqual([
+      "child",
+      "root",
+    ]);
+  });
+
   it("coalesces bounded descendant pages and forwards placement revisions", async () => {
     let release!: (page: NormalizedThreadDescendantsPage) => void;
     const listThreadDescendants = vi.fn(

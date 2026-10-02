@@ -118,10 +118,9 @@ Group Scope only filters inventory; creating a thread while a Group
 is selected does not assign that thread to the Group. Use the new thread's
 context menu to add or move its Group membership.
 
-Scope affects sidebar results, counts, shelves, and defaults in **New thread**.
-It does not move or retarget the thread already open in the workbench. An
-out-of-scope routed thread may remain open. Archived threads use a separate
-search surface.
+Scope affects sidebar results, counts, shelves, and defaults in **New thread**,
+and the list in **Archived**. It does not move or retarget the thread already
+open in the workbench. An out-of-scope routed thread may remain open.
 
 ## Find imported provider conversations
 
@@ -278,9 +277,31 @@ Archive removes a thread from the normal sidebar and blocks new delivery until
 the thread is restored. Choose **Archive** from the thread's menu or row. Sedes
 first checks the thread; when nothing needs a decision, it archives at once.
 When the thread has forks, open Tasks, stashed prompts, pending questions, or an
-isolated workspace, **Archive this thread** opens so you can choose first. Open
-**Archived** to search archived threads, inspect them read-only, or choose
-**Restore to Active**.
+isolated workspace, **Archive this thread** opens so you can choose first.
+
+Open **Archived** from the sidebar's **More** menu to find archived threads,
+open them read-only, or restore them. The list follows the sidebar's Scope and
+shares its search, so narrowing one narrows the other; the sidebar's Show
+toggles and pinned-only do not apply. A line under the search box shows how
+many archived threads match, the active Scope, and the search. Choose **Clear
+scope** there to reset the shared Scope, which matters on phones where the
+sidebar is hidden.
+
+**View options** sorts by **Recently archived** (the default), **Last active**,
+or **Title**, and groups by **Date**, **Project**, or **None**. Title order is
+never grouped by date. Sedes remembers these choices on this device. Each row
+shows the backend, the title on up to two lines, the project, a Target whose
+name differs from its backend, the thread's worktree branch, and marks for an
+unavailable project, environment, or Target. The age at the end of the row is
+the time since archiving (or last activity when sorted that way); hover the row
+for both dates. A fork shows the fork mark before its age; choose it to open
+the fork point in the source thread. The page shows 100 threads at a time;
+choose **Show more** for the next 100.
+
+Choose the restore button at the end of a row to return the thread to Active;
+right-click or long-press a row for the same **Restore to Active** and the
+thread's other actions. A failed restore leaves the row in place with the
+reason.
 
 Archiving preserves the transcript, title, pin, Group membership, stashes, and
 other durable thread state. A restored pinned thread returns pinned. Archive is
