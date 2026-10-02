@@ -430,8 +430,8 @@ export interface TaskScopeDropTargets<Key extends string> {
 
 /**
  * Drop targets that move a dragged task to a scope, for the Tasks scope
- * segments and the Tasks body wherever Tasks is presented (docked, popover
- * or sheet). Feedback uses the shared `data-task-drop-*` styles.
+ * segments and the Tasks body wherever Tasks is presented (docked or
+ * sheet). Feedback uses the shared `data-task-drop-*` styles.
  */
 export function useTaskScopeDropTargets<
   Key extends string,

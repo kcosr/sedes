@@ -495,7 +495,7 @@ export interface TaskRowProps {
   readonly location?: TaskRowLocation;
   /** The roving tab stop of the list. */
   readonly focusable: boolean;
-  /** Render the detail inline under the row (panel and popover). */
+  /** Render the detail inline under the row (the docked panel). */
   readonly inlineDetail: boolean;
   readonly moveOpen: boolean;
   readonly onMoveOpenChange: (open: boolean) => void;

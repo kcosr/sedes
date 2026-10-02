@@ -117,7 +117,7 @@ export function TaskEditDialog({
   /** The live task; undefined once it has been deleted elsewhere. */
   readonly task: AssociatedTask | undefined;
   readonly open: boolean;
-  /** The surface Tasks is shown on: the panel, the popover or the sheet. */
+  /** The surface Tasks is shown on: the panel or the sheet. */
   readonly surface: string;
   readonly store: ApplicationClientStore;
   readonly destinations: TaskDestinations;

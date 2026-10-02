@@ -81,21 +81,25 @@ describe("resolveAndroidBackAction", () => {
     contextMenu.remove();
   });
 
-  it("treats the Tasks popover as an overlay but not the docked Tasks panel", () => {
+  it("treats the Tasks sheet as an overlay but not the docked Tasks panel", () => {
     const docked = document.createElement("section");
     docked.dataset.slot = "tasks-panel";
     docked.dataset.presentation = "panel";
     document.body.append(docked);
     expect(document.querySelector(OPEN_OVERLAY_SELECTOR)).toBeNull();
 
-    const popover = document.createElement("div");
-    popover.setAttribute("role", "dialog");
-    popover.dataset.slot = "popover-content";
-    popover.dataset.state = "open";
-    popover.append(docked.cloneNode());
-    document.body.append(popover);
-    expect(document.querySelector(OPEN_OVERLAY_SELECTOR)).toBe(popover);
-    popover.remove();
+    const sheet = document.createElement("div");
+    sheet.className = "tasks-sheet";
+    sheet.setAttribute("role", "dialog");
+    sheet.dataset.slot = "dialog-content";
+    sheet.dataset.state = "open";
+    const surface = document.createElement("section");
+    surface.dataset.slot = "tasks-panel";
+    surface.dataset.presentation = "sheet";
+    sheet.append(surface);
+    document.body.append(sheet);
+    expect(document.querySelector(OPEN_OVERLAY_SELECTOR)).toBe(sheet);
+    sheet.remove();
     docked.remove();
   });
 

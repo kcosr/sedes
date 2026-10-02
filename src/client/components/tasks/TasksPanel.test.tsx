@@ -70,7 +70,7 @@ function resetStorage() {
 
 beforeEach(() => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
-  // Desktop shell: the panel renders as the floating card, not the sheet.
+  // Desktop shell: Tasks docks beside Chat rather than in the sheet.
   stubDensity(false);
   resetStorage();
 });
@@ -205,10 +205,10 @@ function DraftConsumer({
 
 let tasksHost: TasksHost | undefined;
 
-/** Captures the host and anchors its popover, as the corner toggle does. */
-function HostProbe(): React.JSX.Element {
+/** Captures the host, whose sheet the workbench bar's toggle opens on phones. */
+function HostProbe(): null {
   tasksHost = useTasksHost();
-  return <span ref={(element) => tasksHost?.setPopoverAnchor(element)} />;
+  return null;
 }
 
 /** Stands in for a thread workspace with the Tasks panel docked in it. */
@@ -237,7 +237,7 @@ function DockedTasks({ active }: { readonly active: boolean }): React.JSX.Elemen
 
 /**
  * The Tasks host as the application shell mounts it: docked in a thread
- * workspace, otherwise the popover, or the sheet on phones.
+ * workspace, or the sheet on phones. Pages without a thread have no Tasks.
  */
 function TasksHarness({
   store,
@@ -265,9 +265,9 @@ function TasksHarness({
   );
 }
 
-/** Shows Tasks the way the page presents it (a docked panel is already shown). */
+/** Shows Tasks the way the thread presents it (a docked panel is already shown). */
 function openTasks(): void {
-  if (tasksHost?.placement === undefined) act(() => tasksHost?.toggleOverlay());
+  if (tasksHost?.placement === undefined) act(() => tasksHost?.toggleSheet());
 }
 
 function renderPanel(
@@ -448,6 +448,8 @@ describe("TasksPanel scope", () => {
   });
 
   it("disables views that do not apply and says why", () => {
+    // A thread the snapshot does not hold has no thread or project to show.
+    act(() => navigate(threadPath("thread-missing")));
     const store = makeStore([makeTask()], { threads: THREADS, workspaces: WORKSPACES });
     renderPanel(store);
 
@@ -467,6 +469,7 @@ describe("TasksPanel scope", () => {
   });
 
   it("shows a disabled view's reason when its segment is tapped", async () => {
+    act(() => navigate(threadPath("thread-missing")));
     const store = makeStore([makeTask()], { threads: THREADS, workspaces: WORKSPACES });
     // The tooltip's positioning measures its arrow.
     vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
@@ -1304,25 +1307,6 @@ describe("TasksPanel keyboard", () => {
     fireEvent.keyDown(rowTitle("Add retry to the payment call"), { key: "Escape" });
     expect(panel()).toBeInTheDocument();
   });
-
-  it("closes the expanded row, then search, before Escape closes the popover", async () => {
-    const user = userEvent.setup();
-    renderPanel(makeStore([makeTask({ id: "g", title: "Global errand" })]));
-    expect(panel()).toHaveAttribute("data-presentation", "popover");
-    await user.click(rowTitle("Global errand"));
-    await user.keyboard("{Escape}");
-    expect(rowTitle("Global errand")).toHaveAttribute("aria-expanded", "false");
-    expect(panel()).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Search tasks" }));
-    expect(screen.getByRole("textbox", { name: "Search tasks" })).toHaveFocus();
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("textbox", { name: "Search tasks" })).not.toBeInTheDocument();
-    expect(panel()).toBeInTheDocument();
-
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("region", { name: "Tasks" })).not.toBeInTheDocument();
-  });
 });
 
 describe("TasksPanel reveal", () => {
@@ -1451,6 +1435,36 @@ describe("TasksPanel phone sheet", () => {
     expect(screen.queryByRole("dialog", { name: "Tasks" })).not.toBeInTheDocument();
   });
 
+  it("closes the detail, then search, before Escape from inside closes the sheet", async () => {
+    const user = userEvent.setup();
+    renderPanel(seededStore());
+    const sheet = screen.getByRole("dialog", { name: "Tasks" });
+    const content = sheet.querySelector(".tasks-content")!;
+    await user.click(rowTitle("Add retry to the payment call"));
+    expect(content).toHaveAttribute("data-task-detail-open", "true");
+    await user.keyboard("{Escape}");
+    expect(content).not.toHaveAttribute("data-task-detail-open");
+    expect(sheet).toBeInTheDocument();
+
+    await user.click(within(sheet).getByRole("button", { name: "Search tasks" }));
+    expect(within(sheet).getByRole("textbox", { name: "Search tasks" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(within(sheet).queryByRole("textbox", { name: "Search tasks" })).not.toBeInTheDocument();
+    expect(sheet).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Tasks" })).not.toBeInTheDocument());
+  });
+
+  it("closes the sheet from its close button", async () => {
+    const user = userEvent.setup();
+    renderPanel(seededStore());
+    await user.click(
+      within(screen.getByRole("dialog", { name: "Tasks" })).getByRole("button", { name: "Close Tasks panel" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Tasks" })).not.toBeInTheDocument());
+  });
+
   it("closes the sheet after handing a file to Files", async () => {
     renderPanel(seededStore());
     fireEvent.click(rowTitle("Audit checkout error states"));
@@ -1466,6 +1480,7 @@ describe("TasksPanel phone sheet", () => {
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
     });
+    act(() => navigate(threadPath("thread-9")));
     renderPanel(makeStore([]));
     const sheet = screen.getByRole("dialog", { name: "Tasks" });
     expect(sheet).toHaveAttribute("data-layout", "sheet");
@@ -1516,62 +1531,26 @@ describe("TasksPanelContent docked", () => {
 });
 
 describe("TasksPanel host", () => {
-  it.each([false, true])(
-    "retains an unsaved edit while Settings suspends the popover or sheet (phone: %s)",
-    (phone) => {
-      stubDensity(phone);
-      const store = makeStore([makeTask({ id: "g", title: "Global errand" })]);
-      const panelLayoutStore = makePanelLayoutStore();
-      const route = { name: "home" } as const;
-      const content = (active: boolean) => (
-        <TasksHarness store={store} panelLayoutStore={panelLayoutStore} route={route} active={active} />
-      );
-      const view = render(content(true));
-      openTasks();
-      fireEvent.click(rowTitle("Global errand"));
-      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-      fireEvent.change(screen.getByRole("textbox", { name: "Notes" }), {
-        target: { value: "Unsaved while configuring" },
-      });
-
-      view.rerender(content(false));
-      expect(screen.queryByRole("dialog", { name: "Edit task" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("region", { name: "Tasks" })).not.toBeInTheDocument();
-      view.rerender(content(true));
-      expect(screen.getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved while configuring");
-    },
-  );
-
-  it("keeps the popover open for presses inside the retained content", async () => {
-    const user = userEvent.setup();
-    renderPanel(makeStore([makeTask({ id: "g", title: "Global errand" })]));
-    await user.click(rowTitle("Global errand"));
-    expect(panel()).toHaveAttribute("data-presentation", "popover");
-    await user.click(screen.getByRole("button", { name: "Edit" }));
-    expect(screen.getByRole("dialog", { name: "Edit task" })).toBeInTheDocument();
-  });
-
-  it("dismisses the popover on an outside pointer and offers no pin or resize", async () => {
-    const user = userEvent.setup();
-    const outside = document.createElement("button");
-    document.body.append(outside);
-    renderPanel(makeStore([]));
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
-
-    expect(panel()).toHaveAttribute("data-presentation", "popover");
-    expect(screen.queryByRole("button", { name: /Pin Tasks panel/ })).toBeNull();
-    expect(screen.queryByRole("separator", { name: "Resize Tasks panel" })).toBeNull();
-    await user.click(outside);
-    await waitFor(() =>
-      expect(screen.queryByRole("region", { name: "Tasks" })).not.toBeInTheDocument(),
+  it("retains an unsaved edit while Settings suspends the sheet", () => {
+    stubDensity(true);
+    const store = makeStore([makeTask({ id: "g", title: "Global errand" })]);
+    const panelLayoutStore = makePanelLayoutStore();
+    const route = { name: "thread", threadId: "thread-9", automationOpen: false } as const;
+    const content = (active: boolean) => (
+      <TasksHarness store={store} panelLayoutStore={panelLayoutStore} route={route} active={active} />
     );
-    outside.remove();
-  });
+    const view = render(content(true));
+    openTasks();
+    fireEvent.click(rowTitle("Global errand"));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Notes" }), {
+      target: { value: "Unsaved while configuring" },
+    });
 
-  it("closes the popover from its close button", async () => {
-    const user = userEvent.setup();
-    renderPanel(makeStore([]));
-    await user.click(screen.getByRole("button", { name: "Close Tasks panel" }));
+    view.rerender(content(false));
+    expect(screen.queryByRole("dialog", { name: "Edit task" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Tasks" })).not.toBeInTheDocument();
+    view.rerender(content(true));
+    expect(screen.getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved while configuring");
   });
 });

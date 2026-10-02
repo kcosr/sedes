@@ -54,8 +54,9 @@ export const SIDEBAR_ADJACENT_THREAD_COMMANDS = {
 } as const satisfies Record<"previous" | "next", KeyboardShortcutCommand>;
 
 /**
- * Opens or closes Tasks in the current presentation: the docked panel in a
- * thread workspace, the popover on other pages, the sheet on phones.
+ * Opens or closes Tasks beside a thread: the docked panel, or the sheet on
+ * phones. Pages without a thread (Home, Archived, Usage) have no Tasks and
+ * leave the key alone.
  * Ctrl+Shift+L (⌘⇧L): no browser or app binding uses it, while T and K are
  * taken (reopen tab, web console) and Ctrl+Shift+F opens thread find.
  */

@@ -6,7 +6,7 @@ import { useState, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi, type Mock } from "vitest";
 import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
 import type { PanelLayoutStore } from "../../workspace-panels/panel-state.js";
-import { navigate, threadPath } from "../../app/router.js";
+import { navigate, threadPath, useRoute } from "../../app/router.js";
 import {
   TASKS_PANEL_STORAGE_KEY,
   consumeReveal,
@@ -16,8 +16,8 @@ import {
 } from "../../app/tasks-panel-store.js";
 import { MessageTaskCard } from "../conversation/renderers/MessageTaskCard.js";
 import { TasksPanel } from "./TasksPanel.js";
+import { TasksPanelToggle } from "./TasksPanelToggle.js";
 import {
-  TasksCornerControls,
   TasksDockSlot,
   usePublishTasksDock,
   useTasksHost,
@@ -153,6 +153,30 @@ function Probe({ onHost }: { readonly onHost: (host: ReturnType<typeof useTasksH
   return null;
 }
 
+/**
+ * The workbench: a thread's workspace with its Tasks panel, or a page
+ * without a thread (Home, Archived, Usage), which has no Tasks at all.
+ */
+function Page({ spy }: { readonly spy: DockSpy }): React.JSX.Element {
+  const route = useRoute();
+  return route.name === "thread" ? (
+    <Workspace spy={spy} />
+  ) : (
+    <p>{route.name} page</p>
+  );
+}
+
+/** The workbench bar's Tasks toggle on phones, as the panel layout renders it. */
+function PhoneToggle(): React.JSX.Element {
+  const host = useTasksHost();
+  return (
+    <TasksPanelToggle
+      open={host?.sheetOpen ?? false}
+      onToggle={() => host?.toggleSheet()}
+    />
+  );
+}
+
 function renderHost({
   thread = false,
   active = true,
@@ -170,7 +194,7 @@ function renderHost({
   const content = (isActive: boolean) => (
     <TasksPanel store={makeStore()} panelLayoutStore={panelLayoutStore} active={isActive}>
       <Probe onHost={(value) => (host = value)} />
-      {thread ? <Workspace spy={spy} /> : <TasksCornerControls />}
+      <Page spy={spy} />
       {extra}
     </TasksPanel>
   );
@@ -217,97 +241,84 @@ async function expectOnTop(name: string): Promise<void> {
 
 const expectEditorOnTop = () => expectOnTop("Edit task");
 
-describe("Tasks host on pages without panels", () => {
+/** Presses the Tasks shortcut; false when something prevented its default. */
+const pressShortcut = (target: Element = document.body, init: KeyboardEventInit = {}) =>
+  fireEvent.keyDown(target, { key: "L", ctrlKey: true, shiftKey: true, ...init });
+
+const PAGES_WITHOUT_A_THREAD = [
+  ["Home", "/"],
+  ["Archived", "/archived"],
+  ["Usage", "/usage"],
+] as const;
+
+describe("Tasks host on pages without a thread", () => {
   it("adds no status region to the page while Tasks has nothing to announce", () => {
     renderHost();
     expect(screen.queryAllByRole("status")).toEqual([]);
   });
 
-  it("opens a popover from the corner toggle and closes it again", async () => {
-    const user = userEvent.setup();
-    const { host } = renderHost();
-    expect(toggle()).toHaveAttribute("aria-expanded", "false");
-    expect(tasksSurface()).toBeNull();
+  describe.each([false, true])("(phone: %s)", (isPhone) => {
+    it.each(PAGES_WITHOUT_A_THREAD)(
+      "%s shows no Tasks, and leaves the shortcut and reveals alone",
+      (_page, path) => {
+        phone = isPhone;
+        act(() => navigate(path));
+        const { host } = renderHost();
+        expect(screen.queryByTestId("tasks-panel-toggle")).toBeNull();
 
-    await user.click(toggle());
-    const surface = tasksSurface()!;
-    expect(surface).toHaveAttribute("data-presentation", "popover");
-    expect(surface).toHaveAttribute("id", "tasks-panel");
-    expect(host()?.placement).toBe("popover");
-    expect(toggle()).toHaveAttribute("aria-expanded", "true");
-    expect(toggle()).toHaveAttribute("aria-controls", "tasks-panel");
-    expect(surface.closest('[data-slot="popover-content"]')).not.toBeNull();
-    // No floating card, no pin.
-    expect(document.querySelector(".tasks-panel")).toBeNull();
-    expect(screen.queryByRole("button", { name: /Pin Tasks panel/ })).toBeNull();
+        // Nothing to toggle: the key is not taken from the page.
+        expect(pressShortcut()).toBe(true);
+        act(() => revealTask("task-1"));
 
-    // Pressing the toggle closes it (its press is not an outside dismissal
-    // that the click would immediately reopen).
-    await user.click(toggle());
-    expect(tasksSurface()).toBeNull();
-    expect(toggle()).toHaveAttribute("aria-expanded", "false");
-  });
-
-  it("closes the popover from its close button and on an outside press", async () => {
-    const user = userEvent.setup();
-    const outside = document.createElement("button");
-    document.body.append(outside);
-    renderHost();
-    await user.click(toggle());
-    await user.click(
-      within(tasksSurface()!).getByRole("button", { name: "Close Tasks panel" }),
+        expect(host()?.placement).toBeUndefined();
+        expect(tasksSurface()).toBeNull();
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(document.querySelector(".tasks-content")).toBeNull();
+      },
     );
-    expect(tasksSurface()).toBeNull();
-    expect(toggle()).toHaveFocus();
-
-    await user.click(toggle());
-    await user.click(outside);
-    expect(tasksSurface()).toBeNull();
-    outside.remove();
   });
 
-  it("closes the popover when the page changes", async () => {
-    const user = userEvent.setup();
-    renderHost();
-    await user.click(toggle());
-    expect(tasksSurface()).not.toBeNull();
-    act(() => navigate("/archived"));
-    expect(tasksSurface()).toBeNull();
-  });
+  it.each(PAGES_WITHOUT_A_THREAD)(
+    "closes the phone sheet on leaving the thread for %s",
+    async (_page, path) => {
+      phone = true;
+      const user = userEvent.setup();
+      renderHost({ thread: true, extra: <PhoneToggle /> });
+      await user.click(toggle());
+      expect(screen.getByRole("dialog", { name: "Tasks" })).toBeInTheDocument();
 
-  it("uses a bottom sheet on phones", async () => {
-    phone = true;
-    const user = userEvent.setup();
-    renderHost();
-    await user.click(toggle());
-    const sheet = screen.getByRole("dialog", { name: "Tasks" });
-    expect(sheet).toHaveClass("tasks-sheet");
-    expect(within(sheet).getByRole("region", { name: "Tasks" })).toHaveAttribute(
-      "data-presentation",
-      "sheet",
-    );
-    fireEvent.keyDown(sheet, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "Tasks" })).toBeNull();
-  });
+      act(() => navigate(path));
+      expect(screen.queryByRole("dialog", { name: "Tasks" })).toBeNull();
+      expect(tasksSurface()).toBeNull();
+
+      // Back in the thread, the sheet waits to be opened again.
+      act(() => navigate(threadPath("thread-1")));
+      expect(screen.queryByRole("dialog", { name: "Tasks" })).toBeNull();
+      expect(toggle()).toHaveAttribute("aria-expanded", "false");
+    },
+  );
 
   it.each([false, true])(
-    "suspends the overlay under Settings, keeps the same body and leaves focus (phone: %s)",
+    "keeps the retained body, with an unsaved edit, across a page without a thread (phone: %s)",
     async (isPhone) => {
       phone = isPhone;
       const user = userEvent.setup();
-      const view = renderHost();
-      await user.click(toggle());
+      const { host } = renderHost({ thread: true });
+      if (isPhone) act(() => host()?.toggleSheet());
       const body = document.querySelector(".tasks-content");
-      expect(body).toBeInTheDocument();
-      view.setActive(false);
+      await editNotes(user);
+
+      act(() => navigate("/archived"));
       await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
       expect(tasksSurface()).toBeNull();
-      expect(screen.queryByRole("dialog", { name: "Tasks" })).toBeNull();
-      expect(body).toBeInTheDocument();
-      // Closing must not pull focus back to the hidden workspace's toggle.
-      expect(screen.getByTestId("tasks-panel-toggle")).not.toHaveFocus();
-      view.setActive(true);
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      act(() => navigate(threadPath("thread-1")));
+      if (isPhone) act(() => host()?.toggleSheet());
+      expect(tasksSurface()).toHaveAttribute("data-presentation", isPhone ? "sheet" : "panel");
       expect(document.querySelector(".tasks-content")).toBe(body);
+      await expectEditorOnTop();
+      expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved notes");
     },
   );
 });
@@ -334,7 +345,7 @@ describe("Tasks host in a thread workspace", () => {
     phone = true;
     const { host } = renderHost({ thread: true });
     expect(host()?.placement).toBeUndefined();
-    act(() => host()?.toggleOverlay());
+    act(() => host()?.toggleSheet());
     expect(
       within(screen.getByRole("dialog", { name: "Tasks" })).getByRole("region", {
         name: "Tasks",
@@ -345,6 +356,36 @@ describe("Tasks host in a thread workspace", () => {
     const workbench = document.querySelector<HTMLElement>('section[aria-label="Tasks panel"]')!;
     expect(workbench).toHaveAttribute("aria-hidden", "true");
     expect(within(workbench).queryByRole("region", { name: "Tasks", hidden: true })).toBeNull();
+  });
+
+  it("closes the phone sheet with Escape", async () => {
+    phone = true;
+    const user = userEvent.setup();
+    renderHost({ thread: true, extra: <PhoneToggle /> });
+    await user.click(toggle());
+    const sheet = screen.getByRole("dialog", { name: "Tasks" });
+    expect(sheet).toHaveClass("tasks-sheet");
+    fireEvent.keyDown(sheet, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Tasks" })).toBeNull();
+    expect(toggle()).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("suspends the phone sheet under Settings, keeps the same body and leaves focus", async () => {
+    phone = true;
+    const user = userEvent.setup();
+    const view = renderHost({ thread: true, extra: <PhoneToggle /> });
+    await user.click(toggle());
+    const body = document.querySelector(".tasks-content");
+    expect(body).toBeInTheDocument();
+    view.setActive(false);
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(tasksSurface()).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Tasks" })).toBeNull();
+    expect(body).toBeInTheDocument();
+    // Closing must not pull focus back to the hidden workspace's toggle.
+    expect(toggle()).not.toHaveFocus();
+    view.setActive(true);
+    expect(document.querySelector(".tasks-content")).toBe(body);
   });
 
   it.each(confirmations)(
@@ -428,31 +469,22 @@ describe("Tasks host across the phone breakpoint", () => {
     });
   }
 
-  it("closes an overlay with nothing unsaved in it", async () => {
-    const setPhone = stubBreakpoint();
-    const user = userEvent.setup();
-    renderHost();
-    await user.click(toggle());
-    expect(tasksSurface()).toHaveAttribute("data-presentation", "popover");
-    setPhone(true);
-    expect(tasksSurface()).toBeNull();
-  });
-
-  it("keeps an edit open from the phone sheet to the desktop popover", async () => {
+  it("closes the sheet with nothing unsaved in it, and leaves the dock as it was", () => {
     phone = true;
     const setPhone = stubBreakpoint();
-    const user = userEvent.setup();
-    renderHost();
-    await user.click(toggle());
-    // Home shows Global; the task belongs to a thread.
-    await user.click(screen.getByRole("radio", { name: "All" }));
-    await editNotes(user);
+    const { spy, host } = renderHost({ thread: true });
+    act(() => host()?.toggleSheet());
+    expect(tasksSurface()).toHaveAttribute("data-presentation", "sheet");
 
     setPhone(false);
+    expect(document.querySelector(".tasks-sheet")).toBeNull();
+    expect(tasksSurface()).toHaveAttribute("data-presentation", "panel");
+    expect(spy.open).not.toHaveBeenCalled();
 
-    expect(surfaceElement()).toHaveAttribute("data-presentation", "popover");
-    await expectEditorOnTop();
-    expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved notes");
+    // Docked Tasks has no place on a phone until the sheet is opened.
+    setPhone(true);
+    expect(tasksSurface()).toBeNull();
+    expect(host()?.sheetOpen).toBe(false);
   });
 
   it("keeps an edit open from the docked panel to the phone sheet, and back", async () => {
@@ -484,7 +516,7 @@ describe("Tasks host across the phone breakpoint", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close Tasks panel" }));
     expect(tasksSurface()).toBeNull();
     setPhone(true);
-    act(() => host()?.toggleOverlay());
+    act(() => host()?.toggleSheet());
     await editNotes(user);
 
     setPhone(false);
@@ -522,20 +554,19 @@ describe("Tasks host across the phone breakpoint", () => {
   );
 
   it.each(confirmations)(
-    "keeps $title on top of the editor from the phone sheet to the desktop popover",
+    "keeps $title on top of the editor from the phone sheet to the docked panel",
     async ({ title, opener }) => {
       phone = true;
       const setPhone = stubBreakpoint();
       const user = userEvent.setup();
-      renderHost();
-      await user.click(toggle());
-      await user.click(screen.getByRole("radio", { name: "All" }));
+      const { host } = renderHost({ thread: true });
+      act(() => host()?.toggleSheet());
       await editNotes(user);
       await user.click(within(editor()!).getByRole("button", { name: opener }));
 
       setPhone(false);
 
-      expect(surfaceElement()).toHaveAttribute("data-presentation", "popover");
+      expect(surfaceElement()).toHaveAttribute("data-presentation", "panel");
       await expectOnTop(title);
     },
   );
@@ -568,17 +599,6 @@ describe("Tasks host across the phone breakpoint", () => {
 });
 
 describe("revealTask", () => {
-  it("opens the popover on pages without panels", () => {
-    renderHost();
-    act(() => revealTask("task-1"));
-    expect(tasksSurface()).toHaveAttribute("data-presentation", "popover");
-    // The content, not the host, takes the request: it shows the task.
-    expect(getPendingReveal()).toBeUndefined();
-    expect(
-      screen.getByRole("button", { name: "Audit error states" }),
-    ).toHaveAttribute("aria-expanded", "true");
-  });
-
   it("opens the docked panel without moving focus in a thread workspace", () => {
     const { spy } = renderHost({ thread: true });
     act(() => revealTask("task-1"));
@@ -589,7 +609,13 @@ describe("revealTask", () => {
     phone = true;
     renderHost({ thread: true });
     act(() => revealTask("task-1"));
-    expect(screen.getByRole("dialog", { name: "Tasks" })).toBeInTheDocument();
+    const sheet = screen.getByRole("dialog", { name: "Tasks" });
+    // The content, not the host, takes the request: it shows the task's
+    // detail.
+    expect(getPendingReveal()).toBeUndefined();
+    expect(
+      within(sheet).getByRole("heading", { name: "Audit error states" }),
+    ).toBeInTheDocument();
   });
 
   it("is what the transcript card's Open task asks for in a thread workspace", async () => {
@@ -617,55 +643,36 @@ describe("revealTask", () => {
       expect.objectContaining({ taskId: "task-1" }),
     );
   });
-
-  it("is what the transcript card's Open task asks for on a page without panels", async () => {
-    const user = userEvent.setup();
-    renderHost({
-      extra: <MessageTaskCard taskId="task-1" title="Audit error states" />,
-    });
-    expect(tasksSurface()).toBeNull();
-    const requests = vi.fn();
-    const unsubscribe = subscribeReveal(requests);
-
-    await user.click(
-      screen.getByRole("button", { name: "Open task: Audit error states" }),
-    );
-    unsubscribe();
-
-    expect(tasksSurface()).toHaveAttribute("data-presentation", "popover");
-    expect(toggle()).toHaveAttribute("aria-expanded", "true");
-    expect(requests).toHaveBeenCalledWith(
-      expect.objectContaining({ taskId: "task-1" }),
-    );
-  });
 });
 
 describe("toggle Tasks shortcut", () => {
-  const press = (target: Element = document.body, init: KeyboardEventInit = {}) =>
-    fireEvent.keyDown(target, { key: "L", ctrlKey: true, shiftKey: true, ...init });
-
-  it("toggles the popover on pages without panels", () => {
-    renderHost();
-    press();
-    expect(tasksSurface()).toHaveAttribute("data-presentation", "popover");
-    press(tasksSurface()!);
-    expect(tasksSurface()).toBeNull();
-    press(document.body, { metaKey: true, ctrlKey: false, key: "l" });
-    expect(tasksSurface()).not.toBeNull();
-  });
+  const press = pressShortcut;
 
   it("toggles the docked panel in a thread workspace", () => {
     const { spy } = renderHost({ thread: true });
-    press();
+    expect(press()).toBe(false);
     expect(spy.toggle).toHaveBeenCalledTimes(1);
     expect(tasksSurface()).toBeNull();
-    press();
+    press(document.body, { metaKey: true, ctrlKey: false, key: "l" });
     expect(spy.toggle).toHaveBeenCalledTimes(2);
     expect(tasksSurface()).not.toBeNull();
   });
 
+  it("toggles the sheet on phones in a thread, from inside it too", () => {
+    phone = true;
+    renderHost({ thread: true });
+    press();
+    const sheet = screen.getByRole("dialog", { name: "Tasks" });
+    expect(within(sheet).getByRole("region", { name: "Tasks" })).toHaveAttribute(
+      "data-presentation",
+      "sheet",
+    );
+    press(within(sheet).getByRole("region", { name: "Tasks" }));
+    expect(screen.queryByRole("dialog", { name: "Tasks" })).toBeNull();
+  });
+
   it("leaves other dialogs, repeats, plain keys and Settings alone", () => {
-    const view = renderHost();
+    const view = renderHost({ thread: true });
     const dialog = document.createElement("div");
     dialog.setAttribute("role", "dialog");
     const field = document.createElement("input");
@@ -674,10 +681,9 @@ describe("toggle Tasks shortcut", () => {
     press(field);
     press(document.body, { repeat: true });
     press(document.body, { shiftKey: false });
-    expect(tasksSurface()).toBeNull();
     view.setActive(false);
     press();
-    expect(tasksSurface()).toBeNull();
+    expect(view.spy.toggle).not.toHaveBeenCalled();
     dialog.remove();
   });
 });

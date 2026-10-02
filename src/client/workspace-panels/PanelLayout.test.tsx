@@ -2822,9 +2822,8 @@ function fakeTasksHost(overrides: Partial<TasksHost> = {}): TasksHost & {
   return {
     bodyTarget: document.createElement("div"),
     placement: undefined,
-    overlayOpen: false,
-    toggleOverlay: vi.fn(),
-    setPopoverAnchor: vi.fn(),
+    sheetOpen: false,
+    toggleSheet: vi.fn(),
     publishDock: (dock) => docks.push(dock),
     docks,
     ...overrides,
@@ -2930,11 +2929,11 @@ describe("PanelLayout Tasks tenant", () => {
 
   it("opens the host's sheet from the toggle on phones, never a stage panel", async () => {
     mobile = true;
-    const host = fakeTasksHost({ overlayOpen: true });
+    const host = fakeTasksHost({ sheetOpen: true });
     const store = setup({ extraTenants: [tasksTenant], tasksHost: host });
     expect(tasksToggle()).toHaveAttribute("aria-expanded", "true");
     fireEvent.click(tasksToggle());
-    expect(host.toggleOverlay).toHaveBeenCalledTimes(1);
+    expect(host.toggleSheet).toHaveBeenCalledTimes(1);
     expect(store.hasPanel("tasks")).toBe(false);
 
     // A Tasks panel left in the layout from a wider window stays off stage.

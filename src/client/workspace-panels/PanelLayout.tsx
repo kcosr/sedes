@@ -1722,10 +1722,10 @@ function PanelLayoutReady({
         <SidebarNavTrigger />
         <div className="workspace-workbench-actions">
           <TasksPanelToggle
-            open={desktop ? tasksVisible : (tasksHost?.overlayOpen ?? false)}
+            open={desktop ? tasksVisible : (tasksHost?.sheetOpen ?? false)}
             collapsed={desktop && tasksPanel !== undefined && !tasksVisible}
             onToggle={(invoker) =>
-              desktop ? toggleTasksPanel(invoker) : tasksHost?.toggleOverlay()
+              desktop ? toggleTasksPanel(invoker) : tasksHost?.toggleSheet()
             }
             count={openThreadTaskCount}
           />

@@ -6,17 +6,15 @@ import {
 } from "react";
 import type { PanelChromeControls } from "../../workspace-panels/PanelChrome.js";
 import { StablePaneSlot } from "../../workspace-panels/StablePaneSlot.js";
-import { TasksPanelToggle } from "./TasksPanelToggle.js";
 
 /**
- * Where the one retained Tasks body is shown:
- * - `panel`: docked beside Chat in a thread workspace (a workspace panel
- *   tenant, so it resizes, collapses and persists like Files and Workpads);
- * - `popover`: anchored to the toggle on pages without panels (Home,
- *   Archived, Usage);
+ * Where the one retained Tasks body is shown. Tasks belongs to a thread
+ * workspace; other pages (Home, Archived, Usage) have no Tasks surface.
+ * - `panel`: docked beside Chat (a workspace panel tenant, so it resizes,
+ *   collapses and persists like Files and Workpads);
  * - `sheet`: a bottom sheet on phones.
  */
-export type TasksPresentation = "panel" | "popover" | "sheet";
+export type TasksPresentation = "panel" | "sheet";
 
 /** Phones get the sheet; the same width at which panels stop docking. */
 export const TASKS_SHEET_QUERY = "(max-width: 819px)";
@@ -44,11 +42,9 @@ export interface TasksHost {
   /** The retained body's portal target, adopted by the current surface. */
   readonly bodyTarget: HTMLElement;
   readonly placement: TasksPresentation | undefined;
-  /** Whether the popover or the sheet is open (their local open state). */
-  readonly overlayOpen: boolean;
-  toggleOverlay(): void;
-  /** The popover's anchor on pages without panels. */
-  setPopoverAnchor(element: HTMLElement | null): void;
+  /** Whether the phone sheet is open (its local open state). */
+  readonly sheetOpen: boolean;
+  toggleSheet(): void;
   /** Must be stable: a thread workspace publishes its panel through it. */
   publishDock(dock: TasksDock | undefined): void;
 }
@@ -98,7 +94,7 @@ export function usePublishTasksDock(dock: TasksDock | undefined): void {
 }
 
 /**
- * The surface that adopts the retained body. Every presentation shares the
+ * The surface that adopts the retained body. Both presentations share the
  * `tasks-panel` slot and id, so the toggle's `aria-controls` and tests find
  * Tasks wherever it is shown.
  */
@@ -128,26 +124,4 @@ export function TasksDockSlot(): React.JSX.Element | null {
   return host?.placement === "panel" ? (
     <TasksSurface presentation="panel" target={host.bodyTarget} />
   ) : null;
-}
-
-/** The Tasks toggle in the pane corner of pages without panels. */
-export function TasksCornerControls({
-  count,
-}: {
-  /** Open tasks in this page's context. */
-  readonly count?: number;
-}): React.JSX.Element {
-  const host = useTasksHost();
-  return (
-    <div
-      className="tasks-corner-controls"
-      ref={(element) => host?.setPopoverAnchor(element)}
-    >
-      <TasksPanelToggle
-        open={host?.overlayOpen ?? false}
-        onToggle={() => host?.toggleOverlay()}
-        {...(count === undefined ? {} : { count })}
-      />
-    </div>
-  );
 }
