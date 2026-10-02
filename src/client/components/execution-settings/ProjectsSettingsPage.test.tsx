@@ -175,6 +175,14 @@ function setup(initial: readonly ProjectSummary[] = [sedes, twin, retired, empty
       threads: [
         { id: "thread-1", workspaceId: "twin-local", title: { text: "Fix login" } },
       ],
+      // Project rows count their project tasks; thread and global tasks are not theirs.
+      tasks: [
+        { id: "task-1", scope: { kind: "project", projectId: "project-sedes" } },
+        { id: "task-2", scope: { kind: "project", projectId: "project-sedes" }, completedAt: "2026-10-01T00:00:00.000Z" },
+        { id: "task-3", scope: { kind: "project", projectId: "project-twin" } },
+        { id: "task-4", scope: { kind: "thread", threadId: "thread-1" } },
+        { id: "task-5", scope: { kind: "global" } },
+      ],
     },
   } as unknown as ApplicationClientState;
   const listeners = new Set<() => void>();
@@ -230,7 +238,7 @@ describe("ProjectsSettingsPage", () => {
     await screen.findByText("Retired");
     expect(screen.getAllByTestId("project-settings-row").map((row) =>
       row.querySelector(".projects-project-row")!.textContent)).toEqual([
-      "sedes2 locations · 1 removed", "sedes1 location", "RetiredRemoved3 locations", "Empty0 locations",
+      "sedes2 locations · 1 removed · 2 tasks", "sedes1 location · 1 task", "RetiredRemoved3 locations", "Empty0 locations · 0 tasks",
     ]);
     const local = within(projectRow("sedes")).getAllByTestId("location-settings-row")[0]!;
     expect(local).toHaveTextContent("Local");
@@ -321,16 +329,23 @@ describe("ProjectsSettingsPage", () => {
     expect(api.listProjects).toHaveBeenCalledTimes(3);
   });
 
-  it("removes a location with today's copy and offers its project only for the last one", async () => {
+  it("removes a location, keeping its project's tasks, and offers its project only for the last one", async () => {
     const user = userEvent.setup();
     const { api } = setup();
     await screen.findByText("Retired");
     await chooseAction(user, "Local · /src/sedes", "Remove location…");
     let dialog = screen.getByRole("dialog", { name: "Remove “sedes” from “sedes”?" });
-    expect(dialog).toHaveTextContent("Hide this location (Local · /src/sedes) and its 3 threads from the working inventory.");
+    expect(dialog).toHaveTextContent(
+      "Hide this location (Local · /src/sedes) and its 3 threads from the working inventory; the tasks and workpads of “sedes” stay.");
     expect(dialog).toHaveTextContent("Files, conversation history, and saved application data are retained");
     // Its other location is already removed, so this is the project's last active one.
-    expect(within(dialog).getByRole("checkbox", { name: "Also remove project “sedes”" })).not.toBeChecked();
+    const alsoProject = within(dialog).getByRole("checkbox", { name: "Also remove project “sedes”" });
+    expect(alsoProject).not.toBeChecked();
+    // Removing the project too hides its tasks and workpads as well.
+    await user.click(alsoProject);
+    expect(dialog).toHaveTextContent(
+      "Hide this location (Local · /src/sedes), its 3 threads, and “sedes” with its tasks and workpads from the working inventory.");
+    await user.click(alsoProject);
     await user.click(within(dialog).getByRole("button", { name: "Remove location" }));
     expect(api.removeLocation).toHaveBeenCalledWith("sedes-local", { expectedRevision: 4 });
     expect(api.removeProject).not.toHaveBeenCalled();
@@ -358,7 +373,8 @@ describe("ProjectsSettingsPage", () => {
     // Same-named projects are told apart by their locations.
     await chooseAction(user, "sedes · /src/sedes", "Remove project…");
     const dialog = screen.getByRole("dialog", { name: "Remove project “sedes”?" });
-    expect(dialog).toHaveTextContent("Hide this project, its 1 active location, and their 3 threads from the working inventory.");
+    expect(dialog).toHaveTextContent(
+      "Hide this project with its tasks and workpads, its 1 active location, and their 3 threads from the working inventory.");
     api.removeProject.mockRejectedValueOnce(new ProjectRemovalBlockedApiError(400, "Resolve work first.", false, [
       { locationId: "sedes-local", environmentId: "local", kind: "durable_work", threadIds: ["thread-1"] },
       { locationId: "sedes-local", environmentId: "local", kind: "enabled_schedule", threadIds: ["thread-a", "thread-b"] },
@@ -387,7 +403,7 @@ describe("ProjectsSettingsPage", () => {
     await screen.findByText("Empty");
     await chooseAction(user, "Empty", "Remove project…");
     const dialog = screen.getByRole("dialog", { name: "Remove project “Empty”?" });
-    expect(dialog).toHaveTextContent(/^Remove project “Empty”\?Hide this project from the working inventory\./u);
+    expect(dialog).toHaveTextContent(/^Remove project “Empty”\?Hide this project with its tasks and workpads from the working inventory\./u);
     await user.click(within(dialog).getByRole("button", { name: "Remove project" }));
     expect(api.removeProject).toHaveBeenCalledWith("project-empty", { expectedRevision: 0, expectedMembershipRevision: 0 });
   });
@@ -441,7 +457,9 @@ describe("ProjectsSettingsPage", () => {
     await screen.findByText("Retired");
     await chooseAction(user, "Local · /work/sedes", "Move to project…");
     let dialog = screen.getByRole("dialog", { name: "Move “sedes” to another project" });
-    expect(dialog).toHaveTextContent("Local · /work/sedes leaves “sedes”. Its 1 thread, tasks, and workpads move with it.");
+    // Threads take their tasks and workpads; the project's own stay behind.
+    expect(dialog).toHaveTextContent(
+      "Local · /work/sedes and its 1 thread leave “sedes” with their tasks and workpads. The project’s own tasks and workpads stay in “sedes”.");
     expect(within(dialog).getByRole("button", { name: "Move location" })).toBeDisabled();
     await choose(user, "Move to", "Empty — no locations", dialog);
     await user.click(within(dialog).getByRole("button", { name: "Move location" }));
@@ -547,7 +565,7 @@ describe("ProjectsSettingsPage", () => {
     const alert = await within(dialog).findByRole("alert");
     expect(alert).toHaveTextContent("Local · /work/sedes changed while this was open.");
     expect(alert).toHaveTextContent("It moved to project “sedes”.");
-    expect(dialog).toHaveTextContent("Local · /work/sedes leaves “sedes”.");
+    expect(dialog).toHaveTextContent("Local · /work/sedes and its 1 thread leave “sedes”");
     expect(within(dialog).getByRole("combobox", { name: "Move to" })).toHaveTextContent("Empty — no locations");
 
     await user.click(within(dialog).getByRole("button", { name: "Move location" }));

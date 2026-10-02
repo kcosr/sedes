@@ -282,7 +282,7 @@ export function RemoveProjectDialog({ open, onOpenChange, context, project: open
   const threads = active.reduce((total, location) => total + location.threadCount, 0);
   return <ConfirmDialog open={open} onOpenChange={(next) => { if (!next) removal.reset(); onOpenChange(next); }}
     title={`Remove project “${project.name}”?`} confirmLabel="Remove project" pendingLabel="Removing…"
-    description={`Hide this project${active.length > 0 ? `, its ${countLabel(active.length, "active location")}, and their ${countLabel(threads, "thread")}` : ""} from the working inventory. Files, conversation history, and saved application data are retained, and you can restore the project here.`}
+    description={`Hide this project with its tasks and workpads${active.length > 0 ? `, its ${countLabel(active.length, "active location")}, and their ${countLabel(threads, "thread")}` : ""} from the working inventory. Files, conversation history, and saved application data are retained, and you can restore the project here.`}
     confirmDisabled={shown.unavailable} errorDetail={removal.errorDetail(project) ?? shown.changes}
     onConfirm={() => removal.run(() => shown.attempt((current) => removeProject(context, current)))} {...focusReturn} />;
 }
@@ -310,7 +310,9 @@ export function RemoveLocationDialog({ open, onOpenChange, context, project: ope
   return <ConfirmDialog open={open} onOpenChange={(next) => { if (!next) removal.reset(); onOpenChange(next); }}
     title={`Remove “${location.label}” from “${project.name}”?`}
     confirmLabel={removesProject ? "Remove project" : "Remove location"} pendingLabel="Removing…"
-    description={`Hide this location (${locationName(context, location)}) and its ${countLabel(location.threadCount, "thread")} from the working inventory. Files, conversation history, and saved application data are retained, and you can restore the location here. Stop running work, pause schedules, and end terminals before removal.`}
+    description={`${removesProject
+      ? `Hide this location (${locationName(context, location)}), its ${countLabel(location.threadCount, "thread")}, and “${project.name}” with its tasks and workpads from the working inventory.`
+      : `Hide this location (${locationName(context, location)}) and its ${countLabel(location.threadCount, "thread")} from the working inventory; the tasks and workpads of “${project.name}” stay.`} Files, conversation history, and saved application data are retained, and you can restore the location here. Stop running work, pause schedules, and end terminals before removal.`}
     confirmDisabled={shown.unavailable}
     errorDetail={(removesProject ? removal.errorDetail(project) : undefined) ?? shown.changes}
     onConfirm={() => removesProject
@@ -432,7 +434,7 @@ export function MoveLocationDialog({ open, onOpenChange, context, project: opene
       : { kind: "existing", projectId: chosen };
   return <ConfirmDialog open={open} onOpenChange={onOpenChange}
     title={`Move “${location.label}” to another project`} confirmLabel="Move location" pendingLabel="Moving…"
-    description={`${locationName(context, location)} leaves “${project.name}”. Its ${countLabel(location.threadCount, "thread")}, tasks, and workpads move with it.`}
+    description={`${locationName(context, location)} and its ${countLabel(location.threadCount, "thread")} leave “${project.name}” with their tasks and workpads. The project’s own tasks and workpads stay in “${project.name}”.`}
     confirmDisabled={assignment === undefined || shown.unavailable} errorDetail={shown.changes}
     onConfirm={() => assignment && shown.attempt((current) => context.api.moveLocation(current.location.id, {
       target: assignment, expectedRevision: current.location.revision,

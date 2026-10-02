@@ -684,7 +684,7 @@ test("Settings renames, moves, merges, removes, and restores projects", async ({
   await projectRow(alphaPath).getByRole("button", { name: `Actions for Local · ${betaPath}`, exact: true }).click();
   await page.getByRole("menuitem", { name: "Move to project…", exact: true }).click();
   const move = page.getByRole("dialog", { name: "Move “beta” to another project", exact: true });
-  await expect(move).toContainText("tasks, and workpads move with it");
+  await expect(move).toContainText("The project’s own tasks and workpads stay in “Alpha”.");
   await choose(move, "Move to", "Gamma — on Local");
   const moved = response("POST", /^\/api\/workspaces\/[^/]+\/move$/u);
   await move.getByRole("button", { name: "Move location", exact: true }).click();

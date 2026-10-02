@@ -153,7 +153,8 @@ describe("AddProjectDialog", () => {
     await user.click(within(dialog()).getByRole("button", { name: "Add project" }));
     const alert = await within(dialog()).findByRole("alert");
     expect(alert).toHaveTextContent("Already in project “Old home”");
-    expect(alert).toHaveTextContent("Move it to “notes”; its threads, tasks, and workpads move with it.");
+    expect(alert).toHaveTextContent(
+      "Move it to “notes”; its threads move with their tasks and workpads, and the project’s own tasks and workpads stay in “Old home”.");
     await user.click(within(alert).getByRole("button", { name: "Move here" }));
     expect(api.moveLocation).toHaveBeenCalledWith("existing-location", {
       target: { kind: "existing", projectId: "project-notes" }, expectedRevision: 6,

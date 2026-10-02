@@ -625,7 +625,7 @@ function ToolClientEditor({
       </SettingsSection>
       <SettingsSection
         title="Environments and defaults"
-        description="Only the allowed environments may be accessed."
+        description="Only the allowed environments may be accessed. A project's tasks and workpads are reachable when any environment that hosts it is allowed."
         card
       >
         <SettingsField

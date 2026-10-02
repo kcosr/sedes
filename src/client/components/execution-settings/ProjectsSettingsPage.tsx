@@ -107,6 +107,14 @@ export function ProjectsSettingsPage({ store }: {
   }), [environments, snapshot?.projects, snapshot?.workspaces]);
   const environmentById = useMemo(() => new Map(environments.map((environment) => [environment.id, environment])), [environments]);
   const threadTitles = useMemo(() => new Map((snapshot?.threads ?? []).map(({ id, title }) => [id, title.text])), [snapshot?.threads]);
+  // The snapshot carries every task of an active project; a removed project's are hidden.
+  const projectTaskCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const task of snapshot?.tasks ?? []) {
+      if (task.scope.kind === "project") counts.set(task.scope.projectId, (counts.get(task.scope.projectId) ?? 0) + 1);
+    }
+    return counts;
+  }, [snapshot?.tasks]);
   const environmentLabel = (location: ProjectLocation) => {
     const environment = environmentById.get(location.environmentId);
     return environment ? environmentDisplayLabel(environment, environments) : location.environmentLabel;
@@ -227,7 +235,7 @@ export function ProjectsSettingsPage({ store }: {
             <span className="projects-row-icon" aria-hidden="true"><Folders /></span>
             <span className="projects-row-text">
               <span className="projects-row-title"><span>{project.name}</span>{project.removed ? <Tag>Removed</Tag> : null}</span>
-              <span className="projects-row-meta">{countLabel(project.locations.length, "location")}{removedLocations > 0 && !project.removed ? ` · ${removedLocations} removed` : ""}</span>
+              <span className="projects-row-meta">{countLabel(project.locations.length, "location")}{removedLocations > 0 && !project.removed ? ` · ${removedLocations} removed` : ""}{project.removed ? "" : ` · ${countLabel(projectTaskCounts.get(project.id) ?? 0, "task")}`}</span>
             </span>
             <span className="projects-row-actions"><RowActions label={projectLocations.projectLabel(project.id) ?? project.name} actions={projectActions(project)} /></span>
           </div>
