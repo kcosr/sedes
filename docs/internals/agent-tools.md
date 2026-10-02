@@ -26,6 +26,7 @@ backends must also follow the
 
 - [Policy and caller ownership](#policy-ownership-and-persistence)
 - [Environment authority](#access-boundary)
+- [Workspaces and projects](#workspaces-and-projects)
 - [Catalog and backend presentations](#catalog-and-effects)
 - [Native MCP presentation](#native-mcp-presentation-codex-and-claude)
 - [CLI transport and invocation lifecycle](#cli-transports-and-admission)
@@ -77,9 +78,9 @@ Claude, Grok, and OpenCode share this publication path.
 An external `sedes` CLI process can use a named principal-owned Tool client.
 Creation requires a name, at least one current eligible
 tool, one default execution environment, and an explicit nonempty allowed-
-environment set containing that default. A default workspace and thread are
-optional conveniences; they never expand the allowlist. The client starts
-enabled.
+environment set containing that default. A default location (workspace) and
+thread are optional conveniences; they never expand the allowlist. The client
+starts enabled.
 
 The create response returns the `hatc1_…` credential exactly once. Sedes
 persists only a keyed verifier, never the plaintext token, so a lost value
@@ -90,9 +91,9 @@ is retained for truthful operation provenance and cannot be restored.
 Policy changes, disable, rotation, and revocation are revision checked and
 govern requests that cross the next admission boundary. They do not rewrite
 historical provenance or cancel domain work that was already admitted. A
-removed catalog tool or unavailable configured default remains visible as
-**needs attention** but is filtered from discovery and execution until the
-client is edited.
+removed catalog tool or unavailable configured default, including a removed
+default location, remains visible as **needs attention** but is filtered from
+discovery and execution until the client is edited.
 
 Principal clients have no source thread or active-turn lease. They never see
 the source-only `agent.context` operation and cannot create or expand other
@@ -137,6 +138,39 @@ cannot answer browser decisions; any invocation that needs approval fails
 closed. Delegated agent work uses the destination thread's own policy.
 Application decisions are provider-neutral for Pi, Codex, Claude, and Grok;
 unavailable interaction bindings fail closed instead of bypassing approval.
+
+## Workspaces and projects
+
+A Sedes workspace is one directory on one execution environment, shown as a
+**location**, and belongs to exactly one principal-owned project that can span
+several workspaces and environments; see
+[Projects and locations](architecture.md#projects-and-locations). Project
+membership is not an access boundary: the checks above remain workspace- and
+environment-based, and a project ID grants nothing.
+
+- `workspace.list@5` adds each workspace's `project: { id, name }`. Its
+  continuation fingerprint names the new version, so an earlier cursor is
+  rejected.
+- `agent.context@3` adds `projectId`, the current project of the source
+  thread's workspace. It is read when the tool runs, not captured with the
+  trusted source, because a location can move between projects while its
+  threads run; a move neither retires runtimes nor changes source authority.
+- `workspace.open@2` returns the workspace's `projectId`; its input is
+  unchanged. A directory Sedes does not know becomes a new single-location
+  project named after the directory. A known directory keeps its project: an
+  active location is revalidated, and a removed location of an active project
+  is restored into it. A location whose project was removed is a conflict, so
+  neither thread agents nor Tool clients can restore a removed project.
+
+Adding a directory to an existing project, moving a location, renaming or
+merging projects, and removing or restoring a project are user actions in
+**Settings → Projects** and **Add project**; no agent tool performs them in
+this release. The previous `workspace.list@4`, `agent.context@2`, and
+`workspace.open@1` schemas are no longer admitted, so callers must describe
+the current tool before invocation. A Native individual MCP session that
+outlives a server upgrade, such as a Claude query its sidecar retained, keeps
+the tool list its provider loaded at start until the runtime restarts; each
+call still describes and runs the current version.
 
 
 ## Catalog and effects

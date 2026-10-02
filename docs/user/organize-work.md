@@ -76,8 +76,8 @@ directory within existing access grants.
 
 Filter by environment, status, or search text. The filters apply to
 locations, and a project is shown when any of its locations matches, with only
-the matching locations under it. A project without locations is listed under
-**All statuses** until you add one.
+the matching locations under it. A project without locations stays listed
+unless you filter by environment.
 
 **Add project** asks for a directory and the project it joins: a new project,
 named after the folder and editable, or an existing project, listed with the
@@ -91,7 +91,8 @@ that is already a location never duplicates it:
 - an active location is selected in its project, and a removed one is restored
   into its project;
 - when you chose a different existing project, **Move here** moves the
-  location there instead, restoring it if it was removed;
+  location there instead, restoring it if it was removed; a removed location
+  can also be restored in its own project with **Restore in**;
 - a location of a removed project offers **Restore project** or **Add to
   another project**, which moves the location to the project you chose and
   restores it.
@@ -106,7 +107,7 @@ A merge moves every location of the project, removed ones included, and then
 deletes the merged project; it can't be undone. Running, queued, or uncertain
 work blocks moving and merging.
 
-When several projects share a name, an inline note above the list names them
+When several active projects share a name, an inline note above the list names them
 with a **Merge** action, so separately added checkouts of the same work can be
 combined.
 
@@ -124,7 +125,8 @@ work, enabled schedules, terminals, or busy agents, with the affected threads.
 **Restore project** restores the project and lets you choose which removed
 locations to restore with it; the locations its removal took on available
 environments are preselected, and each one reports whether it was restored. A
-location of a removed project can only be restored with its project.
+location of a removed project is restored with its project, or by moving it to
+another project and restoring it there.
 
 Restoration rechecks current access to each directory; paused schedules remain
 paused until explicitly enabled. Removal retains storage; it is not a permanent

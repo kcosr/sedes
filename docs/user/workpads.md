@@ -17,7 +17,9 @@ or you switch threads. The document's scope does not change when you navigate.
 
 Choose **Global**, **Project**, or **Thread**, then search that scope. Enable
 **Include nested scopes** to include its descendants. Choose **New workpad** to
-create a titled document in the selected scope.
+create a titled document in the selected scope. A Project workpad currently
+belongs to one [location](concepts.md#project-and-location) of its project,
+the directory it was created for, and moves with that location.
 
 Open a workpad to read it, rename it, or choose **Move workpad** and a destination
 scope. **Archive workpad** removes it from the active list without losing its

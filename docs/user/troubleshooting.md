@@ -103,8 +103,9 @@ back to the server host's same-looking path when remote access fails.
 
 ## A thread fails to load
 
-A moved or removed project, unavailable backend, oversized/invalid history, or
-temporary attach failure can prevent an authoritative snapshot.
+A moved or removed directory, a removed location, an unavailable backend,
+oversized/invalid history, or temporary attach failure can prevent an
+authoritative snapshot.
 
 - Repair the directory, provider, or connection.
 - Choose **Try again** for a fresh attach.

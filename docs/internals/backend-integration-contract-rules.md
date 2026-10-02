@@ -2650,14 +2650,19 @@ The complete byte and topology contract is in
 
 ## Creation, binding, and forks
 
-Sidebar project-name scope is a viewer-local browsing preference over the
-principal's normalized inventory. Equal names may span environments and
-directories; they never establish shared workspace identity or grant authority.
-Creation must resolve that preference to an exact workspace and target, asking
-for an environment or directory when ambiguous. All compiled backends (Pi,
-Codex, Claude, and Grok) continue to receive the existing exact-ID creation
-contract. Tasks, Files, tools, Projects grouping, and project stacks retain their existing
-workspace identities.
+A project is a principal-owned `projects` row, and every workspace (a
+location) references exactly one; see
+[Projects and locations](architecture.md#projects-and-locations). Project
+identity is that ID. Equal project or directory names never establish shared
+identity or grant authority; only an explicit move or merge changes
+membership. Sidebar Scope, the Projects view, project stacks, and archive
+grouping key on project ID. Project scope is a viewer-local browsing
+preference, and creation must resolve it to an exact workspace and target,
+asking for a location when the project has several. All compiled backends (Pi,
+Codex, Claude, Grok, and OpenCode) continue to receive the existing exact-ID
+creation contract and never receive a project ID. Tasks, Workpads, Files, and
+agent-tool authority retain their workspace and environment boundaries;
+project membership is not an access boundary.
 
 Creating or importing a thread establishes a durable binding between one
 Sedes thread and one provider-native conversation under the exact target,
@@ -3586,24 +3591,67 @@ remain fail-closed, backend-private, and covered through the consuming history,
 reconciliation, recovery, and presentation paths rather than only by an
 isolated parser test.
 
-### Project registration removal
+### Project and location removal
 
-Project removal is principal-owned workspace lifecycle state (`removed_at`),
-independent of thread Active/Snoozed/Settled/Archived state and environment
-filesystem grants. Pi, Codex, Claude, Grok and OpenCode share its application admission
-and retirement boundaries; no provider-specific delete operation is invoked.
-Preserve native bindings/history and all workspace-related application records.
-Only explicit validated open/restore can revive a removed registration at its
-original environment/canonical-path identity. Background revalidation and
-in-flight discovery must not restore it.
+Removal is principal-owned lifecycle state (`removed_at` on a workspace or a
+project), independent of thread Active/Snoozed/Settled/Archived state and
+environment filesystem grants. Pi, Codex, Claude, Grok and OpenCode share its
+application admission and retirement boundaries; no provider-specific delete
+operation is invoked. Preserve native bindings/history and all
+workspace-related application records. Every commit keeps the membership
+invariant: an active location never belongs to a removed project.
 
-Removal fences terminal admission, thread runtimes, and Files operations;
-rechecks project revision, exact thread membership, durable pending work, live
-terminals, and enabled schedules at commit; then publishes an authoritative
-application replacement. Queue/creation/fork/automation admission must also
-check workspace state at reservation, so earlier validation cannot admit work
-after removal. List projections omit removed projects and member threads while
-retained read identities remain valid. Restore never enables paused schedules.
+Location removal fences terminal admission, thread runtimes, and Files
+operations; rechecks the location revision, exact thread membership, durable
+pending work, live terminals, and enabled schedules at commit, reporting the
+first blocker; advances the project's membership revision; then publishes an
+authoritative application replacement. Removing a project's last active
+location leaves the project active.
+
+Project removal checks the project's revision and membership revision, then
+reports every blocker across every active location before fencing anything:
+durable pending work, enabled schedules, live terminals, and loaded runtimes
+that idle retirement would refuse (`busy_runtime`), each with its location,
+environment, and thread IDs. The HTTP refusal is an `invalid_transition` error
+with a `blockers` array beside the shared error envelope. Without blockers,
+each active location is fenced in workspace-ID order (terminal admission,
+thread runtimes, then Files) and every fence is held; the fences fail fast,
+so nesting them cannot deadlock. One transaction then rechecks both
+revisions, the exact location and thread set, and the durable blockers,
+removes the locations and the project, and marks those locations
+`removed_with_project`, clearing marks an earlier removal left on locations
+that are still removed.
+
+Queue/creation/fork/automation admission must also check workspace state at
+reservation, so earlier validation cannot admit work after removal; the
+membership invariant keeps that check sufficient after a project removal.
+List projections omit removed locations, removed projects, and their threads
+while retained read identities remain valid.
+
+Only an explicit validated open or restore can revive a removed location, at
+its original workspace ID, environment, and canonical path: a user's, or an
+agent's `workspace.open` when the location's project is active. Background
+revalidation and in-flight discovery must not restore it. A location restore
+is refused while its project is removed, fails when the directory now resolves
+to a different canonical path, and fails when the location moved to another
+project while validation was pending; the restoring transaction rechecks that
+project.
+Project restore clears only the project's removal, then restores each
+requested location individually through that revalidating path and reports
+each outcome, so one failed location leaves the project and the others
+restored. Settings preselects the locations marked `removed_with_project` on
+available environments. Restore never enables paused schedules.
+
+Moving a location and merging a project are not removals: they retire nothing
+and leave idle runtimes loaded. Each rechecks its revisions and the exact
+thread set and refuses durable pending work. The commit runs in the same
+synchronous turn as a final observation of every affected thread runtime,
+after in-progress runtime maintenance settles, and refuses a busy or
+still-establishing runtime; `disconnected` does not block. Merge moves every
+source location, removed ones included, then deletes the empty source project.
+Both publish an application replacement and each affected thread's
+application state, including the open streams of dormant bound threads,
+without attaching a provider.
 
 ## Required cross-backend audit
 

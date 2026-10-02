@@ -460,9 +460,10 @@ unique IDs, keep each backend on one execution environment, and select one
 enabled `defaultTargetId`. A new thread stores the selected target immutably;
 changing the principal default does not retarget existing threads.
 
-The creation form keeps Project and Target visible as the routing context. A
-sole eligible choice is preselected; several eligible targets require an
-explicit selection.
+The creation form routes a thread through Project, Location, and Target; it
+offers only targets on the chosen location's environment. A sole eligible
+choice is preselected; several eligible targets require an explicit
+selection.
 
 ### Tool and provider environment variables
 

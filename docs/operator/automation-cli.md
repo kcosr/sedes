@@ -140,7 +140,7 @@ A create request uses the same strict thread-creation contract as the UI:
 
 | Field | Meaning |
 | --- | --- |
-| `workspaceId` | Existing Sedes project/workspace UUID. It must be available and belong to the target's execution environment. |
+| `workspaceId` | Existing Sedes workspace (a project location) UUID. It must be available and belong to the target's execution environment. |
 | `title` | New anchor-thread title. Blank input normalizes to `New thread`; nonblank titles are limited to 240 characters. |
 | `executionWorkspace` | `{ "kind": "direct" }`, or an admitted isolated workspace selection with `workspaceAccess` and `networkProfile`. |
 | `configuration` | A `custom` target plus optional overrides/tool policy, or a `saved_agent` ID with an optional compatible target. |

@@ -267,8 +267,8 @@ whether it is available. The list includes removed projects and locations,
 marked **Removed**, and locations on unavailable environments. Search by
 project name, folder, path, or environment, or use the searchable environment
 and status selectors. In a narrow list, choose **Filters** to open these
-selectors. An inline note lists project names that several projects share,
-each with a **Merge** action.
+selectors. An inline note lists project names that several active projects
+share, each with a **Merge** action.
 
 Choose **Add project** to browse an existing directory or enter its absolute
 path, then choose the project it belongs to: a new project or an existing one.

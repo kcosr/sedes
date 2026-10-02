@@ -22,14 +22,14 @@ from top to bottom.
 
 | Concept or task | Documentation |
 | --- | --- |
-| Project, environment, target, Agent, template, thread | [Core concepts](user/concepts.md) |
+| Project, location, environment, target, Agent, template, thread | [Core concepts](user/concepts.md) |
 | Drafts, Send, Steer, Queue, Stop, stashes, search, bookmarks, forks, recovery | [Conversations](user/conversations.md) |
 | Groups, pins, sidebar views, snooze, settle, archive, prompts, Agents, templates | [Organize and reuse work](user/organize-work.md) |
 | Files, Git Compare, context excerpts, links, attachments, output images | [Files and context](user/files-and-context.md) |
 | Local and Sidecar SSH shells, panels, control transfer, and retained output | [Terminal panes](user/terminals.md) |
 | Tasks and scheduled or manual automations | [Tasks and automations](user/tasks-and-automations.md) |
 | Shared working documents, drafts, attribution, and revisions | [Workpads](user/workpads.md) |
-| Tokens and estimated spend by time, model, effort, backend, and project | [Usage and spend](user/usage.md) |
+| Tokens and estimated spend by time, model, effort, backend, and location | [Usage and spend](user/usage.md) |
 | Models, settings, provider-specific controls, interactions, agent tools, TUI | [Provider features](user/provider-features.md) |
 | Browser and application preferences | [Settings](user/settings.md) |
 | Load failures, uncertain operations, unavailable targets, and recovery | [Troubleshooting](user/troubleshooting.md) |

@@ -605,6 +605,16 @@ Legacy totals are never added to newly selected accounting facts. Opening older
 history registers visible turn identities without performing a global backfill.
 Use the ordinary pre-migration backup and rollback procedure below.
 
+Migration 126 introduces projects and makes every remembered directory a
+location of exactly one project. It groups directories by display name: those
+sharing a name become one project when each environment has at most one active
+directory of that name, and separate projects otherwise. A removed directory
+joins only when that is unambiguous, and a project starts removed only when all
+of its directories were. The migration is one-way, so back up the state
+directory, including `overlay.sqlite`, before upgrading. Afterwards review
+**Settings → Projects**, which notes names that several projects share, and
+merge or move locations as needed.
+
 Before an upgrade:
 
 1. Settle active work and resolve or explicitly review uncertain creation,
