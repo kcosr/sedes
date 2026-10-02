@@ -25,6 +25,7 @@ import type { ThreadSnapshotPublisher } from "../events/thread-snapshot-publishe
 import type { RequestScope } from "../identity/identity-provider.js";
 import { runWithArchivedThreadRuntimesRetired, type ArchivedThreadRuntimeRetirement } from "../domain/thread-runtime-archive-retirement.js";
 import type { WorkspaceApplicationPublication, WorkspaceApplicationService } from "./workspace-application-service.js";
+import type { WorkpadService } from "../domain/workpad-service.js";
 
 export interface WorkspaceRetirement {
   runWithWorkspaceRetired<Result>(scope: RequestScope, workspaceId: string, operation: () => Promise<Result>): Promise<Result>;
@@ -84,6 +85,8 @@ export class ProjectManagementService {
     publications: WorkspaceApplicationPublication;
     /** Republishes the application state of threads whose project changed. */
     threads: Pick<ThreadSnapshotPublisher, "scheduleMany">;
+    /** Announces Workpads a merge moved into the target project. */
+    workpads: Pick<WorkpadService, "publishWorkpadChange">;
     now?: () => number;
   }) {}
 
@@ -189,21 +192,29 @@ export class ProjectManagementService {
     return presentProject(this.input.inventory.getProject(scope, moved.projectId));
   }
 
-  /** Moves every location into the target and deletes the source; it cannot be undone. */
+  /**
+   * Moves every location, project Task, and project Workpad into the target
+   * and deletes the source; it cannot be undone. The authoritative
+   * replacement carries the moved Tasks.
+   */
   async merge(scope: RequestScope, sourceProjectId: string, request: MergeProjectRequest): Promise<ProjectSummary> {
     const threadIds = this.input.inventory.listActiveThreadIdsForProject(scope, sourceProjectId);
+    const now = this.#now();
     const merged = await this.#commitWhileIdle(scope, threadIds,
       "Resolve running, queued, or uncertain work before merging this project.",
       () => ({
         // Every location moves, removed ones included, and with it every thread.
         movedThreadIds: this.input.inventory.getProject(scope, sourceProjectId).locations
           .flatMap(({ id }) => this.input.inventory.listThreadIdsForWorkspace(scope, id)),
-        project: this.input.inventory.mergeProject(scope, sourceProjectId, {
-          ...request, expectedThreadIds: threadIds, now: this.#now(),
+        ...this.input.inventory.mergeProject(scope, sourceProjectId, {
+          ...request, expectedThreadIds: threadIds, now,
         }),
       }));
     this.input.publications.handoffAuthoritativeReplacement(scope);
     this.input.threads.scheduleMany(scope, merged.movedThreadIds);
+    for (const workpad of merged.movedWorkpads) {
+      void this.input.workpads.publishWorkpadChange(scope, workpad.id, workpad.revision, "document", now);
+    }
     return presentProject(merged.project);
   }
 

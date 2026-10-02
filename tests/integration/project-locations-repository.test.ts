@@ -13,6 +13,8 @@ import {
   type InventoryWorkspaceRecord,
 } from "../../src/server/db/repositories/inventory-repository.js";
 import { QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
+import { TaskRepository } from "../../src/server/db/repositories/task-repository.js";
+import { WorkpadRepository } from "../../src/server/db/repositories/workpad-repository.js";
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
 import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
 
@@ -357,7 +359,7 @@ describe("project and location repository", () => {
     expect(() => merge(active.projectId, target.projectId, { threadIds: [] })).toThrow(domainError("conflict"));
 
     const before = f.project(target.projectId);
-    const merged = merge(active.projectId, target.projectId);
+    const merged = merge(active.projectId, target.projectId).project;
     expect(merged).toMatchObject({ id: target.projectId, membershipRevision: before.membershipRevision + 1, removedAt: null });
     expect(merged.locations.map(({ id }) => id).sort()).toEqual([active.id, removed.id, target.id].sort());
     expect(merged.locations.find(({ id }) => id === removed.id)).toMatchObject({ removedAt: expect.any(Number) });
@@ -370,7 +372,7 @@ describe("project and location repository", () => {
     f.removeLocation(retired.id);
     f.removeProject(retired.projectId);
     expect(() => merge(target.projectId, retired.projectId)).toThrow(domainError("invalid_transition"));
-    expect(merge(retired.projectId, target.projectId).locations).toContainEqual(expect.objectContaining({
+    expect(merge(retired.projectId, target.projectId).project.locations).toContainEqual(expect.objectContaining({
       id: retired.id, removedAt: expect.any(Number), removedWithProject: false,
     }));
 
@@ -379,6 +381,54 @@ describe("project and location repository", () => {
     f.enqueue(f.thread(busy.id));
     expect(() => merge(busy.projectId, target.projectId)).toThrow(domainError("invalid_transition"));
     expect(f.inventory.getWorkspace(f.scope, busy.id).projectId).toBe(busy.projectId);
+  });
+
+  it("carries project Tasks and Workpads into the merge target and leaves thread work with its threads", () => {
+    const f = fixture();
+    const target = f.open("/srv/merge-target");
+    const source = f.open("/srv/merge-source");
+    const sourceThread = f.thread(source.id);
+    const tasks = new TaskRepository(f.database);
+    const workpads = new WorkpadRepository(f.database);
+    const projectTask = tasks.create(f.scope, {
+      title: "Shared work", scope: { kind: "project", projectId: source.projectId }, mutationId: randomUUID(), now: f.now(),
+    });
+    const threadTask = tasks.create(f.scope, {
+      title: "Thread work", scope: { kind: "thread", threadId: sourceThread }, mutationId: randomUUID(), now: f.now(),
+    });
+    const targetTask = tasks.create(f.scope, {
+      title: "Target work", scope: { kind: "project", projectId: target.projectId }, mutationId: randomUUID(), now: f.now(),
+    });
+    const pad = workpads.create(f.scope, { title: "Notes", scope: { kind: "project", projectId: source.projectId }, content: "Keep" }, undefined, f.now());
+    const archived = workpads.create(f.scope, { title: "Old notes", scope: { kind: "project", projectId: source.projectId } }, undefined, f.now());
+    workpads.update(f.scope, archived.id, { expectedRevision: 0, archived: true }, undefined, f.now());
+
+    const merged = f.inventory.mergeProject(f.scope, source.projectId, {
+      targetProjectId: target.projectId,
+      expectedSourceMembershipRevision: f.project(source.projectId).membershipRevision,
+      expectedTargetMembershipRevision: f.project(target.projectId).membershipRevision,
+      expectedThreadIds: f.inventory.listActiveThreadIdsForProject(f.scope, source.projectId),
+      now: f.now(),
+    });
+
+    expect(merged.movedTaskIds).toEqual([projectTask.id]);
+    expect(merged.movedWorkpads).toEqual([
+      { id: pad.id, revision: 1 },
+      { id: archived.id, revision: 2 },
+    ].sort((left, right) => left.id < right.id ? -1 : 1));
+    expect(tasks.get(f.scope, projectTask.id)).toMatchObject({
+      scopeKind: "project", projectId: target.projectId, revision: projectTask.revision + 1,
+    });
+    expect(tasks.get(f.scope, threadTask.id)).toEqual(threadTask);
+    expect(tasks.get(f.scope, targetTask.id)).toEqual(targetTask);
+    expect(tasks.getAssociated(f.scope, threadTask.id).associatedProjectId).toBe(target.projectId);
+    const moved = workpads.get(f.scope, pad.id);
+    expect(moved).toMatchObject({ scope: { kind: "project", projectId: target.projectId }, content: "Keep", revision: 1 });
+    expect(workpads.revision(f.scope, pad.id, 0).scope).toEqual({ kind: "project", projectId: source.projectId });
+    expect(workpads.get(f.scope, archived.id)).toMatchObject({
+      scope: { kind: "project", projectId: target.projectId }, archivedAt: expect.any(String),
+    });
+    expect(f.database.prepare("SELECT count(*) AS count FROM projects WHERE id = ?").get(source.projectId)).toEqual({ count: 0 });
   });
 
   it("collects every removal blocker across active locations and refuses to commit while any remain", () => {

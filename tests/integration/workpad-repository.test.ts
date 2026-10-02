@@ -3,6 +3,7 @@ import { parseResolvedBackendConfiguration } from "../support/resolved-backend-c
 import { openOverlayDatabase } from "../../src/server/db/database.js";
 import { applyBackendNormalizationMigration, applyDatabaseMigrations, backendNormalizedMigrations } from "../../src/server/db/migrate.js";
 import { WorkpadRepository } from "../../src/server/db/repositories/workpad-repository.js";
+import { InventoryRepository } from "../../src/server/db/repositories/inventory-repository.js";
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
 import { OverlayRepository } from "../support/schema9/overlay-repository.js";
 import { ThreadInventoryService } from "../support/schema9/thread-inventory-service.js";
@@ -86,15 +87,25 @@ function fixture(latestVersion = backendNormalizedMigrations.at(-1)!.version) {
       (migration) => migration.version <= latestVersion,
     ),
   );
+  const projectOf = (workspaceId: string) =>
+    (
+      database
+        .prepare("SELECT project_id AS projectId FROM workspaces WHERE id = ?")
+        .get(workspaceId) as { readonly projectId: string }
+    ).projectId;
   return {
     database,
     scope,
     environmentId: environment.id,
     firstWorkspaceId: firstWorkspace.id,
     secondWorkspaceId: secondWorkspace.id,
+    // Differently named locations became separate projects in migration 126.
+    firstProjectId: projectOf(firstWorkspace.id),
+    secondProjectId: projectOf(secondWorkspace.id),
     firstThreadId: firstThread.thread.id,
     secondThreadId: secondThread.thread.id,
     workpads: new WorkpadRepository(database),
+    inventory: new InventoryRepository(database),
   };
 }
 
@@ -161,16 +172,63 @@ describe("WorkpadRepository", () => {
     const f = fixture();
     try {
       const first = f.workpads.create(f.scope, { title: "Auth one", scope: { kind: "thread", threadId: f.firstThreadId }, content: "Token" }, undefined, 1000);
-      const second = f.workpads.create(f.scope, { title: "Auth two", scope: { kind: "workspace", workspaceId: f.firstWorkspaceId }, content: "Expiry" }, undefined, 2000);
+      const second = f.workpads.create(f.scope, { title: "Auth two", scope: { kind: "project", projectId: f.firstProjectId }, content: "Expiry" }, undefined, 2000);
       f.workpads.create(f.scope, { title: "Unrelated", scope: { kind: "thread", threadId: f.secondThreadId }, content: "Other" }, undefined, 3000);
-      expect(f.workpads.list(f.scope, { scope: { kind: "workspace", workspaceId: f.firstWorkspaceId } }).items.map(item => item.id)).toEqual([second.id]);
-      const options = { scope: { kind: "workspace" as const, workspaceId: f.firstWorkspaceId }, scopeMode: "subtree" as const, limit: 1 };
+      expect(f.workpads.list(f.scope, { scope: { kind: "project", projectId: f.firstProjectId } }).items.map(item => item.id)).toEqual([second.id]);
+      const options = { scope: { kind: "project" as const, projectId: f.firstProjectId }, scopeMode: "subtree" as const, limit: 1 };
       const page = f.workpads.list(f.scope, options);
       expect(page.nextCursor).toBeDefined();
       const next = f.workpads.list(f.scope, { ...options, cursor: page.nextCursor });
       expect([...page.items, ...next.items].map(item => item.id).sort()).toEqual([first.id, second.id].sort());
       expect(next.nextCursor).toBeUndefined();
       expect(f.workpads.list(f.scope, { scope: { kind: "global" }, scopeMode: "subtree", query: "Token" }).items.map(item => item.id)).toEqual([first.id]);
+    } finally { f.database.close(); }
+  });
+
+  it("lists project workpads by project and hides removed projects and locations", () => {
+    const f = fixture();
+    try {
+      const ids = (page: { items: readonly { id: string }[] }) => page.items.map(item => item.id).sort();
+      const remove = (workspaceId: string) => f.inventory.removeWorkspace(f.scope, workspaceId, {
+        expectedRevision: f.inventory.getWorkspace(f.scope, workspaceId).revision,
+        expectedThreadIds: f.inventory.listThreadIdsForWorkspace(f.scope, workspaceId), now: 5_000,
+      });
+      const global = f.workpads.create(f.scope, { title: "Global", scope: { kind: "global" } }, undefined, 1000);
+      const project = f.workpads.create(f.scope, { title: "Project", scope: { kind: "project", projectId: f.firstProjectId } }, undefined, 2000);
+      const thread = f.workpads.create(f.scope, { title: "Thread", scope: { kind: "thread", threadId: f.firstThreadId } }, undefined, 3000);
+      const other = f.workpads.create(f.scope, { title: "Other", scope: { kind: "project", projectId: f.secondProjectId } }, undefined, 4000);
+      expect(JSON.parse((f.database.prepare("SELECT document_json AS json FROM workpads WHERE id = ?").get(project.id) as { json: string }).json).scope)
+        .toEqual({ kind: "project", projectId: f.firstProjectId });
+      // An agent reaches project workpads through its project, not as global ones.
+      const agent = { environmentIds: [f.environmentId], continuationKey: "agent" };
+      expect(ids(f.workpads.list(f.scope, { scope: { kind: "project", projectId: f.firstProjectId } }, agent))).toEqual([project.id]);
+      expect(ids(f.workpads.list(f.scope, { scope: { kind: "global" }, scopeMode: "subtree" }, agent)))
+        .toEqual([global.id, project.id, thread.id, other.id].sort());
+      expect(ids(f.workpads.list(f.scope, { scope: { kind: "global" }, scopeMode: "subtree" }, { environmentIds: [], continuationKey: "none" })))
+        .toEqual([global.id]);
+
+      // A removed location hides its threads' workpads; its project's stay.
+      remove(f.firstWorkspaceId);
+      expect(ids(f.workpads.list(f.scope, { scope: { kind: "project", projectId: f.firstProjectId }, scopeMode: "subtree" }))).toEqual([project.id]);
+      expect(ids(f.workpads.list(f.scope, { scope: { kind: "global" }, scopeMode: "subtree" })))
+        .toEqual([global.id, project.id, other.id].sort());
+      // Without an active location, the project is outside every environment.
+      expect(ids(f.workpads.list(f.scope, { scope: { kind: "global" }, scopeMode: "subtree" }, agent)))
+        .toEqual([global.id, other.id].sort());
+
+      const removed = f.inventory.getProject(f.scope, f.firstProjectId);
+      const inspection = f.inventory.inspectProjectRemoval(f.scope, f.firstProjectId, {
+        expectedRevision: removed.revision, expectedMembershipRevision: removed.membershipRevision,
+      });
+      f.inventory.removeProject(f.scope, f.firstProjectId, {
+        expectedRevision: removed.revision, expectedMembershipRevision: removed.membershipRevision,
+        expectedLocations: inspection.locations, now: 6_000,
+      });
+      expect(ids(f.workpads.list(f.scope, { scope: { kind: "global" }, scopeMode: "subtree" }))).toEqual([global.id, other.id].sort());
+      expect(() => f.workpads.list(f.scope, { scope: { kind: "project", projectId: f.firstProjectId } })).toThrow(errorCode("not_found"));
+      expect(() => f.workpads.create(f.scope, { title: "Late", scope: { kind: "project", projectId: f.firstProjectId } })).toThrow(errorCode("not_found"));
+      expect(() => f.workpads.update(f.scope, global.id, { expectedRevision: 0, scope: { kind: "project", projectId: f.firstProjectId } })).toThrow(errorCode("not_found"));
+      expect(f.workpads.get(f.scope, project.id).title).toBe("Project");
     } finally { f.database.close(); }
   });
 
@@ -198,10 +256,10 @@ describe("WorkpadRepository", () => {
       const input = { scope: { kind: "global" as const }, scopeMode: "subtree" as const };
       expect(f.workpads.list(f.scope, input, { environmentIds: [], continuationKey: "no-environments" }).items.map(item => item.id)).toEqual([global.id]);
       expect(f.workpads.list(f.scope, input, { environmentIds: [f.environmentId], continuationKey: "local" }).items.map(item => item.id)).toEqual([other.id, local.id, global.id]);
-      const page = f.workpads.list(f.scope, { ...input, limit: 1 }, { continuationKey: "first-policy" });
+      const page = f.workpads.list(f.scope, { ...input, limit: 1 }, { environmentIds: [f.environmentId], continuationKey: "first-policy" });
       expect(page.nextCursor).toBeDefined();
-      expect(() => f.workpads.list(f.scope, { ...input, limit: 1, cursor: page.nextCursor }, { continuationKey: "changed-policy" })).toThrow(errorCode("cursor_invalid"));
-      expect(() => f.workpads.list({ ...f.scope, principalId: "another-owner" }, { ...input, limit: 1, cursor: page.nextCursor }, { continuationKey: "first-policy" })).toThrow(errorCode("cursor_invalid"));
+      expect(() => f.workpads.list(f.scope, { ...input, limit: 1, cursor: page.nextCursor }, { environmentIds: [f.environmentId], continuationKey: "changed-policy" })).toThrow(errorCode("cursor_invalid"));
+      expect(() => f.workpads.list({ ...f.scope, principalId: "another-owner" }, { ...input, limit: 1, cursor: page.nextCursor }, { environmentIds: [f.environmentId], continuationKey: "first-policy" })).toThrow(errorCode("cursor_invalid"));
       for (const item of page.items) {
         expect(item).not.toHaveProperty("content");
         expect(item).not.toHaveProperty("attribution");
@@ -371,14 +429,13 @@ describe("WorkpadRepository", () => {
     const f = fixture();
     try {
       const originalScope = { kind: "thread" as const, threadId: f.firstThreadId };
-      const destination = { kind: "workspace" as const, workspaceId: f.secondWorkspaceId };
+      const destination = { kind: "project" as const, projectId: f.secondProjectId };
       const pad = f.workpads.create(f.scope, { title: "Move", scope: originalScope, content: "Retained" });
       f.workpads.update(f.scope, pad.id, { expectedRevision: 0, scope: destination });
       expect(f.workpads.list(f.scope, { scope: originalScope }).items).toHaveLength(0);
       expect(f.workpads.list(f.scope, { scope: destination }).items.map(item => item.id)).toEqual([pad.id]);
       expect(f.workpads.revision(f.scope, pad.id, 0).scope).toEqual(originalScope);
       expect(f.workpads.get(f.scope, pad.id).scope).toEqual(destination);
-      expect(f.workpads.getAuthority(f.scope, pad.id)).toMatchObject({ scope: destination, environmentId: f.environmentId, revision: 1 });
       f.workpads.update(f.scope, pad.id, { expectedRevision: 1, archived: true });
       expect(f.workpads.list(f.scope, { scope: destination }).items).toHaveLength(0);
       expect(f.workpads.list(f.scope, { scope: destination, archived: true }).items.map(item => item.id)).toEqual([pad.id]);
@@ -393,7 +450,6 @@ describe("WorkpadRepository", () => {
         expect(f.workpads.list(scope, { scope: { kind: "global" }, scopeMode: "subtree" }).items).toHaveLength(0);
         for (const access of [
           () => f.workpads.get(scope, pad.id),
-          () => f.workpads.getAuthority(scope, pad.id),
           () => f.workpads.revision(scope, pad.id, 0),
           () => f.workpads.revisions(scope, pad.id),
           () => f.workpads.getDraft(scope, pad.id),

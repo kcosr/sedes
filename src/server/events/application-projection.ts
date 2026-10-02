@@ -310,12 +310,27 @@ export class ApplicationProjection {
       const affected = affectsDependents
         ? this.#dependents.get(key(collection, id))
         : undefined;
+      // A location changing project also changes the project of its threads'
+      // tasks, which reference those threads rather than the location.
+      const projectChanged =
+        collection === "workspaces" &&
+        prior !== undefined &&
+        value !== undefined &&
+        (prior.value as Values["workspaces"]).projectId !==
+          (value as Values["workspaces"]).projectId;
+      const transitive = projectChanged
+        ? [...(affected ?? [])].flatMap((reference) =>
+            referenceParts(reference)[0] === "threads"
+              ? [...(this.#dependents.get(reference) ?? [])]
+              : [],
+          )
+        : [];
       assert(
-        !affected ||
-          affected.size <= MAXIMUM_APPLICATION_INCREMENTAL_REFERENCE_CHECKS,
+        (affected?.size ?? 0) + transitive.length <=
+          MAXIMUM_APPLICATION_INCREMENTAL_REFERENCE_CHECKS,
         "application_projection_reference_budget",
       );
-      for (const reference of affected ?? []) {
+      for (const reference of [...(affected ?? []), ...transitive]) {
         const [name, entityId] = referenceParts(reference);
         this.#validate(name, this.get(name, entityId)!, lookup);
       }
@@ -411,8 +426,8 @@ export class ApplicationProjection {
       case "tasks": {
         const value = raw as Values["tasks"];
         return [
-          ...(value.associatedWorkspaceId
-            ? [key("workspaces", value.associatedWorkspaceId)]
+          ...(value.associatedProjectId
+            ? [key("projects", value.associatedProjectId)]
             : []),
           ...(value.scope.kind === "thread"
             ? [key("threads", value.scope.threadId)]
@@ -462,8 +477,13 @@ export class ApplicationProjection {
     if (collection === "tasks") {
       const value = raw as Values["tasks"];
       if (value.scope.kind === "thread") {
+        // A thread task belongs to the project of its thread's location.
         const thread = get("threads", value.scope.threadId);
-        assert(!thread || value.associatedWorkspaceId === thread.workspaceId);
+        assert(
+          !thread ||
+            value.associatedProjectId ===
+              get("workspaces", thread.workspaceId)?.projectId,
+        );
       }
     }
   }

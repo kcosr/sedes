@@ -29,7 +29,6 @@ export class WorkpadService {
   ) {}
   list(scope: RequestScope, request: ListWorkpadsRequest, authority?: WorkpadListAuthority) { return this.repository.list(scope, request, authority); }
   get(scope: RequestScope, id: string) { return this.repository.get(scope, id); }
-  getAuthority(scope: RequestScope, id: string) { return this.repository.getAuthority(scope, id); }
   revisions(scope: RequestScope, id: string, options?: { limit?: number; cursor?: string }) { return this.repository.revisions(scope, id, options); }
   revision(scope: RequestScope, id: string, revision: number) { return this.repository.revision(scope, id, revision); }
   getDraft(scope: RequestScope, id: string) { return this.repository.getDraft(scope, id); }

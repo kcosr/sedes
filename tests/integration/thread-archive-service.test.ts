@@ -441,7 +441,7 @@ describe("thread family archive service", () => {
       const input = {
         expectedRevision: 0,
         mutationId: "settle-with-task-disposition",
-        openTaskDisposition: "move_to_workspace",
+        openTaskDisposition: "move_to_project",
       } as const;
 
       await current.service.settle(current.scope, current.rootId, input);
@@ -451,8 +451,17 @@ describe("thread family archive service", () => {
         inventoryState: "settled",
         inventoryRevision: 1,
       });
+      const { projectId } = current.database
+        .prepare(
+          `SELECT location.project_id AS projectId
+           FROM application_threads AS thread
+           JOIN workspaces AS location ON location.id = thread.workspace_id
+           WHERE thread.id = ?`,
+        )
+        .get(current.rootId) as { readonly projectId: string };
       expect(current.tasks.get(current.scope, task.id)).toMatchObject({
-        scopeKind: "workspace",
+        scopeKind: "project",
+        projectId,
         threadId: null,
         revision: 1,
       });

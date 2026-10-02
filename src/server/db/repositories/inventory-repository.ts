@@ -15,6 +15,7 @@ import {
   serializeContextExcerpts,
 } from "../context-excerpts-json.js";
 import { ComposerAttachmentRepository } from "./composer-attachment-repository.js";
+import { WorkpadRepository } from "./workpad-repository.js";
 import type { ComposerTaskReference } from "../../../shared/protocol/tasks.js";
 import {
   parseStoredTaskReferences,
@@ -561,6 +562,19 @@ function fingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+/**
+ * Archive, settle, and bulk receipts hash the open-task disposition. Moving
+ * open tasks up to their thread's project was "move_to_workspace" before
+ * projects existed, and receipts are never rewritten, so these persisted
+ * derivation inputs keep that token. Only fingerprints use it; the wire
+ * value is "move_to_project", with no alias.
+ */
+function storedDispositionToken(
+  disposition: "move_to_project" | "move_to_global" | "complete" | "keep",
+): string {
+  return disposition === "move_to_project" ? "move_to_workspace" : disposition;
+}
+
 /** Non-default archive side effects participate in mutation replay identity. */
 function archiveThreadsFingerprint(
   threadId: string,
@@ -570,7 +584,7 @@ function archiveThreadsFingerprint(
     readonly expectedStashedPromptCount?: number;
     readonly expectedOpenTaskSnapshot?: string;
     readonly openTaskDisposition?:
-      "move_to_workspace" | "move_to_global" | "complete" | "keep";
+      "move_to_project" | "move_to_global" | "complete" | "keep";
     readonly executionWorkspaceDisposition?:
       | { readonly kind: "keep" }
       | {
@@ -589,7 +603,7 @@ function archiveThreadsFingerprint(
     ...(input.expectedStashedPromptCount === undefined
       ? []
       : [input.expectedStashedPromptCount]),
-    ...(disposition === "keep" ? [] : [disposition]),
+    ...(disposition === "keep" ? [] : [storedDispositionToken(disposition)]),
     ...(input.expectedOpenTaskSnapshot === undefined
       ? []
       : [input.expectedOpenTaskSnapshot]),
@@ -606,7 +620,7 @@ function bulkInventoryFingerprint(input: {
   readonly expectedOpenTaskCount?: number;
   readonly expectedOpenTaskSnapshot?: string;
   readonly openTaskDisposition?:
-    "move_to_workspace" | "move_to_global" | "complete" | "keep";
+    "move_to_project" | "move_to_global" | "complete" | "keep";
 }): string {
   const disposition = input.openTaskDisposition ?? "keep";
   const canonicalTargets = input.targets
@@ -624,7 +638,7 @@ function bulkInventoryFingerprint(input: {
     ...(input.expectedOpenTaskCount === undefined
       ? []
       : [input.expectedOpenTaskCount]),
-    disposition,
+    storedDispositionToken(disposition),
     ...(input.expectedOpenTaskSnapshot === undefined
       ? []
       : [input.expectedOpenTaskSnapshot]),
@@ -964,6 +978,14 @@ export class InventoryRepository {
     return row.removedAt !== null;
   }
 
+  isProjectRemoved(scope: RequestScope, projectId: string): boolean {
+    const row = this.database.prepare(`SELECT removed_at AS removedAt FROM projects
+      WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
+      .get(scope.tenantId, scope.principalId, projectId) as { removedAt: number | null } | undefined;
+    if (!row) throw new DomainError("not_found", "The project was not found.");
+    return row.removedAt !== null;
+  }
+
   assertWorkspaceActive(scope: RequestScope, workspaceId: string): void {
     if (this.isWorkspaceRemoved(scope, workspaceId)) {
       throw new DomainError("invalid_transition", "This project was removed. Restore it in Settings → Projects before starting new work.");
@@ -1114,9 +1136,10 @@ export class InventoryRepository {
   }
 
   /**
-   * Moves every location of the source, active and removed, into the target
-   * and deletes the emptied source. This cannot be undone. Runtime and
-   * active-turn checks belong to the caller.
+   * Moves every location of the source, active and removed, and every
+   * project Task and Workpad into the target, then deletes the emptied
+   * source. This cannot be undone. Runtime and active-turn checks belong to
+   * the caller. Each moved Workpad gets a revision recording its new scope.
    */
   mergeProject(scope: RequestScope, sourceProjectId: string, input: {
     readonly targetProjectId: string;
@@ -1125,11 +1148,15 @@ export class InventoryRepository {
     /** Threads of the source's active locations, as listActiveThreadIdsForProject returns them. */
     readonly expectedThreadIds: readonly string[];
     readonly now: number;
-  }): InventoryProjectListing {
+  }): {
+    readonly project: InventoryProjectListing;
+    readonly movedTaskIds: readonly string[];
+    readonly movedWorkpads: readonly { readonly id: string; readonly revision: number }[];
+  } {
     if (sourceProjectId === input.targetProjectId) {
       throw new DomainError("bad_request", "A project cannot be merged into itself.");
     }
-    this.database.transaction(() => {
+    const moved = this.database.transaction(() => {
       const source = this.#project(scope, sourceProjectId);
       const target = this.#project(scope, input.targetProjectId);
       this.#assertProjectMembershipRevision(source, input.expectedSourceMembershipRevision);
@@ -1149,12 +1176,30 @@ export class InventoryRepository {
         WHERE tenant_id = ? AND owner_principal_id = ? AND project_id = ?`)
         .run(target.id, input.now, scope.tenantId, scope.principalId, source.id);
       this.#touchProjectMembership(scope, target.id, input.now);
+      const movedTaskIds = (this.database.prepare(`UPDATE tasks SET project_id = ?,
+        revision = revision + 1, updated_at = max(updated_at, ?)
+        WHERE tenant_id = ? AND owner_principal_id = ? AND scope_kind = 'project' AND project_id = ?
+        RETURNING id`)
+        .all(target.id, input.now, scope.tenantId, scope.principalId, source.id) as Array<{ id: string }>)
+        .map(({ id }) => id).sort();
+      const workpads = new WorkpadRepository(this.database);
+      const movedWorkpads = (this.database.prepare(`SELECT id, revision FROM workpads
+        WHERE tenant_id = ? AND owner_principal_id = ? AND scope_kind = 'project' AND project_id = ?
+        ORDER BY id`)
+        .all(scope.tenantId, scope.principalId, source.id) as Array<{ id: string; revision: number }>)
+        .map(({ id, revision }) => {
+          const pad = workpads.update(scope, id, {
+            expectedRevision: revision, scope: { kind: "project", projectId: target.id },
+          }, { kind: "user" }, input.now);
+          return { id: pad.id, revision: pad.revision };
+        });
       this.database.prepare(`DELETE FROM projects
         WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?`)
         .run(scope.tenantId, scope.principalId, source.id);
       this.#bumpGeneration(scope);
+      return { movedTaskIds, movedWorkpads };
     })();
-    return this.getProject(scope, input.targetProjectId);
+    return { project: this.getProject(scope, input.targetProjectId), ...moved };
   }
 
   /**
@@ -1962,7 +2007,7 @@ export class InventoryRepository {
       readonly expectedStashedPromptCount?: number;
       readonly expectedOpenTaskSnapshot?: string;
       readonly openTaskDisposition?:
-        "move_to_workspace" | "move_to_global" | "complete" | "keep";
+        "move_to_project" | "move_to_global" | "complete" | "keep";
       readonly assertOpenTasks?: (threadIds: readonly string[]) => void;
       readonly applyOpenTasks?: () => readonly string[];
     },
@@ -1976,7 +2021,7 @@ export class InventoryRepository {
       "settle_thread",
       threadId,
       input.expectedRevision,
-      disposition,
+      storedDispositionToken(disposition),
       ...(input.expectedOpenTaskSnapshot === undefined
         ? []
         : [input.expectedOpenTaskSnapshot]),
@@ -2057,7 +2102,7 @@ export class InventoryRepository {
       readonly expectedStashedPromptCount?: number;
       readonly expectedOpenTaskSnapshot?: string;
       readonly openTaskDisposition?:
-        "move_to_workspace" | "move_to_global" | "complete" | "keep";
+        "move_to_project" | "move_to_global" | "complete" | "keep";
       readonly executionWorkspaceDisposition?:
         | { readonly kind: "keep" }
         | {
@@ -2223,7 +2268,7 @@ export class InventoryRepository {
       readonly expectedStashedPromptCount?: number;
       readonly expectedOpenTaskSnapshot?: string;
       readonly openTaskDisposition?:
-        "move_to_workspace" | "move_to_global" | "complete" | "keep";
+        "move_to_project" | "move_to_global" | "complete" | "keep";
       readonly executionWorkspaceDisposition?:
         | { readonly kind: "keep" }
         | {
@@ -2273,7 +2318,7 @@ export class InventoryRepository {
       readonly expectedOpenTaskCount?: number;
       readonly expectedOpenTaskSnapshot?: string;
       readonly openTaskDisposition?:
-        "move_to_workspace" | "move_to_global" | "complete" | "keep";
+        "move_to_project" | "move_to_global" | "complete" | "keep";
       /** Runs inside this transaction and must inspect the affected set. */
       readonly countOpenTasks?: (threadIds: readonly string[]) => number;
       /** Confirms the reviewed task set before any inventory or task writes. */
@@ -2438,7 +2483,7 @@ export class InventoryRepository {
       readonly expectedOpenTaskCount?: number;
       readonly expectedOpenTaskSnapshot?: string;
       readonly openTaskDisposition?:
-        "move_to_workspace" | "move_to_global" | "complete" | "keep";
+        "move_to_project" | "move_to_global" | "complete" | "keep";
     },
   ):
     | {

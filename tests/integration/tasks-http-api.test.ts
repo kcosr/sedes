@@ -206,6 +206,11 @@ function fixture() {
     app,
     owner,
     workspaceId: workspace.id,
+    projectId: (
+      database
+        .prepare("SELECT project_id AS projectId FROM workspaces WHERE id = ?")
+        .get(workspace.id) as { readonly projectId: string }
+    ).projectId,
     threadId: thread.thread.id,
     publishTaskChange,
     withHost,
@@ -345,7 +350,7 @@ describe("tasks HTTP contract", () => {
           completed: true,
           pinned: true,
           files: ["/does/not/need/to/exist.md", "/tmp/release.zip"],
-          scope: { kind: "workspace", workspaceId: current.workspaceId },
+          scope: { kind: "project", projectId: current.projectId },
         })
         .expect(200);
       expect(updated.body.task).toMatchObject({
@@ -354,7 +359,7 @@ describe("tasks HTTP contract", () => {
         details: "Include the migration section",
         pinned: true,
         files: ["/does/not/need/to/exist.md", "/tmp/release.zip"],
-        scope: { kind: "workspace", workspaceId: current.workspaceId },
+        scope: { kind: "project", projectId: current.projectId },
         completedAt: expect.any(String),
         revision: 1,
       });

@@ -120,6 +120,9 @@ describe("Workpads HTTP", () => {
       await f.mutate("post", "/api/workpads").send({ title: "Forged", scope: { kind: "global" }, author: { kind: "agent", threadId: "fake" } }).expect(400);
       await f.get("/api/workpads?scopeKind=global&threadId=wrong").expect(400);
       await f.get("/api/workpads?scopeKind=thread").expect(400);
+      // The former workspace scope has no alias; a project scope names its project.
+      await f.get("/api/workpads?scopeKind=workspace&workspaceId=x").expect(400);
+      await f.get("/api/workpads?scopeKind=global&projectId=x").expect(400);
       await f.get("/api/workpads?scopeKind=global&limit=NaN").expect(400);
       const { workpad: pad } = (await f.mutate("post", "/api/workpads").send({ title: "Atomic", scope: { kind: "global" }, content: "one two two" }).expect(201)).body;
       await f.mutate("patch", `/api/workpads/${pad.id}`).send({ expectedRevision: pad.revision, edit: { kind: "patch", edits: [{ oldText: "one", newText: "changed" }, { oldText: "two", newText: "ambiguous" }] } }).expect(409);

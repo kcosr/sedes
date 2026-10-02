@@ -282,10 +282,14 @@ describe("ApplicationSnapshotService", () => {
     expect(snapshot.defaultNewThreadTargetId).toBeNull();
   });
 
-  it("retains matching thread and task workspace associations across awaited reads", async () => {
+  it("retains matching thread and task project associations across awaited reads", async () => {
     const movingThreadId = "10000000-0000-4000-8000-000000000004";
     const initialWorkspaceId = "10000000-0000-4000-8000-000000000005";
     const movedWorkspaceId = "10000000-0000-4000-8000-000000000006";
+    const projectOf = (workspaceId: string) =>
+      workspaceId === initialWorkspaceId
+        ? "10000000-0000-4000-8000-000000000007"
+        : "10000000-0000-4000-8000-000000000008";
     let currentWorkspaceId = initialWorkspaceId;
     let releaseTargetRead!: () => void;
     const targetReadGate = new Promise<void>((resolve) => {
@@ -297,9 +301,9 @@ describe("ApplicationSnapshotService", () => {
         ownerPrincipalId: scope.principalId,
         id: "10000000-0000-4000-8000-000000000003",
         scopeKind: "thread" as const,
-        environmentId: null,
-        workspaceId: null,
+        projectId: null,
         threadId: movingThreadId,
+        associatedProjectId: projectOf(currentWorkspaceId),
         associatedWorkspaceId: currentWorkspaceId,
         title: "Moving thread task",
         details: "",
@@ -322,12 +326,17 @@ describe("ApplicationSnapshotService", () => {
             diagnosticCode: null,
           },
         ],
-        listActiveProjects: () => [{ id: "project-1", name: "Project", revision: 0 }],
+        listActiveProjects: () =>
+          [initialWorkspaceId, movedWorkspaceId].map((id) => ({
+            id: projectOf(id),
+            name: "Project",
+            revision: 0,
+          })),
         listWorkspaces: () =>
           [initialWorkspaceId, movedWorkspaceId].map((id) => ({
             id,
             environmentId: "environment-local",
-            projectId: "project-1",
+            projectId: projectOf(id),
             canonicalPath: `/work/${id}`,
             displayName: id,
             availability: "available",
@@ -399,7 +408,9 @@ describe("ApplicationSnapshotService", () => {
     const snapshot = await capture;
 
     expect(snapshot.threads[0]?.workspaceId).toBe(initialWorkspaceId);
-    expect(snapshot.tasks[0]?.associatedWorkspaceId).toBe(initialWorkspaceId);
+    expect(snapshot.tasks[0]?.associatedProjectId).toBe(
+      projectOf(initialWorkspaceId),
+    );
     expect(listAssociated).toHaveBeenCalledTimes(1);
   });
 });

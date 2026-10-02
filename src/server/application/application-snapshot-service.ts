@@ -65,6 +65,29 @@ export interface ApplicationThreadSummaryReader {
   ): readonly ApplicationThreadDurableSummary[];
 }
 
+/**
+ * A project task is hidden only while its project is removed. A thread task
+ * is hidden while its thread's location is removed, even though its project
+ * may stay active.
+ */
+function taskVisible(
+  record: AssociatedTaskRecord,
+  projectActive: (projectId: string) => boolean,
+  locationActive: (workspaceId: string) => boolean,
+): boolean {
+  switch (record.scopeKind) {
+    case "global":
+      return true;
+    case "project":
+      return projectActive(record.projectId!);
+    case "thread":
+      return (
+        record.associatedWorkspaceId !== null &&
+        locationActive(record.associatedWorkspaceId)
+      );
+  }
+}
+
 export interface ApplicationTaskReader {
   listAssociated(scope: RequestScope): readonly AssociatedTaskRecord[];
   listAssociatedByThread(
@@ -166,14 +189,17 @@ export class ApplicationSnapshotService {
     // synchronous durable-read turn. A draft can move workspaces while the
     // target/runtime reads below are awaiting; rereading tasks afterward
     // would combine the moved task association with the retained old thread.
+    const projectIds = new Set(projects.map(({ id }) => id));
     const associatedTasks = this.tasks
       .listAssociated(scope)
-      .map(presentAssociatedTask)
-      .filter(
-        (task) =>
-          task.associatedWorkspaceId === null ||
-          workspaceIds.has(task.associatedWorkspaceId),
-      );
+      .filter((record) =>
+        taskVisible(
+          record,
+          (projectId) => projectIds.has(projectId),
+          (workspaceId) => workspaceIds.has(workspaceId),
+        ),
+      )
+      .map(presentAssociatedTask);
     const targetCatalog = await this.executionTargets.read(scope);
     const environmentIds = new Set(environments.map(({ id }) => id));
     const admittedEnvironmentIds = new Set(
@@ -625,13 +651,7 @@ export class ApplicationSnapshotPublicationBoundary {
         this.#publishTask(
           hub,
           record.id,
-          record.associatedWorkspaceId &&
-            this.snapshots.inventory.isWorkspaceRemoved(
-              scope,
-              record.associatedWorkspaceId,
-            )
-            ? null
-            : presentAssociatedTask(record),
+          this.#visibleTask(scope, record) ? presentAssociatedTask(record) : null,
         );
       }
   }
@@ -644,17 +664,20 @@ export class ApplicationSnapshotPublicationBoundary {
     id: string,
   ): void {
     const record = this.snapshots.tasks.findAssociated(scope, id);
-    const task = record ? presentAssociatedTask(record) : null;
     this.#publishTask(
       hub,
       id,
-      task?.associatedWorkspaceId &&
-        this.snapshots.inventory.isWorkspaceRemoved(
-          scope,
-          task.associatedWorkspaceId,
-        )
-        ? null
-        : task,
+      record && this.#visibleTask(scope, record)
+        ? presentAssociatedTask(record)
+        : null,
+    );
+  }
+  #visibleTask(scope: RequestScope, record: AssociatedTaskRecord): boolean {
+    const inventory = this.snapshots.inventory;
+    return taskVisible(
+      record,
+      (projectId) => !inventory.isProjectRemoved(scope, projectId),
+      (workspaceId) => !inventory.isWorkspaceRemoved(scope, workspaceId),
     );
   }
   async publishWorkpadChange(

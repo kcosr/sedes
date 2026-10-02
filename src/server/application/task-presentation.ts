@@ -11,13 +11,14 @@ import type {
 } from "../db/repositories/task-repository.js";
 
 function taskScope(record: TaskRecord): TaskScope {
-  if (record.scopeKind === "workspace") {
-    return { kind: "workspace", workspaceId: record.workspaceId! };
+  switch (record.scopeKind) {
+    case "global":
+      return { kind: "global" };
+    case "project":
+      return { kind: "project", projectId: record.projectId! };
+    case "thread":
+      return { kind: "thread", threadId: record.threadId! };
   }
-  if (record.scopeKind === "thread") {
-    return { kind: "thread", threadId: record.threadId! };
-  }
-  return { kind: "global" };
 }
 
 export function presentTask(record: TaskRecord): Task {
@@ -43,6 +44,6 @@ export function presentAssociatedTask(
 ): AssociatedTask {
   return associatedTaskSchema.parse({
     ...presentTask(record),
-    associatedWorkspaceId: record.associatedWorkspaceId,
+    associatedProjectId: record.associatedProjectId,
   });
 }

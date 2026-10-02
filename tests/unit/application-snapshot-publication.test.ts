@@ -19,6 +19,16 @@ const scope: RequestScope = {
 };
 const TASK_WORKSPACE_ID = "30000000-0000-4000-8000-000000000001";
 const MOVED_TASK_WORKSPACE_ID = "30000000-0000-4000-8000-000000000002";
+const TASK_PROJECT_ID = "40000000-0000-4000-8000-000000000001";
+const MOVED_TASK_PROJECT_ID = "40000000-0000-4000-8000-000000000002";
+/** Each task test location belongs to its own project. */
+function projectOfWorkspace(workspaceId: string): string {
+  return workspaceId === TASK_WORKSPACE_ID
+    ? TASK_PROJECT_ID
+    : workspaceId === MOVED_TASK_WORKSPACE_ID
+      ? MOVED_TASK_PROJECT_ID
+      : "project-1";
+}
 
 function snapshot(active: number): NormalizedApplicationSnapshot {
   return {
@@ -132,9 +142,9 @@ function associatedThreadTask(
     ownerPrincipalId: scope.principalId,
     id: "20000000-0000-4000-8000-000000000001",
     scopeKind: "thread",
-    environmentId: null,
-    workspaceId: null,
+    projectId: null,
     threadId,
+    associatedProjectId: projectOfWorkspace(associatedWorkspaceId),
     associatedWorkspaceId,
     title: "Thread task",
     details: "",
@@ -160,14 +170,18 @@ function incrementalSnapshots(input: {
     retainedCount: 0,
   };
   const currentSnapshot = async (): Promise<NormalizedApplicationSnapshot> => {
+    const workspaceIds = [
+      ...new Set(input.summaries.map((thread) => thread.workspaceId)),
+    ];
     return {
       ...snapshot(input.active ?? 1),
-      workspaces: [
-        ...new Set(input.summaries.map((thread) => thread.workspaceId)),
-      ].map((id) => ({
+      projects: [
+        ...new Set(["project-1", ...workspaceIds.map(projectOfWorkspace)]),
+      ].map((id) => ({ id, name: "Project", revision: 0 })),
+      workspaces: workspaceIds.map((id) => ({
         id,
         environmentId: "environment-1",
-        projectId: "project-1",
+        projectId: projectOfWorkspace(id),
         label: { text: "Workspace" },
         displayPath: { text: "/workspace" },
         available: true,
@@ -304,6 +318,7 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
       ...associatedThreadTask("thread-1", TASK_WORKSPACE_ID),
       scopeKind: "global",
       threadId: null,
+      associatedProjectId: null,
       associatedWorkspaceId: null,
     };
     const findAssociated = vi.fn(() => row);
@@ -1703,10 +1718,10 @@ describe("ApplicationSnapshotPublicationBoundary", () => {
     expect(snapshots.tasks.listAssociatedByThread).not.toHaveBeenCalled();
     expect(snapshots.capture).toHaveBeenCalledTimes(2);
     expect(
-      published.map(({ associatedWorkspaceId }) => associatedWorkspaceId),
+      published.map(({ associatedProjectId }) => associatedProjectId),
     ).toEqual([]);
-    expect(replacements.at(-1)?.tasks[0]?.associatedWorkspaceId).toBe(
-      MOVED_TASK_WORKSPACE_ID,
+    expect(replacements.at(-1)?.tasks[0]?.associatedProjectId).toBe(
+      MOVED_TASK_PROJECT_ID,
     );
     subscription.close();
   });
