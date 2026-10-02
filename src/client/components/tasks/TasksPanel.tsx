@@ -655,7 +655,6 @@ export function TasksPanelContent({
 
   const addToPrompt = useCallback(
     (task: AssociatedTask) => {
-      if (threadId === undefined) return;
       const result = composerDraft?.stageTaskReference({
         taskId: task.id,
         titleSnapshot: task.title,
@@ -673,7 +672,7 @@ export function TasksPanelContent({
       if (sheet) onRequestClose(message);
       else announce(message);
     },
-    [announce, composerDraft, onRequestClose, sheet, threadId],
+    [announce, composerDraft, onRequestClose, sheet],
   );
 
   const openFile = useCallback(
@@ -746,14 +745,11 @@ export function TasksPanelContent({
       destinations,
       touch,
       surfaceActive: active,
-      ...(threadId === undefined
-        ? { promptUnavailable: "Open a thread to add this task to its prompt." }
-        : {}),
       filesOpenable: Boolean(workspace?.available),
       ...(taskDrag ? { taskDrag } : {}),
       pending: (taskId: string) => pending.get(taskId) ?? NO_PENDING,
     }),
-    [actions, active, destinations, pending, taskDrag, threadId, touch, workspace?.available],
+    [actions, active, destinations, pending, taskDrag, touch, workspace?.available],
   );
 
   const addTask = (title: string, notes: string) => {
@@ -1391,7 +1387,8 @@ export function TasksPanelContent({
       controls={{ ...panelControls, renderMenuItems: moreItems }}
     />
   ) : (
-    // The phone sheet: its ⋯ also carries the View options.
+    // The sheet's header, whose ⋯ also carries the View options. A docked
+    // panel retained without a surface (an open editor) draws it unseen.
     <header className="tasks-header">
       <h2 className="tasks-title">
         Tasks
@@ -1582,11 +1579,7 @@ export function TasksPanelContent({
                 <Pencil aria-hidden="true" />
                 Edit
               </Button>
-              <Button
-                size="lg"
-                disabled={threadId === undefined}
-                onClick={() => actions.addToPrompt(expandedTask)}
-              >
+              <Button size="lg" onClick={() => actions.addToPrompt(expandedTask)}>
                 <CornerDownLeft aria-hidden="true" />
                 Add to prompt
               </Button>
@@ -1816,7 +1809,9 @@ function createBodyTarget(): HTMLElement {
  * Chat on desktop and as a sheet on phones. Other pages (Home, Archived,
  * Usage) show no Tasks surface, and the Tasks shortcut leaves them alone.
  * It wraps the workbench so the workbench bar's toggle and the `tasks`
- * panel tenant reach it through context.
+ * panel tenant reach it through context. The application shell mounts a
+ * fresh host when it moves between a thread and another page, so its state
+ * carries over only from one thread to the next.
  */
 export function TasksPanel({
   active = true,
@@ -1856,26 +1851,27 @@ export function TasksPanel({
         ? "panel"
         : undefined;
 
-  const latest = useRef({ mobile, threadWorkspace, dock, placement, editing });
-  latest.current = { mobile, threadWorkspace, dock, placement, editing };
-  // The presentation the content keeps while retained without a surface
-  // (an open editor, hidden until a thread shows Tasks again).
+  const latest = useRef({ mobile, threadWorkspace, dock, editing });
+  latest.current = { mobile, threadWorkspace, dock, editing };
+  // The presentation the content keeps while it has no surface: an open
+  // editor stays mounted, hidden, when the sheet closes under it on a move
+  // to another thread, and while the breakpoint changes its surface.
   const lastPlacement = useRef<TasksPresentation>("panel");
   if (placement) lastPlacement.current = placement;
 
-  // The sheet is transient: navigating or crossing the phone breakpoint
-  // closes it. The docked panel's open state is the panel layout's. An open
-  // editor in a thread is the exception at the breakpoint: so its unsaved
-  // edits survive, Tasks shows in the new presentation instead (the sheet,
-  // or the dock opened for it). While no surface shows an open editor, the
-  // content stays mounted, hidden, until one does.
+  // The sheet is transient: moving to another thread or crossing the phone
+  // breakpoint closes it. The docked panel's open state is the panel
+  // layout's. An open editor is the exception at the breakpoint: so its
+  // unsaved edits survive, Tasks shows in the new presentation instead (the
+  // sheet, or the dock opened for it). While no surface shows an open
+  // editor, the content stays mounted, hidden, until one does.
   const crossed = useRef({ routeKey, mobile });
   useEffect(() => {
     const before = crossed.current;
     crossed.current = { routeKey, mobile };
     if (before.routeKey === routeKey && before.mobile === mobile) return;
     const { editing, dock } = latest.current;
-    if (before.routeKey !== routeKey || !editing || !threadWorkspace) {
+    if (before.routeKey !== routeKey || !editing) {
       setSheetOpen(false);
       return;
     }
@@ -1885,12 +1881,12 @@ export function TasksPanel({
       setSheetOpen(false);
       if (dock && !dock.visible) dock.open({ focus: false });
     }
-  }, [routeKey, mobile, threadWorkspace]);
+  }, [routeKey, mobile]);
 
   const toggleSheet = useCallback(() => setSheetOpen((open) => !open), []);
+  // Only the sheet asks to close: the docked panel has the layout's controls.
   const requestClose = useCallback((message?: string) => {
-    if (latest.current.placement === "panel") latest.current.dock?.close();
-    else setSheetOpen(false);
+    setSheetOpen(false);
     if (message === undefined) return;
     setAnnouncement("");
     window.setTimeout(() => setAnnouncement(message), 0);
@@ -1899,8 +1895,7 @@ export function TasksPanel({
   useEffect(
     () =>
       subscribeReveal(() => {
-        const { mobile, threadWorkspace, dock } = latest.current;
-        if (!threadWorkspace) return;
+        const { mobile, dock } = latest.current;
         // The content switches view and expands the task itself.
         if (mobile) setSheetOpen(true);
         else dock?.open({ focus: false });
@@ -1916,7 +1911,7 @@ export function TasksPanel({
         return;
       // Only a thread shows Tasks; elsewhere the key is not ours.
       const { mobile, threadWorkspace, dock } = latest.current;
-      if (!threadWorkspace || (!mobile && !dock)) return;
+      if (!threadWorkspace) return;
       // A dialog above the workbench keeps its keys, unless it is Tasks.
       const dialog =
         event.target instanceof Element

@@ -18,7 +18,7 @@ export function TasksPanelToggle({
   onToggle,
   count = 0,
 }: {
-  /** Whether Tasks is shown in this page's presentation. */
+  /** Whether Tasks is shown: docked on stage, or the sheet open. */
   readonly open: boolean;
   /** Whether docked Tasks is open but off stage. */
   readonly collapsed?: boolean;

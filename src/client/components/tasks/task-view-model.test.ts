@@ -67,10 +67,16 @@ const otherTask = task({
 
 describe("views", () => {
   it("disables views without a chat to follow and narrows to one that applies", () => {
-    expect(viewUnavailableReason("thread", {})).toBe("Open a thread to see its tasks.");
+    expect(viewUnavailableReason("thread", {})).toBe("This thread isn't available.");
+    expect(
+      viewUnavailableReason("thread", { threadArchived: true, project: context.project! }),
+    ).toBe("This thread is archived. Restore it to see its tasks.");
     expect(viewUnavailableReason("project", {})).toBe(
-      "Open a thread in a project to see its project tasks.",
+      "This thread's project isn't available.",
     );
+    expect(
+      viewUnavailableReason("project", { threadArchived: true, project: context.project! }),
+    ).toBeUndefined();
     expect(viewUnavailableReason("all", {})).toBeUndefined();
     expect(clampView("thread", {})).toBe("global");
     expect(clampView("thread", { project: context.project! })).toBe("project");

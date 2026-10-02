@@ -468,7 +468,7 @@ test.describe.serial("Tasks panel", () => {
     const archivedThreadPath = await createDraftThread(page);
 
     // Create one open thread task on the second draft.
-    await page.getByTestId("tasks-panel-toggle").first().click();
+    await page.getByTestId("tasks-panel-toggle").click();
     const panel = page.locator('[data-slot="tasks-panel"]');
     const tasks = tasksContent(page);
     await selectScope(tasks, "Thread");

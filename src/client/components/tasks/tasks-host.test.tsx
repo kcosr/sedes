@@ -62,6 +62,12 @@ function makeStore(): ApplicationClientStore {
           title: { text: "Checkout flow" },
           inventoryState: "active",
         },
+        {
+          id: "thread-2",
+          workspaceId: "workspace-1",
+          title: { text: "Invoice rounding" },
+          inventoryState: "active",
+        },
       ],
       workspaces: [
         { id: "workspace-1", label: { text: "acme-web" }, displayPath: { text: "/acme" } },
@@ -277,50 +283,43 @@ describe("Tasks host on pages without a thread", () => {
       },
     );
   });
+});
 
-  it.each(PAGES_WITHOUT_A_THREAD)(
-    "closes the phone sheet on leaving the thread for %s",
-    async (_page, path) => {
-      phone = true;
-      const user = userEvent.setup();
-      renderHost({ thread: true, extra: <PhoneToggle /> });
-      await user.click(toggle());
-      expect(screen.getByRole("dialog", { name: "Tasks" })).toBeInTheDocument();
+describe("Tasks host from one thread to the next", () => {
+  it("keeps the docked body and an unsaved edit on stage", async () => {
+    const user = userEvent.setup();
+    const { spy } = renderHost({ thread: true });
+    const body = document.querySelector(".tasks-content");
+    await editNotes(user);
 
-      act(() => navigate(path));
-      expect(screen.queryByRole("dialog", { name: "Tasks" })).toBeNull();
-      expect(tasksSurface()).toBeNull();
+    act(() => navigate(threadPath("thread-2")));
 
-      // Back in the thread, the sheet waits to be opened again.
-      act(() => navigate(threadPath("thread-1")));
-      expect(screen.queryByRole("dialog", { name: "Tasks" })).toBeNull();
-      expect(toggle()).toHaveAttribute("aria-expanded", "false");
-    },
-  );
+    expect(tasksSurface()).toHaveAttribute("data-presentation", "panel");
+    expect(document.querySelector(".tasks-content")).toBe(body);
+    await expectEditorOnTop();
+    expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved notes");
+    expect(spy.open).not.toHaveBeenCalled();
+  });
 
-  it.each([false, true])(
-    "keeps the retained body, with an unsaved edit, across a page without a thread (phone: %s)",
-    async (isPhone) => {
-      phone = isPhone;
-      const user = userEvent.setup();
-      const { host } = renderHost({ thread: true });
-      if (isPhone) act(() => host()?.toggleSheet());
-      const body = document.querySelector(".tasks-content");
-      await editNotes(user);
+  it("closes the phone sheet but keeps the body and an unsaved edit for the next sheet", async () => {
+    phone = true;
+    const user = userEvent.setup();
+    const { host } = renderHost({ thread: true });
+    act(() => host()?.toggleSheet());
+    const body = document.querySelector(".tasks-content");
+    await editNotes(user);
 
-      act(() => navigate("/archived"));
-      await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
-      expect(tasksSurface()).toBeNull();
-      expect(screen.queryByRole("dialog")).toBeNull();
+    act(() => navigate(threadPath("thread-2")));
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(screen.queryByRole("dialog", { name: "Tasks" })).toBeNull();
+    expect(editor()).toBeNull();
 
-      act(() => navigate(threadPath("thread-1")));
-      if (isPhone) act(() => host()?.toggleSheet());
-      expect(tasksSurface()).toHaveAttribute("data-presentation", isPhone ? "sheet" : "panel");
-      expect(document.querySelector(".tasks-content")).toBe(body);
-      await expectEditorOnTop();
-      expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved notes");
-    },
-  );
+    act(() => host()?.toggleSheet());
+    expect(tasksSurface()).toHaveAttribute("data-presentation", "sheet");
+    expect(document.querySelector(".tasks-content")).toBe(body);
+    await expectEditorOnTop();
+    expect(within(editor()!).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved notes");
+  });
 });
 
 describe("Tasks host in a thread workspace", () => {

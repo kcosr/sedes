@@ -47,11 +47,14 @@ export function viewFilters(options: TasksViewOptions): readonly TasksViewFilter
 
 /** The chat the panel follows. */
 export interface TasksContext {
+  /** Absent for an archived thread, or one the snapshot does not hold. */
   readonly thread?: {
     readonly id: string;
     readonly title: string;
     readonly workspaceId: string;
   };
+  /** The followed thread is archived, so it has no Thread view. */
+  readonly threadArchived?: true;
   readonly project?: { readonly id: string; readonly label: string };
 }
 
@@ -60,10 +63,12 @@ export function viewUnavailableReason(
   context: TasksContext,
 ): string | undefined {
   if (view === "thread" && !context.thread) {
-    return "Open a thread to see its tasks.";
+    return context.threadArchived
+      ? "This thread is archived. Restore it to see its tasks."
+      : "This thread isn't available.";
   }
   if (view === "project" && !context.project) {
-    return "Open a thread in a project to see its project tasks.";
+    return "This thread's project isn't available.";
   }
   return undefined;
 }

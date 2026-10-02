@@ -447,8 +447,24 @@ describe("TasksPanel scope", () => {
     expect(segment("All")).toHaveAttribute("aria-checked", "true");
   });
 
-  it("disables views that do not apply and says why", () => {
-    // A thread the snapshot does not hold has no thread or project to show.
+  it("says why an archived thread has no Thread view", () => {
+    act(() => navigate(threadPath("thread-archived")));
+    const store = makeStore([makeTask()], { threads: THREADS, workspaces: WORKSPACES });
+    renderPanel(store);
+
+    const archived = "This thread is archived. Restore it to see its tasks.";
+    expect(segment("Thread")).toBeDisabled();
+    // The last view, Thread, narrows to the archived thread's project.
+    expect(segment("Project")).toHaveAttribute("aria-checked", "true");
+    expect(scope()).toHaveAccessibleDescription(`Thread: ${archived}`);
+    // Each segment carries its own reason, and nothing relies on a native title.
+    expect(segment("Thread")).toHaveAccessibleDescription(archived);
+    expect(segment("Project")).toHaveAccessibleDescription("0 open");
+    expect(segment("Global")).toHaveAccessibleDescription("1 open");
+    expect(scope().querySelector("[title]")).toBeNull();
+  });
+
+  it("disables Thread and Project for a thread the snapshot does not hold", () => {
     act(() => navigate(threadPath("thread-missing")));
     const store = makeStore([makeTask()], { threads: THREADS, workspaces: WORKSPACES });
     renderPanel(store);
@@ -457,19 +473,16 @@ describe("TasksPanel scope", () => {
     expect(segment("Project")).toBeDisabled();
     expect(segment("Global")).toHaveAttribute("aria-checked", "true");
     expect(scope()).toHaveAccessibleDescription(
-      "Thread: Open a thread to see its tasks. Project: Open a thread in a project to see its project tasks.",
+      "Thread: This thread isn't available. Project: This thread's project isn't available.",
     );
-    // Each segment carries its own reason, and nothing relies on a native title.
-    expect(segment("Thread")).toHaveAccessibleDescription("Open a thread to see its tasks.");
+    expect(segment("Thread")).toHaveAccessibleDescription("This thread isn't available.");
     expect(segment("Project")).toHaveAccessibleDescription(
-      "Open a thread in a project to see its project tasks.",
+      "This thread's project isn't available.",
     );
-    expect(segment("Global")).toHaveAccessibleDescription("1 open");
-    expect(scope().querySelector("[title]")).toBeNull();
   });
 
   it("shows a disabled view's reason when its segment is tapped", async () => {
-    act(() => navigate(threadPath("thread-missing")));
+    act(() => navigate(threadPath("thread-archived")));
     const store = makeStore([makeTask()], { threads: THREADS, workspaces: WORKSPACES });
     // The tooltip's positioning measures its arrow.
     vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
@@ -479,8 +492,10 @@ describe("TasksPanel scope", () => {
     // A disabled segment takes no pointer events: the tap lands on its slot.
     fireEvent.click(segment("Thread").parentElement!);
 
-    expect(await screen.findByRole("tooltip")).toHaveTextContent("Open a thread to see its tasks.");
-    expect(segment("Global")).toHaveAttribute("aria-checked", "true");
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "This thread is archived. Restore it to see its tasks.",
+    );
+    expect(segment("Project")).toHaveAttribute("aria-checked", "true");
   });
 
   it("groups All by Global, then projects with their threads, collapsibly", () => {

@@ -57,8 +57,9 @@
   }
 }
 
-/* ── Header: title and open count, then ⌕, View options, ⋯ and × on the
-   panel-header control steps. */
+/* ── Sheet header: title and open count, then ⌕, ⋯ (which carries the View
+   options) and × on the panel-header control steps. Docked, Tasks draws the
+   panel family's header instead. */
 .tasks-header {
   display: flex;
   flex: none;

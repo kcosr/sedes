@@ -479,7 +479,7 @@ test.describe.serial("normalized composer state", () => {
     await openSedesWorkspace(page);
     await createDraftThread(page);
 
-    await page.getByTestId("tasks-panel-toggle").first().click();
+    await page.getByTestId("tasks-panel-toggle").click();
     const tasksPanel = page.locator('[data-slot="tasks-panel"]');
     await expect(tasksPanel).toHaveAttribute("data-presentation", "panel");
     const taskEditor = page.getByRole("dialog", { name: "Edit task" });
@@ -719,7 +719,7 @@ test.describe.serial("normalized composer state", () => {
     await expect(deliveredTask).toContainText(
       "This is the body captured at send time.",
     );
-    await page.getByTestId("tasks-panel-toggle").first().click();
+    await page.getByTestId("tasks-panel-toggle").click();
     await tasksPanel.getByRole("radio", { name: "Thread" }).click();
     // Completed earlier, the task waits in the collapsed Completed section.
     await tasksPanel.getByRole("button", { name: /^Completed/ }).click();
