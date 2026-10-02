@@ -94,7 +94,7 @@ is only for offline conversion:
    `CLAUDE_CONFIG_DIR`, otherwise `$HOME/.claude`, for provider state.
    Set `executablePath` or `configDirectory` only when overriding those defaults.
 2. Define the required top-level `modelPolicy`.
-3. Set `allowedModes` as the backend permission-mode ceiling.
+3. Set `allowedModes` for backend permission-mode launch and selection admission.
 4. Select a conservative target default; `bypassPermissions` can never be the
    default.
 
@@ -260,7 +260,7 @@ presentation.
 Claude permissions appear in Sedes as the private versioned
 `claude.permissions@1` feature. They are not Pi tool access and are not a
 filesystem sandbox. The backend configuration defines a closed
-backend ceiling over these modes:
+backend allowlist for launching and selecting these modes:
 
 | Mode                | Operator-visible behavior                                                                      |
 | ------------------- | ---------------------------------------------------------------------------------------------- |
@@ -276,12 +276,14 @@ the desired selection instead of guessing or silently substituting values.
 Permission prompts become normalized Sedes interactions, including bounded
 ephemeral session grants where the SDK permits them.
 
-When importing a session without a saved Sedes permission selection, Sedes
-adopts the initialized native mode only if it is allowed by the backend.
-SDK 0.3.286 and newer leave an omitted mode to Claude Code: native
-`permissions.defaultMode` applies, and some native configurations select
-`auto`. An unrecognized, disallowed, or plan mode blocks new submissions until
-an allowed selection is applied. This is submission admission, not a guarantee
+Every Claude conversation launch receives an explicit mode from the backend allowlist.
+When importing without a saved selection, or reopening a session whose saved
+mode is no longer allowed, Sedes prefers `default`, then `dontAsk`,
+`acceptEdits`, and `auto` in that order. It never selects `bypassPermissions`
+automatically; if none of those modes is allowed, launch fails. Native
+`permissions.defaultMode` cannot broaden this initial choice. An observed
+unrecognized, disallowed, or plan mode still blocks new submissions until an
+allowed selection is applied. Launch/submission admission is not a guarantee
 that Sedes can constrain every autonomous action of a retained native query.
 New threads with an explicit target selection and isolated fork launches keep
 their explicit modes.

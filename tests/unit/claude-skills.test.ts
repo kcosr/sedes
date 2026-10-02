@@ -85,6 +85,19 @@ describe("Claude safe skills", () => {
     }
   });
 
+  it.each([
+    { name: "clear", aliases: ["reset", "new"] },
+    { name: "usage", aliases: ["cost", "stats"] },
+  ])("does not classify builtin /$name through a model-only skill's name", ({ name, aliases }) => {
+    const builtin = { name, aliases, builtin: true, description: "Native local command", argumentHint: "" };
+    expect(resolveClaudeSafeSkills({ commands: [builtin], skillNames: aliases, terminalCommandNames: [] })).toEqual([]);
+    // Builtin aliases still prevent an ambiguous custom alias from classifying a skill.
+    const custom = { name: "custom-review", aliases: [aliases[0]!], description: "Custom skill", argumentHint: "" };
+    for (const ordered of [[builtin, custom], [custom, builtin]]) {
+      expect(resolveClaudeSafeSkills({ commands: ordered, skillNames: [aliases[0]!], terminalCommandNames: [] })).toEqual([]);
+    }
+  });
+
   it("uses the builtin primary winner and its metadata before classifying aliases", () => {
     const providerCommands: SlashCommand[] = [
       { name: "review", description: "Shadowed user skill", argumentHint: "wrong", aliases: ["old-review"] },

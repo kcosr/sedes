@@ -687,7 +687,7 @@ function toSessionMessage(entry: ClaudeTranscriptEntry): SessionMessage {
   } as SessionMessage;
 }
 
-/** Task notifications expose only their kind, subkind, and fire reason, like the SDK. */
+/** Keep the task-notification provenance exposed by the SDK. */
 function sessionOrigin(origin: unknown): unknown {
   const value = record(origin);
   if (value?.kind !== "task-notification") return origin;
@@ -695,6 +695,7 @@ function sessionOrigin(origin: unknown): unknown {
     kind: "task-notification",
     ...(value.subkind !== undefined ? { subkind: value.subkind } : {}),
     ...(value.fireReason !== undefined ? { fireReason: value.fireReason } : {}),
+    ...(value.producer !== undefined ? { producer: value.producer } : {}),
   };
 }
 

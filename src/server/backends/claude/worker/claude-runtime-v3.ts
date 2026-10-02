@@ -225,10 +225,12 @@ export const claudeRuntimeSessionMessageSchema = z.strictObject({
   parent_tool_use_id: z.string().max(256).nullable(),
   parent_agent_id: z.string().max(256).nullable(),
   origin: boundedJsonValueSchema.optional(),
+  /** Native meta inputs retain their context role across history transport. */
+  is_meta: z.literal(true).optional(),
   timestamp: z.iso.datetime().optional(),
   /** Claude Code's compaction summary; the SDK carries it on history rows. */
   isCompactSummary: z.literal(true).optional(),
-  /** Queued input Claude read during a turn, converted from its attachment row. */
+  /** Visible queued input converted from its attachment row; visibility alone is not consumption. */
   isQueuedCommand: z.literal(true).optional(),
 });
 

@@ -51,25 +51,26 @@ through their normal active-work-protected lifecycle.
 ## Permission initialization
 
 SDK 0.3.286 stopped supplying an implicit `default` when the host omits
-`permissionMode`. Sedes intentionally omits it when importing without a saved
-selection, allowing native configuration to provide the initial mode. The
-driver adopts a recognized allowlisted result; disallowed, unknown, and plan
-modes block new Sedes submissions. Explicit target selections and isolated
-fork launches retain their explicit modes.
+`permissionMode`. Sedes supplies an explicit allowed mode for every conversation launch,
+including imports and sessions whose saved mode the policy no longer allows.
+An allowed saved selection wins; otherwise selection prefers `default`,
+`dontAsk`, `acceptEdits`, then `auto`. `bypassPermissions` requires an explicit
+allowed selection and never becomes an automatic choice. No eligible mode
+means launch fails before creating the native query. Disallowed, unknown, and
+plan observations still block new Sedes submissions. Explicit target selections
+and isolated fork launches retain their explicit modes.
 
-Six isolated native initialization probes covered old/new SDK defaults and
-configured modes without model requests. Five driver regression cases cover
-adoption and denial for `acceptEdits`, `auto`, and `plan`. A bounded native
-probe resumed a killed background Bash task with an observed native mode
-outside a simulated Sedes allowlist: orphan cleanup and the startup marker
-completed with zero model turns, and no model request, permission callback,
-or resumed tool execution occurred during eight further seconds.
-
-That last probe qualifies killed-background-Bash cleanup only. It does not
-establish a global native permission ceiling for every autonomous
-notification, schedule, subagent recovery, or reattachment to a running query.
-The Sedes mode allowlist remains application submission policy, not a native
-sandbox.
+Six isolated native initialization probes established the old/new SDK omission
+behavior without model requests. A bounded investigation probe also resumed
+a killed background Bash task outside a simulated Sedes allowlist: orphan
+cleanup and the startup marker completed with zero model turns, and no model
+request, permission callback, or resumed tool execution occurred during eight
+further seconds. That observation qualifies killed-background-Bash cleanup
+only. It does not justify launching without a policy-admitted mode, nor does it
+establish a global native permission ceiling for every autonomous notification,
+schedule, subagent recovery, or reattachment to a running query. The Sedes
+allowlist governs application launch and submission admission; it is not a
+native sandbox.
 
 ## Ownership and cross-backend disposition
 
@@ -113,6 +114,14 @@ parallel-tools history request after seeing the startup source label; that
 single case passed on a fresh isolated retry without changes. This upgrade
 does not establish a fix for the previously observed startup-marker refusals.
 
+After review corrections, full typecheck and the build passed again, as did
+all 1,086 Claude offline tests across 52 files and two durable usage replay
+regressions. The rebuilt Claude browser journey passed both tests in 32.1
+seconds, with alias-search and in-flight screenshots inspected again. A final
+full real-Claude run passed 33 of 34 tests in 114.9 seconds; the same
+parallel-tools case again received a startup-label refusal. It was not retried
+again or reported as a fully passing live gate.
+
 The prior 2.1.286 persistent-runtime timeout did not reproduce in the bounded
 2.1.287 authenticated and held-text loopback cases. Its cause remains unknown;
 the passing cases do not prove a particular upstream fix caused the change.
@@ -122,6 +131,13 @@ over local framed carriers. They do not qualify an actual SSH login, remote
 host, or outbound connector deployment. Native qualification is Linux x64;
 it supplies no native macOS or Windows evidence. Optional SDK features not
 adopted here remain unqualified.
+
+For existing recorded usage, a peer reply previously attributed to the last
+Sedes turn can now follow its own visible external-input boundary. Immutable
+accounting retains the old turn attribution and reports `conflicting_evidence`
+for that turn; replay neither throws nor charges the reply twice. External
+input consumed inside an unfinished turn retains the original turn and usage
+ownership. This upgrade does not rewrite old accounting facts.
 
 The [operator guide](../../../docs/operator/backends/claude.md) documents the
 upgrade requirements, permission semantics, and opt-in live test gate.

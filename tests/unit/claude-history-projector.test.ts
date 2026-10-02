@@ -194,12 +194,16 @@ describe("Claude turn completion from native stop reasons", () => {
     expect(settled.terminalCheckpointUuidByBackendTurnId.get(id)).toBe(uuid(4));
   });
 
-  it.each([false, true])("never treats a newly visible trailing queue as accepted Steer without scoped consumption (absorbed: %s)", async (absorbed) => {
+  it.each([
+    { absorbed: false, externalMeta: false }, { absorbed: true, externalMeta: false },
+    { absorbed: false, externalMeta: true }, { absorbed: true, externalMeta: true },
+  ])("never treats a newly visible trailing queue as accepted Steer without scoped consumption ($absorbed, external meta: $externalMeta)", async ({ absorbed, externalMeta }) => {
     const fixture = new ClaudeTranscriptFixture();
     fixture.prompt("Original request.", { uuid: uuid(1) });
     fixture.answer("Original answer.");
     const before = await resolveClaudeSessionMessages(await parseClaudeTranscript(Buffer.from(fixture.jsonl())));
-    fixture.attachment({ type: "queued_command", source_uuid: uuid(3), delivery_id: "delivery-steer", prompt: "Pending steer." });
+    fixture.attachment({ type: "queued_command", source_uuid: uuid(3), delivery_id: "delivery-steer", prompt: "Pending steer.",
+      ...(externalMeta ? { isMeta: true, origin: { kind: "peer" } } : {}) });
     if (absorbed) fixture.bookkeeping({ type: "queue-operation", operation: "remove", reason: "absorbed_mid_turn",
       deliveryId: "delivery-steer", commandUuid: uuid(3) });
     const messages = await resolveClaudeSessionMessages(await parseClaudeTranscript(Buffer.from(fixture.jsonl())));
@@ -218,6 +222,47 @@ describe("Claude turn completion from native stop reasons", () => {
       status: "in_progress", completionCorrelations: [uuid(1), uuid(3)],
     });
     expect(consumed.usage?.counters?.userMessages).toBe(2);
+  });
+
+  it.each(["peer", "channel", "observer", "observer-activity", "slack-ping"])("keeps an absorbed %s meta input inside its unfinished native turn", async (kind) => {
+    const fixture = new ClaudeTranscriptFixture();
+    const prompt = fixture.prompt("Original request.");
+    const [call] = fixture.reply([{ type: "tool_use", id: "tool-external", name: "Read", input: { file_path: "/synthetic/file" } }], { stopReason: "tool_use" });
+    const external = uuid(10);
+    fixture.attachment({ type: "queued_command", source_uuid: external, delivery_id: "delivery-external",
+      prompt: "External context.", isMeta: true, origin: { kind } });
+    fixture.bookkeeping({ type: "queue-operation", operation: "remove", reason: "absorbed_mid_turn", deliveryId: "delivery-external" });
+    // The tool result remains after the external input in the active chain.
+    fixture.toolResult("tool-external", fixture.tip!);
+    fixture.answer("Original request answered.");
+    const messages = await resolveClaudeSessionMessages(await parseClaudeTranscript(Buffer.from(fixture.jsonl())));
+    const before = projectClaudeHistory(messages.filter(message => message.uuid !== external));
+    const projection = projectClaudeHistory(messages);
+    expect(projection.snapshot.orderedBackendTurnIds).toEqual(before.snapshot.orderedBackendTurnIds);
+    const turnId = projection.snapshot.orderedBackendTurnIds[0]!;
+    expect(projection.snapshot.turnsById[turnId]).toMatchObject({ status: "completed", completionCorrelations: [prompt] });
+    expect(projection.backendTurnIdByMessageUuid).toEqual(before.backendTurnIdByMessageUuid);
+    expect(projection.nativeUserMessageUuidByBackendTurnId.get(turnId)).toBe(prompt);
+    expect(Object.values(projection.snapshot.itemsById).filter(item => item.semanticKind === "file_read"))
+      .toEqual([expect.objectContaining({ backendTurnId: turnId, status: "completed" })]);
+    expect(JSON.stringify(projection.snapshot)).toContain("External context.");
+    expect(projection.terminalCheckpointUuidByBackendTurnId.get(turnId)).toBe(messages.at(-1)!.uuid);
+    expect(messages.some(message => message.uuid === call)).toBe(true);
+  });
+
+  it("starts a standalone external meta turn after a native answer without giving it a Sedes input identity", async () => {
+    const fixture = new ClaudeTranscriptFixture();
+    const prompt = fixture.prompt("Original request.");
+    fixture.answer("Original answer.");
+    fixture.prompt("External request.", { isMeta: true, origin: { kind: "peer" } });
+    fixture.answer("External answer.");
+    const messages = await resolveClaudeSessionMessages(await parseClaudeTranscript(Buffer.from(fixture.jsonl())));
+    const projection = projectClaudeHistory(messages);
+    expect(projection.snapshot.orderedBackendTurnIds).toHaveLength(2);
+    const [first, external] = projection.snapshot.orderedBackendTurnIds;
+    expect(projection.snapshot.turnsById[first!]!.completionCorrelations).toEqual([prompt]);
+    expect(projection.snapshot.turnsById[external!]!).not.toHaveProperty("completionCorrelations");
+    expect(projection.nativeUserMessageUuidByBackendTurnId.has(external!)).toBe(false);
   });
 
   it("closes a turn that ended on a tool result as interrupted when Claude Code resumes it", () => {

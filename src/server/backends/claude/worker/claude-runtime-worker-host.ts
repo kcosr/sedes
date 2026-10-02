@@ -259,6 +259,9 @@ export class ClaudeRuntimeWorkerHost {
         ...("origin" in message && message.origin !== undefined
           ? { origin: snapshotJson(message.origin) }
           : {}),
+        ...("is_meta" in message && message.is_meta === true
+          ? { is_meta: true as const }
+          : {}),
         ...("timestamp" in message && typeof message.timestamp === "string"
           ? { timestamp: message.timestamp }
           : {}),

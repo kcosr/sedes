@@ -30,7 +30,7 @@ import {
   type ClaudeModelEvidence,
   type ClaudePermissionModeEvidence,
 } from "../../src/server/backends/claude/claude-conversation-handle.js";
-import { isClaudePermissionMode } from "../../src/server/backends/claude/claude-permission-policy.js";
+import { isClaudePermissionMode, type ClaudePermissionPolicy } from "../../src/server/backends/claude/claude-permission-policy.js";
 import { claudeForkContextBoundaryText } from "../../src/server/backends/claude/claude-fork-context-boundary.js";
 import { USER_FORK_CONTEXT_BOUNDARY } from "../../src/server/backends/fork-context-boundary.js";
 import type {
@@ -419,9 +419,7 @@ function createHandle(
       readonly effort: EffortLevel | null;
       readonly source: "setter";
     }) => void;
-    readonly permissionPolicy?: {
-      readonly allowedModes: readonly ("default" | "bypassPermissions")[];
-    };
+    readonly permissionPolicy?: ClaudePermissionPolicy;
     readonly modelPolicy?: BackendModelPolicy;
     readonly onQueryGenerationLost?: (generation: number) => void;
     readonly onEffectiveAxisUnknown?: (
@@ -1834,7 +1832,33 @@ describe("ClaudeConversationHandle", () => {
     expect(generationLost).toHaveBeenCalledWith(1);
   });
 
-  it("omits a revoked durable mode on attach so the thread can recover", async () => {
+  it.each([
+    { mode: "acceptEdits", allowed: ["default", "acceptEdits"] },
+    { mode: "dontAsk", allowed: ["default", "dontAsk"] },
+    { mode: "auto", allowed: ["default", "auto"] },
+    { mode: "bypassPermissions", allowed: ["default", "bypassPermissions"] },
+    { mode: "bypassPermissions", allowed: ["bypassPermissions"] },
+  ] as const)("preserves explicitly selected $mode when policy allows $allowed", async ({ mode, allowed }) => {
+    const provider = fixture();
+    const settings = repository();
+    const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
+    settings.updateDesired(scope, BINDING.applicationThreadId, {
+      expectedRevision: settings.get(scope, BINDING.applicationThreadId).revision,
+      desired: { model: "claude-sonnet-5", effort: "low", permissionMode: mode }, now: 5,
+    });
+    const { handle } = createHandle(provider, vi.fn(), { settings, permissionPolicy: { allowedModes: allowed } });
+    try {
+      await handle.establishProjection({ signal: new AbortController().signal });
+      expect(provider.options().permissionMode).toBe(mode);
+    } finally { await handle.close(); }
+  });
+
+  it.each([
+    { allowed: ["default"], expected: "default" },
+    { allowed: ["auto", "acceptEdits", "dontAsk"], expected: "dontAsk" },
+    { allowed: ["auto", "acceptEdits"], expected: "acceptEdits" },
+    { allowed: ["auto"], expected: "auto" },
+  ] as const)("launches with $expected when the durable permission mode is revoked", async ({ allowed, expected }) => {
     const provider = fixture();
     const settings = repository();
     settings.updateDesired(
@@ -1855,12 +1879,13 @@ describe("ClaudeConversationHandle", () => {
     );
     const { handle } = createHandle(provider, vi.fn(), {
       settings,
-      permissionPolicy: { allowedModes: ["default"] },
+      permissionPolicy: { allowedModes: [...allowed] },
     });
 
     await handle.establishProjection({ signal: new AbortController().signal });
 
-    expect(provider.options()).not.toHaveProperty("permissionMode");
+    expect(provider.options().permissionMode).toBe(expected);
+    expect(settings.get({ tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId }, BINDING.applicationThreadId).permissionMode).toBe("bypassPermissions");
     await expect(handle.backendCapabilities()).resolves.toMatchObject({
       nonblockingQuestions: false,
       providerOutputArtifacts: { nativeImage: false },
@@ -6080,7 +6105,46 @@ describe("Claude image reads and meta rows", () => {
     await reloaded.close();
   });
 
-  it.each(["peer", "channel", "observer", "observer-activity", "slack-ping"])("shows synthetic %s input live with the same identity as reload", async (kind) => {
+  it.each(["peer", "channel", "observer", "observer-activity", "slack-ping"])("keeps synthetic %s context and usage in the active Sedes turn", async (kind) => {
+    const transcript = new ClaudeTranscriptFixture();
+    transcript.prompt("Look at the screenshot", { uuid: PROMPT_ID });
+    const [call] = transcript.reply([{ type: "tool_use", id: "toolu-external", name: "Read", input: { file_path: "/workspace/notes.txt" } }], { stopReason: "tool_use" });
+    const externalId = crypto.randomUUID();
+    transcript.attachment({ type: "queued_command", source_uuid: externalId, delivery_id: "external-delivery",
+      prompt: "External context.", isMeta: true, origin: { kind } });
+    transcript.bookkeeping({ type: "queue-operation", operation: "remove", reason: "absorbed_mid_turn", deliveryId: "external-delivery" });
+    const resultRow = transcript.toolResult("toolu-external", transcript.tip!, "notes");
+    const answer = transcript.answer("The original request is done.");
+    const reloadedMessages = await history(transcript);
+    const externalMessage = reloadedMessages.find(({ uuid }) => uuid === externalId)!;
+    const captured: UsageObservation[] = [];
+    const usage: UsageSink = { ...NO_USAGE_SINK, enabled: true, open: () => ({ registerTurns: () => {},
+      capture: entries => { captured.push(...entries); return true; }, gap: () => {}, reconcile: () => true, seal: () => {} }) };
+    const { handle, settings, provider, turnId, application } = await startedTurn({ usage });
+    provider.messages.push(live(transcript, call!));
+    provider.messages.push({ ...externalMessage, isSynthetic: true } as unknown as SDKMessage);
+    provider.messages.push(live(transcript, resultRow));
+    provider.messages.push(live(transcript, answer));
+    await vi.waitFor(async () => expect(JSON.stringify(await projectionSnapshot(handle))).toContain("The original request is done."));
+    expect((await projectionSnapshot(handle)).turnsById[turnId]).toMatchObject({ status: "in_progress", completionCorrelations: [PROMPT_ID] });
+    provider.messages.push(nativeFrames.result([PROMPT_ID]));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    const liveSnapshot = await projectionSnapshot(handle);
+    expect(liveSnapshot.orderedBackendTurnIds).toEqual([turnId]);
+    expect(kinds(liveSnapshot, turnId)).toEqual(["user_message", "file_read", "user_message", "assistant_message"]);
+    expect(liveSnapshot.turnsById[turnId]).toMatchObject({ status: "completed", completionCorrelations: [PROMPT_ID] });
+    expect(captured.flatMap(observation => observation.facts).filter(fact => fact.turn).map(fact => fact.turn!.backendTurnId))
+      .toEqual(expect.arrayContaining([turnId]));
+    expect(captured.flatMap(observation => observation.facts).every(fact => !fact.turn || fact.turn.backendTurnId === turnId)).toBe(true);
+    expect(application.rejected).toEqual([]);
+    await handle.close();
+    const reloaded = createHandle(fixture(), vi.fn(), { settings, usage, initialMessages: reloadedMessages, resumeSession: true }).handle;
+    expect(identities(await projectionSnapshot(reloaded))).toEqual(identities(liveSnapshot));
+    expect(captured.flatMap(observation => observation.facts).every(fact => !fact.turn || fact.turn.backendTurnId === turnId)).toBe(true);
+    await reloaded.close();
+  });
+
+  it.each(["peer", "channel", "observer", "observer-activity", "slack-ping"])("keeps standalone synthetic %s input running until its exact result, with reload identity", async (kind) => {
     const transcript = new ClaudeTranscriptFixture();
     const input = transcript.prompt("External source input.", { isMeta: true, origin: { kind } });
     const answer = transcript.answer("External input answered.");
@@ -6092,15 +6156,50 @@ describe("Claude image reads and meta rows", () => {
     await handle.establishProjection({ signal: new AbortController().signal });
     provider.messages.push(live(transcript, input));
     provider.messages.push(live(transcript, answer));
-    provider.messages.push(nativeFrames.result([input]));
     await vi.waitFor(async () => expect(JSON.stringify(await projectionSnapshot(handle))).toContain("External input answered."));
+    const running = await projectionSnapshot(handle);
+    const turnId = running.orderedBackendTurnIds[0]!;
+    expect(running).toMatchObject({ runState: "running", activeBackendTurnId: turnId });
+    expect(running.turnsById[turnId]).toMatchObject({ status: "in_progress" });
+    expect(running.turnsById[turnId]).not.toHaveProperty("completionCorrelations");
+    const writeTerminal = vi.spyOn(settings, "writeTerminalReceipt");
+    provider.messages.push(nativeFrames.result([input], { origin: { kind } }));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
     const liveSnapshot = await projectionSnapshot(handle);
+    expect(liveSnapshot.turnsById[turnId]).toMatchObject({ status: "completed" });
+    expect(writeTerminal).not.toHaveBeenCalled();
     expect(JSON.stringify(liveSnapshot)).toContain("External source input.");
     await handle.close();
 
     const reloaded = createHandle(fixture(), vi.fn(), { settings, initialMessages: reloadedMessages, resumeSession: true }).handle;
     expect(identities(await projectionSnapshot(reloaded))).toEqual(identities(liveSnapshot));
     await reloaded.close();
+  });
+
+  it.each([false, true])("settles coalesced external input identities as one provider turn (reattach: %s)", async (reattach) => {
+    const transcript = new ClaudeTranscriptFixture();
+    const first = transcript.prompt("First external input.", { isMeta: true, origin: { kind: "peer" } });
+    const second = transcript.prompt("Second external input.", { isMeta: true, origin: { kind: "channel" } });
+    const initialMessages = reattach ? await history(transcript) : [];
+    const provider = fixture();
+    const { handle, settings } = createHandle(provider, vi.fn(), { initialMessages, resumeSession: reattach,
+      ...(reattach ? { runtimeClient: retainedRuntime(provider, []).runtime } : {}) });
+    await handle.establishProjection({ signal: new AbortController().signal });
+    const writeTerminal = vi.spyOn(settings, "writeTerminalReceipt");
+    if (!reattach) {
+      provider.messages.push(live(transcript, first));
+      provider.messages.push(live(transcript, second));
+    }
+    const answer = transcript.answer("Both external inputs answered.");
+    provider.messages.push(live(transcript, answer));
+    await vi.waitFor(async () => expect(JSON.stringify(await projectionSnapshot(handle))).toContain("Both external inputs answered."));
+    const running = await projectionSnapshot(handle);
+    expect(running.orderedBackendTurnIds).toHaveLength(1);
+    expect(running.turnsById[running.orderedBackendTurnIds[0]!]!.status).toBe("in_progress");
+    provider.messages.push(nativeFrames.result([first, second], { origin: { kind: "peer" } }));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    expect(writeTerminal).not.toHaveBeenCalled();
+    await handle.close();
   });
 
   it("shows a read's image with its completion in one delta, as reload does, without re-publishing", async () => {

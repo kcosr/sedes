@@ -181,7 +181,7 @@ describe("Claude native transcript reader", () => {
     const notification = fixture.attachment({ type: "queued_command", commandMode: "task-notification",
       prompt: "<task-notification>\n<task-id>bsynthetic1</task-id>\n<status>completed</status>\n</task-notification>" });
     const scheduled = fixture.attachment({ type: "queued_command", commandMode: "task-notification", prompt: "Scheduled check.",
-      origin: { kind: "task-notification", subkind: "scheduled-trigger", fireReason: "manual", taskId: "private" } });
+      origin: { kind: "task-notification", subkind: "scheduled-trigger", fireReason: "manual", producer: "scheduler", taskId: "private" } });
     const peer = fixture.attachment({ type: "queued_command", commandMode: "prompt", prompt: "Peer note.", origin: { kind: "peer" } });
     fixture.text("Checked both.");
     fixture.attachment({ type: "queued_command", commandMode: "prompt", prompt: [{ type: "text", text: "Unanswered." }] });
@@ -195,7 +195,7 @@ describe("Claude native transcript reader", () => {
     expect(messages.find(({ uuid }) => uuid === notification)).toMatchObject({
       type: "user", origin: { kind: "task-notification" }, isQueuedCommand: true });
     expect(messages.find(({ uuid }) => uuid === scheduled)).toMatchObject({
-      origin: { kind: "task-notification", subkind: "scheduled-trigger", fireReason: "manual" } });
+      origin: { kind: "task-notification", subkind: "scheduled-trigger", fireReason: "manual", producer: "scheduler" } });
     expect(messages.find(({ uuid }) => uuid === scheduled)).not.toHaveProperty("origin.taskId");
     expect(messages.find(({ uuid }) => uuid === peer)).toMatchObject({ origin: { kind: "peer" }, isQueuedCommand: true });
     expect(JSON.stringify(messages)).not.toContain("Meta note.");
@@ -247,13 +247,13 @@ describe("Claude native transcript reader", () => {
     fixture.text("Started.");
     const handBack = fixture.prompt("<peer>synthetic hand-back</peer>", { isMeta: true, origin: { kind: "peer", peer: "synthetic" } });
     const notification = fixture.prompt("<task-notification>synthetic build done</task-notification>", {
-      origin: { kind: "task-notification", subkind: "background_task", taskId: "task-synthetic", extra: { private: true } },
+      origin: { kind: "task-notification", subkind: "background_task", producer: "background-agent", taskId: "task-synthetic", extra: { private: true } },
     });
     fixture.text("The build finished.");
     const messages = await ours(fixture);
     expect(messages.find(({ uuid }) => uuid === handBack)).toMatchObject({ is_meta: true, origin: { kind: "peer", peer: "synthetic" } });
     expect(messages.find(({ uuid }) => uuid === notification)).toMatchObject({
-      origin: { kind: "task-notification", subkind: "background_task" },
+      origin: { kind: "task-notification", subkind: "background_task", producer: "background-agent" },
     });
     expect(messages.find(({ uuid }) => uuid === notification)).not.toHaveProperty("origin.taskId");
     expect(messages).toEqual(await sdk(fixture));

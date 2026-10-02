@@ -35,7 +35,8 @@
     "No native macOS or Windows runtime qualification.",
     "The prior 2.1.286 persistent timeout did not reproduce on 2.1.287, but its cause remains unknown.",
     "Native permission initialization and killed-background-Bash cleanup do not establish a global ceiling for every autonomous notification, schedule, or retained query.",
-    "Send now and prewarming remain follow-up work."
+    "Send now and prewarming remain follow-up work.",
+    "Historical peer replies newly separated by a visible external-input boundary retain previously recorded turn-level usage attribution with conflicting_evidence coverage; replay does not throw or double-charge. No accounting migration is performed."
   ],
   "verification": {
     "date": "2026-10-02",
@@ -96,6 +97,29 @@
     "electron": {
       "package": "passed full Linux x64 payload, native addons, provider imports, isolated bundled-server startup, HTTP assets and graceful shutdown",
       "graphicalSmoke": "blocked: no secure OS keyring; Electron reports basic_text"
+    },
+    "reviewFixes": {
+      "typecheck": "passed",
+      "build": "passed",
+      "claudeOffline": {
+        "files": 52,
+        "passed": 1086
+      },
+      "durableUsageReplayTests": {
+        "passed": 2
+      },
+      "claudeBrowser": {
+        "passed": 2,
+        "seconds": 32.121,
+        "screenshotsInspected": true
+      },
+      "realClaude": {
+        "files": 14,
+        "passed": 33,
+        "failed": 1,
+        "seconds": 114.89,
+        "failure": "The same parallel-tools native history case received a model refusal citing the startup source label. No additional retry; the final full live gate is not fully passing."
+      }
     }
   }
 }

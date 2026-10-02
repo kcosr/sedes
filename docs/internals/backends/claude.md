@@ -805,10 +805,27 @@ exact `origin` confirms the choice or corrects it with one resnapshot. Markers
 never enter provider history or submission retry anchors.
 
 SDK 0.3.287 retains external meta inputs from `peer`, `channel`, `observer`,
-`observer-activity`, and `slack-ping`. Sedes projects these as visible user
-messages with UUID-derived turn identities, identically live and after reload.
-Internal synthetic notes remain hidden. An external input arriving between a
-compaction boundary and its summary does not consume the pending summary marker.
+`observer-activity`, and `slack-ping`. Their native `is_meta` flag crosses the
+private worker history transport; live synthetic inputs carry the same role.
+These inputs remain visible inside an unfinished native turn, preserving its
+tool results, terminal receipt, and assistant usage ownership. They never add
+their UUIDs to Sedes completion correlations or acknowledge pending Steer.
+After a native answer, a standalone external input opens its own UUID-derived
+provider turn. Live projection keeps it in progress until the native result;
+coalesced external UUIDs can identify that result without creating a Sedes
+terminal receipt. Live and reloaded turn and item identities agree. Internal
+synthetic notes remain hidden. An external input arriving between a compaction
+boundary and its summary does not consume the pending summary marker.
+
+Older reads omitted these meta inputs. Revealing one inside an unfinished turn
+leaves persisted assistant usage ownership unchanged. Revealing a standalone
+input after an answer can move a later assistant message to the newly visible
+provider turn. If usage was already captured under the old turn, accounting
+keeps that immutable fact there and reports `conflicting_evidence` on the new
+turn. It does not add the message's tokens again or mark the session's usage
+as conflicting. This is a turn-attribution limitation for previously captured
+history; fresh capture uses the newly visible provider turn.
+Task-notification origins also retain the SDK's `producer` provenance.
 
 A notification that arrives while a turn runs is read by Claude between tool
 calls and folds into that turn. Claude Code records it as a queued-command
@@ -861,7 +878,7 @@ started, or any `worker_restart` notification, as orphaned work. It records the
 bookend and shows a warning notice naming the task by its recorded
 description, or by its native ID, because the task's result never arrived.
 The provider's summary text is not shown.
-`claude-resume-orphan-native.test.ts` qualifies this on Claude Code 2.1.283.
+`claude-resume-orphan-native.test.ts` qualifies this on Claude Code 2.1.287.
 
 `background_tasks_changed` is the authoritative level inventory for live
 subagents, Bash commands, and other nonambient work. It maps to the shared
@@ -977,20 +994,22 @@ primary decisions and Pi's confirmations; Grok does not advertise provider
 blocking interactions. No provider metadata is added to the browser contract.
 
 Claude permissions use the private versioned `claude.permissions@1` feature.
-The configured `allowedModes` set is a closed backend ceiling. The backend
+The configured `allowedModes` set governs launch and submission admission. The backend
 keeps the SDK permission callback installed in every admitted mode; it does not
 rewrite Claude's user, project, local, or command-line permission files.
 
-Imported sessions with no persisted permission selection intentionally omit
-`Options.permissionMode`. Since SDK 0.3.286, the SDK no longer inserts
-`default`: Claude Code applies its native configured default and may select
-`auto` in some configurations. Initialization adopts a recognized mode only
-when the backend allowlist permits it. A disallowed, unknown, or plan mode
-blocks Sedes submissions until an allowed selection is applied. This is not a
-global native sandbox or a guarantee about autonomous work in a retained
-query. Explicit new-thread selections and isolated fork `default` launches
-are unchanged. The qualification evidence distinguishes tested initialization
-and orphan cleanup from unqualified autonomous native work.
+Every conversation launch passes an explicit allowed `Options.permissionMode`. An
+allowed persisted selection wins. Imports without one, and saved selections
+the policy no longer allows, use `default` when allowed, otherwise the first
+allowed mode in the fixed order `dontAsk`, `acceptEdits`, `auto`. No automatic
+selection chooses `bypassPermissions`; without an eligible mode, launch fails
+closed. This avoids SDK 0.3.286's changed omission behavior, which would let
+native configuration choose the initial mode before Sedes can inspect it.
+Initialization still adopts only recognized allowed observations; a disallowed,
+unknown, or plan mode blocks new submissions until an allowed selection is
+applied. This launch/submission policy is not a global native sandbox or a
+guarantee about every autonomous action in a retained query. Explicit
+new-thread selections and isolated fork `default` launches are unchanged.
 
 SDK prompts become normalized blocking interactions. Bounded ephemeral session
 grants are available only where the SDK permits them. A decision's authority is
@@ -1047,7 +1066,8 @@ session-lifecycle commands. The backend resolves primary-name winners across
 the complete bounded catalog before limiting displayed skills: native builtins
 win primary-name collisions, and ambiguous equal-precedence rows are omitted.
 A skill must be positively classified by the same stream initialization,
-through its canonical name or an unshadowed directory alias. Claude reports
+through its canonical name or, for a non-builtin row, an unshadowed directory
+alias. A builtin alias cannot promote a local command into a skill. Claude reports
 renamed skill directories in the stream skill set while the control catalog
 uses the renamed canonical name. Terminal commands remain excluded.
 
@@ -1221,7 +1241,7 @@ same child fails with `claude_fork_child_evidence_conflict`.
 
 Claude Code resumes a compacted conversation only from its latest compaction.
 `--resume-session-at` a row before it fails with "No message found", as
-verified on 2.1.283. Only turns whose checkpoint follows the latest compaction
+verified by the current 2.1.287 native suite. Only turns whose checkpoint follows the latest compaction
 summary are forkable. The child holds the boundary, the summary, the preserved
 rows, and later rows up to the checkpoint, with the source's row UUIDs.
 Checkpoint prefixes are therefore counted, digested, and verified from the
@@ -1357,8 +1377,8 @@ Stop also withdraws every input Sedes sent that Claude has not started:
   belongs to the stopped turn: the interrupted result stamps it, although
   Claude ends it `cancelled`.
 
-`tests/real-claude/claude-steer-native.test.ts` pins both cases on 2.1.281 and
-2.1.283, as well as two steers Claude folds at one tool boundary, three steers
+`tests/real-claude/claude-steer-native.test.ts` pins both cases on 2.1.287,
+as well as two steers Claude folds at one tool boundary, three steers
 unconfirmed at once in one turn, and Stop withdrawing several unstarted steers.
 
 Steer needs 2.1.274 or newer, below the 2.1.287 runtime minimum. Testing

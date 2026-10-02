@@ -1239,7 +1239,7 @@ describe("ClaudeConversationBackendDriver", () => {
     const options = sdk.createQuery.mock.calls[0]![0].options;
     expect(options).not.toHaveProperty("model");
     expect(options).not.toHaveProperty("effort");
-    expect(options).not.toHaveProperty("permissionMode");
+    expect(options.permissionMode).toBe("default");
     expect(adopted).toHaveBeenCalledWith("default");
     await handle.close();
   });
@@ -1263,9 +1263,9 @@ describe("ClaudeConversationBackendDriver", () => {
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
     });
     try {
-      // SDK 0.3.287 delegates an omitted mode to native settings. Only a
-      // recognized allowlisted result becomes the imported selection.
-      expect(sdk.createQuery.mock.calls[0]![0].options).not.toHaveProperty("permissionMode");
+      // Launch is explicit even if Claude later reports a different native
+      // mode. Only a recognized allowlisted result becomes the selection.
+      expect(sdk.createQuery.mock.calls[0]![0].options.permissionMode).toBe("default");
       if (scenario.adopt) expect(adopted).toHaveBeenCalledWith(scenario.observed);
       else expect(adopted).not.toHaveBeenCalled();
       // An import also has no model selection. A denied mode must fail on
@@ -1283,6 +1283,36 @@ describe("ClaudeConversationBackendDriver", () => {
       await handle.close();
       await driver.close();
     }
+  });
+
+  it.each([
+    { allowed: ["auto", "default", "dontAsk"], expected: "default" },
+    { allowed: ["auto", "acceptEdits", "dontAsk"], expected: "dontAsk" },
+    { allowed: ["auto", "acceptEdits"], expected: "acceptEdits" },
+    { allowed: ["auto"], expected: "auto" },
+  ] as const)("launches an import explicitly as $expected under policy $allowed", async ({ allowed, expected }) => {
+    const sdk = fakeSdk({ streamPermissionMode: expected });
+    const adopted = vi.fn();
+    const driver = createDriver(sdk, { importedSettings: true, onAdoptPermissionMode: adopted, permissionPolicy: { allowedModes: [...allowed] } });
+    const handle = await driver.attach({ scope, workspace, binding: binding(), opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) });
+    try {
+      expect(sdk.createQuery.mock.calls[0]![0].options.permissionMode).toBe(expected);
+      expect(adopted).toHaveBeenCalledWith(expected);
+      expect(nativeInputCount(sdk)).toBe(0);
+    } finally {
+      await handle.close();
+      await driver.close();
+    }
+  });
+
+  it.each([{ allowedModes: [] }, { allowedModes: ["bypassPermissions"] }] as const)("rejects an imported launch with no automatic mode under policy $allowedModes", async ({ allowedModes }) => {
+    const sdk = fakeSdk();
+    const driver = createDriver(sdk, { importedSettings: true, permissionPolicy: { allowedModes } });
+    try {
+      await expect(driver.attach({ scope, workspace, binding: binding(), opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) }))
+        .rejects.toMatchObject({ backendCode: "claude_permission_mode_selection_required" });
+      expect(sdk.createQuery).not.toHaveBeenCalled();
+    } finally { await driver.close(); }
   });
 
   it("forks an exact older completed turn with an application-reserved child and no model turn", async () => {
@@ -2440,7 +2470,7 @@ function createDriver(
 function fakeSdk(
   options: {
     readonly streamModel?: string;
-    readonly streamPermissionMode?: "default" | "acceptEdits" | "auto" | "plan";
+    readonly streamPermissionMode?: ClaudePermissionMode | "plan";
     readonly effortError?: Error;
     readonly streamSkills?: readonly string[];
     readonly terminalCommands?: readonly string[];

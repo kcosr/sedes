@@ -13,6 +13,9 @@ import { UsageService, addUsageMoney } from "../../src/server/usage/usage-servic
 import type { UsageFact, UsageObservation, UsageSink } from "../../src/server/usage/contracts.js";
 import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
 import { ClaudeUsageAccounting } from "../../src/server/backends/claude/claude-usage-accounting.js";
+import { projectClaudeHistory } from "../../src/server/backends/claude/claude-history-projector.js";
+import { parseClaudeTranscript, resolveClaudeSessionMessages } from "../../src/server/backends/claude/claude-native-transcript.js";
+import { ClaudeTranscriptFixture } from "../helpers/claude-native-transcript-fixture.js";
 import type { SDKResultMessage, SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 
 const scope = {tenantId: "tenant", principalId: "principal"};
@@ -45,6 +48,53 @@ function observation(id: string, facts: readonly UsageFact[], replaceCheckpoint 
 }
 const turnId = applicationTurnIdForBackendTurn({backendInstanceId: "backend", sourceApplicationThreadId: "thread", backendTurnId: "turn"});
 describe("durable scoped usage service", () => {
+  it.each([false, true])("replays newly visible Claude external context without duplicating persisted usage (after answer: %s)", async afterAnswer => {
+    const fixture = new ClaudeTranscriptFixture();
+    fixture.prompt("Original request.");
+    fixture.reply([{ type: "text", text: afterAnswer ? "Original answer." : "Working." }], { stopReason: afterAnswer ? "end_turn" : "tool_use" });
+    const external = fixture.prompt("External context.", { isMeta: true, origin: { kind: "peer" } });
+    fixture.answer("Final answer.");
+    const messages = await resolveClaudeSessionMessages(await parseClaudeTranscript(Buffer.from(fixture.jsonl())));
+    const beforeMessages = messages.filter(message => message.uuid !== external);
+    const before = projectClaudeHistory(beforeMessages);
+    const after = projectClaudeHistory(messages);
+    expect(after.snapshot.orderedBackendTurnIds).toHaveLength(afterAnswer ? 2 : 1);
+    const db = database();
+    const service = new UsageService(db, { enabled: true });
+    const accounting = () => new ClaudeUsageAccounting({ sink: service, binding, nativeNamespace: "claude-external", launch: "resume" });
+    const capture = (owner: ClaudeUsageAccounting, rows: readonly SessionMessage[], projection: ReturnType<typeof projectClaudeHistory>) => {
+      owner.registerTurns(projection.usageTurns);
+      owner.messages(rows.flatMap(message => {
+        const backendTurnId = projection.backendTurnIdByMessageUuid.get(message.uuid);
+        return backendTurnId ? [{ message, backendTurnId }] : [];
+      }), "history");
+    };
+    const first = accounting();
+    capture(first, beforeMessages, before);
+    const records = () => db.prepare("SELECT fact_id, turn_id, output FROM usage_records ORDER BY fact_id").all();
+    const originalRecords = records();
+    expect(originalRecords).toHaveLength(2);
+    first.close();
+    const reloaded = accounting();
+    capture(reloaded, messages, after);
+    const revisedRecords = records() as { fact_id: string; turn_id: string; output: number }[];
+    expect(revisedRecords).toHaveLength(2);
+    expect(revisedRecords.map(row => row.output)).toEqual([1, 1]);
+    expect(revisedRecords).toEqual(originalRecords);
+    const stableRecords = records();
+    capture(reloaded, messages, after);
+    expect(records()).toEqual(stableRecords);
+    // Existing immutable operation evidence stays owned by its original
+    // turn. A standalone boundary changes display ownership, so accounting
+    // reports that turn-local conflict instead of silently moving tokens.
+    const conflicts = db.prepare("SELECT reason, subject, affects_session FROM usage_gaps WHERE reason IN ('invalid_evidence', 'conflicting_evidence')").all();
+    expect(conflicts).toEqual(afterAnswer ? [{ reason: "conflicting_evidence", affects_session: 0,
+      subject: applicationTurnIdForBackendTurn({ backendInstanceId: binding.backendInstanceId,
+        sourceApplicationThreadId: binding.applicationThreadId, backendTurnId: after.snapshot.orderedBackendTurnIds[1]! }),
+    }] : []);
+    reloaded.close();
+  });
+
   it("keeps disabled accounting inert, rejects reads and retains evidence for re-enabling", () => {
     const db = database();
     const enabled = new UsageService(db, {enabled: true});

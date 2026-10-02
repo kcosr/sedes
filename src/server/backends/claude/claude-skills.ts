@@ -80,7 +80,7 @@ export function resolveClaudeSafeSkills(input: {
     );
     if (
       !skillNames.has(command.name) &&
-      !aliases.some((alias) => skillNames.has(alias))
+      (command.builtin === true || !aliases.some((alias) => skillNames.has(alias)))
     ) continue;
     const id = claudeSkillId(command.name);
     if (seenIds.has(id)) throw new Error("claude_skill_identity_collision");

@@ -426,8 +426,9 @@ describe("ClaudeRuntimeWorkerHost", () => {
             parent_tool_use_id: null,
             parent_agent_id: null,
             timestamp: "2026-08-27T12:00:00.000Z",
-            origin: { kind: "task-notification" },
+            origin: { kind: "peer" },
             isQueuedCommand: true,
+            is_meta: true,
           },
           {
             type: "user",
@@ -437,7 +438,7 @@ describe("ClaudeRuntimeWorkerHost", () => {
             parent_tool_use_id: null,
             parent_agent_id: null,
           },
-          // A compaction summary keeps its marker; the SDK's derived is_meta does not cross.
+          // Meta context keeps its role as well as its compaction marker.
           {
             type: "user",
             uuid: SUMMARY_ID,
@@ -447,6 +448,7 @@ describe("ClaudeRuntimeWorkerHost", () => {
             parent_agent_id: null,
             timestamp: "2026-08-27T12:00:01.000Z",
             isCompactSummary: true,
+            is_meta: true,
           },
         ],
       });
@@ -457,6 +459,10 @@ describe("ClaudeRuntimeWorkerHost", () => {
       expect(() => claudeRuntimeSessionMessagesResponseSchema.parse({ nextCursor: null, messages: [
         { type: "user", uuid: SUMMARY_ID, session_id: SESSION_ID, message: {}, parent_tool_use_id: null,
           parent_agent_id: null, isQueuedCommand: false },
+      ] })).toThrow();
+      expect(() => claudeRuntimeSessionMessagesResponseSchema.parse({ nextCursor: null, messages: [
+        { type: "user", uuid: SUMMARY_ID, session_id: SESSION_ID, message: {}, parent_tool_use_id: null,
+          parent_agent_id: null, is_meta: false },
       ] })).toThrow();
       expect(sdk.getSessionMessages).toHaveBeenCalledWith(
         SESSION_ID,
@@ -1282,8 +1288,9 @@ function helperFacade(): ClaudeSdkFacade {
         parent_tool_use_id: null,
         parent_agent_id: null,
         timestamp: "2026-08-27T12:00:00.000Z",
-        origin: { kind: "task-notification" },
+        origin: { kind: "peer" },
         isQueuedCommand: true,
+        is_meta: true,
       } as never,
       {
         type: "user",

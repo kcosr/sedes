@@ -45,13 +45,6 @@
   in client protocol 123. This build requires client protocol 132; see the
   client protocol entries below. (#11, #13, #14)
 
-- Claude backends require Claude Code 2.1.281 or newer and are tested through
-  2.1.283. Earlier releases added a hidden "Continue" prompt when resuming
-  after an interrupted tool call, and failed Agent SDK turns after an
-  assistant message with plain-string content. Update Claude Code on
-  every local and remote execution host before upgrading; an older release
-  fails backend startup. (#12)
-
 - Sidecars must use runtime protocol 14, which reads Claude history through the
   transcript's true tip and across automatic compactions, and reports
   transcript presence. It also runs Claude forks as one-shot launches and
@@ -218,9 +211,9 @@
 
 ### Changed
 
-- Claude imports without a saved permission selection now honor the native
-  initialized mode under SDK 0.3.287. Native defaults can differ from the old
-  SDK's implicit `default`; Sedes blocks new submissions for disallowed modes.
+- Claude imports and sessions whose saved permission mode is no longer
+  allowed launch with an explicit allowed mode, preferring `default`.
+  Native defaults cannot silently broaden the initial permission mode.
 
 - In a thread, Tasks docks beside Chat as a workspace panel instead of a
   floating card, and resizes, collapses, docks on another edge, and closes
@@ -416,11 +409,9 @@
   Files other than its records are never removed. Sidecars apply this once
   upgraded to this version. (#12)
 
-- Claude backends use Agent SDK 0.3.283 (was 0.3.274). Claude history now
-  reads task notifications Claude received while running a tool, and other
-  queued input, where Claude read them, as SDK 0.3.283 does; they stay inside
-  their turn, so existing threads show the same turns. The Claude Code
-  runtime policy is unchanged (2.1.281 or newer, tested through 2.1.283).
+- Claude history reads task notifications Claude received while running a
+  tool, and other queued input, where Claude read them; they stay inside
+  their turn, so existing threads show the same turns.
   Upgrade sidecars together with the server: the sidecar build changes and
   sidecar runtime protocol 14 now also carries the queued-input marker.
 

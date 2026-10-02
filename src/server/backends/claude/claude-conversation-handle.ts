@@ -93,6 +93,7 @@ import {
   claudeAgentToolMcpServer,
 } from "./claude-agent-tool-cli-environment.js";
 import {
+  claudePermissionPolicyDefault,
   isClaudePermissionMode,
   isClaudePermissionModeAllowed,
   type ClaudePermissionMode,
@@ -129,6 +130,8 @@ type ProviderTurn = {
   messageId?: string;
   /** Private live boundary marker opening its own normalized turn. */
   boundaryUuid?: string;
+  /** An external meta input already supplies this turn's visible boundary. */
+  inputUuids?: ReadonlyMap<string, true>;
   /** False while its output extends the settled previous turn. */
   ownsTurn: boolean;
   /** A complete response was appended to native messages. */
@@ -458,7 +461,13 @@ export class ClaudeConversationHandle implements ConversationHandle {
         : suppliedMode &&
             isClaudePermissionModeAllowed(suppliedMode, this.#permissionPolicy)
           ? suppliedMode
-          : undefined;
+          : claudePermissionPolicyDefault(this.#permissionPolicy);
+    if (!initialPermissionMode) {
+      throw unavailable(
+        "Select an allowed Claude permission mode before attaching.",
+        "claude_permission_mode_selection_required",
+      );
+    }
     if (input.agentToolMcpMode && input.agentToolCliMode) {
       throw new Error("claude_agent_tool_presentation_ambiguous");
     }
@@ -508,9 +517,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       ...(desiredModelSelectionAllowed && asEffort(desired.effort)
         ? { effort: asEffort(desired.effort) }
         : {}),
-      ...(initialPermissionMode
-        ? { permissionMode: initialPermissionMode }
-        : {}),
+      permissionMode: initialPermissionMode,
       ...(input.allowDangerouslySkipPermissions
         ? { allowDangerouslySkipPermissions: true }
         : {}),
@@ -1581,7 +1588,9 @@ export class ClaudeConversationHandle implements ConversationHandle {
     // input: its `started` frame, or a consumption stamp. Unstamped output
     // belongs to whatever turn Claude is running.
     if (message.type === "stream_event" || message.type === "assistant" || message.type === "result") {
-      const consumed = claudeResultUserMessageIds(message);
+      // Hosted external meta turns can echo their input UUID. It identifies
+      // provider work, never a Sedes submission or the root of a later Steer.
+      const consumed = claudeResultUserMessageIds(message).filter(id => !this.#providerTurn?.inputUuids?.has(id));
       const endsTurn = message.type === "result" && !claudeResultIsNotificationDrain(message);
       if (endsTurn) this.#checkSteerPlacement(consumed);
       // A stamp still places a steer whose start this attachment never saw.
@@ -1667,6 +1676,14 @@ export class ClaudeConversationHandle implements ConversationHandle {
       if (index === this.#messages.length - 1) {
         this.#projectionMessages.push(sessionMessage);
         this.#refreshProjection();
+        const turnId = this.#projection.snapshot.orderedBackendTurnIds.at(-1);
+        if (externalInput && message.type === "user" && message.isSynthetic === true && turnId &&
+            previous.snapshot.turnsById[turnId] === undefined) {
+          this.#providerTurn = { startIndex: index, inputUuids: this.#externalProviderInputs(turnId), ownsTurn: true };
+          this.#nativeTurnRoot = undefined;
+          this.#taskNotificationPending = false;
+          this.#setRunState("running", true);
+        }
         this.#usage = mergeUsage(this.#projection.usage ?? {}, this.#usage);
         this.#emitProjectionDelta(previous.snapshot, this.#projection.snapshot);
       } else {
@@ -1858,7 +1875,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
       : this.#projection.snapshot.turnsById[this.#projection.snapshot.activeBackendTurnId];
     // Attaching during a turn Claude started: its result carries no Sedes input.
     this.#providerTurn = this.#runState === "running" && activeTurn && !activeTurn.completionCorrelations?.length
-      ? { ownsTurn: true } : undefined;
+      ? { ownsTurn: true, inputUuids: this.#externalProviderInputs(activeTurn.backendTurnId) } : undefined;
   }
 
   #captureHistoryUsage(): void {
@@ -1937,9 +1954,10 @@ export class ClaudeConversationHandle implements ConversationHandle {
     const correlatedIds = claudeResultUserMessageIds(message);
     // A turn Claude started itself carries no Sedes input identity. Its result
     // ends that turn without writing a receipt for any application turn.
-    if (this.#providerTurn && correlatedIds.length === 0) {
+    if (this.#providerTurn && correlatedIds.every(id => this.#providerTurn?.inputUuids?.has(id))) {
       // Coalesced notification drains emit empty zero-turn receipts first.
-      if (!claudeResultIsUnrelated(message, [])) this.#endProviderTurn(message.origin);
+      const expected = [...(this.#providerTurn.inputUuids?.keys() ?? [])];
+      if (!claudeResultIsUnrelated(message, expected)) this.#endProviderTurn(message.origin);
       return;
     }
     const activeId = this.#activeBackendTurnId();
@@ -2226,17 +2244,17 @@ export class ClaudeConversationHandle implements ConversationHandle {
     this.#setRunState(this.#runState === "stopping" ? "stopping" : "running", true);
   }
 
-  /** Exact result provenance confirms the live boundary: provider history
-   * keeps a task-notification row but not a peer hand-back's `isMeta` row. */
+  /** Exact result provenance confirms a boundary inferred from notification
+   * frames. A visible external input already supplies its native boundary. */
   #settleProviderBoundary(turn: ProviderTurn, origin: unknown): void {
-    if (turn.startIndex === undefined) return;
+    if (turn.startIndex === undefined || turn.inputUuids !== undefined) return;
     const notification = typeof origin === "object" && origin !== null && !Array.isArray(origin)
       ? Reflect.get(origin, "kind") === "task-notification" : undefined;
     const boundaryUuid = turn.boundaryUuid;
     let revised = false;
     if (boundaryUuid !== undefined && (notification === false || !turn.responded)) {
-      // A peer turn, or one stopped before its first complete response, has
-      // no separate turn in provider history.
+      // Without a visible input, a non-notification turn or one stopped
+      // before its first complete response has no separate history boundary.
       const index = this.#messages.findIndex(({ uuid }) => uuid === boundaryUuid);
       if (index >= 0) this.#messages.splice(index, 1);
       this.#providerTurnBoundaries.delete(boundaryUuid);
@@ -2265,6 +2283,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     const turn = this.#providerTurn;
     if (!turn || turn.messageId !== undefined) return;
     turn.messageId = messageId;
+    if (turn.inputUuids !== undefined) return;
     // A finished background task's notification starts its own turn in
     // provider history. Open it live; the result's provenance confirms it.
     if (turn.startIndex !== undefined && this.#taskNotificationPending) {
@@ -2446,6 +2465,10 @@ export class ClaudeConversationHandle implements ConversationHandle {
       turnOffset,
       userMessageOrdinalBase,
     });
+    const activeId = this.#projection.snapshot.orderedBackendTurnIds.at(-1);
+    if (this.#providerTurn?.inputUuids && activeId) {
+      this.#providerTurn.inputUuids = this.#externalProviderInputs(activeId);
+    }
     if (this.#usageAccounting) {
       this.#inheritedUsage = this.#projection.inheritedUsage ?? this.#inheritedUsage;
       this.#usageAccounting.registerTurns(this.#projection.usageTurns, this.#inheritedUsage);
@@ -2466,6 +2489,14 @@ export class ClaudeConversationHandle implements ConversationHandle {
     this.#projectionTurnOffset = this.#projection.window.retainedStartTurnIndex;
     this.#projectionUserMessageOrdinalBase =
       this.#projection.window.retainedUserMessageOrdinal;
+  }
+
+  #externalProviderInputs(turnId: string): ReadonlyMap<string, true> | undefined {
+    const inputs = this.#projection.externalInputUuidsByBackendTurnId.get(turnId);
+    if (!inputs?.size) return undefined;
+    const retained = new Map<string, true>();
+    for (const uuid of inputs) rememberBounded(retained, uuid, true);
+    return retained;
   }
 
   #projectLatest(
@@ -3096,6 +3127,7 @@ type ClaudeObservedSessionMessage = SessionMessage & {
   readonly timestamp?: string;
   readonly origin?: unknown;
   readonly isCompactSummary?: true;
+  readonly is_meta?: true;
 };
 
 function isCompactSummaryMessage(message: SessionMessage): boolean {
@@ -3144,6 +3176,7 @@ function liveSessionMessage(
     ...(message.timestamp !== undefined
       ? { timestamp: message.timestamp }
       : {}),
+    ...(message.type === "user" && message.isSynthetic === true ? { is_meta: true as const } : {}),
     ...(compactSummary ? { isCompactSummary: true as const } : {}),
   };
 }
