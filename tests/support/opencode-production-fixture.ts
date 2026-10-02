@@ -203,7 +203,7 @@ export class OpenCodeProductionFixture {
     this.targetId = target.id; return true;
   }); }
   async createThread() {
-    const workspace = await this.json("/api/workspaces/open", "POST", { path: this.workspace, environmentId: this.environmentId }) as { id: string };
+    const workspace = await this.json("/api/workspaces/open", "POST", { path: this.workspace, environmentId: this.environmentId, project: { kind: "new", name: "workspace" } }) as { id: string };
     // Stock provider plugins settle asynchronously after native startup. Use
     // the same fresh editor catalog read as the UI, not a synthetic session.
     await this.waitFor(async () => {

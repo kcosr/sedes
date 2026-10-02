@@ -587,7 +587,7 @@ test("mobile task destinations remain usable with long lists and short viewports
     await mkdir(projectPath, { recursive: true });
     expect((await page.request.post("/api/workspaces/open", {
       headers,
-      data: { path: projectPath, environmentId: workspace.environmentId },
+      data: { path: projectPath, environmentId: workspace.environmentId, project: { kind: "new", name: path.basename(projectPath) } },
     })).ok()).toBe(true);
     expect((await page.request.post("/api/tasks", {
       headers,

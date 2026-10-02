@@ -59,6 +59,7 @@ function fixture(overrides?: {
   readonly validateWorkspace?: ReturnType<typeof vi.fn>;
   readonly upsertWorkspace?: ReturnType<typeof vi.fn>;
   readonly discoverWorkspace?: ReturnType<typeof vi.fn>;
+  readonly removed?: { readonly location: boolean; readonly project: boolean };
 }) {
   const getEnvironment =
     overrides?.getEnvironment ??
@@ -98,6 +99,7 @@ function fixture(overrides?: {
       ownerPrincipalId: scope.principalId,
       environmentId: "environment-a",
       id: "workspace-a",
+      projectId: "project-a",
       canonicalPath: "/srv/projects/sedes",
       displayName: "sedes",
       availability: "available" as const,
@@ -108,6 +110,17 @@ function fixture(overrides?: {
       createdAt: 123,
       updatedAt: 123,
     }));
+  const getWorkspace = vi.fn(() => ({
+    environmentId: "environment-a",
+    id: "workspace-a",
+    projectId: "project-a",
+    canonicalPath: "/srv/projects/sedes",
+  }));
+  const isWorkspaceRemoved = vi.fn(() => overrides?.removed?.location ?? false);
+  const getProject = vi.fn(() => ({
+    id: "project-a",
+    removedAt: overrides?.removed?.project ? 100 : null,
+  }));
   const handoffAuthoritativeReplacement = vi.fn();
   const discoverWorkspace =
     overrides?.discoverWorkspace ?? vi.fn(async () => undefined);
@@ -117,6 +130,9 @@ function fixture(overrides?: {
         getEnvironment,
         listEnvironments,
         upsertWorkspace,
+        getWorkspace,
+        isWorkspaceRemoved,
+        getProject,
       } as never,
       execution: { validateWorkspace } as never,
       publications: { handoffAuthoritativeReplacement },
@@ -161,12 +177,14 @@ describe("WorkspaceApplicationService", () => {
         {
           environmentId: "environment-a",
           path: "/srv/projects/sedes",
+          project: { kind: "existing", projectId: "project-a" },
         },
         new AbortController().signal,
       ),
     ).resolves.toEqual({
       workspaceId: "workspace-a",
       environmentId: "environment-a",
+      projectId: "project-a",
       label: "sedes",
       availability: "available",
     });
@@ -177,7 +195,7 @@ describe("WorkspaceApplicationService", () => {
       "/srv/projects/sedes",
     );
     expect(current.upsertWorkspace).toHaveBeenCalledWith(scope, {
-      project: { kind: "new", name: "sedes" },
+      project: { kind: "existing", projectId: "project-a" },
       restoreRemoved: true,
       environmentId: "environment-a",
       canonicalPath: "/srv/projects/sedes",
@@ -221,8 +239,16 @@ describe("WorkspaceApplicationService", () => {
         },
         agentAuthority,
       ),
-    ).resolves.toMatchObject({ workspaceId: "workspace-a" });
+    ).resolves.toMatchObject({ workspaceId: "workspace-a", projectId: "project-a" });
     expect(admitted.validateWorkspace).toHaveBeenCalledOnce();
+    // Agents cannot choose an existing project; a known directory keeps its own.
+    expect(admitted.upsertWorkspace).toHaveBeenCalledWith(
+      scope,
+      expect.objectContaining({
+        project: { kind: "new", name: "sedes" },
+        restoreRemoved: true,
+      }),
+    );
   });
 
   it("keeps unknown environments non-enumerating and does not validate or mutate", async () => {
@@ -239,6 +265,7 @@ describe("WorkspaceApplicationService", () => {
       current.service.openWorkspace(scope, {
         environmentId: "foreign-environment",
         path: "/srv/projects/sedes",
+        project: { kind: "new", name: "sedes" },
       }),
     ).rejects.toMatchObject({ code: "not_found" });
     expect(current.validateWorkspace).not.toHaveBeenCalled();
@@ -256,6 +283,7 @@ describe("WorkspaceApplicationService", () => {
       outside.service.openWorkspace(scope, {
         environmentId: "environment-a",
         path: "/outside/project",
+        project: { kind: "new", name: "sedes" },
       }),
     ).rejects.toMatchObject({ code: "invalid_transition", retryable: false });
     expect(outside.upsertWorkspace).not.toHaveBeenCalled();
@@ -269,6 +297,7 @@ describe("WorkspaceApplicationService", () => {
       unavailable.service.openWorkspace(scope, {
         environmentId: "environment-a",
         path: "/srv/projects/sedes",
+        project: { kind: "new", name: "sedes" },
       }),
     ).rejects.toMatchObject({ code: "runtime_unavailable", retryable: true });
     expect(unavailable.upsertWorkspace).not.toHaveBeenCalled();
@@ -285,7 +314,11 @@ describe("WorkspaceApplicationService", () => {
     const controller = new AbortController();
     const opening = cancelled.service.openWorkspace(
       scope,
-      { environmentId: "environment-a", path: "/srv/projects/sedes" },
+      {
+        environmentId: "environment-a",
+        path: "/srv/projects/sedes",
+        project: { kind: "new", name: "sedes" },
+      },
       controller.signal,
     );
     controller.abort(new Error("caller_cancelled"));
@@ -318,6 +351,7 @@ describe("WorkspaceApplicationService", () => {
       mismatch.service.openWorkspace(scope, {
         environmentId: "environment-a",
         path: "/srv/projects/sedes",
+        project: { kind: "new", name: "sedes" },
       }),
     ).rejects.toMatchObject({ code: "conflict" });
     expect(mismatch.upsertWorkspace).not.toHaveBeenCalled();
@@ -334,10 +368,91 @@ describe("WorkspaceApplicationService", () => {
       current.service.openWorkspace(scope, {
         environmentId: "environment-a",
         path: "/srv/projects/sedes",
+        project: { kind: "new", name: "sedes" },
       }),
     ).resolves.toMatchObject({ workspaceId: "workspace-a" });
     await vi.waitFor(() =>
       expect(current.discoverWorkspace).toHaveBeenCalled(),
     );
+  });
+
+  it("restores a known location under its own identity and project", async () => {
+    const current = fixture({ removed: { location: true, project: false } });
+    await expect(
+      current.service.restoreLocation(scope, "workspace-a"),
+    ).resolves.toEqual({
+      workspaceId: "workspace-a",
+      environmentId: "environment-a",
+      projectId: "project-a",
+      label: "sedes",
+      availability: "available",
+    });
+    expect(current.validateWorkspace).toHaveBeenCalledWith(
+      scope,
+      "environment-a",
+      "/srv/projects/sedes",
+    );
+    expect(current.upsertWorkspace).toHaveBeenCalledWith(scope, {
+      id: "workspace-a",
+      restoreRemoved: true,
+      environmentId: "environment-a",
+      canonicalPath: "/srv/projects/sedes",
+      displayName: "sedes",
+      available: true,
+      trustState: "trusted",
+      environmentConfigurationRevision: 11,
+      now: 123,
+    });
+    expect(current.handoffAuthoritativeReplacement).toHaveBeenCalledWith(scope);
+  });
+
+  it("fails a location restore that resolves elsewhere, moved, or belongs to a removed project", async () => {
+    const moved = fixture({
+      validateWorkspace: vi.fn(async () => ({
+        canonicalPath: "/srv/projects/sedes-renamed",
+        authorityRevision: 11,
+        summary: {
+          id: "provider-private-workspace-id",
+          environmentId: "environment-a",
+          displayName: "sedes-renamed",
+          displayPath: "/srv/projects/sedes-renamed",
+          availability: "available" as const,
+          trustState: "trusted" as const,
+          revision: 0,
+        },
+      })),
+    });
+    await expect(
+      moved.service.restoreLocation(scope, "workspace-a"),
+    ).rejects.toMatchObject({
+      code: "conflict",
+      message:
+        "The location's directory now resolves to a different path. Add that directory as a location instead.",
+    });
+    expect(moved.upsertWorkspace).not.toHaveBeenCalled();
+
+    const otherProject = fixture();
+    await expect(
+      otherProject.service.restoreLocation(
+        scope,
+        "workspace-a",
+        undefined,
+        "project-b",
+      ),
+    ).rejects.toMatchObject({ code: "conflict" });
+    expect(otherProject.validateWorkspace).not.toHaveBeenCalled();
+
+    const removedProject = fixture({
+      removed: { location: true, project: true },
+    });
+    await expect(
+      removedProject.service.restoreLocation(scope, "workspace-a"),
+    ).rejects.toMatchObject({
+      code: "invalid_transition",
+      message:
+        "The project was removed. Restore it before restoring its locations.",
+    });
+    expect(removedProject.validateWorkspace).not.toHaveBeenCalled();
+    expect(removedProject.upsertWorkspace).not.toHaveBeenCalled();
   });
 });

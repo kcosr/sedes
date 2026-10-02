@@ -419,7 +419,7 @@ describe("NewThreadControl", () => {
     const dialog = screen.getByRole("dialog", { name: "Add project" });
     await user.type(within(dialog).getByLabelText("Absolute directory path"), "/workspace/added");
     await user.click(within(dialog).getByRole("button", { name: "Add project" }));
-    expect(openWorkspace).toHaveBeenCalledWith("/workspace/added", "environment-1");
+    expect(openWorkspace).toHaveBeenCalledWith("/workspace/added", "environment-1", { kind: "new", name: "added" });
     expect(screen.getByRole("textbox", { name: "Thread name" })).toHaveValue("Keep this title");
     expect(screen.getByRole("button", { name: "Adding project…" })).toBeDisabled();
     rerenderWorkspaces([workspace, { ...workspace, id: "workspace-added", label: { text: "Added project" } }]);

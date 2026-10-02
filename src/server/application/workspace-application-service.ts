@@ -1,4 +1,8 @@
-import type { InventoryRepository } from "../db/repositories/inventory-repository.js";
+import type {
+  InventoryProjectAssignment,
+  InventoryRepository,
+} from "../db/repositories/inventory-repository.js";
+import type { ValidatedWorkspace } from "../execution/contracts.js";
 import { DomainError } from "../domain/errors.js";
 import type { ExecutionEnvironmentProvider } from "../execution/contracts.js";
 import type { RequestScope } from "../identity/identity-provider.js";
@@ -46,7 +50,12 @@ export class WorkspaceApplicationService {
     readonly input: {
       readonly inventory: Pick<
         InventoryRepository,
-        "getEnvironment" | "listEnvironments" | "upsertWorkspace"
+        | "getEnvironment"
+        | "listEnvironments"
+        | "upsertWorkspace"
+        | "getWorkspace"
+        | "isWorkspaceRemoved"
+        | "getProject"
       >;
       readonly execution: Pick<
         ExecutionEnvironmentProvider,
@@ -80,14 +89,31 @@ export class WorkspaceApplicationService {
       );
   }
 
+  /**
+   * Adds a directory as a location of the assigned project, or restores or
+   * revalidates it when it is already a location. A known location keeps its
+   * project; naming a different existing project is a conflict.
+   */
   async openWorkspace(
     scope: RequestScope,
-    request: { readonly environmentId: string; readonly path: string },
+    request: {
+      readonly environmentId: string;
+      readonly path: string;
+      readonly project: InventoryProjectAssignment;
+    },
     signal = new AbortController().signal,
   ): Promise<OpenedWorkspaceSummary> {
-    return this.#openWorkspace(scope, request, undefined, signal);
+    const validated = await this.#validate(scope, request, undefined, signal);
+    return this.#admit(scope, validated, {
+      project: request.project,
+      restoreRemoved: true,
+    });
   }
 
+  /**
+   * Agents cannot choose an existing project: a new directory becomes its own
+   * project, and a known one keeps its project.
+   */
   async openWorkspaceForAgent(
     scope: RequestScope,
     request: { readonly environmentId: string; readonly path: string },
@@ -99,15 +125,67 @@ export class WorkspaceApplicationService {
       id: request.environmentId,
       environmentId: request.environmentId,
     });
-    return this.#openWorkspace(scope, request, environmentAuthority, signal);
+    const validated = await this.#validate(
+      scope,
+      request,
+      environmentAuthority,
+      signal,
+    );
+    return this.#admit(scope, validated, {
+      project: { kind: "new", name: validated.summary.displayName },
+      restoreRemoved: true,
+    });
   }
 
-  async #openWorkspace(
+  /**
+   * Restores or revalidates one known location under its original identity.
+   * The location never changes project here, and a directory that now
+   * resolves elsewhere fails instead of becoming a new location.
+   */
+  async restoreLocation(
+    scope: RequestScope,
+    workspaceId: string,
+    signal = new AbortController().signal,
+    expectedProjectId?: string,
+  ): Promise<OpenedWorkspaceSummary> {
+    throwIfAborted(signal);
+    const current = this.input.inventory.getWorkspace(scope, workspaceId);
+    if (expectedProjectId !== undefined && current.projectId !== expectedProjectId) {
+      throw new DomainError(
+        "conflict",
+        "The location moved to another project. Refresh and try again.",
+      );
+    }
+    if (
+      this.input.inventory.isWorkspaceRemoved(scope, workspaceId) &&
+      this.input.inventory.getProject(scope, current.projectId).removedAt !== null
+    ) {
+      throw new DomainError(
+        "invalid_transition",
+        "The project was removed. Restore it before restoring its locations.",
+      );
+    }
+    const validated = await this.#validate(
+      scope,
+      { environmentId: current.environmentId, path: current.canonicalPath },
+      undefined,
+      signal,
+    );
+    if (validated.canonicalPath !== current.canonicalPath) {
+      throw new DomainError(
+        "conflict",
+        "The location's directory now resolves to a different path. Add that directory as a location instead.",
+      );
+    }
+    return this.#admit(scope, validated, { id: current.id, restoreRemoved: true });
+  }
+
+  async #validate(
     scope: RequestScope,
     request: { readonly environmentId: string; readonly path: string },
     environmentAuthority: TrustedEnvironmentAuthorityGrant | undefined,
     signal: AbortSignal,
-  ): Promise<OpenedWorkspaceSummary> {
+  ): Promise<ValidatedWorkspace> {
     throwIfAborted(signal);
     this.input.inventory.getEnvironment(scope, request.environmentId);
     const validated = await callRuntime(() =>
@@ -131,9 +209,21 @@ export class WorkspaceApplicationService {
         environmentId: validated.summary.environmentId,
       });
     }
+    return validated;
+  }
+
+  #admit(
+    scope: RequestScope,
+    validated: ValidatedWorkspace,
+    identity:
+      | {
+          readonly project: InventoryProjectAssignment;
+          readonly restoreRemoved: true;
+        }
+      | { readonly id: string; readonly restoreRemoved: true },
+  ): OpenedWorkspaceSummary {
     const workspace = this.input.inventory.upsertWorkspace(scope, {
-      project: { kind: "new", name: validated.summary.displayName },
-      restoreRemoved: true,
+      ...identity,
       environmentId: validated.summary.environmentId,
       canonicalPath: validated.canonicalPath,
       displayName: validated.summary.displayName,

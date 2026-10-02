@@ -3,6 +3,11 @@ import type { NormalizedEnvironmentSummary } from "../../shared/index.js";
 import { messageFrom, type ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { DirectoryPickerDialog } from "./DirectoryPickerDialog.js";
 
+/** The last path segment, which names a new project; a known directory keeps its project. */
+function directoryName(path: string): string {
+  return path.replace(/[\\/]+$/u, "").split(/[\\/]/u).at(-1) || path;
+}
+
 /** Projects are principal-owned remembered directories; adding one never changes root grants. */
 export function AddProjectDialog({ store, environments, initialEnvironmentId, environmentLocked = false, onAdded, onClose }: {
   readonly store: Pick<ApplicationClientStore, "api" | "openWorkspace">;
@@ -24,7 +29,8 @@ export function AddProjectDialog({ store, environments, initialEnvironmentId, en
     setPending(true);
     setError("");
     try {
-      const id = await store.openWorkspace(path.trim(), environmentId);
+      const directory = path.trim();
+      const id = await store.openWorkspace(directory, environmentId, { kind: "new", name: directoryName(directory) });
       onAdded(id, environmentId);
       onClose();
     } catch (cause) {

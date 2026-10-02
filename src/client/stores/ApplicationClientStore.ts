@@ -23,6 +23,7 @@ import type {
   HandoffThreadExecutionWorkspaceResult,
   InventoryTransitionRequest,
   NormalizedThreadGroup,
+  ProjectAssignment,
   ThreadForceResetImpact,
   ThreadForceResetResult,
 } from "../../shared/index.js";
@@ -307,8 +308,8 @@ export class ApplicationClientStore {
     }
   }
 
-  async openWorkspace(path: string, environmentId: string): Promise<string> {
-    return this.api.openWorkspace(path, environmentId);
+  async openWorkspace(path: string, environmentId: string, project: ProjectAssignment): Promise<string> {
+    return this.api.openWorkspace(path, environmentId, project);
   }
 
   async reopenWorkspace(workspaceId: string): Promise<string> {

@@ -575,16 +575,18 @@ test("sidebar execution scope filters creation and persists responsively", async
   await removal.getByRole("button", { name: "Remove project", exact: true }).click();
   const removedResponse = await removed;
   expect(removedResponse.status(), await removedResponse.text()).toBe(200);
-  const removedProject = await removedResponse.json() as { id: string };
+  // Removing a location answers with its project.
+  const removedProject = await removedResponse.json() as { locations: Array<{ id: string; removed: boolean }> };
+  const removedLocation = removedProject.locations.find(location => location.removed)!;
   await expect(projectRow.getByRole("button", { name: `Restore project ${browsedProjectLabel}` })).toBeVisible();
   await expect(desktopSidebar.getByText(alternateTitle, { exact: true })).toBeHidden();
   await expect(desktopSidebar.getByText(primaryTitle, { exact: true })).toBeHidden();
   await page.reload();
-  const restored = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith(`/api/workspaces/${removedProject.id}/open`));
+  const restored = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith(`/api/workspaces/${removedLocation.id}/open`));
   await projectRow.getByRole("button", { name: `Restore project ${browsedProjectLabel}` }).click();
   const restoredResponse = await restored;
   expect(restoredResponse.status(), await restoredResponse.text()).toBe(200);
-  expect(await restoredResponse.json()).toMatchObject({ id: removedProject.id });
+  expect(await restoredResponse.json()).toMatchObject({ id: removedLocation.id });
   await expect(projectRow).toContainText("3 threads");
   await expect(projectRow.getByRole("button", { name: `Remove project ${browsedProjectLabel}` })).toBeVisible();
   await expect(desktopSidebar.getByText(alternateTitle, { exact: true })).toBeVisible();

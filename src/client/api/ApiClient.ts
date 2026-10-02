@@ -8,8 +8,9 @@ import {
   type EnvironmentVariablesPreviewResult,
   type ThreadEnvironmentVariablesResult,
 } from "../../shared/protocol/environment-variables.js";
-import { listProjectsResultSchema, projectSummarySchema, removeProjectRequestSchema,
-  type ListProjectsResult, type ProjectSummary, type RemoveProjectRequest } from "../../shared/index.js";
+import { listProjectsResultSchema, openWorkspaceRequestSchema, openWorkspaceResultSchema,
+  projectSummarySchema, removeLocationRequestSchema, type ListProjectsResult,
+  type ProjectAssignment, type ProjectSummary, type RemoveLocationRequest } from "../../shared/index.js";
 import { authenticatedFetch } from "../authentication/auth-transport.js";
 import {
   workpadSchema, workpadRevisionSchema, workpadDraftSchema, workpadListPageSchema, workpadRevisionPageSchema,
@@ -405,7 +406,6 @@ function workspaceFileDownloadPreflightError(status: number): ApiError {
   );
 }
 
-const idResponseSchema = z.object({ id: z.string().min(1).max(160) });
 const compositionResponseSchema = z.strictObject({
   draft: normalizedDraftSchema,
   stashes: z.array(normalizedStashSchema),
@@ -1761,22 +1761,24 @@ export class ApiClient {
   }
 
   listProjects(signal?: AbortSignal): Promise<ListProjectsResult> {
-    return this.#request("/api/workspaces", { signal }, listProjectsResultSchema);
+    return this.#request("/api/projects", { signal }, listProjectsResultSchema);
   }
 
-  removeProject(id: string, input: RemoveProjectRequest): Promise<ProjectSummary> {
-    const request = removeProjectRequestSchema.parse(input);
-    return this.#mutation(`/api/workspaces/${encodeURIComponent(id)}/remove`, projectSummarySchema,
+  /** Removes one location; the response is its project. */
+  removeLocation(workspaceId: string, input: RemoveLocationRequest): Promise<ProjectSummary> {
+    const request = removeLocationRequestSchema.parse(input);
+    return this.#mutation(`/api/workspaces/${encodeURIComponent(workspaceId)}/remove`, projectSummarySchema,
       { method: "POST", body: JSON.stringify(request) });
   }
 
-  async openWorkspace(path: string, environmentId: string): Promise<string> {
+  async openWorkspace(path: string, environmentId: string, project: ProjectAssignment): Promise<string> {
+    const request = openWorkspaceRequestSchema.parse({ path, environmentId, project });
     const result = await this.#mutation(
       "/api/workspaces/open",
-      idResponseSchema,
+      openWorkspaceResultSchema,
       {
         method: "POST",
-        body: JSON.stringify({ path, environmentId }),
+        body: JSON.stringify(request),
       },
     );
     return result.id;
@@ -1798,7 +1800,7 @@ export class ApiClient {
   async reopenWorkspace(workspaceId: string): Promise<string> {
     const result = await this.#mutation(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/open`,
-      idResponseSchema,
+      openWorkspaceResultSchema,
       { method: "POST" },
     );
     return result.id;

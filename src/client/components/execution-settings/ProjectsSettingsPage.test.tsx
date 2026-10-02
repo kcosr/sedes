@@ -2,7 +2,7 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProjectSummary } from "../../../shared/index.js";
+import type { ProjectLocation } from "../../../shared/index.js";
 import type { ApplicationClientState, ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
 import { ProjectsSettingsPage } from "./ProjectsSettingsPage.js";
 
@@ -16,20 +16,24 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
-const project: ProjectSummary = { id: "project-1", environmentId: "local", environmentLabel: "Local", label: "Sedes", path: "/projects/sedes", removed: false, available: true, threadCount: 3, revision: 4 };
+const project: ProjectLocation = { id: "project-1", environmentId: "local", environmentLabel: "Local", label: "Sedes", path: "/projects/sedes", removed: false, removedWithProject: false, available: true, threadCount: 3, revision: 4 };
 
-function setup(initial: readonly ProjectSummary[] = [project]) {
-  let projects = initial;
+// The page still lists one row per location of the two-level project list.
+function setup(initial: readonly ProjectLocation[] = [project]) {
+  let locations = initial;
+  const listed = () => locations.map((location) => ({
+    id: `owner-${location.id}`, name: location.label, revision: 0, membershipRevision: 0, removed: location.removed, locations: [location],
+  }));
   const state = { snapshot: { environments: [{ id: "local", kind: "local", label: { text: "Local" }, available: true, directoryBrowsing: "unavailable" }], workspaces: [], threads: [] } } as unknown as ApplicationClientState;
   const api = {
-    listProjects: vi.fn(async () => ({ projects })),
-    removeProject: vi.fn(async () => {
-      projects = projects.map((entry) => ({ ...entry, removed: true, revision: entry.revision + 1 }));
-      return projects[0];
+    listProjects: vi.fn(async () => ({ projects: listed() })),
+    removeLocation: vi.fn(async () => {
+      locations = locations.map((entry) => ({ ...entry, removed: true, revision: entry.revision + 1 }));
+      return listed()[0];
     }),
   };
   const reopenWorkspace = vi.fn(async () => {
-    projects = projects.map((entry) => ({ ...entry, removed: false, revision: entry.revision + 1 }));
+    locations = locations.map((entry) => ({ ...entry, removed: false, revision: entry.revision + 1 }));
     return project.id;
   });
   const store = { api, reopenWorkspace, getSnapshot: () => state, subscribe: () => () => {} } as unknown as ApplicationClientStore;
@@ -69,9 +73,9 @@ describe("ProjectsSettingsPage", () => {
     await user.click(await screen.findByRole("button", { name: "Remove project Sedes" }));
     const dialog = screen.getByRole("dialog", { name: "Remove project Sedes?" });
     expect(dialog).toHaveTextContent("Files, conversation history, and saved application data are retained");
-    expect(api.removeProject).not.toHaveBeenCalled();
+    expect(api.removeLocation).not.toHaveBeenCalled();
     await user.click(within(dialog).getByRole("button", { name: "Remove project" }));
-    expect(api.removeProject).toHaveBeenCalledWith("project-1", { expectedRevision: 4 });
+    expect(api.removeLocation).toHaveBeenCalledWith("project-1", { expectedRevision: 4 });
     await user.click(await screen.findByRole("button", { name: "Restore project Sedes" }));
     expect(reopenWorkspace).toHaveBeenCalledWith("project-1");
     expect(await screen.findByRole("button", { name: "Remove project Sedes" })).toBeVisible();
@@ -81,7 +85,7 @@ describe("ProjectsSettingsPage", () => {
   it("keeps a blocked removal visible and reports the server reason", async () => {
     const user = userEvent.setup();
     const { api } = setup();
-    api.removeProject.mockRejectedValueOnce(new Error("Stop running threads before removing this project."));
+    api.removeLocation.mockRejectedValueOnce(new Error("Stop running threads before removing this project."));
     await user.click(await screen.findByRole("button", { name: "Remove project Sedes" }));
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Remove project" }));
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Stop running threads"));

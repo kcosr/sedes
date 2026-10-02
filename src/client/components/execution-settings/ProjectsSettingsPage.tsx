@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Folder, Plus, RefreshCw, SlidersHorizontal } from "lucide-react";
-import type { ProjectSummary } from "../../../shared/index.js";
+import type { ProjectLocation } from "../../../shared/index.js";
 import { useApplicationStore, messageFrom, type ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
 import { AddProjectDialog } from "../AddProjectDialog.js";
 import { SettingsPage } from "../settings/SettingsPage.js";
@@ -23,14 +23,16 @@ export function ProjectsSettingsPage({ store }: {
 }): React.JSX.Element {
   const application = useApplicationStore(store);
   const environments = application.snapshot?.environments ?? [];
-  const [projects, setProjects] = useState<readonly ProjectSummary[]>([]);
+  // Each row is still one location; the two-level project list arrives with
+  // the project settings redesign.
+  const [projects, setProjects] = useState<readonly ProjectLocation[]>([]);
   const [loading, setLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const [mutationError, setMutationError] = useState("");
   const [notice, setNotice] = useState("");
   const [pendingId, setPendingId] = useState<string>();
-  const [removing, setRemoving] = useState<ProjectSummary>();
+  const [removing, setRemoving] = useState<ProjectLocation>();
   const [addOpen, setAddOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const [search, setSearch] = useState("");
@@ -56,7 +58,7 @@ export function ProjectsSettingsPage({ store }: {
     setError("");
     try {
       const result = await store.api.listProjects(controller.signal);
-      if (!controller.signal.aborted) { setProjects(result.projects); setLoaded(true); }
+      if (!controller.signal.aborted) { setProjects(result.projects.flatMap(({ locations }) => locations)); setLoaded(true); }
     } catch (cause) {
       if (!controller.signal.aborted) setError(messageFrom(cause));
     } finally {
@@ -64,11 +66,11 @@ export function ProjectsSettingsPage({ store }: {
     }
   }, [store]);
   useEffect(() => { void refresh(); return () => request.current?.abort(); }, [refresh, publication]);
-  const remove = async (project: ProjectSummary) => {
+  const remove = async (project: ProjectLocation) => {
     setPendingId(project.id);
     setNotice("");
     try {
-      await store.api.removeProject(project.id, { expectedRevision: project.revision });
+      await store.api.removeLocation(project.id, { expectedRevision: project.revision });
       setNotice(`Removed project ${project.label}. Files and history are retained.`);
       await refresh();
     } catch (cause) {
@@ -78,7 +80,7 @@ export function ProjectsSettingsPage({ store }: {
       setPendingId(undefined);
     }
   };
-  const restore = async (project: ProjectSummary) => {
+  const restore = async (project: ProjectLocation) => {
     if (pendingId) return;
     setPendingId(project.id);
     setMutationError("");

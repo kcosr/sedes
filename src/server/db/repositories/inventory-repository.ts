@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import { MAXIMUM_PROJECT_NAME_LENGTH } from "../../../shared/protocol/domain.js";
-import type { ProjectSummary } from "../../../shared/protocol/projects.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import type { ContextExcerpt } from "../../../shared/protocol/context-excerpts.js";
@@ -87,7 +86,8 @@ export type InventoryWorkspaceUpsert = WorkspaceObservation &
         /** Revalidation refreshes this known location and never inserts one. */
         readonly id: string;
         readonly project?: never;
-        readonly restoreRemoved?: never;
+        /** Only explicit user restore may revive this removed location. */
+        readonly restoreRemoved?: true;
       }
   );
 
@@ -925,23 +925,6 @@ export class InventoryRepository {
       WHERE tenant_id = ? AND owner_principal_id = ? AND removed_at IS NULL
       ORDER BY last_opened_at DESC, id`)
       .all(scope.tenantId, scope.principalId) as InventoryWorkspaceRecord[];
-  }
-
-  listWorkspaceRegistrations(scope: RequestScope): ProjectSummary[] {
-    return (this.database.prepare(`SELECT workspace.id, workspace.environment_id AS environmentId,
-      environment.label AS environmentLabel, workspace.display_name AS label,
-      workspace.canonical_path AS path, workspace.removed_at IS NOT NULL AS removed,
-      workspace.availability = 'available' AND environment.availability = 'available' AS available,
-      workspace.revision,
-      (SELECT COUNT(*) FROM application_threads AS thread WHERE thread.tenant_id = workspace.tenant_id
-        AND thread.owner_principal_id = workspace.owner_principal_id AND thread.workspace_id = workspace.id) AS threadCount
-      FROM workspaces AS workspace JOIN execution_environments AS environment
-        ON environment.tenant_id = workspace.tenant_id AND environment.owner_principal_id = workspace.owner_principal_id
-        AND environment.id = workspace.environment_id
-      WHERE workspace.tenant_id = ? AND workspace.owner_principal_id = ?
-      ORDER BY workspace.display_name COLLATE NOCASE, workspace.id`)
-      .all(scope.tenantId, scope.principalId) as Array<Omit<ProjectSummary, "removed" | "available"> & { removed: number; available: number }> )
-      .map(row => ({ ...row, removed: row.removed === 1, available: row.available === 1 }));
   }
 
   listThreadIdsForWorkspace(scope: RequestScope, workspaceId: string): string[] {

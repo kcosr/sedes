@@ -2991,6 +2991,7 @@ describe("InventorySidebar view modes", () => {
     expect(store.openWorkspace).toHaveBeenCalledWith(
       "/srv/new",
       "environment-ssh",
+      { kind: "new", name: "new" },
     );
     expect(
       JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY) ?? "{}"),

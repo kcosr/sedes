@@ -4,7 +4,22 @@ import type { UsageService } from "./usage/usage-service.js";
 import { environmentVariablesPreviewQuerySchema, environmentVariablesPreviewResultSchema, threadEnvironmentVariablesResultSchema } from "../shared/protocol/environment-variables.js";
 import type { EnvironmentVariablesService } from "./environment-variables/environment-variables-service.js";
 import { ProjectManagementService } from "./application/project-management-service.js";
-import { listProjectsResultSchema, projectSummarySchema, removeProjectRequestSchema } from "../shared/protocol/projects.js";
+import {
+  listProjectsResultSchema,
+  mergeProjectRequestSchema,
+  moveLocationRequestSchema,
+  openWorkspaceRequestSchema,
+  openWorkspaceResultSchema,
+  projectRemovalBlockedErrorSchema,
+  projectSummarySchema,
+  removeLocationRequestSchema,
+  removeProjectRequestSchema,
+  renameProjectRequestSchema,
+  restoreProjectRequestSchema,
+  restoreProjectResultSchema,
+} from "../shared/protocol/projects.js";
+import { projectIdSchema } from "../shared/protocol/domain.js";
+import { ProjectRemovalBlockedError } from "./db/repositories/inventory-repository.js";
 import { respondToQuestionResultSchema } from "../shared/protocol/api.js";
 import type { QuestionRequestService } from "./domain/question-request-service.js";
 import {
@@ -51,7 +66,6 @@ import {
   loadThreadHistoryRequestSchema,
   listAutomationRunsQuerySchema,
   listThreadDescendantsQuerySchema,
-  openWorkspaceRequestSchema,
   previewAutomationScheduleRequestSchema,
   putComposerAttachmentQuerySchema,
   putComposerAttachmentResultSchema,
@@ -264,7 +278,7 @@ import {
   requestIdMiddleware,
   securityHeaders,
 } from "./security/http-security.js";
-import { ApiError, errorMiddleware, notFound } from "./http/errors.js";
+import { ApiError, errorMiddleware, notFound, projectApiError } from "./http/errors.js";
 import type {
   ApplicationDrainController,
   HttpRequestOperationGate,
@@ -792,6 +806,15 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       execution: dependencies.execution,
       publications: dependencies.applicationSnapshots,
       discoverWorkspace: dependencies.discoverWorkspace,
+    });
+  const projectManagement = () =>
+    new ProjectManagementService({
+      inventory: dependencies.inventory.repository,
+      runtimes: dependencies.threadRuntimes,
+      files: dependencies.workspaceFiles,
+      ...(dependencies.terminals ? { terminals: dependencies.terminals.service } : {}),
+      locations: workspaceManagement(),
+      publications: dependencies.applicationSnapshots,
     });
   const providerPulse =
     dependencies.providerPulse ??
@@ -1795,22 +1818,70 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     );
   });
 
-  routes.get("/api/workspaces", async (request, response) => {
-    response.json(listProjectsResultSchema.parse({ projects: dependencies.inventory.repository.listWorkspaceRegistrations(await scope(request)) }));
+  routes.get("/api/projects", async (request, response) => {
+    response.json(listProjectsResultSchema.parse(projectManagement().list(await scope(request))));
+  });
+
+  routes.patch("/api/projects/:projectId", async (request, response) => {
+    const requestScope = await scope(request);
+    const projectId = projectIdSchema.parse(request.params.projectId);
+    const body = renameProjectRequestSchema.parse(request.body);
+    response.json(projectSummarySchema.parse(projectManagement().rename(requestScope, projectId, body)));
+  });
+
+  routes.post("/api/projects/:projectId/remove", async (request, response) => {
+    const requestScope = await scope(request);
+    const projectId = projectIdSchema.parse(request.params.projectId);
+    const body = removeProjectRequestSchema.parse(request.body);
+    try {
+      response.json(projectSummarySchema.parse(await projectManagement().removeProject(requestScope, projectId, body)));
+    } catch (error) {
+      if (!(error instanceof ProjectRemovalBlockedError)) throw error;
+      const projected = projectApiError(error);
+      response.status(projected.status).json(projectRemovalBlockedErrorSchema.parse({
+        error: projected.body.error,
+        blockers: error.blockers.map((blocker) => ({
+          locationId: blocker.workspaceId,
+          environmentId: blocker.environmentId,
+          kind: blocker.kind,
+          threadIds: blocker.threadIds,
+        })),
+      }));
+    }
+  });
+
+  routes.post("/api/projects/:projectId/restore", async (request, response) => {
+    const requestScope = await scope(request);
+    const projectId = projectIdSchema.parse(request.params.projectId);
+    const body = restoreProjectRequestSchema.parse(request.body);
+    const restored = await projectManagement().restoreProject(requestScope, projectId, body);
+    response.json(restoreProjectResultSchema.parse({
+      project: restored.project,
+      locations: restored.locations.map((location) => location.status === "restored"
+        ? location
+        : { id: location.id, status: "failed", error: projectApiError(location.cause).body.error }),
+    }));
+  });
+
+  routes.post("/api/projects/:projectId/merge", async (request, response) => {
+    const requestScope = await scope(request);
+    const projectId = projectIdSchema.parse(request.params.projectId);
+    const body = mergeProjectRequestSchema.parse(request.body);
+    response.json(projectSummarySchema.parse(await projectManagement().merge(requestScope, projectId, body)));
   });
 
   routes.post("/api/workspaces/:workspaceId/remove", async (request, response) => {
     const requestScope = await scope(request);
     const workspaceId = z.uuid().parse(request.params.workspaceId);
-    const body = removeProjectRequestSchema.parse(request.body);
-    const service = new ProjectManagementService({
-      inventory: dependencies.inventory.repository,
-      runtimes: dependencies.threadRuntimes,
-      files: dependencies.workspaceFiles,
-      ...(dependencies.terminals ? { terminals: dependencies.terminals.service } : {}),
-      publications: dependencies.applicationSnapshots,
-    });
-    response.json(projectSummarySchema.parse(await service.remove(requestScope, workspaceId, body)));
+    const body = removeLocationRequestSchema.parse(request.body);
+    response.json(projectSummarySchema.parse(await projectManagement().removeLocation(requestScope, workspaceId, body)));
+  });
+
+  routes.post("/api/workspaces/:workspaceId/move", async (request, response) => {
+    const requestScope = await scope(request);
+    const workspaceId = z.uuid().parse(request.params.workspaceId);
+    const body = moveLocationRequestSchema.parse(request.body);
+    response.json(projectSummarySchema.parse(await projectManagement().moveLocation(requestScope, workspaceId, body)));
   });
 
   routes.post("/api/workspaces/open", async (request, response) => {
@@ -1820,7 +1891,10 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       requestScope,
       body,
     );
-    response.status(201).json({ id: workspace.workspaceId });
+    response.status(201).json(openWorkspaceResultSchema.parse({
+      id: workspace.workspaceId,
+      projectId: workspace.projectId,
+    }));
   });
 
   routes.post(
@@ -1849,15 +1923,14 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     async (request, response) => {
       const requestScope = await scope(request);
       const workspaceId = z.uuid().parse(request.params.workspaceId);
-      const current = dependencies.inventory.repository.getWorkspace(
+      const workspace = await workspaceManagement().restoreLocation(
         requestScope,
         workspaceId,
       );
-      const workspace = await workspaceManagement().openWorkspace(requestScope, {
-        environmentId: current.environmentId,
-        path: current.canonicalPath,
-      });
-      response.json({ id: workspace.workspaceId });
+      response.json(openWorkspaceResultSchema.parse({
+        id: workspace.workspaceId,
+        projectId: workspace.projectId,
+      }));
     },
   );
 
