@@ -597,6 +597,7 @@
   leaves archived thread details available, and retryable history failures
   acquire a fresh reader on the next attempt. Open viewers receive restored
   inventory even when the provider cannot reconnect.
+  ([#35](https://github.com/kcosr/sedes/pull/35))
 
 - Removing a project or location while terminal work blocked it could return
   an internal server error. Terminal conflicts now return their own error from
