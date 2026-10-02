@@ -872,6 +872,25 @@ describe("project access", () => {
       resolveFor("thread_agent", "workspace.open", { environmentId: "env-a", path: "/srv/new" })
         .targetEnvironmentIds,
     ).toEqual(["env-a"]);
+    // Restoring a location of a project with no active location reaches
+    // outside every environment: thread agents ask, Tool clients are denied.
+    const empty = resolveFor("thread_agent", "workspace.open", {
+      environmentId: "env-a",
+      path: "/srv/removed",
+      projectId: "project-empty",
+    });
+    expect(empty.resolvedResourceRefs).toEqual([
+      { kind: "environment", id: "env-a", environmentId: "env-a", label: "Local" },
+      projectRef("project-empty"),
+    ]);
+    expect(reachesOutsideEveryEnvironment(empty)).toBe(true);
+    expect(() =>
+      resolveFor(toolClient(["env-a", "env-b"]), "workspace.open", {
+        environmentId: "env-a",
+        path: "/srv/removed",
+        projectId: "project-empty",
+      }),
+    ).toThrow(expect.objectContaining({ code: "permission_denied" }));
   });
 
   it("rechecks list queries against exactly the admitted environments", () => {

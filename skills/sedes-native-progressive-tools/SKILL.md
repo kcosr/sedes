@@ -54,8 +54,10 @@ directory Sedes does not know yet creates a new single-location project named
 after it; opening a known directory keeps its project. Workspace open can
 instead add a new directory to an existing project when you pass that
 `projectId`; naming a different project for a known directory is a conflict.
-Only the user can move a directory to another project or restore a removed
-project.
+A removed workspace is restored only when you pass its project's `projectId`,
+which needs the same access as reaching that project; without it, opening the
+directory fails and names the project. Only the user can move a directory to
+another project or restore a removed project.
 
 Tasks and Workpads belong to everyone (`global`), to a project (`project`,
 shared by all of its workspaces on every environment), or to one thread

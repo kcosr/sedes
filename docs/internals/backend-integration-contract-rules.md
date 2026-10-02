@@ -3668,12 +3668,16 @@ identities remain valid.
 
 Only an explicit validated open or restore can revive a removed location, at
 its original workspace ID, environment, and canonical path: a user's, or an
-agent's `workspace.open` when the location's project is active. Background
-revalidation and in-flight discovery must not restore it. A location restore
-is refused while its project is removed, fails when the directory now resolves
-to a different canonical path, and fails when the location moved to another
-project while validation was pending; the restoring transaction rechecks that
-project.
+agent's `workspace.open` that names the location's own active project.
+Restoring or adding a location changes which environments reach the project,
+so an agent or Tool client needs that project's authority, computed against
+its membership before the change and rechecked at commit. An agent's open
+without a project never revives a location; it fails and names the project.
+Background revalidation and in-flight discovery must not restore it. A
+location restore is refused while its project is removed, fails when the
+directory now resolves to a different canonical path, and fails when the
+location moved to another project while validation was pending; the restoring
+transaction rechecks that project.
 Project restore clears only the project's removal, then restores each
 requested location individually through that revalidating path and reports
 each outcome, so one failed location leaves the project and the others

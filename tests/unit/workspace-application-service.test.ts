@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { WorkspaceApplicationService } from "../../src/server/application/workspace-application-service.js";
 import { DomainError } from "../../src/server/domain/errors.js";
+import { RemovedLocationError } from "../../src/server/db/repositories/inventory-repository.js";
+import { createTrustedEnvironmentAuthorityGrant } from "../../src/server/agent-tools/environment/environment-authority.js";
 
 const scope = { tenantId: "tenant-1", principalId: "principal-1" };
 const agentAuthority = {
@@ -61,6 +63,7 @@ function fixture(overrides?: {
   readonly upsertWorkspace?: ReturnType<typeof vi.fn>;
   readonly discoverWorkspace?: ReturnType<typeof vi.fn>;
   readonly removed?: { readonly location: boolean; readonly project: boolean };
+  readonly resolveProject?: ReturnType<typeof vi.fn>;
 }) {
   const getEnvironment =
     overrides?.getEnvironment ??
@@ -137,6 +140,9 @@ function fixture(overrides?: {
       } as never,
       execution: { validateWorkspace } as never,
       publications: { handoffAuthoritativeReplacement },
+      ...(overrides?.resolveProject
+        ? { projectAuthority: { resolveProject: overrides.resolveProject } as never }
+        : {}),
       discoverWorkspace: discoverWorkspace as never,
       now: () => 123,
     }),
@@ -242,14 +248,100 @@ describe("WorkspaceApplicationService", () => {
       ),
     ).resolves.toMatchObject({ workspaceId: "workspace-a", projectId: "project-a" });
     expect(admitted.validateWorkspace).toHaveBeenCalledOnce();
-    // Agents cannot choose an existing project; a known directory keeps its own.
+    // Without a project, admission authorized no existing project: a known
+    // directory keeps its own, and a removed location is never revived.
     expect(admitted.upsertWorkspace).toHaveBeenCalledWith(
       scope,
+      expect.objectContaining({ project: { kind: "new", name: "sedes" } }),
+    );
+    expect(admitted.upsertWorkspace.mock.calls[0]![1]).not.toHaveProperty(
+      "restoreRemoved",
+    );
+  });
+
+  it("reports a removed location to an agent with its project instead of restoring it", async () => {
+    const current = fixture({
+      upsertWorkspace: vi.fn(() => {
+        throw new RemovedLocationError({
+          workspaceId: "workspace-a",
+          projectId: "project-elsewhere",
+        });
+      }),
+    });
+    await expect(
+      current.service.openWorkspaceForAgent(
+        scope,
+        { environmentId: "environment-a", path: "/srv/projects/sedes" },
+        agentAuthority,
+      ),
+    ).rejects.toMatchObject({
+      code: "conflict",
+      message:
+        "This directory is a removed location of project project-elsewhere. To restore it there, retry with that projectId.",
+    });
+    expect(current.handoffAuthoritativeReplacement).not.toHaveBeenCalled();
+    expect(current.discoverWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("authorizes a named project against its current membership and binds the commit to it", async () => {
+    let membershipRevision = 4;
+    const resolveProject = vi.fn(() => ({
+      id: "project-b",
+      membershipRevision,
+      memberEnvironmentIds: ["environment-b"],
+      label: "Beta",
+    }));
+    const projectRef = {
+      kind: "project",
+      id: "project-b",
+      revision: 4,
+      environmentId: "environment-b",
+      label: "Beta",
+    } as const;
+    // As admitted after approval: the project is reached through its member.
+    const approved = createTrustedEnvironmentAuthorityGrant({
+      ...agentAuthority,
+      tool: { id: "workspace.open", schemaVersion: 3 },
+      targetEnvironmentIds: ["environment-a", "environment-b"],
+      resolvedResourceRefs: [...agentAuthority.resolvedResourceRefs, projectRef],
+      admittedEnvironmentIds: ["environment-source", "environment-a", "environment-b"],
+    });
+    const input = {
+      environmentId: "environment-a",
+      path: "/srv/projects/sedes",
+      projectId: "project-b",
+    };
+    const current = fixture({ resolveProject });
+    await expect(
+      current.service.openWorkspaceForAgent(scope, input, approved),
+    ).resolves.toMatchObject({ workspaceId: "workspace-a" });
+    expect(current.upsertWorkspace).toHaveBeenCalledWith(
+      scope,
       expect.objectContaining({
-        project: { kind: "new", name: "sedes" },
+        project: {
+          kind: "existing",
+          projectId: "project-b",
+          expectedMembershipRevision: 4,
+        },
         restoreRemoved: true,
       }),
     );
+
+    // A grant that never authorized the project, as for a request admitted
+    // without it, cannot restore or add into it.
+    const unauthorized = fixture({ resolveProject });
+    await expect(
+      unauthorized.service.openWorkspaceForAgent(scope, input, agentAuthority),
+    ).rejects.toMatchObject({ code: "permission_denied" });
+    expect(unauthorized.upsertWorkspace).not.toHaveBeenCalled();
+
+    // A location edit since admission changes the project's refs.
+    membershipRevision = 5;
+    const changed = fixture({ resolveProject });
+    await expect(
+      changed.service.openWorkspaceForAgent(scope, input, approved),
+    ).rejects.toMatchObject({ code: "permission_denied" });
+    expect(changed.upsertWorkspace).not.toHaveBeenCalled();
   });
 
   it("keeps unknown environments non-enumerating and does not validate or mutate", async () => {

@@ -152,7 +152,7 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     id: "workspace.open",
     schemaVersion: 3,
     description:
-      "Opens an existing directory in a configured execution environment as a Sedes workspace, optionally as a location of an existing project; otherwise a new directory becomes its own project.",
+      "Opens an existing directory in a configured execution environment as a Sedes workspace, optionally as a location of an existing project; otherwise a new directory becomes its own project. Restoring a removed location requires naming its project.",
     catalog: { groupId: "context", label: "Open workspace", order: 40 },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),

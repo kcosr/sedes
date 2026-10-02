@@ -1,7 +1,9 @@
-import type {
-  InventoryProjectAssignment,
-  InventoryRepository,
+import {
+  RemovedLocationError,
+  type InventoryProjectAssignment,
+  type InventoryRepository,
 } from "../db/repositories/inventory-repository.js";
+import { CanonicalAgentToolRequestError } from "../agent-tools/invocation/canonical-agent-tool-request-error.js";
 import type { ValidatedWorkspace } from "../execution/contracts.js";
 import { DomainError } from "../domain/errors.js";
 import type { ExecutionEnvironmentProvider } from "../execution/contracts.js";
@@ -120,11 +122,15 @@ export class WorkspaceApplicationService {
   }
 
   /**
-   * An agent adds a new directory to a project only with that project's
-   * authority, so an agent on one host cannot make its directory reachable
-   * from a project hosted elsewhere without approval. Without a project, a
-   * new directory becomes its own project. A known directory keeps its
-   * project: naming another is a conflict, never an implicit move.
+   * An agent adds a new directory to a project, or restores a removed
+   * location of one, only with that project's authority: either changes the
+   * project's membership, and so the environments it is reachable from. An
+   * agent on one host therefore cannot make a project hosted elsewhere
+   * reachable from its own host without approval. Without a project, a new
+   * directory becomes its own project, an active location is returned
+   * unchanged, and a removed location is a conflict naming its project. A
+   * known directory keeps its project: naming another is a conflict, never
+   * an implicit move.
    */
   async openWorkspaceForAgent(
     scope: RequestScope,
@@ -148,13 +154,22 @@ export class WorkspaceApplicationService {
       signal,
     );
     if (request.projectId === undefined) {
-      return this.#admit(scope, validated, {
-        project: { kind: "new", name: validated.summary.displayName },
-        restoreRemoved: true,
-      });
+      // Admission authorized only the environment, not any existing project.
+      try {
+        return this.#admit(scope, validated, {
+          project: { kind: "new", name: validated.summary.displayName },
+        });
+      } catch (error) {
+        if (!(error instanceof RemovedLocationError)) throw error;
+        throw new CanonicalAgentToolRequestError(
+          "conflict",
+          `This directory is a removed location of project ${error.location.projectId}. To restore it there, retry with that projectId.`,
+        );
+      }
     }
-    // Rechecked in the admitting turn: a membership change since admission
-    // changes the project's refs and fails closed.
+    // Rechecked in the admitting turn against the project's current
+    // membership, and bound to that membership at commit: a location edit
+    // since admission changes the project's refs and fails closed.
     const project = this.input.projectAuthority?.resolveProject(
       scope,
       request.projectId,
@@ -171,7 +186,11 @@ export class WorkspaceApplicationService {
       ),
     );
     return this.#admit(scope, validated, {
-      project: { kind: "existing", projectId: request.projectId },
+      project: {
+        kind: "existing",
+        projectId: project.id,
+        expectedMembershipRevision: project.membershipRevision,
+      },
       restoreRemoved: true,
     });
   }
@@ -266,7 +285,7 @@ export class WorkspaceApplicationService {
     identity:
       | {
           readonly project: InventoryProjectAssignment;
-          readonly restoreRemoved: true;
+          readonly restoreRemoved?: true;
         }
       | {
           readonly id: string;

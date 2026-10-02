@@ -61,7 +61,16 @@ export type InventoryWorkspaceRecord = {
 
 /** The project a location joins when it is first admitted. */
 export type InventoryProjectAssignment =
-  | { readonly kind: "existing"; readonly projectId: string }
+  | {
+      readonly kind: "existing";
+      readonly projectId: string;
+      /**
+       * The membership the caller was authorized against. Any location edit
+       * since then fails the commit, so authority computed for one membership
+       * never admits a location into another.
+       */
+      readonly expectedMembershipRevision?: number;
+    }
   | { readonly kind: "new"; readonly name: string };
 
 type WorkspaceObservation = {
@@ -80,7 +89,11 @@ export type InventoryWorkspaceUpsert = WorkspaceObservation &
         /** Admission may insert the location; only a new row uses this. */
         readonly project: InventoryProjectAssignment;
         readonly id?: string;
-        /** Only explicit user open/restore may revive a removed location. */
+        /**
+         * Revives a removed location in its own active project: the user's
+         * explicit open, or an agent's open authorized for that project.
+         * Without it, a removed location is a `RemovedLocationError`.
+         */
         readonly restoreRemoved?: true;
         readonly expectedProjectId?: never;
       }
@@ -191,6 +204,23 @@ export class LocationConflictError extends DomainError {
         : "The project was removed. Restore it before restoring its locations.",
     );
     this.name = "LocationConflictError";
+  }
+}
+
+/**
+ * Admission found a removed location of an active project without leave to
+ * restore it. Restoring changes that project's membership, so it needs the
+ * project's own authority.
+ */
+export class RemovedLocationError extends DomainError {
+  constructor(
+    readonly location: { readonly workspaceId: string; readonly projectId: string },
+  ) {
+    super(
+      "conflict",
+      "This directory is a removed location of an existing project. Restore it in that project.",
+    );
+    this.name = "RemovedLocationError";
   }
 }
 
@@ -892,7 +922,10 @@ export class InventoryRepository {
         );
       }
       const removed = this.isWorkspaceRemoved(scope, existing.id);
-      if (removed && !input.restoreRemoved) this.assertWorkspaceActive(scope, existing.id);
+      // Revalidation never revives a location.
+      if (removed && !input.project && !input.restoreRemoved) {
+        this.assertWorkspaceActive(scope, existing.id);
+      }
       const project = this.#project(scope, existing.projectId);
       const conflict = (reason: InventoryLocationConflict["reason"]) =>
         new LocationConflictError({
@@ -906,12 +939,24 @@ export class InventoryRepository {
         });
       // Only a removed location can belong to a removed project.
       if (project.removedAt !== null) throw conflict("project_removed");
-      // An existing location keeps its project; joining another one is a move.
-      if (
-        input.project?.kind === "existing" &&
-        input.project.projectId !== existing.projectId
-      ) {
-        throw conflict("other_project");
+      if (input.project?.kind === "existing") {
+        // An existing location keeps its project; joining another one is a move.
+        if (input.project.projectId !== existing.projectId) {
+          throw conflict("other_project");
+        }
+        if (input.project.expectedMembershipRevision !== undefined) {
+          this.#assertProjectMembershipRevision(
+            project,
+            input.project.expectedMembershipRevision,
+          );
+        }
+      }
+      // Admission without leave to restore leaves the location removed.
+      if (removed && !input.restoreRemoved) {
+        throw new RemovedLocationError({
+          workspaceId: existing.id,
+          projectId: project.id,
+        });
       }
       const availability = input.available ? "available" : "unavailable";
       const changed =
@@ -3501,6 +3546,9 @@ export class InventoryRepository {
     const project = this.#project(scope, assignment.projectId);
     if (project.removedAt !== null) {
       throw new DomainError("invalid_transition", "The project was removed. Restore it before adding locations to it.");
+    }
+    if (assignment.expectedMembershipRevision !== undefined) {
+      this.#assertProjectMembershipRevision(project, assignment.expectedMembershipRevision);
     }
     return project.id;
   }

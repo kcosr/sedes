@@ -38,7 +38,7 @@ export function createWorkspaceOpenToolDefinition(
               minLength: 1,
               maxLength: 128,
               description:
-                "An existing active project to add a new directory to. Without it, a new directory becomes a new single-location project named after it. Naming a project other than a known directory's own is a conflict.",
+                "An existing active project to add a new directory to, or to restore a removed location of that project into. Without it, a new directory becomes a new single-location project named after it, and a removed location is a conflict. Naming a project other than a known directory's own is a conflict.",
             }),
           ),
         },
