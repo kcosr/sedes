@@ -34,7 +34,7 @@ SQLite's loader preferring a prebuild compiled for a newer glibc. No dependency
 lifecycle hooks run in the staged runtime. Build tools stay in the source
 checkout, outside the release.
 
-The pinned msgpackr 3.0.4 optional native packages need separate glibc handling:
+The pinned msgpackr-extract 3.0.4 optional native packages need separate glibc handling:
 Linux x64 retains the N-API glibc addon; Linux arm64 omits its musl-only optional
 package and uses msgpackr's JavaScript implementation. Other native packages
 are unaffected, and changing this pinned layout requires a packaging review.
