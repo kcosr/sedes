@@ -433,12 +433,9 @@ describe("WorkspaceApplicationService", () => {
 
     const otherProject = fixture();
     await expect(
-      otherProject.service.restoreLocation(
-        scope,
-        "workspace-a",
-        undefined,
-        "project-b",
-      ),
+      otherProject.service.restoreLocation(scope, "workspace-a", {
+        expectedProjectId: "project-b",
+      }),
     ).rejects.toMatchObject({ code: "conflict" });
     expect(otherProject.validateWorkspace).not.toHaveBeenCalled();
 

@@ -136,7 +136,7 @@ export class ProjectManagementService {
     const locations: RestoredLocationOutcome[] = [];
     for (const id of request.locationIds) {
       try {
-        await this.input.locations.restoreLocation(scope, id, undefined, projectId);
+        await this.input.locations.restoreLocation(scope, id, { expectedProjectId: projectId });
         locations.push({ id, status: "restored" });
       } catch (cause) {
         locations.push({ id, status: "failed", cause });

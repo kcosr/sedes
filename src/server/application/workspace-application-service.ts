@@ -145,12 +145,16 @@ export class WorkspaceApplicationService {
   async restoreLocation(
     scope: RequestScope,
     workspaceId: string,
-    signal = new AbortController().signal,
-    expectedProjectId?: string,
+    options: {
+      /** Fails the restore if the location has moved to another project. */
+      readonly expectedProjectId?: string;
+      readonly signal?: AbortSignal;
+    } = {},
   ): Promise<OpenedWorkspaceSummary> {
+    const signal = options.signal ?? new AbortController().signal;
     throwIfAborted(signal);
     const current = this.input.inventory.getWorkspace(scope, workspaceId);
-    if (expectedProjectId !== undefined && current.projectId !== expectedProjectId) {
+    if (options.expectedProjectId !== undefined && current.projectId !== options.expectedProjectId) {
       throw new DomainError(
         "conflict",
         "The location moved to another project. Refresh and try again.",
