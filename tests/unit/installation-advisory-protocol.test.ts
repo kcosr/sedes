@@ -26,6 +26,7 @@ const advisory = {
 function emptySnapshot(advisories: readonly unknown[]) {
   return {
     environments: [],
+    projects: [{ id: "project-1", name: "Project", revision: 0 }],
     workspaces: [],
     threads: [],
     groups: [],

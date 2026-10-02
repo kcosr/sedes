@@ -68,6 +68,7 @@ describe("WorkspacePanelTenantRegistry", () => {
         workspace: {
           id: "workspace-1",
           environmentId: "local",
+          projectId: "project-1",
           label: { text: "Workspace" },
           displayPath: { text: "/workspace" },
           available: true,
@@ -79,6 +80,7 @@ describe("WorkspacePanelTenantRegistry", () => {
         workspace: {
           id: "workspace-1",
           environmentId: "local",
+          projectId: "project-1",
           label: { text: "Workspace" },
           displayPath: { text: "/workspace" },
           available: false,

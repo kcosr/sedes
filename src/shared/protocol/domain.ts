@@ -5,6 +5,7 @@ const opaqueIdPattern = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 export const opaqueIdSchema = z.string().min(1).max(128).regex(opaqueIdPattern);
 export const threadIdSchema = z.uuid();
 export const workspaceIdSchema = z.uuid();
+export const projectIdSchema = z.uuid();
 export const environmentIdSchema = z.uuid();
 export const stashIdSchema = z.uuid();
 export const taskIdSchema = z.uuid();
@@ -13,6 +14,16 @@ export const outputArtifactIdSchema = z
   .regex(/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/u);
 export const mutationIdSchema = z.uuid();
 export const applicationTurnIdSchema = z.string().min(1).max(160);
+
+/** Project names are bounded in code points, as SQLite length() counts them. */
+export const MAXIMUM_PROJECT_NAME_LENGTH = 240;
+export const projectNameSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (name) => [...name].length <= MAXIMUM_PROJECT_NAME_LENGTH,
+    `A project name must contain at most ${MAXIMUM_PROJECT_NAME_LENGTH} characters.`,
+  );
 
 export const automationRunModeSchema = z.enum(["same_thread", "clone"]);
 export type AutomationRunMode = z.infer<typeof automationRunModeSchema>;

@@ -94,10 +94,12 @@ function snapshot(
         directoryBrowsing: "unavailable",
       },
     ],
+    projects: [{ id: "project-1", name: "Project", revision: 0 }],
     workspaces: [
       {
         id: "workspace-1",
         environmentId: "environment-1",
+        projectId: "project-1",
         label: { text: "Project" },
         displayPath: { text: "/project" },
         available: true,

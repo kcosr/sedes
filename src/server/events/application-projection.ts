@@ -9,6 +9,7 @@ import { MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES } from "../../shared/protocol
 export const MAXIMUM_APPLICATION_INCREMENTAL_REFERENCE_CHECKS = 64;
 const COLLECTIONS = [
   "environments",
+  "projects",
   "workspaces",
   "threads",
   "groups",
@@ -302,8 +303,10 @@ export class ApplicationProjection {
             (prior.value as Values["threads"]).workspaceId !==
               (value as Values["threads"]).workspaceId) ||
           (collection === "workspaces" &&
-            (prior.value as Values["workspaces"]).environmentId !==
-              (value as Values["workspaces"]).environmentId));
+            ((prior.value as Values["workspaces"]).environmentId !==
+              (value as Values["workspaces"]).environmentId ||
+              (prior.value as Values["workspaces"]).projectId !==
+                (value as Values["workspaces"]).projectId)));
       const affected = affectsDependents
         ? this.#dependents.get(key(collection, id))
         : undefined;
@@ -383,10 +386,13 @@ export class ApplicationProjection {
   }
   #references(collection: Collection, raw: Value): string[] {
     switch (collection) {
-      case "workspaces":
+      case "workspaces": {
+        const value = raw as Values["workspaces"];
         return [
-          key("environments", (raw as Values["workspaces"]).environmentId),
+          key("environments", value.environmentId),
+          key("projects", value.projectId),
         ];
+      }
       case "executionTargets":
         return [
           key(

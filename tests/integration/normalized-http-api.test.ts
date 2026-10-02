@@ -235,6 +235,7 @@ function threadSnapshot(
     workspace: {
       id: workspace.id,
       environmentId: workspace.environmentId,
+      projectId: workspace.projectId,
       label: { text: workspace.displayName },
       displayPath: { text: workspace.canonicalPath },
       available: workspace.availability === "available",
@@ -806,9 +807,15 @@ async function fixture(
             directoryBrowsing: "available",
           },
         ],
+        projects: repository.listActiveProjects(scope).map((project) => ({
+          id: project.id,
+          name: project.name,
+          revision: project.revision,
+        })),
         workspaces: workspaces.map((workspace) => ({
           id: workspace.id,
           environmentId: workspace.environmentId,
+          projectId: workspace.projectId,
           label: { text: workspace.displayName },
           displayPath: { text: workspace.canonicalPath },
           available: workspace.availability === "available",

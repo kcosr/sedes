@@ -257,6 +257,7 @@ function makeState(
       {
         id: "workspace-1",
         environmentId: "environment-1",
+        projectId: "project-1",
         label: { text: "Sedes" },
         displayPath: { text: "/workspace/sedes" },
         available: true,
@@ -948,6 +949,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-1",
             environmentId: "environment-1",
+            projectId: "project-1",
             label: { text: "Sedes" },
             displayPath: { text: "/workspace/sedes" },
             available: true,
@@ -955,6 +957,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-2",
             environmentId: "environment-1",
+            projectId: "project-1",
             label: { text: "Console" },
             displayPath: { text: "/workspace/console" },
             available: true,
@@ -1267,6 +1270,7 @@ describe("InventorySidebar view modes", () => {
       {
         id: "workspace-1",
         environmentId: "environment-local",
+        projectId: "project-1",
         label: { text: "Sedes" },
         displayPath: { text: "/workspace/sedes" },
         available: true,
@@ -1274,6 +1278,7 @@ describe("InventorySidebar view modes", () => {
       {
         id: "workspace-remote",
         environmentId: "environment-remote",
+        projectId: "project-1",
         label: { text: "Sedes" },
         displayPath: { text: "/workspace/sedes" },
         available: true,
@@ -1393,6 +1398,7 @@ describe("InventorySidebar view modes", () => {
         {
           id: "workspace-1",
           environmentId: "environment-local",
+          projectId: "project-1",
           label: { text: "Sedes" },
           displayPath: { text: "/workspace/sedes" },
           available: true,
@@ -1400,6 +1406,7 @@ describe("InventorySidebar view modes", () => {
         {
           id: "workspace-remote",
           environmentId: "environment-remote",
+          projectId: "project-1",
           label: { text: "Sedes" },
           displayPath: { text: "/workspace/sedes" },
           available: true,
@@ -1469,6 +1476,7 @@ describe("InventorySidebar view modes", () => {
       {
         id: "workspace-1",
         environmentId: "environment-local",
+        projectId: "project-1",
         label: { text: "Sedes" },
         displayPath: { text: "/workspace/sedes" },
         available: true,
@@ -1476,6 +1484,7 @@ describe("InventorySidebar view modes", () => {
       {
         id: "workspace-remote",
         environmentId: "environment-remote",
+        projectId: "project-1",
         label: { text: "Sedes" },
         displayPath: { text: "/workspace/sedes" },
         available: true,
@@ -2028,6 +2037,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-remote",
             environmentId: "environment-ssh",
+            projectId: "project-1",
             label: { text: "Sedes" },
             displayPath: { text: "/srv/sedes" },
             available: true,
@@ -2104,6 +2114,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-1",
             environmentId: "environment-local",
+            projectId: "project-1",
             label: { text: "agent-workspaces" },
             displayPath: { text: "/home/me/agent-workspaces" },
             available: true,
@@ -2111,6 +2122,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-remote",
             environmentId: "environment-ssh",
+            projectId: "project-1",
             label: { text: "agent-workspaces" },
             displayPath: { text: "/srv/agent-workspaces" },
             available: true,
@@ -2247,9 +2259,9 @@ describe("InventorySidebar view modes", () => {
         { id: "remote-env", kind: "ssh", label: { text: "Remote host" }, available: false, directoryBrowsing: "unavailable" },
       ],
       workspaces: [
-        { id: "workspace-1", environmentId: "environment-1", label: { text: "Sedes" }, displayPath: { text: "/code/sedes" }, available: true },
-        { id: "remote", environmentId: "remote-env", label: { text: "Sedes" }, displayPath: { text: "/srv/sedes" }, available: false },
-        { id: "other", environmentId: "environment-1", label: { text: "Other" }, displayPath: { text: "/code/other" }, available: true },
+        { id: "workspace-1", environmentId: "environment-1", projectId: "project-1", label: { text: "Sedes" }, displayPath: { text: "/code/sedes" }, available: true },
+        { id: "remote", environmentId: "remote-env", projectId: "project-1", label: { text: "Sedes" }, displayPath: { text: "/srv/sedes" }, available: false },
+        { id: "other", environmentId: "environment-1", projectId: "project-1", label: { text: "Other" }, displayPath: { text: "/code/other" }, available: true },
       ],
     });
     expect(screen.getAllByTestId("project-stack")).toHaveLength(2);
@@ -2282,8 +2294,8 @@ describe("InventorySidebar view modes", () => {
         { id: "remote-env", kind: "ssh", label: { text: "Remote" }, available: true, directoryBrowsing: "unavailable" },
       ],
       workspaces: [
-        { id: "workspace-1", environmentId: "environment-1", label: { text: "Local only" }, displayPath: { text: "/code/local" }, available: true },
-        { id: "remote", environmentId: "remote-env", label: { text: "Remote only" }, displayPath: { text: "/srv/remote" }, available: true },
+        { id: "workspace-1", environmentId: "environment-1", projectId: "project-1", label: { text: "Local only" }, displayPath: { text: "/code/local" }, available: true },
+        { id: "remote", environmentId: "remote-env", projectId: "project-1", label: { text: "Remote only" }, displayPath: { text: "/srv/remote" }, available: true },
       ],
     });
     expect(screen.getByText("Remote work")).toBeVisible();
@@ -2302,8 +2314,8 @@ describe("InventorySidebar view modes", () => {
       makeThread("named", "Sentinel-named work"),
       makeThread("other", "Other work", { workspaceId: "other" }),
     ], { workspaces: [
-      { id: "workspace-1", environmentId: "environment-1", label: { text: "__all_projects__" }, displayPath: { text: "/repo/__all_projects__" }, available: true },
-      { id: "other", environmentId: "environment-1", label: { text: "Other" }, displayPath: { text: "/repo/other" }, available: true },
+      { id: "workspace-1", environmentId: "environment-1", projectId: "project-1", label: { text: "__all_projects__" }, displayPath: { text: "/repo/__all_projects__" }, available: true },
+      { id: "other", environmentId: "environment-1", projectId: "project-1", label: { text: "Other" }, displayPath: { text: "/repo/other" }, available: true },
     ] });
     const picker = screen.getByRole("combobox", { name: "Project filter" });
     await user.click(picker);
@@ -2321,8 +2333,8 @@ describe("InventorySidebar view modes", () => {
     const user = userEvent.setup();
     renderSidebar([makeThread("thread-1", "Existing work")], {
       workspaces: [
-        { id: "workspace-1", environmentId: "environment-1", label: { text: "Sedes" }, displayPath: { text: "/srv/code/sedes" }, available: false },
-        { id: "workspace-other", environmentId: "environment-1", label: { text: "Other" }, displayPath: { text: "/srv/other" }, available: true },
+        { id: "workspace-1", environmentId: "environment-1", projectId: "project-1", label: { text: "Sedes" }, displayPath: { text: "/srv/code/sedes" }, available: false },
+        { id: "workspace-other", environmentId: "environment-1", projectId: "project-1", label: { text: "Other" }, displayPath: { text: "/srv/other" }, available: true },
       ],
     });
     const project = screen.getByRole("combobox", { name: "Project filter" });
@@ -2364,6 +2376,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-1",
             environmentId: "environment-1",
+            projectId: "project-1",
             label: { text: "Local project" },
             displayPath: { text: "/local" },
             available: true,
@@ -2371,6 +2384,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-remote",
             environmentId: "environment-1",
+            projectId: "project-1",
             label: { text: "Remote project" },
             displayPath: { text: "/remote" },
             available: true,
@@ -2452,9 +2466,9 @@ describe("InventorySidebar view modes", () => {
       { id: "remote", kind: "ssh" as const, label: { text: "AW personal" }, available: true, directoryBrowsing: "unavailable" as const },
     ];
     const workspaces = [
-      { id: "local-one", environmentId: "local", label: { text: "One" }, displayPath: { text: "/one" }, available: true },
-      { id: "local-two", environmentId: "local", label: { text: "Two" }, displayPath: { text: "/two" }, available: true },
-      { id: "remote-one", environmentId: "remote", label: { text: "Remote" }, displayPath: { text: "/remote" }, available: true },
+      { id: "local-one", environmentId: "local", projectId: "project-1", label: { text: "One" }, displayPath: { text: "/one" }, available: true },
+      { id: "local-two", environmentId: "local", projectId: "project-1", label: { text: "Two" }, displayPath: { text: "/two" }, available: true },
+      { id: "remote-one", environmentId: "remote", projectId: "project-1", label: { text: "Remote" }, displayPath: { text: "/remote" }, available: true },
     ];
     const executionTargets = environments.map((environment) => ({
       id: `target-${environment.id}`, environmentId: environment.id,
@@ -2504,6 +2518,7 @@ describe("InventorySidebar view modes", () => {
     const workspaces = ["Alpha", "Beta"].map((name) => ({
       id: `workspace-${name}`,
       environmentId: "environment-1",
+      projectId: "project-1",
       label: { text: name },
       displayPath: { text: `/workspace/${name}` },
       available: true,
@@ -2536,6 +2551,7 @@ describe("InventorySidebar view modes", () => {
       {
         id: "workspace-a",
         environmentId: "environment-1",
+        projectId: "project-1",
         label: { text: "Alpha" },
         displayPath: { text: "/workspace/alpha" },
         available: true,
@@ -2543,6 +2559,7 @@ describe("InventorySidebar view modes", () => {
       {
         id: "workspace-b",
         environmentId: "environment-1",
+        projectId: "project-1",
         label: { text: "Beta" },
         displayPath: { text: "/workspace/beta" },
         available: true,
@@ -2595,6 +2612,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-a",
             environmentId: "environment-1",
+            projectId: "project-1",
             label: { text: "Alpha" },
             displayPath: { text: "/workspace/alpha" },
             available: true,
@@ -2602,6 +2620,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-b",
             environmentId: "environment-1",
+            projectId: "project-1",
             label: { text: "Beta" },
             displayPath: { text: "/workspace/beta" },
             available: true,
@@ -2641,6 +2660,7 @@ describe("InventorySidebar view modes", () => {
       {
         id: "workspace-a",
         environmentId: "environment-1",
+        projectId: "project-1",
         label: { text: "Alpha" },
         displayPath: { text: "/workspace/alpha" },
         available: true,
@@ -2648,6 +2668,7 @@ describe("InventorySidebar view modes", () => {
       {
         id: "workspace-b",
         environmentId: "environment-1",
+        projectId: "project-1",
         label: { text: "Beta" },
         displayPath: { text: "/workspace/beta" },
         available: true,
@@ -2918,6 +2939,7 @@ describe("InventorySidebar view modes", () => {
         {
           id: "workspace-remote",
           environmentId: "environment-ssh",
+          projectId: "project-1",
           label: { text: "Remote project" },
           displayPath: { text: "/srv/project" },
           available: true,
@@ -2949,6 +2971,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-remote",
             environmentId: "environment-ssh",
+            projectId: "project-1",
             label: { text: "Remote project" },
             displayPath: { text: "/srv/project" },
             available: true,
@@ -2956,6 +2979,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-new",
             environmentId: "environment-ssh",
+            projectId: "project-1",
             label: { text: "New remote project" },
             displayPath: { text: "/srv/new" },
             available: true,
@@ -3001,6 +3025,7 @@ describe("InventorySidebar view modes", () => {
     const remoteWorkspace = {
       id: "workspace-remote",
       environmentId: "environment-ssh",
+      projectId: "project-1",
       label: { text: "Remote project" },
       displayPath: { text: "/srv/project" },
       available: true,
@@ -3029,6 +3054,7 @@ describe("InventorySidebar view modes", () => {
           {
             id: "workspace-new",
             environmentId: "environment-ssh",
+            projectId: "project-1",
             label: { text: "New remote project" },
             displayPath: { text: "/srv/new" },
             available: true,
@@ -3078,6 +3104,7 @@ describe("InventorySidebar view modes", () => {
             {
               id: "workspace-new",
               environmentId: environment.id,
+              projectId: "project-1",
               label: { text: "New project" },
               displayPath: { text: "/srv/new" },
               available: true,

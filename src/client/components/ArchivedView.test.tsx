@@ -134,6 +134,7 @@ function makeSnapshot(
       {
         id: "ws-sedes",
         environmentId: "env-local",
+        projectId: "project-1",
         label: { text: "sedes" },
         displayPath: { text: "/src/sedes" },
         available: true,
@@ -141,6 +142,7 @@ function makeSnapshot(
       {
         id: "ws-acme",
         environmentId: "env-local",
+        projectId: "project-1",
         label: { text: "acme-web" },
         displayPath: { text: "/src/acme-web" },
         available: true,
@@ -253,6 +255,7 @@ describe("ArchivedView rows", () => {
           {
             id: "workspace-1",
             environmentId: "environment-1",
+            projectId: "project-1",
             label: { text: "sedes" },
             displayPath: { text: "/srv/sedes" },
             available: false,

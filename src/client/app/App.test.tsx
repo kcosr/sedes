@@ -158,6 +158,7 @@ const applicationSnapshot = {
       directoryBrowsing: "available" as const,
     },
   ],
+  projects: [{ id: "project-1", name: "Project", revision: 0 }],
   workspaces: [],
   executionTargets: [],
   defaultNewThreadTargetId: null,
@@ -1687,6 +1688,7 @@ describe("application endpoint startup", () => {
         {
           id: "workspace-1",
           environmentId: "10000000-0000-4000-8000-000000000002",
+          projectId: "project-1",
           label: { text: "Back test workspace" },
           displayPath: { text: "/back-test" },
           available: true,

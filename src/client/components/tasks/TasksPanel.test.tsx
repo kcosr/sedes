@@ -336,6 +336,7 @@ const WORKSPACES = [
   {
     id: "workspace-1",
     environmentId: "local",
+    projectId: "project-1",
     label: { text: "acme-web" },
     displayPath: { text: "/workspace" },
     available: true,
@@ -343,6 +344,7 @@ const WORKSPACES = [
   {
     id: "workspace-2",
     environmentId: "local",
+    projectId: "project-1",
     label: { text: "billing-service" },
     displayPath: { text: "/billing" },
     available: true,

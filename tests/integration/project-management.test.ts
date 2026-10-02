@@ -10,6 +10,7 @@ import { QueuedInputRepository } from "../../src/server/db/repositories/queued-i
 import { ProjectManagementService } from "../../src/server/application/project-management-service.js";
 import { WorkspaceApplicationService } from "../../src/server/application/workspace-application-service.js";
 import { DatabaseApplicationThreadSummaryReader } from "../../src/server/application/database-application-summary-reader.js";
+import { ApplicationSnapshotService } from "../../src/server/application/application-snapshot-service.js";
 import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
 import { ThreadRuntimeNotIdleError } from "../../src/server/events/thread-runtime-coordinator.js";
 
@@ -129,6 +130,29 @@ describe("project registration lifecycle", () => {
     const updatedPad=pads.update(f.scope,pad.id,{scope:target,title:"Updated retained pad",expectedRevision:pad.revision});
     expect(tasks.move(f.scope,task.id,{scope:{kind:"global"},expectedRevision:updatedTask.revision,mutationId:randomUUID(),now:700}).scopeKind).toBe("global");
     expect(pads.update(f.scope,pad.id,{scope:{kind:"global"},expectedRevision:updatedPad.revision}).scope).toEqual({kind:"global"});
+  });
+
+  it("captures active projects, including empty ones, and each location's project in the application snapshot", async () => {
+    const f=fixture();
+    const location=(canonicalPath:string,name:string,now:number)=>f.inventory.upsertWorkspace(f.scope,{environmentId:f.environment.id,canonicalPath,displayName:name,
+      project:{kind:"new",name},available:true,trustState:"trusted",environmentConfigurationRevision:f.environment.configurationRevision,now});
+    const emptied=location("/tmp/project-management-emptied","Emptied",500);
+    f.inventory.removeWorkspace(f.scope,emptied.id,{expectedRevision:emptied.revision,expectedThreadIds:[],now:510});
+    const removed=location("/tmp/project-management-removed","Removed",520);
+    const removedProject=f.inventory.getProject(f.scope,removed.projectId);
+    const inspection=f.inventory.inspectProjectRemoval(f.scope,removed.projectId,{expectedRevision:removedProject.revision,expectedMembershipRevision:removedProject.membershipRevision});
+    f.inventory.removeProject(f.scope,removed.projectId,{expectedRevision:removedProject.revision,expectedMembershipRevision:removedProject.membershipRevision,expectedLocations:inspection.locations,now:530});
+    const [summary]=f.summaries.list(f.scope,f.environment.id);
+    const snapshot=await new ApplicationSnapshotService(f.inventory,f.summaries,{captureLoadedState:async()=>undefined},
+      {read:async()=>({executionTargets:[{id:summary!.targetId,environmentId:f.environment.id,label:{text:"Target"},backend:summary!.backend,workspaceExecution:{kind:"direct_only"},available:true}],defaultTargetId:null}),requireSelectable:async()=>undefined},
+      {list:()=>({forkOrigins:[],lineagePlacements:[],lineageFamilies:[]})},
+      {listAssociated:()=>[],listAssociatedByThread:()=>[],findAssociated:()=>undefined},
+      {list:()=>[]},()=>"unavailable",{summariesByThread:()=>new Map()}).capture(f.scope);
+    expect(snapshot.projects).toEqual([
+      {id:emptied.projectId,name:"Emptied",revision:f.inventory.getProject(f.scope,emptied.projectId).revision},
+      {id:f.workspace.projectId,name:"Project",revision:f.inventory.getProject(f.scope,f.workspace.projectId).revision},
+    ]);
+    expect(snapshot.workspaces).toEqual([expect.objectContaining({id:f.workspace.id,projectId:f.workspace.projectId})]);
   });
 
   it("blocks queued work without mutating it", async () => {

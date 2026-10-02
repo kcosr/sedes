@@ -15,6 +15,7 @@ const workspaces = [
   {
     id: "workspace-local",
     environmentId: "environment-local",
+    projectId: "project-1",
     label: { text: "agent-workspaces" },
     displayPath: { text: "/home/me/agent-workspaces" },
     available: true,
@@ -22,6 +23,7 @@ const workspaces = [
   {
     id: "workspace-ssh",
     environmentId: "environment-ssh",
+    projectId: "project-1",
     label: { text: "agent-workspaces" },
     displayPath: { text: "/srv/agent-workspaces" },
     available: true,
@@ -53,6 +55,7 @@ describe("sidebar scope presentation", () => {
     const duplicate = {
       id: "workspace-ssh-2",
       environmentId: "environment-ssh",
+      projectId: "project-1",
       label: { text: "agent-workspaces" },
       displayPath: { text: "/opt/agent-workspaces" },
       available: true,

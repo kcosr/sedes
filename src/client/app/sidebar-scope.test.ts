@@ -59,6 +59,7 @@ const catalog: SidebarScopeCatalog = {
     {
       id: "workspace-a",
       environmentId: "env-a",
+      projectId: "project-1",
       label: { text: "Sedes" },
       displayPath: { text: "/work/sedes" },
       available: true,
@@ -66,6 +67,7 @@ const catalog: SidebarScopeCatalog = {
     {
       id: "workspace-b",
       environmentId: "env-b",
+      projectId: "project-1",
       label: { text: "Sedes" },
       displayPath: { text: "/work/sedes" },
       available: false,

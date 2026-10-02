@@ -23,6 +23,7 @@ const agentId = "11111111-1111-4111-8111-111111111111";
 const workspace = {
   id: "workspace-1",
   environmentId: "environment-1",
+  projectId: "project-1",
   label: { text: "Sedes" },
   displayPath: { text: "/workspace/sedes" },
   available: true,

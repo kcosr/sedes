@@ -63,11 +63,13 @@ function snapshotService(tasks: readonly AssociatedTaskRecord[]) {
         revision: 0,
       },
     ],
+    listActiveProjects: () => [{ id: "project-1", name: "Project", revision: 0 }],
     listWorkspaces: () => [
       {
         tenantId: scope.tenantId,
         ownerPrincipalId: scope.principalId,
         environmentId: "environment-1",
+        projectId: "project-1",
         id: WORKSPACE_ID,
         canonicalPath: "/tmp/task-workspace",
         displayName: "Task workspace",

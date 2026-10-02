@@ -46,6 +46,7 @@ const catalog: SidebarScopeCatalog = {
     {
       id: "ws-a",
       environmentId: "env-a",
+      projectId: "project-1",
       label: { text: "sedes" },
       displayPath: { text: "/src/sedes" },
       available: true,

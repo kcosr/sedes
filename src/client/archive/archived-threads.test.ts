@@ -92,6 +92,7 @@ function snapshot(
       {
         id: "ws-sedes",
         environmentId: "env-local",
+        projectId: "project-1",
         label: { text: "sedes" },
         displayPath: { text: "~/src/sedes" },
         available: true,
@@ -99,6 +100,7 @@ function snapshot(
       {
         id: "ws-acme",
         environmentId: "env-local",
+        projectId: "project-1",
         label: { text: "acme-web" },
         displayPath: { text: "~/src/acme-web" },
         available: true,
@@ -106,6 +108,7 @@ function snapshot(
       {
         id: "ws-infra",
         environmentId: "env-ssh",
+        projectId: "project-1",
         label: { text: "infra" },
         displayPath: { text: "/srv/infra" },
         available: false,

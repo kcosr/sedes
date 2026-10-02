@@ -61,6 +61,7 @@ describe("Workbench new-thread creation scope", () => {
       {
         id: "workspace-1",
         environmentId: "environment-1",
+        projectId: "project-1",
         label: { text: "First" },
         displayPath: { text: "/first" },
         available: true,
@@ -68,6 +69,7 @@ describe("Workbench new-thread creation scope", () => {
       {
         id: "workspace-2",
         environmentId: "environment-2",
+        projectId: "project-1",
         label: { text: "Second" },
         displayPath: { text: "/second" },
         available: true,

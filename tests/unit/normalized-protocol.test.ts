@@ -2042,6 +2042,7 @@ describe("normalized conversation protocol", () => {
       workspace: {
         id: "workspace",
         environmentId: "environment",
+        projectId: "project-1",
         label: { text: "Workspace" },
         displayPath: { text: "/workspace" },
         available: true,
@@ -2364,13 +2365,14 @@ describe("application sidebar background-work wire contract", () => {
   };
   const snapshot = {
     environments: [{ id: "environment-1", kind: "local", label: { text: "Local" }, available: true, directoryBrowsing: "available" }],
-    workspaces: [{ id: "workspace-1", environmentId: "environment-1", label: { text: "Workspace" }, displayPath: { text: "/workspace" }, available: true }],
+    projects: [{ id: "project-1", name: "Project", revision: 0 }],
+    workspaces: [{ id: "workspace-1", environmentId: "environment-1", projectId: "project-1", label: { text: "Workspace" }, displayPath: { text: "/workspace" }, available: true }],
     executionTargets: [{ id: "target-1", environmentId: "environment-1", label: { text: "Claude" }, backend, available: true, workspaceExecution: { kind: "direct_only" } }],
     threads: [thread], groups: [], forkOrigins: [], lineagePlacements: [], lineageFamilies: [],
     advisories: [], defaultNewThreadTargetId: "target-1", counts, tasks: [],
   };
   it("carries the same counts through snapshot and thread-upsert events without changing run state", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(132);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(133);
     expect(normalizedApplicationEventSchema.parse({ type: "snapshot", generation: "generation-1", snapshot }))
       .toMatchObject({ snapshot: { threads: [{ runState: "idle", backgroundWork }] } });
     expect(normalizedApplicationEventSchema.parse({ type: "thread_upsert", generation: "generation-1", thread, counts }))

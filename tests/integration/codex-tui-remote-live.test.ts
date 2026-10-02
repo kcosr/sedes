@@ -1862,6 +1862,7 @@ function normalizedFixtureSnapshot(
     workspace: {
       id: "workspace-feature-033-normalized-live",
       environmentId: "environment-feature-033-normalized-live",
+      projectId: "project-1",
       label: { text: "Fixture workspace" },
       displayPath: { text: "/fixture-workspace" },
       available: true,

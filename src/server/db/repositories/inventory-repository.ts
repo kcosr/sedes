@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
+import { MAXIMUM_PROJECT_NAME_LENGTH } from "../../../shared/protocol/domain.js";
 import type { ProjectSummary } from "../../../shared/protocol/projects.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
@@ -154,8 +155,6 @@ export class ProjectRemovalBlockedError extends DomainError {
     this.name = "ProjectRemovalBlockedError";
   }
 }
-
-const MAXIMUM_PROJECT_NAME_LENGTH = 240;
 
 function assertProjectName(name: string): void {
   // SQLite length() counts code points, as does string iteration.
@@ -985,6 +984,14 @@ export class InventoryRepository {
       this.#touchProjectMembership(scope, this.getWorkspace(scope, workspaceId).projectId, input.now);
       this.#bumpGeneration(scope);
     })();
+  }
+
+  /** Active projects, including empty ones, without their locations. */
+  listActiveProjects(scope: RequestScope): InventoryProjectRecord[] {
+    return this.database.prepare(`SELECT ${projectColumns} FROM projects
+      WHERE tenant_id = ? AND owner_principal_id = ? AND removed_at IS NULL
+      ORDER BY name COLLATE NOCASE, id`)
+      .all(scope.tenantId, scope.principalId) as InventoryProjectRecord[];
   }
 
   /** Every project with every location, including removed ones. */

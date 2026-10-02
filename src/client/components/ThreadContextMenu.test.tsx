@@ -2191,10 +2191,12 @@ function sidebarFixture(
         directoryBrowsing: "unavailable" as const,
       },
     ],
+    projects: [{ id: "project-1", name: "Project", revision: 0 }],
     workspaces: [
       {
         id: "workspace-1",
         environmentId: "environment-1",
+        projectId: "project-1",
         label: { text: "Sedes" },
         displayPath: { text: "/workspace/sedes" },
         available: true,

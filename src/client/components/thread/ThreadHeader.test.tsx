@@ -112,6 +112,7 @@ function makeSnapshot({
     workspace: {
       id: "workspace-1",
       environmentId: "environment-1",
+      projectId: "project-1",
       label: { text: "sedes" },
       displayPath: { text: "/workspace" },
       available: true,
@@ -213,6 +214,7 @@ function fixture(
               {
                 id: "workspace-1",
                 environmentId: "environment-1",
+                projectId: "project-1",
                 label: { text: "sedes" },
                 displayPath: { text: "/workspace" },
                 available: true,
@@ -220,6 +222,7 @@ function fixture(
               {
                 id: "workspace-2",
                 environmentId: "environment-1",
+                projectId: "project-1",
                 label: { text: "second" },
                 displayPath: { text: "/second" },
                 available: true,
