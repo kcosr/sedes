@@ -425,6 +425,11 @@
   Populate existing item timestamps in live and reloaded history, and retain
   meaningful interrupted-turn errors without changing normal Stop behavior.
 
+- Saving agent tools on an existing idle thread now refreshes the saved policy
+  in open clients after runtime retirement. Subsequent edits no longer report
+  a false conflict because the client still holds the previous policy revision.
+  ([#26](https://github.com/kcosr/sedes/pull/26))
+
 - Archive progress now offers **Dismiss** throughout. Closing progress keeps
   the archive workflow running, including required choices, and reports failures
   that arrive after dismissal or navigation. Pending archives are shared across

@@ -343,6 +343,14 @@ export class ThreadApplicationService {
     );
   }
 
+  /** Reads saved policy without attaching or consulting the provider runtime. */
+  async agentToolPolicy(
+    scope: RequestScope,
+    applicationThreadId: string,
+  ): Promise<NormalizedThreadAgentToolPolicy> {
+    return (await this.#authorize(scope, applicationThreadId)).agentTools;
+  }
+
   /**
    * Captures only the application-owned projection around the current actor
    * state. Overlay publication must not rebuild or validate transcript
