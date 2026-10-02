@@ -1,3 +1,4 @@
+import { readConversationHistory } from "../helpers/read-conversation-history.js";
 // Shared immutable operation deadline keeps replays identical throughout this local suite.
 const interruptDeadlineAt = Date.now() + 3_600_000;
 import { describe, expect, it } from "vitest";
@@ -217,7 +218,7 @@ export function describeBackendDriverConformance(
         opaqueBindingDetail: created.opaqueBindingDetail,
       });
       expect(handle.binding).toEqual(binding);
-      const read = await driver.read({
+      const read = await readConversationHistory(driver, {
         scope,
         binding,
         workspace,
@@ -514,7 +515,7 @@ export function describeBackendDriverConformance(
         }),
       ).toMatchObject({ status: "unresolved" });
 
-      const read = await fixture.driver.read({
+      const read = await readConversationHistory(fixture.driver, {
         scope: fixture.scope,
         binding,
         workspace: fixture.workspace,
@@ -754,7 +755,7 @@ export function describeBackendDriverConformance(
       const first = await handle.history({ limit: 1 });
       expect(first.orderedBackendTurnIds).toHaveLength(1);
       expect(first.previousCursor).toBeTypeOf("string");
-      const current = await fixture.driver.read({
+      const current = await readConversationHistory(fixture.driver, {
         scope: fixture.scope,
         binding: handle.binding,
         workspace: fixture.workspace,
@@ -1100,7 +1101,7 @@ export function describeBackendDriverConformance(
         title: "Branched",
       });
       const branchBinding = fixture.binding(branch, "branch-thread");
-      const branchRead = await fixture.driver.read({
+      const branchRead = await readConversationHistory(fixture.driver, {
         scope: fixture.scope,
         binding: branchBinding,
         workspace: fixture.workspace,
@@ -1125,7 +1126,7 @@ export function describeBackendDriverConformance(
           return latest ? page.turnsById[latest]?.endedBy : undefined;
         })
         .toBe("agent_settled");
-      const unchangedBranch = await fixture.driver.read({
+      const unchangedBranch = await readConversationHistory(fixture.driver, {
         scope: fixture.scope,
         binding: branchBinding,
         workspace: fixture.workspace,

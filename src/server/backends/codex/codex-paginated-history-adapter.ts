@@ -261,14 +261,13 @@ export class CodexPaginatedHistoryAdapter {
   async readDetachedHead(
     visibleLimit: number,
     signal: AbortSignal,
-  ): Promise<{ readonly thread: CodexThread; readonly itemTimestamps: CodexHistoryItemTimestamps }> {
+  ): Promise<CodexPaginatedNativePage> {
     const itemTimestamps = new Map<string, CodexItemLifecycleTimestamps>();
-    const thread = await this.#withAcquisitionDeadline(
+    return await this.#withAcquisitionDeadline(
       signal,
       async (bounded) =>
         await this.#readDetachedHeadWithinDeadline(visibleLimit, bounded, itemTimestamps),
     );
-    return { thread, itemTimestamps };
   }
 
   async refreshCurrentHead(
@@ -562,11 +561,13 @@ export class CodexPaginatedHistoryAdapter {
     input: {
       readonly matchesBackendTurnId: (backendTurnId: string) => boolean;
       readonly maximumTurnCandidates: number;
+      /** Captured durable head for a detached reader's immutable acquisition. */
+      readonly headCursor?: string;
     },
     signal: AbortSignal,
   ): Promise<CodexPaginatedTurnLocation> {
     signal.throwIfAborted();
-    let cursor: string | undefined;
+    let cursor: string | undefined = input.headCursor;
     let examined = 0;
     const seenCursors = new RecentCursorCycleDetector();
     for (;;) {
@@ -616,7 +617,7 @@ export class CodexPaginatedHistoryAdapter {
     visibleLimit: number,
     signal: AbortSignal,
     itemTimestamps: Map<string, CodexItemLifecycleTimestamps>,
-  ): Promise<CodexThread> {
+  ): Promise<CodexPaginatedNativePage> {
     switch (this.#thread.status.type) {
       case "idle":
       case "notLoaded":
@@ -639,6 +640,7 @@ export class CodexPaginatedHistoryAdapter {
       turns: [],
     };
     const seenCursors = new RecentCursorCycleDetector();
+    const segments: PageSegment[] = [];
     let hiddenPlateau = false;
     const seenTurnIds = new Set<string>();
     for (;;) {
@@ -657,6 +659,13 @@ export class CodexPaginatedHistoryAdapter {
             ),
         signal,
       );
+      const pageCursor = cursor ?? response.backwardsCursor;
+      if (response.data.length > 0 && pageCursor === null) {
+        throw protocolError(
+          "Codex did not identify the detached history boundary.",
+          "codex_paginated_head_cursor_invalid",
+        );
+      }
       const hydrated = await this.#hydrateTurnShells(response.data, signal, undefined, itemTimestamps);
       const visible = this.#visibleTurns(hydrated);
       hiddenPlateau = visible.length === 0;
@@ -673,12 +682,21 @@ export class CodexPaginatedHistoryAdapter {
         ...thread,
         turns: [...visible].reverse().concat(thread.turns),
       };
+      if (pageCursor !== null && (visible.length > 0 || response.nextCursor === null)) {
+        segments.push({
+          providerCursor: pageCursor,
+          initialSkip: 0,
+          nativeTurnIds: response.data.map(({ id }) => id),
+          visibleNativeTurnIds: visible.map(({ id }) => id),
+          nextProviderCursor: response.nextCursor,
+        });
+      }
       if (
         codexNativeHistoryVisibleTurnCount(thread, this.#correlationScope) >=
           visibleLimit ||
         response.nextCursor === null
       ) {
-        return thread;
+        return { thread, itemTimestamps, source: { syntheticNativeTurnIds: [], segments } };
       }
       if (
         response.data.length === 0 ||

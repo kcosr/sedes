@@ -6,7 +6,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, vi } from "vitest";
-import type { ConversationHandle, SubmitTurnInput } from "../../src/server/backends/contracts.js";
+import type { ConversationHandle, ConversationHistoryReader, SubmitTurnInput } from "../../src/server/backends/contracts.js";
 import { OpenCodeRuntime } from "../../src/server/backends/opencode/opencode-runtime.js";
 import { OpenCodeNativeApi } from "../../src/server/backends/opencode/opencode-native-api.js";
 import { OpenCodeNativeMutations } from "../../src/server/backends/opencode/opencode-native-mutations.js";
@@ -30,6 +30,7 @@ export async function runOpenCodeReadonlyGate(input: ReturnType<typeof parseLive
   const lifetime = new AbortController();
   let runtime: OpenCodeRuntime | undefined, current: ReturnType<typeof createOpenCodeConversationFixture> | undefined;
   let handle: ConversationHandle | undefined, monitor: ReturnType<typeof monitorLiveGate> | undefined;
+  let historyReader: ConversationHistoryReader | undefined;
   let monitorFailure: Error | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined, originalFailure: unknown;
   const reads = new Set<Promise<unknown>>();
@@ -138,6 +139,20 @@ export async function runOpenCodeReadonlyGate(input: ReturnType<typeof parseLive
       }
       if (monitorFailure) throw monitorFailure;
       await handle!.close(); handle = undefined;
+      const attachesBeforeHistory = current.attached.mock.calls.length;
+      historyReader = await wait(current.driver.openHistory({ ...current.target, signal: lifetime.signal }));
+      const archived = await wait(historyReader.readSnapshot({ signal: lifetime.signal }));
+      const archivedTurn = Object.values(archived.snapshot.turnsById).find(turn =>
+        turn.status === "completed" && turn.completionCorrelations?.includes(operation.applicationOperationId));
+      expect(archivedTurn).toBeDefined();
+      const archivedPage = await wait(historyReader.history({ limit: 10, signal: lifetime.signal }));
+      expect(archivedPage.turnsById[archivedTurn!.backendTurnId]).toEqual(archivedTurn);
+      expect(await wait(historyReader.locateTurn({ maximumTurnCandidates: 10, signal: lifetime.signal,
+        matchesBackendTurnId: id => id === archivedTurn!.backendTurnId }))).toMatchObject({ status: "found" });
+      expect((await wait(historyReader.backendCapabilities())).actions).toEqual([]);
+      expect(current.attached).toHaveBeenCalledTimes(attachesBeforeHistory);
+      expect(promptSpy).toHaveBeenCalledTimes(1);
+      await historyReader.close(); historyReader = undefined;
       await wait(current.driver.attach(current.target).then(value => { handle = value; }));
       const reread = await handle!.establishProjection({ signal: lifetime.signal });
       expect(Object.values(reread.snapshot.turnsById).some(turn => turn.status === "completed" && turn.completionCorrelations?.includes(operation.applicationOperationId))).toBe(true);
@@ -157,7 +172,7 @@ export async function runOpenCodeReadonlyGate(input: ReturnType<typeof parseLive
     clearTimeout(timer); lifetime.abort();
     const cleanup = await cleanupLiveGate({
       observer: async () => { await monitor?.close(); },
-      handle: async () => { await handle?.close(); },
+      handle: async () => { await Promise.all([handle?.close(), historyReader?.close()]); },
       stopRuntime: async () => { if (runtime) { const result = await runtime.stop(); if (result.cleanup !== "proved") throw new Error("Owned cleanup unproved"); } },
       pendingReads: async () => { await Promise.allSettled([...reads]); await handle?.close(); },
       disposeSqlite: async () => {

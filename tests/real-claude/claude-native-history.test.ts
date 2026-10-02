@@ -1,3 +1,4 @@
+import { readConversationHistory } from "../helpers/read-conversation-history.js";
 import { randomUUID } from "node:crypto";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises";
@@ -29,7 +30,7 @@ import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import type { BackendItem } from "../../src/shared/protocol/backend.js";
 import { createFakeAgentToolSourceCapabilities } from "../helpers/fake-agent-tool-source-capabilities.js";
 
-const REQUIRED_MODEL = "claude-sonnet-5";
+const REQUIRED_MODEL = "claude-sonnet-5-5";
 const REQUIRED_EFFORT = "low";
 const MODEL_TURN_TIMEOUT_MS = 240_000;
 const scope = { tenantId: "real-claude-tenant", principalId: "real-claude-principal" };
@@ -83,6 +84,35 @@ describe.sequential("real Claude native history", () => {
     vi.stubEnv("CLAUDE_CONFIG_DIR", configDirectory);
   });
   afterEach(() => vi.unstubAllEnvs());
+
+  it("reads detached persisted history without starting a query or changing the transcript", async () => {
+    const live = await liveDriver([], []);
+    const thread = await live.createThread();
+    const handle = await live.driver.attach(thread.attachment);
+    try {
+      await handle.establishProjection({ signal: new AbortController().signal });
+      await live.completeTurn(handle, "Reply with exactly SEDES_PASSIVE_HISTORY_OK. Do not use tools.");
+      await handle.close();
+      const file = path.join(configDirectory, "projects", live.workspace.canonicalPath.replace(/[^a-zA-Z0-9]/gu, "-"), `${thread.sessionId}.jsonl`);
+      const before = await readFile(file);
+      const queries = live.sdk.persistentQueryOptions.length;
+      const reader = await live.driver.openHistory(thread.attachment);
+      try {
+        const signal = new AbortController().signal;
+        const head = await reader.readSnapshot({ signal });
+        expect(head.snapshot.orderedBackendTurnIds).toHaveLength(1);
+        expect(finalAssistantText(head.snapshot.itemsById)).toContain("SEDES_PASSIVE_HISTORY_OK");
+        const page = await reader.history({ limit: 10, signal });
+        expect(page.orderedBackendTurnIds).toEqual(head.snapshot.orderedBackendTurnIds);
+        const target = head.snapshot.orderedBackendTurnIds[0]!;
+        const located = await reader.locateTurn({ matchesBackendTurnId: id => id === target, maximumTurnCandidates: 10, signal });
+        expect(located).toMatchObject({ status: "found" });
+        expect((await reader.backendCapabilities()).deliveryModes).toEqual([]);
+        expect(live.sdk.persistentQueryOptions).toHaveLength(queries);
+        expect(await readFile(file)).toEqual(before);
+      } finally { await reader.close(); }
+    } finally { await handle.close(); await live.close(); }
+  });
 
   it("reads a resumed transcript with parallel tool calls through its startup-message tip", async () => {
     // A dead end needs a call still running when the next tool_use arrives; a
@@ -150,7 +180,7 @@ describe.sequential("real Claude native history", () => {
       expect(settled.snapshot.orderedBackendTurnIds).toHaveLength(1);
       expect(finalAssistantText(settled.snapshot.itemsById)).toContain("SEDES_CLAUDE_REOPEN_OK");
       await handle.close();
-      const read = await live.driver.read(thread.attachment);
+      const read = await readConversationHistory(live.driver, thread.attachment);
       expect(read.snapshot.orderedBackendTurnIds).toEqual(settled.snapshot.orderedBackendTurnIds);
 
       // The first reopen finds the reply at the tip; the second closes the
@@ -162,7 +192,7 @@ describe.sequential("real Claude native history", () => {
         expect(finalAssistantText(again.snapshot.itemsById)).toBe(finalAssistantText(settled.snapshot.itemsById));
         await handle.close();
       }
-      const reread = await live.driver.read(thread.attachment);
+      const reread = await readConversationHistory(live.driver, thread.attachment);
       expect(reread.snapshot).toEqual(read.snapshot);
       expect(JSON.stringify(reread.snapshot)).not.toContain("No response requested.");
       const synthetic = (await transcriptRows(thread.sessionId, live.workspace.canonicalPath))
@@ -211,7 +241,7 @@ async function liveDriver(tools: readonly string[], allowedTools: readonly strin
   });
   const catalog = await driver.catalog({ scope, workspace });
   if (catalog.models.filter((model) => model.id === REQUIRED_MODEL && model.supportedReasoningEfforts?.includes(REQUIRED_EFFORT)).length !== 1) {
-    throw new Error(`REAL_CLAUDE_BLOCKER: expected exactly one ${REQUIRED_MODEL}/${REQUIRED_EFFORT} catalog entry.`);
+    throw new Error(`REAL_CLAUDE_BLOCKER: expected exactly one ${REQUIRED_MODEL}/${REQUIRED_EFFORT} catalog entry. Available: ${JSON.stringify(catalog.models.map(model => ({ id: model.id, efforts: model.supportedReasoningEfforts })))}`);
   }
   return {
     sdk, workspace, childEnvironment, driver,

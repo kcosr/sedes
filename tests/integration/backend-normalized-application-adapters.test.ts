@@ -2508,6 +2508,19 @@ describe("backend-normalized application adapters", () => {
         },
         opaqueBindingDetail: '{"version":1,"sessionFile":"/tmp/pi.jsonl"}',
       });
+      const historyInventory = new InventoryRepository(current.database);
+      const historyRevision = historyInventory.getThread(current.scope, current.threadId).inventory.inventoryRevision;
+      historyInventory.transitionInventory(current.scope, current.threadId, {
+        expectedRevision: historyRevision, mutationId: "passive-history-archive", change: { action: "archive" }, now: 510,
+      });
+      const validationsBeforeHistory = revalidateWorkspace.mock.calls.length;
+      await expect(actor.resolve(current.scope, current.threadId)).resolves.toMatchObject({ access: "history" });
+      expect(revalidateWorkspace).toHaveBeenCalledTimes(validationsBeforeHistory);
+      await expect(actor.resolve({ ...current.scope, principalId: "other-principal" }, current.threadId)).rejects.toThrow();
+      historyInventory.transitionInventory(current.scope, current.threadId, {
+        expectedRevision: historyRevision + 1, mutationId: "passive-history-restore", change: { action: "restore" }, now: 511,
+      });
+      await expect(actor.resolve(current.scope, current.threadId)).resolves.toMatchObject({ access: "execution" });
       const firstUseInventory =
         await new DatabaseThreadApplicationInventoryReader({
           inventory: new InventoryRepository(current.database),

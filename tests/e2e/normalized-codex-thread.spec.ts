@@ -626,9 +626,9 @@ test.describe.serial("normalized Codex thread state", () => {
     }
   });
 
-  test("active Codex history keeps abandoned paginated turns readable", async ({
+  test("Codex history stays readable through archive and restore without resuming the archived session", async ({
     page,
-  }) => {
+  }, testInfo) => {
     await page.goto("/");
     await openSedesWorkspace(page);
     await page
@@ -691,5 +691,49 @@ test.describe.serial("normalized Codex thread state", () => {
     await expect(page.getByRole("button", { name: "Load more" })).toHaveCount(
       0,
     );
+
+    const oldestTurnId = await olderAbandoned.getAttribute("data-turn-id");
+    expect(oldestTurnId).toBeTruthy();
+    await capture(page, testInfo, "codex-history-before-archive-streaming.png");
+    await page.getByRole("button", { name: "Stop", exact: true }).click();
+    await expect(page.locator('.conversation-turn[data-turn-status="in_progress"]')).toHaveCount(0);
+    await page.getByRole("button", { name: "Thread actions" }).click();
+    await page.getByRole("menu", { name: "Thread actions" }).getByRole("menuitem", { name: "Archive", exact: true }).click();
+    await expect(page).toHaveURL("/");
+    const readMethods = async () => {
+      const response = await page.request.get("/__e2e/codex/backends/codex-import-e2e/state");
+      expect(response.ok()).toBe(true);
+      return ((await response.json()) as { requests: Array<{ method: string }> }).requests.map(({ method }) => method);
+    };
+    const before = await readMethods();
+    await page.goto(threadPath);
+    await expect(initialAbandoned).toBeVisible();
+    await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeDisabled();
+    const session = await (await page.request.get("/api/application/session")).json() as { csrfToken: string };
+    const sought = await page.request.post(`/api/threads/${threadId}/history/seek`, {
+      headers: { "X-CSRF-Token": session.csrfToken }, data: { turnId: oldestTurnId, activityDetail: "full" },
+    });
+    expect(sought.ok(), await sought.text()).toBe(true);
+    expect(await sought.json()).toMatchObject({ status: "found" });
+    await page.getByRole("button", { name: "Load more", exact: true }).click();
+    await expect(olderAbandoned).toBeVisible();
+    await capture(page, testInfo, "codex-archived-history-readable.png");
+    const after = await readMethods();
+    const archivedMethods = after.slice(before.length);
+    expect(archivedMethods).toContain("thread/read");
+    expect(archivedMethods).not.toContain("thread/resume");
+    expect(archivedMethods).not.toContain("thread/start");
+    expect(archivedMethods).not.toContain("turn/start");
+    await page.getByRole("button", { name: "Thread actions" }).click();
+    const restoration = page.waitForResponse(response => response.request().method() === "PATCH" &&
+      response.url().endsWith(`/api/threads/${threadId}/inventory`) && response.ok());
+    await page.getByRole("menu", { name: "Thread actions" }).getByRole("menuitem", { name: "Restore to Active", exact: true }).click();
+    await restoration;
+    await expect(page.getByRole("textbox", { name: "Message Codex" })).toBeEnabled();
+    await fillAndPersistDraft(page, "Continue after restoring the archived transcript", "Message Codex");
+    await expect(page.getByRole("button", { name: "Send message" })).toBeEnabled();
+    await sendCurrentDraft(page);
+    await expect(page.locator('[data-item-kind="user_message"]').filter({ hasText: "Continue after restoring the archived transcript" })).toBeVisible();
+    await expect(page.locator('.conversation-turn[data-turn-status="in_progress"]')).toHaveCount(0);
   });
 });

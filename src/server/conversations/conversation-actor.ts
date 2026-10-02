@@ -210,7 +210,7 @@ export type ActorBranchCheckpointSelection =
  */
 export class ConversationActor {
   readonly #handle: ConversationHandle;
-  readonly #environmentLease: ExecutionEnvironmentLease;
+  readonly #environmentLease: ExecutionEnvironmentLease | undefined;
   readonly #attachmentDelivery: ComposerAttachmentDeliveryService;
   readonly #drainAuthoritativeObservers?: () => Promise<void>;
   readonly #persistDeliveryInputSnapshot?: (
@@ -256,7 +256,8 @@ export class ConversationActor {
     readonly handle: ConversationHandle;
     /** Installed before establishment so durable observers cannot miss startup events. */
     readonly initialObserver?: ConversationActorListener;
-    readonly environmentLease: ExecutionEnvironmentLease;
+    /** Absent only for a passive history projection with no execution authority. */
+    readonly environmentLease?: ExecutionEnvironmentLease;
     readonly attachmentDelivery: ComposerAttachmentDeliveryService;
     readonly drainAuthoritativeObservers?: () => Promise<void>;
     readonly persistDeliveryInputSnapshot?: (
@@ -346,6 +347,10 @@ export class ConversationActor {
     return this.#handle.automaticEviction;
   }
 
+  get readOnly(): boolean {
+    return this.#environmentLease === undefined;
+  }
+
   /** Archive, policy changes and other maintenance require native quiescence. */
   get canEvict(): boolean {
     return this.#canRetire(false);
@@ -365,6 +370,9 @@ export class ConversationActor {
 
   #canRetire(clientDetach: boolean): boolean {
     if (!this.#started || this.#closing || this.#closed) return false;
+    // A retained transcript may record an interrupted or externally active
+    // provider. This reader owns no such work and is always safe to close.
+    if (this.readOnly) return true;
     if (this.#handleReplacementRequired) return true;
     if (!this.#snapshotState || this.#projectionRecoveryRequired) return false;
     const timeline = this.#projector.timeline();
@@ -939,6 +947,10 @@ export class ConversationActor {
     attachments: readonly ComposerAttachmentDescriptor[],
     signal?: AbortSignal,
   ) {
+    if (!this.#environmentLease) {
+      throw new BackendError({ category: "invalid_state", retryable: false,
+        crossedSubmissionBoundary: false, safeMessage: "Conversation history cannot stage attachments." });
+    }
     if (attachments.length === 0) {
       return Promise.resolve({
         attachments: [],
@@ -1648,6 +1660,11 @@ export class ConversationActor {
   }
 
   #runStartingMutation<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.readOnly) {
+      return Promise.reject(new BackendError({ category: "invalid_state", retryable: false,
+        crossedSubmissionBoundary: false, backendCode: "conversation_history_read_only",
+        safeMessage: "Archived conversation history is read-only. Restore the thread before starting work." }));
+    }
     this.#abortHistoryReads("conversation_actor_history_preempted_by_mutation");
     return this.#enqueue(async () => {
       this.#awaitingAuthoritativeIdle = true;
@@ -1787,7 +1804,7 @@ export class ConversationActor {
       failures.push(error);
     }
     try {
-      await this.#environmentLease.release();
+      await this.#environmentLease?.release();
       this.#leaseReleaseProven = true;
     } catch (error) {
       failures.push(error);

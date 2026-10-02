@@ -127,6 +127,7 @@ interface RuntimeEntry {
   readonly applicationThreadId: string;
   readonly generation: string;
   readonly establishmentAbort: AbortController;
+  access?: "execution" | "history";
   runtime?: EstablishedRuntime;
   applicationOverlayReady: boolean;
   pendingApplicationPublication?: (runtime: EstablishedRuntime) => Promise<boolean>;
@@ -227,6 +228,13 @@ export class ThreadRuntimeRetirementUnprovenError extends Error {
   }
 }
 
+export class ThreadRuntimeRestoreFailedError extends Error {
+  constructor(cause: unknown) {
+    super("The restored thread runtime could not be opened.", { cause });
+    this.name = "ThreadRuntimeRestoreFailedError";
+  }
+}
+
 /**
  * Owns exactly one bridge and interaction binding for each process-wide actor.
  * Browser subscribers and mutations borrow that owner. When the actor becomes
@@ -312,6 +320,34 @@ export class ThreadRuntimeCoordinator {
         continue;
       }
       let entry = this.#entries.get(key);
+      if ((entry?.access === "history" || entry?.runtime?.actor.readOnly) && !entry.eviction) {
+        const target = await this.#targets.resolve(scope, applicationThreadId);
+        // Target resolution may yield to retirement, restore, or shutdown.
+        if (this.#closed || this.#maintenance.has(key) || this.#entries.get(key) !== entry || entry.eviction) continue;
+        if (target.access !== "history") {
+          // An explicit restore invalidates the passive acquisition and its
+          // cursors. The next acquisition may establish an execution owner.
+          const runtime = entry.runtime;
+          if (runtime) {
+            await runtime.actor.close();
+            await this.#retireForReplacement(key, entry, runtime);
+          } else {
+            entry.establishmentAbort.abort(new Error("thread_history_restored"));
+            let established: EstablishedRuntime | undefined;
+            try { established = await entry.promise; }
+            catch (error) { if (error !== entry.establishmentAbort.signal.reason) throw error; }
+            // Establishment may already have crossed its final await when
+            // the abort arrives. Release that successful owner as well.
+            if (established) {
+              await established.actor.close();
+              await this.#retireForReplacement(key, entry, established);
+            } else if (this.#entries.get(key) === entry) {
+              this.#entries.delete(key);
+            }
+          }
+          continue;
+        }
+      }
       if (!entry) {
         const establishmentAbort = new AbortController();
         const created = {
@@ -329,6 +365,7 @@ export class ThreadRuntimeCoordinator {
             this.#shutdownController.signal,
             establishmentAbort.signal,
           ]),
+          access => { created.access = access; },
         ).then(async (runtime) => {
           created.runtime = runtime;
           if (runtime.actor.closed) {
@@ -404,6 +441,20 @@ export class ThreadRuntimeCoordinator {
       try {
         runtime = await entry.promise;
         await runtime.actor.ensureProjectionCurrent();
+        if (runtime.actor.readOnly) {
+          // An opening viewer has not subscribed yet. Restore publication
+          // cannot hand it off, so validate access again after the pending
+          // history establishment before exposing a passive baseline.
+          const target = await this.#targets.resolve(scope, applicationThreadId);
+          if (
+            this.#closed || this.#maintenance.has(key) ||
+            this.#entries.get(key) !== entry || entry.eviction ||
+            target.access !== "history"
+          ) {
+            this.#release(key, entry);
+            continue;
+          }
+        }
       } catch (error) {
         this.#release(key, entry);
         if (runtime?.actor.replacementRequired) {
@@ -833,6 +884,29 @@ export class ThreadRuntimeCoordinator {
     const key = scopedKey(scope, applicationThreadId);
     const entry = this.#entries.get(key);
     if (!entry || entry.eviction) return false;
+    if (
+      (entry.access === "history" || entry.runtime?.actor.readOnly) &&
+      (entry.runtime?.hub.subscriberCount ?? 0) > 0
+    ) {
+      const target = await this.#targets.resolve(scope, applicationThreadId);
+      if (this.#closed || this.#entries.get(key) !== entry || entry.eviction) return false;
+      if (
+        target.access !== "history" &&
+        (entry.runtime?.hub.subscriberCount ?? 0) > 0
+      ) {
+        // Restore changes provider authority, not just inventory. An open
+        // viewer needs the execution actor's new capability baseline. Reuse
+        // ordinary acquisition so the same subscribed hub survives
+        // replacement. Transient history borrowers do not represent viewers.
+        try {
+          const restored = await this.acquire(scope, applicationThreadId);
+          restored.release();
+        } catch (cause) {
+          throw new ThreadRuntimeRestoreFailedError(cause);
+        }
+        return true;
+      }
+    }
     const publish = (runtime: EstablishedRuntime): Promise<boolean> =>
       runtime.hub.serializeApplicationPublication(async () => {
         if (
@@ -1256,6 +1330,7 @@ export class ThreadRuntimeCoordinator {
     scope: RequestScope,
     applicationThreadId: string,
     signal: AbortSignal,
+    onTargetResolved: (access: "execution" | "history") => void,
   ): Promise<EstablishedRuntime> {
     throwIfAborted(signal);
     const target = await abortable(
@@ -1263,6 +1338,7 @@ export class ThreadRuntimeCoordinator {
       signal,
     );
     throwIfAborted(signal);
+    onTargetResolved(target.access ?? "execution");
     const actorAcquisition = this.#actors.acquire(target, {
       idleRelease: "evict",
     });
@@ -1325,13 +1401,13 @@ export class ThreadRuntimeCoordinator {
         // run-state event (for example, when the backend requires a
         // resnapshot while a stopped turn ends). Settlement hooks are
         // idempotent, so observe both.
-        if (
+        if (!acquired.actor.readOnly && (
           (event.type === "run_state" &&
             (event.state === "idle" || event.state === "failed")) ||
           (event.type === "snapshot" &&
             (event.snapshot.runState === "idle" ||
               event.snapshot.runState === "failed"))
-        ) {
+        )) {
           try {
             const dispatch = this.#onAuthoritativeSettled?.(
               scope,

@@ -34,6 +34,12 @@ export type ThreadWorkspaceIsolationResolution =
     });
 
 export interface ThreadWorkspaceIsolationResolver {
+  /** Durable native-history identity, without requiring a retained checkout. */
+  historyWorkspace(input: {
+    readonly scope: ExecutionScope;
+    readonly applicationThreadId: string;
+    readonly sourceWorkspace: ValidatedWorkspace;
+  }): ValidatedWorkspace | undefined;
   /**
    * Reports whether isolation was selected without materializing the
    * workspace or acquiring a worker lease.

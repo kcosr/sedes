@@ -1,3 +1,4 @@
+import { readConversationHistory } from "../helpers/read-conversation-history.js";
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import type { ClaudeConversationHandle } from "../../src/server/backends/claude/claude-conversation-handle.js";
 import type {
@@ -313,7 +314,7 @@ describe("ClaudeConversationBackendDriver", () => {
       assistant("33333333-3333-4333-8333-333333333333", "hello back"),
     ]);
     const driver = createDriver(sdk);
-    const read = await driver.read({
+    const read = await readConversationHistory(driver, {
       scope,
       workspace,
       binding: binding(),
@@ -340,6 +341,52 @@ describe("ClaudeConversationBackendDriver", () => {
     });
   });
 
+  it("pages and locates an immutable archived cut without issuing credentials or creating a query", async () => {
+    const sdk = fakeSdk();
+    sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
+    const messages = Array.from({ length: 25 }, (_, index) => [
+      user(crypto.randomUUID(), `question ${index}`), assistant(crypto.randomUUID(), `answer ${index}`),
+    ]).flat();
+    exposeSessionMessages(sdk, messages);
+    const issue = vi.fn(() => { throw new Error("archived credentials forbidden"); });
+    const driver = createDriver(sdk, { agentToolCli: { availability: "available", endpoint: "http://127.0.0.1:4784", executableDirectory: "/opt/sedes/bin", inheritedPath: "/usr/bin" },
+      presentation: { surface: "native", mode: "progressive" },
+      sourceCapabilities: { ...agentToolSourceCapabilities, issue } });
+    const input = { scope, workspace, binding: binding(), opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) };
+    const reader = await driver.openHistory(input);
+    const signal = new AbortController().signal;
+    try {
+      const head = await reader.readSnapshot({ signal });
+      expect(head.snapshot.orderedBackendTurnIds).toHaveLength(10);
+      expect(head.history.previousCursor).toBeDefined();
+      const readCount = sdk.getSessionMessages.mock.calls.length;
+      const firstId = projectClaudeHistory(messages.slice(0, 2)).snapshot.orderedBackendTurnIds[0]!;
+      messages.push(user(crypto.randomUUID(), "new external message"));
+      let cursor = head.history.previousCursor;
+      const turns = [...head.snapshot.orderedBackendTurnIds];
+      while (cursor) {
+        const page = await reader.history({ cursor, limit: 6, signal });
+        turns.unshift(...page.orderedBackendTurnIds);
+        cursor = page.previousCursor;
+      }
+      expect(turns).toHaveLength(25);
+      expect(new Set(turns).size).toBe(25);
+      expect(turns[0]).toBe(firstId);
+      expect(await reader.locateTurn({ matchesBackendTurnId: id => id === firstId, maximumTurnCandidates: 30, signal }))
+        .toMatchObject({ status: "found" });
+      expect((await reader.readSnapshot({ signal })).snapshot).toEqual(head.snapshot);
+      expect(sdk.getSessionMessages).toHaveBeenCalledTimes(readCount);
+      const other = await driver.openHistory(input);
+      await expect(other.history({ cursor: head.history.previousCursor!, limit: 5, signal }))
+        .rejects.toMatchObject({ backendCode: "claude_history_cursor_invalid" });
+      await other.close();
+      expect(issue).not.toHaveBeenCalled();
+      expect(sdk.createQuery).not.toHaveBeenCalled();
+      await expect(driver.openHistory({ ...input, scope: { ...scope, principalId: "other" } })).rejects.toMatchObject({ category: "permission_denied" });
+    } finally { await reader.close(); await driver.close(); }
+    await expect(reader.readSnapshot({ signal })).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it("reads a completed image read with the image Claude received, publishing it once", async () => {
     const sdk = fakeSdk();
     sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
@@ -358,10 +405,10 @@ describe("ClaudeConversationBackendDriver", () => {
     const publishImage = vi.fn(retained.publishImage);
     const driver = createDriver(sdk, { outputArtifacts: { findImage: retained.findImage, publishImage } });
     const input = { scope, workspace, binding: binding(), opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) };
-    const items = (snapshot: Awaited<ReturnType<typeof driver.read>>["snapshot"]) =>
+    const items = (snapshot: Awaited<ReturnType<typeof readConversationHistory>>["snapshot"]) =>
       snapshot.turnsById[snapshot.orderedBackendTurnIds[0]!]!.orderedBackendItemIds.map(id => snapshot.itemsById[id]!);
 
-    const first = await driver.read(input);
+    const first = await readConversationHistory(driver, input);
     expect(items(first.snapshot).map(item => item.semanticKind))
       .toEqual(["user_message", "viewed_image", "image", "assistant_message"]);
     expect(items(first.snapshot)[2]).toMatchObject({ sourceOrder: 3, origin: { kind: "viewed", capture: "provider_input" },
@@ -369,7 +416,7 @@ describe("ClaudeConversationBackendDriver", () => {
     expect(publishImage).toHaveBeenCalledTimes(1);
     expect(publishImage.mock.calls[0]![0]).toMatchObject({ scope, threadId: binding().applicationThreadId, mediaType: "image/png",
       publicationKey: `claude-viewed-image:${items(first.snapshot)[2]!.backendItemId}` });
-    const second = await driver.read(input);
+    const second = await readConversationHistory(driver, input);
     expect(second.snapshot.itemsById).toEqual(first.snapshot.itemsById);
     expect(publishImage).toHaveBeenCalledTimes(1);
   });
@@ -396,16 +443,17 @@ describe("ClaudeConversationBackendDriver", () => {
       return retained.publishImage(publication);
     });
     const driver = createDriver(sdk, { outputArtifacts: { findImage: retained.findImage, publishImage } });
-    const reading = driver.read({ scope, workspace, binding: binding(),
+    const reading = readConversationHistory(driver, { scope, workspace, binding: binding(),
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) });
     // Four inline and two background stores start; two stay queued.
     await vi.waitFor(() => expect(publishImage).toHaveBeenCalledTimes(6));
+    const cancelled = expect(reading).rejects.toMatchObject({ name: "AbortError" });
     await driver.close();
     for (const release of releases) release();
-    await reading;
+    await cancelled;
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(publishImage).toHaveBeenCalledTimes(6);
-    await expect(driver.read({ scope, workspace, binding: binding(),
+    await expect(readConversationHistory(driver, { scope, workspace, binding: binding(),
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) }))
       .rejects.toMatchObject({ backendCode: "claude_driver_closed" });
     expect(publishImage).toHaveBeenCalledTimes(6);
@@ -867,7 +915,7 @@ describe("ClaudeConversationBackendDriver", () => {
       scope, workspace, binding: binding(),
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
     };
-    for (const operation of [() => driver.attach(input), () => driver.read(input)]) {
+    for (const operation of [() => driver.attach(input), () => readConversationHistory(driver, input)]) {
       await expect(operation()).rejects.toMatchObject({
         backendCode: "claude_sdk_read_failed", category: "unavailable",
         retryable: true, cause,
@@ -888,7 +936,7 @@ describe("ClaudeConversationBackendDriver", () => {
     await expect(driver.attach(input)).rejects.toMatchObject({
       backendCode: "claude_session_identity_mismatch",
     });
-    await expect(driver.read(input)).rejects.toMatchObject({
+    await expect(readConversationHistory(driver, input)).rejects.toMatchObject({
       backendCode: "claude_session_identity_mismatch",
     });
 
@@ -903,7 +951,7 @@ describe("ClaudeConversationBackendDriver", () => {
     await expect(handle.establishProjection({ signal: new AbortController().signal })).rejects.toMatchObject({
       backendCode: "claude_session_identity_mismatch",
     });
-    await expect(driver.read(input)).rejects.toMatchObject({
+    await expect(readConversationHistory(driver, input)).rejects.toMatchObject({
       backendCode: "claude_session_identity_mismatch",
     });
     await handle.close();
@@ -931,7 +979,7 @@ describe("ClaudeConversationBackendDriver", () => {
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
     };
 
-    await expect(driver.read(input)).resolves.toMatchObject({
+    await expect(readConversationHistory(driver, input)).resolves.toMatchObject({
       snapshot: { orderedBackendTurnIds: expect.any(Array) },
     });
     sdk.getSessionMessages.mockClear();
@@ -951,7 +999,7 @@ describe("ClaudeConversationBackendDriver", () => {
     await handle.close();
 
     exposeSessionMessages(sdk, [{ session_id: sessionId } as SessionMessage]);
-    await expect(driver.read(input)).rejects.toMatchObject({
+    await expect(readConversationHistory(driver, input)).rejects.toMatchObject({
       category: "incompatible_protocol",
       backendCode: "claude_history_invalid",
       retryable: false,
@@ -970,7 +1018,7 @@ describe("ClaudeConversationBackendDriver", () => {
       binding: binding(),
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
     };
-    for (const operation of [() => driver.read(input), async () => { const handle = await driver.attach(input); try { return await handle.establishProjection({ signal: new AbortController().signal }); } finally { await handle.close(); } }]) {
+    for (const operation of [() => readConversationHistory(driver, input), async () => { const handle = await driver.attach(input); try { return await handle.establishProjection({ signal: new AbortController().signal }); } finally { await handle.close(); } }]) {
       await expect(operation()).rejects.toMatchObject({
         category: "incompatible_protocol",
         backendCode: "claude_message_payload_too_large",
@@ -996,7 +1044,7 @@ describe("ClaudeConversationBackendDriver", () => {
 
     for (const operation of [
       () => driver.attach(input),
-      () => driver.read(input),
+      () => readConversationHistory(driver, input),
     ]) {
       await expect(operation()).rejects.toMatchObject({
         category: "invalid_state",
@@ -2140,7 +2188,7 @@ describe("ClaudeConversationBackendDriver", () => {
   it("fails closed for a wrong principal scope", async () => {
     const driver = createDriver(fakeSdk());
     await expect(
-      driver.read({
+      readConversationHistory(driver, {
         scope: { ...scope, principalId: "other" },
         workspace,
         binding: binding(),
@@ -2190,7 +2238,7 @@ describe("ClaudeConversationBackendDriver native history", () => {
     // The SDK exposes no metadata for this transcript, but Claude Code rejects a fresh launch reusing its ID.
     await expect(sdk.getSessionInfo(sessionId, { dir: workspace.canonicalPath }, process.env)).resolves.toBeUndefined();
 
-    await expect(driver.read(attachment())).resolves.toMatchObject({ snapshot: { orderedBackendTurnIds: [] } });
+    await expect(readConversationHistory(driver, attachment())).resolves.toMatchObject({ snapshot: { orderedBackendTurnIds: [] } });
     const handle = await driver.attach(attachment());
     try {
       const options = sdk.createQuery.mock.calls.at(-1)![0].options;
@@ -2204,7 +2252,7 @@ describe("ClaudeConversationBackendDriver native history", () => {
 
   it("launches a new session only when no native transcript exists", async () => {
     const { sdk, driver } = nativeStoreDriver();
-    await expect(driver.read(attachment())).rejects.toMatchObject({ backendCode: "claude_session_not_found" });
+    await expect(readConversationHistory(driver, attachment())).rejects.toMatchObject({ backendCode: "claude_session_not_found" });
     const handle = await driver.attach(attachment());
     try {
       const options = sdk.createQuery.mock.calls.at(-1)![0].options;
@@ -2310,7 +2358,7 @@ describe("ClaudeConversationBackendDriver native history", () => {
 
   async function readViaDriver(driver: ClaudeConversationBackendDriver): Promise<SessionMessage[]> {
     const native = new OfficialClaudeSdkFacade();
-    await driver.read(attachment());
+    await readConversationHistory(driver, attachment());
     return await native.getSessionMessages(sessionId, { dir: workspace.canonicalPath }, process.env);
   }
 });

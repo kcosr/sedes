@@ -21,7 +21,7 @@ import {
   type BranchConversationInput,
   type ConversationBackendDriver,
   type ConversationHandle,
-  type ConversationReadResult,
+  type ConversationHistoryReader,
   type CreateConversationInput,
   type CreateConversationResult,
   type DiscoverConversationsInput,
@@ -66,13 +66,13 @@ import {
   normalizeCodexTurnStatuses,
   mapCodexHistoryProjectionError,
   projectCodexThreadHistory,
-  selectCodexSnapshotWindow,
   verifiedCodexProjectionBytes,
   type CodexExecutionSettingsProvider,
   type CodexExecutionSettingsTuple,
 } from "./codex-conversation-handle.js";
 import { codexExecutionPolicy } from "./codex-execution-policy.js";
 import { CODEX_HISTORY_TIMEOUT_MILLISECONDS } from "./codex-history-timeouts.js";
+import { CodexHistoryReader } from "./codex-history-reader.js";
 import {
   defaultCodexComposerSkillPreferenceReader,
   readCodexSkills,
@@ -1276,92 +1276,22 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     }
   }
 
-  async read(input: ReadConversationInput): Promise<ConversationReadResult> {
+  async openHistory(input: ReadConversationInput): Promise<ConversationHistoryReader> {
+    input.signal?.throwIfAborted();
     this.#assertAttach(input);
     const detail = parseCodexBindingDetail(input.opaqueBindingDetail);
-    const active = this.#ownership.current(input.binding.backendConversationId);
-    if (active) return await active.readCurrent();
-    const metadataReceipt = await this.#client
-      .requestWithReceipt(
-        codexThreadReadMethod,
-        {
-          threadId: input.binding.backendConversationId,
-          includeTurns: false,
-        },
-        { timeoutMilliseconds: CODEX_HISTORY_TIMEOUT_MILLISECONDS },
-      )
-      .catch((error: unknown) => {
-        throw mapCodexReadError(error);
-      });
-    const metadata = metadataReceipt.result.thread;
-    assertThreadBinding(
-      metadata,
-      input.binding.backendConversationId,
-      input.workspace.canonicalPath,
-    );
-    const scope = this.#correlationScope(
-      metadata.id,
-      detail.correlationAncestorThreadIds,
-    );
-    let thread: CodexThread;
-    let itemTimestamps: CodexHistoryItemTimestamps = new Map();
-    switch (metadata.historyMode) {
-      case "legacy":
-        thread = await this.#readNativeThread(
-          input.binding.backendConversationId,
-          input.workspace,
-          detail.correlationAncestorThreadIds,
-          input.binding.applicationThreadId,
-          true,
-          "legacy",
-        );
-        break;
-      case "paginated":
-        try {
-          const hydrated = await new CodexPaginatedHistoryAdapter({
-            client: this.#client,
-            thread: metadata,
-            generation: metadataReceipt.generation,
-            correlationScope: scope,
-          }).readDetachedHead(10, new AbortController().signal);
-          thread = hydrated.thread;
-          itemTimestamps = hydrated.itemTimestamps;
-        } catch (error) {
-          throw mapCodexReadError(error);
-        }
-        break;
-      default:
-        throw codexError(
-          "incompatible_protocol",
-          "Codex returned an unsupported history mode.",
-          "codex_history_mode_invalid",
-        );
-    }
-    const projection = await this.#projectThreadHistory(
-      thread,
-      detail.correlationAncestorThreadIds,
-      input.binding.applicationThreadId,
-      10,
-      metadata.historyMode,
-      input.binding,
-      itemTimestamps,
-    );
-    const current = this.#client.lifecycleSnapshot();
-    if (
-      current.state !== "ready" ||
-      current.generation !== metadataReceipt.generation
-    ) {
-      throw codexError(
-        "unavailable",
-        "Codex changed generation while the detached history was loading.",
-        "codex_history_reconciliation_required",
-        true,
-      );
-    }
-    return {
-      snapshot: selectCodexSnapshotWindow(projection.snapshot).snapshot,
-      usage: {},
-    };
+    return new CodexHistoryReader({
+      client: this.#client,
+      threadId: input.binding.backendConversationId,
+      correlationScope: this.#correlationScope(input.binding.backendConversationId, detail.correlationAncestorThreadIds),
+      validateThread: thread => assertThreadBinding(thread, input.binding.backendConversationId, input.workspace.canonicalPath),
+      mapError: mapCodexReadError,
+      project: (thread, beforeNativeTurnIndex, limit, signal, itemTimestamps) => this.#projectThreadHistory(
+        thread, detail.correlationAncestorThreadIds, input.binding.applicationThreadId,
+        limit, thread.historyMode, input.binding, itemTimestamps,
+        { beforeNativeTurnIndex, signal },
+      ),
+    });
   }
 
   async resolveBranchCheckpoint(
@@ -2528,7 +2458,9 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     expectedHistoryMode: "legacy" | "paginated" = "legacy",
     captureBinding?: ConversationBinding,
     itemTimestamps: CodexHistoryItemTimestamps = new Map(),
+    acquisition?: { readonly beforeNativeTurnIndex: number; readonly signal: AbortSignal },
   ) {
+    acquisition?.signal.throwIfAborted();
     if (thread.historyMode !== expectedHistoryMode) {
       throw codexError(
         "incompatible_protocol",
@@ -2554,15 +2486,16 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     let captureBudgetUsed = false;
     for (;;) {
       try {
-        const candidate =
+        const selected =
           candidateLimit === undefined
-            ? normalized
+            ? { thread: normalized, startNativeTurnIndex: 0 }
             : selectCodexNativeHistorySlice(
                 normalized,
                 scope,
-                normalized.turns.length,
+                acquisition?.beforeNativeTurnIndex ?? normalized.turns.length,
                 candidateLimit,
-              ).thread;
+              );
+        const candidate = selected.thread;
         let projection = projectCodexThreadHistory(
           candidate,
           scope,
@@ -2574,7 +2507,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
           captureBudgetUsed = true;
           const capture = new CodexViewedImageCaptureCoordinator({ binding: captureBinding,
             capture: this.#viewedImageCapture, onCaptured: () => undefined });
-          try { await capture.capturePage(projection.pendingViewedImages); }
+          try { await capture.capturePage(projection.pendingViewedImages, acquisition?.signal); }
           finally { capture.close(); }
           projection = projectCodexThreadHistory(candidate, scope, new Map(), context, itemTimestamps);
         }
@@ -2592,7 +2525,8 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
             "history_too_large",
           );
         }
-        return materialized;
+        acquisition?.signal.throwIfAborted();
+        return { ...materialized, startNativeTurnIndex: selected.startNativeTurnIndex };
       } catch (error) {
         const mapped = mapCodexHistoryProjectionError(error);
         if (

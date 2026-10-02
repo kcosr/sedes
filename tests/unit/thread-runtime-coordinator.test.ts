@@ -305,6 +305,67 @@ function pendingOverlayFixture() {
 }
 
 describe("ThreadRuntimeCoordinator", () => {
+  it("retires a history runtime that finishes establishment concurrently with restore", async () => {
+    const threadId = "restore-during-establishment";
+    const history = resettableActor({ generation: "history", canEvict: true });
+    Object.defineProperty(history.actor, "readOnly", { value: true });
+    const execution = resettableActor({ generation: "execution", canEvict: true });
+    const actorRelease = [vi.fn(), vi.fn()];
+    const bridgeRelease = [vi.fn(async () => undefined), vi.fn(async () => undefined)];
+    const interactionRelease = [vi.fn(async () => { ownerBound = false; }), vi.fn(async () => { ownerBound = false; })];
+    let access: "history" | "execution" = "history";
+    let actorIndex = 0;
+    let bridgeIndex = 0;
+    let interactionIndex = 0;
+    let ownerBound = false;
+    let restoring: ReturnType<ThreadRuntimeCoordinator["acquire"]> | undefined;
+    const coordinator = new ThreadRuntimeCoordinator({
+      actors: {
+        acquire: async () => {
+          const index = actorIndex++;
+          return { actor: index === 0 ? history.actor : execution.actor, release: actorRelease[index]! };
+        },
+      } as never,
+      targets: { resolve: async () => ({ ...runtimeTarget(threadId), access }) },
+      bridge: {
+        bind: () => ({ ready: Promise.resolve(), release: bridgeRelease[bridgeIndex++]! }),
+      } as unknown as ConversationEventBridge,
+      interactions: {
+        bind: () => {
+          if (ownerBound) throw new Error("interaction_broker_owner_already_bound");
+          ownerBound = true;
+          const index = interactionIndex++;
+          return {
+            publishPending: () => {
+              if (index !== 0) return;
+              // Runs after bridge.ready but before created.runtime is set.
+              // Restore's resolved target is resumed in that microtask gap.
+              access = "execution";
+              restoring = coordinator.acquire(scope, threadId);
+            },
+            release: interactionRelease[index]!,
+          };
+        },
+      } as never,
+      hubs: new ScopedThreadEventHubRegistry(), retentionMilliseconds: 60_000,
+    });
+    try {
+      const original = await coordinator.acquire(scope, threadId);
+      expect(restoring).toBeDefined();
+      const restored = await restoring!;
+      expect(restored.actor).toBe(execution.actor);
+      expect(history.close).toHaveBeenCalledOnce();
+      expect(actorRelease[0]).toHaveBeenCalledOnce();
+      expect(bridgeRelease[0]).toHaveBeenCalledOnce();
+      expect(interactionRelease[0]).toHaveBeenCalledOnce();
+      original.release();
+      restored.release();
+      const reopened = await coordinator.acquire(scope, threadId);
+      expect(reopened.actor).toBe(execution.actor);
+      reopened.release();
+    } finally { await coordinator.close(); }
+  });
+
   it("publishes usage hints only for an admitted loaded actor and matching projection generation", async () => {
     const fixture=pendingOverlayFixture();
     expect(fixture.coordinator.publishUsageRevisionIfLoaded(scope,"dormant-thread","1")).toBe(false);

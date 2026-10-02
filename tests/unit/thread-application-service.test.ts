@@ -647,6 +647,122 @@ describe("ThreadApplicationService", () => {
     expect(bound.readCachedPresentation).toHaveBeenCalledOnce();
   });
 
+  it("uses cached presentation throughout archived reads and refreshes it after restore", async () => {
+    const active = inventory();
+    const current = createService({
+      state: { ...active, thread: { ...active.thread, inventoryState: "archived" } },
+      runState: "idle", queue: [], includeInteraction: false,
+    });
+    const captured = await current.capture();
+    if (captured.status !== "connected") throw new Error("expected connected actor capture");
+    current.capture.mockClear();
+    const freshPresentation = current.readPresentation.getMockImplementation()!;
+    current.readPresentation.mockRejectedValue(new Error("Archived reads must not load a provider catalog."));
+
+    const snapshot = await current.service.snapshot(scope, "thread-1");
+    await current.service.prepareSnapshotFromActorCapture(scope, "thread-1", captured.state);
+    const actorSnapshot = await current.service.snapshotFromActorCapture(scope, "thread-1", captured.state);
+    const targeted = await current.service.capabilitiesAndProviderFeaturesFromActorCapture(scope, "thread-1", captured.state);
+    const fork = await current.service.forkSourceFromActorCapture(scope, "thread-1", captured.state);
+    await expect(current.service.skills(scope, "thread-1")).resolves.toEqual({ skills: [] });
+
+    expect(snapshot.thread.inventoryState).toBe("archived");
+    expect(snapshot.orderedTurnIds).toEqual(["turn-1"]);
+    expect(snapshot.itemsById["item-1"]).toMatchObject({ markdown: { text: "Working" } });
+    expect(actorSnapshot).toEqual(snapshot);
+    expect(targeted.capabilities).toEqual(snapshot.capabilities);
+    expect(snapshot.capabilities.deliveryModes.every(({ available }) => !available)).toBe(true);
+    expect(fork).toEqual(snapshot.forkSource);
+    expect(fork.selectedCompletedTurn).toEqual({
+      available: false, unavailableReason: { text: "Archived threads cannot be forked." },
+    });
+    expect(current.capture).toHaveBeenCalledOnce();
+    expect(current.readPresentation).not.toHaveBeenCalled();
+    expect(current.readCachedPresentation).toHaveBeenCalledTimes(5);
+
+    current.getAuthorized.mockResolvedValue(active);
+    current.readPresentation.mockImplementation(freshPresentation);
+    const restored = await current.service.snapshot(scope, "thread-1");
+    await current.service.prepareSnapshotFromActorCapture(scope, "thread-1", captured.state);
+    await current.service.snapshotFromActorCapture(scope, "thread-1", captured.state);
+    await current.service.capabilitiesAndProviderFeaturesFromActorCapture(scope, "thread-1", captured.state);
+    await current.service.forkSourceFromActorCapture(scope, "thread-1", captured.state);
+    await current.service.skills(scope, "thread-1");
+    expect(restored.thread.inventoryState).toBe("active");
+    expect(restored.capabilities.deliveryModes).toContainEqual(expect.objectContaining({ id: "submit", available: true }));
+    expect(current.readPresentation).toHaveBeenCalledTimes(5);
+    expect(current.readCachedPresentation).toHaveBeenCalledTimes(6);
+  });
+
+  it("renders an archived SSE baseline using only cached presentation", async () => {
+    const active = inventory();
+    const current = createService({
+      state: { ...active, thread: { ...active.thread, inventoryState: "archived" } },
+      runState: "idle", queue: [], includeInteraction: false,
+    });
+    const captured = await current.capture();
+    if (captured.status !== "connected") throw new Error("expected connected actor capture");
+    current.capture.mockClear();
+    current.readPresentation.mockRejectedValue(new Error("Archived streams must not load a provider catalog."));
+    const hub = new ThreadEventHub();
+    const client = new NormalizedThreadStore();
+    const subscription = hub.subscribe(event => {
+      expect(client.apply(event).kind).not.toBe("resnapshot_required");
+    });
+    const onFailure = vi.fn();
+    const binding = new ConversationEventBridge(new ThreadEventPresentation(current.service), () => undefined).bind({
+      scope, applicationThreadId: "thread-1", hub,
+      actor: {
+        subscribe(listener) {
+          listener({ type: "projection_replaced", state: captured.state });
+          return () => undefined;
+        },
+      },
+      captureAuthoritativeState: async () => captured.state,
+      onFailure,
+    });
+    try {
+      await binding.ready;
+      client.confirmReplayCaughtUp();
+      expect(client.state.authoritative).toBe(true);
+      expect(client.state.snapshot?.thread.inventoryState).toBe("archived");
+      expect(client.state.snapshot?.itemsById["item-1"]).toMatchObject({ markdown: { text: "Working" } });
+      expect(client.state.snapshot?.capabilities.deliveryModes.every(({ available }) => !available)).toBe(true);
+      expect(current.readCachedPresentation).toHaveBeenCalledOnce();
+      expect(current.readPresentation).not.toHaveBeenCalled();
+      expect(current.capture).not.toHaveBeenCalled();
+      expect(onFailure).not.toHaveBeenCalled();
+    } finally { subscription.close(); await binding.release(); }
+  });
+
+  it.each(["active", "archived"] as const)("composes a provider-free disconnected snapshot for %s inventory", async (inventoryState) => {
+    const state = inventory();
+    const current = createService({
+      state: { ...state, thread: { ...state.thread, inventoryState } },
+      includeInteraction: false,
+    });
+    current.capture.mockRejectedValue(new Error("Disconnected publication must not reacquire the actor."));
+    current.readPresentation.mockRejectedValue(new Error("Disconnected publication must not load a provider catalog."));
+
+    const snapshot = await current.service.disconnectedSnapshot(scope, "thread-1");
+    expect(snapshot.thread.inventoryState).toBe(inventoryState);
+    expect(snapshot.runState).toBe("disconnected");
+    expect(snapshot.orderedTurnIds).toEqual([]);
+    expect(snapshot.draft).toEqual(state.draft);
+    expect(snapshot.capabilities.deliveryModes.every(({ available }) => !available)).toBe(true);
+    expect(current.capture).not.toHaveBeenCalled();
+    expect(current.readPresentation).not.toHaveBeenCalled();
+    expect(current.readCachedPresentation).toHaveBeenCalledOnce();
+  });
+
+  it("authorizes disconnected publication before consulting cached presentation", async () => {
+    const current = createService({ state: { ...inventory(), ownerPrincipalId: "other-owner" } });
+    await expect(current.service.disconnectedSnapshot(scope, "thread-1")).rejects.toThrow("thread_application_scope_mismatch");
+    expect(current.capture).not.toHaveBeenCalled();
+    expect(current.readPresentation).not.toHaveBeenCalled();
+    expect(current.readCachedPresentation).not.toHaveBeenCalled();
+  });
+
   for (const replacement of ["actor event", "authoritative request"] as const) {
     it.each(["created", "acknowledged"] as const)(
       `publishes %s attention and drains the publisher during stalled ${replacement} catalog preparation`,
@@ -1754,6 +1870,19 @@ describe("ThreadApplicationService", () => {
     });
   });
 
+  it("captures archived history even when its execution target is unavailable", async () => {
+    const state = inventory();
+    const { service, capture } = createService({ state: {
+      ...state, thread: { ...state.thread, available: false, inventoryState: "archived" },
+    } });
+    const snapshot = await service.snapshot(scope, "thread-1");
+    expect(capture).toHaveBeenCalledOnce();
+    expect(snapshot.runState).not.toBe("disconnected");
+    expect(snapshot.thread.inventoryState).toBe("archived");
+    expect(snapshot.capabilities.deliveryModes.every(({ available }) => !available)).toBe(true);
+    expect(snapshot.capabilities.automation.available).toBe(false);
+  });
+
   it("does not acquire or offer backend delivery when the inventory target is unavailable", async () => {
     const state = inventory();
     const { service, capture } = createService({
@@ -2069,12 +2198,12 @@ describe("ActorBackedThreadApplicationConversationReader", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("maps transient backend acquisition failures to disconnected state", async () => {
+  it.each(["unavailable", "overloaded"] as const)("maps %s backend acquisition failures to disconnected state", async (category) => {
     const reader = new ActorBackedThreadApplicationConversationReader({
       actors: {
         acquire: vi.fn(async () => {
           throw new BackendError({
-            category: "unavailable",
+            category,
             retryable: true,
             crossedSubmissionBoundary: false,
             safeMessage: "Backend unavailable.",
@@ -2089,7 +2218,85 @@ describe("ActorBackedThreadApplicationConversationReader", () => {
     });
   });
 
-  it("rejects a resolver that crosses the owner scope before acquisition", async () => {
+  it.each(["not_found", "rejected", "invalid_state", "incompatible_protocol", "permission_denied"] as const)(
+    "preserves archived inventory after %s native history failures while retaining active errors",
+    async (category) => {
+      const failure = new BackendError({
+        category, retryable: false, crossedSubmissionBoundary: false,
+        safeMessage: "Native history cannot be read.",
+        ...(category === "rejected" ? { backendCode: "pi_history_native_migration_required" } : {}),
+      });
+      const acquire = vi.fn(async () => { throw failure; });
+      for (const access of ["history", "execution"] as const) {
+        const reader = new ActorBackedThreadApplicationConversationReader({
+          actors: { acquire } as never,
+          targets: { resolve: async () => ({ ...target, access }) },
+        });
+        if (access === "execution") {
+          await expect(reader.capture(scope, "thread-1")).rejects.toBe(failure);
+          continue;
+        }
+        const state = inventory();
+        const current = createService({
+          state: { ...state, thread: { ...state.thread, inventoryState: "archived" } },
+          includeInteraction: false,
+        });
+        current.capture.mockImplementation(() => reader.capture(scope, "thread-1"));
+        const snapshot = await current.service.snapshot(scope, "thread-1");
+        expect(snapshot.thread.inventoryState).toBe("archived");
+        expect(snapshot.runState).toBe("disconnected");
+        expect(snapshot.orderedTurnIds).toEqual([]);
+        expect(snapshot.draft).toEqual(state.draft);
+        expect(snapshot.capabilities.deliveryModes.every(({ available }) => !available)).toBe(true);
+        expect(current.readPresentation).not.toHaveBeenCalled();
+        expect(current.readCachedPresentation).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it("releases an archived actor when a definitive history capture fails", async () => {
+    const release = vi.fn();
+    const reader = new ActorBackedThreadApplicationConversationReader({
+      actors: { acquire: vi.fn(async () => ({
+        actor: { captureSnapshotState: async () => { throw new BackendError({
+          category: "not_found", retryable: false, crossedSubmissionBoundary: false,
+          safeMessage: "Native history is missing.",
+        }); } },
+        release,
+      })) } as never,
+      targets: { resolve: async () => ({ ...target, access: "history" }) },
+    });
+    await expect(reader.capture(scope, "thread-1")).resolves.toEqual({ status: "disconnected" });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it.each(["permission_denied", "not_found"] as const)("preserves %s errors during target authorization", async (category) => {
+    const failure = new BackendError({
+      category, retryable: false, crossedSubmissionBoundary: false,
+      safeMessage: "Thread access denied.",
+    });
+    const acquire = vi.fn();
+    const reader = new ActorBackedThreadApplicationConversationReader({
+      actors: { acquire } as never,
+      targets: { resolve: async () => { throw failure; } },
+    });
+    await expect(reader.capture(scope, "thread-1")).rejects.toBe(failure);
+    expect(acquire).not.toHaveBeenCalled();
+  });
+
+  it.each(["internal", "submission_unknown"] as const)("preserves unexpected %s errors from an archived reader", async (category) => {
+    const failure = new BackendError({
+      category, retryable: false, crossedSubmissionBoundary: false,
+      safeMessage: "Unexpected failure.",
+    });
+    const reader = new ActorBackedThreadApplicationConversationReader({
+      actors: { acquire: async () => { throw failure; } } as never,
+      targets: { resolve: async () => ({ ...target, access: "history" }) },
+    });
+    await expect(reader.capture(scope, "thread-1")).rejects.toBe(failure);
+  });
+
+  it.each(["history", "execution"] as const)("rejects a %s resolver that crosses the owner scope before acquisition", async (access) => {
     const acquire = vi.fn();
     const reader = new ActorBackedThreadApplicationConversationReader({
       actors: { acquire } as never,
@@ -2097,6 +2304,7 @@ describe("ActorBackedThreadApplicationConversationReader", () => {
         resolve: async () =>
           ({
             ...target,
+            access,
             binding: {
               ...target.binding,
               ownerPrincipalId: "principal-2",

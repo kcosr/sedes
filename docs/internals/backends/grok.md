@@ -77,6 +77,17 @@ The initial production profile supports:
   and
 - session close as unload, never delete.
 
+Archived reads use a dedicated `ConversationHistoryReader` with an unbound ACP
+process. It initializes the transport and authenticates with Grok's native
+credential handling, validates the exact native session/workspace through
+session discovery, and reads persisted `_x.ai/session/updates` directly. It
+never loads, resumes, closes, or repairs the target session, replays settings,
+or requests Sedes agent-tool credentials. Closing the reader releases only its
+owned process. The retained head remains fixed for that reader's lifetime;
+older pages use reader-scoped native cursors with the same boundary and
+issuance-frontier validation as execution handles. Initial acquisition and
+each page have a bounded deadline and honor caller cancellation and close.
+
 Native text chunks are incrementally folded into stable bounded semantic blocks
 with an exact private digest. The resident projector retains the active turn,
 the newest whole-turn display window, and compact unsettled-operation evidence;
@@ -151,12 +162,18 @@ terminates, a bounded drain deadline closes the unsafe ACP connection
 generation; a replacement connection may reacquire history without admitting
 late chunks into a successor read.
 
-Targeted turn lookup scans the retained authoritative history window newest
+Execution-handle targeted turn lookup scans the retained authoritative history window newest
 first and projects only the matching whole turn. Its retained-history boundary
 is part of the result: reaching native history start proves absence, while an
 older opaque boundary or the caller's candidate ceiling reports bounded-search
 exhaustion. It does not start another ACP history acquisition or walk
 normalized older-history pages.
+
+Detached readers can continue targeted lookup through older native pages,
+newest first, under the caller's candidate ceiling. Ignored native prompts also
+consume that acquisition budget. Only the matching whole turn is normalized
+with generated images; reaching native history start proves absence, and
+exhausting the candidate budget reports a bounded-search limit.
 
 One turn retains at most the shared normalized item capacity. Additional
 provider activity is folded into one ordinary normalized notice rather than

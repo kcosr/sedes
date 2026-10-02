@@ -1,3 +1,4 @@
+import { readConversationHistory } from "../helpers/read-conversation-history.js";
 // Shared immutable operation deadline keeps replays identical throughout this local suite.
 const interruptDeadlineAt = Date.now() + 3_600_000;
 import { savedAgentDatabase } from "../support/saved-agent-fixture.js";
@@ -11,13 +12,17 @@ import { type UsageObservation } from "../../src/server/usage/contracts.js";
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { PiUsageAccounting } from "../../src/server/backends/pi/pi-usage-accounting.js";
 import {
+  appendFile,
   chmod,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   realpath,
   rm,
   symlink,
+  truncate,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { createHash, createHmac } from "node:crypto";
@@ -783,7 +788,7 @@ async function activeSteerConversation(
           : [];
       });
   const userItems = async () => {
-    const { snapshot } = await driver.read({
+    const { snapshot } = await readConversationHistory(driver, {
       scope,
       workspace: fixture.workspace,
       binding: target,
@@ -817,9 +822,9 @@ async function activeSteerConversation(
 /** The actor's `latest_completed` selection: the newest completed turn it resolved. */
 async function latestCompleted(
   driver: PiConversationBackendDriver,
-  input: Parameters<PiConversationBackendDriver["read"]>[0],
+  input: Parameters<PiConversationBackendDriver["openHistory"]>[0],
 ) {
-  const { snapshot } = await driver.read(input);
+  const { snapshot } = await readConversationHistory(driver, input);
   const backendTurnId = snapshot.orderedBackendTurnIds.findLast((turnId) =>
     snapshot.turnsById[turnId]?.status === "completed" && snapshot.turnsById[turnId]?.endedBy === "agent_settled");
   return { kind: "latest_completed" as const, backendTurnId: backendTurnId ?? "no-completed-turn" };
@@ -1826,6 +1831,260 @@ describe("Pi interaction bridge", () => {
 });
 
 describe("Pi conversation backend driver", () => {
+  it.each(["local", "remote", "removed_isolated"] as const)(
+    "reads immutable %s history without agent credentials, SDK resources, or a worker",
+    async (topology) => {
+      const fixture = await workspace();
+      const targetWorkspace = topology === "remote"
+        ? { ...fixture.workspace, canonicalPath: "/unavailable/remote/project" }
+        : fixture.workspace;
+      const nativeWorkspace = topology === "removed_isolated"
+        ? { ...targetWorkspace, canonicalPath: path.join(fixture.root, "isolated") }
+        : targetWorkspace;
+      if (topology === "removed_isolated") await mkdir(nativeWorkspace.canonicalPath);
+      const store = new PiSessionStore({
+        sessionDirectory: fixture.sessions,
+        workspacePathMode: topology === "remote" ? "remote_semantic" : "local_canonical",
+      });
+      const reserved = await store.reserve(nativeWorkspace, `history-${topology}`);
+      for (let index = 0; index < 14; index += 1) appendBranchableSessionTurn(reserved.manager, `Turn ${index}`);
+      const nativeFile = reserved.manager.getSessionFile()!;
+      const before = await readFile(nativeFile);
+      if (topology === "removed_isolated") await rm(nativeWorkspace.canonicalPath, { recursive: true });
+      const forbidden = vi.fn((): never => { throw new Error("archived_source_must_not_execute"); });
+      const driver = new PiConversationBackendDriver({
+        instance, connection, usage: NO_USAGE_SINK,
+        nativeDiscoveryNamespaceKey: "pi-test-native-namespace", toolProvenanceKey,
+        sessionDirectory: fixture.sessions, store,
+        agentTools: { ...noAgentTools, readPolicy: forbidden, eligibleCatalog: forbidden },
+        agentToolSourceCapabilities: { issue: forbidden },
+        agentToolCli: { availability: "available", endpoint: "http://127.0.0.1:4784", executableDirectory: "/opt/sedes/bin", inheritedPath: "/usr/bin" },
+        toolAccessPolicy: forbidden,
+        sessionFactory: { create: forbidden },
+        resolveRemoteWorkspace: forbidden,
+        ...(topology === "removed_isolated" ? { isolatedWorkspaces: {
+          historyWorkspace: () => nativeWorkspace, isSelected: forbidden, resolve: forbidden,
+        } } : {}),
+      });
+      const reader = await driver.openHistory({ scope, workspace: targetWorkspace,
+        binding: binding(reserved.manager.getSessionId()), opaqueBindingDetail: reserved.opaqueBindingDetail });
+      const snapshot = await reader.readSnapshot({ signal: new AbortController().signal });
+      expect(snapshot.snapshot.orderedBackendTurnIds).toHaveLength(10);
+      expect(snapshot.history.previousCursor).toBeDefined();
+      const other = await driver.openHistory({ scope, workspace: targetWorkspace,
+        binding: binding(reserved.manager.getSessionId()), opaqueBindingDetail: reserved.opaqueBindingDetail });
+      try {
+        await expect(other.history({ cursor: snapshot.history.previousCursor, limit: 10 }))
+          .rejects.toMatchObject({ backendCode: "pi_history_cursor_invalid" });
+      } finally { await other.close(); }
+      const older = await reader.history({ cursor: snapshot.history.previousCursor, limit: 10 });
+      expect(older.orderedBackendTurnIds).toHaveLength(4);
+      expect(older.previousCursor).toBeUndefined();
+      const first = older.orderedBackendTurnIds[0]!;
+      await expect(reader.locateTurn({ maximumTurnCandidates: 14, matchesBackendTurnId: (id) => id === first })).resolves.toMatchObject({ status: "found", page: { orderedBackendTurnIds: [first] } });
+      await expect(reader.locateTurn({ maximumTurnCandidates: 1, matchesBackendTurnId: (id) => id === first })).resolves.toEqual({ status: "search_limit_reached" });
+      await expect(reader.locateTurn({ maximumTurnCandidates: 14, matchesBackendTurnId: () => false })).resolves.toEqual({ status: "not_found" });
+      await expect(reader.usage()).resolves.toMatchObject({ counters: { userMessages: 14, assistantMessages: 14 } });
+      await expect(reader.backendCapabilities()).resolves.toMatchObject({ actions: [], deliveryModes: [], supportsHistory: true });
+      expect(await readFile(nativeFile)).toEqual(before);
+      appendBranchableSessionTurn(reserved.manager, "Appended after capture");
+      expect(await reader.readSnapshot({ signal: new AbortController().signal })).toEqual(snapshot);
+      await reader.close();
+      await expect(reader.history({ limit: 1 })).rejects.toMatchObject({ name: "AbortError" });
+      expect(forbidden).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects wrong-scope history and cancels before native acquisition", async () => {
+    const fixture = await workspace();
+    const store = new PiSessionStore({ sessionDirectory: fixture.sessions });
+    const reserved = await store.reserve(fixture.workspace, "cancelled-history");
+    const read = vi.spyOn(store, "readHistory");
+    const driver = new PiConversationBackendDriver({ instance, connection, usage: NO_USAGE_SINK,
+      nativeDiscoveryNamespaceKey: "pi-test-native-namespace", toolProvenanceKey,
+      agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy, store });
+    const input = { scope, workspace: fixture.workspace, binding: binding("cancelled-history"), opaqueBindingDetail: reserved.opaqueBindingDetail };
+    await expect(driver.openHistory({ ...input, scope: { ...scope, principalId: "other" } })).rejects.toMatchObject({ category: "permission_denied" });
+    const reader = await driver.openHistory(input);
+    const signal = AbortSignal.abort(new Error("history_cancelled"));
+    await expect(reader.readSnapshot({ signal })).rejects.toThrow("history_cancelled");
+    await expect(reader.history({ signal, limit: 1 })).rejects.toThrow("history_cancelled");
+    await expect(reader.locateTurn({ signal, maximumTurnCandidates: 1, matchesBackendTurnId: () => true })).rejects.toThrow("history_cancelled");
+    expect(read).not.toHaveBeenCalled();
+    await reader.close();
+  });
+
+  it.each([1, 2] as const)("reads native v%s only when stable entry identities exist, without rewriting it", async (version) => {
+    const fixture = await workspace();
+    const store = new PiSessionStore({ sessionDirectory: fixture.sessions });
+    const reserved = await store.reserve(fixture.workspace, `legacy-history-${version}`);
+    appendBranchableSessionTurn(reserved.manager, "Persisted history");
+    const file = reserved.manager.getSessionFile()!;
+    const entries = (await readFile(file, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    entries[0].version = version;
+    const before = entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n";
+    await writeFile(file, before);
+    const reader = store.readHistory(fixture.workspace, reserved.manager.getSessionId(), reserved.opaqueBindingDetail, new AbortController().signal);
+    if (version === 1) await expect(reader).rejects.toMatchObject({ backendCode: "pi_history_native_migration_required" });
+    else {
+      const manager = await reader;
+      expect(manager.getHeader()?.version).toBe(3);
+      expect(manager.getEntries().map(({ id }) => id)).toEqual(entries.slice(1).map(({ id }) => id));
+    }
+    expect(await readFile(file, "utf8")).toBe(before);
+  });
+
+  it("closes only after a cancelled native history acquisition releases its resources", async () => {
+    const fixture = await workspace();
+    const store = new PiSessionStore({ sessionDirectory: fixture.sessions });
+    const reserved = await store.reserve(fixture.workspace, "closing-history");
+    let entered!: () => void, release!: () => void;
+    const acquisition = new Promise<void>(resolve => { entered = resolve; });
+    const cleanup = new Promise<void>(resolve => { release = resolve; });
+    vi.spyOn(store, "readHistory").mockImplementation(async (_workspace, _id, _detail, signal) => {
+      entered();
+      await new Promise<void>(resolve => { signal.addEventListener("abort", () => resolve(), { once: true }); });
+      await cleanup;
+      throw signal.reason;
+    });
+    const driver = new PiConversationBackendDriver({ instance, connection, usage: NO_USAGE_SINK,
+      nativeDiscoveryNamespaceKey: "pi-test-native-namespace", toolProvenanceKey,
+      agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy, store });
+    const reader = await driver.openHistory({ scope, workspace: fixture.workspace, binding: binding("closing-history"), opaqueBindingDetail: reserved.opaqueBindingDetail });
+    const rejected = expect(reader.readSnapshot({ signal: new AbortController().signal })).rejects.toMatchObject({ name: "AbortError" });
+    await acquisition;
+    let closed = false;
+    const closing = reader.close().then(() => { closed = true; });
+    await rejected;
+    expect(closed).toBe(false);
+    release(); await closing;
+    expect(closed).toBe(true);
+  });
+
+  it("refuses oversized native history before retaining transcript bytes", async () => {
+    const fixture = await workspace();
+    const store = new PiSessionStore({ sessionDirectory: fixture.sessions });
+    const reserved = await store.reserve(fixture.workspace, "bounded-history");
+    await truncate(reserved.manager.getSessionFile()!, 64 * 1024 * 1024 + 1);
+    await expect(store.readHistory(fixture.workspace, "bounded-history", reserved.opaqueBindingDetail, new AbortController().signal)).rejects.toMatchObject({ backendCode: "pi_history_capacity_exceeded" });
+  });
+
+  it.each(["{bad-json}\n", "{\"type\":\"message\""])("refuses malformed native history without silently dropping records (%s)", async malformed => {
+    const fixture = await workspace();
+    const store = new PiSessionStore({ sessionDirectory: fixture.sessions });
+    const reserved = await store.reserve(fixture.workspace, "malformed-history");
+    appendBranchableSessionTurn(reserved.manager, "Persisted history");
+    const file = reserved.manager.getSessionFile()!;
+    const before = await readFile(file, "utf8") + malformed;
+    await writeFile(file, before);
+    await expect(store.readHistory(fixture.workspace, "malformed-history", reserved.opaqueBindingDetail, new AbortController().signal))
+      .rejects.toMatchObject({ backendCode: "pi_history_entry_invalid" });
+    expect(await readFile(file, "utf8")).toBe(before);
+  });
+
+  it("rejects an in-place native rewrite during acquisition", async () => {
+    const fixture = await workspace();
+    const store = new PiSessionStore({ sessionDirectory: fixture.sessions });
+    const reserved = await store.reserve(fixture.workspace, "rewritten-history");
+    appendBranchableSessionTurn(reserved.manager, "Persisted history");
+    const file = reserved.manager.getSessionFile()!, before = await readFile(file, "utf8");
+    const handle = await open(file, "r");
+    const prototype = Object.getPrototypeOf(handle) as { read(...args: unknown[]): Promise<{ bytesRead: number }> };
+    const original = prototype.read;
+    await handle.close();
+    let rewritten = false;
+    const read = vi.spyOn(prototype, "read").mockImplementation(async function(this: unknown, ...args: unknown[]) {
+      const result = await original.apply(this, args);
+      if (!rewritten && result.bytesRead > 0) {
+        rewritten = true;
+        await writeFile(file, before.replace("Persisted history", "Rewritten history"));
+        const changed = new Date(Date.now() + 2_000);
+        await utimes(file, changed, changed);
+      }
+      return result;
+    });
+    try {
+      await expect(store.readHistory(fixture.workspace, "rewritten-history", reserved.opaqueBindingDetail, new AbortController().signal))
+        .rejects.toMatchObject({ backendCode: "pi_history_invalidated", retryable: true });
+    } finally { read.mockRestore(); }
+  });
+
+  it.each(["malformed", "oversized", "unreadable", "unresolvable workspace"] as const)(
+    "reads bound history when a sibling has an %s header probe",
+    async (failure) => {
+      const fixture = await workspace();
+      const store = new PiSessionStore({ sessionDirectory: fixture.sessions });
+      const reserved = await store.reserve(fixture.workspace, "bound-history");
+      appendBranchableSessionTurn(reserved.manager, "Persisted history");
+      const before = await readFile(reserved.manager.getSessionFile()!);
+      const sibling = path.join(fixture.sessions, "unrelated.jsonl");
+      const header = { ...reserved.manager.getHeader()!, id: "unrelated-history" };
+      if (failure === "unresolvable workspace") {
+        header.id = "bound-history";
+        header.cwd = path.join(fixture.root, "looping-workspace");
+        await symlink(header.cwd, header.cwd);
+      }
+      await writeFile(sibling, failure === "malformed" ? "{bad-json}\n"
+        : failure === "oversized" ? "x".repeat(1024 * 1024 + 1)
+        : `${JSON.stringify(header)}\n`);
+      if (failure === "unreadable") await chmod(sibling, 0o000);
+      try {
+        const manager = await store.readHistory(fixture.workspace, "bound-history", reserved.opaqueBindingDetail, new AbortController().signal);
+        expect(manager.getEntries()).toEqual(reserved.manager.getEntries());
+        expect(await readFile(reserved.manager.getSessionFile()!)).toEqual(before);
+      } finally {
+        if (failure === "unreadable") await chmod(sibling, 0o600);
+      }
+    },
+  );
+
+  it.each(["different ID", "different workspace", "duplicate", "cancelled"] as const)(
+    "preserves sibling identity checks during an append (%s)",
+    async (scenario) => {
+      const fixture = await workspace();
+      const store = new PiSessionStore({ sessionDirectory: fixture.sessions });
+      const reserved = await store.reserve(fixture.workspace, "bound-history");
+      appendBranchableSessionTurn(reserved.manager, "Persisted history");
+      const sibling = path.join(fixture.sessions, "active-sibling.jsonl");
+      const siblingTimestamp = "2000-01-01T00:00:00.000Z";
+      await writeFile(sibling, `${JSON.stringify({
+        ...reserved.manager.getHeader()!,
+        id: scenario === "different ID" ? "unrelated-history" : "bound-history",
+        cwd: scenario === "different workspace" ? fixture.root : fixture.workspace.canonicalPath,
+        timestamp: siblingTimestamp,
+      })}\n`);
+      const handle = await open(sibling, "r");
+      const prototype = Object.getPrototypeOf(handle) as { read(...args: unknown[]): Promise<{ bytesRead: number }> };
+      const original = prototype.read;
+      await handle.close();
+      const controller = new AbortController();
+      const cancelled = new Error("sibling_probe_cancelled");
+      let appended = false;
+      const read = vi.spyOn(prototype, "read").mockImplementation(async function(this: unknown, ...args: unknown[]) {
+        const result = await original.apply(this, args);
+        if (!appended && Buffer.isBuffer(args[0]) &&
+          args[0].subarray(0, result.bytesRead).includes(Buffer.from(siblingTimestamp))) {
+          appended = true;
+          await appendFile(sibling, `${JSON.stringify({ type: "session_info", id: "active-info", parentId: null,
+            timestamp: siblingTimestamp, name: "Active sibling" })}\n`);
+          if (scenario === "cancelled") controller.abort(cancelled);
+        }
+        return result;
+      });
+      try {
+        const acquisition = store.readHistory(fixture.workspace, "bound-history", reserved.opaqueBindingDetail, controller.signal);
+        if (scenario === "duplicate") {
+          await expect(acquisition).rejects.toMatchObject({ backendCode: "pi_session_id_ambiguous" });
+        } else if (scenario === "cancelled") {
+          await expect(acquisition).rejects.toBe(cancelled);
+        } else {
+          expect((await acquisition).getEntries()).toEqual(reserved.manager.getEntries());
+        }
+        expect(appended).toBe(true);
+      } finally { read.mockRestore(); }
+    },
+  );
+
   it("keeps throughput only in the resident handle with accounting disabled, across refresh, history and targeted lookup", async () => {
     const fixture = await workspace();
     const base = fakeSessionFactory(1, true);
@@ -2341,7 +2600,7 @@ describe("Pi conversation backend driver", () => {
       sessionDirectory: fixture.sessions,
       store,
       sessionFactory,
-      isolatedWorkspaces: { isSelected, resolve },
+      isolatedWorkspaces: { isSelected, resolve, historyWorkspace: () => effectiveWorkspace },
       agentToolCli: {
         availability: "available",
         endpoint: "http://127.0.0.1:4784",
@@ -2444,30 +2703,15 @@ describe("Pi conversation backend driver", () => {
     expect(releases[1]).toHaveBeenCalledOnce();
 
     await expect(
-      driver.read({
+      readConversationHistory(driver, {
         scope,
         workspace: fixture.workspace,
         binding: binding(created.backendConversationId, "thread"),
         opaqueBindingDetail: created.opaqueBindingDetail,
       }),
     ).resolves.toMatchObject({ snapshot: { runState: "idle" } });
-    expect(resolve).toHaveBeenNthCalledWith(5, {
-      scope,
-      applicationThreadId: "thread",
-      sourceWorkspace: fixture.workspace,
-      access: "passive",
-    });
-    expect(createInputs[1]).toMatchObject({
-      workspace: effectiveWorkspace,
-      isolatedWorkspace: {
-        semanticCwd: "/home/agent",
-        environmentLabel: "Isolated workspace",
-      },
-    });
-    await expect(
-      createInputs[1]!.isolatedWorkspace!.executor.read({ path: "README.md" }),
-    ).rejects.toMatchObject({ code: "workspace_tools_unavailable" });
-    expect(releases[4]).toHaveBeenCalledOnce();
+    expect(resolve).toHaveBeenCalledTimes(4);
+    expect(createInputs).toHaveLength(1);
 
     const failedCreated = await driver.create({
       scope,
@@ -2485,8 +2729,8 @@ describe("Pi conversation backend driver", () => {
         opaqueBindingDetail: failedCreated.opaqueBindingDetail,
       }),
     ).rejects.toMatchObject({ backendCode: "pi_operation_failed" });
+    expect(releases[4]).toHaveBeenCalledOnce();
     expect(releases[5]).toHaveBeenCalledOnce();
-    expect(releases[6]).toHaveBeenCalledOnce();
   });
 
   it("uses the thread Sedes policy for isolated native tools without admitting CLI authority", async () => {
@@ -2625,7 +2869,7 @@ describe("Pi conversation backend driver", () => {
       toolAccessPolicy: fullToolAccessPolicy,
       sessionDirectory: fixture.sessions,
       sessionFactory,
-      isolatedWorkspaces: { isSelected: () => true, resolve },
+      isolatedWorkspaces: { isSelected: () => true, resolve, historyWorkspace: () => effectiveWorkspace },
       agentToolCli: {
         availability: "available",
         endpoint: "http://127.0.0.1:4784",
@@ -2742,7 +2986,7 @@ describe("Pi conversation backend driver", () => {
       toolAccessPolicy: fullToolAccessPolicy,
       sessionDirectory: fixture.sessions,
       sessionFactory: fakeSessionFactory(),
-      isolatedWorkspaces: { isSelected, resolve },
+      isolatedWorkspaces: { isSelected, resolve, historyWorkspace: () => undefined },
     });
     const sourceBinding = binding("isolated-source", "isolated-thread");
 
@@ -3395,6 +3639,15 @@ describe("Pi conversation backend driver", () => {
         sessionDirectory: fixture.sessions,
         sessionFactory: fakeSessionFactory(),
       });
+      const historyFile = reserved.manager.getSessionFile()!;
+      const historyBytes = await readFile(historyFile);
+      const detached = await readConversationHistory(driver, {
+        scope,
+        workspace: fixture.workspace,
+        binding: binding(nativeId, "task-attestation-recovery-thread"),
+        opaqueBindingDetail: reserved.opaqueBindingDetail,
+      });
+      expect(await readFile(historyFile)).toEqual(historyBytes);
       const handle = await driver.attach({
         scope,
         workspace: fixture.workspace,
@@ -3423,6 +3676,7 @@ describe("Pi conversation backend driver", () => {
       expect(
         JSON.stringify(projection.snapshot.itemsById[`${userEntryId}:user`]),
       ).not.toContain('"scope"');
+      expect(detached.snapshot.itemsById[`${userEntryId}:user`]).toEqual(projection.snapshot.itemsById[`${userEntryId}:user`]);
       const recoveredManager = await store.openPersisted(
         fixture.workspace,
         nativeId,
@@ -3728,7 +3982,7 @@ describe("Pi conversation backend driver", () => {
       status: "accepted",
       backendTurnId: activeTurnId,
     });
-    const materialized = await driver.read({
+    const materialized = await readConversationHistory(driver, {
       scope,
       workspace: fixture.workspace,
       binding: target,
@@ -6402,7 +6656,7 @@ describe("Pi conversation backend driver", () => {
     await firstHandle.close();
 
     const restarted = new PiConversationBackendDriver(options);
-    await restarted.read({
+    await readConversationHistory(restarted, {
       scope,
       workspace: fixture.workspace,
       binding: target,
@@ -6418,9 +6672,8 @@ describe("Pi conversation backend driver", () => {
     expect(appliedSelections).toEqual([
       ["read", "grep"],
       ["read", "grep"],
-      ["read", "grep"],
     ]);
-    expect(policyCalls).toEqual(["thread", "thread", "thread"]);
+    expect(policyCalls).toEqual(["thread", "thread"]);
     await expect(reopenedHandle.backendCapabilities()).resolves.toMatchObject({
       effectiveSettings: { toolAccess: "read_only" },
     });
@@ -6560,7 +6813,7 @@ describe("Pi conversation backend driver", () => {
       source: { kind: "user" },
     });
     const target = binding(created.backendConversationId);
-    await driver.read({
+    await readConversationHistory(driver, {
       scope,
       workspace: fixture.workspace,
       binding: target,
@@ -6578,7 +6831,6 @@ describe("Pi conversation backend driver", () => {
       customToolInputs.map((tools) => tools?.map(({ name }) => name)),
     ).toEqual([
       undefined,
-      undefined,
       [
         "sedes_agent_context",
         "sedes_workspace_mutate",
@@ -6589,13 +6841,11 @@ describe("Pi conversation backend driver", () => {
     ]);
     expect(protectedAgentToolNameInputs).toEqual([
       undefined,
-      undefined,
       ["sedes_workspace_mutate", "sedes_act"],
     ]);
     expect(eligibleCatalog).toHaveBeenCalledOnce();
     expect(eligibleCatalog).toHaveBeenCalledWith("pi_sdk");
     expect(appliedSelections).toEqual([
-      ["read", "grep"],
       ["read", "grep", "sedes_agent_context"],
     ]);
     enabledToolIds = [contract.id];
@@ -9230,7 +9480,7 @@ describe("Pi conversation backend driver", () => {
       requestedBackendConversationId: "semantic-clone-target",
       inheritedSettings: { toolAccess: "full" },
     });
-    const clonedRead = await driver.read({
+    const clonedRead = await readConversationHistory(driver, {
       scope,
       workspace: fixture.workspace,
       binding: {
@@ -9306,7 +9556,7 @@ describe("Pi conversation backend driver", () => {
       });
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
-    const sourceRead = await driver.read({
+    const sourceRead = await readConversationHistory(driver, {
       scope,
       workspace: fixture.workspace,
       binding: sourceBinding,
@@ -9429,7 +9679,7 @@ describe("Pi conversation backend driver", () => {
         },
       }),
     ).rejects.toMatchObject({ backendCode: "pi_branch_id_collision" });
-    const childRead = await driver.read({
+    const childRead = await readConversationHistory(driver, {
       scope,
       workspace: fixture.workspace,
       binding: binding(child.backendConversationId, "selected-child-thread"),
@@ -9466,7 +9716,7 @@ describe("Pi conversation backend driver", () => {
         requestedBackendConversationId: childId,
         inheritedSettings: { toolAccess: "full" },
       });
-      const boundaryRead = await driver.read({
+      const boundaryRead = await readConversationHistory(driver, {
         scope,
         workspace: fixture.workspace,
         binding: binding(
@@ -9578,13 +9828,7 @@ describe("Pi conversation backend driver", () => {
       binding: sourceBinding,
       opaqueBindingDetail: created.opaqueBindingDetail,
     });
-    const readSource = () =>
-      driver.read({
-        scope,
-        workspace: fixture.workspace,
-        binding: sourceBinding,
-        opaqueBindingDetail: created.opaqueBindingDetail,
-      });
+    const readSource = () => sourceHandle.establishProjection({ signal: new AbortController().signal });
     expect((await sourceHandle.backendCapabilities()).branching).toMatchObject({
       availability: "available",
       sourceMustBeIdle: false,
@@ -9692,7 +9936,7 @@ describe("Pi conversation backend driver", () => {
     const child = await driver.branchConversation(childInput);
     expect(await driver.branchConversation(childInput)).toEqual(child);
     const readChild = () =>
-      driver.read({
+      readConversationHistory(driver, {
         scope,
         workspace: fixture.workspace,
         binding: binding(
@@ -9810,7 +10054,7 @@ describe("Pi conversation backend driver", () => {
       text: "Source turn",
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const sourceRead = await driver.read({
+    const sourceRead = await readConversationHistory(driver, {
       scope,
       workspace: fixture.workspace,
       binding: sourceBinding,
@@ -9861,7 +10105,7 @@ describe("Pi conversation backend driver", () => {
       text: "Child-only turn",
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const childRead = await driver.read({
+    const childRead = await readConversationHistory(driver, {
       scope,
       workspace: fixture.workspace,
       binding: childBinding,
@@ -10202,7 +10446,7 @@ describe("Pi conversation backend driver", () => {
       "selected-steer-source-native",
       "selected-steer-source-thread",
     );
-    const sourceRead = await driver.read({
+    const sourceRead = await readConversationHistory(driver, {
       scope,
       workspace: fixture.workspace,
       binding: sourceBinding,
@@ -10233,7 +10477,7 @@ describe("Pi conversation backend driver", () => {
       requestedBackendConversationId: "selected-steer-child-native",
       inheritedSettings: { toolAccess: "full" },
     });
-    const childRead = await driver.read({
+    const childRead = await readConversationHistory(driver, {
       scope,
       workspace: fixture.workspace,
       binding: binding(

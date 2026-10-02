@@ -409,6 +409,10 @@ strict MCP configuration, and only the thread's `sedes` server, in `default`
 permission mode approving only `mcp__sedes__*` calls. It verifies the server
 connects, the reference stays out of the CLI arguments, and one Individual
 tool call round-trips through a real Sedes listener.
+The native-history file pins the currently available `claude-sonnet-5-5`/low
+entry with the same subscription checks; its detached-history case allows no
+tools and verifies that reading a closed session creates no query and leaves
+the native transcript unchanged.
 The driver test covers reopen; the managed-worker test completes an active
 turn while the main client is detached, then reattaches without resubmitting.
 That test uses real worker stdio with local framed sockets standing in for

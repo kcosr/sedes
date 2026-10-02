@@ -237,6 +237,21 @@ mode. Native forks inherit the source thread's provider-owned mode.
 
 ## History and event projection
 
+Archived threads use a dedicated history reader instead of an execution
+handle. Opening, paging, and locating turns issue only `thread/read`,
+`thread/turns/list`, and `thread/items/list`; they never resume a native
+session, acquire agent-tool credentials, or replay execution settings. The
+reader retains transport residency until close, without claiming native
+thread ownership. Its capabilities expose history and output artifacts only.
+
+Each reader captures one bounded normalized head. Legacy history retains its
+complete native read for local paging. Paginated history retains the native
+head boundary and private cursor key; older pages and targeted lookups start
+from that captured boundary. Generation changes and observed native session,
+history mode, update timestamp, or status changes invalidate further native
+acquisitions. Closing or cancelling a read releases its waits without native
+unsubscribe or session mutations.
+
 The history projector maps strict app-server items and live notifications into
 normalized user, assistant, reasoning, tool, compaction, and status items.
 Native thread, turn, and item IDs and rollout paths stay server-side. One
