@@ -417,6 +417,10 @@
 
 ### Fixed
 
+- Linux x64 server and full Electron packages retain only the compatible
+  msgpackr N-API addon, removing bundled musl and Node 20 ABI variants that
+  caused server archive dependency checks to fail.
+
 - Accept Codex 0.160.0 settings, image references, errors, and account metadata.
   Populate existing item timestamps in live and reloaded history, and retain
   meaningful interrupted-turn errors without changing normal Stop behavior.
