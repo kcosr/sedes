@@ -501,8 +501,9 @@ test.describe.serial("workspace file browser and editor", () => {
       animations: "allow",
     });
     await conflict.getByRole("button", { name: "Keep editing" }).click();
-    // The callout returns before the closing dialog finishes releasing its
-    // overlay. Wait for that transition before opening the dialog again.
+    // Complete the exit before testing Reload. A rapid reopen can self-dismiss
+    // through the closing layer's deferred outside-press handler; that known
+    // pre-existing UI race needs separate coverage and an application fix.
     await expect(page.getByRole("dialog", {
       name: "File changed on disk",
       includeHidden: true,
