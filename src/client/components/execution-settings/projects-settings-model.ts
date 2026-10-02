@@ -47,6 +47,104 @@ export function filterProjects(
   });
 }
 
+/** A location with the project that holds it. */
+export interface PlacedLocation {
+  readonly project: ProjectSummary;
+  readonly location: ProjectLocation;
+}
+
+/** Finds a location in whichever project holds it now. */
+export function placeLocation(
+  projects: readonly ProjectSummary[],
+  locationId: string,
+): PlacedLocation | undefined {
+  for (const project of projects) {
+    const location = project.locations.find(({ id }) => id === locationId);
+    if (location) return { project, location };
+  }
+  return undefined;
+}
+
+/** Whether removing the location leaves its active project without an active one. */
+export function isLastActiveLocation({ project, location }: PlacedLocation): boolean {
+  return !project.removed
+    && project.locations.every(({ id, removed }) => id === location.id || removed);
+}
+
+/** What changed in a project that its dialogs describe, as sentences. */
+export function describeProjectChanges(
+  before: ProjectSummary,
+  after: ProjectSummary,
+): string[] {
+  const changes: string[] = [];
+  if (after.name !== before.name) changes.push(`It was renamed “${after.name}”.`);
+  if (after.removed !== before.removed) changes.push(after.removed ? "It was removed." : "It was restored.");
+  const active = activeLocations(after);
+  if (
+    locationIds(after.locations) !== locationIds(before.locations)
+    || locationIds(active) !== locationIds(activeLocations(before))
+  ) {
+    const removed = after.locations.length - active.length;
+    changes.push(`It now has ${counted(active.length, "active location")}${
+      removed > 0 ? ` and ${counted(removed, "removed location")}` : ""}.`);
+  }
+  const threads = activeThreadCount(after);
+  if (threads !== activeThreadCount(before)) {
+    changes.push(`Its active locations now have ${counted(threads, "thread")}.`);
+  }
+  return changes;
+}
+
+/** What changed about a location that its dialogs describe, as sentences. */
+export function describeLocationChanges(
+  before: PlacedLocation,
+  after: PlacedLocation,
+): string[] {
+  const changes: string[] = [];
+  if (after.project.id !== before.project.id) {
+    changes.push(`It moved to project “${after.project.name}”.`);
+  } else if (after.project.name !== before.project.name) {
+    changes.push(`Its project was renamed “${after.project.name}”.`);
+  }
+  if (after.location.removed !== before.location.removed) {
+    changes.push(after.location.removed ? "It was removed." : "It was restored.");
+  }
+  if (after.location.threadCount !== before.location.threadCount) {
+    changes.push(`It now has ${counted(after.location.threadCount, "thread")}.`);
+  }
+  return changes;
+}
+
+/**
+ * The removed locations to restore once a project reloads: choices made for
+ * locations that are still removed stay, and newly removed ones follow the
+ * default.
+ */
+export function reselectRemovedLocations(
+  selected: ReadonlySet<string>,
+  before: ProjectSummary,
+  after: ProjectSummary,
+  preselect: (location: ProjectLocation) => boolean,
+): Set<string> {
+  const listed = new Set(before.locations.filter(({ removed }) => removed).map(({ id }) => id));
+  return new Set(after.locations
+    .filter((location) => location.removed
+      && (listed.has(location.id) ? selected.has(location.id) : preselect(location)))
+    .map(({ id }) => id));
+}
+
+function activeLocations(project: ProjectSummary): ProjectLocation[] {
+  return project.locations.filter(({ removed }) => !removed);
+}
+
+function activeThreadCount(project: ProjectSummary): number {
+  return activeLocations(project).reduce((total, { threadCount }) => total + threadCount, 0);
+}
+
+function locationIds(locations: readonly ProjectLocation[]): string {
+  return locations.map(({ id }) => id).sort().join("\n");
+}
+
 /** Names that more than one active project carries, with those projects. */
 export function duplicateProjectNames(
   projects: readonly ProjectSummary[],
@@ -97,12 +195,12 @@ export function describeBlockedThreads(
     return title ? [`“${title}”`] : [];
   });
   const unknown = threadIds.length - titles.length;
-  if (titles.length === 0) return threadCount(unknown);
+  if (titles.length === 0) return counted(unknown, "thread");
   return unknown > 0
     ? `${titles.join(", ")} and ${unknown} other ${unknown === 1 ? "thread" : "threads"}`
     : titles.join(", ");
 }
 
-function threadCount(count: number): string {
-  return `${count} ${count === 1 ? "thread" : "threads"}`;
+function counted(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }

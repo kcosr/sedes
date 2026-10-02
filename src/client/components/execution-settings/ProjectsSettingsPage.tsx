@@ -64,6 +64,7 @@ export function ProjectsSettingsPage({ store }: {
   const searchInput = useRef<HTMLInputElement>(null);
   const filterToggle = useRef<HTMLButtonElement>(null);
   const request = useRef<AbortController | undefined>(undefined);
+  const latestLoad = useRef<Promise<readonly ProjectSummary[] | undefined>>(undefined);
   const openings = useRef(0);
   // Refetch on catalog/identity changes, without issuing requests for streaming tokens.
   const publication = JSON.stringify([
@@ -73,20 +74,31 @@ export function ProjectsSettingsPage({ store }: {
     snapshot?.threads.map(({ id, workspaceId }) => ({ id, workspaceId }))
       .sort((left, right) => left.id.localeCompare(right.id)),
   ]);
-  const refresh = useCallback(async () => {
+  /** Reloads the list and resolves to it, or to undefined when it cannot be loaded. */
+  const refresh = useCallback((): Promise<readonly ProjectSummary[] | undefined> => {
     request.current?.abort();
     const controller = new AbortController();
     request.current = controller;
     setLoading(true);
     setError("");
-    try {
-      const result = await store.api.listProjects(controller.signal);
-      if (!controller.signal.aborted) { setProjects(result.projects); setLoaded(true); }
-    } catch (cause) {
-      if (!controller.signal.aborted) setError(messageFrom(cause));
-    } finally {
-      if (!controller.signal.aborted) setLoading(false);
-    }
+    const load = (async (): Promise<readonly ProjectSummary[] | undefined> => {
+      try {
+        const result = await store.api.listProjects(controller.signal);
+        if (!controller.signal.aborted) {
+          setProjects(result.projects);
+          setLoaded(true);
+          return result.projects;
+        }
+      } catch (cause) {
+        if (!controller.signal.aborted) setError(messageFrom(cause));
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+      // A newer load replaced this one; its list is the current one.
+      return request.current === controller ? undefined : latestLoad.current;
+    })();
+    latestLoad.current = load;
+    return load;
   }, [store]);
   useEffect(() => { void refresh(); return () => request.current?.abort(); }, [refresh, publication]);
 
