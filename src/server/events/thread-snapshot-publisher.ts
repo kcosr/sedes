@@ -35,7 +35,7 @@ export class ThreadSnapshotPublisher {
       | "snapshot"
       | "applicationState"
       | "applicationStateFromActorCapture"
-      | "agentToolPolicy"
+      | "retainedOverlay"
     >,
     readonly runtimes: ThreadRuntimeCoordinator,
     readonly onThreadChanged?: (
@@ -157,25 +157,28 @@ export class ThreadSnapshotPublisher {
               quiet.hub.subscriberCount > 0 &&
               quiet.hub.snapshot?.thread.backingState === "bound"
             ) {
-              // A native policy edit retires the runtime before committing.
-              // Keep its open clients current without attaching a provider
-              // just to read application-owned policy (also safe after Stop
-              // or archive). Other projection fields stay exactly as observed.
-              const agentTools = await this.application.agentToolPolicy(
+              // A native policy edit retires the runtime before committing,
+              // and a project move or merge leaves a dormant runtime dormant.
+              // Keep open clients current without attaching a provider just
+              // to read application-owned policy and location (also safe
+              // after Stop or archive). Other projection fields stay exactly
+              // as observed.
+              const overlay = await this.application.retainedOverlay(
                 scope,
                 applicationThreadId,
               );
               const generation = quiet.hub.projectionGeneration;
               const current = quiet.hub.snapshot;
-              if (
-                generation &&
-                current?.thread.backingState === "bound" &&
-                agentTools.revision > current.agentTools.revision
-              ) {
+              if (generation && current?.thread.backingState === "bound") {
+                // A slower capture never replaces a newer retained policy.
+                const agentTools =
+                  overlay.agentTools.revision > current.agentTools.revision
+                    ? overlay.agentTools
+                    : current.agentTools;
                 for (const event of ThreadSnapshotPublisher.applicationChangeIncrementals(
                   generation,
                   current,
-                  { ...current, agentTools },
+                  { ...current, agentTools, workspace: overlay.workspace },
                 )) {
                   quiet.hub.publish(event);
                 }

@@ -170,21 +170,26 @@ function retainedPolicyFixture(initial: NormalizedThreadSnapshot) {
   hub.publish({ type: "snapshot", generation: "generation-1", snapshot: initial });
   const received = vi.fn();
   const subscription = hub.subscribe(received);
-  const agentToolPolicy = vi.fn(async () => initial.agentTools);
+  const agentToolPolicy = vi.fn(async (_scope: unknown, _threadId: string) => initial.agentTools);
+  const workspace = vi.fn((): NormalizedThreadSnapshot["workspace"] => initial.workspace);
+  const retainedOverlay = vi.fn(async (eventScope: unknown, threadId: string) => ({
+    agentTools: await agentToolPolicy(eventScope, threadId),
+    workspace: workspace(),
+  }));
   const acquire = vi.fn(() => {
     throw new Error("policy publication must not reopen the provider");
   });
   const release = vi.fn();
   const publisher = new ThreadSnapshotPublisher(
     { getTarget: vi.fn(() => ({ backingState: "bound" })) } as never,
-    { agentToolPolicy } as never,
+    { retainedOverlay } as never,
     {
       publishApplicationIncrementalsIfLoaded: vi.fn(async () => false),
       acquire,
       quiet: vi.fn(() => ({ hub, release })),
     } as never,
   );
-  return { hub, received, subscription, agentToolPolicy, acquire, release, publisher };
+  return { hub, received, subscription, agentToolPolicy, workspace, acquire, release, publisher };
 }
 
 describe("ThreadSnapshotPublisher", () => {
@@ -274,12 +279,12 @@ describe("ThreadSnapshotPublisher", () => {
   it("does not attach a dormant bound provider for an application overlay", async () => {
     const acquire = vi.fn();
     const capture = vi.fn();
-    const agentToolPolicy = vi.fn();
+    const retainedOverlay = vi.fn();
     const publisher = new ThreadSnapshotPublisher(
       {
         getTarget: vi.fn(() => ({ backingState: "bound" })),
       } as never,
-      { snapshot: capture, agentToolPolicy } as never,
+      { snapshot: capture, retainedOverlay } as never,
       {
         publishApplicationIncrementalsIfLoaded: vi.fn(async () => false),
         acquire,
@@ -294,7 +299,7 @@ describe("ThreadSnapshotPublisher", () => {
 
     expect(acquire).not.toHaveBeenCalled();
     expect(capture).not.toHaveBeenCalled();
-    expect(agentToolPolicy).not.toHaveBeenCalled();
+    expect(retainedOverlay).not.toHaveBeenCalled();
   });
 
   it.each(["idle", "stopped", "archived"] as const)(
@@ -322,6 +327,34 @@ describe("ThreadSnapshotPublisher", () => {
         .toEqual(["application_state_changed", "application_state_changed"]);
       expect(fixture.acquire).not.toHaveBeenCalled();
       expect(fixture.release).toHaveBeenCalledTimes(2);
+      fixture.subscription.close();
+      await fixture.publisher.close();
+    },
+  );
+
+  it.each(["idle", "stopped"] as const)(
+    "publishes a changed project to a retained %s thread without reopening its provider",
+    async (state) => {
+      const initial = snapshot();
+      if (state === "stopped") {
+        initial.runState = "disconnected";
+        initial.thread.runState = "disconnected";
+        initial.capabilities.runState = "disconnected";
+      }
+      const fixture = retainedPolicyFixture(initial);
+      const moved = { ...initial.workspace, projectId: "project-2" };
+      fixture.workspace.mockReturnValue(moved);
+
+      await fixture.publisher.publish(scope, "thread-1");
+      expect(fixture.hub.snapshot).toEqual({ ...initial, workspace: moved });
+      expect(fixture.received).toHaveBeenLastCalledWith(expect.objectContaining({
+        event: expect.objectContaining({ type: "application_state_changed", generation: "generation-1" }),
+      }));
+      // An unchanged location publishes nothing.
+      fixture.received.mockClear();
+      await fixture.publisher.publish(scope, "thread-1");
+      expect(fixture.received).not.toHaveBeenCalled();
+      expect(fixture.acquire).not.toHaveBeenCalled();
       fixture.subscription.close();
       await fixture.publisher.close();
     },

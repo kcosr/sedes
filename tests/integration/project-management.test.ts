@@ -48,6 +48,7 @@ function fixture() {
   const commitWithRuntimesObserved = vi.fn(async <T>(_scope: typeof scope, threadIds: readonly string[], commit: (runtimes: ReadonlyMap<string, ThreadRuntimeObservation>) => T) =>
     commit(new Map(threadIds.flatMap((id) => runtimeStates.has(id) ? [[id, runtimeStates.get(id)!] as const] : []))));
   const handoffAuthoritativeReplacement = vi.fn();
+  const scheduleThreadPublications = vi.fn();
   // Validation echoes the requested directory unless a test makes it resolve elsewhere.
   const resolvesTo = new Map<string, string>();
   const validateWorkspace = vi.fn(async (_scope: typeof scope, environmentId: string, requested: string) => {
@@ -60,7 +61,7 @@ function fixture() {
     runtimes: {runWithRuntimeRetired: runWithRuntimeRetired as RuntimeRetirement, releaseProviderResidency: async () => undefined, commitWithRuntimesObserved: commitWithRuntimesObserved as RuntimeCommit},
     files: {runWithWorkspaceRetired: runWithWorkspaceRetired as Retirement},
     terminals: {runWithWorkspaceRetired: runWithTerminalsRetired as Retirement},
-    locations: open, publications: {handoffAuthoritativeReplacement} });
+    locations: open, publications: {handoffAuthoritativeReplacement}, threads: {scheduleMany: scheduleThreadPublications} });
   const remove = () => service.removeLocation(scope, workspace.id, { expectedRevision: inventory.getWorkspace(scope, workspace.id).revision });
   const location = (canonicalPath: string, project: import("../../src/server/db/repositories/inventory-repository.js").InventoryProjectAssignment = { kind: "new", name: path.basename(canonicalPath) }) =>
     inventory.upsertWorkspace(scope, { environmentId: environment.id, canonicalPath, displayName: path.basename(canonicalPath), project,
@@ -69,7 +70,7 @@ function fixture() {
   const queue = new QueuedInputRepository(database);
   const summaries = new DatabaseApplicationThreadSummaryReader({ inventory, queue, completion: new SubmissionCompletionRepository(database) });
   return {database,scope,inventory,environment,workspace,thread,bindings,create,createIn,service,remove,open,location,project,queue,summaries,resolvesTo,validateWorkspace,
-    runWithRuntimeRetired,runWithWorkspaceRetired,runWithTerminalsRetired,runtimeStates,commitWithRuntimesObserved,handoffAuthoritativeReplacement};
+    runWithRuntimeRetired,runWithWorkspaceRetired,runWithTerminalsRetired,runtimeStates,commitWithRuntimesObserved,handoffAuthoritativeReplacement,scheduleThreadPublications};
 }
 
 const newProject = { kind: "new", name: "Project" } as const;
@@ -449,6 +450,8 @@ describe("project and location management", () => {
     expect(f.runWithTerminalsRetired).not.toHaveBeenCalled();
     expect(f.runWithWorkspaceRetired).not.toHaveBeenCalled();
     expect(f.handoffAuthoritativeReplacement).toHaveBeenCalledOnce();
+    // Each thread's snapshot carries its project, so every moved thread is republished.
+    expect(f.scheduleThreadPublications.mock.calls).toEqual([[f.scope, [f.thread.id]]]);
 
     await f.service.removeProject(f.scope, source.id, expected(f, source.id));
     await expect(f.service.moveLocation(f.scope, f.workspace.id, {
@@ -459,6 +462,11 @@ describe("project and location management", () => {
   it("merges only an idle project into an active one and deletes the source", async () => {
     const f = fixture();
     const target = f.location("/tmp/project-management-target");
+    const targetThread = f.createIn(target.id);
+    // A removed location of the source moves too, with its threads.
+    const retired = f.location("/tmp/project-management-retired", { kind: "existing", projectId: f.workspace.projectId });
+    const retiredThread = f.createIn(retired.id);
+    f.inventory.removeWorkspace(f.scope, retired.id, { expectedRevision: retired.revision, expectedThreadIds: [retiredThread.id], now: 260 });
     const merge = () => f.service.merge(f.scope, f.workspace.projectId, {
       targetProjectId: target.projectId,
       expectedSourceMembershipRevision: f.project(f.workspace.projectId).membershipRevision,
@@ -470,10 +478,16 @@ describe("project and location management", () => {
     await expect(f.service.merge(f.scope, f.workspace.projectId, {
       targetProjectId: target.projectId, expectedSourceMembershipRevision: 99, expectedTargetMembershipRevision: 0,
     })).rejects.toMatchObject({ code: "conflict" });
+    expect(f.scheduleThreadPublications).not.toHaveBeenCalled();
     const merged = await merge();
     expect(merged.id).toBe(target.projectId);
-    expect(merged.locations.map(({ id }) => id).sort()).toEqual([f.workspace.id, target.id].sort());
+    expect(merged.locations.map(({ id }) => id).sort()).toEqual([f.workspace.id, target.id, retired.id].sort());
     expect(() => f.project(f.workspace.projectId)).toThrow(expect.objectContaining({ code: "not_found" }));
     expect(f.handoffAuthoritativeReplacement).toHaveBeenCalledOnce();
+    expect(f.scheduleThreadPublications).toHaveBeenCalledOnce();
+    const [publishedScope, published] = f.scheduleThreadPublications.mock.calls[0]!;
+    expect(publishedScope).toBe(f.scope);
+    expect([...published].sort()).toEqual([f.thread.id, retiredThread.id].sort());
+    expect(published).not.toContain(targetThread.id);
   });
 });

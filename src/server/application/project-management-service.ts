@@ -20,6 +20,7 @@ import {
   ThreadRuntimeRetirementUnprovenError,
   type ThreadRuntimeCoordinator,
 } from "../events/thread-runtime-coordinator.js";
+import type { ThreadSnapshotPublisher } from "../events/thread-snapshot-publisher.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import { runWithArchivedThreadRuntimesRetired, type ArchivedThreadRuntimeRetirement } from "../domain/thread-runtime-archive-retirement.js";
 import type { WorkspaceApplicationPublication, WorkspaceApplicationService } from "./workspace-application-service.js";
@@ -69,7 +70,8 @@ function presentProject(project: InventoryProjectListing): ProjectSummary {
 /**
  * Project and location lifecycle. Provider history and thread inventory
  * states survive every operation; each structural change publishes an
- * authoritative application replacement.
+ * authoritative application replacement, and a move or merge also republishes
+ * every affected thread, whose snapshot carries its project.
  */
 export class ProjectManagementService {
   constructor(readonly input: {
@@ -79,6 +81,8 @@ export class ProjectManagementService {
     terminals?: WorkspaceRetirement;
     locations: Pick<WorkspaceApplicationService, "restoreLocation">;
     publications: WorkspaceApplicationPublication;
+    /** Republishes the application state of threads whose project changed. */
+    threads: Pick<ThreadSnapshotPublisher, "scheduleMany">;
     now?: () => number;
   }) {}
 
@@ -164,6 +168,7 @@ export class ProjectManagementService {
         ...request, expectedThreadIds: threadIds, now: this.#now(),
       }));
     this.input.publications.handoffAuthoritativeReplacement(scope);
+    this.input.threads.scheduleMany(scope, threadIds);
     return presentProject(this.input.inventory.getProject(scope, moved.projectId));
   }
 
@@ -172,11 +177,17 @@ export class ProjectManagementService {
     const threadIds = this.input.inventory.listActiveThreadIdsForProject(scope, sourceProjectId);
     const merged = await this.#commitWhileIdle(scope, threadIds,
       "Resolve running, queued, or uncertain work before merging this project.",
-      () => this.input.inventory.mergeProject(scope, sourceProjectId, {
-        ...request, expectedThreadIds: threadIds, now: this.#now(),
+      () => ({
+        // Every location moves, removed ones included, and with it every thread.
+        movedThreadIds: this.input.inventory.getProject(scope, sourceProjectId).locations
+          .flatMap(({ id }) => this.input.inventory.listThreadIdsForWorkspace(scope, id)),
+        project: this.input.inventory.mergeProject(scope, sourceProjectId, {
+          ...request, expectedThreadIds: threadIds, now: this.#now(),
+        }),
       }));
     this.input.publications.handoffAuthoritativeReplacement(scope);
-    return presentProject(merged);
+    this.input.threads.scheduleMany(scope, merged.movedThreadIds);
+    return presentProject(merged.project);
   }
 
   /**

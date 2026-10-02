@@ -74,7 +74,19 @@ function projectManagement(harness: Harness) {
     files: { runWithWorkspaceRetired: (_scope, _workspaceId, operation) => operation() },
     locations: { restoreLocation: async () => { throw new Error("unexpected_location_restore"); } },
     publications: { handoffAuthoritativeReplacement: vi.fn() },
+    threads: harness.threadSnapshots,
   });
+}
+
+/** Asserts the open stream learned the thread's new project as an incremental, not a new baseline. */
+async function expectStreamedProject(
+  frames: readonly ThreadEventEnvelope[],
+  since: number,
+  projectId: string,
+) {
+  await vi.waitFor(() => expect(frames.slice(since).some(({ event }) =>
+    event.type === "application_state_changed" && event.state.workspace.projectId === projectId)).toBe(true));
+  expect(frames.slice(since).some(({ event }) => event.type === "snapshot")).toBe(false);
 }
 
 /**
@@ -96,7 +108,7 @@ async function maintain(harness: Harness, threadId: string) {
 }
 
 describe("project membership changes against live runtimes", () => {
-  it("rejects a move when a provider turn starts after the thread set was observed, then moves the idle runtime without retiring it", async () => {
+  it("rejects a move when a provider turn starts after the thread set was observed, then moves the idle runtime without retiring it and streams its project", async () => {
     const harness = await createInMemoryThreadRuntimeHarness();
     const { scope, workspaceRecord, inventoryRepository, runtimes } = harness;
     try {
@@ -123,8 +135,10 @@ describe("project membership changes against live runtimes", () => {
         viewed.providerRunState("idle");
         await vi.waitFor(() => expect(runtimes.observeRuntimes(scope, [viewed.threadId]).get(viewed.threadId))
           .toEqual({ kind: "loaded", runState: "idle" }));
+        const since = viewed.frames.length;
         const moved = await move();
         expect(moved).toMatchObject({ name: "Split", locations: [{ id: workspaceRecord.id }] });
+        await expectStreamedProject(viewed.frames, since, moved.id);
         expect(inventoryRepository.getWorkspace(scope, workspaceRecord.id).projectId).toBe(moved.id);
         expect(await runtimes.captureLoadedRuntime(scope, viewed.threadId))
           .toMatchObject({ generation: viewed.generation, runState: "idle" });
@@ -136,7 +150,7 @@ describe("project membership changes against live runtimes", () => {
     }
   }, 60_000);
 
-  it("rejects a merge when a provider turn starts after the thread set was observed, then merges without retiring the runtime", async () => {
+  it("rejects a merge when a provider turn starts after the thread set was observed, then merges without retiring the runtime and streams its project", async () => {
     const harness = await createInMemoryThreadRuntimeHarness();
     const { scope, workspaceRecord, inventoryRepository, runtimes } = harness;
     try {
@@ -169,8 +183,10 @@ describe("project membership changes against live runtimes", () => {
         viewed.providerRunState("idle");
         await vi.waitFor(() => expect(runtimes.observeRuntimes(scope, [viewed.threadId]).get(viewed.threadId))
           .toEqual({ kind: "loaded", runState: "idle" }));
+        const since = viewed.frames.length;
         const merged = await merge();
         expect(merged.locations.map(({ id }) => id).sort()).toEqual([workspaceRecord.id, target.id].sort());
+        await expectStreamedProject(viewed.frames, since, target.projectId);
         expect(() => inventoryRepository.getProject(scope, sourceProjectId)).toThrow(expect.objectContaining({ code: "not_found" }));
         expect(await runtimes.captureLoadedRuntime(scope, viewed.threadId))
           .toMatchObject({ generation: viewed.generation, runState: "idle" });

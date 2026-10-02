@@ -815,6 +815,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
       ...(dependencies.terminals ? { terminals: dependencies.terminals.service } : {}),
       locations: workspaceManagement(),
       publications: dependencies.applicationSnapshots,
+      threads: dependencies.threadSnapshots,
     });
   const providerPulse =
     dependencies.providerPulse ??

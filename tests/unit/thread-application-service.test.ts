@@ -461,12 +461,12 @@ function createService(input?: {
 }
 
 describe("ThreadApplicationService", () => {
-  it("reads saved agent-tool policy without consulting a bound provider", async () => {
+  it("reads saved agent-tool policy and location without consulting a bound provider", async () => {
     const state = inventory();
     const current = createService({ state, disconnected: true });
 
-    await expect(current.service.agentToolPolicy(scope, "thread-1"))
-      .resolves.toEqual(state.agentTools);
+    await expect(current.service.retainedOverlay(scope, "thread-1"))
+      .resolves.toEqual({ agentTools: state.agentTools, workspace: state.workspace });
 
     expect(current.getAuthorized).toHaveBeenCalledWith(scope, "thread-1");
     expect(current.capture).not.toHaveBeenCalled();
@@ -480,7 +480,7 @@ describe("ThreadApplicationService", () => {
   ])("rejects a saved policy outside the requested scope: %j", async (owner) => {
     const current = createService({ state: { ...inventory(), ...owner } });
 
-    await expect(current.service.agentToolPolicy(scope, "thread-1"))
+    await expect(current.service.retainedOverlay(scope, "thread-1"))
       .rejects.toThrow("thread_application_scope_mismatch");
     expect(current.capture).not.toHaveBeenCalled();
   });

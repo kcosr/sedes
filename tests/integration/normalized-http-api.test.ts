@@ -1006,6 +1006,9 @@ async function fixture(
     schedule(scope: RequestScope, threadId: string) {
       void this.publish(scope, threadId);
     },
+    scheduleMany(scope: RequestScope, threadIds: readonly string[]) {
+      for (const threadId of threadIds) this.schedule(scope, threadId);
+    },
     async publishAuthoritativeReplacement(
       scope: RequestScope,
       threadId: string,
