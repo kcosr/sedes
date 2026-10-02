@@ -3174,6 +3174,13 @@ Never update durable presentation while retaining a provider runtime with the
 old mode, and never fall back to another surface when retirement is busy or
 cannot be proved.
 
+Retirement must not leave open clients with the old saved policy revision.
+Publish the principal-scoped saved policy independently of provider residency,
+using the latest retained projection for unrelated fields and ignoring captures
+older than its policy revision. This application-owned update must not acquire
+a provider runtime or restart a stopped or archived thread. All compiled
+backends share this rule; the next attachment applies the saved presentation.
+
 Durable transitions from an earlier flat presentation contract belong in a
 one-time migration, not a runtime compatibility parser. The historical `cli`
 value maps to CLI/Progressive, while `native_progressive` and

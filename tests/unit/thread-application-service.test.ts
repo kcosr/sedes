@@ -460,6 +460,30 @@ function createService(input?: {
 }
 
 describe("ThreadApplicationService", () => {
+  it("reads saved agent-tool policy without consulting a bound provider", async () => {
+    const state = inventory();
+    const current = createService({ state, disconnected: true });
+
+    await expect(current.service.agentToolPolicy(scope, "thread-1"))
+      .resolves.toEqual(state.agentTools);
+
+    expect(current.getAuthorized).toHaveBeenCalledWith(scope, "thread-1");
+    expect(current.capture).not.toHaveBeenCalled();
+    expect(current.readPresentation).not.toHaveBeenCalled();
+    expect(current.readCachedPresentation).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { tenantId: "another-tenant" },
+    { ownerPrincipalId: "another-principal" },
+  ])("rejects a saved policy outside the requested scope: %j", async (owner) => {
+    const current = createService({ state: { ...inventory(), ...owner } });
+
+    await expect(current.service.agentToolPolicy(scope, "thread-1"))
+      .rejects.toThrow("thread_application_scope_mismatch");
+    expect(current.capture).not.toHaveBeenCalled();
+  });
+
   it("exposes reconciliation for an uncertain queue without a thread recovery receipt", async () => {
     const queued = {
       id: "uncertain-head", sequence: 1, state: "uncertain", isHead: true,
