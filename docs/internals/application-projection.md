@@ -51,7 +51,10 @@ fork origins and lineage have no incremental event and change only through a
 full replacement, as do cross-collection changes one delta cannot carry, such
 as a grouped thread crossing the archived boundary, a thread moving workspaces,
 a location moving projects, or a fork whose bounded selection membership can
-change. Folding is bounded work: ID,
+change. A Task's `associatedProjectId` (null for a global Task) must name a
+listed project, and a thread Task whose thread is listed must carry the project
+of that thread's location, so a workspace changing project also revalidates
+its threads' Tasks. Folding is bounded work: ID,
 reverse-reference and lineage reference-count indexes and a per-entity byte
 ledger let a delta serialize only the incoming entity and reject a projected
 total above the 32 MiB snapshot limit. Regressed thread or Task revisions,

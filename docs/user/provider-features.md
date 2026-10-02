@@ -164,7 +164,9 @@ The **Access boundary** setting determines when enabled tools ask for approval:
 - **Ask outside this thread** asks before accessing another thread, project or
   global content, or resources outside the current thread's workspace.
 - **Ask outside this environment** is the default and asks when a tool reaches
-  another execution environment.
+  another execution environment. A project's Tasks and Workpads are inside
+  when this thread's environment hosts one of the project's locations; a
+  project hosted only elsewhere, or with no active location, asks.
 - **Allow without asking** skips this extra application prompt.
 
 An approval waits across browser navigation or disconnect and applies only to

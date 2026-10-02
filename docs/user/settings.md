@@ -261,14 +261,14 @@ Review a thread under **Thread actions → Environment variables…**, then use
 ## Projects
 
 Open **Settings → Projects** (or `/settings/projects`) to manage projects and
-their locations. Each project row shows its name and location count, with its
-locations underneath: each shows its environment, path, thread count, and
-whether it is available. The list includes removed projects and locations,
-marked **Removed**, and locations on unavailable environments. Search by
-project name, folder, path, or environment, or use the searchable environment
-and status selectors. In a narrow list, choose **Filters** to open these
-selectors. An inline note lists project names that several active projects
-share, each with a **Merge** action.
+their locations. Each project row shows its name, location count, and, for an
+active project, how many Tasks belong to the project, with its locations
+underneath: each shows its environment, path, thread count, and whether it is
+available. The list includes removed projects and locations, marked **Removed**,
+and locations on unavailable environments. Search by project name, folder, path,
+or environment, or use the searchable environment and status selectors. In a
+narrow list, choose **Filters** to open these selectors. An inline note lists
+project names that several active projects share, each with a **Merge** action.
 
 Choose **Add project** to browse an existing directory or enter its absolute
 path, then choose the project it belongs to: a new project or an existing one.
@@ -281,13 +281,14 @@ the environment's editor, under **Workspace access**.
 
 Each row's menu holds its actions. A project can be renamed, given another
 location, merged into another project, removed, or restored; a location can be
-moved to another or a new project, removed, or restored. Removal hides
-threads from the working inventory and creation choices; files, history,
-drafts, and saved application data remain intact. Stop running or queued work,
-resolve uncertain operations, pause schedules, and end terminals before
-removal; removing a project lists anything that still blocks it. Restoration
-rechecks current directory access; unavailable hosts or revoked roots may
-require attention first. Paused schedules stay paused. See
+moved to another or a new project, removed, or restored. Removal hides threads
+from the working inventory and creation choices; files, history, drafts, and
+saved application data remain intact. Removing a location keeps the project's
+Tasks and Workpads; removing the project hides them too until you restore it.
+Stop running or queued work, resolve uncertain operations, pause schedules, and
+end terminals before removal; removing a project lists anything that still
+blocks it. Restoration rechecks current directory access; unavailable hosts or
+revoked roots may require attention first. Paused schedules stay paused. See
 [Manage projects](organize-work.md#manage-projects) for what each action moves
 or keeps.
 
@@ -573,6 +574,12 @@ A Tool client has:
 - an explicit set of allowed environments;
 - optional default location and thread selections; and
 - enabled, disabled, rotated, or revoked credential state.
+
+A project's Tasks and Workpads are reachable when any environment that hosts
+one of the project's active locations is allowed. Listing them together with
+the Tasks of the project's threads needs every such environment, and a project
+with no active location is not reachable. The default location's project is
+the client's current project while that location is active.
 
 Creation and rotation show the bearer token exactly once. Choose **Reveal
 token** and copy the generated configuration before closing the dialog; Sedes

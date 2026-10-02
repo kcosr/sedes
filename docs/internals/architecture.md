@@ -76,7 +76,7 @@ The first design question for any state or operation is who owns it.
 | Listener, backend configuration, workspace roots, network boundary                                                      | Installation operator                                                                   |
 | Tenant and principal identity                                                                                           | Server-side identity provider                                                           |
 | Projects and their locations (workspaces): names, membership, and removal                                               | Sedes application state, scoped to tenant and principal                                 |
-| Thread inventory, drafts, stashes, prompts, tasks, automations, saved Agents, queues, receipts, and lineage             | Sedes application state, scoped to tenant and principal                                 |
+| Thread inventory, drafts, stashes, prompts, Tasks, Workpads, automations, saved Agents, queues, receipts, and lineage   | Sedes application state, scoped to tenant and principal                                 |
 | Thread target and provider binding                                                                                      | Sedes application state; target is immutable after thread creation                      |
 | Provider output artifact metadata and immutable retained bytes                                                          | Sedes application state, scoped to tenant, principal, and thread                        |
 | Native conversation identity, transcript, provider settings/events, and provider process or endpoint                    | Backend/provider                                                                        |
@@ -115,7 +115,8 @@ These identities are intentionally distinct:
 - backend instance, which owns operator configuration and model policy;
 - target, which selects a backend instance, execution environment, and defaults;
 - execution environment, which defines path, process, and operation authority;
-- project, which groups locations under one principal-owned, renamable name;
+- project, which groups locations under one principal-owned, renamable name
+  and shares its Tasks and Workpads across them;
 - workspace, shown as a **location**, which is one canonical directory on one
   execution environment and belongs to exactly one project;
 - Sedes thread, which owns application overlays and an immutable target;
@@ -132,11 +133,11 @@ through backend-owned binding adapters.
 
 A workspace is unique per tenant by execution environment and canonical path.
 Its random ID survives removal, restore, and moves between projects, and
-everything keyed by it (threads, Tasks and Workpads scoped to it or its
-threads, drafts, file roots, diff reviews, templates, usage attribution, and
-Tool client defaults) follows it unchanged, because a move rewrites only its
-project reference. Its display name is the directory's basename and is never
-identity.
+everything keyed by it (threads and their Tasks and Workpads, drafts, file
+roots, diff reviews, templates, usage attribution, and Tool client defaults)
+follows it unchanged, because a move rewrites only its project reference.
+Project-scoped Tasks and Workpads reference the project instead and stay with
+it. Its display name is the directory's basename and is never identity.
 
 A project has its own random ID, never reused from a workspace, and a name of
 1 to 240 characters that is editable, independent of any directory, and not
@@ -145,7 +146,11 @@ included; `membershipRevision` advances only when a location is added,
 removed, restored, or moved, and removal and merge check it. Equal project or directory names
 never establish shared identity: only `workspaces.project_id` places locations
 in one project, and same-named projects stay separate until a user merges
-them. A project may be empty; it stays active and listed.
+them. A project may be empty; it stays active and listed with its Tasks and
+Workpads. Merging moves every location of the source project and every
+project-scoped Task and Workpad into the target in one transaction, advancing
+each Task's revision and writing a user-attributed Workpad revision for the
+new scope, then deletes the source.
 
 Membership is a database invariant. Every workspace references exactly one
 project through a non-null composite foreign key, and an active workspace never
@@ -157,9 +162,16 @@ projects. The application snapshot carries only active projects, including
 empty ones, and every snapshot workspace carries its `projectId`, which must
 name a listed project.
 
-A project is a grouping and lifecycle unit, not an authority boundary. Agent
-and Tool client access remain workspace- and environment-based, and backends
-receive exact workspace and target IDs, never a project.
+A project is a grouping, lifecycle, and sharing unit. Tasks and Workpads are
+scoped globally, to a project, or to a thread; a project-scoped one is shared
+by every location of its project, stays with the project when a location
+moves or is removed, and is hidden while the project is removed. Agent and
+Tool client access to it follows a host rule, not membership: it is reachable
+from each member environment, one hosting an active location of the project,
+and a project with no active location is outside every environment. Project
+membership is not a separate authority boundary; see
+[Project resources](agent-tools.md#project-resources). Backends receive exact
+workspace and target IDs, never a project.
 
 ## Backend boundary
 

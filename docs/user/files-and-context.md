@@ -214,10 +214,13 @@ first when necessary.
 ## Follow file links
 
 Rendered chat and Markdown previews recognize supported file links and absolute
-path references. If the path resolves uniquely within the project's available
-primary, supplemental, or linked-worktree roots, Sedes opens it in Files and,
-when possible, selects the requested one-based line. A relative chat link uses
-the thread's preferred linked worktree when set; otherwise it uses Primary. A
+path references. If the path resolves uniquely within the thread's location's
+available primary, supplemental, or linked-worktree roots, Sedes opens it in
+Files and, when possible, selects the requested one-based line. An absolute
+path outside those roots opens only when its folder is inside the
+environment's allowed workspace roots; Sedes then opens it through a hidden
+root that does not appear in the Files tree. A relative chat link uses the
+thread's preferred linked worktree when set; otherwise it uses Primary. A
 relative link inside a rendered Markdown file stays anchored to that source
 file's root and directory.
 
@@ -226,8 +229,9 @@ checks. Merely rendering a link does not authorize a path, attach a directory,
 or grant the agent access. Ambiguous, truncated, missing, or disallowed targets
 fail instead of guessing.
 
-Files linked from Tasks remain workspace-scoped and relative paths use
-Primary. They retain the same safety checks.
+Files linked from Tasks are absolute paths. They open against the location of
+the thread you are viewing, with the same safety checks, so a Project Task's
+path may not exist in another location of the project or on another host.
 
 ## Attach whole files or images to the composer
 

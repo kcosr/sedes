@@ -92,8 +92,9 @@ Tasks and Workpads belong to everyone (`global`), to a project (`project`,
 shared by all of its workspaces on every environment), or to one thread
 (`thread`). A project is reachable from every environment that hosts one of
 its active workspaces. Reaching a project hosted only on other environments
-needs approval, or for a Tool client an allowlisted host; a project with no
-active workspace always needs approval and is unavailable to Tool clients.
+needs approval, or for a Tool client an allowlisted host. A project with no
+active workspace is outside every environment: it needs approval as another
+environment would, and Tool clients cannot reach it.
 
 ## Task workflow
 
@@ -127,7 +128,8 @@ current help advertises them. `exact` selects direct assignments; `subtree`
 also traverses descendants. Preserve the identical scope, scope mode, filters,
 projection, page size, and opaque cursor across continuation pages. Prefer
 `exact` for project tasks: a project subtree also spans the threads of every
-workspace in the project and needs access to every environment that hosts one.
+active workspace in the project and needs access to every environment that
+hosts one.
 
 Create once and preserve the complete returned record, especially its exact
 `id` and `revision`. Verify with the named exact-record read when independent

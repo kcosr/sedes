@@ -116,21 +116,28 @@ permissions.
   environment directory require approval. Moving a resource checks both its
   current and destination scopes. Source context and public web research do
   not cross the boundary.
-- **Ask outside this environment** preserves the previous default. Global
-  Tasks, Workpads, and Saved Agent metadata remain environment-neutral.
+- **Ask outside this environment** is the default. It asks when a target
+  environment differs from the source thread's. Global Tasks, Workpads, and
+  Saved Agent metadata remain environment-neutral; project resources are
+  reached through the project's environments, as described in
+  [Project resources](#project-resources).
 - **Allow without asking** performs the same resource checks without prompting.
 
 Approval is **Allow once** or **Deny**, bound to the exact invocation. Sedes
 revalidates the source thread, approval runtime, policy revision, input,
 resource identity and revision, tool contract, and effects after approval.
-Task and Workpad authority includes thread identity, preventing a resource
-moved between scopes while approval is pending from inheriting stale access.
-Policy changes and runtime resets invalidate pending approvals.
+Task and Workpad authority includes thread identity and, for a project scope,
+the project's membership revision, preventing a resource moved between scopes
+or a project whose locations changed while approval is pending from inheriting
+stale access. Execution recomputes a Task's or Workpad's refs from its current
+scope rather than trusting the admitted ones. Policy changes and runtime
+resets invalidate pending approvals.
 
 These scopes do not otherwise isolate projects. A thread in environment mode
-may explicitly query another project or thread in its environment. Lists use
-the requested scope and do not silently filter denied targets into a different
-query. Cross-environment checks remain in addition to principal ownership.
+may explicitly query another project hosted on its environment, or another
+thread in its environment. Lists use the requested scope and do not silently
+filter denied targets into a different query. Cross-environment checks remain
+in addition to principal ownership.
 
 Tool clients retain their configured environment allowlists and have no
 interactive approval path. They do not inherit a thread policy. Automations
@@ -139,35 +146,91 @@ closed. Delegated agent work uses the destination thread's own policy.
 Application decisions are provider-neutral for Pi, Codex, Claude, and Grok;
 unavailable interaction bindings fail closed instead of bypassing approval.
 
+### Project resources
+
+A project-scoped Task or Workpad, a `project` scope, and a project named by
+`workspace.open` are reachable from the project's **member environments**:
+those hosting one of its active locations. Membership is not a separate
+boundary; this host rule decides. Any thread can already reach other threads
+and workspaces on its own environment without asking, so a membership-only rule
+could be laundered through them and would only look stricter, while for a
+single-location project the host rule is exactly that location's environment
+rule. A project ref carries the project's membership revision, which every
+location edit advances, and its access environment:
+
+- A thread agent whose environment is a member is inside the project. For any
+  other thread agent every member environment is a target, so an
+  `environment`-boundary approval names them all.
+- A Tool client reaches the project through its default environment when that
+  is a member, otherwise through its lowest-sorted allowlisted member, so any
+  one allowlisted member suffices for an exact scope. With none, the call is
+  denied.
+- A project with no active location is outside every environment, never
+  environment-neutral like a global resource: a thread agent with the
+  `environment` boundary is asked, with the prompt naming a project with no
+  active location, and a Tool client is denied.
+- A removed project is not found, whether it is the source scope, the
+  destination, or the query.
+- A project subtree list, which adds the Tasks or Workpads of threads in the
+  project's active locations, targets every member environment. In a
+  multi-host project a thread agent is therefore asked and a Tool client needs
+  every member allowlisted, as for a global subtree list. A global subtree list
+  omits projects with no active location; an explicit project query still
+  reaches them, with approval.
+- The `thread` boundary asks for every project scope. `unrestricted` resolves
+  the same refs without prompting.
+
+A `project` scope without `projectId` means the caller's project. For a thread
+agent that is the current project of its source thread's location, read at
+each admission rather than captured with a native runtime's trusted source: a
+location can move between projects while its runtimes keep running, and a move
+neither retires them nor changes source authority. The project is part of the
+trusted defaults bound into the authority digest, so a move invalidates a
+pending approval. A Tool client's project is its default location's project
+while that location is active; without one, a project scope must name its
+project.
+
 ## Workspaces and projects
 
 A Sedes workspace is one directory on one execution environment, shown as a
 **location**, and belongs to exactly one principal-owned project that can span
 several workspaces and environments; see
-[Projects and locations](architecture.md#projects-and-locations). Project
-membership is not an access boundary: the checks above remain workspace- and
-environment-based, and a project ID grants nothing.
+[Projects and locations](architecture.md#projects-and-locations). A project
+ID grants nothing by itself: workspaces and threads keep their environment
+checks, and project Tasks and Workpads are reached through the project's
+environments under [Project resources](#project-resources).
 
 - `workspace.list@5` adds each workspace's `project: { id, name }`. Its
   continuation fingerprint names the new version, so an earlier cursor is
   rejected.
-- `agent.context@3` adds `projectId`, the current project of the source
-  thread's workspace. It is read when the tool runs, not captured with the
-  trusted source, because a location can move between projects while its
-  threads run; a move neither retires runtimes nor changes source authority.
-- `workspace.open@2` returns the workspace's `projectId`; its input is
-  unchanged. A directory Sedes does not know becomes a new single-location
-  project named after the directory. A known directory keeps its project: an
-  active location is revalidated, and a removed location of an active project
-  is restored into it. A location whose project was removed is a conflict, so
-  neither thread agents nor Tool clients can restore a removed project.
+- `agent.context@3` adds `projectId`, the caller's project as admitted for
+  that call.
+- `workspace.open@3` returns the workspace's `projectId` and accepts an
+  optional `projectId`. Without it, a directory Sedes does not know becomes a
+  new single-location project named after the directory. With it, the new
+  directory joins that active project, which is authorized as a project ref,
+  so attaching a directory to a project hosted elsewhere needs the same
+  approval or allowlisted member as reaching it; a removed project is not
+  found. A known directory keeps its project, and naming a different project
+  for it is a conflict, never a move: an active location is revalidated, and a
+  removed location of an active project is restored into it. A location whose
+  project was removed is a conflict, so neither thread agents nor Tool clients
+  can restore a removed project.
+- `task.list@4`, `task.get@2`, `task.create@2`, `task.update@2`, and
+  `workpad.list`, `workpad.get`, `workpad.revisions`, `workpad.create`, and
+  `workpad.update` at version 2 take and return `global`, `project`, and
+  `thread` scopes. Input `{ kind: "project", projectId? }` defaults to the
+  caller's project; output never contains a workspace scope. Task summaries
+  and full list items report `associatedProjectId`: the Task's project, the
+  current project of a thread Task's thread, or null for a global Task.
+- `thread.archive@2` names its open-Task dispositions `move_to_project`,
+  `move_to_global`, and `keep`; `move_to_project` moves each archived thread's
+  open Tasks to that thread's project.
 
-Adding a directory to an existing project, moving a location, renaming or
-merging projects, and removing or restoring a project are user actions in
-**Settings → Projects** and **Add project**; no agent tool performs them in
-this release. The previous `workspace.list@4`, `agent.context@2`, and
-`workspace.open@1` schemas are no longer admitted, so callers must describe
-the current tool before invocation. A Native individual MCP session that
+Moving a location, renaming or merging projects, and removing or restoring a
+project are user actions in **Settings → Projects**; no agent tool performs
+them. Only the versions above are admitted, so callers must describe the
+current tool before invocation. A Native individual MCP session that
 outlives a server upgrade, such as a Claude query its sidecar retained, keeps
 the tool list its provider loaded at start until the runtime restarts; each
 call still describes and runs the current version.
@@ -419,7 +482,7 @@ registration fails closed on invalid, reserved, or colliding paths. Examples:
 ```text
 sedes thread status --thread-id <thread-id> [--json]
 sedes thread messages --thread-id <thread-id> [--json]
-sedes task create --title <title> --scope-kind workspace [--json]
+sedes task create --title <title> --scope-kind project [--json]
 sedes research web-search --query "What changed in Node.js today?" [--json]
 sedes thread worktree-list [--json]
 sedes thread worktree-set --expected-revision 3 --root-id <root-id> [--json]
@@ -687,7 +750,7 @@ after admission; CLI `list` and `describe` remain bounded discovery operations,
 while `invoke` follows caller cancellation rather than imposing a transport
 approval timeout.
 
-Optional workspace or thread inputs may default from trusted source-thread
+Optional workspace, project, or thread inputs may default from trusted caller
 context. Explicit IDs are still resolved under the server-derived principal.
 A missing, disabled, wrong-version, wrong-scope, malformed, or stale request
 fails closed.
@@ -738,6 +801,7 @@ pre-upgrade state; an older binary must never open the migrated database.
 Changes must cover generated schema parity, exact-ID catalog filtering,
 thread-policy and Tool-client revision conflicts, token rotation/disable/
 revocation, wrong-principal and wrong-environment denial, default resolution,
+project member, non-member, empty, and removed cases for both caller classes,
 cross-environment approval revalidation, application-decision cancellation,
 and automation fail-closed behavior. Adapter tests must exercise both modes on
 native Pi, both CLI modes for local Codex, Claude, and Grok, both Native MCP

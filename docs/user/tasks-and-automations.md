@@ -24,10 +24,10 @@ Choose scope by where you expect to find the work later:
 | **Project** | Work shared by several threads in one project |
 | **Thread** | Follow-up owned by one conversation |
 
-A Project Task currently belongs to one
-[location](concepts.md#project-and-location) of its project: the directory
-where it was created. Threads in the project's other locations don't list it,
-and it moves with its location when you move that location to another project.
+A Project Task belongs to the whole project, so every
+[location](concepts.md#project-and-location) of the project lists it, on every
+host. It stays with the project when you move or remove a location, and is
+hidden while the project is removed. A Thread Task follows its thread.
 
 Complete a Task when the work is done. Completion does not send a provider
 message or settle its thread.
@@ -66,8 +66,9 @@ The scope control at the top of Tasks has four views, each with its open
 count:
 
 - **Thread**: Tasks of the current thread.
-- **Project**: Tasks of the current thread's project. Turn on **Include
-  thread tasks** in **View options** to add the Tasks of the project's threads.
+- **Project**: Tasks of the current thread's project, from all of its
+  locations and hosts. Turn on **Include thread tasks** in **View options** to
+  add the Tasks of threads in any of the project's locations.
 - **Global**: Tasks not tied to a project or thread.
 - **All**: every Task.
 
@@ -77,21 +78,24 @@ phone, to see why.
 Tasks opens on the view you last chose; when that view is unavailable, it falls
 back to Project, then Global.
 
-**All** is grouped by project: Global first, then each project, the current one
-first, with each thread's Tasks in a group under its project. Select a group
-heading to collapse or expand it, or use **Collapse all groups** in the Tasks
-menu (**⋯**, or **Tasks panel actions** when docked). Turn off **Group by
-project** in **View options** for one flat list. Without group headings, as in
-that list or in Project with **Include thread tasks**, each row shows where
-its Task belongs on a quiet line under the title.
+**All** is grouped by project: Global first, then one group for each project,
+however many locations it has, the current one first, with each thread's Tasks
+in a group under its project. Select a group heading to collapse or expand it,
+or use **Collapse all groups** in the Tasks menu (**⋯**, or **Tasks panel
+actions** when docked). Turn off **Group by project** in **View options** for
+one flat list. Without group headings, as in that list or in Project with
+**Include thread tasks**, each row shows where its Task belongs on a quiet line
+under the title. In a project with several locations, a thread's group heading
+or row also says where the thread runs, such as its host or folder.
 
 ## Add Tasks
 
 Type a title in the add row under the scope control and press Enter. Its
 placeholder names where the Task goes: **Add a task to this thread…**, **Add a
-task to this project…**, or **Add a global task…**. In All, new Tasks are
-Global. Focus stays in the add row, so you can type the next Task at once.
-Searching never blocks adding.
+task to this project…**, or **Add a global task…**. A Task added in Project
+belongs to the whole project, so Sedes does not ask for a location. In All, new
+Tasks are Global. Focus stays in the add row, so you can type the next Task at
+once. Searching never blocks adding.
 
 - Press Shift+Enter, or select **Add details**, to add notes before adding the
   Task. In the notes field, press Ctrl+Enter (Command+Enter on macOS) or select
@@ -153,7 +157,8 @@ Select a row, or press Enter on it, to expand it in place. One row is
 expanded at a time, and its title shows whole. The detail shows:
 
 - the notes as plain text, with **Show more** for long notes;
-- the linked files, which open in Files when the project is available;
+- the linked files, which open in Files when the thread's location is
+  available;
 - when the Task was added and where, with a link to its thread, and when it
   was last edited or completed; and
 - **Add to prompt**, **Edit**, and **Move to…**.
@@ -190,6 +195,10 @@ The row's **⋯** menu has:
 - **Move to**, with **This thread**, **This project**, **Global**, and
   **Choose…**, which searches every project and thread; and
 - **Delete…**.
+
+**This project** is the current thread's project. **Choose…** and **Edit**'s
+**Belongs to** list each project once, named as in the sidebar; projects that
+share a name show a host or path hint.
 
 Deleting a Task is permanent and asks first. Prompts that already carry the
 Task keep their copy.
@@ -244,13 +253,19 @@ phone sheet, Escape closes Tasks once the details and search are closed.
 
 ## Link files to a Task
 
-A Task can list absolute file paths as metadata. When the Task is associated
-with a project, select a file in the Task's details to resolve it through the
-same authorized Files rules used by Markdown links.
+A Task can list absolute file paths as metadata. In a thread whose location
+is available, select a file in the Task's details to open it in Files. The
+path resolves against the location of the thread you are viewing, by the same
+rules as an absolute Markdown link: a file in one of the location's Files roots
+opens there, and a file elsewhere opens only when its folder is inside the
+environment's allowed workspace roots, through a hidden root that does not
+appear in the Files tree. A Project Task viewed from another location or host
+resolves its paths there, where they may not exist.
 
 The path does not grant filesystem access and is not automatically sent to an
-agent. Missing, sensitive, outside-root, ambiguous, or unsupported paths fail
-closed. See [Files and context](files-and-context.md#follow-file-links).
+agent. Missing, sensitive, ambiguous, or disallowed paths, and paths outside
+the allowed workspace roots, report that the file isn't available in Files.
+See [Files and context](files-and-context.md#follow-file-links).
 
 ## Add a Task to a prompt
 
@@ -282,7 +297,8 @@ Chat for that prompt.
 
 Settle and archive previews list the affected open Tasks and let you choose
 **To project**, **To global**, **Keep**, or **Complete all**. The choice applies
-to every open Task in the selected scope. **Complete all** marks those Tasks
+to every open Task in the selected scope. **To project** moves each open
+Thread Task to its thread's project. **Complete all** marks those Tasks
 done and keeps them attached to their original threads. Tasks already completed
 remain unchanged.
 
@@ -298,8 +314,8 @@ settle and archive previews refresh automatically; for bulk stack actions, selec
 remain separate: completing Tasks does not consume stashed prompts.
 
 Lifecycle completion is available in the browser and packaged clients. The
-agent archive tool retains its move/keep options; agents can use the ordinary
-Task update tool to complete individual Tasks explicitly.
+agent archive tool offers only to project, to global, or keep; agents can use
+the ordinary Task update tool to complete individual Tasks explicitly.
 
 ## Schedule work with an automation
 

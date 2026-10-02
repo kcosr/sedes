@@ -10,18 +10,39 @@ Documents, revisions, and human drafts belong to the server-derived
 author. Repository reads and writes constrain both ownership keys, including
 history, draft, and pagination paths.
 
-Workpads reuse Task scopes: `global`, `workspace` (Project in the UI), and
-`thread`. Scope organizes content and resolves authority; it is not an
-independent project isolation mechanism. Agent access uses the shared
-[Agent tools](agent-tools.md) policy and Access boundary. `thread` requires
-approval outside the calling thread, including global and workspace resources;
-`environment` checks environment authority; `unrestricted` does not require
-boundary approval. These do not override tool enablement or owner checks.
+Workpads reuse Task scopes: `global`, `project`, and `thread`. A project
+workpad is shared by every location of its project, on every environment.
+Scope organizes content and resolves authority; it is not an independent
+project isolation mechanism. Agent access uses the shared
+[Agent tools](agent-tools.md#project-resources) policy and Access boundary.
+`thread` requires approval outside the calling thread, including global and
+project resources; `environment` reaches a project workpad from the project's
+member environments, those hosting one of its active locations, and asks
+otherwise; `unrestricted` does not require boundary approval. These do not
+override tool enablement or owner checks.
 
 Authorize historical reads using the workpad's current scope, not the scope
 recorded in an old revision. Moving requires authority for source and
 destination. Archiving a thread does not delete or relocate its workpads.
 Archiving a workpad retains history and disables content editing until restore.
+
+The `workpads` row stores `scope_kind` with exactly that scope's `project_id`
+or `thread_id`, enforced by a CHECK, and references `projects` by foreign key.
+The scope is also embedded in the current document and in every revision
+snapshot. Migration 127 rewrote each workspace scope, in the row, the current
+document, and each revision, to the project of the workspace that document or
+revision recorded. These documents are internal and unsigned, so no legacy
+scope parser remains, and history no longer records which directory an old
+revision was scoped to. Commit-time triggers refuse to create a workpad in, or
+move one into, a removed project or a thread whose location was removed.
+
+Lists hide the workpads of removed projects and the thread workpads of removed
+locations. An exact project query lists only that project's workpads; its
+subtree adds the workpads of threads in the project's active locations. For an
+agent, a global subtree lists a project workpad only when one of its project's
+active locations is on an admitted environment, and a thread workpad only when
+its thread's environment is admitted. A removed project is not found to agent
+tools, as a source or as a destination.
 
 ## Committed state and attribution
 
@@ -71,8 +92,9 @@ against the expected content; they do not automatically erase unchanged text
 provenance. Every mode writes the same revision and attribution record shapes.
 
 The canonical `workpad.list`, `workpad.get`, `workpad.revisions`,
-`workpad.create`, and `workpad.update` tools share the Sedes service through
-native and CLI adapters. Agents access committed state, not human drafts.
+`workpad.create`, and `workpad.update` tools, each at version 2, share the
+Sedes service through native and CLI adapters. A `project` scope in their
+input defaults to the caller's project. Agents access committed state, not human drafts.
 Listing and history are paginated. Caller-supplied filesystem paths are not
 interpreted as server-side content authority.
 
