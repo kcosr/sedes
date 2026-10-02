@@ -41,6 +41,8 @@ export interface SearchableSelectOption {
    * last segments stay in view (the row's tooltip keeps all of it).
    */
   readonly descriptionIsPath?: boolean;
+  /** The row's tooltip, when it should say more than the label and description. */
+  readonly title?: string;
   readonly icon?: ReactNode;
   readonly searchTerms?: readonly string[];
   /** Not selectable: dimmed and skipped by the keyboard. */
@@ -441,7 +443,7 @@ export function SearchableSelectList({
         id={`${listboxId}-${index}`}
         // The label and description truncate to one line each; the full
         // text stays one hover away.
-        title={option.description ? `${option.label}\n${option.description}` : option.label}
+        title={option.title ?? (option.description ? `${option.label}\n${option.description}` : option.label)}
         aria-selected={selected}
         aria-disabled={disabled || option.disabled || undefined}
         data-active={active?.option.value === option.value || undefined}

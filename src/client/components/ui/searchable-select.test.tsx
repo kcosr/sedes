@@ -232,6 +232,25 @@ describe("SearchableSelect", () => {
     expect(plain.querySelector("bdi")).toBeNull();
   });
 
+  it("uses an option's own tooltip when it says more than its label", async () => {
+    const user = userEvent.setup();
+    render(
+      <SearchableSelect
+        label="Project"
+        searchLabel="Search projects"
+        emptyLabel="No matches"
+        value=""
+        options={[
+          { value: "sedes", label: "sedes — on Local, aw-personal +1", title: "sedes — on Local, aw-personal, CI" },
+        ]}
+        onValueChange={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("combobox", { name: "Project" }));
+    expect(screen.getByRole("option", { name: "sedes — on Local, aw-personal +1" }))
+      .toHaveAttribute("title", "sedes — on Local, aw-personal, CI");
+  });
+
   it("selects an unavailable option but never a disabled one", async () => {
     const user = userEvent.setup();
     const onValueChange = vi.fn();
