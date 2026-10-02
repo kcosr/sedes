@@ -18,6 +18,7 @@ export type WorkspaceEnvironmentSummary = {
 export type OpenedWorkspaceSummary = {
   readonly workspaceId: string;
   readonly environmentId: string;
+  readonly projectId: string;
   readonly label: string;
   readonly availability: "available" | "unavailable";
 };
@@ -148,6 +149,7 @@ export class WorkspaceApplicationService {
     return {
       workspaceId: workspace.id,
       environmentId: workspace.environmentId,
+      projectId: workspace.projectId,
       label: workspace.displayName,
       availability:
         workspace.availability === "available" ? "available" : "unavailable",

@@ -10,7 +10,7 @@ import { CanonicalInlineAgentToolService } from "../../src/server/agent-tools/in
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
-const tools = new CanonicalInlineAgentToolService({ application: { readThreadStatus: async () => undefined } });
+const tools = new CanonicalInlineAgentToolService({ application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined } });
 const catalog = tools.catalogSummaries("mcp", "thread_agent");
 async function fixture(invoke: Parameters<OpenCodeMcpIngress["admit"]>[0]["invoke"]) {
   const ingress = new OpenCodeMcpIngress(); cleanups.push(() => ingress.close());

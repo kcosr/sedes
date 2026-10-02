@@ -15,7 +15,7 @@ const threadId = "10000000-0000-4000-8000-000000000001";
 
 function canonical() {
   return new CanonicalInlineAgentToolService({
-    application: { readThreadStatus: async () => undefined },
+    application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
   });
 }
 

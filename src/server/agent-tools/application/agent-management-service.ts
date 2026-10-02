@@ -54,6 +54,10 @@ export type AgentWorkspaceSummary = {
     readonly id: string;
     readonly label: string;
   };
+  readonly project: {
+    readonly id: string;
+    readonly name: string;
+  };
 };
 
 export type AgentWorkspaceListScope =
@@ -248,7 +252,7 @@ export class AgentManagementService {
     for (const environmentId of environmentIds) {
       requireAdmittedEnvironment(environmentAuthority, environmentId);
     }
-    const fingerprint = queryFingerprint("workspace.list@4", [
+    const fingerprint = queryFingerprint("workspace.list@5", [
       scope.tenantId,
       scope.principalId,
       request.scope.kind,
@@ -271,12 +275,17 @@ export class AgentManagementService {
           SELECT workspace.id, workspace.display_name AS label,
             workspace.availability, workspace.environment_id AS environmentId,
             environment.label AS environmentLabel,
+            project.id AS projectId, project.name AS projectName,
             workspace.last_opened_at AS sort
           FROM workspaces AS workspace
           INNER JOIN execution_environments AS environment
             ON environment.tenant_id = workspace.tenant_id
             AND environment.owner_principal_id = workspace.owner_principal_id
             AND environment.id = workspace.environment_id
+          INNER JOIN projects AS project
+            ON project.tenant_id = workspace.tenant_id
+            AND project.owner_principal_id = workspace.owner_principal_id
+            AND project.id = workspace.project_id
           WHERE workspace.tenant_id = ? AND workspace.owner_principal_id = ?
             AND workspace.removed_at IS NULL
             AND workspace.environment_id IN (${environmentIds.map(() => "?").join(", ")})
@@ -297,6 +306,8 @@ export class AgentManagementService {
       readonly availability: string;
       readonly environmentId: string;
       readonly environmentLabel: string;
+      readonly projectId: string;
+      readonly projectName: string;
       readonly sort: number;
     }>;
     const retained = rows.slice(0, request.pageSize);
@@ -307,6 +318,7 @@ export class AgentManagementService {
         row.availability === "available" ? "available" : "unavailable",
       lastOpenedAt: new Date(row.sort).toISOString(),
       environment: { id: row.environmentId, label: row.environmentLabel },
+      project: { id: row.projectId, name: row.projectName },
     })) as AgentWorkspaceSummary[];
     const last = retained.at(-1);
     return {

@@ -104,7 +104,7 @@ describe("resident OpenCode runtime registry", () => {
     expect(() => f.hosts.captureCliInvocation("duplicate-capability")).toThrow("opencode_runtime_configuration_scope_denied");
     const attachment = new SidecarRuntimeAttachment(), send = vi.spyOn(attachment, "call");
     await expect(relayAgentToolCliRequest(attachment, { protocolVersion: 3, requestId: randomUUID(), sourceCapability: "duplicate-capability",
-      operation: { type: "invoke", request: { toolId: "agent.context", schemaVersion: 2, requestId: randomUUID(), input: {} } } },
+      operation: { type: "invoke", request: { toolId: "agent.context", schemaVersion: 3, requestId: randomUUID(), input: {} } } },
       new AbortController().signal, capability => f.hosts.captureCliInvocation(capability)))
       .rejects.toMatchObject({ toolError: { code: "permission_denied", retryable: false } });
     expect(send).not.toHaveBeenCalled();

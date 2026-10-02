@@ -74,7 +74,7 @@ function createCrossEnvironmentApprovalComposition() {
     activity: "idle" as const,
   }));
   const canonical = new CanonicalInlineAgentToolService({
-    application: { readThreadStatus },
+    application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus },
     invocationId: () => "cross-environment-invocation",
   });
   const policies = {
@@ -280,6 +280,7 @@ describe("agent-tool HTTP production composition", () => {
       });
       const firstCanonical = new CanonicalInlineAgentToolService({
         application: {
+          readWorkspaceProjectId: async () => "project-1",
           readThreadStatus: async (_scope, _threadId, _grant, signal) =>
             await new Promise((_resolve, reject) => {
               signal.addEventListener(
@@ -411,7 +412,7 @@ describe("agent-tool HTTP production composition", () => {
       await associated(request(app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "thread-scoped-after-restart",
           input: {},
         })
@@ -420,6 +421,10 @@ describe("agent-tool HTTP production composition", () => {
           expect(body.output).toEqual({
             threadId: thread.thread.id,
             workspaceId: workspace.id,
+            projectId: secondDatabase!
+              .prepare("SELECT project_id FROM workspaces WHERE id = ?")
+              .pluck()
+              .get(workspace.id),
             backend: "pi",
           }),
         );
@@ -609,7 +614,7 @@ describe("agent-tool HTTP production composition", () => {
           adapter: "pi_sdk",
           request: {
             toolId: "agent.context",
-            schemaVersion: 2,
+            schemaVersion: 3,
             requestId: "disabled-request",
             input: {},
           },
@@ -636,7 +641,7 @@ describe("agent-tool HTTP production composition", () => {
           adapter: "pi_sdk",
           request: {
             toolId: "agent.context",
-            schemaVersion: 2,
+            schemaVersion: 3,
             requestId: "trusted-source-context",
             input: {},
           },
@@ -669,7 +674,7 @@ describe("agent-tool HTTP production composition", () => {
       await associated(request(app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "native-http-request",
           input: {},
         })
@@ -702,7 +707,7 @@ describe("agent-tool HTTP production composition", () => {
       await associated(request(app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "agent.context",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "context-request",
           input: {},
         })
@@ -711,6 +716,10 @@ describe("agent-tool HTTP production composition", () => {
           expect(body.output).toEqual({
             threadId: thread.thread.id,
             workspaceId: workspace.id,
+            projectId: database
+              .prepare("SELECT project_id FROM workspaces WHERE id = ?")
+              .pluck()
+              .get(workspace.id),
             backend: "pi",
           }),
         );

@@ -268,6 +268,9 @@ function fixture() {
     },
   };
   const application = {
+    async readWorkspaceProjectId() {
+      return "project-1";
+    },
     async readThreadStatus(requestScope: RequestScope, threadId: string) {
       expect(requestScope).toEqual(scope);
       if (!turns.has(threadId)) return undefined;

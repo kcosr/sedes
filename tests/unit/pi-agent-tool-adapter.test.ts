@@ -9,7 +9,7 @@ import type {
   TrustedAgentToolSource,
 } from "../../src/server/agent-tools/adapters/backend-facade.js";
 import type { SedesToolInvocationResult } from "../../src/server/agent-tools/contracts/agent-tool-contracts.js";
-import { agentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
+import { createAgentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
 import { AgentToolRegistry } from "../../src/server/agent-tools/registry/agent-tool-registry.js";
 import {
   assertNoPiAgentToolExtensionCollisions,
@@ -21,6 +21,11 @@ import {
   readPiAgentToolInvocationMarker,
 } from "../../src/server/backends/pi/pi-agent-tool-invocation-marker.js";
 import { PiToolAccessController } from "../../src/server/backends/pi/pi-tool-access.js";
+
+const agentContextToolDefinition = createAgentContextToolDefinition({
+  readWorkspaceProjectId: async () => "project-1",
+  readThreadStatus: async () => undefined,
+});
 
 const authentication = {
   conversationId: "pi-agent-tool-conversation",
@@ -539,7 +544,7 @@ describe("Pi agent-tool adapter", () => {
     expect(set.descriptors).toContainEqual({
       toolName: "sedes_agent_context",
       toolId: "agent.context",
-      schemaVersion: 2,
+      schemaVersion: 3,
       displayName: "Sedes agent context",
       readOnly: true,
     });
@@ -573,7 +578,7 @@ describe("Pi agent-tool adapter", () => {
       adapter: "pi_sdk",
       request: {
         toolId: "agent.context",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "pi-call-1",
         input: {},
       },
@@ -618,7 +623,7 @@ describe("Pi agent-tool adapter", () => {
         toolCallId: "pi-call-1",
         toolName: "sedes_agent_context",
         toolId: "agent.context",
-        schemaVersion: 2,
+        schemaVersion: 3,
         invocationId: "invocation-1",
       },
     });

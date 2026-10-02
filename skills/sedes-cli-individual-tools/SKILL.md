@@ -75,6 +75,17 @@ Never retry a write whose transport outcome is uncertain. Reconcile it with a
 currently advertised named read using the exact stable identifier, or ask the
 user how to proceed.
 
+## Workspaces and projects
+
+A Sedes workspace is one directory on one execution environment, and it is a
+location of exactly one project. A project can span several workspaces on
+several environments. Workspace list reports each workspace's `project`, and
+agent context reports the `projectId` of your own workspace. Opening a
+directory Sedes does not know yet creates a new single-location project named
+after it; opening a known directory keeps its project. Only the user can add a
+directory to an existing project, move it to another project, or restore a
+removed project. Task scopes still name workspaces and threads, not projects.
+
 ## Task workflow
 
 ### Quick current-scope creation

@@ -104,7 +104,7 @@ import type {
   BackendAgentToolInvocationInput,
 } from "../../src/server/agent-tools/adapters/backend-facade.js";
 import { AgentToolRegistry } from "../../src/server/agent-tools/registry/agent-tool-registry.js";
-import { agentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
+import { createAgentContextToolDefinition } from "../../src/server/agent-tools/tools/agent-context-tool.js";
 import { ConversationProjector } from "../../src/server/conversations/conversation-projector.js";
 import { renderTaskContextsForModel } from "../../src/server/conversations/delivery-input-projection.js";
 import {
@@ -113,6 +113,11 @@ import {
 } from "../../src/server/backends/model-policy.js";
 import { createFakeAgentToolSourceCapabilities } from "../helpers/fake-agent-tool-source-capabilities.js";
 import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
+
+const agentContextToolDefinition = createAgentContextToolDefinition({
+  readWorkspaceProjectId: async () => "project-1",
+  readThreadStatus: async () => undefined,
+});
 
 const roots: string[] = [];
 const toolProvenanceKey = new Uint8Array(32).fill(0x42);

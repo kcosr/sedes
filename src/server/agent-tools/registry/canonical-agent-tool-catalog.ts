@@ -1,7 +1,7 @@
 import { createWorkpadToolDefinitions } from "../tools/workpad-management-tools.js";
 import type { WorkpadAgentToolService } from "../tools/workpad-agent-tool-service.js";
 import type { AgentToolDefinition } from "../contracts/agent-tool-contracts.js";
-import { agentContextToolDefinition } from "../tools/agent-context-tool.js";
+import { createAgentContextToolDefinition } from "../tools/agent-context-tool.js";
 import type { AgentManagementService } from "../application/agent-management-service.js";
 import type { AgentToolApplicationReader } from "../tools/agent-tool-readers.js";
 import type { AutomationAgentToolService } from "../tools/automation-agent-tool-service.js";
@@ -144,7 +144,7 @@ export function createCanonicalAgentToolDefinitions(input: {
         ]
       : [];
   return orderCanonicalAgentToolDefinitions([
-    agentContextToolDefinition,
+    createAgentContextToolDefinition(input.application),
     ...(input.workpads ? createWorkpadToolDefinitions(input.workpads) : []),
     ...(input.threadWorktrees
       ? [

@@ -206,7 +206,7 @@ describe("Thread worktree agent tools", () => {
 
   it("is discoverable by thread agents but absent for principal Tool clients", () => {
     const canonical = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
       threadWorktrees: service(),
     });
     expect(

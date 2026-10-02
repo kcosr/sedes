@@ -13,6 +13,8 @@ import { DatabaseApplicationThreadSummaryReader } from "../../src/server/applica
 import { ApplicationSnapshotService } from "../../src/server/application/application-snapshot-service.js";
 import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
 import { ThreadRuntimeNotIdleError } from "../../src/server/events/thread-runtime-coordinator.js";
+import { createTrustedEnvironmentAuthorityGrant } from "../../src/server/agent-tools/environment/environment-authority.js";
+import path from "node:path";
 
 const cleanups: Array<() => void> = [];
 afterEach(() => cleanups.splice(0).forEach(close => close()));
@@ -161,5 +163,48 @@ describe("project registration lifecycle", () => {
     await expect(f.remove()).rejects.toThrow(/queued/);
     expect(f.queue.get(f.scope,f.thread.id,item.item.id).state).toBe("pending");
     expect(f.inventory.isWorkspaceRemoved(f.scope,f.workspace.id)).toBe(false);
+  });
+});
+
+describe("workspace.open for agents", () => {
+  function agentFixture() {
+    const f=fixture();
+    const service=new WorkspaceApplicationService({inventory:f.inventory,publications:{handoffAuthoritativeReplacement:f.handoffAuthoritativeReplacement},
+      execution:{validateWorkspace:vi.fn(async (_scope,environmentId:string,canonicalPath:string)=>({canonicalPath,authorityRevision:f.environment.configurationRevision,
+        summary:{id:randomUUID(),environmentId,displayName:path.basename(canonicalPath),displayPath:canonicalPath,availability:"available" as const,trustState:"trusted" as const,revision:0}}))}});
+    const grant=createTrustedEnvironmentAuthorityGrant({
+      canonicalInputDigest:"input",authorityDigest:"authority",targetEnvironmentIds:[f.environment.id],
+      resolvedResourceRefs:[{kind:"environment",id:f.environment.id,environmentId:f.environment.id}],
+      display:{targetEnvironmentLabels:[],resourceLabels:[]},tool:{id:"workspace.open",schemaVersion:2},callerKind:"thread_agent",
+      defaults:{kind:"thread_agent",environmentId:f.environment.id,workspaceId:f.workspace.id,threadId:f.thread.id},
+      policyIdentity:{ownerKind:"thread",ownerId:f.thread.id,revision:1},admittedEnvironmentIds:[f.environment.id]});
+    const open=(canonicalPath:string)=>service.openWorkspaceForAgent(f.scope,{environmentId:f.environment.id,path:canonicalPath},grant);
+    return {...f,open};
+  }
+
+  it("gives a new directory its own project and keeps a known directory's project", async () => {
+    const f=agentFixture();
+    const opened=await f.open("/tmp/agent-opened");
+    expect(opened).toMatchObject({environmentId:f.environment.id,label:"agent-opened",availability:"available"});
+    expect(opened.projectId).not.toBe(f.workspace.projectId);
+    expect(f.inventory.getProject(f.scope,opened.projectId)).toMatchObject({name:"agent-opened",locations:[expect.objectContaining({id:opened.workspaceId})]});
+    await expect(f.open(f.workspace.canonicalPath)).resolves.toMatchObject({workspaceId:f.workspace.id,projectId:f.workspace.projectId});
+    await expect(f.open("/tmp/agent-opened")).resolves.toEqual(opened);
+  });
+
+  it("restores a removed location only while its project is active", async () => {
+    const f=agentFixture();
+    const opened=await f.open("/tmp/agent-restored");
+    const current=f.inventory.getWorkspace(f.scope,opened.workspaceId);
+    f.inventory.removeWorkspace(f.scope,opened.workspaceId,{expectedRevision:current.revision,expectedThreadIds:[],now:600});
+    await expect(f.open("/tmp/agent-restored")).resolves.toMatchObject({workspaceId:opened.workspaceId,projectId:opened.projectId});
+
+    const project=f.inventory.getProject(f.scope,opened.projectId);
+    const inspection=f.inventory.inspectProjectRemoval(f.scope,opened.projectId,{expectedRevision:project.revision,expectedMembershipRevision:project.membershipRevision});
+    f.inventory.removeProject(f.scope,opened.projectId,{expectedRevision:project.revision,expectedMembershipRevision:project.membershipRevision,expectedLocations:inspection.locations,now:700});
+    // Agents cannot restore projects; the tool maps this to a conflict.
+    await expect(f.open("/tmp/agent-restored")).rejects.toMatchObject({code:"invalid_transition"});
+    expect(f.inventory.isWorkspaceRemoved(f.scope,opened.workspaceId)).toBe(true);
+    expect(f.inventory.getProject(f.scope,opened.projectId).removedAt).not.toBeNull();
   });
 });

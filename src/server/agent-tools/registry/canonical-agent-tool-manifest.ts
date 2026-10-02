@@ -119,8 +119,8 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "agent.context": threadOnlyManifestEntry({
     environmentAuthority: { kind: "source_only" },
     id: "agent.context",
-    schemaVersion: 2,
-    description: "Returns the Sedes source thread, workspace, and backend.",
+    schemaVersion: 3,
+    description: "Returns the Sedes source thread, workspace, project, and backend.",
     catalog: { groupId: "context", label: "Agent context", order: 10 },
     effects: { application: "read", modelUsage: "none", external: "none" },
   }),
@@ -136,9 +136,9 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "workspace.list": manifestEntry({
     environmentAuthority: { kind: "scoped_query", resource: "workspace" },
     id: "workspace.list",
-    schemaVersion: 4,
+    schemaVersion: 5,
     description:
-      "Lists admitted principal-owned Sedes workspaces by recent use, defaulting to the caller's configured environment.",
+      "Lists admitted principal-owned Sedes workspaces with their projects by recent use, defaulting to the caller's configured environment.",
     catalog: { groupId: "context", label: "List workspaces", order: 30 },
     effects: { application: "read", modelUsage: "none", external: "none" },
   }),
@@ -149,9 +149,9 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
       inputField: "environmentId",
     },
     id: "workspace.open",
-    schemaVersion: 1,
+    schemaVersion: 2,
     description:
-      "Opens an existing project directory in a configured execution environment and records it as a Sedes workspace.",
+      "Opens an existing directory in a configured execution environment as a Sedes workspace; a new directory becomes its own project.",
     catalog: { groupId: "context", label: "Open workspace", order: 40 },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),

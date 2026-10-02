@@ -30,7 +30,7 @@ export function createWorkspaceOpenToolDefinition(
             minLength: 1,
             maxLength: 4_096,
             description:
-              "Absolute path to an existing project directory on the selected configured execution environment.",
+              "Absolute path to an existing directory on the selected configured execution environment. A new directory becomes a new single-location project named after it; a known directory keeps its project.",
           }),
         },
         {
@@ -45,6 +45,7 @@ export function createWorkspaceOpenToolDefinition(
         {
           workspaceId: identifierSchema,
           environmentId: identifierSchema,
+          projectId: identifierSchema,
           label: Type.String({ minLength: 1, maxLength: 240 }),
           availability: Type.String({
             enum: ["available", "unavailable"],
@@ -54,7 +55,7 @@ export function createWorkspaceOpenToolDefinition(
         {
           $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
           additionalProperties: false,
-          maxProperties: 4,
+          maxProperties: 5,
         },
       ),
     ),
@@ -76,7 +77,7 @@ export function createWorkspaceOpenToolDefinition(
         name: "sedes_workspace_open",
         label: "Sedes workspace open",
         promptSnippet:
-          "Open an existing project directory in a configured Sedes execution environment.",
+          "Open an existing directory as a Sedes workspace in a configured execution environment.",
       },
       mcp: { name: "sedes_workspace_open" },
       http: { invocation: "inline" },

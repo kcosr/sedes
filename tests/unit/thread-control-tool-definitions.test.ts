@@ -574,7 +574,7 @@ describe("thread control tool definitions", () => {
   it("rejects a schema-valid multibyte send above the durable UTF-8 byte limit", async () => {
     const value = services();
     const canonical = new CanonicalInlineAgentToolService({
-      application: { readThreadStatus: async () => undefined },
+      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
       threadControl: value,
       invocationId: () => "invocation-1",
       mutationId: () => "mutation-1",

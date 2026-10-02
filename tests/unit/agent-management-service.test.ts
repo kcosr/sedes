@@ -90,7 +90,8 @@ function discoveryFixture() {
     environmentId: remoteEnvironmentId,
     canonicalPath: "/tmp/discovery-remote",
     displayName: "Remote project",
-    project: { kind: "new", name: "Remote project" },
+    // The same project on another environment.
+    project: { kind: "existing", projectId: workspaceA.projectId },
     available: true,
     trustState: "trusted",
     environmentConfigurationRevision: 0,
@@ -265,6 +266,7 @@ describe("AgentManagementService discovery", () => {
             availability: "available",
             lastOpenedAt: new Date(2_000).toISOString(),
             environment: current.environment,
+            project: { id: current.workspaceB.projectId, name: "Other project" },
           },
           {
             id: current.workspaceA.id,
@@ -272,6 +274,7 @@ describe("AgentManagementService discovery", () => {
             availability: "available",
             lastOpenedAt: new Date(1_000).toISOString(),
             environment: current.environment,
+            project: { id: current.workspaceA.projectId, name: "Same project" },
           },
         ],
       });
@@ -362,11 +365,11 @@ describe("AgentManagementService discovery", () => {
             { scope: { kind: "all_allowed_environments" }, pageSize: 10 },
             allEnvironmentAuthority,
           )
-          .items.map(({ id }) => id),
+          .items.map(({ id, project }) => [id, project]),
       ).toEqual([
-        current.remoteWorkspace.id,
-        current.workspaceB.id,
-        current.workspaceA.id,
+        [current.remoteWorkspace.id, { id: current.workspaceA.projectId, name: "Same project" }],
+        [current.workspaceB.id, { id: current.workspaceB.projectId, name: "Other project" }],
+        [current.workspaceA.id, { id: current.workspaceA.projectId, name: "Same project" }],
       ]);
       expect(() =>
         current.management.listWorkspaces(

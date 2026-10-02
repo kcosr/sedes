@@ -96,6 +96,7 @@ function fixture() {
   const management = unavailableDomainService<AgentManagementService>();
   const canonical = new CanonicalInlineAgentToolService({
     application: {
+      readWorkspaceProjectId: async () => workspace.projectId,
       readThreadStatus: async (_scope, threadId) =>
         threadId === thread.id
           ? {
@@ -294,7 +295,7 @@ describe("principal agent-tool client persistence and admission", () => {
       expect(() =>
         value.service().admitInvocation(created.credential, {
           toolId: "workspace.list",
-          schemaVersion: 4,
+          schemaVersion: 5,
           requestId: "other-environment",
           input: {
             scope: { kind: "environment", environmentId: remoteEnvironmentId },

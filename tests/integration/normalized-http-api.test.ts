@@ -4482,7 +4482,7 @@ describe("normalized HTTP application contract", () => {
       .set(SEDES_AGENT_TOOL_SOURCE_CAPABILITY_HEADER, sourceCapability)
       .send({
         toolId: "agent.context",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "request-1",
         input: {},
       })
