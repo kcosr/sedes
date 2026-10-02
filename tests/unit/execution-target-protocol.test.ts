@@ -12,6 +12,8 @@ const WORKSPACE_ID = "30000000-0000-4000-8000-000000000001";
 const OTHER_WORKSPACE_ID = "30000000-0000-4000-8000-000000000002";
 const THREAD_ID = "40000000-0000-4000-8000-000000000001";
 const ARCHIVED_THREAD_ID = "40000000-0000-4000-8000-000000000002";
+const PROJECT_ID = "50000000-0000-4000-8000-000000000001";
+const OTHER_PROJECT_ID = "50000000-0000-4000-8000-000000000002";
 
 function snapshot() {
   return {
@@ -31,12 +33,12 @@ function snapshot() {
         directoryBrowsing: "unavailable" as const,
       },
     ],
-    projects: [{ id: "project-1", name: "Project", revision: 0 }],
+    projects: [{ id: PROJECT_ID, name: "Project", revision: 0 }],
     workspaces: [
       {
         id: WORKSPACE_ID,
         environmentId: "environment-1",
-        projectId: "project-1",
+        projectId: PROJECT_ID,
         label: { text: "Sedes" },
         displayPath: { text: "/work/sedes" },
         available: true,
@@ -111,14 +113,14 @@ function snapshot() {
 function associatedTask(
   scope:
     | { readonly kind: "global" }
-    | { readonly kind: "workspace"; readonly workspaceId: string }
+    | { readonly kind: "project"; readonly projectId: string }
     | { readonly kind: "thread"; readonly threadId: string },
-  associatedWorkspaceId: string | null,
+  associatedProjectId: string | null,
 ) {
   return {
     id: "20000000-0000-4000-8000-000000000001",
     scope,
-    associatedWorkspaceId,
+    associatedProjectId,
     title: "Task",
     details: "",
     pinned: false,
@@ -132,22 +134,31 @@ function associatedTask(
 
 describe("execution-target application protocol", () => {
   it("uses the current client protocol for associated task presentation", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(133);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(134);
   });
 
-  it("enforces exact associated-workspace semantics on task projections", () => {
+  it("enforces exact associated-project semantics on task projections", () => {
     expect(
       associatedTaskSchema.safeParse(
-        associatedTask({ kind: "global" }, WORKSPACE_ID),
+        associatedTask({ kind: "global" }, PROJECT_ID),
       ).success,
     ).toBe(false);
     expect(
       associatedTaskSchema.safeParse(
-        associatedTask(
-          { kind: "workspace", workspaceId: WORKSPACE_ID },
-          OTHER_WORKSPACE_ID,
-        ),
+        associatedTask({ kind: "project", projectId: PROJECT_ID }, OTHER_PROJECT_ID),
       ).success,
+    ).toBe(false);
+    expect(
+      associatedTaskSchema.safeParse(
+        associatedTask({ kind: "project", projectId: PROJECT_ID }, PROJECT_ID),
+      ).success,
+    ).toBe(true);
+    // The former workspace scope has no alias.
+    expect(
+      associatedTaskSchema.safeParse({
+        ...associatedTask({ kind: "global" }, null),
+        scope: { kind: "workspace", workspaceId: WORKSPACE_ID },
+      }).success,
     ).toBe(false);
     expect(
       associatedTaskSchema.safeParse(
@@ -194,45 +205,78 @@ describe("execution-target application protocol", () => {
     ).toBe(true);
   });
 
-  it("accepts omitted threads but checks known workspace and present-thread association", () => {
+  it("accepts omitted threads but checks known projects and the present thread's project", () => {
     const omittedThread = snapshot();
     omittedThread.tasks = [
       associatedTask(
         { kind: "thread", threadId: ARCHIVED_THREAD_ID },
-        WORKSPACE_ID,
+        PROJECT_ID,
       ),
     ];
     expect(
       normalizedApplicationSnapshotSchema.safeParse(omittedThread).success,
     ).toBe(true);
 
-    const unknownWorkspace = snapshot();
-    unknownWorkspace.tasks = [
+    const unknownProject = snapshot();
+    unknownProject.tasks = [
       associatedTask(
         { kind: "thread", threadId: ARCHIVED_THREAD_ID },
-        OTHER_WORKSPACE_ID,
+        OTHER_PROJECT_ID,
       ),
     ];
     expect(
-      normalizedApplicationSnapshotSchema.safeParse(unknownWorkspace).success,
+      normalizedApplicationSnapshotSchema.safeParse(unknownProject).error
+        ?.issues,
+    ).toEqual([
+      expect.objectContaining({
+        message: "Task association references an unknown project.",
+        path: ["tasks", 0, "associatedProjectId"],
+      }),
+    ]);
+
+    const unknownProjectTask = snapshot();
+    unknownProjectTask.tasks = [
+      associatedTask({ kind: "project", projectId: OTHER_PROJECT_ID }, OTHER_PROJECT_ID),
+    ];
+    expect(
+      normalizedApplicationSnapshotSchema.safeParse(unknownProjectTask).success,
     ).toBe(false);
 
+    // A thread task belongs to the project of its thread's location, even
+    // when another listed project exists.
     const mismatchedPresentThread = snapshot();
+    mismatchedPresentThread.projects.push({ id: OTHER_PROJECT_ID, name: "Other", revision: 0 });
     mismatchedPresentThread.workspaces.push({
       ...mismatchedPresentThread.workspaces[0]!,
       id: OTHER_WORKSPACE_ID,
+      projectId: OTHER_PROJECT_ID,
       label: { text: "Other project" },
     });
     mismatchedPresentThread.tasks = [
       associatedTask(
         { kind: "thread", threadId: THREAD_ID },
-        OTHER_WORKSPACE_ID,
+        OTHER_PROJECT_ID,
       ),
     ];
     expect(
       normalizedApplicationSnapshotSchema.safeParse(mismatchedPresentThread)
+        .error?.issues,
+    ).toEqual([
+      expect.objectContaining({
+        message: "A thread task must belong to the project of its thread's location.",
+      }),
+    ]);
+    mismatchedPresentThread.tasks = [
+      associatedTask({ kind: "thread", threadId: THREAD_ID }, PROJECT_ID),
+      {
+        ...associatedTask({ kind: "project", projectId: OTHER_PROJECT_ID }, OTHER_PROJECT_ID),
+        id: "20000000-0000-4000-8000-000000000002",
+      },
+    ];
+    expect(
+      normalizedApplicationSnapshotSchema.safeParse(mismatchedPresentThread)
         .success,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("accepts available and retained unavailable targets", () => {

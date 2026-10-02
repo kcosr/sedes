@@ -1,17 +1,15 @@
 import { z } from "zod";
 import {
   mutationIdSchema,
+  projectIdSchema,
   taskIdSchema,
   threadIdSchema,
-  workspaceIdSchema,
 } from "./domain.js";
 
+/** Tasks and Workpads belong to everyone, to a project, or to one thread. */
 export const taskScopeSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("global") }),
-  z.strictObject({
-    kind: z.literal("workspace"),
-    workspaceId: workspaceIdSchema,
-  }),
+  z.strictObject({ kind: z.literal("project"), projectId: projectIdSchema }),
   z.strictObject({ kind: z.literal("thread"), threadId: threadIdSchema }),
 ]);
 export type TaskScope = z.infer<typeof taskScopeSchema>;
@@ -120,27 +118,18 @@ export const composerTaskReferenceIdsSchema = z
     message: "Composer task reference identifiers must be unique.",
   });
 
-/** Immutable Task state captured at durable delivery acceptance. */
-export const materializedTaskContextSchema = taskSchema;
-export type MaterializedTaskContext = Task;
-
-export const materializedTaskContextsSchema = z
-  .array(materializedTaskContextSchema)
-  .max(MAXIMUM_COMPOSER_TASK_REFERENCES)
-  .superRefine((tasks, context) => {
-    const seen = new Set<string>();
-    for (let index = 0; index < tasks.length; index += 1) {
-      const taskId = tasks[index]!.id;
-      if (seen.has(taskId)) {
-        context.addIssue({
-          code: "custom",
-          message: "Materialized task context identifiers must be unique.",
-          path: [index, "id"],
-        });
-      }
-      seen.add(taskId);
-    }
-  });
+/**
+ * A delivered Task as a conversation message shows it. The immutable snapshot
+ * captured at delivery acceptance, scope included, stays on the server.
+ */
+export const messageTaskContextSchema = z.strictObject({
+  id: taskIdSchema,
+  title: taskTitleSchema,
+  details: taskDetailsSchema,
+  completedAt: z.iso.datetime().nullable(),
+  revision: z.number().int().nonnegative(),
+});
+export type MessageTaskContext = z.infer<typeof messageTaskContextSchema>;
 
 export function requireUniqueTaskContextContentParts(
   parts: readonly {
@@ -174,35 +163,34 @@ export function requireUniqueTaskContextContentParts(
 }
 export const associatedTaskSchema = taskSchema
   .extend({
-    associatedWorkspaceId: workspaceIdSchema.nullable(),
+    associatedProjectId: projectIdSchema.nullable(),
   })
   .superRefine((task, context) => {
     if (task.scope.kind === "global") {
-      if (task.associatedWorkspaceId !== null) {
+      if (task.associatedProjectId !== null) {
         context.addIssue({
           code: "custom",
-          message: "A global task cannot have an associated workspace.",
-          path: ["associatedWorkspaceId"],
+          message: "A global task cannot have an associated project.",
+          path: ["associatedProjectId"],
         });
       }
       return;
     }
-    if (task.scope.kind === "workspace") {
-      if (task.associatedWorkspaceId !== task.scope.workspaceId) {
+    if (task.scope.kind === "project") {
+      if (task.associatedProjectId !== task.scope.projectId) {
         context.addIssue({
           code: "custom",
-          message:
-            "A workspace task must be associated with its exact workspace.",
-          path: ["associatedWorkspaceId"],
+          message: "A project task must be associated with its exact project.",
+          path: ["associatedProjectId"],
         });
       }
       return;
     }
-    if (task.associatedWorkspaceId === null) {
+    if (task.associatedProjectId === null) {
       context.addIssue({
         code: "custom",
-        message: "A thread task requires an associated workspace.",
-        path: ["associatedWorkspaceId"],
+        message: "A thread task requires the project of its thread's location.",
+        path: ["associatedProjectId"],
       });
     }
   });
@@ -263,7 +251,7 @@ export const taskRouteParametersSchema = z.strictObject({
  * can move up-scope, stay open, or complete in place by explicit choice.
  */
 export const openTaskDispositionSchema = z.enum([
-  "move_to_workspace",
+  "move_to_project",
   "move_to_global",
   "complete",
   "keep",

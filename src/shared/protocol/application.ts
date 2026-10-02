@@ -522,7 +522,6 @@ export const normalizedApplicationSnapshotSchema = z
       }
     }
 
-    const workspaceIds = new Set(workspaceById.keys());
     const taskThreadById = new Map(
       snapshot.threads.map((thread) => [thread.id, thread] as const),
     );
@@ -531,25 +530,30 @@ export const normalizedApplicationSnapshotSchema = z
       const task = snapshot.tasks[index]!;
       const taskScope = task.scope;
       if (
-        task.associatedWorkspaceId !== null &&
-        !workspaceIds.has(task.associatedWorkspaceId)
+        task.associatedProjectId !== null &&
+        !projectIds.has(task.associatedProjectId)
       ) {
         context.addIssue({
           code: "custom",
-          message: "Task association references an unknown workspace.",
-          path: ["tasks", index, "associatedWorkspaceId"],
+          message: "Task association references an unknown project.",
+          path: ["tasks", index, "associatedProjectId"],
         });
       }
       if (taskScope.kind !== "thread") continue;
       // Archived or otherwise omitted threads remain valid. When a thread is
-      // present, the task association must agree with the same authoritative
-      // workspace projection.
+      // present, the task belongs to the project of the thread's location.
       const thread = taskThreadById.get(taskScope.threadId);
-      if (thread && task.associatedWorkspaceId !== thread.workspaceId) {
+      const threadWorkspace = thread
+        ? workspaceById.get(thread.workspaceId)
+        : undefined;
+      if (
+        threadWorkspace &&
+        task.associatedProjectId !== threadWorkspace.projectId
+      ) {
         context.addIssue({
           code: "custom",
-          message: "Task and thread workspace associations must match.",
-          path: ["tasks", index, "associatedWorkspaceId"],
+          message: "A thread task must belong to the project of its thread's location.",
+          path: ["tasks", index, "associatedProjectId"],
         });
       }
     }
@@ -772,7 +776,7 @@ export type ApplicationEventEnvelope = z.infer<
   typeof applicationEventEnvelopeSchema
 >;
 
-export const SEDES_CLIENT_PROTOCOL_VERSION = 133 as const;
+export const SEDES_CLIENT_PROTOCOL_VERSION = 134 as const;
 
 export const normalizedApplicationSessionSchema = z.strictObject({
   clientProtocolVersion: z.literal(SEDES_CLIENT_PROTOCOL_VERSION),

@@ -9,20 +9,22 @@ import {
   composerTaskReferencesSchema,
   composerInputUtf8Bytes,
   hasDeliverableComposerInput,
-  materializedTaskContextsSchema,
+  messageTaskContextSchema,
   normalizedDraftSchema,
   normalizedStashSchema,
   queuedInputSummarySchema,
   saveDraftRequestSchema,
   userMessageItemSchema,
-  type MaterializedTaskContext,
+  type MessageTaskContext,
+  type Task,
 } from "../../src/shared/index.js";
+import { materializedTaskContextsSchema } from "../../src/server/domain/materialized-task-contexts.js";
 
 const task = {
   id: "10000000-0000-4000-8000-000000000001",
   scope: {
-    kind: "workspace",
-    workspaceId: "20000000-0000-4000-8000-000000000001",
+    kind: "project",
+    projectId: "20000000-0000-4000-8000-000000000001",
   },
   title: "Implement composer Task references",
   details: "Preserve exact task identity and revision.",
@@ -32,13 +34,21 @@ const task = {
   revision: 7,
   createdAt: "2026-08-11T18:00:00.000Z",
   updatedAt: "2026-08-11T19:00:00.000Z",
-} satisfies MaterializedTaskContext;
+} satisfies Task;
+/** What a delivered message shows: no scope crosses to the browser. */
+const messageTask = {
+  id: task.id,
+  title: task.title,
+  details: task.details,
+  completedAt: task.completedAt,
+  revision: task.revision,
+} satisfies MessageTaskContext;
 
 const reference = { taskId: task.id, titleSnapshot: task.title };
 
 describe("composer Task reference protocol", () => {
   it("uses the current protocol version for the atomic normalized cutover", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(133);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(134);
   });
 
   it("bounds ordered draft references and rejects duplicate Task ids", () => {
@@ -124,9 +134,16 @@ describe("composer Task reference protocol", () => {
       status: "completed" as const,
       revision: 0,
       deliveryOperationId: "operation-1",
-      content: [{ kind: "task_context" as const, task }],
+      content: [{ kind: "task_context" as const, task: messageTask }],
     };
     expect(userMessageItemSchema.parse(normalized)).toEqual(normalized);
+    expect(messageTaskContextSchema.safeParse(task).success).toBe(false);
+    expect(
+      userMessageItemSchema.safeParse({
+        ...normalized,
+        content: [{ kind: "task_context", task }],
+      }).success,
+    ).toBe(false);
     expect(
       userMessageItemSchema.safeParse({
         ...normalized,
@@ -141,15 +158,15 @@ describe("composer Task reference protocol", () => {
         status: "completed",
         sourceOrder: 0,
         deliveryOperationId: "operation-1",
-        content: [{ kind: "task_context", task }],
+        content: [{ kind: "task_context", task: messageTask }],
       }),
-    ).toMatchObject({ content: [{ kind: "task_context", task }] });
+    ).toMatchObject({ content: [{ kind: "task_context", task: messageTask }] });
     expect(
       userMessageItemSchema.safeParse({
         ...normalized,
         content: [
-          { kind: "task_context", task },
-          { kind: "task_context", task },
+          { kind: "task_context", task: messageTask },
+          { kind: "task_context", task: messageTask },
         ],
       }).success,
     ).toBe(false);
