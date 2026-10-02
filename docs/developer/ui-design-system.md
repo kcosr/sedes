@@ -164,6 +164,9 @@ pointer input through; open modal dialogs retain their normal isolation.
 Retained content portaled outside a modal's React ancestry, such as the Tasks
 body, activates its dialogs only after the host modal mounts so the host does
 not hide an editor that has already reopened from assistive technology.
+Hover surfaces ignore leave and blur events from descendants portaled outside
+their DOM boundary, so a closing child dialog cannot dismiss its owning roster
+before focus returns.
 
 `ConfirmDialog` is the only confirmation, never `window.confirm`: a small card,
 also on phones, with no X; Cancel is the way out. Name the verb and object in
