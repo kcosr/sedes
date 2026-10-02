@@ -129,6 +129,12 @@ all 1,172 Claude and usage-accounting tests across 53 files, all 29 native
 loopback cases across 10 files, and both Claude browser tests in 31.9 seconds.
 The authenticated startup-label test was not repeated for this correction.
 
+The retained-reattach ownership correction passed full typecheck, build, all
+1,175 Claude and usage-accounting tests across 53 files, and the native
+persistent text-steer loopback case. Three regressions verify live/reload
+identity and receipt ownership for running, failed, and interrupted turns
+after reattach. The authenticated suite was not repeated for this correction.
+
 The prior 2.1.286 persistent-runtime timeout did not reproduce in the bounded
 2.1.287 authenticated and held-text loopback cases. Its cause remains unknown;
 the passing cases do not prove a particular upstream fix caused the change.

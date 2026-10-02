@@ -6144,6 +6144,76 @@ describe("Claude image reads and meta rows", () => {
     await reloaded.close();
   });
 
+  it.each(["in_progress", "failed", "interrupted"] as const)("restores only the running Sedes input on retained reattach (%s)", async (status) => {
+    const transcript = new ClaudeTranscriptFixture();
+    const oldInput = transcript.prompt("Earlier stopped request.");
+    transcript.reply([{ type: "tool_use", id: "read-earlier", name: "Read", input: { file_path: "/workspace/earlier.txt" } }], { stopReason: "tool_use" });
+    transcript.prompt("Look at the screenshot", { uuid: PROMPT_ID });
+    const [call] = transcript.reply([{ type: "tool_use", id: "read-at-reattach", name: "Read", input: { file_path: "/workspace/notes.txt" } }], { stopReason: "tool_use" });
+    transcript.toolResult("read-at-reattach", call!, "notes");
+    const initialMessages = await history(transcript);
+    const initial = projectClaudeHistory(initialMessages);
+    const [oldTurn, turnId] = initial.snapshot.orderedBackendTurnIds as [string, string];
+    const settings = repository();
+    const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
+    settings.writeTerminalReceipt(scope, BINDING.applicationThreadId, { backendTurnId: oldTurn,
+      status: "failed", providerTerminalReason: "error", terminalAt: 1, now: 1 });
+    if (status !== "in_progress") {
+      settings.writeTerminalReceipt(scope, BINDING.applicationThreadId, { backendTurnId: turnId,
+        status, providerTerminalReason: status === "failed" ? "error" : "aborted_streaming", terminalAt: 2, now: 2 });
+    }
+    const receiptKey = { applicationThreadId: BINDING.applicationThreadId, backendTurnId: turnId };
+    const receipt = settings.findTerminalReceipt(scope, receiptKey);
+    const writeTerminal = vi.spyOn(settings, "writeTerminalReceipt");
+    const provider = fixture();
+    // The original admission and first stamped output predate this attachment.
+    const retained = retainedRuntime(provider, []);
+    const { handle } = createHandle(provider, vi.fn(), { settings, initialMessages, resumeSession: true, runtimeClient: retained.runtime });
+    const established = await projectionSnapshot(handle);
+    expect(established.turnsById[oldTurn]).toMatchObject({ status: "failed", completionCorrelations: [oldInput] });
+    expect(established.turnsById[turnId]).toMatchObject({ status, completionCorrelations: [PROMPT_ID] });
+    expect(established.activeBackendTurnId).toBe(status === "in_progress" ? turnId : undefined);
+
+    const external = crypto.randomUUID();
+    transcript.attachment({ type: "queued_command", source_uuid: external, delivery_id: "reattach-external",
+      prompt: "External context after reattach.", isMeta: true, origin: { kind: "peer" } });
+    if (status === "in_progress") {
+      transcript.bookkeeping({ type: "queue-operation", operation: "remove", reason: "absorbed_mid_turn", deliveryId: "reattach-external" });
+    }
+    const externalMessage = (await history(transcript)).find(({ uuid }) => uuid === external)!;
+    // Live SDK frames have no Sedes history-only absorption flag or input stamp.
+    provider.messages.push({ type: "user", uuid: external, session_id: SESSION_ID, parent_tool_use_id: null,
+      message: externalMessage.message, isSynthetic: true, origin: { kind: "peer" } } as unknown as SDKMessage);
+    const answer = transcript.answer("Finished after reattach.");
+    provider.messages.push(live(transcript, answer));
+    await vi.waitFor(async () => expect(JSON.stringify(await projectionSnapshot(handle))).toContain("Finished after reattach."));
+    const running = await projectionSnapshot(handle);
+    const resultOwner = status === "in_progress" ? turnId : running.orderedBackendTurnIds[2]!;
+    expect(running.orderedBackendTurnIds).toHaveLength(status === "in_progress" ? 2 : 3);
+    expect(running).toMatchObject({ runState: "running", activeBackendTurnId: resultOwner });
+    expect(running.turnsById[resultOwner]!.status).toBe("in_progress");
+    if (status !== "in_progress") expect(running.turnsById[resultOwner]).not.toHaveProperty("completionCorrelations");
+    provider.messages.push(nativeFrames.result([status === "in_progress" ? PROMPT_ID : external]));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    const settled = await projectionSnapshot(handle);
+    expect(settled.orderedBackendTurnIds).toHaveLength(status === "in_progress" ? 2 : 3);
+    expect(settled.turnsById[oldTurn]).toMatchObject({ status: "failed", completionCorrelations: [oldInput] });
+    expect(settled.turnsById[turnId]).toMatchObject({ status: status === "in_progress" ? "completed" : status,
+      completionCorrelations: [PROMPT_ID] });
+    expect(settled.turnsById[resultOwner]!.status).toBe("completed");
+    if (status === "in_progress") {
+      expect(writeTerminal).toHaveBeenCalledExactlyOnceWith(scope, BINDING.applicationThreadId,
+        expect.objectContaining({ backendTurnId: turnId, status: "completed" }));
+    } else {
+      expect(writeTerminal).not.toHaveBeenCalled();
+      expect(settings.findTerminalReceipt(scope, receiptKey)).toEqual(receipt);
+    }
+    await handle.close();
+    const reloaded = createHandle(fixture(), vi.fn(), { settings, initialMessages: await history(transcript), resumeSession: true }).handle;
+    expect(identities(await projectionSnapshot(reloaded))).toEqual(identities(settled));
+    await reloaded.close();
+  });
+
   it.each([
     { status: "failed", queued: false }, { status: "failed", queued: true },
     { status: "interrupted", queued: false }, { status: "interrupted", queued: true },

@@ -138,6 +138,19 @@
         "seconds": 31.943
       },
       "authenticatedLive": "Not repeated for this correction; preceding full run and startup-label refusal remain recorded above."
+    },
+    "retainedReattachFix": {
+      "typecheck": "passed",
+      "build": "passed",
+      "claudeAndUsageOffline": {
+        "files": 53,
+        "passed": 1175
+      },
+      "nativePersistentTextSteerLoopback": {
+        "files": 1,
+        "passed": 1
+      },
+      "authenticatedLive": "Not repeated for this correction; preceding full run and startup-label refusal remain recorded above."
     }
   }
 }

@@ -1879,6 +1879,11 @@ export class ClaudeConversationHandle implements ConversationHandle {
     this.#runState = this.#projection.snapshot.runState;
     const activeTurn = this.#projection.snapshot.activeBackendTurnId === undefined ? undefined
       : this.#projection.snapshot.turnsById[this.#projection.snapshot.activeBackendTurnId];
+    // A retained query may have emitted its start and first input stamp before
+    // this attachment. Restore its running Sedes root for later absorbed input.
+    this.#nativeTurnRoot = this.#session.reattached === true && this.#runState === "running" && activeTurn?.completionCorrelations?.length
+      ? this.#projection.nativeUserMessageUuidByBackendTurnId.get(activeTurn.backendTurnId) ?? activeTurn.completionCorrelations[0]
+      : undefined;
     // Attaching during a turn Claude started: its result carries no Sedes input.
     this.#providerTurn = this.#runState === "running" && activeTurn && !activeTurn.completionCorrelations?.length
       ? { ownsTurn: true, inputUuids: this.#externalProviderInputs(activeTurn.backendTurnId) } : undefined;
