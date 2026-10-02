@@ -499,7 +499,7 @@ export class PrincipalAgentToolClientRepository {
       invalid("The tool client environment selection is unavailable.");
     }
     if (input.defaultThreadId && !input.defaultWorkspaceId) {
-      invalid("A default thread requires a default workspace.");
+      invalid("A default thread requires a default location.");
     }
     if (input.defaultWorkspaceId) {
       const workspace = this.database

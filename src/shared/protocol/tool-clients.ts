@@ -78,7 +78,7 @@ function refinePolicy(
     context.addIssue({
       code: "custom",
       path: ["defaultThreadId"],
-      message: "A default thread requires a default workspace.",
+      message: "A default thread requires a default location.",
     });
   }
 }
