@@ -1518,7 +1518,7 @@ describe("TasksPanelContent docked", () => {
 describe("TasksPanel host", () => {
   it.each([false, true])(
     "retains an unsaved edit while Settings suspends the popover or sheet (phone: %s)",
-    (phone) => {
+    async (phone) => {
       stubDensity(phone);
       const store = makeStore([makeTask({ id: "g", title: "Global errand" })]);
       const panelLayoutStore = makePanelLayoutStore();
@@ -1534,11 +1534,17 @@ describe("TasksPanel host", () => {
         target: { value: "Unsaved while configuring" },
       });
 
-      view.rerender(content(false));
-      expect(screen.queryByRole("dialog", { name: "Edit task" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("region", { name: "Tasks" })).not.toBeInTheDocument();
-      view.rerender(content(true));
-      expect(screen.getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved while configuring");
+      for (let cycle = 0; cycle < 2; cycle += 1) {
+        view.rerender(content(false));
+        expect(screen.queryByRole("dialog", { name: "Edit task" })).not.toBeInTheDocument();
+        expect(screen.queryByRole("region", { name: "Tasks" })).not.toBeInTheDocument();
+        view.rerender(content(true));
+        const editor = screen.getByRole("dialog", { name: "Edit task" });
+        expect(within(editor).getByRole("textbox", { name: "Notes" })).toHaveValue("Unsaved while configuring");
+        // Let the replaced surface's deferred focus restoration run too.
+        await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+        expect(editor).toContainElement(document.activeElement as HTMLElement);
+      }
     },
   );
 

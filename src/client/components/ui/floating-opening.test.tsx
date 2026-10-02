@@ -5,6 +5,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import postcss from "postcss";
+import { useState } from "react";
+import { flushSync } from "react-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ContextMenu,
@@ -20,6 +22,7 @@ import {
 } from "./dropdown-menu.js";
 import type { MenuPresentation } from "./menu-sheet.js";
 import { Popover, PopoverContent, PopoverTrigger } from "./popover.js";
+import { Dialog, DialogClose, DialogContent, DialogTitle, DialogTrigger } from "./dialog.js";
 
 /**
  * jsdom runs no CSS animations, so Radix unmounts closed content at once.
@@ -30,7 +33,7 @@ function simulateExitMotion(): void {
   const computed = window.getComputedStyle.bind(window);
   vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
     const style = computed(element, pseudo);
-    if (!(element instanceof HTMLElement) || !element.dataset.slot?.endsWith("content")) {
+    if (!(element instanceof HTMLElement) || (!element.dataset.slot?.endsWith("content") && element.dataset.slot !== "dialog-overlay")) {
       return style;
     }
     return new Proxy(style, {
@@ -113,6 +116,140 @@ function ViewOptions({
 }
 
 describe("reopening a floating surface during its exit motion", () => {
+  it.each([false, true])("reopens a controlled dialog without a stale dismissal or focus restoration (modal: %s)", async (modal) => {
+    // jsdom has no PointerEvent; give Radix a real primary button so it
+    // exercises its deferred document-click dismissal path.
+    vi.stubGlobal("PointerEvent", MouseEvent);
+    const onOpenChange = vi.fn();
+    const onInteractOutside = vi.fn();
+    const onCloseAutoFocus = vi.fn((event: Event) => {
+      event.preventDefault();
+      target.current?.focus();
+    });
+    const target = { current: null as HTMLButtonElement | null };
+    const content = { current: null as HTMLDivElement | null };
+    function Harness() {
+      const [open, setOpen] = useState(false);
+      const change = (next: boolean) => {
+        onOpenChange(next);
+        setOpen(next);
+      };
+      return <>
+        {/* Flush before the native document listener, as a browser's discrete
+            React click does, rather than jsdom's whole-event act batching. */}
+        <button ref={target} onClick={() => flushSync(() => change(true))}>Resolve conflict</button>
+        <Dialog open={open} onOpenChange={change} modal={modal}>
+          <DialogContent ref={content} aria-describedby={undefined} onInteractOutside={onInteractOutside} onCloseAutoFocus={onCloseAutoFocus}>
+            <DialogTitle>File changed</DialogTitle>
+            <input aria-label="Resolution" />
+            <DialogClose>Keep editing</DialogClose>
+          </DialogContent>
+        </Dialog>
+      </>;
+    }
+    render(<Harness />);
+    const trigger = screen.getByRole("button", { name: "Resolve conflict" });
+    press(trigger);
+    await settle();
+    const closing = screen.getByRole("dialog", { name: "File changed" });
+    expect(document.body.style.pointerEvents).toBe(modal ? "none" : "");
+    press(screen.getByRole("button", { name: "Keep editing" }));
+    expect(closing).toHaveAttribute("data-state", "closed");
+    expect(closing.style.pointerEvents).toBe("none");
+    expect(document.body.style.pointerEvents).toBe("");
+    if (modal) expect(screen.getByTestId("dialog-overlay").style.pointerEvents).toBe("none");
+
+    // The old layer sees this pointerdown outside, then defers dismissal to
+    // document click, after the button has reopened the controlled dialog.
+    press(trigger);
+    await settle();
+    const reopened = screen.getByRole("dialog", { name: "File changed" });
+    expect(reopened).toHaveAttribute("data-state", "open");
+    expect(document.body.style.pointerEvents).toBe(modal ? "none" : "");
+    expect(reopened.style.pointerEvents).toBe(modal ? "auto" : "");
+    if (modal) expect(screen.getByTestId("dialog-overlay").style.pointerEvents).toBe("auto");
+    expect(reopened).not.toBe(closing);
+    expect(closing).not.toBeInTheDocument();
+    expect(content.current).toBe(reopened);
+    expect(screen.getByRole("textbox", { name: "Resolution" })).toHaveFocus();
+    expect(onOpenChange.mock.calls).toEqual([[true], [false], [true]]);
+    expect(onInteractOutside).not.toHaveBeenCalled();
+    expect(onCloseAutoFocus).not.toHaveBeenCalled();
+
+    // The live opening still dismisses normally and runs the caller's focus
+    // restoration once its own exit finishes.
+    fireEvent.keyDown(reopened, { key: "Escape" });
+    finishExitMotion(reopened);
+    await settle();
+    expect(onCloseAutoFocus).toHaveBeenCalledTimes(1);
+    expect(trigger).toHaveFocus();
+    expect(content.current).toBeNull();
+  });
+
+  it.each([false, true])("reopens an uncontrolled dialog from its trigger (defaultOpen: %s)", async (defaultOpen) => {
+    const onOpenChange = vi.fn();
+    render(<Dialog defaultOpen={defaultOpen} onOpenChange={onOpenChange}>
+      <DialogTrigger>Open details</DialogTrigger>
+      <DialogContent aria-describedby={undefined}>
+        <DialogTitle>Details</DialogTitle>
+        <input aria-label="Detail name" />
+      </DialogContent>
+    </Dialog>);
+    const trigger = screen.getByRole("button", { name: "Open details", hidden: true });
+    if (!defaultOpen) press(trigger);
+    await settle();
+    const closing = screen.getByRole("dialog", { name: "Details" });
+    fireEvent.keyDown(closing, { key: "Escape" });
+    expect(closing).toHaveAttribute("data-state", "closed");
+    press(trigger);
+    await settle();
+    const reopened = screen.getByRole("dialog", { name: "Details" });
+    expect(reopened).toHaveAttribute("data-state", "open");
+    expect(reopened).not.toBe(closing);
+    expect(screen.getByRole("textbox", { name: "Detail name" })).toHaveFocus();
+    expect(onOpenChange.mock.calls).toEqual(defaultOpen ? [[false], [true]] : [[true], [false], [true]]);
+    fireEvent.keyDown(reopened, { key: "Escape" });
+    finishExitMotion(reopened);
+    await settle();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("keeps a nested dialog's reopening independent from its non-dismissible parent", async () => {
+    const parentChange = vi.fn();
+    render(<Dialog defaultOpen onOpenChange={parentChange}>
+      <DialogContent dismissible={false} aria-describedby={undefined}>
+        <DialogTitle>Editor</DialogTitle>
+        <Dialog>
+          <DialogTrigger>Resolve conflict</DialogTrigger>
+          <DialogContent aria-describedby={undefined}>
+            <DialogTitle>File changed</DialogTitle>
+            <input aria-label="Resolution" />
+          </DialogContent>
+        </Dialog>
+      </DialogContent>
+    </Dialog>);
+    const parent = screen.getByRole("dialog", { name: "Editor" });
+    const trigger = screen.getByRole("button", { name: "Resolve conflict" });
+    press(trigger);
+    await settle();
+    const closing = screen.getByRole("dialog", { name: "File changed" });
+    fireEvent.keyDown(closing, { key: "Escape" });
+    press(trigger);
+    await settle();
+    const reopened = screen.getByRole("dialog", { name: "File changed" });
+    expect(reopened).not.toBe(closing);
+    expect(reopened).toHaveAttribute("data-state", "open");
+    expect(screen.getByRole("textbox", { name: "Resolution" })).toHaveFocus();
+    expect(parent).toHaveAttribute("data-state", "open");
+    expect(parentChange).not.toHaveBeenCalled();
+    fireEvent.keyDown(reopened, { key: "Escape" });
+    finishExitMotion(reopened);
+    await settle();
+    expect(trigger).toHaveFocus();
+    fireEvent.keyDown(parent, { key: "Escape" });
+    expect(parentChange).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "reopens a dropdown menu from its trigger with fresh content (modal: %s)",
     async (modal) => {

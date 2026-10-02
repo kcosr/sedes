@@ -2615,7 +2615,11 @@ function ThreadStackItem({
     if (stackSurfaceInteractionOpen.current) return;
     setOpen(true);
   };
-  const scheduleClose = () => {
+  const scheduleClose = (event?: React.SyntheticEvent<HTMLElement>) => {
+    // React bubbles events from portaled menus/dialogs through the roster.
+    // Leaving those layers (including their pointer-through exit motion)
+    // is not leaving the roster's own hover or focus boundary.
+    if (event && !event.currentTarget.contains(event.target as Node)) return;
     cancelClose();
     if (interactionOpen.current) return;
     closeTimer.current = window.setTimeout(() => {

@@ -214,6 +214,74 @@ async function replaceEditorContent(
   await page.keyboard.type(content);
 }
 
+// Hold the real CSS exit at its first frame so a browser round trip cannot
+// accidentally turn a rapid reopen into a reopen after unmount. The two cases
+// cover the content-only tail and the earlier interval with a closing scrim.
+async function reopenConflictDuringExit(
+  page: Page,
+  holdOverlay: boolean,
+): Promise<void> {
+  const conflict = page.getByRole("dialog", { name: "File changed on disk" });
+  await overlaySettled(conflict);
+  const trigger = page.getByRole("button", {
+    name: "File changed on disk. Resolve conflict.",
+    includeHidden: true,
+  });
+  const exitSelectors = ['[data-slot="dialog-content"][data-state="closed"]'];
+  if (holdOverlay) {
+    exitSelectors.push('[data-slot="dialog-overlay"][data-state="closed"]');
+  }
+  const exitStyle = await page.addStyleTag({
+    content: `${exitSelectors.join(", ")} { animation-play-state: paused !important; }`,
+  });
+  try {
+    await conflict.getByRole("button", { name: "Keep editing" }).click();
+    const closingContent = page.locator(
+      '[data-slot="dialog-content"][data-state="closed"]',
+    );
+    await expect(closingContent).toHaveCount(1);
+    await expect(closingContent).toHaveCSS("animation-play-state", "paused");
+    const closingOverlay = page.locator(
+      '[data-slot="dialog-overlay"][data-state="closed"]',
+    );
+    if (holdOverlay) {
+      await expect(closingOverlay).toHaveCount(1);
+      await expect(closingOverlay).toHaveCSS("animation-play-state", "paused");
+    } else {
+      // The scrim normally finishes before the content. Reproduce that real
+      // interval while retaining the old content and its outside-press layer.
+      await closingOverlay.evaluateAll((elements) => {
+        for (const element of elements) {
+          for (const animation of element.getAnimations()) animation.finish();
+        }
+      });
+      await expect(closingOverlay).toHaveCount(0);
+    }
+    // The callout is rendered only while the conflict dialog is closed.
+    const triggerBox = await trigger.boundingBox();
+    expect(triggerBox).not.toBeNull();
+    // Real pointerdown/pointerup/click, with no locator actionability retry
+    // that could quietly wait for the old content to disappear first.
+    await page.mouse.click(
+      triggerBox!.x + triggerBox!.width / 2,
+      triggerBox!.y + triggerBox!.height / 2,
+    );
+    const reopened = page
+      .locator('[data-slot="dialog-content"][data-state="open"]')
+      .filter({ has: page.getByRole("heading", { name: "File changed on disk" }) });
+    await expect(reopened).toBeVisible();
+    await overlaySettled(reopened);
+    await expect(reopened).toHaveAttribute("data-state", "open");
+    await expect(
+      reopened.getByRole("button", { name: "Keep editing" }),
+    ).toBeFocused();
+  } finally {
+    await exitStyle.evaluate((element) => {
+      element.parentNode?.removeChild(element);
+    });
+  }
+}
+
 test.describe.serial("workspace file browser and editor", () => {
   test.beforeAll(async () => {
     await resetWorkspaceFileFixtures();
@@ -224,6 +292,7 @@ test.describe.serial("workspace file browser and editor", () => {
     page,
   }, testInfo) => {
     test.setTimeout(120_000);
+    await page.emulateMedia({ reducedMotion: "no-preference" });
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/");
     await expect(
@@ -500,25 +569,29 @@ test.describe.serial("workspace file browser and editor", () => {
     await capture(page, testInfo, "workspace-files-conflict.png", {
       animations: "allow",
     });
-    await conflict.getByRole("button", { name: "Keep editing" }).click();
-    // Complete the exit before testing Reload. A rapid reopen can self-dismiss
-    // through the closing layer's deferred outside-press handler; that known
-    // pre-existing UI race needs separate coverage and an application fix.
-    await expect(page.getByRole("dialog", {
-      name: "File changed on disk",
-      includeHidden: true,
-    })).toHaveCount(0);
-    await expect(page.getByTestId("dialog-overlay")).toHaveCount(0);
-    editable = editor(panel);
-    await expect(editable).toContainText("43");
-    await panel
-      .getByRole("button", { name: "File changed on disk. Resolve conflict." })
-      .click();
+    for (const viewport of [
+      { width: 1440, height: 900 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(viewport);
+      for (const holdOverlay of [false, true]) {
+        const exitPhase = holdOverlay ? "scrim and content" : "content-only";
+        await test.step(
+          `reopen during ${exitPhase} exit at ${viewport.width}px`,
+          async () => {
+            await reopenConflictDuringExit(page, holdOverlay);
+            await expect(
+              page.locator('[contenteditable="true"][role="textbox"]'),
+            ).toContainText("43");
+          },
+        );
+      }
+    }
     conflict = page.getByRole("dialog", { name: "File changed on disk" });
-    await expect(conflict).toBeVisible();
     await conflict.getByRole("button", { name: "Reload" }).click();
     await expect(conflict).toHaveCount(0);
     await expect(panel).toContainText("100");
+    await page.setViewportSize({ width: 1440, height: 900 });
 
     editable = await enterEditMode(panel);
     const overwriteDraft = savedContent.replace("42", "44");
