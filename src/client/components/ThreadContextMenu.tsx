@@ -156,6 +156,7 @@ export function ThreadContextMenu({
   onRename,
   disabled = false,
   onAction,
+  onRestore,
   onArchiveFamily,
   onNavigate,
   children,
@@ -176,6 +177,12 @@ export function ThreadContextMenu({
   disabled?: boolean;
   /** Notified after a lifecycle action is accepted by the server. */
   onAction?: (action: InventoryContextAction) => void;
+  /**
+   * Replaces the menu's own Restore request for a surface that tracks
+   * restores itself (the Archived page), so both of its controls share one
+   * restore lifecycle.
+   */
+  onRestore?: () => void;
   /** Notified when archive-all accepts the complete server-resolved family. */
   onArchiveFamily?: (archivedThreadIds: readonly string[]) => void;
   onNavigate?: () => void;
@@ -590,7 +597,9 @@ export function ThreadContextMenu({
   );
 
   const lifecycleGroup = archived ? (
-    <ContextMenuItem onSelect={() => mutate("restore")}>
+    <ContextMenuItem
+      onSelect={() => (onRestore ? onRestore() : mutate("restore"))}
+    >
       <ArchiveRestore aria-hidden="true" />
       Restore to Active
     </ContextMenuItem>

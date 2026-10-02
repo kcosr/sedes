@@ -323,8 +323,9 @@ export const ArchivedView = memo(function ArchivedView({
         ];
   }, []);
 
-  // Each restore of a row supersedes the previous one: only the row's latest
-  // attempt may settle its status, announce, or move focus, so a late
+  // The row's Restore and its actions menu's Restore to Active both start
+  // here. Each restore of a row supersedes the previous one: only the row's
+  // latest attempt may settle its status, announce, or move focus, so a late
   // response from an older attempt (say, before another client restored and
   // re-archived the thread) cannot override a newer one.
   const restoreAttempts = useRef(0);
@@ -370,46 +371,6 @@ export const ArchivedView = memo(function ArchivedView({
     [announce, focusCandidates, setStatus, store],
   );
 
-  // The menu reports a Restore only once the server accepted it, by which
-  // time the stream may have removed the row; its focus candidates are taken
-  // when the menu is requested instead.
-  const menuIntent = useRef<FocusAfterRestore>(undefined);
-  const menuRequested = useCallback(
-    (row: ArchivedThreadRowModel) => {
-      menuIntent.current = {
-        threadId: row.id,
-        candidates: focusCandidates(row.id),
-      };
-    },
-    [focusCandidates],
-  );
-
-  // A Restore accepted from the thread actions menu gets the same busy row,
-  // announcement, and focus recovery as the row's own Restore.
-  const menuRestored = useCallback(
-    (row: ArchivedThreadRowModel) => {
-      const revision = row.thread.inventoryRevision;
-      const attempt = startRestoreAttempt(row.id);
-      setRestoreStatus((current) => {
-        if (!archivedRevisionsRef.current.has(row.id)) return current;
-        return new Map(current).set(row.id, {
-          kind: "restored",
-          revision,
-          attempt,
-        });
-      });
-      announce(`Restored ${row.title}`);
-      setFocusAfterRestore({
-        threadId: row.id,
-        candidates:
-          menuIntent.current?.threadId === row.id
-            ? menuIntent.current.candidates
-            : focusCandidates(row.id),
-      });
-    },
-    [announce, focusCandidates],
-  );
-
   // Forget statuses of rows that left the archive or changed since their
   // restore started, and move focus on from a restored row once the stream
   // removes it.
@@ -418,8 +379,6 @@ export const ArchivedView = memo(function ArchivedView({
       new Map(base.rows.map(({ id, thread }) => [id, thread.inventoryRevision])),
     [base.rows],
   );
-  const archivedRevisionsRef = useRef(archivedRevisions);
-  archivedRevisionsRef.current = archivedRevisions;
   useEffect(() => {
     const stale = [...restoreStatus].flatMap(([id, status]) =>
       !archivedRevisions.has(id) ||
@@ -609,8 +568,6 @@ export const ArchivedView = memo(function ArchivedView({
                       ageDateTime={new Date(timestamp).toISOString()}
                       restoreStatus={restoreStatus.get(row.id)}
                       onRestore={restore}
-                      onMenuRequested={menuRequested}
-                      onMenuRestored={menuRestored}
                     />
                   );
                 })}

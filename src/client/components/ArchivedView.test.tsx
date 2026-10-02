@@ -579,7 +579,7 @@ describe("ArchivedView restore", () => {
     ).not.toHaveAttribute("aria-disabled");
   });
 
-  it("treats a Restore accepted from the actions menu like the row's own", async () => {
+  it("runs the actions menu's Restore as the row's own", async () => {
     const snapshot = makeSnapshot(threads);
     const { store, publish } = createStore(snapshot);
     render(<ArchivedView store={store} />);
@@ -606,6 +606,103 @@ describe("ArchivedView restore", () => {
       },
     });
     expect(rowTitles()).toEqual(["First", "Third"]);
+  });
+
+  it("lets a newer row Restore supersede an outstanding menu Restore", async () => {
+    const snapshot = makeSnapshot(threads);
+    const { store, publish } = createStore(snapshot);
+    const settlers: Array<{
+      resolve: () => void;
+      reject: (error: Error) => void;
+    }> = [];
+    store.mutateInventory.mockImplementation(
+      () =>
+        new Promise<void>((resolve, reject) =>
+          settlers.push({ resolve, reject }),
+        ),
+    );
+    render(<ArchivedView store={store} />);
+    const row = screen
+      .getAllByTestId("archive-row")
+      .find((candidate) => candidate.textContent?.includes("Second"))!;
+    fireEvent.contextMenu(row);
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("menuitem", { name: "Restore to Active" }));
+    expect(store.mutateInventory).toHaveBeenCalledTimes(1);
+    // Restored and re-archived elsewhere, then restored again from the row.
+    publish({
+      snapshot: {
+        ...snapshot,
+        threads: [
+          threads[0]!,
+          { ...threads[1]!, inventoryState: "active", inventoryRevision: 2 },
+          threads[2]!,
+        ],
+      },
+    });
+    publish({
+      snapshot: {
+        ...snapshot,
+        threads: [
+          threads[0]!,
+          { ...threads[1]!, inventoryRevision: 3 },
+          threads[2]!,
+        ],
+      },
+    });
+    const restore = screen.getByRole("button", { name: "Restore Second" });
+    fireEvent.click(restore);
+    expect(store.mutateInventory).toHaveBeenCalledTimes(2);
+    // The menu's late success neither settles nor announces the newer one.
+    await act(async () => settlers[0]!.resolve());
+    expect(restore).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("status")).toHaveTextContent("");
+    await act(async () => settlers[1]!.reject(new Error("Stale revision.")));
+    expect(screen.getByRole("alert")).toHaveTextContent("Stale revision.");
+    expect(restore).not.toHaveAttribute("aria-disabled");
+  });
+
+  it("keeps each outstanding menu Restore's focus candidates", async () => {
+    const four = [
+      ...threads,
+      makeThread("t4", "Fourth", { stateChangedAt: hoursAgo(4) }),
+    ];
+    const snapshot = makeSnapshot(four);
+    const { store, publish } = createStore(snapshot);
+    const accepts: Array<() => void> = [];
+    store.mutateInventory.mockImplementation(
+      () => new Promise<void>((resolve) => accepts.push(resolve)),
+    );
+    const user = userEvent.setup();
+    render(<ArchivedView store={store} />);
+    for (const title of ["Second", "Third"]) {
+      const row = screen
+        .getAllByTestId("archive-row")
+        .find((candidate) => candidate.textContent?.includes(title))!;
+      fireEvent.contextMenu(row);
+      await user.click(
+        await screen.findByRole("menuitem", { name: "Restore to Active" }),
+      );
+    }
+    expect(store.mutateInventory).toHaveBeenCalledTimes(2);
+    // The stream removes both rows before either response arrives.
+    publish({
+      snapshot: {
+        ...snapshot,
+        threads: [
+          four[0]!,
+          { ...four[1]!, inventoryState: "active", inventoryRevision: 2 },
+          { ...four[2]!, inventoryState: "active", inventoryRevision: 2 },
+          four[3]!,
+        ],
+      },
+    });
+    (document.activeElement as HTMLElement | null)?.blur();
+    await act(async () => accepts[0]!());
+    expect(document.activeElement).toHaveTextContent("Fourth");
+    await act(async () => accepts[1]!());
+    expect(document.activeElement).toHaveTextContent("Fourth");
   });
 
   it("moves focus on after a menu Restore whose row left before the response", async () => {

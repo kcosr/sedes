@@ -71,8 +71,6 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
   ageDateTime,
   restoreStatus,
   onRestore,
-  onMenuRequested,
-  onMenuRestored,
 }: {
   readonly row: ArchivedThreadRowModel;
   readonly store: ApplicationClientStore;
@@ -85,10 +83,6 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
   readonly ageDateTime: string;
   readonly restoreStatus?: ArchiveRestoreStatus;
   readonly onRestore: (row: ArchivedThreadRowModel) => void;
-  /** A right-click, touch press, or menu key may open the actions menu. */
-  readonly onMenuRequested: (row: ArchivedThreadRowModel) => void;
-  /** The thread actions menu's Restore was accepted. */
-  readonly onMenuRestored: (row: ArchivedThreadRowModel) => void;
 }): React.JSX.Element {
   const busy =
     restoreStatus?.kind === "pending" || restoreStatus?.kind === "restored";
@@ -117,14 +111,7 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
   const detailsId = `${id}-details`;
   const hasMeta = projectPart || targetPart || worktreePart;
   return (
-    <li
-      className="archive-list-item"
-      onContextMenuCapture={() => onMenuRequested(row)}
-      onPointerDownCapture={(event) => {
-        // A touch long-press opens the menu without a contextmenu event.
-        if (event.pointerType !== "mouse") onMenuRequested(row);
-      }}
-    >
+    <li className="archive-list-item">
       <ThreadContextMenu
         thread={row.thread}
         store={store}
@@ -132,8 +119,9 @@ export const ArchivedThreadRow = memo(function ArchivedThreadRow({
         placement={row.placement}
         sourceTitle={row.forkSourceTitle}
         configurationCopyPending={row.configurationCopyPending}
-        onAction={(action) => {
-          if (action === "restore") onMenuRestored(row);
+        // The menu's Restore to Active is this row's Restore.
+        onRestore={() => {
+          if (!busy) onRestore(row);
         }}
       >
         <div
