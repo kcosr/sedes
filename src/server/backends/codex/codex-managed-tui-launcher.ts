@@ -22,6 +22,7 @@ import {
 } from "./codex-service-tier.js";
 import { parseCodexTcpEndpoint } from "./transport/tcp-websocket-transport.js";
 import type { BackendModelPolicy } from "../model-policy.js";
+import type { CodexLiveModelSelection } from "./codex-live-model-selection.js";
 
 const REMOTE_TOKEN_ENVIRONMENT_NAME = "SEDES_CODEX_TUI_REMOTE_TOKEN";
 
@@ -37,11 +38,21 @@ const MANAGED_TUI_CONFIG_OVERRIDES = Object.freeze([
   "tui.fullscreen_transcript=false",
   "tui.raw_output_mode=false",
   "tui.disable_paste_burst=false",
-  // Codex 0.160 offers these optional catalog upgrades before attaching.
-  // A process-local acknowledgment preserves the selected model and prevents
-  // the startup prompt from consuming a staged prompt's submission Enter.
-  'notice.model_migrations={"gpt-5.5"="gpt-6-sol","gpt-5.6-sol"="gpt-6-sol","gpt-5.6-terra"="gpt-6-sol","gpt-5.6-luna"="gpt-6-luna"}',
 ]);
+
+export function codexManagedTuiConfigArguments(
+  model: string,
+  selection: CodexLiveModelSelection,
+): readonly string[] {
+  const overrides: string[] = [...MANAGED_TUI_CONFIG_OVERRIDES];
+  if (selection.upgrade !== null) {
+    // Acknowledge only the selected model's authoritative live upgrade. This
+    // keeps its startup prompt from consuming Stage/Send input or changing the
+    // selected model, including after a provider catalog refresh.
+    overrides.push(`notice.model_migrations={${tomlString(model)}=${tomlString(selection.upgrade)}}`);
+  }
+  return overrides.flatMap(override => ["-c", override]);
+}
 
 /**
  * A running interactive client can select a model and submit the turn before
@@ -77,7 +88,7 @@ export class EnvironmentCodexManagedTuiLauncher implements CodexManagedTuiLaunch
     readonly authority: CodexManagedTuiBindingAuthority;
     readonly settings: CodexManagedTuiLaunchSettings;
     readonly signal: AbortSignal;
-  }) => Promise<void>;
+  }) => Promise<CodexLiveModelSelection>;
   readonly #onRuntimeVersionAssessment: (
     assessment: VerifiedCodexRuntimeVersion,
   ) => void;
@@ -95,7 +106,7 @@ export class EnvironmentCodexManagedTuiLauncher implements CodexManagedTuiLaunch
       readonly authority: CodexManagedTuiBindingAuthority;
       readonly settings: CodexManagedTuiLaunchSettings;
       readonly signal: AbortSignal;
-    }) => Promise<void>;
+    }) => Promise<CodexLiveModelSelection>;
     readonly onRuntimeVersionAssessment: (
       assessment: VerifiedCodexRuntimeVersion,
     ) => void;
@@ -175,8 +186,9 @@ export class EnvironmentCodexManagedTuiLauncher implements CodexManagedTuiLaunch
     // but an interactive TUI must be allowed to negotiate the terminal's
     // advertised color capabilities.
     delete environment.NO_COLOR;
-    await this.#prepareThreadSettings({ authority, settings, signal });
+    const modelSelection = await this.#prepareThreadSettings({ authority, settings, signal });
     if (signal.aborted) throw signal.reason;
+    const configArguments = codexManagedTuiConfigArguments(settings.model, modelSelection);
     const endpoint =
       connection.channel.type === "unix_websocket"
         ? await this.#channels.prepareManagedProcessEndpoint!(
@@ -219,9 +231,7 @@ export class EnvironmentCodexManagedTuiLauncher implements CodexManagedTuiLaunch
       "-c",
       `service_tier=${tomlString(encodeCodexServiceTier(settings.serviceTier))}`,
     );
-    for (const override of MANAGED_TUI_CONFIG_OVERRIDES) {
-      arguments_.push("-c", override);
-    }
+    arguments_.push(...configArguments);
     let channel: EnvironmentOwnedPtyChannel;
     try {
       this.#assertLaunchAdmission?.();
@@ -314,5 +324,6 @@ function ptyProcess(
 }
 
 function tomlString(value: string): string {
-  return JSON.stringify(value);
+  if (/[\uD800-\uDFFF]/u.test(value)) throw new Error("codex_tui_config_string_invalid");
+  return JSON.stringify(value).replace(/\u007f/gu, "\\u007f");
 }

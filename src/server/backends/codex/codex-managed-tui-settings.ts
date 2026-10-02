@@ -6,7 +6,7 @@ import {
   codexThreadSettingsUpdateMethod,
 } from "./codex-c2-protocol.js";
 import { codexExecutionPolicy } from "./codex-execution-policy.js";
-import { assertCodexLiveModelSelection } from "./codex-live-model-selection.js";
+import { assertCodexLiveModelSelection, type CodexLiveModelSelection } from "./codex-live-model-selection.js";
 import type { CodexManagedTuiLaunchSettings } from "./codex-managed-tui-launcher.js";
 import type { CodexManagedTuiBindingAuthority } from "./codex-managed-tui-registry.js";
 import { encodeCodexServiceTier } from "./codex-service-tier.js";
@@ -25,7 +25,7 @@ export async function prepareCodexManagedTuiThreadSettings(input: {
   readonly authority: CodexManagedTuiBindingAuthority;
   readonly settings: CodexManagedTuiLaunchSettings;
   readonly signal: AbortSignal;
-}): Promise<void> {
+}): Promise<CodexLiveModelSelection> {
   const { client, authority, settings, signal } = input;
   const assertCurrent = () => {
     if (signal.aborted) throw signal.reason;
@@ -35,7 +35,7 @@ export async function prepareCodexManagedTuiThreadSettings(input: {
     }
   };
   assertCurrent();
-  await assertCodexLiveModelSelection({
+  const modelSelection = await assertCodexLiveModelSelection({
     client,
     expectedGeneration: authority.appServerGeneration,
     model: settings.model,
@@ -145,6 +145,7 @@ export async function prepareCodexManagedTuiThreadSettings(input: {
         latestObservation.sequence > observed.sequence && !latestObservation.matches)) {
       throw new Error("codex_tui_settings_confirmation_mismatch");
     }
+    return modelSelection;
   } finally {
     clearTimeout(timeout);
     signal.removeEventListener("abort", abort);

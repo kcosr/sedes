@@ -12,6 +12,7 @@ import {
   CodexRpcRemoteError,
 } from "../../src/server/backends/codex/rpc/errors.js";
 import { CodexServerRequestRouter } from "../../src/server/backends/codex/codex-server-request-router.js";
+import { codexThreadItemsListMethod } from "../../src/server/backends/codex/codex-c1-protocol.js";
 import {
   CODEX_CLIENT_REQUEST_METHODS,
   CODEX_EXPERIMENTAL_CLIENT_REQUEST_METHODS,
@@ -787,6 +788,42 @@ describe("Codex RPC client", () => {
         },
       ]);
     });
+  });
+
+  it("keeps the shared connection usable after persisted item times run backwards", async () => {
+    const { client, transport } = createClient();
+    const closed = vi.fn();
+    void client.closed.then(closed);
+    const readItems = (threadId: string) => client.request(
+      codexThreadItemsListMethod,
+      { threadId, turnId: "turn-1" },
+      { timeoutMilliseconds: 1_000 },
+    );
+    const reversed = readItems("thread-clock-rollback");
+    const concurrent = readItems("thread-other");
+    await waitForWrites(transport, 2);
+    const result = {
+      data: [{
+        turnId: "turn-1",
+        item: { type: "plan", id: "plan-1", text: "Plan" },
+        startedAtMs: 2_000,
+        completedAtMs: 1_000,
+      }],
+      nextCursor: null,
+      backwardsCursor: null,
+    };
+    transport.emit({ id: parsedWrite(transport, 0).id, result });
+    await expect(reversed).resolves.toMatchObject({
+      data: [{ startedAtMs: 2_000, completedAtMs: null }],
+    });
+    transport.emit({ id: parsedWrite(transport, 1).id, result: { ...result, data: [] } });
+    await expect(concurrent).resolves.toMatchObject({ data: [] });
+
+    const following = readItems("thread-after-rollback");
+    await waitForWrites(transport, 3);
+    transport.emit({ id: parsedWrite(transport, 2).id, result: { ...result, data: [] } });
+    await expect(following).resolves.toMatchObject({ data: [] });
+    expect(closed).not.toHaveBeenCalled();
   });
 
   it("routes authentication recovery and contains malformed payloads to the attributable thread", async () => {

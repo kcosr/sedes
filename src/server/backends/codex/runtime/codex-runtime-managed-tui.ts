@@ -158,9 +158,10 @@ export class CodexRuntimeManagedTuiHosts {
       settings: () => settings,
       assertLaunchAdmission: () => this.#assertAdmission(runtimeId, controllerEpoch),
       prepareThreadSettings: async ({ authority: current, settings: selection, signal }) => {
-        await prepareCodexManagedTuiThreadSettings({ client: host.runtime.supervisor.client,
+        const modelSelection = await prepareCodexManagedTuiThreadSettings({ client: host.runtime.supervisor.client,
           authority: current, settings: selection, signal });
         this.#assertAdmission(runtimeId, controllerEpoch);
+        return modelSelection;
       },
       onRuntimeVersionAssessment: assessment => {
         host.assessment = assessment;

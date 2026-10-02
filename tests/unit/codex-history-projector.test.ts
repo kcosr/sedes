@@ -796,10 +796,14 @@ describe("Codex 0.160.0 C1 protocol codecs", () => {
       output: [{ type: "input_image", file_id: "file-image", image_url: "https://private.invalid/image.png", detail: "high" }] })).toThrow();
   });
 
-  it("rejects contradictory item lifecycle timestamps", () => {
-    expect(() => codexThreadItemsListMethod.decodeResult({ data: [{
+  it("omits a reversed completion time without discarding the observed start", () => {
+    const wire = { data: [{
       turnId: "turn", item: { type: "plan", id: "plan", text: "Plan" }, startedAtMs: 2, completedAtMs: 1,
-    }], nextCursor: null, backwardsCursor: null })).toThrow();
+    }], nextCursor: null, backwardsCursor: null };
+    expect(codexThreadItemsListMethod.decodeResult(wire).data[0]).toMatchObject({
+      startedAtMs: 2, completedAtMs: null,
+    });
+    expect(wire.data[0]).toMatchObject({ startedAtMs: 2, completedAtMs: 1 });
   });
 
   it.each([{}, { startedAtMs: 1 }, { completedAtMs: 2 }])(
@@ -1791,6 +1795,8 @@ describe("Codex 0.160.0 C1 history projector", () => {
     [{ startedAtMs: null, completedAtMs: 1_700_000_002_500 }, { completedAt: "2023-11-14T22:13:22.500Z" }],
     [{ startedAtMs: 1_700_000_002_000, completedAtMs: 1_700_000_002_500 },
       { startedAt: "2023-11-14T22:13:22.000Z", completedAt: "2023-11-14T22:13:22.500Z" }],
+    [{ startedAtMs: 1_700_000_002_000, completedAtMs: 1_700_000_001_500 },
+      { startedAt: "2023-11-14T22:13:22.000Z" }],
   ])("projects provider item timing independently of turn timing and duration: %j", (timestamps, expected) => {
     const item = stableItems.find(({ item }) => item.type === "commandExecution")!.item;
     const native = thread([turn("timed", [item])]);

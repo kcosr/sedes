@@ -32,6 +32,9 @@ import {
 import { CodexDaemonSupervisor } from "../../src/server/backends/codex/codex-daemon-supervisor.js";
 import { CodexFastModeSessionRegistry } from "../../src/server/backends/codex/codex-fast-mode-session.js";
 import { prepareCodexManagedTuiThreadSettings } from "../../src/server/backends/codex/codex-managed-tui-settings.js";
+import { codexManagedTuiConfigArguments } from "../../src/server/backends/codex/codex-managed-tui-launcher.js";
+import type { CodexLiveModelSelection } from "../../src/server/backends/codex/codex-live-model-selection.js";
+import { codexModelListMethod } from "../../src/server/backends/codex/codex-c2-protocol.js";
 import type { CodexManagedTuiBindingAuthority } from "../../src/server/backends/codex/codex-managed-tui-registry.js";
 import { TcpWebSocketTransportFactory } from "../../src/server/backends/codex/transport/tcp-websocket-transport.js";
 import { UnixWebSocketTransportFactory } from "../../src/server/backends/codex/transport/unix-websocket-transport.js";
@@ -64,26 +67,6 @@ interface FixtureProviderHold {
 const tmuxServers = new Set<string>();
 const realCodexTuiHome = readRealCodexTuiHome();
 const launchHome = process.env.HOME ?? os.homedir();
-const managedTuiConfigArguments = Object.freeze([
-  "-c",
-  "check_for_update_on_startup=false",
-  "-c",
-  "tui.auto_recap=false",
-  "-c",
-  'tui.keymap.composer.submit="enter"',
-  "-c",
-  "tui.vim_mode_default=false",
-  "-c",
-  'tui.alternate_screen="always"',
-  "-c",
-  "tui.fullscreen_transcript=false",
-  "-c",
-  "tui.raw_output_mode=false",
-  "-c",
-  "tui.disable_paste_burst=false",
-  "-c",
-  'notice.model_migrations={"gpt-5.5"="gpt-6-sol","gpt-5.6-sol"="gpt-6-sol","gpt-5.6-terra"="gpt-6-sol","gpt-5.6-luna"="gpt-6-luna"}',
-]);
 
 afterEach(async () => {
   await Promise.all(
@@ -110,7 +93,7 @@ describe("Codex managed TUI config parser compatibility", () => {
         [
           "debug",
           "prompt-input",
-          ...managedTuiConfigArguments,
+          ...codexManagedTuiConfigArguments('future."preview"\\region', { upgrade: 'next."release"\\region\u007f' }),
           "managed TUI config parser probe",
         ],
         {
@@ -404,7 +387,7 @@ describe.runIf(tmuxAvailable)("Codex TUI remote live compatibility", () => {
       });
       await Promise.all([activeAttachStarted, activeAttachHold.received]);
 
-      await prepareLiveManagedTuiSettings(sedesSupervisor, {
+      const modelSelection = await prepareLiveManagedTuiSettings(sedesSupervisor, {
         scope: sedesScope, applicationThreadId, backendInstanceId, connectionProfileId,
         executionEnvironmentId, workspaceId: "workspace-feature-033-normalized-live",
         canonicalWorkspacePath: workspace, backendConversationId: threadId,
@@ -456,7 +439,7 @@ describe.runIf(tmuxAvailable)("Codex TUI remote live compatibility", () => {
         "--remote",
         `unix://${socketPath}`,
         "--strict-config",
-        ...managedTuiConfigArguments,
+        ...codexManagedTuiConfigArguments("gpt-5.6-luna", modelSelection),
         "--cd",
         workspace,
         "--model",
@@ -954,7 +937,7 @@ describe.runIf(tmuxAvailable)("Codex TUI remote live compatibility", () => {
       });
       await Promise.all([activeAttachStarted, activeAttachHold.received]);
 
-      await prepareLiveManagedTuiSettings(sedesSupervisor, {
+      const modelSelection = await prepareLiveManagedTuiSettings(sedesSupervisor, {
         scope: sedesScope, applicationThreadId, backendInstanceId, connectionProfileId,
         executionEnvironmentId, workspaceId: "workspace-feature-033-tcp-active",
         canonicalWorkspacePath: workspace, backendConversationId: threadId,
@@ -1017,7 +1000,7 @@ describe.runIf(tmuxAvailable)("Codex TUI remote live compatibility", () => {
         "--remote-auth-token-env",
         "SEDES_FEATURE_033_TEST_TOKEN",
         "--strict-config",
-        ...managedTuiConfigArguments,
+        ...codexManagedTuiConfigArguments("gpt-5.6-luna", modelSelection),
         "--cd",
         workspace,
         "--model",
@@ -1223,6 +1206,7 @@ describe.runIf(tmuxAvailable)("Codex TUI remote live compatibility", () => {
       });
       await seedCompleted;
 
+      const modelSelection = await readLiveManagedTuiModelSelection(client);
       tmuxServer = `sedes-codex-tui-wss-${randomUUID()}`;
       tmuxServers.add(tmuxServer);
       await execFile(
@@ -1279,7 +1263,7 @@ describe.runIf(tmuxAvailable)("Codex TUI remote live compatibility", () => {
         "--remote-auth-token-env",
         "SEDES_FEATURE_033_TEST_TOKEN",
         "--strict-config",
-        ...managedTuiConfigArguments,
+        ...codexManagedTuiConfigArguments("gpt-5.6-luna", modelSelection),
         "--cd",
         workspace,
         "--model",
@@ -1485,6 +1469,7 @@ describe.runIf(tmuxAvailable)("Codex TUI remote live compatibility", () => {
         });
         await seedCompleted;
 
+        const modelSelection = await readLiveManagedTuiModelSelection(client);
         tmuxServer = `sedes-codex-tui-luna-${randomUUID()}`;
         tmuxServers.add(tmuxServer);
         await execFile("tmux", [
@@ -1529,7 +1514,7 @@ describe.runIf(tmuxAvailable)("Codex TUI remote live compatibility", () => {
           "--remote",
           `unix://${socketPath}`,
           "--strict-config",
-          ...managedTuiConfigArguments,
+          ...codexManagedTuiConfigArguments("gpt-5.6-luna", modelSelection),
           "--cd",
           workspace,
           "--model",
@@ -1819,7 +1804,7 @@ function normalizedLiveSnapshot(timeline: ProjectedConversationTimeline): Normal
 
 async function prepareLiveManagedTuiSettings(
   supervisor: CodexDaemonSupervisor, authority: CodexManagedTuiBindingAuthority,
-): Promise<void> {
+): Promise<CodexLiveModelSelection> {
   const input = { client: supervisor.client, authority,
     settings: { model: "gpt-5.6-luna", reasoningEffort: "low", serviceTier: "standard" as const,
       sandboxMode: "read-only" as const, networkAccess: "disabled" as const,
@@ -1827,7 +1812,16 @@ async function prepareLiveManagedTuiSettings(
     signal: AbortSignal.timeout(15_000) };
   // Exercise both a changed saved tuple and an exact no-op while the turn runs.
   await prepareCodexManagedTuiThreadSettings(input);
-  await prepareCodexManagedTuiThreadSettings(input);
+  return await prepareCodexManagedTuiThreadSettings(input);
+}
+
+async function readLiveManagedTuiModelSelection(client: JsonRpcWebSocketClient): Promise<CodexLiveModelSelection> {
+  const catalog = codexModelListMethod.decodeResult(await client.request("model/list", {
+    limit: 100, includeHidden: false,
+  }));
+  const selected = catalog.data.find(model => model.id === "gpt-5.6-luna" && !model.hidden);
+  expect(selected).toBeDefined();
+  return { upgrade: selected!.upgrade ?? null };
 }
 
 function normalizedFixtureSnapshot(

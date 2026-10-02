@@ -108,7 +108,10 @@ export function refineCodexItemLifecycleTimestamps(
   }
   if (value.startedAtMs != null && value.completedAtMs != null &&
       value.completedAtMs < value.startedAtMs) {
-    throw new Error("thread_item_timestamp_order_invalid");
+    // These are wall-clock observations, so a clock correction can reverse
+    // their order. Preserve the observed start without implying a duration;
+    // optional display metadata must not invalidate the shared RPC connection.
+    return { startedAtMs: value.startedAtMs, completedAtMs: null };
   }
   return { startedAtMs: value.startedAtMs ?? null, completedAtMs: value.completedAtMs ?? null };
 }

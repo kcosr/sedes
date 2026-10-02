@@ -9661,26 +9661,34 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
-  it("preserves paginated item timestamps across attach, reload, and detached reads", async () => {
+  it.each([1_700_000_002_500, 1_700_000_001_500])(
+    "loads paginated history across attach, reload, and detached reads with completion time %i", async (completedAtMs) => {
     const harness = new RpcHarness();
     const target = driver(harness);
     const handle = await attachIdle(harness, target);
+    const persisted = timedPaginatedItems(0);
+    const items = { ...persisted, data: persisted.data.map(entry => ({ ...entry, completedAtMs })) };
     const establishTimed = async () => {
       harness.enqueue("thread/read", { thread: paginatedThread() });
       harness.enqueue("thread/resume", paginatedResumeResult({ shells: [notLoadedTurn(0)] }));
-      harness.enqueue("thread/items/list", timedPaginatedItems(0));
+      harness.enqueue("thread/items/list", items);
       return await handle.establishProjection({ signal: new AbortController().signal });
     };
     const initial = await establishTimed();
-    expect(Object.values(initial.snapshot.itemsById)[0]).toMatchObject({
-      startedAt: "2023-11-14T22:13:22.000Z", completedAt: "2023-11-14T22:13:22.500Z",
-    });
+    const item = Object.values(initial.snapshot.itemsById)[0];
+    expect(item).toMatchObject({ startedAt: "2023-11-14T22:13:22.000Z" });
+    if (completedAtMs < 1_700_000_002_000) {
+      expect(item).not.toHaveProperty("completedAt");
+      expect(item).not.toHaveProperty("durationMs");
+    } else {
+      expect(item).toMatchObject({ completedAt: "2023-11-14T22:13:22.500Z" });
+    }
     expect((await establishTimed()).snapshot.itemsById).toEqual(initial.snapshot.itemsById);
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
     harness.enqueue("thread/read", { thread: paginatedThread() });
     harness.enqueue("thread/turns/list", { data: [notLoadedTurn(0)], nextCursor: null, backwardsCursor: "turns-head" });
-    harness.enqueue("thread/items/list", timedPaginatedItems(0));
+    harness.enqueue("thread/items/list", items);
     const detached = await target.read(attachInput());
     expect(detached.snapshot.itemsById).toEqual(initial.snapshot.itemsById);
   });
@@ -9710,20 +9718,53 @@ describe("CodexConversationHandle", () => {
     },
   );
 
-  it("requests reconciliation when lifecycle notifications contradict their retained start time", async () => {
+  it.each([true, false])(
+    "completes live items after wall-clock rollback and safely merges persisted timing (start persisted: %s)", async (persistedStart) => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
-    const established = await establish(harness, handle);
-    const events: BackendConversationEvent[] = [];
-    established.subscribeFromNext(({ event }) => events.push(event));
+    harness.enqueue("thread/read", { thread: paginatedThread() });
+    harness.enqueue("thread/resume", paginatedResumeResult({ shells: [] }));
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: SequencedBackendEvent[] = [];
+    established.subscribeFromNext(event => events.push(event));
     const active = { ...nativeTurn(1), items: [], status: "inProgress" as const, completedAt: null, durationMs: null };
     const item = { type: "contextCompaction" as const, id: "timed-compaction" };
     harness.notify("turn/started", { threadId: "thread-1", turn: active });
     harness.notify("item/started", { threadId: "thread-1", turnId: active.id, item, startedAtMs: 2_000 });
     await handle.readCurrent();
     harness.notify("item/completed", { threadId: "thread-1", turnId: active.id, item, completedAtMs: 1_000 });
-    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "resnapshot_required" })));
-    expect(events).not.toContainEqual(expect.objectContaining({ type: "item_completed" }));
+    const liveItem = Object.values((await handle.readCurrent()).snapshot.itemsById)[0];
+    expect(liveItem).toMatchObject({ status: "completed", startedAt: "1970-01-01T00:00:02.000Z" });
+    expect(liveItem).not.toHaveProperty("completedAt");
+    expect(liveItem).not.toHaveProperty("durationMs");
+
+    // Later notifications must still project on the same live handle.
+    const nextItem = { type: "contextCompaction" as const, id: "next-compaction" };
+    harness.notify("item/started", { threadId: "thread-1", turnId: active.id, item: nextItem, startedAtMs: 3_000 });
+    harness.notify("item/completed", { threadId: "thread-1", turnId: active.id, item: nextItem, completedAtMs: 3_500 });
+    await handle.readCurrent();
+    const completed = { ...active, status: "completed" as const, completedAt: 1_700_000_003, items: [item, nextItem] };
+    harness.enqueue("thread/turns/list", { data: [{ ...completed, items: [], itemsView: "notLoaded" }],
+      nextCursor: null, backwardsCursor: "turns-head" });
+    harness.enqueue("thread/items/list", {
+      data: [
+        { turnId: active.id, item, ...(persistedStart ? { startedAtMs: 2_000 } : {}), completedAtMs: 1_000 },
+        { turnId: active.id, item: nextItem, startedAtMs: 3_000, completedAtMs: 3_500 },
+      ],
+      nextCursor: null, backwardsCursor: "items-head",
+    });
+    harness.notify("turn/completed", { threadId: "thread-1", turn: completed });
+    await vi.waitFor(async () => expect(Object.values((await handle.readCurrent()).snapshot.turnsById)[0]?.status).toBe("completed"));
+    const current = (await handle.readCurrent()).snapshot;
+    const projectedItems = Object.values(current.itemsById);
+    expect(projectedItems[0]).toEqual(liveItem);
+    expect(projectedItems[1]).toMatchObject({
+      status: "completed", startedAt: "1970-01-01T00:00:03.000Z", completedAt: "1970-01-01T00:00:03.500Z",
+    });
+    expect(events.map(({ event }) => event)).not.toContainEqual(expect.objectContaining({ type: "resnapshot_required" }));
+    const projector = new ConversationProjector({ backendInstanceId: instance.id, bindingIdentity: binding().applicationThreadId });
+    projector.replace(established.snapshot, established.handleSequence);
+    for (const event of events) expect(projector.apply(event)).not.toMatchObject({ kind: "resnapshot_required" });
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
   });

@@ -63,6 +63,8 @@ The official 0.160.0 validators own item lifecycle metadata and MCP app UI
 metadata. Sedes maps available item `startedAtMs`/`completedAtMs` into the existing
 normalized `startedAt`/`completedAt` fields for live events and loaded history.
 Missing timestamps stay absent, and command/MCP `durationMs` remains independent.
+If wall-clock times run backwards, Sedes retains the observed start and omits
+the inconsistent completion; it does not infer a duration.
 Timestamps are not usage evidence. MCP app UI stays provider-private.
 File-backed images are recognized without treating file IDs as URLs or paths;
 unavailable bytes remain visibly unavailable. Interrupted turns retain meaningful

@@ -909,7 +909,9 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
     serviceTier: "fast" as const,
   });
 
-  function settingsFixture(mode: "ready" | "no_op" | "failed" | "stale" | "stale_read" | "mismatch" | "missing" | "replaced" | "superseded" | "invalid") {
+  function settingsFixture(mode: "ready" | "no_op" | "failed" | "stale" | "stale_read" | "mismatch" | "missing" | "replaced" | "superseded" | "invalid",
+    catalogSelection: { model: string; upgrade: string | null } = { model: settings.model, upgrade: null }) {
+    const selectedSettings = { ...settings, model: catalogSelection.model };
     const fixture = launcherChannels();
     const updateStarted = deferred<void>();
     const readStarted = deferred<void>();
@@ -917,13 +919,13 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
     let sequence = 0;
     const nativeSettings = {
       cwd: authority.canonicalWorkspacePath, disabledPluginIds: [],
-      model: settings.model, modelProvider: "openai", effort: settings.reasoningEffort,
+      model: selectedSettings.model, modelProvider: "openai", effort: settings.reasoningEffort,
       serviceTier: "priority", approvalPolicy: settings.approvalPolicy,
       approvalsReviewer: settings.approvalReviewer,
       sandboxPolicy: { type: "workspaceWrite", writableRoots: [], networkAccess: true,
         excludeTmpdirEnvVar: true, excludeSlashTmp: true },
       activePermissionProfile: null, summary: null, personality: null,
-      collaborationMode: { mode: "default", settings: { model: settings.model,
+      collaborationMode: { mode: "default", settings: { model: selectedSettings.model,
         reasoning_effort: settings.reasoningEffort, developer_instructions: null } },
       multiAgentMode: "explicitRequestOnly",
     };
@@ -941,7 +943,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
     const requestWithReceipt = vi.fn(async (method: { method: string }, _params: unknown) => {
       if (method.method === "model/list") return {
         generation: 7, inboundSequence: ++sequence,
-        result: { data: [{ id: settings.model, hidden: false, inputModalities: ["text"],
+        result: { data: [{ id: selectedSettings.model, upgrade: catalogSelection.upgrade, hidden: false, inputModalities: ["text"],
           supportedReasoningEfforts: [{ reasoningEffort: settings.reasoningEffort }] }], nextCursor: null },
       };
       if (method.method === "thread/resume") {
@@ -974,7 +976,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
     const launcher = new EnvironmentCodexManagedTuiLauncher({
       channels: fixture.channels, configuration: externalConfiguration({
         type: "unix_websocket", socketPath: "/run/private/codex.sock",
-      }), environment: ordinaryLauncherEnvironment, settings: () => settings,
+      }), environment: ordinaryLauncherEnvironment, settings: () => selectedSettings,
       onRuntimeVersionAssessment: vi.fn(),
       prepareThreadSettings: input => prepareCodexManagedTuiThreadSettings({ client, ...input }),
     });
@@ -1015,6 +1017,22 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       threadId: authority.backendConversationId, excludeTurns: true,
     });
     expect(fixture.openOwnedPty).toHaveBeenCalledOnce();
+    expect(fixture.openOwnedPty.mock.calls[0]![1].arguments.some(arg => arg.startsWith("notice.model_migrations="))).toBe(false);
+  });
+
+  it.each([
+    { model: "gpt-6-sol", upgrade: "gpt-6.1-sol" },
+    { model: 'future."preview"\\region', upgrade: 'next."release"\\region\u007f' },
+  ])("acknowledges the live upgrade $model → $upgrade without changing the selected model", async selection => {
+    const fixture = settingsFixture("no_op", selection);
+    await fixture.launch();
+    const args = fixture.openOwnedPty.mock.calls[0]![1].arguments;
+    expect(args[args.indexOf("-m") + 1]).toBe(selection.model);
+    expect(fixture.requestWithReceipt.mock.calls[1]?.[1]).toMatchObject({ model: selection.model });
+    const quoted = (value: string) => JSON.stringify(value).replace(/\u007f/gu, "\\u007f");
+    expect(args.filter(arg => arg.startsWith("notice.model_migrations="))).toEqual([
+      `notice.model_migrations={${quoted(selection.model)}=${quoted(selection.upgrade)}}`,
+    ]);
   });
 
   it.each([
@@ -1098,7 +1116,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       }),
       environment: ordinaryLauncherEnvironment,
       settings: () => settings,
-      prepareThreadSettings: async () => undefined,
+      prepareThreadSettings: async () => ({ upgrade: null }),
     });
     await launcher.launch({
       authority,
@@ -1149,8 +1167,6 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       "tui.raw_output_mode=false",
       "-c",
       "tui.disable_paste_burst=false",
-      "-c",
-      'notice.model_migrations={"gpt-5.5"="gpt-6-sol","gpt-5.6-sol"="gpt-6-sol","gpt-5.6-terra"="gpt-6-sol","gpt-5.6-luna"="gpt-6-luna"}',
     ]);
     expect(launchInput.environment).toMatchObject({
       HOME: "/ordinary-home",
@@ -1188,7 +1204,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       }),
       environment: ordinaryLauncherEnvironment,
       settings: () => ({ ...settings, serviceTier: "standard" }),
-      prepareThreadSettings: async () => undefined,
+      prepareThreadSettings: async () => ({ upgrade: null }),
     });
     await launcher.launch({
       authority,
@@ -1234,7 +1250,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
         authentication: { type: "capability_token", secret: { source: "protected_file", path: "/run/secret/token" } } }),
       environment: ordinaryLauncherEnvironment,
       settings: () => settings,
-      prepareThreadSettings: async () => {},
+      prepareThreadSettings: async () => ({ upgrade: null }),
       onRuntimeVersionAssessment: vi.fn(),
       assertLaunchAdmission: () => { if (frozen) throw new Error("runtime_admission_frozen"); },
     });
@@ -1264,7 +1280,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
         sandboxMode: "read-only",
         networkAccess: "enabled",
       }),
-      prepareThreadSettings: async () => undefined,
+      prepareThreadSettings: async () => ({ upgrade: null }),
     });
     await expect(
       launcher.launch({
@@ -1350,7 +1366,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
           }),
           environment: ordinaryLauncherEnvironment,
           settings: () => settings,
-          prepareThreadSettings: async () => undefined,
+          prepareThreadSettings: async () => ({ upgrade: null }),
         }),
     ).toThrow("codex_tui_environment_launcher_configuration_invalid");
   });
@@ -1381,7 +1397,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       }),
       environment: ordinaryLauncherEnvironment,
       settings: () => settings,
-      prepareThreadSettings: async () => undefined,
+      prepareThreadSettings: async () => ({ upgrade: null }),
     });
     const registry = new CodexManagedTuiRegistry({
       startupTimeoutMilliseconds: 10,
@@ -1407,7 +1423,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       }),
       environment: ordinaryLauncherEnvironment,
       settings: () => settings,
-      prepareThreadSettings: async () => undefined,
+      prepareThreadSettings: async () => ({ upgrade: null }),
     });
     for (const resourceGeneration of [1, 2]) {
       await launcher.launch({
@@ -1468,7 +1484,7 @@ describe("assertCodexLiveModelSelection", () => {
     isDefault: false,
   });
 
-  it("reads uncached pages and admits only the exact live model-effort tuple", async () => {
+  it.each([null, "gpt-6.1-luna"])("reads uncached pages and returns the exact live model's upgrade: %s", async upgrade => {
     const requestWithReceipt = vi
       .fn()
       .mockResolvedValueOnce({
@@ -1480,7 +1496,7 @@ describe("assertCodexLiveModelSelection", () => {
         generation: 7,
         inboundSequence: 2,
         result: {
-          data: [model("gpt-5.6-luna", ["low", "high"])],
+          data: [{ ...model("gpt-5.6-luna", ["low", "high"]), upgrade }],
           nextCursor: null,
         },
       });
@@ -1503,12 +1519,30 @@ describe("assertCodexLiveModelSelection", () => {
         reasoningEffort: "high",
         signal: new AbortController().signal,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ upgrade });
     expect(requestWithReceipt).toHaveBeenCalledTimes(2);
     expect(requestWithReceipt.mock.calls[1]?.[1]).toMatchObject({
       cursor: "page-2",
       includeHidden: false,
     });
+  });
+
+  it.each(["", "m".repeat(513), "\uD800"])("rejects an invalid selected-model upgrade before preparing launch: %j", async upgrade => {
+    const client = new CodexSharedClientFacade({
+      current: () => ({
+        generation: 7, request: vi.fn() as never,
+        requestWithReceipt: vi.fn(async () => ({
+          generation: 7, inboundSequence: 1,
+          result: { data: [{ ...model("gpt-6-sol", ["high"]), upgrade }], nextCursor: null },
+        })) as never,
+      }),
+      latestGeneration: () => 7, retireGeneration: async () => undefined,
+    });
+    client.updateLifecycle({ state: "ready", generation: 7 });
+    await expect(assertCodexLiveModelSelection({
+      client, expectedGeneration: 7, model: "gpt-6-sol", reasoningEffort: "high",
+      signal: new AbortController().signal,
+    })).rejects.toThrow("codex_tui_live_model_upgrade_invalid");
   });
 
   it("rejects a response from a stale daemon generation", async () => {

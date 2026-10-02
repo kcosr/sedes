@@ -131,11 +131,12 @@ boundaries and send the submission Enter outside those boundaries. These
 overrides take precedence over account-owned Codex configuration because
 terminal synchronization and the durable composer contract depend on them.
 
-The profile also acknowledges Codex 0.160's optional catalog upgrade prompts
-for GPT-5.5 and GPT-5.6 Sol, Terra, and Luna through process-local
-`notice.model_migrations` entries. This preserves the thread's selected model
-and prevents a startup promotion from consuming Stage/Send input. It does not
-write the account's model selection or notice acknowledgments.
+The live model check also returns the selected model's optional upgrade target.
+After settings confirmation, the launcher acknowledges that exact pair through
+a process-local `notice.model_migrations` entry. This follows account catalog
+refreshes and admitted runtime upgrades while preserving the thread's selected
+model and preventing a startup promotion from consuming Stage/Send input. It
+does not write the account's model selection or notice acknowledgments.
 
 For authenticated TCP, the environment provider resolves a short-lived secret
 capability. Its current value is copied into a dedicated child environment
