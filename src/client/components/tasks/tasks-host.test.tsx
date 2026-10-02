@@ -69,15 +69,16 @@ function makeStore(): ApplicationClientStore {
           inventoryState: "active",
         },
       ],
+      projects: [{ id: "project-1", name: "acme-web", revision: 0 }],
       workspaces: [
-        { id: "workspace-1", label: { text: "acme-web" }, displayPath: { text: "/acme" } },
+        { id: "workspace-1", projectId: "project-1", label: { text: "acme-web" }, displayPath: { text: "/acme" } },
       ],
       environments: [],
       tasks: [
         {
           id: "task-1",
           scope: { kind: "thread", threadId: "thread-1" },
-          associatedWorkspaceId: "workspace-1",
+          associatedProjectId: "project-1",
           title: "Audit error states",
           details: "",
           pinned: false,

@@ -695,7 +695,7 @@ describe("task references", () => {
   const task: AssociatedTask = {
     id: "84f9a3b0-9c14-456d-b08d-58d325d869d0",
     scope: { kind: "global" },
-    associatedWorkspaceId: null,
+    associatedProjectId: null,
     title: "Current task title",
     details: "Current details",
     pinned: false,

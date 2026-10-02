@@ -82,7 +82,7 @@ export function clampView(view: TasksView, context: TasksContext): TasksView {
 
 export function scopeKey(scope: TaskScope): string {
   if (scope.kind === "global") return "global";
-  if (scope.kind === "workspace") return `workspace:${scope.workspaceId}`;
+  if (scope.kind === "project") return `project:${scope.projectId}`;
   return `thread:${scope.threadId}`;
 }
 
@@ -92,7 +92,7 @@ export function parseScopeKey(key: string): TaskScope | undefined {
   const kind = key.slice(0, separator);
   const id = key.slice(separator + 1);
   if (separator < 0 || id.length === 0) return undefined;
-  if (kind === "workspace") return { kind: "workspace", workspaceId: id };
+  if (kind === "project") return { kind: "project", projectId: id };
   if (kind === "thread") return { kind: "thread", threadId: id };
   return undefined;
 }
@@ -113,7 +113,7 @@ export function destinationScope(
   }
   if (view === "project") {
     return context.project
-      ? { kind: "workspace", workspaceId: context.project.id }
+      ? { kind: "project", projectId: context.project.id }
       : undefined;
   }
   return { kind: "global" };
@@ -136,13 +136,13 @@ export function inViewScope(
     );
   }
   if (!context.project) return false;
-  if (task.scope.kind === "workspace") {
-    return task.scope.workspaceId === context.project.id;
+  if (task.scope.kind === "project") {
+    return task.scope.projectId === context.project.id;
   }
   return (
     includeThreadTasks &&
     task.scope.kind === "thread" &&
-    task.associatedWorkspaceId === context.project.id
+    task.associatedProjectId === context.project.id
   );
 }
 
@@ -234,7 +234,7 @@ export function compareCompleted(
 export type TaskGroupKind = "global" | "project" | "thread";
 
 export interface TaskGroup {
-  /** The scope key ("global", "workspace:…", "thread:…"); collapse state keys on it. */
+  /** The scope key ("global", "project:…", "thread:…"); collapse state keys on it. */
   readonly key: string;
   readonly kind: TaskGroupKind;
   readonly label: string;
@@ -246,7 +246,7 @@ export interface TaskGroup {
 }
 
 export interface TaskGroupLabels {
-  readonly workspaces: ReadonlyMap<string, string>;
+  readonly projects: ReadonlyMap<string, string>;
   readonly threads: ReadonlyMap<string, string>;
 }
 
@@ -267,27 +267,27 @@ export function groupTasks(
     string,
     { own: AssociatedTask[]; threads: Map<string, AssociatedTask[]> }
   >();
-  const project = (workspaceId: string) => {
-    let entry = projects.get(workspaceId);
+  const project = (projectId: string) => {
+    let entry = projects.get(projectId);
     if (!entry) {
       entry = { own: [], threads: new Map() };
-      projects.set(workspaceId, entry);
+      projects.set(projectId, entry);
     }
     return entry;
   };
   for (const task of tasks) {
     if (task.scope.kind === "global") global.push(task);
-    else if (task.scope.kind === "workspace") {
-      project(task.scope.workspaceId).own.push(task);
+    else if (task.scope.kind === "project") {
+      project(task.scope.projectId).own.push(task);
     } else {
-      const threads = project(task.associatedWorkspaceId ?? NO_PROJECT).threads;
+      const threads = project(task.associatedProjectId ?? NO_PROJECT).threads;
       const list = threads.get(task.scope.threadId) ?? [];
       list.push(task);
       threads.set(task.scope.threadId, list);
     }
   }
   const projectLabel = (id: string) =>
-    id === NO_PROJECT ? "No project" : (labels.workspaces.get(id) ?? "Project");
+    id === NO_PROJECT ? "No project" : (labels.projects.get(id) ?? "Project");
   const threadLabel = (id: string) => labels.threads.get(id) ?? "Thread";
   const byLabel =
     (label: (id: string) => string, current: string | undefined) =>
@@ -310,10 +310,10 @@ export function groupTasks(
       count: global.length,
     });
   }
-  for (const workspaceId of [...projects.keys()].sort(
+  for (const projectId of [...projects.keys()].sort(
     byLabel(projectLabel, context.project?.id),
   )) {
-    const entry = projects.get(workspaceId)!;
+    const entry = projects.get(projectId)!;
     const children = [...entry.threads.keys()]
       .sort(byLabel(threadLabel, context.thread?.id))
       .map((threadId): TaskGroup => {
@@ -328,9 +328,9 @@ export function groupTasks(
         };
       });
     groups.push({
-      key: `workspace:${workspaceId}`,
+      key: `project:${projectId}`,
       kind: "project",
-      label: projectLabel(workspaceId),
+      label: projectLabel(projectId),
       tasks: entry.own,
       children,
       count:
@@ -354,8 +354,8 @@ export function revealView(
     return "thread";
   }
   if (
-    task.scope.kind === "workspace" &&
-    context.project?.id === task.scope.workspaceId
+    task.scope.kind === "project" &&
+    context.project?.id === task.scope.projectId
   ) {
     return "project";
   }

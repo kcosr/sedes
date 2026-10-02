@@ -147,10 +147,10 @@ function MoveToItems({ task }: { readonly task: AssociatedTask }): React.JSX.Ele
     },
     {
       label: "This project",
-      kind: "workspace",
+      kind: "project",
       missing: "No project",
       ...(context.project
-        ? { scope: { kind: "workspace", workspaceId: context.project.id } }
+        ? { scope: { kind: "project", projectId: context.project.id } }
         : {}),
     },
     { label: "Global", kind: "global", missing: "", scope: { kind: "global" } },
@@ -339,7 +339,7 @@ export function TaskFacts({ task }: { readonly task: AssociatedTask }): React.JS
       Added {relativeTime(task.createdAt)}
       {scope.kind === "global" ? (
         " · Global"
-      ) : scope.kind === "workspace" ? (
+      ) : scope.kind === "project" ? (
         <> to {destinations.label(scope)}</>
       ) : destinations.threadTitles.has(scope.threadId) ? (
         <>

@@ -20,7 +20,7 @@ afterEach(cleanup);
 const task: AssociatedTask = {
   id: "task-1",
   scope: { kind: "thread", threadId: "thread-1" },
-  associatedWorkspaceId: "workspace-1",
+  associatedProjectId: "project-1",
   title: "Audit error states",
   details: "",
   pinned: false,
@@ -32,10 +32,9 @@ const task: AssociatedTask = {
 };
 
 const projectTarget: TaskScopeDropTarget = {
-  scope: { kind: "workspace", workspaceId: "workspace-1" },
+  scope: { kind: "project", projectId: "project-1" },
   label: "acme-web",
-  workspaceId: "workspace-1",
-  workspaceLabel: "acme-web",
+  projectId: "project-1",
 };
 
 function dataTransfer(): DataTransfer {

@@ -94,7 +94,7 @@ function makeTask(overrides: Partial<AssociatedTask> = {}): AssociatedTask {
   return {
     id: "task-1",
     scope: { kind: "global" },
-    associatedWorkspaceId: null,
+    associatedProjectId: null,
     title: "Write docs",
     details: "",
     pinned: false,
@@ -109,6 +109,7 @@ function makeTask(overrides: Partial<AssociatedTask> = {}): AssociatedTask {
 
 type StoreContext = {
   readonly threads?: readonly unknown[];
+  readonly projects?: readonly unknown[];
   readonly workspaces?: readonly unknown[];
   readonly environments?: readonly unknown[];
   readonly resolveFileLink?: (absolutePath: string) =>
@@ -129,6 +130,7 @@ function makeStore(
   let state = {
     snapshot: {
       threads: context.threads ?? [],
+      projects: context.projects ?? [],
       workspaces: context.workspaces ?? [],
       environments: context.environments ?? [],
       tasks: initialTasks,
@@ -344,11 +346,16 @@ const WORKSPACES = [
   {
     id: "workspace-2",
     environmentId: "local",
-    projectId: "project-1",
+    projectId: "project-2",
     label: { text: "billing-service" },
     displayPath: { text: "/billing" },
     available: true,
   },
+];
+
+const PROJECTS = [
+  { id: "project-1", name: "acme-web", revision: 0 },
+  { id: "project-2", name: "billing-service", revision: 0 },
 ];
 
 const ENVIRONMENTS = [{ id: "local", kind: "local", label: { text: "Local" }, available: true }];
@@ -356,7 +363,7 @@ const ENVIRONMENTS = [{ id: "local", kind: "local", label: { text: "Local" }, av
 const threadTask = (overrides: Partial<AssociatedTask> = {}) =>
   makeTask({
     scope: { kind: "thread", threadId: "thread-9" },
-    associatedWorkspaceId: "workspace-1",
+    associatedProjectId: "project-1",
     ...overrides,
   });
 
@@ -368,13 +375,13 @@ function seededStore(extra: readonly AssociatedTask[] = []) {
       threadTask({ id: "t-audit", title: "Audit checkout error states", createdAt: "2026-08-03T10:00:00.000Z", details: "Walk every error branch.", files: ["/workspace/src/checkout.ts"], pinned: true }),
       threadTask({ id: "t-retry", title: "Add retry to the payment call", createdAt: "2026-08-02T10:00:00.000Z" }),
       threadTask({ id: "t-done", title: "Remove the legacy flag", completedAt: "2026-08-04T10:00:00.000Z" }),
-      makeTask({ id: "p-upgrade", title: "Upgrade the test runner", scope: { kind: "workspace", workspaceId: "workspace-1" }, associatedWorkspaceId: "workspace-1" }),
-      makeTask({ id: "s-sibling", title: "Sibling thread task", scope: { kind: "thread", threadId: "thread-2" }, associatedWorkspaceId: "workspace-1" }),
-      makeTask({ id: "o-other", title: "Round invoices half-even", scope: { kind: "thread", threadId: "thread-other" }, associatedWorkspaceId: "workspace-2" }),
+      makeTask({ id: "p-upgrade", title: "Upgrade the test runner", scope: { kind: "project", projectId: "project-1" }, associatedProjectId: "project-1" }),
+      makeTask({ id: "s-sibling", title: "Sibling thread task", scope: { kind: "thread", threadId: "thread-2" }, associatedProjectId: "project-1" }),
+      makeTask({ id: "o-other", title: "Round invoices half-even", scope: { kind: "thread", threadId: "thread-other" }, associatedProjectId: "project-2" }),
       makeTask({ id: "g-rotate", title: "Rotate staging credentials" }),
       ...extra,
     ],
-    { threads: THREADS, workspaces: WORKSPACES, environments: ENVIRONMENTS },
+    { threads: THREADS, projects: PROJECTS, workspaces: WORKSPACES, environments: ENVIRONMENTS },
   );
 }
 
@@ -451,7 +458,7 @@ describe("TasksPanel scope", () => {
 
   it("says why an archived thread has no Thread view", () => {
     act(() => navigate(threadPath("thread-archived")));
-    const store = makeStore([makeTask()], { threads: THREADS, workspaces: WORKSPACES });
+    const store = makeStore([makeTask()], { threads: THREADS, projects: PROJECTS, workspaces: WORKSPACES });
     renderPanel(store);
 
     const archived = "This thread is archived. Restore it to see its tasks.";
@@ -468,7 +475,7 @@ describe("TasksPanel scope", () => {
 
   it("disables Thread and Project for a thread the snapshot does not hold", () => {
     act(() => navigate(threadPath("thread-missing")));
-    const store = makeStore([makeTask()], { threads: THREADS, workspaces: WORKSPACES });
+    const store = makeStore([makeTask()], { threads: THREADS, projects: PROJECTS, workspaces: WORKSPACES });
     renderPanel(store);
 
     expect(segment("Thread")).toBeDisabled();
@@ -485,7 +492,7 @@ describe("TasksPanel scope", () => {
 
   it("shows a disabled view's reason when its segment is tapped", async () => {
     act(() => navigate(threadPath("thread-archived")));
-    const store = makeStore([makeTask()], { threads: THREADS, workspaces: WORKSPACES });
+    const store = makeStore([makeTask()], { threads: THREADS, projects: PROJECTS, workspaces: WORKSPACES });
     // The tooltip's positioning measures its arrow.
     vi.stubGlobal("ResizeObserver", class { observe(): void {} unobserve(): void {} disconnect(): void {} });
     renderPanel(store);
@@ -801,7 +808,7 @@ describe("TasksPanel rows", () => {
 
     expect(store.moveTask).toHaveBeenCalledWith(
       expect.objectContaining({ id: "t-retry" }),
-      { kind: "workspace", workspaceId: "workspace-1" },
+      { kind: "project", projectId: "project-1" },
     );
     await waitFor(() => expect(announced("Moved “Add retry to the payment call” to acme-web.")).toBe(true));
   });
@@ -932,7 +939,7 @@ describe("TasksPanel rows", () => {
     await vi.waitFor(() =>
       expect(store.moveTask).toHaveBeenCalledWith(
         expect.objectContaining({ id: "t-retry" }),
-        { kind: "workspace", workspaceId: "workspace-1" },
+        { kind: "project", projectId: "project-1" },
         expect.any(String),
       ),
     );
@@ -969,7 +976,7 @@ describe("TasksPanel rows", () => {
     await vi.waitFor(() =>
       expect(store.moveTask).toHaveBeenCalledWith(
         expect.objectContaining({ id: "t-retry" }),
-        { kind: "workspace", workspaceId: "workspace-1" },
+        { kind: "project", projectId: "project-1" },
         expect.any(String),
       ),
     );
@@ -1032,7 +1039,7 @@ describe("TasksPanel edit dialog", () => {
       {
         title: "Add retry with backoff",
         details: "Three attempts.",
-        scope: { kind: "workspace", workspaceId: "workspace-1" },
+        scope: { kind: "project", projectId: "project-1" },
         pinned: true,
       },
     );
@@ -1386,7 +1393,7 @@ describe("TasksPanel files", () => {
         threadTask({ id: "a", title: "Outside", files: ["/other/private.txt"] }),
         threadTask({ id: "b", title: "Dotted", files: ["/other/../private.txt"] }),
       ],
-      { threads: THREADS, workspaces: WORKSPACES, resolveFileLink: () => ({ status: "not_found" }) },
+      { threads: THREADS, projects: PROJECTS, workspaces: WORKSPACES, resolveFileLink: () => ({ status: "not_found" }) },
     );
     renderPanel(store);
 

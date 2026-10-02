@@ -29,15 +29,15 @@ type TaskDragPayload = {
 export interface TaskThreadDropTarget {
   readonly threadId: string;
   readonly threadTitle: string;
-  readonly workspaceId: string;
-  readonly workspaceLabel: string;
+  /** The project of the thread's location. */
+  readonly projectId: string | null;
 }
 
 export interface TaskScopeDropTarget {
   readonly scope: TaskScope;
   readonly label: string;
-  readonly workspaceId: string | null;
-  readonly workspaceLabel: string;
+  /** The project the task belongs to after the move; null for Global. */
+  readonly projectId: string | null;
 }
 
 type PendingMove = {
@@ -99,8 +99,8 @@ function moveErrorMessage(error: unknown): string {
 function scopesEqual(left: TaskScope, right: TaskScope): boolean {
   if (left.kind !== right.kind) return false;
   if (left.kind === "global") return true;
-  if (left.kind === "workspace" && right.kind === "workspace") {
-    return left.workspaceId === right.workspaceId;
+  if (left.kind === "project" && right.kind === "project") {
+    return left.projectId === right.projectId;
   }
   return (
     left.kind === "thread" &&
@@ -189,8 +189,8 @@ export function TaskDragProvider({
       const targetIdentity =
         target.scope.kind === "global"
           ? "global"
-          : target.scope.kind === "workspace"
-            ? `workspace:${target.scope.workspaceId}`
+          : target.scope.kind === "project"
+            ? `project:${target.scope.projectId}`
             : `thread:${target.scope.threadId}`;
       const fingerprint = `${current.id}:${current.revision}:${targetIdentity}`;
       const mutationId =
@@ -223,8 +223,8 @@ export function TaskDragProvider({
   const requestScopeMove = useCallback(
     async (task: AssociatedTask, target: TaskScopeDropTarget) => {
       const crossesProjects =
-        task.associatedWorkspaceId !== null &&
-        task.associatedWorkspaceId !== target.workspaceId;
+        task.associatedProjectId !== null &&
+        task.associatedProjectId !== target.projectId;
       if (crossesProjects && task.files.length > 0) {
         setPendingMove({ task, target });
         return;
@@ -239,18 +239,17 @@ export function TaskDragProvider({
       await requestScopeMove(task, {
         scope: { kind: "thread", threadId: target.threadId },
         label: target.threadTitle,
-        workspaceId: target.workspaceId,
-        workspaceLabel: target.workspaceLabel,
+        projectId: target.projectId,
       });
     },
     [requestScopeMove],
   );
 
   const targetByThreadId = useMemo(() => {
-    const workspaceLabels = new Map(
+    const projectIdByWorkspace = new Map(
       snapshot.workspaces.map((workspace) => [
         workspace.id,
-        workspace.label.text,
+        workspace.projectId,
       ]),
     );
     return new Map(
@@ -259,9 +258,7 @@ export function TaskDragProvider({
         {
           threadId: thread.id,
           threadTitle: thread.title.text,
-          workspaceId: thread.workspaceId,
-          workspaceLabel:
-            workspaceLabels.get(thread.workspaceId) ?? "Unknown project",
+          projectId: projectIdByWorkspace.get(thread.workspaceId) ?? null,
         } satisfies TaskThreadDropTarget,
       ]),
     );

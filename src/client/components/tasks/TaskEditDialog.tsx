@@ -222,8 +222,8 @@ export function TaskEditDialog({
 
   const destination = draft ? parseScopeKey(draft.scope) : undefined;
   const destinationProject =
-    destination?.kind === "workspace"
-      ? destination.workspaceId
+    destination?.kind === "project"
+      ? destination.projectId
       : destination?.kind === "thread"
         ? undefined
         : null;
@@ -237,7 +237,7 @@ export function TaskEditDialog({
     initial !== undefined &&
     draft.scope !== initial.scope &&
     destinationProject !== undefined &&
-    destinationProject !== task.associatedWorkspaceId;
+    destinationProject !== task.associatedProjectId;
 
   return (
     <>

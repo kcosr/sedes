@@ -401,7 +401,7 @@ export function TasksPanelContent({
         ? groupTasks(
             mainTasks,
             {
-              workspaces: destinations.workspaceLabels,
+              projects: destinations.projectLabels,
               threads: destinations.threadTitles,
             },
             context,
@@ -538,8 +538,8 @@ export function TasksPanelContent({
     }
     const scope = scopeKey(task.scope);
     const parent =
-      task.scope.kind === "thread" && task.associatedWorkspaceId
-        ? `workspace:${task.associatedWorkspaceId}`
+      task.scope.kind === "thread" && task.associatedProjectId
+        ? `project:${task.associatedProjectId}`
         : undefined;
     setCollapsedGroups((current) => {
       if (!current.has(scope) && (!parent || !current.has(parent))) {
@@ -631,17 +631,22 @@ export function TasksPanelContent({
     (task: AssociatedTask, scope: TaskScope) => {
       if (sameScope(task.scope, scope)) return;
       if (pendingRef.current.get(task.id)?.has("move")) return;
+      const targetWorkspaceId =
+        scope.kind === "thread"
+          ? snapshot?.threads.find(({ id }) => id === scope.threadId)
+              ?.workspaceId
+          : undefined;
       const targetProject =
         scope.kind === "global"
           ? null
-          : scope.kind === "workspace"
-            ? scope.workspaceId
-            : (snapshot?.threads.find(({ id }) => id === scope.threadId)
-                ?.workspaceId ?? null);
+          : scope.kind === "project"
+            ? scope.projectId
+            : (snapshot?.workspaces.find(({ id }) => id === targetWorkspaceId)
+                ?.projectId ?? null);
       if (
         task.files.length > 0 &&
-        task.associatedWorkspaceId !== null &&
-        task.associatedWorkspaceId !== targetProject
+        task.associatedProjectId !== null &&
+        task.associatedProjectId !== targetProject
       ) {
         setPendingMove({ task, scope });
         return;
@@ -650,7 +655,7 @@ export function TasksPanelContent({
         setError(`Couldn't move “${task.title}”: ${errorMessage(cause)}`),
       );
     },
-    [moveNow, snapshot?.threads],
+    [moveNow, snapshot?.threads, snapshot?.workspaces],
   );
 
   const addToPrompt = useCallback(
@@ -969,21 +974,14 @@ export function TasksPanelContent({
     if (candidate === "all" || !draggedTask) return undefined;
     const scope = destinationScope(candidate, context);
     if (!scope || sameScope(draggedTask.scope, scope)) return undefined;
-    const workspaceId =
+    // A thread segment's scope is the followed thread, in the current project.
+    const projectId =
       scope.kind === "global"
         ? null
-        : scope.kind === "workspace"
-          ? scope.workspaceId
-          : (context.thread?.workspaceId ?? null);
-    return {
-      scope,
-      label: destinations.label(scope),
-      workspaceId,
-      workspaceLabel:
-        workspaceId === null
-          ? destinations.label({ kind: "global" })
-          : destinations.label({ kind: "workspace", workspaceId }),
-    };
+        : scope.kind === "project"
+          ? scope.projectId
+          : (context.project?.id ?? null);
+    return { scope, label: destinations.label(scope), projectId };
   };
 
   // ── Rendering ────────────────────────────────────────────────────────────
@@ -998,8 +996,8 @@ export function TasksPanelContent({
     const project =
       view === "all" &&
       task.scope.kind === "thread" &&
-      task.associatedWorkspaceId !== null
-        ? destinations.workspaceLabels.get(task.associatedWorkspaceId)
+      task.associatedProjectId !== null
+        ? destinations.projectLabels.get(task.associatedProjectId)
         : undefined;
     return {
       kind: task.scope.kind,

@@ -218,12 +218,12 @@ function makeTask(
   return {
     id,
     scope,
-    associatedWorkspaceId:
+    associatedProjectId:
       scope.kind === "global"
         ? null
-        : scope.kind === "workspace"
-          ? scope.workspaceId
-          : "workspace-1",
+        : scope.kind === "project"
+          ? scope.projectId
+          : "project-sedes",
     title: `Task ${id}`,
     details: "",
     pinned: false,
@@ -3160,9 +3160,9 @@ describe("InventorySidebar view modes", () => {
           { kind: "thread", threadId: "thread-a" },
           completedAt,
         ),
-        makeTask("workspace-task", {
-          kind: "workspace",
-          workspaceId: "workspace-1",
+        makeTask("project-task", {
+          kind: "project",
+          projectId: "project-sedes",
         }),
         makeTask("global-task", { kind: "global" }),
         makeTask(
@@ -4037,7 +4037,7 @@ describe("InventorySidebar view modes", () => {
     await waitFor(() =>
       expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
         expectedStashedPromptCount: 0,
-        openTaskDisposition: "move_to_workspace",
+        openTaskDisposition: "move_to_project",
         executionWorkspaceDisposition: { kind: "keep" },
       }),
     );
@@ -4091,7 +4091,7 @@ describe("InventorySidebar view modes", () => {
     await waitFor(() =>
       expect(store.mutateInventory).toHaveBeenCalledWith(thread, "archive", {
         expectedStashedPromptCount: 0,
-        openTaskDisposition: "move_to_workspace",
+        openTaskDisposition: "move_to_project",
         executionWorkspaceDisposition: { kind: "keep" },
       }),
     );

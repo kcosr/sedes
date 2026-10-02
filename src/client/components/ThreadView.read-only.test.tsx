@@ -478,7 +478,7 @@ describe("ThreadView backend interaction modes", () => {
     const task: AssociatedTask = {
       id: "task-composer-drop",
       scope: { kind: "global" },
-      associatedWorkspaceId: null,
+      associatedProjectId: null,
       title: "Attach me",
       details: "",
       pinned: false,

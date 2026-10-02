@@ -92,7 +92,7 @@ export function ThreadTaskDisposition({
         onValueChange={(next) => onChange(next as OpenTaskDisposition)}
       >
         <SegmentedControlItem
-          value="move_to_workspace"
+          value="move_to_project"
           title="Move each task to its thread's project"
           disabled={disabled}
         >
