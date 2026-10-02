@@ -495,14 +495,26 @@ test.describe.serial("workspace file browser and editor", () => {
     await expect(conflict).toBeVisible();
     browserDiagnostics.allowNetworkFailures = false;
     await expect(conflict).toContainText("Your draft has not been lost.");
-    await capture(page, testInfo, "workspace-files-conflict.png");
+    // Preserve Radix Presence motion, as with the diagram dialog above.
+    await overlaySettled(conflict);
+    await capture(page, testInfo, "workspace-files-conflict.png", {
+      animations: "allow",
+    });
     await conflict.getByRole("button", { name: "Keep editing" }).click();
+    // The callout returns before the closing dialog finishes releasing its
+    // overlay. Wait for that transition before opening the dialog again.
+    await expect(page.getByRole("dialog", {
+      name: "File changed on disk",
+      includeHidden: true,
+    })).toHaveCount(0);
+    await expect(page.getByTestId("dialog-overlay")).toHaveCount(0);
     editable = editor(panel);
     await expect(editable).toContainText("43");
     await panel
       .getByRole("button", { name: "File changed on disk. Resolve conflict." })
       .click();
     conflict = page.getByRole("dialog", { name: "File changed on disk" });
+    await expect(conflict).toBeVisible();
     await conflict.getByRole("button", { name: "Reload" }).click();
     await expect(conflict).toHaveCount(0);
     await expect(panel).toContainText("100");
