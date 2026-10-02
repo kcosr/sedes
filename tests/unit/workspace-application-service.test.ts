@@ -395,6 +395,7 @@ describe("WorkspaceApplicationService", () => {
     expect(current.upsertWorkspace).toHaveBeenCalledWith(scope, {
       id: "workspace-a",
       restoreRemoved: true,
+      expectedProjectId: "project-a",
       environmentId: "environment-a",
       canonicalPath: "/srv/projects/sedes",
       displayName: "sedes",

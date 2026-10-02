@@ -139,8 +139,9 @@ export class WorkspaceApplicationService {
 
   /**
    * Restores or revalidates one known location under its original identity.
-   * The location never changes project here, and a directory that now
-   * resolves elsewhere fails instead of becoming a new location.
+   * The location never changes project here: the commit rechecks the
+   * project it was validated for, and a directory that now resolves
+   * elsewhere fails instead of becoming a new location.
    */
   async restoreLocation(
     scope: RequestScope,
@@ -181,7 +182,11 @@ export class WorkspaceApplicationService {
         "The location's directory now resolves to a different path. Add that directory as a location instead.",
       );
     }
-    return this.#admit(scope, validated, { id: current.id, restoreRemoved: true });
+    return this.#admit(scope, validated, {
+      id: current.id,
+      restoreRemoved: true,
+      expectedProjectId: current.projectId,
+    });
   }
 
   async #validate(
@@ -224,7 +229,11 @@ export class WorkspaceApplicationService {
           readonly project: InventoryProjectAssignment;
           readonly restoreRemoved: true;
         }
-      | { readonly id: string; readonly restoreRemoved: true },
+      | {
+          readonly id: string;
+          readonly restoreRemoved: true;
+          readonly expectedProjectId: string;
+        },
   ): OpenedWorkspaceSummary {
     const workspace = this.input.inventory.upsertWorkspace(scope, {
       ...identity,

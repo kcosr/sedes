@@ -81,13 +81,22 @@ export type InventoryWorkspaceUpsert = WorkspaceObservation &
         readonly id?: string;
         /** Only explicit user open/restore may revive a removed location. */
         readonly restoreRemoved?: true;
+        readonly expectedProjectId?: never;
       }
     | {
-        /** Revalidation refreshes this known location and never inserts one. */
+        /** Revalidation refreshes this known location and never inserts or revives one. */
         readonly id: string;
         readonly project?: never;
-        /** Only explicit user restore may revive this removed location. */
-        readonly restoreRemoved?: true;
+        readonly restoreRemoved?: never;
+        readonly expectedProjectId?: never;
+      }
+    | {
+        /** Explicit user restore revives this known location in its own project. */
+        readonly id: string;
+        readonly project?: never;
+        readonly restoreRemoved: true;
+        /** The project the restore was validated for; a move since then fails it. */
+        readonly expectedProjectId: string;
       }
   );
 
@@ -829,6 +838,15 @@ export class InventoryRepository {
         throw new DomainError(
           "conflict",
           "The validated workspace identity changed.",
+        );
+      }
+      if (
+        input.expectedProjectId !== undefined &&
+        existing.projectId !== input.expectedProjectId
+      ) {
+        throw new DomainError(
+          "conflict",
+          "The location moved to another project. Refresh and try again.",
         );
       }
       const removed = this.isWorkspaceRemoved(scope, existing.id);

@@ -186,6 +186,21 @@ describe("project and location repository", () => {
     expect(f.project(a.projectId)).toMatchObject({ membershipRevision: 3, locations: [{ removedAt: null, removedWithProject: false }] });
     expect(f.inventory.listThreadIdsForWorkspace(f.scope, a.id)).toEqual([threadId]);
 
+    // Restoring a known location commits only into the project it was validated for.
+    f.removeLocation(a.id);
+    const other = f.open("/srv/other");
+    const restore = (expectedProjectId: string) => f.inventory.upsertWorkspace(f.scope, {
+      id: a.id, restoreRemoved: true, expectedProjectId, environmentId: a.environmentId, canonicalPath: a.canonicalPath,
+      displayName: a.displayName, available: true, trustState: a.trustState,
+      environmentConfigurationRevision: a.environmentConfigurationRevision, now: f.now(),
+    });
+    const removed = f.project(a.projectId);
+    expect(() => restore(other.projectId))
+      .toThrow(domainError("conflict", "The location moved to another project. Refresh and try again."));
+    expect(f.inventory.isWorkspaceRemoved(f.scope, a.id)).toBe(true);
+    expect(f.project(a.projectId)).toEqual(removed);
+    expect(restore(a.projectId)).toMatchObject({ id: a.id, projectId: a.projectId });
+
     f.removeProject(a.projectId);
     expect(() => f.open("/srv/a", { restoreRemoved: true }))
       .toThrow(domainError("invalid_transition", "The project was removed. Restore it before restoring its locations."));

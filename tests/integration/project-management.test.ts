@@ -377,6 +377,39 @@ describe("project and location management", () => {
     await expect(f.open.restoreLocation(f.scope, f.workspace.id)).rejects.toMatchObject({ code: "invalid_transition" });
   });
 
+  it("fails a location restore whose location moved to another project while validation was pending", async () => {
+    const f = fixture();
+    await f.service.removeProject(f.scope, f.workspace.projectId, expected(f, f.workspace.projectId));
+    const other = f.location("/tmp/project-management-other");
+    let finishValidation!: () => void;
+    const validation = new Promise<void>((resolve) => { finishValidation = resolve; });
+    const validate = f.validateWorkspace.getMockImplementation()!;
+    f.validateWorkspace.mockImplementationOnce(async (...args) => {
+      await validation;
+      return validate(...args);
+    });
+    const removed = f.project(f.workspace.projectId);
+    const restoring = f.service.restoreProject(f.scope, removed.id, {
+      expectedRevision: removed.revision, locationIds: [f.workspace.id],
+    });
+    await vi.waitFor(() => expect(f.validateWorkspace).toHaveBeenCalledOnce());
+    // Moving a removed location is allowed; it now belongs to the other project.
+    f.inventory.moveWorkspaceToProject(f.scope, f.workspace.id, {
+      target: { kind: "existing", projectId: other.projectId },
+      expectedRevision: f.inventory.getWorkspace(f.scope, f.workspace.id).revision,
+      expectedThreadIds: [f.thread.id], now: 600,
+    });
+    finishValidation();
+
+    const restored = await restoring;
+    expect(restored.locations).toEqual([
+      { id: f.workspace.id, status: "failed", cause: expect.objectContaining({ code: "conflict" }) },
+    ]);
+    expect(restored.project).toMatchObject({ id: removed.id, removed: false, locations: [] });
+    expect(f.inventory.getWorkspace(f.scope, f.workspace.id).projectId).toBe(other.projectId);
+    expect(f.inventory.isWorkspaceRemoved(f.scope, f.workspace.id)).toBe(true);
+  });
+
   it("moves a location only while its threads are idle and never retires their runtimes", async () => {
     const f = fixture();
     const move = (target: Parameters<Fixture["service"]["moveLocation"]>[2]["target"]) => f.service.moveLocation(f.scope, f.workspace.id, {
