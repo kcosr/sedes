@@ -77,6 +77,72 @@ describe('server package native targets', () => {
     await expect(prunePlatformPackages(path.join(root, 'node_modules'), { platform: 'linux', arch: 'x64' })).rejects.toThrow('Unreviewed Pi native layout');
   });
 
+  it.each([false, true])('retains the reviewed msgpackr N-API glibc payload without pruning unrelated native files (nested: %s)', async nested => {
+    const root = await fixture();
+    const modules = path.join(root, 'node_modules');
+    const owner = nested ? path.join(await pkg(modules, 'parent'), 'node_modules') : modules;
+    const name = '@msgpackr-extract/msgpackr-extract-linux-x64';
+    const native = await pkg(owner, name, { version: '3.0.4', os: ['linux'], cpu: ['x64'] });
+    const other = await pkg(owner, 'unrelated-native');
+    const incompatible = ['node.abi115.glibc.node', 'node.abi115.musl.node', 'node.napi.musl.node'];
+    for (const filename of ['node.napi.glibc.node', ...incompatible]) {
+      await put(native, filename, `msgpackr:${filename}`);
+      await put(other, filename, `unrelated:${filename}`);
+    }
+    const removed = await prunePlatformPackages(modules, { platform: 'linux', arch: 'x64' });
+    expect((await readdir(native)).sort()).toEqual(['node.napi.glibc.node', 'package.json']);
+    expect(await readFile(path.join(native, 'node.napi.glibc.node'), 'utf8')).toBe('msgpackr:node.napi.glibc.node');
+    expect(removed).toEqual(incompatible.map(filename => ({ name, version: '3.0.4', path: filename })));
+    for (const filename of ['node.napi.glibc.node', ...incompatible]) {
+      expect(await readFile(path.join(other, filename), 'utf8')).toBe(`unrelated:${filename}`);
+    }
+  });
+
+  it('fails closed when the reviewed msgpackr version or retained N-API payload is missing', async () => {
+    const root = await fixture();
+    const modules = path.join(root, 'node_modules');
+    const name = '@msgpackr-extract/msgpackr-extract-linux-x64';
+    const fields = { os: ['linux'], cpu: ['x64'] };
+    const native = await pkg(modules, name, { ...fields, version: '3.0.5' });
+    await put(native, 'node.napi.glibc.node');
+    await expect(prunePlatformPackages(modules, { platform: 'linux', arch: 'x64' })).rejects.toThrow('Unreviewed msgpackr native layout');
+    await pkg(modules, name, { ...fields, version: '3.0.4' });
+    await rm(path.join(native, 'node.napi.glibc.node'));
+    await expect(prunePlatformPackages(modules, { platform: 'linux', arch: 'x64' })).rejects.toThrow('ENOENT');
+  });
+
+  it.each([false, true])('removes only the reviewed musl-only msgpackr arm64 package on glibc (nested: %s)', async nested => {
+    const root = await fixture();
+    const modules = path.join(root, 'node_modules');
+    const owner = nested ? path.join(await pkg(modules, 'parent'), 'node_modules') : modules;
+    const name = '@msgpackr-extract/msgpackr-extract-linux-arm64';
+    const native = await pkg(owner, name, { version: '3.0.4', os: ['linux'], cpu: ['arm64'] });
+    const javascript = await pkg(owner, 'msgpackr', { version: '2.1.0' });
+    await put(javascript, 'index.js', 'javascript-implementation');
+    const other = await pkg(owner, 'unrelated-native');
+    for (const filename of ['node.abi115.musl.node', 'node.napi.musl.node']) {
+      await put(native, filename);
+      await put(other, filename, `unrelated:${filename}`);
+    }
+    const removed = await prunePlatformPackages(modules, { platform: 'linux', arch: 'arm64' });
+    expect(await exists(native)).toBe(false);
+    expect(removed).toEqual([{ name, version: '3.0.4' }]);
+    expect(await readFile(path.join(javascript, 'index.js'), 'utf8')).toBe('javascript-implementation');
+    for (const filename of ['node.abi115.musl.node', 'node.napi.musl.node']) {
+      expect(await readFile(path.join(other, filename), 'utf8')).toBe(`unrelated:${filename}`);
+    }
+  });
+
+  it('fails closed when the reviewed arm64 msgpackr version changes', async () => {
+    const root = await fixture();
+    const modules = path.join(root, 'node_modules');
+    const native = await pkg(modules, '@msgpackr-extract/msgpackr-extract-linux-arm64', {
+      version: '3.0.5', os: ['linux'], cpu: ['arm64'],
+    });
+    await expect(prunePlatformPackages(modules, { platform: 'linux', arch: 'arm64' })).rejects.toThrow('Unreviewed msgpackr native layout');
+    expect(await exists(native)).toBe(true);
+  });
+
   async function nativeFixture() {
     const root = await fixture();
     for (const [name, version] of [['better-sqlite3', '13.0.2'], ['node-pty', '1.1.0']]) {

@@ -28,26 +28,26 @@ troubleshooting, see the [Codex operator guide](../../operator/backends/codex.md
 
 ## Protocol and release admission
 
-Sedes pins `@openai/codex` 0.153.0 as its development-time generated protocol
+Sedes pins `@openai/codex` 0.160.0 as its development-time generated protocol
 baseline. Generated TypeScript, JSON Schema, the method
 inventory, hashes, and release evidence live under
-`protocol/codex-app-server/0.153.0`.
+`protocol/codex-app-server/0.160.0`.
 
 Owned Codex processes support Linux x64 and macOS arm64/x64. External
 topologies retain their separate transport and execution-environment
 requirements.
 
-The compiled Codex backend supplies exactly one `0.153.0` generated parser
+The compiled Codex backend supplies exactly one `0.160.0` generated parser
 profile and persists that value for diagnostics and runtime-generation
 integrity. It is not operator configuration and remains separate from
 executable admission. Owned and external runtimes admit stable releases at or
-above 0.153.0. Build metadata is allowed. Prereleases, malformed versions,
+above 0.160.0. Build metadata is allowed. Prereleases, malformed versions,
 versions below the floor, and explicitly excluded known-bad releases are
 rejected.
 
-Releases newer than the 0.154.0 tested-through threshold receive a
+Releases newer than the 0.160.0 tested-through threshold receive a
 provider-private `newerThanTested` assessment for the installation advisory.
-They still use only the pinned 0.153.0 stable and experimental validators and
+They still use only the pinned 0.160.0 stable and experimental validators and
 gain no capabilities from their version. Managed TUI uses the same
 operator-installed command policy in every deployment: an optional canonical
 `tuiExecutablePath` override, otherwise the first `codex` on `PATH`, with the
@@ -59,27 +59,28 @@ update prompt must not intercept terminal input or replace the executable
 outside Sedes release admission; operators update the installed command
 separately.
 
-The history/item refiners additionally validate and discard three reviewed
-optional metadata fields from newer runtimes: `mcpAppUi` (0.156.1 and
-0.159.0) and item-entry `startedAtMs`/`completedAtMs` (0.159.0).
-This covers paginated and legacy history and live item/turn events without
-exposing MCP app UI or using item timestamps as usage evidence. Unknown fields
-and malformed values remain rejected. This bounded metadata fix does not
-qualify either release in full or raise the tested-through threshold.
-See the [metadata review](../../../protocol/codex-app-server/0.153.0/runtime-compatibility/item-metadata-review.md).
+The official 0.160.0 validators own item lifecycle metadata and MCP app UI
+metadata. Sedes maps available item `startedAtMs`/`completedAtMs` into the existing
+normalized `startedAt`/`completedAt` fields for live events and loaded history.
+Missing timestamps stay absent, and command/MCP `durationMs` remains independent.
+If wall-clock times run backwards, Sedes retains the observed start and omits
+the inconsistent completion; it does not infer a duration.
+Timestamps are not usage evidence. MCP app UI stays provider-private.
+File-backed images are recognized without treating file IDs as URLs or paths;
+unavailable bytes remain visibly unavailable. Interrupted turns retain meaningful
+native errors as bounded warning notices; an ordinary Stop adds no error notice.
 
-Raising the tested-through threshold requires artifact review and focused
-conformance. Change the compatibility floor only when a required contract
-changes; do not add a second parser merely
-because a newer compatible executable is admitted.
+The runtime floor is 0.160.0, aligning runtime admission with the qualified
+remote-TUI permission restoration and parser baseline. Upgrade operator-owned
+app-servers and managed TUI commands together with Sedes. The floor and
+tested-through policy remain independent constants; newer stable runtimes are
+admitted with the usual advisory.
 
-The 0.154.0 qualification retains the 0.153.0 development fixture and parser.
-Its [artifact metadata and reproducible offline probe](../../../protocol/codex-app-server/0.153.0/runtime-compatibility/README.md)
-record exact reviewed protocol-export deltas and Linux x64 execution against a
-local mock model. Unreviewed export changes fail qualification; production
-continues to use the unchanged 0.153.0 parser. macOS artifacts were
-integrity-checked but not executed on that host; live-provider and additional
-topology verification remain separate.
+The [0.160.0 qualification](../../../protocol/codex-app-server/0.160.0/runtime-compatibility/README.md)
+records exact exports and Linux x64 execution against a local mock model,
+including changed-settings notification, persistence after restart, explicit fork
+settings, and rejected command approval. macOS artifacts are integrity-checked
+only. Authenticated provider and topology checks are recorded separately.
 
 Sedes opts into only the contracted experimental `thread/settings/update`
 method. Unknown experimental methods are rejected. The stable, invoked
@@ -95,12 +96,12 @@ error replies after dispatch remain unconfirmed, and are never retried as a
 new Stop operation.
 
 Method stability is distinct from the selected wire artifact. Because Sedes
-initializes app-server with `experimentalApi`, nine reviewed route directions
-select their exact experimental 0.153.0 definition: five stable thread
-requests, settings update, command approval, settings-updated, and
+initializes app-server with `experimentalApi`, ten reviewed route directions
+select their exact experimental 0.160.0 definition: five stable thread
+requests, settings update, command approval, MCP elicitation, settings-updated, and
 thread-started. Remaining adopted directions, including both pagination
 requests, select the stable artifact. No direction falls back between profiles.
-RPC admission recognizes all 83 official stable server notifications; 63 have
+RPC admission recognizes all 85 official stable server notifications; 64 have
 reviewed thread-routing evidence for bounded resnapshot recovery. The 31
 adopted notifications retain their explicit semantic consumers, while other
 official notifications are validated and ignored when no consumer is active.
@@ -110,11 +111,11 @@ The 0.153.0 command-approval request distinguishes ordinary commands from
 distinct approval ID, its visible command context, and exactly ordered
 `accept`/`cancel` decisions; policy and network amendments fail closed. It is
 correlated to the current turn and original terminal item before the existing
-normalized decision interaction is published. The `openaiForm` and `openai/form` MCP
-elicitation variant is structurally recognized but rejected by the semantic
+normalized decision interaction is published. The `openaiForm`, `openai/form`, and `openai/userVerification` MCP
+elicitation variants are structurally recognized but rejected by the semantic
 gate because Sedes does not advertise or implement that extension. This
 release cutover remains provider-private: it does not change shared backend
-contracts, capabilities, or the Pi, Claude, and Grok dispositions.
+contracts, capabilities, or the Pi, Claude, Grok, and OpenCode dispositions.
 
 MCP tool-approval requests can carry exact invocation arguments in
 `_meta.tool_params`, identified by `_meta.codex_approval_kind: mcp_tool_call`.
@@ -510,7 +511,7 @@ answer encoding never enter the browser contract. See
 
 ## Generated image artifacts
 
-The 0.153.0 protocol defines a closed `imageGeneration` item with native
+The protocol defines a closed `imageGeneration` item with native
 status, revised prompt, transparent-background flag, in-band `result`, and
 `savedPath`. For a completed item, Sedes accepts only canonical padded base64
 that decodes to at most 16 MiB and passes shared PNG header and dimension

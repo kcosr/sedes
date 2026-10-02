@@ -97,13 +97,13 @@ can apply. The detailed authority rules are in
 
 ## Version compatibility
 
-Sedes supplies the exact generated `0.153.0` app-server protocol profile from
+Sedes supplies the exact generated `0.160.0` app-server protocol profile from
 its compiled Codex backend. Operators do not select that profile in Settings. Sedes independently probes and admits stable Codex app-server
-executables at or above 0.153.0. Build metadata is allowed and does not affect
+executables at or above 0.160.0. Build metadata is allowed and does not affect
 version precedence. Prereleases, malformed versions, versions below the floor,
 and explicitly excluded known-bad releases are rejected.
 
-Releases newer than the 0.154.0 tested-through threshold are admitted with an
+Releases newer than the 0.160.0 tested-through threshold are admitted with an
 installation advisory. They do not gain capabilities merely because of their
 version. Managed TUI uses `moduleConfiguration.tuiExecutablePath` when present;
 otherwise it resolves the first `codex` on the execution environment account's `PATH`. This is
@@ -348,7 +348,8 @@ Sedes-owned stdio connections on every topology. See
 Sedes does not edit the service account's Codex configuration. Each managed
 TUI process receives a closed set of command-line config overrides: automatic
 recap is off, Enter submits, Vim mode does not start active, alternate-screen
-support remains enabled for full-screen overlays, raw-output mode is off, and
+support remains enabled for full-screen overlays, fullscreen transcript is off,
+raw-output mode is off, and
 Codex's paste-burst detector remains enabled. Codex still renders its main
 surface in an inline viewport. These launch invariants override conflicting
 account config; other Codex TUI preferences remain account-owned.

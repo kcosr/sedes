@@ -23,7 +23,7 @@ import {
   serverRequests,
 } from "./provider-protocol/codex-adoption-inventory.mjs";
 
-const RELEASE = "0.153.0";
+const RELEASE = "0.160.0";
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const releaseRoot = path.join(
   repositoryRoot,
@@ -395,11 +395,8 @@ async function buildAdoptionManifest({
     productionRelease: RELEASE,
     status: "production_parser_authority",
     productionRuntimeCompatibility: {
-      currentPolicy: `stable releases at or above ${RELEASE} using exactly the ${RELEASE} parser profile`,
+      currentPolicy: `stable releases admitted by the runtime policy using exactly the ${RELEASE} parser profile`,
       disposition: "selected_exact_generated_profile",
-      selectedD3InitialProfile: `exactly ${RELEASE}`,
-      d3Requirement:
-        "add a later release only through a finite generated-and-conformance-tested allowlist",
     },
     generatedProfiles: Object.fromEntries(
       [...generatedProfileManifests].map(([name, manifest]) => [

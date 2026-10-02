@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir } from "node:fs/promises";
+import { lstat, mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { expect, it, vi } from "vitest";
@@ -19,8 +19,10 @@ if (enabled && (!socketPath || !path.isAbsolute(socketPath) || path.resolve(sock
 const options = { timeoutMilliseconds: 15_000 };
 
 it.skipIf(!enabled)("retains a real Luna turn, receipt and native history across a disposable sidecar attachment restart", async () => {
-  const socketBefore = await lstat(socketPath!, { bigint: true });
+  const socketPathBefore = await lstat(socketPath!, { bigint: true });
+  const socketBefore = await stat(socketPath!, { bigint: true });
   expect(socketBefore.isSocket()).toBe(true);
+  expect(socketBefore.mode & 0o777n).toBe(0o600n);
   const service = await createPersistentCodexLiveSidecar();
   const workspace = path.join(service.home, "workspace");
   await mkdir(workspace);
@@ -31,7 +33,7 @@ it.skipIf(!enabled)("retains a real Luna turn, receipt and native history across
   const scope = { tenantId: service.scope.tenantId, principalId: service.scope.principalId,
     executionEnvironmentId: service.scope.executionEnvironmentId, backendInstanceId: "codex-live" };
   const configuration = {
-    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Persistent live canary", enabled: true, configurationRevision: 0, protocolRelease: "0.153.0" as const },
+    instance: { id: scope.backendInstanceId, tenantId: scope.tenantId, kind: "codex_app_server" as const, label: "Persistent live canary", enabled: true, configurationRevision: 0, protocolRelease: "0.160.0" as const },
     connections: [{ id: "live-profile", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, templateId: "live-template", kind: "codex_app_server" as const, backendInstanceId: scope.backendInstanceId, executionEnvironmentId: scope.executionEnvironmentId, label: "Live canary", enabled: true, configurationRevision: 0 }],
     connection: { ownership: "external" as const, channel: { type: "unix_websocket" as const, socketPath: socketPath! } },
   };
@@ -151,6 +153,10 @@ it.skipIf(!enabled)("retains a real Luna turn, receipt and native history across
     if (database.open) database.close();
     await service.close();
   }
-  const socketAfter = await lstat(socketPath!, { bigint: true });
+  const socketPathAfter = await lstat(socketPath!, { bigint: true });
+  expect({ dev: socketPathAfter.dev, ino: socketPathAfter.ino }).toEqual({ dev: socketPathBefore.dev, ino: socketPathBefore.ino });
+  const socketAfter = await stat(socketPath!, { bigint: true });
+  expect(socketAfter.isSocket()).toBe(true);
+  expect(socketAfter.mode & 0o777n).toBe(0o600n);
   expect({ dev: socketAfter.dev, ino: socketAfter.ino }).toEqual({ dev: socketBefore.dev, ino: socketBefore.ino });
 }, 300_000);

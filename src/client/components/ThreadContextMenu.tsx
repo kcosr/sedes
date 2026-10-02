@@ -46,7 +46,10 @@ import {
   THREAD_CONFIGURATION_COPY_PENDING_ACCESSIBLE_LABEL,
   THREAD_CONFIGURATION_COPY_TITLE,
 } from "./thread/thread-configuration-copy-labels.js";
-import { useArchiveThreadAction } from "./thread/ArchiveChoicesDialog.js";
+import {
+  useArchiveChoicesOpen,
+  useArchiveThreadAction,
+} from "./thread/ArchiveChoicesDialog.js";
 import { ForceResetDialog } from "./thread/ForceResetDialog.js";
 import {
   ExecutionWorkspaceDeleteDialog,
@@ -83,6 +86,45 @@ type InventoryContextAction =
 // Match the 240ms dialog exit motion before installing a sibling modal root.
 const SHEET_DIALOG_HANDOFF_DELAY_MS = 260;
 
+/**
+ * True from the first render in which `open` is true. Each of a row's dialogs
+ * mounts at its first opening and then stays mounted, so close motion, focus
+ * return and reopening during a close behave as before; rows whose dialogs
+ * never open do not pay for their roots on every render.
+ */
+function useMountedOnceOpen(open: boolean): boolean {
+  const [opened, setOpened] = useState(open);
+  if (open && !opened) setOpened(true);
+  return opened || open;
+}
+
+type CatalogEntry = { readonly id: string };
+const catalogIndexes = new WeakMap<
+  readonly CatalogEntry[],
+  ReadonlyMap<string, CatalogEntry>
+>();
+
+/**
+ * Looks an entry up by id, as `find` would (the first match), through an
+ * index shared by every row that renders against the same catalog array.
+ */
+function catalogEntry<T extends CatalogEntry>(
+  catalog: readonly T[] | undefined,
+  id: string,
+): T | undefined {
+  if (!catalog) return undefined;
+  let index = catalogIndexes.get(catalog);
+  if (!index) {
+    const entries = new Map<string, T>();
+    for (const entry of catalog) {
+      if (!entries.has(entry.id)) entries.set(entry.id, entry);
+    }
+    catalogIndexes.set(catalog, entries);
+    index = entries;
+  }
+  return index.get(id) as T | undefined;
+}
+
 /** "sedes · Claude · updated 12m ago": the row's project, backend and age. */
 function threadMetaLine(
   thread: NormalizedApplicationThreadSummary,
@@ -114,6 +156,7 @@ export function ThreadContextMenu({
   onRename,
   disabled = false,
   onAction,
+  onRestore,
   onArchiveFamily,
   onNavigate,
   children,
@@ -134,6 +177,12 @@ export function ThreadContextMenu({
   disabled?: boolean;
   /** Notified after a lifecycle action is accepted by the server. */
   onAction?: (action: InventoryContextAction) => void;
+  /**
+   * Replaces the menu's own Restore request for a surface that tracks
+   * restores itself (the Archived page), so both of its controls share one
+   * restore lifecycle.
+   */
+  onRestore?: () => void;
   /** Notified when archive-all accepts the complete server-resolved family. */
   onArchiveFamily?: (archivedThreadIds: readonly string[]) => void;
   onNavigate?: () => void;
@@ -159,11 +208,13 @@ export function ThreadContextMenu({
   // the commands they exercise).
   const application =
     typeof store.getSnapshot === "function" ? store.getSnapshot() : undefined;
-  const targetWorkspaceExecution = application?.snapshot?.executionTargets.find(
-    ({ id }) => id === thread.targetId,
+  const targetWorkspaceExecution = catalogEntry(
+    application?.snapshot?.executionTargets,
+    thread.targetId,
   )?.workspaceExecution.kind;
-  const projectLabel = application?.snapshot?.workspaces?.find(
-    ({ id }) => id === thread.workspaceId,
+  const projectLabel = catalogEntry(
+    application?.snapshot?.workspaces,
+    thread.workspaceId,
   )?.label.text;
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [forceResetOpen, setForceResetOpen] = useState(false);
@@ -191,6 +242,13 @@ export function ThreadContextMenu({
     },
     returnFocusRef,
   });
+  // Only an enclosing surface that tracks interaction needs to follow the
+  // shared archive workflow; other rows stay unsubscribed.
+  const archiveChoicesOpen = useArchiveChoicesOpen(
+    store,
+    thread.id,
+    onInteractionOpenChange !== undefined,
+  );
   const [pinPending, setPinPending] = useState(false);
   // "New group…" opens the create dialog with this prefill; closed when undefined.
   const [newGroupName, setNewGroupName] = useState<string>();
@@ -199,7 +257,7 @@ export function ThreadContextMenu({
     menuOpen ||
     newGroupName !== undefined ||
     snoozeOpen ||
-    archiveAction.open ||
+    archiveChoicesOpen ||
     forceResetOpen ||
     settleChoicesOpen ||
     workspaceDeleteTarget !== undefined;
@@ -208,6 +266,13 @@ export function ThreadContextMenu({
   }, [interactionOpen, onInteractionOpenChange]);
   const [groupPending, setGroupPending] = useState(false);
   const [placementPending, setPlacementPending] = useState(false);
+  const newGroupDialogMounted = useMountedOnceOpen(newGroupName !== undefined);
+  const snoozeDialogMounted = useMountedOnceOpen(snoozeOpen);
+  const forceResetDialogMounted = useMountedOnceOpen(forceResetOpen);
+  const settleDialogMounted = useMountedOnceOpen(settleChoicesOpen);
+  const workspaceDeleteDialogMounted = useMountedOnceOpen(
+    workspaceDeleteTarget !== undefined,
+  );
   const [localConfigurationCopyPending, setConfigurationCopyPending] =
     useState(false);
   const configurationCopyPending =
@@ -471,6 +536,7 @@ export function ThreadContextMenu({
         ? "Loading…"
         : "Unavailable";
   const title = thread.title.text || "Untitled thread";
+  const metaLine = threadMetaLine(thread, projectLabel);
 
   const organizeGroup = (
     <>
@@ -531,7 +597,9 @@ export function ThreadContextMenu({
   );
 
   const lifecycleGroup = archived ? (
-    <ContextMenuItem onSelect={() => mutate("restore")}>
+    <ContextMenuItem
+      onSelect={() => (onRestore ? onRestore() : mutate("restore"))}
+    >
       <ArchiveRestore aria-hidden="true" />
       Restore to Active
     </ContextMenuItem>
@@ -729,7 +797,7 @@ export function ThreadContextMenu({
           data-testid={sheet ? "thread-actions-sheet" : "thread-context-menu"}
           aria-label={`Actions for ${title}`}
           sheetTitle={title}
-          sheetDescription={threadMetaLine(thread, projectLabel)}
+          sheetDescription={metaLine}
           onCloseAutoFocus={(event) => {
             if (afterSheetClose.current) {
               // A deferred action (a dialog, the rename field) takes focus.
@@ -756,7 +824,7 @@ export function ThreadContextMenu({
             <>
               <ContextMenuLabel
                 variant="header"
-                description={threadMetaLine(thread, projectLabel)}
+                description={metaLine}
               >
                 {title}
               </ContextMenuLabel>
@@ -789,17 +857,19 @@ export function ThreadContextMenu({
           )}
         </ContextMenuContent>
       </ContextMenu>
-      <NewGroupDialog
-        open={newGroupName !== undefined}
-        initialName={newGroupName ?? ""}
-        groups={groupCatalog}
-        contentRef={newGroupDialogRef}
-        returnFocusRef={returnFocusRef}
-        onOpenChange={(open) => {
-          if (!open) setNewGroupName(undefined);
-        }}
-        onCreate={(name) => store.createThreadGroup(thread, name)}
-      />
+      {newGroupDialogMounted && (
+        <NewGroupDialog
+          open={newGroupName !== undefined}
+          initialName={newGroupName ?? ""}
+          groups={groupCatalog}
+          contentRef={newGroupDialogRef}
+          returnFocusRef={returnFocusRef}
+          onOpenChange={(open) => {
+            if (!open) setNewGroupName(undefined);
+          }}
+          onCreate={(name) => store.createThreadGroup(thread, name)}
+        />
+      )}
       {!thread.available && (
         <span
           id={`sidebar-settings-copy-unavailable-${thread.id}`}
@@ -813,65 +883,75 @@ export function ThreadContextMenu({
           {latestFork.unavailableReason}
         </span>
       )}
-      <ForceResetDialog
-        open={forceResetOpen}
-        onOpenChange={setForceResetOpen}
-        loadImpact={() => store.getThreadForceResetImpact(thread.id)}
-        onForceReset={(impact, mutationId) =>
-          store
-            .forceResetThread(thread.id, impact.blockerFingerprint, mutationId)
-            .then(() => undefined)
-        }
-        returnFocusRef={returnFocusRef}
-      />
-      <SettleImpactDialog
-        open={settleChoicesOpen}
-        onOpenChange={setSettleChoicesOpen}
-        impact={settleImpact}
-        loadImpact={() => store.getThreadArchiveImpact(thread.id)}
-        onSettle={(options) =>
-          performMutation("settle", options).then(() => undefined)
-        }
-        returnFocusRef={returnFocusRef}
-      />
-      <SnoozeDialog
-        open={snoozeOpen}
-        onOpenChange={setSnoozeOpen}
-        onSnooze={(options) => store.mutateInventory(thread, "snooze", options)}
-        onRemindNow={(wakeReminder) =>
-          store.mutateInventory(thread, "remind", { wakeReminder })
-        }
-        returnFocusRef={returnFocusRef}
-      />
-      <ExecutionWorkspaceDeleteDialog
-        workspace={workspaceDeleteTarget}
-        returnFocusRef={returnFocusRef}
-        open={workspaceDeleteTarget !== undefined}
-        onOpenChange={(open) => {
-          if (!open) setWorkspaceDeleteTarget(undefined);
-        }}
-        pending={workspaceDeletePending}
-        error={workspaceDeleteError}
-        onDelete={() => {
-          if (!workspaceDeleteTarget || workspaceDeletePending) return;
-          setWorkspaceDeletePending(true);
-          setWorkspaceDeleteError("");
-          void store
-            .deleteThreadExecutionWorkspace(
-              thread.id,
-              workspaceDeleteTarget.allocationRevision,
-            )
-            .then(() => setWorkspaceDeleteTarget(undefined))
-            .catch((error: unknown) =>
-              setWorkspaceDeleteError(
-                error instanceof Error
-                  ? error.message
-                  : "The isolated workspace could not be deleted.",
-              ),
-            )
-            .finally(() => setWorkspaceDeletePending(false));
-        }}
-      />
+      {forceResetDialogMounted && (
+        <ForceResetDialog
+          open={forceResetOpen}
+          onOpenChange={setForceResetOpen}
+          loadImpact={() => store.getThreadForceResetImpact(thread.id)}
+          onForceReset={(impact, mutationId) =>
+            store
+              .forceResetThread(thread.id, impact.blockerFingerprint, mutationId)
+              .then(() => undefined)
+          }
+          returnFocusRef={returnFocusRef}
+        />
+      )}
+      {settleDialogMounted && (
+        <SettleImpactDialog
+          open={settleChoicesOpen}
+          onOpenChange={setSettleChoicesOpen}
+          impact={settleImpact}
+          loadImpact={() => store.getThreadArchiveImpact(thread.id)}
+          onSettle={(options) =>
+            performMutation("settle", options).then(() => undefined)
+          }
+          returnFocusRef={returnFocusRef}
+        />
+      )}
+      {snoozeDialogMounted && (
+        <SnoozeDialog
+          open={snoozeOpen}
+          onOpenChange={setSnoozeOpen}
+          onSnooze={(options) =>
+            store.mutateInventory(thread, "snooze", options)
+          }
+          onRemindNow={(wakeReminder) =>
+            store.mutateInventory(thread, "remind", { wakeReminder })
+          }
+          returnFocusRef={returnFocusRef}
+        />
+      )}
+      {workspaceDeleteDialogMounted && (
+        <ExecutionWorkspaceDeleteDialog
+          workspace={workspaceDeleteTarget}
+          returnFocusRef={returnFocusRef}
+          open={workspaceDeleteTarget !== undefined}
+          onOpenChange={(open) => {
+            if (!open) setWorkspaceDeleteTarget(undefined);
+          }}
+          pending={workspaceDeletePending}
+          error={workspaceDeleteError}
+          onDelete={() => {
+            if (!workspaceDeleteTarget || workspaceDeletePending) return;
+            setWorkspaceDeletePending(true);
+            setWorkspaceDeleteError("");
+            void store
+              .deleteThreadExecutionWorkspace(
+                thread.id,
+                workspaceDeleteTarget.allocationRevision,
+              )
+              .then(() => setWorkspaceDeleteTarget(undefined))
+              .catch((error: unknown) =>
+                setWorkspaceDeleteError(
+                  error instanceof Error
+                    ? error.message
+                    : "The isolated workspace could not be deleted.",
+                ),
+              )
+              .finally(() => setWorkspaceDeletePending(false));
+          }}
+        />
+      )}
       {actionError && (
         <p className="thread-row-error" role="alert">
           {actionError}

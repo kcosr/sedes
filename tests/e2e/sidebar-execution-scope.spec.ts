@@ -1,11 +1,17 @@
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
+import {
+  normalizedApplicationSessionSchema,
+  normalizedApplicationSnapshotSchema,
+} from "../../src/shared/index.js";
 import { loadE2ERunContext } from "./run-context";
 import type { Locator, Page, TestInfo } from "@playwright/test";
 import { expect, test } from "./fixtures";
 import {
   capture,
   expectNoPageOverflow,
+  openSedesWorkspace,
   overlaySettled,
   repositoryLabel,
   selectCustomNewThreadTarget,
@@ -595,4 +601,140 @@ test("sidebar execution scope filters creation and persists responsively", async
   await projects.getByRole("heading", { name: "Projects", exact: true }).scrollIntoViewIfNeeded();
   await capture(page, testInfo, "projects-settings-mobile.png");
 
+});
+
+test("archived threads honor the shared sidebar scope and search", async ({
+  page,
+}, testInfo) => {
+  await openSedesWorkspace(page, { preserveSidebarView: true });
+  const [session, snapshot] = await Promise.all([
+    page.request.get("/api/application/session").then(async (response) =>
+      normalizedApplicationSessionSchema.parse(await response.json()),
+    ),
+    page.request.get("/api/application/snapshot").then(async (response) =>
+      normalizedApplicationSnapshotSchema.parse(await response.json()),
+    ),
+  ]);
+  const workspace = snapshot.workspaces.find(
+    ({ available, label }) => available && label.text === repositoryLabel,
+  )!;
+  const targetNamed = (label: string) =>
+    snapshot.executionTargets.find(
+      (target) =>
+        target.available &&
+        target.environmentId === workspace.environmentId &&
+        target.label.text === label,
+    )!;
+  const primary = targetNamed("Pi SDK");
+  const alternate = targetNamed("Alternate scripted agent");
+  const headers = {
+    "Content-Type": "application/json",
+    "X-CSRF-Token": session.csrfToken,
+  };
+  const suffix = randomUUID().slice(0, 8);
+  const archiveThread = async (title: string, targetId: string) => {
+    const created = await page.request.post("/api/threads", {
+      headers,
+      data: {
+        workspaceId: workspace.id,
+        title,
+        executionWorkspace: { kind: "direct" },
+        configuration: { kind: "custom", targetId },
+      },
+    });
+    expect(created.status(), await created.text()).toBe(201);
+    const { threadId } = (await created.json()) as { threadId: string };
+    const thread = normalizedApplicationSnapshotSchema
+      .parse(await (await page.request.get("/api/application/snapshot")).json())
+      .threads.find(({ id }) => id === threadId)!;
+    const archived = await page.request.patch(
+      `/api/threads/${threadId}/inventory`,
+      {
+        headers,
+        data: {
+          action: "archive",
+          expectedRevision: thread.inventoryRevision,
+          expectedStashedPromptCount: 0,
+          mutationId: randomUUID(),
+          executionWorkspaceDisposition: { kind: "keep" },
+        },
+      },
+    );
+    expect(archived.status(), await archived.text()).toBe(204);
+    return threadId;
+  };
+  const primaryTitle = `Archived on the primary target ${suffix}`;
+  const alternateTitle = `Archived on the alternate target ${suffix}`;
+  const primaryId = await archiveThread(primaryTitle, primary.id);
+  const alternateId = await archiveThread(alternateTitle, alternate.id);
+  const archivedTotal = normalizedApplicationSnapshotSchema
+    .parse(await (await page.request.get("/api/application/snapshot")).json())
+    .threads.filter(({ inventoryState }) => inventoryState === "archived");
+  const inScope = archivedTotal.filter(
+    ({ targetId }) => targetId === alternate.id,
+  ).length;
+
+  // Narrow the sidebar Scope to the alternate target.
+  await page.goto("/");
+  const desktopSidebar = page.getByTestId("desktop-sidebar");
+  const targetFilter = desktopSidebar.getByTestId("target-filter");
+  await targetFilter.click();
+  await page
+    .getByRole("combobox", { name: "Search targets", exact: true })
+    .fill("alternate");
+  await page.keyboard.press("Enter");
+  await expect(targetFilter).toHaveAttribute("data-scope-value", alternate.id);
+
+  await page.goto("/archived");
+  const rowFor = (threadId: string) =>
+    page.locator(`[data-testid="archive-row"][data-thread-id="${threadId}"]`);
+  const status = page.getByTestId("archive-status");
+  await expect(rowFor(alternateId)).toContainText(alternateTitle);
+  await expect(rowFor(primaryId)).toHaveCount(0);
+  await expect(status).toContainText(
+    `${inScope} of ${archivedTotal.length}`,
+  );
+  await expect(status).toContainText("Scope: Alternate scripted agent");
+  await expect(page.getByTestId("archive-count")).toHaveText(
+    `${archivedTotal.length} archived threads`,
+  );
+  await capture(page, testInfo, "archive-scope-desktop.png");
+
+  // Search is the sidebar's search: typing here narrows both surfaces.
+  const search = page.getByRole("searchbox", {
+    name: "Search archived threads",
+  });
+  await search.fill(suffix);
+  await expect(desktopSidebar.getByRole("searchbox")).toHaveValue(suffix);
+  await expect(status).toContainText(`matching “${suffix}”`);
+  await expect(page.getByTestId("archive-row")).toHaveCount(1);
+
+  // On a phone the sidebar is hidden; the status line carries the Scope.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(status).toBeInViewport();
+  await expectNoPageOverflow(page);
+  await expectMinimumHeight(
+    rowFor(alternateId).getByRole("button", {
+      name: `Restore ${alternateTitle}`,
+      exact: true,
+    }),
+    40,
+  );
+  await capture(page, testInfo, "archive-scope-mobile-dark.png");
+  await status.getByRole("button", { name: "Clear scope", exact: true }).click();
+  await expect(status).not.toContainText("Scope:");
+  await expect(rowFor(primaryId)).toContainText(primaryTitle);
+  await expect(rowFor(alternateId)).toBeVisible();
+  await expect(status).toContainText(`2 of ${archivedTotal.length}`);
+  await capture(page, testInfo, "archive-scope-cleared-mobile-dark.png");
+  await search.fill("");
+  await page.emulateMedia({ colorScheme: "light" });
+
+  // Clearing from the archive clears the sidebar Scope too.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(targetFilter).not.toHaveAttribute(
+    "data-scope-value",
+    alternate.id,
+  );
 });

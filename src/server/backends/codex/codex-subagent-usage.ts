@@ -7,7 +7,7 @@ import type { CodexRpcNotification } from "./rpc/codex-rpc-client.js";
 import { codexC2NotificationSchemas, refineCodexThreadStartedNotification } from "./codex-c2-protocol.js";
 import { codexThreadResumeMethod, type CodexThreadTokenUsage } from "./codex-c1-protocol.js";
 import { codexRuntimeMethod } from "./runtime/codex-runtime-protocol.js";
-import type { ThreadClosedNotification } from "../../provider-protocol/bindings/codex-app-server/generated/0.153.0/stable/v2/ThreadClosedNotification.js";
+import type { ThreadClosedNotification } from "../../provider-protocol/bindings/codex-app-server/generated/0.160.0/stable/v2/ThreadClosedNotification.js";
 import type { OfficialCodexClientRequestResult } from "../../provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 
 const MAX_PENDING = 256;

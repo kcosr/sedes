@@ -65,6 +65,13 @@ without resolving the provider. Native presentation keeps its tool list for
 the Pi turn or the Codex or Claude provider session; every invocation still
 rechecks policy.
 
+After retirement, open thread streams receive the saved policy revision through
+an application-state update even when no provider runtime remains attached.
+This publication reads principal-scoped policy only and preserves the retained
+provider projection; it does not restart a stopped or archived thread. The next
+runtime attachment constructs its tools from the saved policy. Pi, Codex,
+Claude, Grok, and OpenCode share this publication path.
+
 ## Principal Tool clients
 
 An external `sedes` CLI process can use a named principal-owned Tool client.

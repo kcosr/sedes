@@ -2854,6 +2854,9 @@ class CodexE2eRpcFixture {
       }
       const thread = this.#replaceThread({
         id: `e2e-codex-created-${threadSource}`,
+        environments: null,
+        originator: "sedes_web",
+        daybreakEnabled: null,
         extra: {},
         sessionId: `e2e-codex-created-session-${threadSource}`,
         forkedFromId: null,

@@ -12,6 +12,7 @@ import {
   CodexRpcRemoteError,
 } from "../../src/server/backends/codex/rpc/errors.js";
 import { CodexServerRequestRouter } from "../../src/server/backends/codex/codex-server-request-router.js";
+import { codexThreadItemsListMethod } from "../../src/server/backends/codex/codex-c1-protocol.js";
 import {
   CODEX_CLIENT_REQUEST_METHODS,
   CODEX_EXPERIMENTAL_CLIENT_REQUEST_METHODS,
@@ -789,6 +790,42 @@ describe("Codex RPC client", () => {
     });
   });
 
+  it("keeps the shared connection usable after persisted item times run backwards", async () => {
+    const { client, transport } = createClient();
+    const closed = vi.fn();
+    void client.closed.then(closed);
+    const readItems = (threadId: string) => client.request(
+      codexThreadItemsListMethod,
+      { threadId, turnId: "turn-1" },
+      { timeoutMilliseconds: 1_000 },
+    );
+    const reversed = readItems("thread-clock-rollback");
+    const concurrent = readItems("thread-other");
+    await waitForWrites(transport, 2);
+    const result = {
+      data: [{
+        turnId: "turn-1",
+        item: { type: "plan", id: "plan-1", text: "Plan" },
+        startedAtMs: 2_000,
+        completedAtMs: 1_000,
+      }],
+      nextCursor: null,
+      backwardsCursor: null,
+    };
+    transport.emit({ id: parsedWrite(transport, 0).id, result });
+    await expect(reversed).resolves.toMatchObject({
+      data: [{ startedAtMs: 2_000, completedAtMs: null }],
+    });
+    transport.emit({ id: parsedWrite(transport, 1).id, result: { ...result, data: [] } });
+    await expect(concurrent).resolves.toMatchObject({ data: [] });
+
+    const following = readItems("thread-after-rollback");
+    await waitForWrites(transport, 3);
+    transport.emit({ id: parsedWrite(transport, 2).id, result: { ...result, data: [] } });
+    await expect(following).resolves.toMatchObject({ data: [] });
+    expect(closed).not.toHaveBeenCalled();
+  });
+
   it("routes authentication recovery and contains malformed payloads to the attributable thread", async () => {
     const { client, transport } = createClient();
     const notifications: unknown[] = [];
@@ -1194,6 +1231,23 @@ describe("Codex RPC client", () => {
     });
   });
 
+  it.each([
+    ["account/gatewayOAuth/changed", { authUrl: null, providerId: "provider-1", status: "succeeded", error: null }],
+    ["thread/attachment/updated", { threadId: "thread-1", attachmentType: "file", identityKey: "identity-1", attachmentId: "attachment-1", operation: "created" }],
+    ["account/updated", { authMode: "chatgpt", planType: "promax" }],
+  ])("recognizes the 0.160 %s notification without disrupting RPC", async (method, params) => {
+    const { client, transport } = createClient();
+    const notifications: unknown[] = [];
+    client.subscribeNotifications((notification) => notifications.push(notification));
+    transport.emit({ method, params });
+    await vi.waitFor(() => expect(notifications).toHaveLength(1));
+    expect(notifications[0]).toMatchObject({ kind: "decoded_notification", method, params });
+    const followUp = client.request(echoMethod, { value: "still-open" }, { timeoutMilliseconds: 1_000 });
+    await waitForWrites(transport, 1);
+    transport.emit({ id: parsedWrite(transport, 0).id, result: { value: "still-open" } });
+    await expect(followUp).resolves.toBe("still-open");
+  });
+
   it("publishes a redacted attributable marker and continues notifications and pending requests", async () => {
     const { client, transport } = createClient();
     const notifications: unknown[] = [];
@@ -1423,7 +1477,7 @@ describe("Codex RPC client", () => {
     await expect(followUp).resolves.toBe("still-open");
   });
 
-  it("fails an unsolicited openai elicitation form without reaching an owner or closing RPC", async () => {
+  it.each(["openaiForm", "openai/form", "openai/userVerification"])("fails unsolicited %s elicitation without reaching an owner or closing RPC", async (mode) => {
     const router = new CodexServerRequestRouter();
     router.activateGeneration(7);
     const handle = vi.fn();
@@ -1444,13 +1498,11 @@ describe("Codex RPC client", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         serverName: "provider",
-        mode: "openaiForm",
+        mode,
         _meta: null,
-        message: "Configure the provider",
-        requestedSchema: {
-          type: "object",
-          properties: { account: { type: "string" } },
-        },
+        ...(mode === "openai/userVerification"
+          ? { title: "Verify account", description: "Verify the account", challenge: "opaque-challenge" }
+          : { message: "Configure the provider", requestedSchema: { type: "object", properties: { account: { type: "string" } } } }),
       },
     });
     await waitForWrites(transport, 1);

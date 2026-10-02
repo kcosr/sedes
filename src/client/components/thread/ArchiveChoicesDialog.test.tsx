@@ -17,6 +17,7 @@ import { getBlockingOperation } from "../../operations/blocking-operation.js";
 import type { ApplicationClientStore } from "../../stores/ApplicationClientStore.js";
 import {
   ArchiveChoicesDialog,
+  useArchiveChoicesOpen,
   useArchiveThreadAction,
 } from "./ArchiveChoicesDialog.js";
 
@@ -701,12 +702,13 @@ describe("useArchiveThreadAction", () => {
       onArchived,
       onPendingChange,
     });
+    const choicesOpen = useArchiveChoicesOpen(store, "thread-1");
     return (
       <>
         <button type="button" onClick={archive.start}>
           Archive…
         </button>
-        <output aria-label="Choices open">{String(archive.open)}</output>
+        <output aria-label="Choices open">{String(choicesOpen)}</output>
       </>
     );
   }
@@ -846,4 +848,39 @@ describe("useArchiveThreadAction", () => {
     expect(screen.queryByText("Old connection failure")).toBeNull();
   });
 
+  it("re-renders only the surfaces whose thread's choices open or close", async () => {
+    const store = makeStore();
+    const renders = { other: 0, unsubscribed: 0 };
+    function Observer({
+      threadId,
+      enabled,
+      count,
+    }: {
+      readonly threadId: string;
+      readonly enabled?: boolean;
+      readonly count: keyof typeof renders;
+    }) {
+      renders[count] += 1;
+      const open = useArchiveChoicesOpen(store, threadId, enabled);
+      return <output aria-label={`${count} open`}>{String(open)}</output>;
+    }
+    render(
+      <>
+        <ArchiveAction store={store} onArchived={vi.fn()} />
+        <Observer threadId="thread-2" count="other" />
+        <Observer threadId="thread-1" enabled={false} count="unsubscribed" />
+      </>,
+    );
+    const initial = { ...renders };
+
+    await userEvent.click(screen.getByRole("button", { name: "Archive…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Archive this thread" });
+    expect(screen.getByLabelText("Choices open")).toHaveTextContent("true");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
+
+    expect(renders).toEqual(initial);
+    expect(screen.getByLabelText("other open")).toHaveTextContent("false");
+    expect(screen.getByLabelText("unsubscribed open")).toHaveTextContent("false");
+  });
 });

@@ -164,6 +164,28 @@ function applicationState(
   return state;
 }
 
+function retainedPolicyFixture(initial: NormalizedThreadSnapshot) {
+  const hub = new ThreadEventHub();
+  hub.publish({ type: "snapshot", generation: "generation-1", snapshot: initial });
+  const received = vi.fn();
+  const subscription = hub.subscribe(received);
+  const agentToolPolicy = vi.fn(async () => initial.agentTools);
+  const acquire = vi.fn(() => {
+    throw new Error("policy publication must not reopen the provider");
+  });
+  const release = vi.fn();
+  const publisher = new ThreadSnapshotPublisher(
+    { getTarget: vi.fn(() => ({ backingState: "bound" })) } as never,
+    { agentToolPolicy } as never,
+    {
+      publishApplicationIncrementalsIfLoaded: vi.fn(async () => false),
+      acquire,
+      quiet: vi.fn(() => ({ hub, release })),
+    } as never,
+  );
+  return { hub, received, subscription, agentToolPolicy, acquire, release, publisher };
+}
+
 describe("ThreadSnapshotPublisher", () => {
   it("publishes every changed application summary after a batch", async () => {
     const onThreadChanged = vi.fn(async () => undefined);
@@ -251,11 +273,12 @@ describe("ThreadSnapshotPublisher", () => {
   it("does not attach a dormant bound provider for an application overlay", async () => {
     const acquire = vi.fn();
     const capture = vi.fn();
+    const agentToolPolicy = vi.fn();
     const publisher = new ThreadSnapshotPublisher(
       {
         getTarget: vi.fn(() => ({ backingState: "bound" })),
       } as never,
-      { snapshot: capture } as never,
+      { snapshot: capture, agentToolPolicy } as never,
       {
         publishApplicationIncrementalsIfLoaded: vi.fn(async () => false),
         acquire,
@@ -270,6 +293,134 @@ describe("ThreadSnapshotPublisher", () => {
 
     expect(acquire).not.toHaveBeenCalled();
     expect(capture).not.toHaveBeenCalled();
+    expect(agentToolPolicy).not.toHaveBeenCalled();
+  });
+
+  it.each(["idle", "stopped", "archived"] as const)(
+    "publishes successive tool policy revisions to a retained %s thread without reopening its provider",
+    async (state) => {
+      const initial = snapshot();
+      if (state === "stopped") {
+        initial.runState = "disconnected";
+        initial.thread.runState = "disconnected";
+        initial.capabilities.runState = "disconnected";
+      }
+      if (state === "archived") initial.thread.inventoryState = "archived";
+      const fixture = retainedPolicyFixture(initial);
+      const enabled = { ...initial.agentTools, enabled: true, revision: 1 };
+      const revised = { ...enabled, accessBoundary: "thread" as const, revision: 2 };
+      fixture.agentToolPolicy.mockResolvedValueOnce(enabled).mockResolvedValueOnce(revised);
+
+      await fixture.publisher.publish(scope, "thread-1");
+      expect(fixture.hub.snapshot).toEqual({ ...initial, agentTools: enabled });
+      await fixture.publisher.publish(scope, "thread-1");
+      expect(fixture.hub.snapshot).toEqual({ ...initial, agentTools: revised });
+
+      expect(fixture.agentToolPolicy).toHaveBeenNthCalledWith(1, scope, "thread-1");
+      expect(fixture.received.mock.calls.map(([envelope]) => envelope.event.type))
+        .toEqual(["application_state_changed", "application_state_changed"]);
+      expect(fixture.acquire).not.toHaveBeenCalled();
+      expect(fixture.release).toHaveBeenCalledTimes(2);
+      fixture.subscription.close();
+      await fixture.publisher.close();
+    },
+  );
+
+  it("merges a captured tool policy into the latest retained generation and state", async () => {
+    const initial = snapshot();
+    const fixture = retainedPolicyFixture(initial);
+    const policy = deferred<NormalizedThreadSnapshot["agentTools"]>();
+    fixture.agentToolPolicy.mockImplementationOnce(() => policy.promise);
+    const publication = fixture.publisher.publish(scope, "thread-1");
+    await vi.waitFor(() => expect(fixture.agentToolPolicy).toHaveBeenCalledOnce());
+
+    const current: NormalizedThreadSnapshot = {
+      ...initial,
+      thread: { ...initial.thread, title: { text: "Renamed while reading" }, threadRevision: 1, runState: "running" },
+      draft: { ...initial.draft, text: "newer draft", revision: 1 },
+      runState: "running",
+      activeTurnId: "turn-2",
+      orderedTurnIds: ["turn-2"],
+      turnsById: {
+        "turn-2": {
+          id: "turn-2", revision: 1, status: "in_progress",
+          orderedItemIds: ["item-2"],
+        },
+      },
+      itemsById: {
+        "item-2": {
+          id: "item-2", turnId: "turn-2", revision: 1,
+          kind: "assistant_message", status: "streaming",
+          markdown: { text: "Working on the next turn" },
+        },
+      },
+      forksByTurnId: {
+        "turn-2": {
+          sourceTurnId: "turn-2", expectedTurnRevision: 1, available: false,
+          unavailableReason: { text: "Only a successfully completed turn can be forked." },
+        },
+      },
+      history: { hasOlder: true, olderCursor: "older-history" },
+      capabilities: { ...initial.capabilities, revision: "capabilities-2", runState: "running" },
+    };
+    fixture.hub.publish({ type: "snapshot", generation: "generation-2", snapshot: current });
+    const enabled = { ...initial.agentTools, enabled: true, revision: 1 };
+    policy.resolve(enabled);
+    await publication;
+
+    expect(fixture.hub.snapshot).toEqual({ ...current, agentTools: enabled });
+    expect(fixture.received).toHaveBeenLastCalledWith(expect.objectContaining({
+      event: expect.objectContaining({ type: "application_state_changed", generation: "generation-2" }),
+    }));
+    expect(fixture.acquire).not.toHaveBeenCalled();
+    fixture.subscription.close();
+    await fixture.publisher.close();
+  });
+
+  it.each([1, 2])("does not overwrite a newer retained policy with captured revision %i", async (capturedRevision) => {
+    const initial = snapshot();
+    const fixture = retainedPolicyFixture(initial);
+    const policy = deferred<NormalizedThreadSnapshot["agentTools"]>();
+    fixture.agentToolPolicy.mockImplementationOnce(() => policy.promise);
+    const publication = fixture.publisher.publish(scope, "thread-1");
+    await vi.waitFor(() => expect(fixture.agentToolPolicy).toHaveBeenCalledOnce());
+    const current = {
+      ...initial,
+      agentTools: { ...initial.agentTools, accessBoundary: "thread" as const, revision: 2 },
+    };
+    fixture.hub.publish({ type: "application_state_changed", generation: "generation-1", state: applicationState(current) });
+    fixture.received.mockClear();
+    policy.resolve({ ...initial.agentTools, enabled: true, revision: capturedRevision });
+    await publication;
+
+    expect(fixture.hub.snapshot).toEqual(current);
+    expect(fixture.received).not.toHaveBeenCalled();
+    expect(fixture.acquire).not.toHaveBeenCalled();
+    fixture.subscription.close();
+    await fixture.publisher.close();
+  });
+
+  it("does not apply a policy capture after the retained thread becomes unbound", async () => {
+    const initial = snapshot();
+    const fixture = retainedPolicyFixture(initial);
+    const policy = deferred<NormalizedThreadSnapshot["agentTools"]>();
+    fixture.agentToolPolicy.mockImplementationOnce(() => policy.promise);
+    const publication = fixture.publisher.publish(scope, "thread-1");
+    await vi.waitFor(() => expect(fixture.agentToolPolicy).toHaveBeenCalledOnce());
+    const current = {
+      ...initial,
+      thread: { ...initial.thread, backingState: "unbound" as const },
+    };
+    fixture.hub.publish({ type: "snapshot", generation: "generation-2", snapshot: current });
+    fixture.received.mockClear();
+    policy.resolve({ ...initial.agentTools, enabled: true, revision: 1 });
+    await publication;
+
+    expect(fixture.hub.snapshot).toEqual(current);
+    expect(fixture.received).not.toHaveBeenCalled();
+    expect(fixture.acquire).not.toHaveBeenCalled();
+    fixture.subscription.close();
+    await fixture.publisher.close();
   });
 
   it("re-baselines a loaded bound hub without acquiring a dormant runtime", async () => {

@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import path from "node:path";
-import release from "../../protocol/codex-app-server/0.153.0/release.json" with { type: "json" };
+import release from "../../protocol/codex-app-server/0.160.0/release.json" with { type: "json" };
 
 const require = createRequire(import.meta.url);
 

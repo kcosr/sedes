@@ -50,7 +50,7 @@ export type CodexGeneratedImageDecodeResult =
 /**
  * Decodes the provider-private `ImageGenerationItem.result` contract.
  *
- * Codex 0.153.0's image-generation extension returns standard, padded base64
+ * Codex's image-generation extension returns standard, padded base64
  * PNG bytes in `result`. `savedPath` is only a provider-local convenience copy
  * and is deliberately not consulted here.
  */

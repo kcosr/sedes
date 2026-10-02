@@ -326,10 +326,16 @@ describe("Workbench new-thread creation scope", () => {
       const task = (id: string, scope: unknown, completedAt: string | null = null) => ({ id, scope, completedAt });
       const state = {
         experimentalUsageEnabled: false,
+        search: "",
+        pendingThreadConfigurationCopySourceIds: [],
         snapshot: {
           environments: [],
           workspaces: [],
           executionTargets: [],
+          groups: [],
+          threads: [],
+          forkOrigins: [],
+          lineagePlacements: [],
           tasks: [
             task("global-open", { kind: "global" }),
             task("global-open-2", { kind: "global" }),

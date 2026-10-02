@@ -87,7 +87,7 @@ an unsupported action and the backend rejects it again if called directly.
 | Backend | Compiled profile                | Runtime admission                                                        | Tested through        |
 | ------- | ------------------------------- | ------------------------------------------------------------------------ | --------------------- |
 | Pi SDK  | `0.86.0` SDK                    | Exact pinned SDK package in the Sedes process                            | `0.86.0`              |
-| Codex   | `0.153.0` app-server protocol   | Stable `>=0.153.0`, excluding reviewed incompatible releases             | `0.154.0`             |
+| Codex   | `0.160.0` app-server protocol   | Stable `>=0.160.0`, excluding reviewed incompatible releases             | `0.160.0`             |
 | Claude  | `0.3.287` Agent SDK             | Stable Claude Code `>=2.1.287`, excluding reviewed incompatible releases | Claude Code `2.1.287` |
 | Grok    | `1.x` ACP compatibility profile | Stable `>=1.0.4`, excluding reviewed incompatible releases               | `1.0.4`               |
 | OpenCode v2 | `2.0.18` HTTP/SSE profile | Exact stock `2.0.18` | `2.0.18` |
@@ -112,7 +112,7 @@ runtimes are not equivalent to exercised runtimes.
 | Backend | In Sedes since | Most recent runtime qualification | Live suites in the repository | Execution topologies |
 | --- | --- | --- | --- | --- |
 | Pi SDK | July 2026 | Pinned SDK `0.86.0` runs inside the Sedes process; no external runtime to qualify | `test:real-pi`, `test:real-pi-cli` | Local runtime; SSH or outbound sidecar for workspace tools and context |
-| Codex | July 2026 | App-server `0.154.0` reviewed against the compiled `0.153.0` profile | `test:real-codex-agent-tools` | Local process, external UDS/TCP, persistent SSH or outbound sidecar |
+| Codex | July 2026 | App-server `0.160.0` reviewed against the compiled `0.160.0` profile | `test:real-codex-agent-tools` | Local process, external UDS/TCP, persistent SSH or outbound sidecar |
 | Claude | August 2026 | Claude Code `2.1.287` with Agent SDK `0.3.287` | `test:real-claude` (native loopback and authenticated cases) | Local worker; persistent SSH or outbound sidecar on Linux/macOS |
 | Grok | August 2026 | Grok Build `1.0.4` against the compiled `1.x` ACP profile | `test:real-grok` (three files) | Local Linux x64 or macOS only |
 | OpenCode v2 | September 2026 | Stock `opencode2` 2.0.18 with isolated loopback model fixtures | `test:real-opencode` (no paid inference) | Owned or external HTTP/SSE on a Linux execution host; local, SSH and outbound |

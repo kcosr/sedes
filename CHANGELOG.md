@@ -13,6 +13,12 @@
 - Browser and packaged clients require client protocol 132 for searchable
   skill aliases. Upgrade clients together with the server.
 
+- Codex uses the generated 0.160.0 app-server profile. Rebuild the server,
+  execution sidecars, and Electron Local together; mismatched compiled Codex
+  profiles are rejected. Codex app-servers and managed TUI commands now require
+  0.160.0 or newer; upgrade them on each execution host.
+  ([#27](https://github.com/kcosr/sedes/pull/27))
+
 - Remote OpenCode requires a matching sidecar build with private OpenCode
   runtime capability major 2 and tool capabilities. Upgrade existing execution sidecars before
   connecting this backend. (#17)
@@ -214,6 +220,17 @@
 - Claude imports and sessions whose saved permission mode is no longer
   allowed launch with an explicit allowed mode, preferring `default`.
   Native defaults cannot silently broaden the initial permission mode.
+
+- **Archived** follows the sidebar's Scope and shares its search, with a status
+  line showing the match count, Scope, search, and **Clear scope**. View options
+  sort by Recently archived, Last active, or Title and group by Date, Project,
+  or None. Rows show the backend, a two-line title, location details, and the
+  archive age, with an always-visible Restore button that reports progress and
+  failures inline. The list shows 100 threads at a time with **Show more**.
+  ([#28](https://github.com/kcosr/sedes/pull/28))
+
+- Qualify Codex 0.160.0 and preserve the managed TUI inline transcript despite
+  the upstream fullscreen default. ([#27](https://github.com/kcosr/sedes/pull/27))
 
 - In a thread, Tasks docks beside Chat as a workspace panel instead of a
   floating card, and resizes, collapses, docks on another edge, and closes
@@ -420,6 +437,29 @@
 - Claude history retains eligible external-origin messages and chooses queued
   inputs using native delivery evidence, matching the updated SDK while
   keeping internal startup markers hidden.
+
+- Searching **Archived** no longer lists non-matching fork parents, and the
+  page no longer re-renders for unrelated application events, which made large
+  archives slow to use. Thread menus mount their dialogs only when first
+  opened, the sidebar no longer builds lineage for archived threads, and
+  events that change nothing no longer re-render the app.
+  ([#28](https://github.com/kcosr/sedes/pull/28))
+
+- Linux x64 server and full Electron packages retain only the compatible
+  msgpackr N-API addon, removing bundled musl and Node 20 ABI variants that
+  caused server archive dependency checks to fail. Glibc arm64 packages omit
+  msgpackr's musl-only optional addon and use its JavaScript implementation.
+  ([#27](https://github.com/kcosr/sedes/pull/27))
+
+- Accept Codex 0.160.0 settings, image references, errors, and account metadata.
+  Populate existing item timestamps in live and reloaded history, and retain
+  meaningful interrupted-turn errors without changing normal Stop behavior.
+  ([#27](https://github.com/kcosr/sedes/pull/27))
+
+- Saving agent tools on an existing idle thread now refreshes the saved policy
+  in open clients after runtime retirement. Subsequent edits no longer report
+  a false conflict because the client still holds the previous policy revision.
+  ([#26](https://github.com/kcosr/sedes/pull/26))
 
 - Archive progress now offers **Dismiss** throughout. Closing progress keeps
   the archive workflow running, including required choices, and reports failures

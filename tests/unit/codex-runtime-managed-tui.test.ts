@@ -46,7 +46,7 @@ function fixture() {
   const client = new CodexSharedClientFacade({ current: () => ({ generation: 3, request: vi.fn() as never, requestWithReceipt: vi.fn() as never }), latestGeneration: () => 3, retireGeneration: async () => {} });
   client.updateLifecycle({ state: "ready", generation: 3 });
   const runtime: CodexManagedTuiHostRuntime = {
-    configuration: { scope, instance: { tenantId: scope.tenantId, id: "backend", kind: "codex_app_server", label: "Codex", enabled: true, configurationRevision: 1, protocolRelease: "0.153.0" },
+    configuration: { scope, instance: { tenantId: scope.tenantId, id: "backend", kind: "codex_app_server", label: "Codex", enabled: true, configurationRevision: 1, protocolRelease: "0.160.0" },
       executionEnvironmentId: "remote", connection: { ownership: "external", channel: { type: "unix_websocket", socketPath: "/remote/provider.sock" } } },
     environmentChannel: {} as never, environment: { HOME: "/remote/account", PATH: "/remote/bin" }, supervisor: { client },
   };
@@ -315,11 +315,11 @@ describe("persistent Codex managed TUI", () => {
     const remote = await host.attach();
     await remote.registry.start(authority, host.launcher);
     const input = host.createLauncher.mock.calls[0]![0] as { onRuntimeVersionAssessment(value: { version: string; newerThanTested: boolean }): void };
-    input.onRuntimeVersionAssessment({ version: "0.155.0", newerThanTested: true });
-    await vi.waitFor(() => expect(remote.assessment).toHaveBeenCalledWith({ version: "0.155.0", newerThanTested: true }));
+    input.onRuntimeVersionAssessment({ version: "0.161.0", newerThanTested: true });
+    await vi.waitFor(() => expect(remote.assessment).toHaveBeenCalledWith({ version: "0.161.0", newerThanTested: true }));
     remote.lose();
     const next = await host.attach(100);
-    expect(next.assessment).toHaveBeenCalledWith({ version: "0.155.0", newerThanTested: true });
+    expect(next.assessment).toHaveBeenCalledWith({ version: "0.161.0", newerThanTested: true });
   });
 
   it("rechecks controller authority when queued input reaches the native write boundary", async () => {

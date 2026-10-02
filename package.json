@@ -175,7 +175,7 @@
   "devDependencies": {
     "@capacitor/android": "8.4.0",
     "@capacitor/cli": "8.4.0",
-    "@openai/codex": "0.153.0",
+    "@openai/codex": "0.160.0",
     "@playwright/test": "1.62.0",
     "@tailwindcss/vite": "4.3.3",
     "@testing-library/jest-dom": "7.0.0",

@@ -283,6 +283,84 @@ test.describe.serial("agent tool policy", () => {
     ).toBeVisible({ timeout: 20_000 });
   });
 
+  test("saves repeated native policy changes on a bound idle thread and converges across clients", async ({
+    browser,
+    page,
+  }) => {
+    // The previous turn bound this thread to a provider runtime. Saving a native
+    // policy retires that runtime, but both clients must receive the new policy.
+    await page.goto(threadPath);
+    await expect(
+      page.locator(
+        '[data-item-kind="assistant_message"][data-item-status="completed"]',
+      ),
+    ).toHaveCount(1);
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeHidden();
+
+    const settings = page.getByRole("dialog", { name: "Agent tools" });
+    const openSettings = async () => {
+      await page.getByRole("button", { name: "Thread actions" }).click();
+      await page.getByRole("menuitem", { name: /^Agent tools…/ }).click();
+      await expect(settings).toBeVisible();
+      await expect(
+        settings.getByRole("combobox", { name: "Agent tool surface" }),
+      ).toContainText("Native tools");
+      await settings.getByRole("button", { name: "Threads", exact: true }).click();
+    };
+    const saveSettings = async () => {
+      const [saved] = await Promise.all([
+        page.waitForResponse(
+          (response) =>
+            response.request().method() === "POST" &&
+            response.url().endsWith("/operations") &&
+            response.request().postDataJSON()?.kind === "set_agent_tool_policy",
+          { timeout: 10_000 },
+        ),
+        settings.getByRole("button", { name: "Save", exact: true }).click(),
+      ]);
+      expect(saved.ok()).toBe(true);
+      await expect(settings).toBeHidden();
+      return saved.request().postDataJSON() as {
+        expectedPolicyRevision: number;
+      };
+    };
+
+    const secondPage = await browser.newPage();
+    try {
+      await secondPage.goto(threadPath);
+      await expect(
+        secondPage.getByRole("textbox", { name: "Message Scripted agent" }),
+      ).toBeVisible();
+      await secondPage.getByRole("button", { name: "Thread actions" }).click();
+      await secondPage.getByRole("menuitem", { name: /^Agent tools…/ }).click();
+      const secondSettings = secondPage.getByRole("dialog", { name: "Agent tools" });
+      await expect(secondSettings).toBeVisible();
+      await secondSettings.getByRole("button", { name: "Threads", exact: true }).click();
+      const secondThreadStatus = secondSettings.getByRole("checkbox", {
+        name: "Thread status",
+      });
+      await expect(secondThreadStatus).not.toBeChecked();
+
+      await openSettings();
+      await settings.getByRole("checkbox", { name: "Thread status" }).check();
+      const firstMutation = await saveSettings();
+      await expect(secondThreadStatus).toBeChecked();
+
+      // Reopening without a reload must use the policy revision just saved.
+      await openSettings();
+      const threadStatus = settings.getByRole("checkbox", { name: "Thread status" });
+      await expect(threadStatus).toBeChecked();
+      await threadStatus.uncheck();
+      const secondMutation = await saveSettings();
+      expect(secondMutation.expectedPolicyRevision).toBe(
+        firstMutation.expectedPolicyRevision + 1,
+      );
+      await expect(secondThreadStatus).not.toBeChecked();
+    } finally {
+      await secondPage.close();
+    }
+  });
+
   test("changes CLI access during a turn without interrupting it and converges across clients", async ({
     browser,
     page,
