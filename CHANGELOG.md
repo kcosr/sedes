@@ -589,6 +589,12 @@
   accurate location terminology while preserving project-level diagnostics.
   ([#34](https://github.com/kcosr/sedes/pull/34))
 
+- Archived thread messages now load through passive history readers in the
+  browser and agent tools, without resuming an agent or issuing tool credentials.
+  Older pages and turn lookups remain available; restoring a thread permits
+  normal execution again. Backend read failures report safe, actionable tool
+  errors instead of a generic internal error.
+
 - Removing a project or location while terminal work blocked it could return
   an internal server error. Terminal conflicts now return their own error from
   every route.

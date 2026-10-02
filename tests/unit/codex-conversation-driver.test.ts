@@ -1,3 +1,4 @@
+import { readConversationHistory } from "../helpers/read-conversation-history.js";
 import { usageSubagentRecoveryIndexesMigration } from "../../src/server/db/migrations/114-usage-subagent-recovery-indexes.js";
 import Database from "better-sqlite3";
 import { durableUsageAccountingMigration } from "../../src/server/db/migrations/110-durable-usage-accounting.js";
@@ -2348,7 +2349,7 @@ describe("CodexConversationBackendDriver", () => {
     const targetHarness = new RpcHarness();
     const target = driver(targetHarness);
     await expect(
-      target.read({
+      readConversationHistory(target, {
         ...attachInput(),
         scope: { ...scope, principalId: "other" },
       }),
@@ -2357,7 +2358,7 @@ describe("CodexConversationBackendDriver", () => {
       backendCode: "codex_thread_binding_mismatch",
     });
     await expect(
-      target.read({
+      readConversationHistory(target, {
         ...attachInput(),
         opaqueBindingDetail: "{bad",
       }),
@@ -2372,7 +2373,7 @@ describe("CodexConversationBackendDriver", () => {
       nativeThread({ source: { subAgent: "review" } }),
     ]) {
       targetHarness.enqueue("thread/read", { thread: unsafe });
-      await expect(target.read(attachInput())).rejects.toMatchObject({
+      await expect(readConversationHistory(target, attachInput())).rejects.toMatchObject({
         category: "permission_denied",
         backendCode: "codex_thread_binding_mismatch",
       });
@@ -3116,7 +3117,7 @@ describe("CodexConversationBackendDriver", () => {
     for (const candidate of cases) {
       const harness = new RpcHarness();
       harness.enqueue("thread/read", candidate.error);
-      await expect(driver(harness).read(attachInput())).rejects.toSatisfy(
+      await expect(readConversationHistory(driver(harness), attachInput())).rejects.toSatisfy(
         (error: unknown) => (
           expectBackendError(error, candidate.category, candidate.code),
           true
@@ -3137,7 +3138,7 @@ describe("CodexConversationBackendDriver", () => {
       }),
     );
 
-    await expect(driver(harness).read(attachInput())).rejects.toMatchObject({
+    await expect(readConversationHistory(driver(harness), attachInput())).rejects.toMatchObject({
       category: "unavailable",
       backendCode: "codex_rpc_client_closed",
       retryable: true,
@@ -3215,7 +3216,7 @@ describe("CodexConversationBackendDriver", () => {
       });
 
       enqueueCompleteLegacyRead(harness, accepted);
-      const read = await target.read(attachInput());
+      const read = await readConversationHistory(target, attachInput());
       const message = Object.values(read.snapshot.itemsById).find(
         (item) =>
           item.semanticKind === "user_message" &&
@@ -4391,7 +4392,7 @@ describe("CodexConversationBackendDriver", () => {
       { thread: { ...source, turns: [] } },
       { thread: source },
     );
-    const sourceRead = await discoveryDriver.read(attachInput());
+    const sourceRead = await readConversationHistory(discoveryDriver, attachInput());
     const selectedBackendTurnId = sourceRead.snapshot.orderedBackendTurnIds[0]!;
 
     const harness = new RpcHarness();
@@ -4821,6 +4822,197 @@ describe("CodexConversationBackendDriver", () => {
       state: "ready",
       generation: 1,
     });
+  });
+});
+
+describe("Codex archived history reader", () => {
+  const snapshotInput = () => ({ signal: new AbortController().signal });
+
+  function enqueueHead(harness: RpcHarness, indexes: number[], nextCursor: string | null = null) {
+    const metadata = paginatedThread({ status: { type: "notLoaded" } });
+    harness.enqueue("thread/read", { thread: metadata }, { thread: metadata });
+    harness.enqueue("thread/turns/list", {
+      data: indexes.map(notLoadedTurn), nextCursor, backwardsCursor: indexes.length ? "captured-head" : null,
+    });
+    harness.enqueue("thread/items/list", ...indexes.map(paginatedItems));
+    return metadata;
+  }
+
+  it("reads and locates legacy history without credentials, execution settings, ownership or native resume", async () => {
+    const acquire = vi.fn(async () => { throw new Error("archived_source_thread"); });
+    const desiredSettings = vi.fn(() => { throw new Error("execution_settings_must_not_load"); });
+    const reattachThread = vi.fn(async () => { throw new Error("native_session_must_not_reattach"); });
+    const detachThread = vi.fn(async () => undefined);
+    const harness = new RpcHarness({ reattachThread, detachThread });
+    const ownership = new CodexConversationOwnershipRegistry();
+    const target = driver(harness, connection, ownership, catalogModelPolicy,
+      executionSettingsProvider({ desiredSettings }), undefined, undefined, { acquire });
+    const reader = await target.openHistory(attachInput());
+    expect(harness.calls).toEqual([]);
+    enqueueCompleteLegacyRead(harness, nativeThread({ turns: Array.from({ length: 17 }, (_, index) => nativeTurn(index)) }));
+    const initial = await reader.readSnapshot(snapshotInput());
+    expect(initial.snapshot.orderedBackendTurnIds).toEqual(
+      Array.from({ length: 10 }, (_, index) => codexBackendTurnId("thread-1", `turn-${index + 7}`)),
+    );
+    expect(initial.history.previousCursor).toBeDefined();
+    const page = await reader.history({ cursor: initial.history.previousCursor, limit: 3 });
+    expect(page.orderedBackendTurnIds).toEqual([4, 5, 6].map(index => codexBackendTurnId("thread-1", `turn-${index}`)));
+    const located = await reader.locateTurn({
+      matchesBackendTurnId: id => id === codexBackendTurnId("thread-1", "turn-0"), maximumTurnCandidates: 17,
+    });
+    expect(located).toMatchObject({ status: "found", page: { orderedBackendTurnIds: [codexBackendTurnId("thread-1", "turn-0")] } });
+    expect(await reader.locateTurn({ matchesBackendTurnId: () => false, maximumTurnCandidates: 2 })).toEqual({ status: "search_limit_reached" });
+    expect(await reader.locateTurn({ matchesBackendTurnId: () => false, maximumTurnCandidates: 17 })).toEqual({ status: "not_found" });
+    expect(await reader.backendCapabilities()).toMatchObject({ supportsHistory: true, actions: [], deliveryModes: [], interactionKinds: [] });
+    expect(await reader.usage()).toEqual({});
+    initial.snapshot.orderedBackendTurnIds.splice(0);
+    expect((await reader.readSnapshot(snapshotInput())).snapshot.orderedBackendTurnIds).toHaveLength(10);
+    expect(ownership.size()).toBe(0);
+    await reader.close();
+    await reader.close();
+    await expect(reader.history({ limit: 1 })).rejects.toMatchObject({ backendCode: "codex_history_reader_closed" });
+    expect(acquire).not.toHaveBeenCalled();
+    expect(desiredSettings).not.toHaveBeenCalled();
+    expect(reattachThread).not.toHaveBeenCalled();
+    expect(detachThread).not.toHaveBeenCalled();
+    expect(harness.calls.map(({ method }) => method)).toEqual(["thread/read", "thread/read"]);
+  });
+
+  it("does not establish an existing uninitialized execution owner while reading", async () => {
+    const harness = new RpcHarness();
+    const ownership = new CodexConversationOwnershipRegistry();
+    const target = driver(harness, connection, ownership);
+    const handle = await target.attach(attachInput());
+    enqueueCompleteLegacyRead(harness, nativeThread());
+    const reader = await target.openHistory(attachInput());
+    await reader.readSnapshot(snapshotInput());
+    await reader.close();
+    expect(ownership.size()).toBe(1);
+    expect(harness.calls.map(({ method }) => method)).toEqual(["thread/read", "thread/read"]);
+    await handle.close();
+    expect(ownership.size()).toBe(0);
+  });
+
+  it("pages and seeks from the captured paginated head with stable normalized identities and opaque cursors", async () => {
+    const harness = new RpcHarness();
+    const reader = await driver(harness).openHistory(attachInput());
+    const metadata = enqueueHead(harness, Array.from({ length: 10 }, (_, index) => 13 - index), "older-3");
+    const first = await reader.readSnapshot(snapshotInput());
+    expect(first.history.previousCursor).toBeDefined();
+    expect(first.history.previousCursor).not.toContain("older-3");
+    const cached = await reader.history({ limit: 3 });
+    expect(cached.orderedBackendTurnIds).toEqual([11, 12, 13].map(index => codexBackendTurnId("thread-1", `turn-${index}`)));
+    harness.enqueue("thread/read", { thread: metadata }, { thread: metadata });
+    harness.enqueue("thread/turns/list", { data: [13, 12, 11, 10, 9].map(notLoadedTurn), nextCursor: "older-8", backwardsCursor: "captured-head" });
+    harness.enqueue("thread/items/list", paginatedItems(10), paginatedItems(9));
+    const insideHead = await reader.history({ cursor: cached.previousCursor, limit: 2 });
+    expect(insideHead.orderedBackendTurnIds).toEqual([9, 10].map(index => codexBackendTurnId("thread-1", `turn-${index}`)));
+    expect(harness.calls.filter(({ method }) => method === "thread/turns/list").at(-1)?.params).toMatchObject({ cursor: "captured-head", limit: 5 });
+    harness.enqueue("thread/read", { thread: metadata }, { thread: metadata });
+    harness.enqueue("thread/turns/list", { data: [3, 2].map(notLoadedTurn), nextCursor: "older-1", backwardsCursor: "older-3" });
+    harness.enqueue("thread/items/list", paginatedItems(3), paginatedItems(2));
+    const older = await reader.history({ cursor: first.history.previousCursor, limit: 2 });
+    expect(older.orderedBackendTurnIds).toEqual([2, 3].map(index => codexBackendTurnId("thread-1", `turn-${index}`)));
+    expect(harness.calls.filter(({ method }) => method === "thread/turns/list").at(-1)?.params).toMatchObject({ cursor: "older-3", limit: 2 });
+    harness.enqueue("thread/read", { thread: metadata }, { thread: metadata });
+    harness.enqueue("thread/turns/list", { data: [13, 12, 11, 10, 9, 8, 7].map(notLoadedTurn), nextCursor: "older-6", backwardsCursor: "captured-head" });
+    harness.enqueue("thread/items/list", paginatedItems(7));
+    const beforeLocate = harness.calls.filter(({ method }) => method === "thread/items/list").length;
+    expect(await reader.locateTurn({ matchesBackendTurnId: id => id === codexBackendTurnId("thread-1", "turn-7"), maximumTurnCandidates: 7 }))
+      .toMatchObject({ status: "found", page: { orderedBackendTurnIds: [codexBackendTurnId("thread-1", "turn-7")] } });
+    expect(harness.calls.filter(({ method }) => method === "thread/items/list")).toHaveLength(beforeLocate + 1);
+    expect(harness.calls.filter(({ method }) => method === "thread/turns/list").at(-1)?.params).toMatchObject({ cursor: "captured-head", limit: 7 });
+    const beforeRepeat = harness.calls.length;
+    expect(await reader.readSnapshot(snapshotInput())).toEqual(first);
+    expect(harness.calls).toHaveLength(beforeRepeat);
+    await reader.close();
+    expect(new Set(harness.calls.map(({ method }) => method))).toEqual(new Set(["thread/read", "thread/turns/list", "thread/items/list"]));
+  });
+
+  it("starts larger history requests at the captured head and preserves continuation", async () => {
+    const harness = new RpcHarness();
+    const reader = await driver(harness).openHistory(attachInput());
+    const metadata = enqueueHead(harness, Array.from({ length: 10 }, (_, index) => 13 - index), "older-3");
+    await reader.readSnapshot(snapshotInput());
+    const indexes = Array.from({ length: 12 }, (_, index) => 13 - index);
+    harness.enqueue("thread/read", { thread: metadata }, { thread: metadata });
+    harness.enqueue("thread/turns/list", { data: indexes.map(notLoadedTurn), nextCursor: "older-1", backwardsCursor: "captured-head" });
+    harness.enqueue("thread/items/list", ...indexes.map(paginatedItems));
+    const expanded = await reader.history({ limit: 12 });
+    expect(expanded.orderedBackendTurnIds).toHaveLength(12);
+    expect(expanded.previousCursor).toBeDefined();
+    expect(harness.calls.filter(({ method }) => method === "thread/turns/list").at(-1)?.params).toMatchObject({ cursor: "captured-head", limit: 12 });
+    await reader.close();
+  });
+
+  it.each(["legacy", "paginated"] as const)("rejects %s cursors from another reader", async mode => {
+    const harness = new RpcHarness();
+    const target = driver(harness);
+    const first = await target.openHistory(attachInput());
+    const second = await target.openHistory(attachInput());
+    const metadata = paginatedThread({ status: { type: "notLoaded" } });
+    const acquire = async (reader: Awaited<ReturnType<typeof target.openHistory>>) => {
+      if (mode === "legacy") enqueueCompleteLegacyRead(harness, nativeThread({ turns: Array.from({ length: 12 }, (_, index) => nativeTurn(index)) }));
+      else enqueueHead(harness, Array.from({ length: 10 }, (_, index) => 11 - index), "older-1");
+      return await reader.readSnapshot(snapshotInput());
+    };
+    const snapshot = await acquire(first);
+    await acquire(second);
+    if (mode === "paginated") harness.enqueue("thread/read", { thread: metadata });
+    await expect(second.history({ cursor: snapshot.history.previousCursor, limit: 1 })).rejects.toMatchObject({ category: "rejected", backendCode: "codex_history_cursor_invalid" });
+    await first.close();
+    await second.close();
+  });
+
+  it("fails closed when native history changes during acquisition or later paging", async () => {
+    const harness = new RpcHarness();
+    const target = driver(harness);
+    const first = await target.openHistory(attachInput());
+    const metadata = enqueueHead(harness, Array.from({ length: 10 }, (_, index) => 11 - index), "older");
+    harness.queues.get("thread/read")![1] = { thread: { ...metadata, updatedAt: metadata.updatedAt + 1 } };
+    await expect(first.readSnapshot(snapshotInput())).rejects.toMatchObject({ category: "unavailable", retryable: true, backendCode: "codex_history_reconciliation_required" });
+    await expect(first.history({ limit: 1 })).rejects.toMatchObject({ backendCode: "codex_history_not_established" });
+    await first.close();
+    const reader = await target.openHistory(attachInput());
+    enqueueHead(harness, Array.from({ length: 10 }, (_, index) => 11 - index), "older");
+    const snapshot = await reader.readSnapshot(snapshotInput());
+    harness.enqueue("thread/read", { thread: { ...metadata, sessionId: "replacement-session" } });
+    await expect(reader.history({ cursor: snapshot.history.previousCursor, limit: 1 })).rejects.toMatchObject({ backendCode: "codex_history_reconciliation_required" });
+    const callsBeforeReplacement = harness.calls.length;
+    harness.lifecycle("ready", 2);
+    await expect(reader.locateTurn({ matchesBackendTurnId: () => true, maximumTurnCandidates: 1 })).rejects.toMatchObject({ backendCode: "codex_history_reconciliation_required" });
+    expect(harness.calls).toHaveLength(callsBeforeReplacement);
+    await reader.close();
+  });
+
+  it("keeps an empty paginated acquisition empty without resuming it", async () => {
+    const harness = new RpcHarness();
+    const reader = await driver(harness).openHistory(attachInput());
+    enqueueHead(harness, []);
+    const snapshot = await reader.readSnapshot(snapshotInput());
+    expect(snapshot).toMatchObject({ snapshot: { orderedBackendTurnIds: [], runState: "idle" }, history: { operational: true } });
+    expect(snapshot.history.previousCursor).toBeUndefined();
+    expect((await reader.history({ limit: 500 })).orderedBackendTurnIds).toEqual([]);
+    expect(await reader.locateTurn({ matchesBackendTurnId: () => true, maximumTurnCandidates: 1 })).toEqual({ status: "not_found" });
+    expect(harness.calls.map(({ method }) => method)).toEqual(["thread/read", "thread/turns/list", "thread/read"]);
+    await reader.close();
+  });
+
+  it.each(["abort", "close"] as const)("settles a blocked read promptly on %s", async action => {
+    const harness = new RpcHarness();
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    harness.enqueue("thread/read", () => { entered(); return new Promise(() => undefined); });
+    const reader = await driver(harness).openHistory(attachInput());
+    const controller = new AbortController();
+    const pending = reader.readSnapshot({ signal: controller.signal });
+    const rejected = expect(pending).rejects.toMatchObject(action === "close" ? { backendCode: "codex_history_reader_closed" } : { message: "cancelled_read" });
+    await started;
+    if (action === "close") await reader.close();
+    else controller.abort(new Error("cancelled_read"));
+    await rejected;
+    expect(harness.requestOptions[0]?.options.signal?.aborted).toBe(true);
+    await reader.close();
   });
 });
 
@@ -7032,9 +7224,10 @@ describe("CodexConversationHandle", () => {
     const harness = new RpcHarness();
     const target = driver(harness);
     const indexes = Array.from({ length: 10 }, (_, index) => 9 - index);
-    harness.enqueue("thread/read", {
-      thread: paginatedThread({ status: { type: "notLoaded" } }),
-    });
+    harness.enqueue("thread/read",
+      { thread: paginatedThread({ status: { type: "notLoaded" } }) },
+      { thread: paginatedThread({ status: { type: "notLoaded" } }) },
+    );
     harness.enqueue("thread/turns/list", {
       data: indexes.map(notLoadedTurn),
       nextCursor: "older",
@@ -7042,7 +7235,7 @@ describe("CodexConversationHandle", () => {
     });
     harness.enqueue("thread/items/list", ...indexes.map(paginatedItems));
 
-    const read = await target.read(attachInput());
+    const read = await readConversationHistory(target, attachInput());
     expect(read.snapshot.orderedBackendTurnIds).toEqual(
       indexes
         .slice()
@@ -7052,10 +7245,8 @@ describe("CodexConversationHandle", () => {
     expect(
       harness.calls.filter(({ method }) => method === "thread/read"),
     ).toEqual([
-      {
-        method: "thread/read",
-        params: { threadId: "thread-1", includeTurns: false },
-      },
+      { method: "thread/read", params: { threadId: "thread-1", includeTurns: false } },
+      { method: "thread/read", params: { threadId: "thread-1", includeTurns: false } },
     ]);
     expect(
       harness.calls.find(({ method }) => method === "thread/turns/list"),
@@ -7076,7 +7267,7 @@ describe("CodexConversationHandle", () => {
       }),
     });
     await expect(
-      driver(activeHarness).read(attachInput()),
+      readConversationHistory(driver(activeHarness), attachInput()),
     ).rejects.toMatchObject({
       category: "unavailable",
       retryable: true,
@@ -7094,7 +7285,7 @@ describe("CodexConversationHandle", () => {
       thread: paginatedThread({ status: { type: "systemError" } }),
     });
     await expect(
-      driver(systemErrorHarness).read(attachInput()),
+      readConversationHistory(driver(systemErrorHarness), attachInput()),
     ).rejects.toMatchObject({
       category: "unavailable",
       retryable: true,
@@ -7121,7 +7312,7 @@ describe("CodexConversationHandle", () => {
       }),
     );
     await expect(
-      driver(missingRouteHarness).read(attachInput()),
+      readConversationHistory(driver(missingRouteHarness), attachInput()),
     ).rejects.toMatchObject({
       category: "incompatible_protocol",
       retryable: false,
@@ -7152,7 +7343,7 @@ describe("CodexConversationHandle", () => {
       backwardsCursor: "item-head",
     });
     await expect(
-      driverWithOutputArtifacts(rolloverHarness, rolloverArtifacts).read(
+      readConversationHistory(driverWithOutputArtifacts(rolloverHarness, rolloverArtifacts),
         attachInput(),
       ),
     ).rejects.toMatchObject({
@@ -7172,9 +7363,10 @@ describe("CodexConversationHandle", () => {
         completedAt: null,
         durationMs: null,
       }));
-      harness.enqueue("thread/read", {
-        thread: paginatedThread({ status: { type: status } }),
-      });
+      harness.enqueue("thread/read",
+        { thread: paginatedThread({ status: { type: status } }) },
+        { thread: paginatedThread({ status: { type: status } }) },
+      );
       harness.enqueue("thread/turns/list", {
         data: abandoned,
         nextCursor: null,
@@ -7186,7 +7378,7 @@ describe("CodexConversationHandle", () => {
         paginatedItems(0),
       );
 
-      const read = await driver(harness).read(attachInput());
+      const read = await readConversationHistory(driver(harness), attachInput());
       expect(read.snapshot).toMatchObject({ runState: "idle" });
       expect(read.snapshot.activeBackendTurnId).toBeUndefined();
       expect(
@@ -7794,7 +7986,7 @@ describe("CodexConversationHandle", () => {
       { thread: { ...thread, turns: [] } },
       { thread: { ...thread, turns: thread.turns.slice(0, 10) } },
     );
-    await expect(target.read(attachInput())).rejects.toMatchObject({
+    await expect(readConversationHistory(target, attachInput())).rejects.toMatchObject({
       category: "incompatible_protocol",
       backendCode: "codex_history_invalid",
     });
@@ -9783,10 +9975,10 @@ describe("CodexConversationHandle", () => {
     expect((await establishTimed()).snapshot.itemsById).toEqual(initial.snapshot.itemsById);
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
-    harness.enqueue("thread/read", { thread: paginatedThread() });
+    harness.enqueue("thread/read", { thread: paginatedThread() }, { thread: paginatedThread() });
     harness.enqueue("thread/turns/list", { data: [notLoadedTurn(0)], nextCursor: null, backwardsCursor: "turns-head" });
     harness.enqueue("thread/items/list", items);
-    const detached = await target.read(attachInput());
+    const detached = await readConversationHistory(target, attachInput());
     expect(detached.snapshot.itemsById).toEqual(initial.snapshot.itemsById);
   });
 
@@ -12447,7 +12639,7 @@ describe("CodexConversationHandle", () => {
       { thread: { ...overLimit, turns: [] } },
       { thread: overLimit },
     );
-    const detached = await target.read(attachInput());
+    const detached = await readConversationHistory(target, attachInput());
     expect(detached.snapshot.orderedBackendTurnIds).toHaveLength(10);
     expect(
       harness.calls.some(

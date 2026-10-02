@@ -11,6 +11,7 @@ import {
   type ConversationBackendDriver,
   type ConversationBinding,
   type ConversationHandle,
+  type ConversationHistoryReader,
   type EstablishedBackendProjection,
   type SteerTurnInput,
   type SteerTurnResult,
@@ -27,7 +28,7 @@ import type {
   AuthoritativeCompletionObserver,
   AuthoritativeSubmissionObserver,
 } from "../../src/server/conversations/conversation-actor-manager.js";
-import type { ConversationActorEvent } from "../../src/server/conversations/conversation-actor.js";
+import type { ConversationActor, ConversationActorEvent } from "../../src/server/conversations/conversation-actor.js";
 import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
 import type { ConversationEventBridge } from "../../src/server/events/conversation-event-bridge.js";
 import {
@@ -382,6 +383,229 @@ function fixture(
     manager,
   };
 }
+
+describe("passive archived history", () => {
+  function historyFixture() {
+    const completion = vi.fn<AuthoritativeCompletionObserver>();
+    const current = fixture(completion);
+    const reader: ConversationHistoryReader = {
+      readSnapshot: vi.fn(async () => ({ snapshot: snapshot(), history: { operational: true, previousCursor: "older" } })),
+      history: current.handle.history,
+      locateTurn: current.handle.locateTurn,
+      backendCapabilities: current.handle.backendCapabilities,
+      usage: current.handle.usage,
+      close: vi.fn(async () => undefined),
+    };
+    const openHistory = vi.fn(async () => reader);
+    const driver = { ...current.driver, openHistory };
+    const input = { scope, binding, workspace, opaqueBindingDetail: "opaque", driver, access: "history" as const };
+    return { ...current, reader, driver, input, openHistory, completion };
+  }
+
+  it("reads snapshots, older pages, and selected turns without execution authority", async () => {
+    const current = historyFixture();
+    const { manager, input, reader, handle } = current;
+    const acquired = await manager.acquire(input);
+    try {
+      expect(acquired.actor.readOnly).toBe(true);
+      const captured = await acquired.actor.captureSnapshotState();
+      expect(captured.timeline.orderedTurnIds).toEqual([projectedTurnId]);
+      expect(captured.history).toEqual({ operational: true, previousCursor: "older" });
+      expect(captured.backendCapabilities.deliveryModes).toEqual([]);
+      expect(captured.backendCapabilities.branching.availability).toBe("unavailable");
+      await acquired.actor.history({ cursor: "older", limit: 5 });
+      expect(reader.history).toHaveBeenCalledWith(expect.objectContaining({ cursor: "older", limit: 5 }));
+      const { runState: _runState, ...page } = snapshot();
+      handle.locateTurn.mockResolvedValueOnce({ status: "found", page });
+      expect(await acquired.actor.locateTurn({ targetTurnId: projectedTurnId })).toMatchObject({ status: "found" });
+      await expect(acquired.actor.submit({ applicationOperationId: "forbidden", text: "Run", attachments: [], contextExcerpts: [], taskContexts: [], mutationId: "forbidden", source: { kind: "user" }, reconciliationToken: "forbidden" }))
+        .rejects.toMatchObject({ backendCode: "conversation_history_read_only" });
+      expect(current.driver.attach).not.toHaveBeenCalled();
+      expect(current.environments.acquireLease).not.toHaveBeenCalled();
+      expect(current.completion).not.toHaveBeenCalled();
+    } finally { acquired.release(); await manager.close(); }
+    expect(reader.close).toHaveBeenCalledOnce();
+  });
+
+  it("replaces retained history after restore and invalidates its generation", async () => {
+    const { manager, input, reader, driver, environments } = historyFixture();
+    const historical = await manager.acquire(input);
+    const generation = historical.actor.timeline.generation;
+    const restored = await manager.acquire({ ...input, access: "execution" });
+    expect(restored.actor.readOnly).toBe(false);
+    expect(restored.actor.timeline.generation).not.toBe(generation);
+    expect(historical.actor.closed).toBe(true);
+    expect(reader.close).toHaveBeenCalledOnce();
+    expect(driver.attach).toHaveBeenCalledOnce();
+    expect(environments.acquireLease).toHaveBeenCalledOnce();
+    historical.release(); restored.release(); await manager.close();
+  });
+
+  it("replaces the coordinator's retained history when inventory is restored", async () => {
+    const current = historyFixture();
+    let target: AcquireConversationActorInput = current.input;
+    const releaseBridge = vi.fn(async () => undefined);
+    const coordinator = new ThreadRuntimeCoordinator({
+      actors: current.actorManager,
+      targets: { resolve: async () => target },
+      bridge: { bind: () => ({ ready: Promise.resolve(), publishAuthoritativeReplacement: vi.fn(), release: releaseBridge }) } as unknown as ConversationEventBridge,
+      interactions: { bind: () => ({ publishPending: vi.fn(), release: vi.fn(async () => undefined) }) } as never,
+      hubs: new ScopedThreadEventHubRegistry(), retentionMilliseconds: 60_000,
+    });
+    const archived = await coordinator.acquire(scope, binding.applicationThreadId);
+    const unsubscribe = archived.hub.subscribe(() => undefined);
+    const original = await coordinator.captureLoadedRuntime(scope, binding.applicationThreadId);
+    target = { ...target, access: "execution" };
+    const restored = await coordinator.acquire(scope, binding.applicationThreadId);
+    const replacement = await coordinator.captureLoadedRuntime(scope, binding.applicationThreadId);
+    expect(replacement?.generation).not.toBe(original?.generation);
+    expect(releaseBridge).toHaveBeenCalledOnce();
+    expect(current.reader.close).toHaveBeenCalledOnce();
+    expect(current.driver.attach).toHaveBeenCalledOnce();
+    expect(restored.hub).toBe(archived.hub);
+    unsubscribe.close(); archived.release(); restored.release();
+    await coordinator.close(); await current.manager.close();
+  });
+
+  function historyPublicationFixture() {
+    const current = historyFixture();
+    let target: AcquireConversationActorInput = current.input;
+    const baselines: { hub: unknown; state: Awaited<ReturnType<ConversationActor["captureSnapshotState"]>> }[] = [];
+    const bind = vi.fn(({ actor, hub }: Parameters<ConversationEventBridge["bind"]>[0]) => ({
+      ready: (actor as ConversationActor).captureSnapshotState().then(state => { baselines.push({ hub, state }); }),
+      publishAuthoritativeReplacement: vi.fn(),
+      release: vi.fn(async () => undefined),
+    }));
+    const resolve = vi.fn(async () => target);
+    const coordinator = new ThreadRuntimeCoordinator({
+      actors: current.actorManager, targets: { resolve },
+      bridge: { bind } as unknown as ConversationEventBridge,
+      interactions: { bind: () => ({ publishPending: vi.fn(), release: vi.fn(async () => undefined) }) } as never,
+      hubs: new ScopedThreadEventHubRegistry(), retentionMilliseconds: 60_000,
+    });
+    const capture = vi.fn(async () => ({}) as never);
+    return {
+      ...current, coordinator, baselines, resolve, capture,
+      restore: () => { target = { ...target, access: "execution" }; },
+      publish: () => coordinator.publishApplicationIncrementalsIfLoaded(scope, binding.applicationThreadId, capture, () => []),
+      close: async () => { await coordinator.close(); await current.manager.close(); },
+    };
+  }
+
+  it("publishes the restored execution baseline to the existing subscribed hub without another browser acquire", async () => {
+    const current = historyPublicationFixture();
+    const archived = await current.coordinator.acquire(scope, binding.applicationThreadId);
+    const subscriber = archived.hub.subscribe(() => undefined);
+    archived.release();
+    try {
+      expect(current.baselines[0]!.state.backendCapabilities.deliveryModes).toEqual([]);
+      await current.publish();
+      expect(current.driver.attach).not.toHaveBeenCalled();
+      current.capture.mockClear();
+      current.restore();
+      expect(await current.publish()).toBe(true);
+      expect(current.baselines).toHaveLength(2);
+      expect(current.baselines[1]!.hub).toBe(archived.hub);
+      expect(current.baselines[1]!.state.timeline.generation).not.toBe(current.baselines[0]!.state.timeline.generation);
+      expect(current.baselines[1]!.state.backendCapabilities.deliveryModes).toContain("submit");
+      expect(archived.hub.subscriberCount).toBe(1);
+      expect(current.reader.close).toHaveBeenCalledOnce();
+      expect(current.driver.attach).toHaveBeenCalledOnce();
+      expect(current.capture).not.toHaveBeenCalled();
+    } finally { subscriber.close(); await current.close(); }
+  });
+
+  it("does not activate a dormant reader or unopened thread solely for restore publication", async () => {
+    const current = historyPublicationFixture();
+    try {
+      expect(await current.publish()).toBe(false);
+      expect(current.resolve).not.toHaveBeenCalled();
+      const archived = await current.coordinator.acquire(scope, binding.applicationThreadId);
+      archived.release();
+      current.restore();
+      await current.publish();
+      expect(current.driver.attach).not.toHaveBeenCalled();
+      expect(current.environments.acquireLease).not.toHaveBeenCalled();
+      expect(current.reader.close).not.toHaveBeenCalled();
+    } finally { await current.close(); }
+  });
+
+  it("cancels pending history on restore publication while a viewer is acquiring it", async () => {
+    const current = historyPublicationFixture();
+    vi.mocked(current.reader.readSnapshot).mockImplementation(async ({ signal }) => {
+      signal.throwIfAborted();
+      return new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    });
+    const opening = current.coordinator.acquire(scope, binding.applicationThreadId).catch(error => error);
+    try {
+      await vi.waitFor(() => expect(current.reader.readSnapshot).toHaveBeenCalledOnce());
+      current.restore();
+      expect(await current.publish()).toBe(true);
+      expect(await opening).toBeInstanceOf(Error);
+      expect(current.reader.close).toHaveBeenCalledOnce();
+      expect(current.driver.attach).toHaveBeenCalledOnce();
+      expect(current.baselines).toHaveLength(1);
+      expect(current.baselines[0]!.state.backendCapabilities.deliveryModes).toContain("submit");
+      expect(current.capture).not.toHaveBeenCalled();
+    } finally { await current.close(); }
+  });
+
+  it.each(["manager", "coordinator"] as const)("cancels pending history before restore through the %s", async (kind) => {
+    const current = historyFixture();
+    let target: AcquireConversationActorInput = current.input;
+    vi.mocked(current.reader.readSnapshot).mockImplementation(async ({ signal }) => {
+      signal.throwIfAborted();
+      return new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    });
+    const coordinator = new ThreadRuntimeCoordinator({
+      actors: current.actorManager, targets: { resolve: async () => target },
+      bridge: { bind: () => ({ ready: Promise.resolve(), publishAuthoritativeReplacement: vi.fn(), release: vi.fn(async () => undefined) }) } as unknown as ConversationEventBridge,
+      interactions: { bind: () => ({ publishPending: vi.fn(), release: vi.fn(async () => undefined) }) } as never,
+      hubs: new ScopedThreadEventHubRegistry(), retentionMilliseconds: 60_000,
+    });
+    const acquire = () => kind === "manager" ? current.manager.acquire(target) : coordinator.acquire(scope, binding.applicationThreadId);
+    const opening = acquire().then(() => { throw new Error("Unexpected completed history read"); }, error => error);
+    await vi.waitFor(() => expect(current.reader.readSnapshot).toHaveBeenCalledOnce());
+    target = { ...target, access: "execution" };
+    const restored = await acquire();
+    expect(restored.actor.readOnly).toBe(false);
+    expect(await opening).toBeInstanceOf(Error);
+    expect(current.reader.close).toHaveBeenCalledOnce();
+    expect(current.driver.attach).toHaveBeenCalledOnce();
+    restored.release(); await coordinator.close(); await current.manager.close();
+  });
+
+  it("treats shutdown during passive establishment as cancellation after closing the reader", async () => {
+    const current = historyFixture();
+    vi.mocked(current.reader.readSnapshot).mockImplementation(async ({ signal }) => {
+      signal.throwIfAborted();
+      return new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
+    });
+    const opening = current.manager.acquire(current.input).catch(error => error);
+    await vi.waitFor(() => expect(current.reader.readSnapshot).toHaveBeenCalledOnce());
+    await expect(current.manager.close()).resolves.toBeUndefined();
+    expect(await opening).toMatchObject({ name: "ConversationActorCreationAbortedError" });
+    expect(current.reader.close).toHaveBeenCalledOnce();
+    expect(current.environments.acquireLease).not.toHaveBeenCalled();
+  });
+
+  it("closes a reader whose initial snapshot fails and permits a fresh acquisition", async () => {
+    const { manager, input, reader, openHistory } = historyFixture();
+    vi.mocked(reader.readSnapshot).mockRejectedValueOnce(new Error("history unavailable"));
+    await expect(manager.acquire(input)).rejects.toThrow("history unavailable");
+    expect(reader.close).toHaveBeenCalledOnce();
+    const acquired = await manager.acquire(input);
+    expect(openHistory).toHaveBeenCalledTimes(2);
+    acquired.release(); await manager.close();
+  });
+
+  it("rejects wrong-scope history before opening the backend", async () => {
+    const { manager, input, openHistory } = historyFixture();
+    await expect(manager.acquire({ ...input, scope: { ...scope, principalId: "other" } })).rejects.toThrow();
+    expect(openHistory).not.toHaveBeenCalled();
+    await manager.close();
+  });
+});
 
 describe("turn throughput capability admission", () => {
   const throughput = { outputTokens: 120, requestDurationMs: 3_000 };

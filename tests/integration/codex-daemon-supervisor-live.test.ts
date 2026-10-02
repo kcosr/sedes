@@ -1,3 +1,5 @@
+import { readConversationHistory } from "../helpers/read-conversation-history.js";
+import { CodexConversationHandle } from "../../src/server/backends/codex/codex-conversation-handle.js";
 import { NO_USAGE_SINK, type UsageObservation } from "../../src/server/usage/contracts.js";
 import { createServer, type Server } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -426,7 +428,7 @@ plugins = false
         workspace,
         opaqueBindingDetail,
       };
-      const read = await driver.read(boundInput);
+      const read = await readConversationHistory(driver, boundInput);
       expect(read.snapshot.runState).toBe("idle");
       expect(read.snapshot.orderedBackendTurnIds).toHaveLength(1);
       expect(read.snapshot.itemsById).not.toEqual({});
@@ -521,7 +523,7 @@ plugins = false
           event: expect.objectContaining({ type: "resnapshot_required" }),
         }),
       );
-      const streamedSnapshot = (await driver.read(boundInput)).snapshot;
+      const streamedSnapshot = (await readConversationHistory(driver, boundInput)).snapshot;
       expect(streamedSnapshot.runState).toBe("idle");
       expect(
         streamedSnapshot.turnsById[submission.backendTurnId!]?.status,
@@ -622,7 +624,7 @@ plugins = false
       await waitUntil(() => lifecycleEvents.includes("disconnected"), 5_000);
       expect(lifecycleEvents).toContain("disconnected");
       expect(["disconnected", "reconciling"]).toContain(
-        (await driver.read(boundInput)).snapshot.runState,
+        (await (handle as CodexConversationHandle).readCurrent()).snapshot.runState,
       );
       const restarted = await waitUntil(() => {
         const snapshot = supervisor?.snapshot();
@@ -683,7 +685,7 @@ plugins = false
             item.semanticKind === "assistant_message",
         ),
       ).toBe(false);
-      expect((await driver.read(boundInput)).snapshot.runState).toBe("idle");
+      expect((await readConversationHistory(driver, boundInput)).snapshot.runState).toBe("idle");
       unsubscribeProjection();
       expect(provider.requestCount()).toBe(3);
       provider.failNextResponse();
@@ -1491,7 +1493,7 @@ plugins = false
         expect(restoredFork.thread.turns).toEqual(nativeFork.thread.turns);
         // This fixture constructs the raw driver; production's factory holds
         // these same semantic-operation leases around reads and attachment.
-        const projectedFork = await supervisor.client.residency!.run(() => driver.read({
+        const projectedFork = await supervisor.client.residency!.run(() => readConversationHistory(driver, {
           scope,
           binding: {
             ...binding,
@@ -2101,7 +2103,7 @@ plugins = false
   }, 60_000);
 
   it.skipIf(!configuredSharedUdsLiveEndpoint)(
-    "creates and streams a disposable low-reasoning agent through an operator-owned UDS daemon",
+    "creates and streams a disposable low-reasoning agent through an operator-owned UDS daemon and reads passive history",
     async () => {
       const configured = configuredSharedUdsLiveEndpoint!;
       const workingDirectory = await mkdtemp(
@@ -2151,6 +2153,7 @@ plugins = false
             approvalPolicy: "never",
             sandbox: "read-only",
             ephemeral: false,
+            historyMode: "paginated",
             threadSource: "sedes_c5b_shared_uds_live",
           },
           requestOptions,
@@ -2190,6 +2193,60 @@ plugins = false
           { threadId: started.thread.id },
           requestOptions,
         );
+
+        const instance: AgentBackendInstance = {
+          id: runtimeScope.backendInstanceId, tenantId: scope.tenantId,
+          kind: "codex_app_server", label: "Codex passive live history", enabled: true,
+          configurationRevision: 1, protocolRelease: CODEX_APP_SERVER_RELEASE,
+        };
+        const connection: AgentConnectionProfile = {
+          id: "codex-passive-live-profile", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
+          templateId: "codex-passive-live-template", kind: "codex_app_server",
+          backendInstanceId: instance.id, executionEnvironmentId: runtimeScope.executionEnvironmentId,
+          label: "Codex passive live history", enabled: true, configurationRevision: 1,
+        };
+        const credentials = vi.fn(async () => { throw new Error("archived_live_credentials_forbidden"); });
+        const settings = vi.fn((): CodexExecutionSettingsTuple => { throw new Error("archived_live_settings_forbidden"); });
+        const driver = new CodexConversationBackendDriver({
+          instance, connection, client: supervisor.client, serverRequests: supervisor.serverRequests,
+          ownership: new CodexConversationOwnershipRegistry(), usageSink: NO_USAGE_SINK,
+          nativeNamespace: "codex-passive-live", toolProvenanceKey: new Uint8Array(32).fill(0x54),
+          modelPolicy: catalogModelPolicy, executionSettings: liveExecutionSettings(settings),
+          outputArtifacts: createInMemoryOutputArtifactPublisher(), viewedImageCapture: { capture: async () => undefined },
+          agentToolCliEnvironment: { acquire: credentials },
+        });
+        const requests = vi.spyOn(supervisor.client, "requestWithReceipt");
+        const reader = await driver.openHistory({
+          scope,
+          workspace: {
+            authorityRevision: 1, canonicalPath: workingDirectory,
+            summary: { id: "passive-live-workspace", environmentId: connection.executionEnvironmentId,
+              displayName: "Passive live history", displayPath: workingDirectory,
+              availability: "available", trustState: "trusted", revision: 1 },
+          },
+          binding: { tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
+            applicationThreadId: randomUUID(), backendInstanceId: instance.id, connectionProfileId: connection.id,
+            executionEnvironmentId: connection.executionEnvironmentId, backendConversationId: started.thread.id,
+            createdAt: new Date().toISOString() },
+          opaqueBindingDetail: serializeCodexBindingDetail({ threadId: started.thread.id,
+            sessionId: started.thread.sessionId, nativeAncestry: null, correlationAncestorThreadIds: [] }),
+        });
+        try {
+          const signal = new AbortController().signal;
+          const snapshot = await reader.readSnapshot({ signal });
+          expect(snapshot.snapshot.orderedBackendTurnIds).toHaveLength(1);
+          const turnId = snapshot.snapshot.orderedBackendTurnIds[0]!;
+          expect((await reader.history({ limit: 1, signal })).orderedBackendTurnIds).toEqual([turnId]);
+          expect(await reader.locateTurn({ maximumTurnCandidates: 1, matchesBackendTurnId: id => id === turnId, signal }))
+            .toMatchObject({ status: "found", page: { orderedBackendTurnIds: [turnId] } });
+          expect(await reader.readSnapshot({ signal })).toEqual(snapshot);
+          expect(credentials).not.toHaveBeenCalled();
+          expect(settings).not.toHaveBeenCalled();
+          expect(requests.mock.calls.every(([method]) => ["thread/read", "thread/turns/list", "thread/items/list"].includes(method.method))).toBe(true);
+        } finally {
+          await reader.close();
+          requests.mockRestore();
+        }
 
         await closeObserver(observer);
         observer = undefined;

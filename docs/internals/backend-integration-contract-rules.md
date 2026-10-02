@@ -381,6 +381,35 @@ deletes provider-native durable conversation history. Audit this close
 disposition for Pi, Codex, Claude, Grok and OpenCode whenever archive or runtime
 ownership changes.
 
+Archived transcript access is a separate backend contract: `openHistory` returns
+an owned `ConversationHistoryReader` supporting a bounded initial snapshot,
+older pages, targeted turn lookup, capabilities, usage, cancellation, and close.
+The scoped inventory state selects this path for browser snapshots/events,
+browser history, and agent-tool message reads. It must not acquire an execution
+lease, attach/resume/load an agent, issue source credentials, replay settings,
+load executable extensions, acknowledge provider inputs, or mutate native
+transcripts. Connecting provider infrastructure to read its store is permitted.
+An immutable cut or validated native boundary must keep pages and lookups
+coherent; reject stale cursors rather than mixing generations. Closing a reader
+owns no native execution and must not interrupt external work. Restore replaces
+the reader and its projection generation before executing again. Open browser
+subscribers receive that replacement baseline without a reload; restoring a
+dormant thread does not itself attach an agent. The archived source-agent
+credential prohibition remains enforced independently of target history
+authorization; wrong owner/thread/namespace still fails closed.
+
+All five backends implement this split: Claude reads native session messages;
+Codex uses detached thread and turn/item reads; Pi parses its exact stored
+session into an in-memory tree; Grok reads persisted session updates without
+loading a session; OpenCode captures native messages under a temporary observation
+and releases its infrastructure lease. Pi's locally retained remote session store
+also permits reads without its worker or deleted isolated checkout. Pi v1 files
+requiring randomized-ID migration are explicitly refused without rewriting them.
+Provider unavailability, missing data, unsupported native versions and bounded
+capture failures remain truthful read errors, never reasons to start an agent.
+Regression coverage must prove paging, lookup, scope denial, cleanup,
+archive/restore generation changes, and absence of execution side effects.
+
 Provider residency can outlive Sedes' handle, as a Claude query owned by a
 persistent sidecar service does. A backend with such residency implements the
 optional driver method `releaseConversationResidency`. Inside each thread's

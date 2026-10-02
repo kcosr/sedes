@@ -3010,6 +3010,8 @@ class CodexE2eRpcFixture {
           }),
         );
         result = {};
+      } else if (specification.method === "thread/goal/get") {
+        result = { goal: null };
       } else if (specification.method === "thread/unsubscribe") {
         result = { status: "unsubscribed" };
       } else if (specification.method === "turn/start") {

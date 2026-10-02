@@ -127,6 +127,7 @@ interface RuntimeEntry {
   readonly applicationThreadId: string;
   readonly generation: string;
   readonly establishmentAbort: AbortController;
+  access?: "execution" | "history";
   runtime?: EstablishedRuntime;
   applicationOverlayReady: boolean;
   pendingApplicationPublication?: (runtime: EstablishedRuntime) => Promise<boolean>;
@@ -312,6 +313,26 @@ export class ThreadRuntimeCoordinator {
         continue;
       }
       let entry = this.#entries.get(key);
+      if ((entry?.access === "history" || entry?.runtime?.actor.readOnly) && !entry.eviction) {
+        const target = await this.#targets.resolve(scope, applicationThreadId);
+        // Target resolution may yield to retirement, restore, or shutdown.
+        if (this.#closed || this.#maintenance.has(key) || this.#entries.get(key) !== entry || entry.eviction) continue;
+        if (target.access !== "history") {
+          // An explicit restore invalidates the passive acquisition and its
+          // cursors. The next acquisition may establish an execution owner.
+          const runtime = entry.runtime;
+          if (runtime) {
+            await runtime.actor.close();
+            await this.#retireForReplacement(key, entry, runtime);
+          } else {
+            entry.establishmentAbort.abort(new Error("thread_history_restored"));
+            try { await entry.promise; }
+            catch (error) { if (error !== entry.establishmentAbort.signal.reason) throw error; }
+            if (this.#entries.get(key) === entry) this.#entries.delete(key);
+          }
+          continue;
+        }
+      }
       if (!entry) {
         const establishmentAbort = new AbortController();
         const created = {
@@ -329,6 +350,7 @@ export class ThreadRuntimeCoordinator {
             this.#shutdownController.signal,
             establishmentAbort.signal,
           ]),
+          access => { created.access = access; },
         ).then(async (runtime) => {
           created.runtime = runtime;
           if (runtime.actor.closed) {
@@ -833,6 +855,25 @@ export class ThreadRuntimeCoordinator {
     const key = scopedKey(scope, applicationThreadId);
     const entry = this.#entries.get(key);
     if (!entry || entry.eviction) return false;
+    if (
+      (entry.access === "history" || entry.runtime?.actor.readOnly) &&
+      (entry.references > 0 || (entry.runtime?.hub.subscriberCount ?? 0) > 0)
+    ) {
+      const target = await this.#targets.resolve(scope, applicationThreadId);
+      if (this.#closed || this.#entries.get(key) !== entry || entry.eviction) return false;
+      if (
+        target.access !== "history" &&
+        (entry.references > 0 || (entry.runtime?.hub.subscriberCount ?? 0) > 0)
+      ) {
+        // Restore changes provider authority, not just inventory. An open
+        // viewer needs the execution actor's new capability baseline. Reuse
+        // ordinary acquisition so pending history is cancelled and the same
+        // subscribed hub survives replacement. Dormant readers stay dormant.
+        const restored = await this.acquire(scope, applicationThreadId);
+        restored.release();
+        return true;
+      }
+    }
     const publish = async (runtime: EstablishedRuntime): Promise<boolean> => {
       // One cache-only capture is enough. Merge against the latest hub after
       // the await, without actor recovery or waiting for a quiet provider.
@@ -1246,6 +1287,7 @@ export class ThreadRuntimeCoordinator {
     scope: RequestScope,
     applicationThreadId: string,
     signal: AbortSignal,
+    onTargetResolved: (access: "execution" | "history") => void,
   ): Promise<EstablishedRuntime> {
     throwIfAborted(signal);
     const target = await abortable(
@@ -1253,6 +1295,7 @@ export class ThreadRuntimeCoordinator {
       signal,
     );
     throwIfAborted(signal);
+    onTargetResolved(target.access ?? "execution");
     const actorAcquisition = this.#actors.acquire(target, {
       idleRelease: "evict",
     });
@@ -1315,13 +1358,13 @@ export class ThreadRuntimeCoordinator {
         // run-state event (for example, when the backend requires a
         // resnapshot while a stopped turn ends). Settlement hooks are
         // idempotent, so observe both.
-        if (
+        if (!acquired.actor.readOnly && (
           (event.type === "run_state" &&
             (event.state === "idle" || event.state === "failed")) ||
           (event.type === "snapshot" &&
             (event.snapshot.runState === "idle" ||
               event.snapshot.runState === "failed"))
-        ) {
+        )) {
           try {
             const dispatch = this.#onAuthoritativeSettled?.(
               scope,

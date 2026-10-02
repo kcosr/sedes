@@ -349,11 +349,34 @@ export interface ReadConversationInput {
   readonly binding: ConversationBinding;
   readonly workspace: ValidatedWorkspace;
   readonly opaqueBindingDetail: string;
+  readonly signal?: AbortSignal;
 }
 
 export interface ConversationReadResult {
   readonly snapshot: BackendConversationSnapshot;
   readonly usage: UsageSnapshot;
+}
+
+/**
+ * A bounded provider-history acquisition, independent of an executing agent.
+ * Opening or paging it must not attach/resume a conversation, issue agent-tool
+ * credentials, load executable extensions, or mutate native transcript data.
+ * Infrastructure needed to reach the native store may still be connected.
+ * Cursors and native identity remain private to this reader's lifetime.
+ */
+export interface ConversationHistoryReader {
+  readSnapshot(input: EstablishProjectionInput): Promise<{
+    readonly snapshot: BackendConversationSnapshot;
+    readonly history: {
+      readonly operational: boolean;
+      readonly previousCursor?: string;
+    };
+  }>;
+  history(input: HistoryPageInput): Promise<BackendHistoryPage>;
+  locateTurn(input: LocateTurnInput): Promise<LocateTurnResult>;
+  backendCapabilities(): Promise<BackendCapabilityDocument>;
+  usage(): Promise<UsageSnapshot>;
+  close(): Promise<void>;
 }
 
 export interface BackendCheckpointRef {
@@ -735,7 +758,7 @@ export interface ConversationBackendDriver {
   ): Promise<DiscoveredConversationPage>;
   create(input: CreateConversationInput): Promise<CreateConversationResult>;
   attach(input: AttachConversationInput): Promise<ConversationHandle>;
-  read(input: ReadConversationInput): Promise<ConversationReadResult>;
+  openHistory(input: ReadConversationInput): Promise<ConversationHistoryReader>;
   resolveBranchCheckpoint(
     input: ResolveBranchCheckpointInput,
   ): Promise<BackendCheckpointRef>;

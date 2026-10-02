@@ -34,7 +34,7 @@ import {
   type ConversationBinding,
   type ConversationHandle,
   type ConversationControl,
-  type ConversationReadResult,
+  type ConversationHistoryReader,
   type CreateConversationInput,
   type CreateConversationResult,
   type DiscoverConversationsInput,
@@ -644,16 +644,21 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
     return handle;
   }
 
-  async read(input: ReadConversationInput): Promise<ConversationReadResult> {
-    const record = this.#resolveBoundConversation(
-      input.scope,
-      input.binding,
-      input.workspace,
-      input.opaqueBindingDetail,
-    );
+  async openHistory(input: ReadConversationInput): Promise<ConversationHistoryReader> {
+    const record = this.#resolveBoundConversation(input.scope, input.binding, input.workspace, input.opaqueBindingDetail);
+    const captured = { ...record, snapshot: structuredClone(record.snapshot), usage: cloneUsage(record.usage),
+      handles: new Set<InMemoryConversationHandle>() };
+    const handle = new InMemoryConversationHandle(this, captured, input.binding, this.#maximumProjectionBufferEvents);
     return {
-      snapshot: cloneRecentSnapshot(record.snapshot),
-      usage: cloneUsage(record.usage),
+      async readSnapshot(input) {
+        const { snapshot, history } = await handle.establishProjection(input);
+        return { snapshot, history };
+      },
+      history: input => handle.history(input),
+      locateTurn: input => handle.locateTurn(input),
+      backendCapabilities: async () => capabilities(captured.capabilityRevision, "read_only"),
+      usage: () => handle.usage(),
+      close: () => handle.close(),
     };
   }
 

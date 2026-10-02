@@ -15,6 +15,7 @@ import { completedAssistantEntryIdForTurn } from "./pi-branch-checkpoints.js";
 import type {
   AgentSessionEvent,
   SessionEntry,
+  SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import {
   backendConversationEventSchema,
@@ -56,6 +57,7 @@ import {
   type ConversationBackendDriver,
   type ConversationBinding,
   type ConversationHandle,
+  type ConversationHistoryReader,
   type ConversationControl,
   type ConversationReadResult,
   type CreateConversationInput,
@@ -1892,94 +1894,28 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
     }
   }
 
-  async read(input: ReadConversationInput): Promise<ConversationReadResult> {
+  async openHistory(input: ReadConversationInput): Promise<ConversationHistoryReader> {
+    input.signal?.throwIfAborted();
     this.#assertAttach(input);
-    const active = this.#openHandles.get(input.binding.backendConversationId);
-    if (active) return active.readCurrent();
-    const resolvedWorkspace = await backendCall(() =>
-      this.#resolveWorkspace({
+    const workspace = await backendCall(() =>
+      this.#isolatedWorkspaces?.historyWorkspace({
         scope: input.scope,
         applicationThreadId: input.binding.applicationThreadId,
         sourceWorkspace: input.workspace,
-        access: "passive",
-      }),
+      }) ?? input.workspace,
     );
-    const manager = await backendCall(() =>
-      this.#store.open(
-        resolvedWorkspace.workspace,
+    input.signal?.throwIfAborted();
+    return new PiConversationHistoryReader({
+      binding: input.binding,
+      authentication: this.#toolIdentityAuthentication(input.binding.backendConversationId),
+      outputArtifacts: this.#outputArtifacts,
+      load: (signal) => this.#store.readHistory(
+        workspace,
         input.binding.backendConversationId,
         input.opaqueBindingDetail,
+        signal,
       ),
-    ).catch(async (cause) => {
-      await resolvedWorkspace.release();
-      throw cause;
     });
-    const interactions = new PiInteractionBridge({
-      cancelUnpublishedRequests: true,
-    });
-    const toolAccess = new PiToolAccessController(
-      this.#toolAccessPolicy(input.scope, input.binding.applicationThreadId),
-    );
-    const session = await backendCall(() =>
-      this.#sessionFactory.create({
-        manager,
-        workspace: resolvedWorkspace.workspace,
-        interactions,
-        toolAccess,
-        ...(resolvedWorkspace.remoteWorkspace
-          ? { remoteWorkspace: resolvedWorkspace.remoteWorkspace }
-          : {}),
-        ...(resolvedWorkspace.isolatedWorkspace
-          ? { isolatedWorkspace: resolvedWorkspace.isolatedWorkspace }
-          : {}),
-      }),
-    ).catch(async (cause) => {
-      interactions.close();
-      await resolvedWorkspace.release();
-      throw cause;
-    });
-    try {
-      await backendCall(() => session.ready());
-      await backendCall(() =>
-        applyToolAccess(session, toolAccess.mode, toolAccess),
-      );
-      const authentication = this.#toolIdentityAuthentication(
-        input.binding.backendConversationId,
-      );
-      recoverPiTaskSubmissionAttestations(
-        session.sessionManager.getBranch(),
-        (marker) =>
-          session.sessionManager.appendCustomEntry(
-            piSubmissionAttestationType,
-            marker,
-          ),
-        authentication,
-      );
-      const projection = await backendCall(() =>
-        new PiHistoryProjector({
-          toolIdentityAuthentication: authentication,
-        }).project(session.sessionManager.getBranch()),
-      );
-      const snapshot = fillPublishedPiViewedImages(
-        projection,
-        new Set(projection.snapshot.orderedBackendTurnIds.slice(-readSnapshotTurns)),
-        this.#outputArtifacts,
-        input.binding,
-        session.sessionId,
-      ).snapshot;
-      return {
-        snapshot: selectPiSnapshotWindow(
-          snapshot,
-          readSnapshotTurns,
-          input.binding.backendConversationId,
-        ),
-        usage: piUsage(session),
-      };
-    } finally {
-      interactions.close();
-      session.dispose();
-      await resolvedWorkspace.release();
-    }
   }
 
   async resolveBranchCheckpoint(
@@ -2526,6 +2462,183 @@ export class PiConversationBackendDriver implements ConversationBackendDriver {
   ): void {
     this.#assertScope(input.scope);
     this.#assertBinding(input.binding, input.workspace);
+  }
+}
+
+class PiConversationHistoryReader implements ConversationHistoryReader {
+  readonly #lifetime = new AbortController();
+  readonly #cursorScope = randomUUID();
+  #capture: Promise<SessionManager> | undefined;
+
+  constructor(readonly input: {
+    readonly binding: ConversationBinding;
+    readonly authentication: PiToolIdentityAuthentication;
+    readonly outputArtifacts: OutputArtifactPublisher;
+    readonly load: (signal: AbortSignal) => Promise<SessionManager>;
+  }) {}
+
+  async #manager(signal?: AbortSignal): Promise<SessionManager> {
+    this.#lifetime.signal.throwIfAborted();
+    signal?.throwIfAborted();
+    if (!this.#capture) {
+      const acquisitionSignal = AbortSignal.any([
+        this.#lifetime.signal,
+        AbortSignal.timeout(60_000),
+        ...(signal ? [signal] : []),
+      ]);
+      const pending = this.input.load(acquisitionSignal).then((manager) => {
+        acquisitionSignal.throwIfAborted();
+        // Keep normalization identical to attachment, but repair only this
+        // in-memory copy. The native transcript remains byte-for-byte intact.
+        recoverPiTaskSubmissionAttestations(
+          manager.getBranch(),
+          (marker) => manager.appendCustomEntry(piSubmissionAttestationType, marker),
+          this.input.authentication,
+        );
+        return manager;
+      });
+      this.#capture = pending;
+      void pending.catch(() => {
+        if (this.#capture === pending) this.#capture = undefined;
+      });
+    }
+    const capture = this.#capture;
+    const waitingSignal = AbortSignal.any([
+      this.#lifetime.signal,
+      ...(signal ? [signal] : []),
+    ]);
+    return new Promise<SessionManager>((resolve, reject) => {
+      const aborted = () => reject(waitingSignal.reason);
+      waitingSignal.addEventListener("abort", aborted, { once: true });
+      void capture.then(
+        (manager) => {
+          waitingSignal.removeEventListener("abort", aborted);
+          if (waitingSignal.aborted) reject(waitingSignal.reason);
+          else resolve(manager);
+        },
+        (cause: unknown) => {
+          waitingSignal.removeEventListener("abort", aborted);
+          reject(waitingSignal.aborted ? waitingSignal.reason : mappedError(cause));
+        },
+      );
+    });
+  }
+
+  async #projection(signal?: AbortSignal): Promise<PiHistoryProjection> {
+    const manager = await this.#manager(signal);
+    signal?.throwIfAborted();
+    return backendCall(() => new PiHistoryProjector({
+      toolIdentityAuthentication: this.input.authentication,
+    }).project(manager.getBranch()));
+  }
+
+  #withImages(projection: PiHistoryProjection, turnIds: readonly string[]) {
+    return fillPublishedPiViewedImages(
+      projection,
+      new Set(turnIds),
+      this.input.outputArtifacts,
+      this.input.binding,
+      this.input.binding.backendConversationId,
+    ).snapshot;
+  }
+
+  async readSnapshot(input: EstablishProjectionInput) {
+    const projection = await this.#projection(input.signal);
+    input.signal.throwIfAborted();
+    return selectPiProjectionWindow(
+      this.#withImages(projection, projection.snapshot.orderedBackendTurnIds.slice(-readSnapshotTurns)),
+      readSnapshotTurns,
+      this.#cursorScope,
+    );
+  }
+
+  async history(input: HistoryPageInput): Promise<BackendHistoryPage> {
+    input.signal?.throwIfAborted();
+    validatePage(input.limit);
+    const projection = await this.#projection(input.signal);
+    const ids = projection.snapshot.orderedBackendTurnIds;
+    const before = parseHistoryCursor(input.cursor, this.#cursorScope, ids.length);
+    input.signal?.throwIfAborted();
+    return selectPiHistoryPage(
+      this.#withImages(projection, ids.slice(Math.max(0, before - input.limit), before)),
+      this.#cursorScope,
+      before,
+      input.limit,
+    );
+  }
+
+  async locateTurn(input: LocateTurnInput): Promise<LocateTurnResult> {
+    input.signal?.throwIfAborted();
+    validateTurnCandidateLimit(input.maximumTurnCandidates);
+    const projection = await this.#projection(input.signal);
+    const ids = projection.snapshot.orderedBackendTurnIds;
+    const count = Math.min(ids.length, input.maximumTurnCandidates);
+    for (let offset = 0; offset < count; offset += 1) {
+      input.signal?.throwIfAborted();
+      const index = ids.length - offset - 1;
+      const matched = input.matchesBackendTurnId(ids[index]!);
+      input.signal?.throwIfAborted();
+      if (!matched) continue;
+      const { previousCursor: _previousCursor, ...page } = selectPiHistoryPage(
+        this.#withImages(projection, [ids[index]!]),
+        this.#cursorScope,
+        index + 1,
+        1,
+      );
+      return { status: "found", page };
+    }
+    return ids.length > count ? { status: "search_limit_reached" } : { status: "not_found" };
+  }
+
+  async backendCapabilities(): Promise<BackendCapabilityDocument> {
+    const manager = await this.#manager();
+    const settings: { model?: { provider: string; id: string }; thinkingLevel?: string } = {};
+    for (const entry of manager.getBranch()) {
+      if (entry.type === "model_change") settings.model = { provider: entry.provider, id: entry.modelId };
+      if (entry.type === "thinking_level_change") settings.thinkingLevel = entry.thinkingLevel;
+    }
+    return {
+      revision: token("history-capabilities", this.input.binding.backendConversationId, JSON.stringify(settings)),
+      actions: [],
+      deliveryModes: [],
+      steerTarget: null,
+      composerAttachments: { fileStaging: false, nativeImage: false },
+      nonblockingQuestions: false,
+      providerOutputArtifacts: { nativeImage: false },
+      supportsHistory: true,
+      branching: { availability: "unavailable", reason: { text: "This conversation is open for history reading." } },
+      interactionKinds: [],
+      usageSections: ["counters"],
+      usageAccounting: "supported",
+      turnThroughput: "supported",
+      effectiveSettings: settings,
+    };
+  }
+
+  async usage(): Promise<UsageSnapshot> {
+    const manager = await this.#manager();
+    const counters = {
+      userMessages: 0, assistantMessages: 0, toolCalls: 0, toolResults: 0, totalMessages: 0,
+      compactions: manager.getBranch().filter((entry) => entry.type === "compaction").length,
+    };
+    for (const entry of manager.getEntries()) {
+      if (entry.type !== "message") continue;
+      counters.totalMessages += 1;
+      if (entry.message.role === "user") counters.userMessages += 1;
+      if (entry.message.role === "toolResult") counters.toolResults += 1;
+      if (entry.message.role === "assistant") {
+        counters.assistantMessages += 1;
+        counters.toolCalls += entry.message.content.filter((part) => part.type === "toolCall").length;
+      }
+    }
+    return { counters };
+  }
+
+  async close(): Promise<void> {
+    this.#lifetime.abort();
+    const capture = this.#capture;
+    this.#capture = undefined;
+    await capture?.catch(() => undefined);
   }
 }
 

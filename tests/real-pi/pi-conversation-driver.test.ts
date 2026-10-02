@@ -1,3 +1,4 @@
+import { readConversationHistory } from "../helpers/read-conversation-history.js";
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
@@ -906,7 +907,7 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
         backendConversationId: branched.backendConversationId,
         createdAt: new Date().toISOString(),
       };
-      const childBeforeSourceActivity = await driver.read({
+      const childBeforeSourceActivity = await readConversationHistory(driver, {
         scope,
         workspace: fixture.workspace,
         binding: childBinding,
@@ -997,7 +998,7 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
       );
       expect(eventOfType(events.slice(stopEventStart), "turn_completed")
         .every(({ turn }) => turn.throughput === undefined)).toBe(true);
-      const childAfterSourceActivity = await driver.read({
+      const childAfterSourceActivity = await readConversationHistory(driver, {
         scope,
         workspace: fixture.workspace,
         binding: childBinding,
@@ -1011,8 +1012,10 @@ describe.sequential("Pi 0.86.0 normalized driver live verification", () => {
       await conversation.handle.close();
     }
 
-    const restarted = new PiConversationBackendDriver(fixture.driverOptions);
-    const reopened = await restarted.read({
+    const restarted = new PiConversationBackendDriver({ ...fixture.driverOptions,
+      sessionFactory: { create: async () => { throw new Error("Cold history must not create a Pi agent session."); } },
+    });
+    const reopened = await readConversationHistory(restarted, {
       scope,
       workspace: fixture.workspace,
       binding: conversation.binding,

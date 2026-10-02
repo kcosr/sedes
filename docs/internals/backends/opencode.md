@@ -262,6 +262,16 @@ reconnect or event replay at the transport layer. Ordinary requests and native
 mutations continue through the official client. A configurable upstream SSE
 frame bound would remove this local framing requirement.
 
+Archived threads use a separate history reader that never creates a conversation
+handle, admits agent tools, observes input consumption, replays settings, or
+starts usage accounting. It validates the scoped native binding, subscribes
+before a bounded native-history acquisition, and rejects durable session changes
+during that acquisition. Its temporary observation and runtime lease close as
+soon as the immutable projection is captured. Snapshots, older pages, and targeted
+turn lookup share that capture and reader-scoped cursors. Persisted delivery
+correlations and native usage counters remain available without updating input
+evidence or native history.
+
 Each resident handle retains one complete, disposable native-history projection.
 Initial acquisition reads to a captured finite head, validates continuation
 anchors, and catches up by refreshing mutable records, exact records identified

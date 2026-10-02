@@ -8,6 +8,7 @@ import { OpenCodeNativeApi } from "../../src/server/backends/opencode/opencode-n
 import { OPENCODE_MAXIMUM_RESPONSE_BYTES } from "../../src/server/backends/opencode/opencode-http-client.js";
 import { createOpenCodeApiFixture } from "../support/opencode-api-fixture.js";
 import { createOpenCodeConversationFixture, scope } from "../support/opencode-conversation-fixture.js";
+import { readConversationHistory } from "../helpers/read-conversation-history.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { vi.restoreAllMocks(); for (const close of cleanup.splice(0).reverse()) await close(); });
@@ -67,7 +68,7 @@ describe("OpenCode conversation authority and finite discovery", () => {
       counters: { ...expected.counters, userMessages: 13, assistantMessages: 13, totalMessages: 26 },
     } } })));
     const live = await current.handle.usage();
-    expect((await current.driver.read(current.target)).usage).toEqual(live);
+    expect((await readConversationHistory(current.driver, current.target)).usage).toEqual(live);
     // Neither paginating the display nor replaying a step adds message counts.
     await current.handle.history({ limit: 10, cursor: established.history.previousCursor, signal: signal() });
     expect(await current.handle.usage()).toEqual(live);

@@ -21,7 +21,7 @@ import {
   type BranchConversationInput,
   type ConversationBackendDriver,
   type ConversationHandle,
-  type ConversationReadResult,
+  type ConversationHistoryReader,
   type CreateConversationInput,
   type CreateConversationResult,
   type DiscoverConversationsInput,
@@ -42,8 +42,8 @@ import {
   type ClaudeForkBoundaryAuthentication,
 } from "./claude-fork-context-boundary.js";
 import { ClaudeConversationHandle } from "./claude-conversation-handle.js";
+import { ClaudeHistoryReader } from "./claude-history-reader.js";
 import {
-  CLAUDE_VIEWED_IMAGE_INLINE_BUDGET,
   ClaudeViewedImagePublications,
 } from "./claude-viewed-images.js";
 import type { OutputArtifactPublisher } from "../../output-artifacts/contracts.js";
@@ -201,8 +201,8 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
       ) => ClaudeRuntimeVersionObservation)
     | undefined;
   readonly #handles = new Set<ClaudeConversationHandle>();
-  /** Reads whose remaining images still publish in the background. */
-  readonly #readPublications = new Set<ClaudeViewedImagePublications>();
+  /** Passive acquisitions, closed with the backend even when a caller is waiting. */
+  readonly #historyReaders = new Set<ConversationHistoryReader>();
   #closed = false;
   #nextQueryGeneration = 0;
 
@@ -662,58 +662,29 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
     }
   }
 
-  async read(input: ReadConversationInput): Promise<ConversationReadResult> {
+  async openHistory(input: ReadConversationInput): Promise<ConversationHistoryReader> {
+    input.signal?.throwIfAborted();
     this.#assertAttach(input);
     this.#assertEnabled();
-    try {
-      const messages = await this.#readMessages(
-        input.binding.backendConversationId,
-        input.workspace,
-      );
-      if (this.#closed) {
-        throw claudeError(
-          "unavailable",
-          "Claude is shutting down.",
-          "claude_driver_closed",
-          true,
-        );
-      }
-      const viewedImages = new ClaudeViewedImagePublications({
-        outputArtifacts: this.#outputArtifacts,
-        scope: input.scope,
-        applicationThreadId: input.binding.applicationThreadId,
-      });
-      // Registered before any publication, so close() stops inline and
-      // queued work alike; the rest publish in the background.
-      this.#readPublications.add(viewedImages);
-      const project = () => projectClaudeHistory(
-        messages,
-        this.#settings.listTerminalReceipts(
-          input.scope,
-          input.binding.applicationThreadId,
-        ),
-        {
-          ...this.#historyAuthentication(
-            input.scope,
-            input.binding.applicationThreadId,
-            input.binding.backendConversationId,
-          ),
-          viewedImages,
-        },
-      );
-      let projection;
-      try {
-        projection = project();
-        if (await viewedImages.publish(projection.pendingViewedImages, CLAUDE_VIEWED_IMAGE_INLINE_BUDGET)) {
-          projection = project();
-        }
-      } finally {
-        void viewedImages.idle().finally(() => this.#readPublications.delete(viewedImages));
-      }
-      return { snapshot: projection.snapshot, usage: projection.usage ?? {} };
-    } catch (error) {
-      throw mapClaudeReadError(error);
-    }
+    if (this.#closed) throw claudeError("unavailable", "Claude is shutting down.", "claude_driver_closed", true);
+    const viewedImages = new ClaudeViewedImagePublications({
+      outputArtifacts: this.#outputArtifacts,
+      scope: input.scope,
+      applicationThreadId: input.binding.applicationThreadId,
+    });
+    const reader = new ClaudeHistoryReader({
+      load: () => this.#readMessages(input.binding.backendConversationId, input.workspace),
+      terminalReceipts: this.#settings.listTerminalReceipts(input.scope, input.binding.applicationThreadId),
+      authentication: {
+        ...this.#historyAuthentication(input.scope, input.binding.applicationThreadId, input.binding.backendConversationId),
+        viewedImages,
+      },
+      viewedImages,
+      mapError: mapClaudeReadError,
+      onClosed: () => { this.#historyReaders.delete(reader); },
+    });
+    this.#historyReaders.add(reader);
+    return reader;
   }
 
   async resolveBranchCheckpoint(
@@ -1262,8 +1233,8 @@ export class ClaudeConversationBackendDriver implements ConversationBackendDrive
 
   async close(): Promise<void> {
     this.#closed = true;
-    for (const publications of this.#readPublications) publications.close();
-    this.#readPublications.clear();
+    await Promise.allSettled([...this.#historyReaders].map(reader => reader.close()));
+    this.#historyReaders.clear();
     const handles = [...this.#handles];
     await Promise.allSettled(
       handles.map(async (handle) => await handle.close()),

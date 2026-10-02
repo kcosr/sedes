@@ -82,6 +82,24 @@ export class LocalThreadWorkspaceIsolationResolver implements ThreadWorkspaceIso
     },
   ) {}
 
+  historyWorkspace(
+    input: Parameters<ThreadWorkspaceIsolationResolver["historyWorkspace"]>[0],
+  ): ReturnType<ThreadWorkspaceIsolationResolver["historyWorkspace"]> {
+    const allocation = this.input.allocations.getForThread(
+      input.scope,
+      input.applicationThreadId,
+    );
+    if (!allocation) return undefined;
+    assertAllocationAuthority(input.scope, input.sourceWorkspace, allocation);
+    if (allocation.applicationThreadId !== input.applicationThreadId) {
+      throw new DomainError("conflict", "The isolated workspace does not match the history thread.");
+    }
+    return {
+      ...input.sourceWorkspace,
+      canonicalPath: piSandboxEffectiveWorkspacePath(allocation),
+    };
+  }
+
   isSelected(
     input: Parameters<ThreadWorkspaceIsolationResolver["isSelected"]>[0],
   ): boolean {
@@ -241,6 +259,24 @@ export class UnavailableThreadWorkspaceIsolationResolver implements ThreadWorksp
   constructor(
     readonly allocations: Pick<PiSandboxAllocationRepository, "getForThread">,
   ) {}
+
+  historyWorkspace(
+    input: Parameters<ThreadWorkspaceIsolationResolver["historyWorkspace"]>[0],
+  ): ReturnType<ThreadWorkspaceIsolationResolver["historyWorkspace"]> {
+    const allocation = this.allocations.getForThread(
+      input.scope,
+      input.applicationThreadId,
+    );
+    if (!allocation) return undefined;
+    assertAllocationAuthority(input.scope, input.sourceWorkspace, allocation);
+    if (allocation.applicationThreadId !== input.applicationThreadId) {
+      throw new DomainError("conflict", "The isolated workspace does not match the history thread.");
+    }
+    return {
+      ...input.sourceWorkspace,
+      canonicalPath: piSandboxEffectiveWorkspacePath(allocation),
+    };
+  }
 
   isSelected(
     input: Parameters<ThreadWorkspaceIsolationResolver["isSelected"]>[0],

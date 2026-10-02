@@ -332,7 +332,8 @@ export class ThreadApplicationService {
   ): Promise<NormalizedThreadSnapshot> {
     const inventory = await this.#authorize(scope, applicationThreadId);
     const capture =
-      inventory.thread.backingState === "bound" && inventory.thread.available
+      inventory.thread.backingState === "bound" &&
+      (inventory.thread.available || inventory.thread.inventoryState === "archived")
         ? await this.#conversations.capture(scope, applicationThreadId)
         : ({ status: "disconnected" } as const);
     return this.#composeSnapshot(

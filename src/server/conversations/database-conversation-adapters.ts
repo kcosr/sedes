@@ -407,6 +407,8 @@ export class DatabaseConversationTargetStore {
       workspace,
       opaqueBindingDetail,
       driver,
+      access: this.#inventory.getThread(scope, applicationThreadId).inventory.inventoryState === "archived"
+        ? "history" : "execution",
     };
   }
 

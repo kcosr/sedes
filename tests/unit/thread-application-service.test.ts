@@ -1625,6 +1625,19 @@ describe("ThreadApplicationService", () => {
     });
   });
 
+  it("captures archived history even when its execution target is unavailable", async () => {
+    const state = inventory();
+    const { service, capture } = createService({ state: {
+      ...state, thread: { ...state.thread, available: false, inventoryState: "archived" },
+    } });
+    const snapshot = await service.snapshot(scope, "thread-1");
+    expect(capture).toHaveBeenCalledOnce();
+    expect(snapshot.runState).not.toBe("disconnected");
+    expect(snapshot.thread.inventoryState).toBe("archived");
+    expect(snapshot.capabilities.deliveryModes.every(({ available }) => !available)).toBe(true);
+    expect(snapshot.capabilities.automation.available).toBe(false);
+  });
+
   it("does not acquire or offer backend delivery when the inventory target is unavailable", async () => {
     const state = inventory();
     const { service, capture } = createService({
