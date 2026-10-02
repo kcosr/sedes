@@ -64,6 +64,7 @@ function context(): TrustedToolInvocationContext {
       kind: "thread_agent",
       environmentId: "environment-1",
       workspaceId: "controller-workspace",
+      projectId: "project-1",
       threadId: "controller-thread",
     },
     policyIdentity: {
@@ -81,6 +82,7 @@ function context(): TrustedToolInvocationContext {
         kind: "thread_agent",
         environmentId: "environment-1",
         workspaceId: "controller-workspace",
+        projectId: "project-1",
         threadId: "controller-thread",
       },
       policyIdentity: {
@@ -133,7 +135,7 @@ describe("thread control tool definitions", () => {
       ["thread.messages", 4],
       ["thread.send", 2],
       ["thread.fork", 1],
-      ["thread.archive", 1],
+      ["thread.archive", 2],
       ["thread.restore", 1],
     ]);
     expect(definitions.map(({ effects }) => effects)).toEqual([
@@ -217,21 +219,23 @@ describe("thread control tool definitions", () => {
       }),
     ).toBe(false);
     expect(
-      registry.validatesInput("thread.archive", 1, {
+      registry.validatesInput("thread.archive", 2, {
         threadId: "thread-1",
         includeDescendants: true,
-        openTaskDisposition: "move_to_workspace",
+        openTaskDisposition: "move_to_project",
       }),
     ).toBe(true);
-    expect(
-      registry.validatesInput("thread.archive", 1, {
-        threadId: "thread-1",
-        openTaskDisposition: "delete",
-      }),
-    ).toBe(false);
+    for (const openTaskDisposition of ["delete", "move_to_workspace"]) {
+      expect(
+        registry.validatesInput("thread.archive", 2, {
+          threadId: "thread-1",
+          openTaskDisposition,
+        }),
+      ).toBe(false);
+    }
     // This tool has no impact-review step; completion is deliberately unsupported.
     for (const extra of [{}, { expectedOpenTaskSnapshot: "a".repeat(64) }]) {
-      expect(registry.validatesInput("thread.archive", 1, {
+      expect(registry.validatesInput("thread.archive", 2, {
         threadId: "thread-1",
         openTaskDisposition: "complete",
         ...extra,
@@ -574,7 +578,7 @@ describe("thread control tool definitions", () => {
   it("rejects a schema-valid multibyte send above the durable UTF-8 byte limit", async () => {
     const value = services();
     const canonical = new CanonicalInlineAgentToolService({
-      application: { readWorkspaceProjectId: async () => "project-1", readThreadStatus: async () => undefined },
+      application: { readThreadStatus: async () => undefined },
       threadControl: value,
       invocationId: () => "invocation-1",
       mutationId: () => "mutation-1",

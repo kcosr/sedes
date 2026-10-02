@@ -29,6 +29,6 @@ describe("Workpad tool surfaces", () => {
     expect(canonicalCliOptionSpecs(update.inputSchema)).toContainEqual(expect.objectContaining({ name: "edit-text-file", path: ["edit", "text"], representation: "file" }));
     const registry = new AgentToolRegistry();
     registry.register(update);
-    expect(registry.validatesInput("workpad.update", 1, { workpadId: "pad", expectedRevision: 0, edit: { kind: "replace", path: "/some/file" } })).toBe(false);
+    expect(registry.validatesInput("workpad.update", 2, { workpadId: "pad", expectedRevision: 0, edit: { kind: "replace", path: "/some/file" } })).toBe(false);
   });
 });

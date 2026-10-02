@@ -308,7 +308,12 @@ describe("built Sedes agent-tool CLI", () => {
         workspaces: workspaceManagement,
         taskRepository,
         tasks,
+        authorityReader: sourceAuthority,
       });
+      const workspaceProjectId = inventory.getWorkspace(
+        scope,
+        workspace.id,
+      ).projectId;
       const automationDomain = new AutomationService({
         repository: new AutomationRepository(database),
         inventory,
@@ -666,7 +671,7 @@ describe("built Sedes agent-tool CLI", () => {
             "--files",
             path.join(root, "workspace", "README.md"),
             "--scope-kind",
-            "workspace",
+            "project",
             "--json",
           ])
         ).stdout,
@@ -675,7 +680,7 @@ describe("built Sedes agent-tool CLI", () => {
         title: "Generated CLI task",
         details: taskDetails,
         pinned: true,
-        scope: { kind: "workspace", workspaceId: workspace.id },
+        scope: { kind: "project", projectId: workspaceProjectId },
         revision: 0,
       });
       const taskId = createdTask.id as string;
@@ -691,7 +696,7 @@ describe("built Sedes agent-tool CLI", () => {
             "task",
             "list",
             "--scope-kind",
-            "workspace",
+            "project",
             "--scope-mode",
             "exact",
             "--json",
@@ -707,7 +712,7 @@ describe("built Sedes agent-tool CLI", () => {
               title: "Generated CLI task",
               pinned: true,
               fileCount: 1,
-              scope: { kind: "workspace", workspaceId: workspace.id },
+              scope: { kind: "project", projectId: workspaceProjectId },
             },
           ],
         },
@@ -771,7 +776,7 @@ describe("built Sedes agent-tool CLI", () => {
             {
               id: globalTask.id,
               title: "Principal-wide CLI task",
-              associatedWorkspaceId: null,
+              associatedProjectId: null,
               scope: { kind: "global" },
             },
           ],

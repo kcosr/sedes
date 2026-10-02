@@ -14,7 +14,9 @@ import { DatabaseApplicationThreadSummaryReader } from "../../src/server/applica
 import { ApplicationSnapshotService } from "../../src/server/application/application-snapshot-service.js";
 import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
 import { ThreadRuntimeNotIdleError, ThreadRuntimeRetirementUnprovenError, type ThreadRuntimeObservation } from "../../src/server/events/thread-runtime-coordinator.js";
-import { createTrustedEnvironmentAuthorityGrant } from "../../src/server/agent-tools/environment/environment-authority.js";
+import { AgentToolEnvironmentAuthorityResolver, createTrustedEnvironmentAuthorityGrant } from "../../src/server/agent-tools/environment/environment-authority.js";
+import { DatabaseAgentToolSourceAuthority } from "../../src/server/agent-tools/application/database-agent-tool-source-authority.js";
+import { CANONICAL_AGENT_TOOL_MANIFEST } from "../../src/server/agent-tools/registry/canonical-agent-tool-manifest.js";
 import path from "node:path";
 
 const cleanups: Array<() => void> = [];
@@ -63,7 +65,8 @@ function fixture() {
     runtimes: {runWithRuntimeRetired: runWithRuntimeRetired as RuntimeRetirement, releaseProviderResidency: async () => undefined, observeRuntimes, commitWithRuntimesObserved: commitWithRuntimesObserved as RuntimeCommit},
     files: {runWithWorkspaceRetired: runWithWorkspaceRetired as Retirement},
     terminals: {runWithWorkspaceRetired: runWithTerminalsRetired as Retirement},
-    locations: open, publications: {handoffAuthoritativeReplacement}, threads: {scheduleMany: scheduleThreadPublications} });
+    locations: open, publications: {handoffAuthoritativeReplacement}, threads: {scheduleMany: scheduleThreadPublications},
+    workpads: {publishWorkpadChange: async () => undefined} });
   const remove = () => service.removeLocation(scope, workspace.id, { expectedRevision: inventory.getWorkspace(scope, workspace.id).revision });
   const location = (canonicalPath: string, project: import("../../src/server/db/repositories/inventory-repository.js").InventoryProjectAssignment = { kind: "new", name: path.basename(canonicalPath) }) =>
     inventory.upsertWorkspace(scope, { environmentId: environment.id, canonicalPath, displayName: path.basename(canonicalPath), project,
@@ -143,22 +146,31 @@ describe("project registration lifecycle", () => {
     expect(automations.getDefinition(f.scope,definition.id).enabled).toBe(false);
   });
 
-  it.each(["workspace", "thread"] as const)("retains saved %s work while rejecting new records and moves into removed projects", async kind => {
+  it.each(["project", "thread"] as const)("retains saved %s work while rejecting new records and moves into removed projects", async kind => {
     const f=fixture();
     const tasks=new TaskRepository(f.database);
     const pads=new WorkpadRepository(f.database);
-    const target=kind === "workspace" ? {kind,workspaceId:f.workspace.id} : {kind,threadId:f.thread.id};
+    const target=kind === "project" ? {kind,projectId:f.workspace.projectId} : {kind,threadId:f.thread.id};
     const task=tasks.create(f.scope,{scope:target,title:"Retain task",mutationId:randomUUID(),now:500});
     const pad=pads.create(f.scope,{scope:target,title:"Retain pad",content:"Notes"});
     const globalTask=tasks.create(f.scope,{scope:{kind:"global"},title:"Global task",mutationId:randomUUID(),now:500});
     const globalPad=pads.create(f.scope,{scope:{kind:"global"},title:"Global pad"});
     await f.remove();
+    if (kind === "project") {
+      // Removing a project's last location leaves the project and its saved work active.
+      const added=tasks.create(f.scope,{scope:target,title:"Still active",mutationId:randomUUID(),now:550});
+      tasks.remove(f.scope,added.id);
+      const current=f.project(f.workspace.projectId);
+      await f.service.removeProject(f.scope,f.workspace.projectId,{expectedRevision:current.revision,expectedMembershipRevision:current.membershipRevision});
+    }
     expect(tasks.get(f.scope,task.id).title).toBe("Retain task");
     expect(pads.get(f.scope,pad.id).content).toBe("Notes");
-    expect(()=>tasks.create(f.scope,{scope:target,title:"Hidden task",mutationId:randomUUID(),now:600})).toThrow(/removed/);
-    expect(()=>pads.create(f.scope,{scope:target,title:"Hidden pad"})).toThrow(/removed/);
-    expect(()=>tasks.move(f.scope,globalTask.id,{scope:target,expectedRevision:globalTask.revision,mutationId:randomUUID(),now:600})).toThrow(/removed/);
-    expect(()=>pads.update(f.scope,globalPad.id,{scope:target,expectedRevision:globalPad.revision})).toThrow(/removed/);
+    // A removed project is not found as a destination; the commit-time guard backs both.
+    const rejected=kind === "project" ? /not found/ : /removed/;
+    expect(()=>tasks.create(f.scope,{scope:target,title:"Hidden task",mutationId:randomUUID(),now:600})).toThrow(rejected);
+    expect(()=>pads.create(f.scope,{scope:target,title:"Hidden pad"})).toThrow(rejected);
+    expect(()=>tasks.move(f.scope,globalTask.id,{scope:target,expectedRevision:globalTask.revision,mutationId:randomUUID(),now:600})).toThrow(rejected);
+    expect(()=>pads.update(f.scope,globalPad.id,{scope:target,expectedRevision:globalPad.revision})).toThrow(rejected);
     const updatedTask=tasks.update(f.scope,task.id,{scope:target,title:"Updated retained task",expectedRevision:task.revision,mutationId:randomUUID(),now:600});
     const updatedPad=pads.update(f.scope,pad.id,{scope:target,title:"Updated retained pad",expectedRevision:pad.revision});
     expect(tasks.move(f.scope,task.id,{scope:{kind:"global"},expectedRevision:updatedTask.revision,mutationId:randomUUID(),now:700}).scopeKind).toBe("global");
@@ -203,8 +215,8 @@ describe("workspace.open for agents", () => {
     const grant=createTrustedEnvironmentAuthorityGrant({
       canonicalInputDigest:"input",authorityDigest:"authority",targetEnvironmentIds:[f.environment.id],
       resolvedResourceRefs:[{kind:"environment",id:f.environment.id,environmentId:f.environment.id}],
-      display:{targetEnvironmentLabels:[],resourceLabels:[]},tool:{id:"workspace.open",schemaVersion:2},callerKind:"thread_agent",
-      defaults:{kind:"thread_agent",environmentId:f.environment.id,workspaceId:f.workspace.id,threadId:f.thread.id},
+      display:{targetEnvironmentLabels:[],resourceLabels:[]},tool:{id:"workspace.open",schemaVersion:3},callerKind:"thread_agent",
+      defaults:{kind:"thread_agent",environmentId:f.environment.id,workspaceId:f.workspace.id,projectId:f.workspace.projectId,threadId:f.thread.id},
       policyIdentity:{ownerKind:"thread",ownerId:f.thread.id,revision:1},admittedEnvironmentIds:[f.environment.id]});
     return {...f,open:(canonicalPath:string)=>f.open.openWorkspaceForAgent(f.scope,{environmentId:f.environment.id,path:canonicalPath},grant)};
   }
@@ -233,6 +245,64 @@ describe("workspace.open for agents", () => {
     await expect(f.open("/tmp/agent-restored")).rejects.toMatchObject({code:"invalid_transition"});
     expect(f.inventory.isWorkspaceRemoved(f.scope,opened.workspaceId)).toBe(true);
     expect(f.inventory.getProject(f.scope,opened.projectId).removedAt).not.toBeNull();
+  });
+});
+
+describe("workspace.open@3 with a project", () => {
+  function projectFixture() {
+    const f=fixture();
+    const reader=new DatabaseAgentToolSourceAuthority(f.database,new Uint8Array(32).fill(7));
+    const open=new WorkspaceApplicationService({inventory:f.inventory,execution:{validateWorkspace:f.validateWorkspace},
+      publications:{handoffAuthoritativeReplacement:f.handoffAuthoritativeReplacement},projectAuthority:reader});
+    const tool=CANONICAL_AGENT_TOOL_MANIFEST["workspace.open"];
+    const defaults={kind:"thread_agent" as const,environmentId:f.environment.id,workspaceId:f.workspace.id,projectId:f.workspace.projectId,threadId:f.thread.id};
+    const policyIdentity={ownerKind:"thread" as const,ownerId:f.thread.id,revision:1};
+    /** Admits like a thread agent whose request needs no approval, then runs it. */
+    const admit=(input:{readonly environmentId:string;readonly path:string;readonly projectId?:string})=>{
+      const resolved=new AgentToolEnvironmentAuthorityResolver(reader).resolve({tool,input,scope:f.scope,defaults});
+      return createTrustedEnvironmentAuthorityGrant({...resolved,tool,callerKind:"thread_agent",defaults,policyIdentity,
+        admittedEnvironmentIds:[f.environment.id,...resolved.targetEnvironmentIds]});
+    };
+    const openIn=(path:string,projectId?:string)=>{
+      const input={environmentId:f.environment.id,path,...(projectId?{projectId}:{})};
+      return open.openWorkspaceForAgent(f.scope,input,admit(input));
+    };
+    return {...f,reader,open,admit,openIn};
+  }
+
+  it("adds a new directory to an existing project the caller reaches", async () => {
+    const f=projectFixture();
+    const before=f.project(f.workspace.projectId);
+    const opened=await f.openIn("/tmp/agent-joined",f.workspace.projectId);
+    expect(opened).toMatchObject({projectId:f.workspace.projectId,label:"agent-joined"});
+    expect(f.project(f.workspace.projectId)).toMatchObject({membershipRevision:before.membershipRevision+1});
+    expect(f.project(f.workspace.projectId).locations.map(({id})=>id)).toContain(opened.workspaceId);
+    // Selecting a known directory through its own project is not a move.
+    await expect(f.openIn("/tmp/agent-joined",f.workspace.projectId)).resolves.toEqual(opened);
+  });
+
+  it("never moves a known directory and fails closed for removed projects and changed membership", async () => {
+    const f=projectFixture();
+    const other=await f.openIn("/tmp/agent-other");
+    await expect(f.openIn(f.workspace.canonicalPath,other.projectId)).rejects.toMatchObject({code:"conflict"});
+    expect(f.inventory.getWorkspace(f.scope,f.workspace.id).projectId).toBe(f.workspace.projectId);
+
+    const otherProject=f.project(other.projectId);
+    const otherLocation=f.inventory.getWorkspace(f.scope,other.workspaceId);
+    f.inventory.removeWorkspace(f.scope,other.workspaceId,{expectedRevision:otherLocation.revision,expectedThreadIds:[],now:600});
+    const emptied=f.project(other.projectId);
+    const inspection=f.inventory.inspectProjectRemoval(f.scope,other.projectId,{expectedRevision:emptied.revision,expectedMembershipRevision:emptied.membershipRevision});
+    f.inventory.removeProject(f.scope,other.projectId,{expectedRevision:emptied.revision,expectedMembershipRevision:emptied.membershipRevision,expectedLocations:inspection.locations,now:610});
+    expect(otherProject.membershipRevision).toBeLessThan(emptied.membershipRevision);
+    // A removed project is not found, so an agent can neither join nor restore it.
+    expect(()=>f.admit({environmentId:f.environment.id,path:"/tmp/agent-late",projectId:other.projectId})).toThrow(expect.objectContaining({code:"not_found"}));
+
+    // Admission binds the membership revision; a location edit before the commit denies the request.
+    const input={environmentId:f.environment.id,path:"/tmp/agent-raced",projectId:f.workspace.projectId};
+    const grant=f.admit(input);
+    f.location("/tmp/agent-raced-sibling",{kind:"existing",projectId:f.workspace.projectId});
+    await expect(f.open.openWorkspaceForAgent(f.scope,input,grant)).rejects.toMatchObject({code:"permission_denied"});
+    expect(f.inventory.listWorkspaces(f.scope).map(({canonicalPath})=>canonicalPath)).not.toContain("/tmp/agent-raced");
   });
 });
 

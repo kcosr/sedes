@@ -51,21 +51,30 @@ location of exactly one project. A project can span several workspaces on
 several environments. Workspace list reports each workspace's `project`, and
 agent context reports the `projectId` of your own workspace. Opening a
 directory Sedes does not know yet creates a new single-location project named
-after it; opening a known directory keeps its project. Only the user can add a
-directory to an existing project, move it to another project, or restore a
-removed project. Task scopes still name workspaces and threads, not projects.
+after it; opening a known directory keeps its project. Workspace open can
+instead add a new directory to an existing project when you pass that
+`projectId`; naming a different project for a known directory is a conflict.
+Only the user can move a directory to another project or restore a removed
+project.
+
+Tasks and Workpads belong to everyone (`global`), to a project (`project`,
+shared by all of its workspaces on every environment), or to one thread
+(`thread`). A project is reachable from every environment that hosts one of
+its active workspaces. Reaching a project hosted only on other environments
+needs approval, or for a Tool client an allowlisted host; a project with no
+active workspace always needs approval and is unavailable to Tool clients.
 
 ## Task workflow
 
 ### Quick current-scope creation
 
-Nearly every task created by a thread agent belongs to its current workspace
+Nearly every task created by a thread agent belongs to its current project
 or current thread. Unless the user explicitly names a different target, skip
 the catalog list, describe only `task.create`, and invoke it with the returned
 schema version and one of these basic inputs:
 
 ```json
-{"title":"Investigate the reported issue","scope":{"kind":"workspace"}}
+{"title":"Investigate the reported issue","scope":{"kind":"project"}}
 ```
 
 ```json
@@ -76,10 +85,10 @@ schema version and one of these basic inputs:
 {"title":"Review shared maintenance","scope":{"kind":"global"}}
 ```
 
-For `workspace` and `thread`, omit `workspaceId` or `threadId`. Sedes resolves
+For `project` and `thread`, omit `projectId` or `threadId`. Sedes resolves
 the authenticated agent's current scope. Do not describe or invoke agent
 context, workspace list, or thread list merely to recover those IDs. Supply an
-explicit target ID only when the user requests another known workspace or
+explicit target ID only when the user requests another known project or
 thread; never guess one. Global scope is explicit and should be used only when
 actually intended.
 
@@ -87,7 +96,9 @@ Freshly list and describe task list/get/update as needed. Never build other
 input from this skill or a remembered shape. The current task list requires
 both `scope` and `scopeMode`; `exact` selects direct assignments and `subtree`
 also traverses descendants. Preserve identical scope, scope mode, filters,
-projection, page size, and opaque cursor across continuation pages.
+projection, page size, and opaque cursor across continuation pages. Prefer
+`exact` for project tasks: a project subtree also spans the threads of every
+workspace in the project and needs access to every environment that hosts one.
 
 Create once. Preserve the returned exact `id` and `revision`, and independently
 verify through the described exact read when warranted. Read immediately before

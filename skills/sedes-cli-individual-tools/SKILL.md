@@ -50,7 +50,7 @@ commands.
    sedes task create \
      --title "Make agent-access CLI environment variables override config values" \
      --details-file /tmp/task-details.md \
-     --scope-kind workspace
+     --scope-kind project
    ```
 
 Property names become kebab-case options, nested properties are flattened,
@@ -82,21 +82,30 @@ location of exactly one project. A project can span several workspaces on
 several environments. Workspace list reports each workspace's `project`, and
 agent context reports the `projectId` of your own workspace. Opening a
 directory Sedes does not know yet creates a new single-location project named
-after it; opening a known directory keeps its project. Only the user can add a
-directory to an existing project, move it to another project, or restore a
-removed project. Task scopes still name workspaces and threads, not projects.
+after it; opening a known directory keeps its project. Workspace open can
+instead add a new directory to an existing project when you pass that
+`projectId`; naming a different project for a known directory is a conflict.
+Only the user can move a directory to another project or restore a removed
+project.
+
+Tasks and Workpads belong to everyone (`global`), to a project (`project`,
+shared by all of its workspaces on every environment), or to one thread
+(`thread`). A project is reachable from every environment that hosts one of
+its active workspaces. Reaching a project hosted only on other environments
+needs approval, or for a Tool client an allowlisted host; a project with no
+active workspace always needs approval and is unavailable to Tool clients.
 
 ## Task workflow
 
 ### Quick current-scope creation
 
-Nearly every task created by a thread agent belongs to its current workspace
+Nearly every task created by a thread agent belongs to its current project
 or current thread. Unless the user explicitly names a different target, use
 one of these short forms directly and do not run help or try to discover an ID:
 
 ```sh
-# Current workspace (the usual choice)
-sedes task create --title "Investigate the reported issue" --scope-kind workspace
+# Current project (the usual choice)
+sedes task create --title "Investigate the reported issue" --scope-kind project
 
 # Current thread
 sedes task create --title "Follow up in this thread" --scope-kind thread
@@ -105,18 +114,20 @@ sedes task create --title "Follow up in this thread" --scope-kind thread
 sedes task create --title "Review shared maintenance" --scope-kind global
 ```
 
-For `workspace` and `thread`, omitting the target ID deliberately asks Sedes to
-resolve the authenticated agent's current workspace or thread. Do not call
+For `project` and `thread`, omitting the target ID deliberately asks Sedes to
+resolve the authenticated agent's current project or thread. Do not call
 agent context, workspace list, or thread list merely to recover that ID. Use
-`--scope-workspace-id` or `--scope-thread-id` only when the user explicitly
-requests another known workspace or thread; never guess a target ID.
+`--scope-project-id` or `--scope-thread-id` only when the user explicitly
+requests another known project or thread; never guess a target ID.
 
 Use the normal help workflow when adding other fields, targeting another
 scope, or after the quick command reports an option/schema mismatch. The
 task-list command requires both scope and its canonical `scopeMode` when
 current help advertises them. `exact` selects direct assignments; `subtree`
 also traverses descendants. Preserve the identical scope, scope mode, filters,
-projection, page size, and opaque cursor across continuation pages.
+projection, page size, and opaque cursor across continuation pages. Prefer
+`exact` for project tasks: a project subtree also spans the threads of every
+workspace in the project and needs access to every environment that hosts one.
 
 Create once and preserve the complete returned record, especially its exact
 `id` and `revision`. Verify with the named exact-record read when independent

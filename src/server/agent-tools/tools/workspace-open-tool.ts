@@ -14,6 +14,7 @@ const manifest = CANONICAL_AGENT_TOOL_MANIFEST["workspace.open"];
 export type WorkspaceOpenInput = {
   readonly environmentId: string;
   readonly path: string;
+  readonly projectId?: string;
 };
 export type WorkspaceOpenOutput = OpenedWorkspaceSummary;
 
@@ -30,13 +31,21 @@ export function createWorkspaceOpenToolDefinition(
             minLength: 1,
             maxLength: 4_096,
             description:
-              "Absolute path to an existing directory on the selected configured execution environment. A new directory becomes a new single-location project named after it; a known directory keeps its project.",
+              "Absolute path to an existing directory on the selected configured execution environment. A known directory keeps its project.",
           }),
+          projectId: Type.Optional(
+            Type.String({
+              minLength: 1,
+              maxLength: 128,
+              description:
+                "An existing active project to add a new directory to. Without it, a new directory becomes a new single-location project named after it. Naming a project other than a known directory's own is a conflict.",
+            }),
+          ),
         },
         {
           $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
           additionalProperties: false,
-          maxProperties: 2,
+          maxProperties: 3,
         },
       ),
     ),
