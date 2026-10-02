@@ -7,6 +7,11 @@ import { useTouchDensity } from "@client/app/use-touch-density"
 import { Button } from "@client/components/ui/button"
 import { Callout } from "@client/components/ui/callout"
 import { FieldControlContext } from "@client/components/ui/control"
+import {
+  FloatingOpeningProvider,
+  useFloatingLayer,
+  useFloatingOpening,
+} from "@client/components/ui/floating-opening"
 
 // Floating content opened inside a dialog portals into the dialog node, so
 // it layers above the dialog and stays inside its focus and scroll lock.
@@ -25,9 +30,21 @@ type DialogPresentation = "modal" | "side" | "sheet" | "fullscreen"
 type DialogLayer = "dialog" | "over-dialog" | "blocking"
 
 function Dialog({
+  open: openProp,
+  defaultOpen,
+  onOpenChange,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />
+  const { open, setOpen, value } = useFloatingOpening({
+    open: openProp,
+    defaultOpen,
+    onOpenChange,
+  })
+  return (
+    <FloatingOpeningProvider value={value}>
+      <DialogPrimitive.Root data-slot="dialog" {...props} open={open} onOpenChange={setOpen} />
+    </FloatingOpeningProvider>
+  )
 }
 
 function DialogTrigger({
@@ -50,8 +67,10 @@ function DialogClose({
 
 function DialogOverlay({
   layer = "dialog",
+  style,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Overlay> & { layer?: DialogLayer }) {
+  const { open } = useFloatingLayer({})
   // Surface, layer and motion: components/ui/overlay.css.
   return (
     <DialogPrimitive.Overlay
@@ -59,6 +78,9 @@ function DialogOverlay({
       data-testid="dialog-overlay"
       data-layer={layer}
       {...props}
+      // Radix supplies inline pointer-events:auto; let a closing scrim
+      // pass presses through without changing open-modal isolation.
+      style={{ ...style, ...(open === false ? { pointerEvents: "none" } : {}) }}
     />
   )
 }
@@ -215,6 +237,7 @@ function DialogContent({
 }) {
   const touch = useTouchDensity()
   const keyboardInset = useKeyboardInset(touch)
+  const floatingLayer = useFloatingLayer({ onInteractOutside, onCloseAutoFocus })
   const presentation = touch
     ? MOBILE_PRESENTATION[mobile ?? defaultMobile(layout, size)]
     : layout
@@ -231,8 +254,9 @@ function DialogContent({
   }, [ref])
   return (
     <DialogPortal>
-      {showOverlay && <DialogOverlay layer={layer} />}
+      {showOverlay && <DialogOverlay key={`overlay-${floatingLayer.key}`} layer={layer} />}
       <DialogPrimitive.Content
+        key={floatingLayer.key}
         ref={contentRef}
         data-slot="dialog-content"
         data-size={size}
@@ -240,7 +264,11 @@ function DialogContent({
         data-layer={layer}
         data-close={showClose ? "" : undefined}
         className={className}
-        style={{ "--keyboard-inset": `${keyboardInset}px`, ...style } as React.CSSProperties}
+        style={{
+          "--keyboard-inset": `${keyboardInset}px`,
+          ...style,
+          ...(floatingLayer.open === false ? { pointerEvents: "none" } : {}),
+        } as React.CSSProperties}
         onOpenAutoFocus={(event) => {
           // Escape hatch: a handler that prevents the default owns focus.
           onOpenAutoFocus?.(event)
@@ -252,8 +280,9 @@ function DialogContent({
           initialFocusTarget(content).focus({ preventScroll: true })
         }}
         onCloseAutoFocus={(event) => {
-          // A handler that prevents the default owns focus.
-          onCloseAutoFocus?.(event)
+          // A replaced opening must neither run the caller's close handler
+          // nor take focus away from the new opening.
+          floatingLayer.onCloseAutoFocus?.(event)
           if (event.defaultPrevented) return
           const content = event.currentTarget as HTMLElement
           // A reopening may already have mounted new content; keep its opener.
@@ -281,7 +310,7 @@ function DialogContent({
           if (!dismissible) event.preventDefault()
         }}
         onInteractOutside={(event) => {
-          onInteractOutside?.(event)
+          floatingLayer.onInteractOutside?.(event)
           if (!dismissible) event.preventDefault()
         }}
         {...props}

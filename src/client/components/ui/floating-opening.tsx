@@ -11,7 +11,7 @@ import * as React from "react"
  * by the count): a reopen starts fresh, with its entry motion and focus,
  * and drops the fading layer. The replaced layer neither dismisses the new
  * opening nor restores focus. A fading layer's own close request is
- * harmless: dropdown, popover and sheet roots are controlled here, so Radix
+ * harmless: dropdown, popover and dialog roots are controlled here, so Radix
  * ignores it while the root is closed, and a context menu reopens on the
  * contextmenu event, after the press. Any other press during an exit
  * reaches the layer as before and leaves focus where that press put it.
@@ -19,6 +19,8 @@ import * as React from "react"
  */
 
 interface FloatingOpening {
+  /** Whether the current surface is open (closed content may still animate). */
+  readonly open: boolean
   /** The current opening; its content's React key. */
   readonly opening: number
   /** The opening last committed, read by the content's guards. */
@@ -68,7 +70,7 @@ function useFloatingOpening({
   React.useLayoutEffect(() => {
     current.current = opening
   })
-  const value = React.useMemo(() => ({ opening, current }), [opening])
+  const value = React.useMemo(() => ({ open, opening, current }), [open, opening])
   return { open, setOpen, value }
 }
 
@@ -99,14 +101,16 @@ function useFloatingLayer<
   onInteractOutside?: (event: InteractEvent) => void
   onCloseAutoFocus?: (event: FocusEvent) => void
 }): {
+  open: boolean | undefined
   key: number | undefined
   onInteractOutside: ((event: InteractEvent) => void) | undefined
   onCloseAutoFocus: ((event: FocusEvent) => void) | undefined
 } {
   const context = React.useContext(FloatingOpeningContext)
-  if (!context) return { key: undefined, onInteractOutside, onCloseAutoFocus }
+  if (!context) return { open: undefined, key: undefined, onInteractOutside, onCloseAutoFocus }
   const { opening, current } = context
   return {
+    open: context.open,
     key: opening,
     onInteractOutside: (event) => {
       // A newer opening replaced this layer: dismissing would close it.

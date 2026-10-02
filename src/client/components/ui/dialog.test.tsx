@@ -139,6 +139,12 @@ describe("DialogContent dismissal", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("closes on an outside click while dismissible", async () => {
+    const { onOpenChange } = renderDialog(null);
+    await userEvent.click(screen.getByTestId("dialog-overlay"));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
   it("locks Escape, outside clicks and the X when not dismissible", async () => {
     const onEscapeKeyDown = vi.fn();
     const { onOpenChange } = renderDialog(null, { dismissible: false, onEscapeKeyDown });
@@ -147,6 +153,18 @@ describe("DialogContent dismissal", () => {
     expect(onEscapeKeyDown).toHaveBeenCalled();
     expect(onOpenChange).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Close" })).toBeDisabled();
+  });
+
+  it("honors consumer Escape and outside-interaction guards on the current opening", async () => {
+    const onEscapeKeyDown = vi.fn((event: KeyboardEvent) => event.preventDefault());
+    const onInteractOutside = vi.fn((event: Event) => event.preventDefault());
+    const { onOpenChange } = renderDialog(null, { onEscapeKeyDown, onInteractOutside });
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(screen.getByTestId("dialog-overlay"));
+    expect(onEscapeKeyDown).toHaveBeenCalledTimes(1);
+    expect(onInteractOutside).toHaveBeenCalledTimes(1);
+    expect(onOpenChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toHaveAttribute("data-state", "open");
   });
 });
 

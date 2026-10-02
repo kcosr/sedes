@@ -438,6 +438,10 @@
 
 ### Fixed
 
+- Reopening a dialog while it closes now keeps the new opening visible and
+  focused. Closing dialog surfaces let clicks through, including when quickly
+  reopening the file editor's conflict dialog.
+
 - Claude history retains eligible external-origin messages and chooses queued
   inputs using native delivery evidence, matching the updated SDK while
   keeping internal startup markers hidden.

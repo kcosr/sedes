@@ -157,6 +157,14 @@ panel with rounded top corners, safe-area padding, and an X (no drag handle),
 lifted above the soft keyboard through `--keyboard-inset`. Floating content
 opened inside a dialog portals into it.
 
+Reopening during an exit animation creates fresh content and a fresh scrim.
+Delayed outside-press and focus-restoration events from the previous opening
+cannot dismiss or steal focus from the new one. Closing dialog surfaces let
+pointer input through; open modal dialogs retain their normal isolation.
+Retained content portaled outside a modal's React ancestry, such as the Tasks
+body, activates its dialogs only after the host modal mounts so the host does
+not hide an editor that has already reopened from assistive technology.
+
 `ConfirmDialog` is the only confirmation, never `window.confirm`: a small card,
 also on phones, with no X; Cancel is the way out. Name the verb and object in
 `confirmLabel` ("Remove backend"). `tone="danger"` makes the confirm solid red
