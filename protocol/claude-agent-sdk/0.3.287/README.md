@@ -30,7 +30,9 @@ qualification was installed separately from the SDK.
 - History conversion follows the SDK's delivery-ledger selection for queued
   command copies, including `absorbed_mid_turn` evidence and eligible trailing
   queued inputs. Sedes retains its existing true-tip selection and history
-  across automatic compactions.
+  across automatic compactions. A private absorption marker preserves external
+  context inside its original turn even after that turn receives a terminal
+  receipt. Merely visible queued input cannot reuse a settled turn.
 - Eligible external-origin meta messages are retained in history and live
   projection. Internal meta messages, including Sedes startup markers, remain
   hidden. Visibility alone never acknowledges a pending Sedes steer;
@@ -117,10 +119,15 @@ does not establish a fix for the previously observed startup-marker refusals.
 After review corrections, full typecheck and the build passed again, as did
 all 1,086 Claude offline tests across 52 files and two durable usage replay
 regressions. The rebuilt Claude browser journey passed both tests in 32.1
-seconds, with alias-search and in-flight screenshots inspected again. A final
+seconds, with alias-search and in-flight screenshots inspected again. A repeated
 full real-Claude run passed 33 of 34 tests in 114.9 seconds; the same
 parallel-tools case again received a startup-label refusal. It was not retried
 again or reported as a fully passing live gate.
+
+The terminal-receipt ordering correction then passed full typecheck, build,
+all 1,172 Claude and usage-accounting tests across 53 files, all 29 native
+loopback cases across 10 files, and both Claude browser tests in 31.9 seconds.
+The authenticated startup-label test was not repeated for this correction.
 
 The prior 2.1.286 persistent-runtime timeout did not reproduce in the bounded
 2.1.287 authenticated and held-text loopback cases. Its cause remains unknown;

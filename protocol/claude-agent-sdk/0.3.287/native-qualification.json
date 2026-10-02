@@ -120,6 +120,24 @@
         "seconds": 114.89,
         "failure": "The same parallel-tools native history case received a model refusal citing the startup source label. No additional retry; the final full live gate is not fully passing."
       }
+    },
+    "receiptOrderingFix": {
+      "typecheck": "passed",
+      "build": "passed",
+      "claudeAndUsageOffline": {
+        "files": 53,
+        "passed": 1172
+      },
+      "nativeLoopback": {
+        "files": 10,
+        "passed": 29,
+        "seconds": 33.33
+      },
+      "claudeBrowser": {
+        "passed": 2,
+        "seconds": 31.943
+      },
+      "authenticatedLive": "Not repeated for this correction; preceding full run and startup-label refusal remain recorded above."
     }
   }
 }

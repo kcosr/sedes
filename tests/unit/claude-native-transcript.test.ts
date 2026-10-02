@@ -388,6 +388,25 @@ describe("Claude native transcript reader", () => {
 });
 
 describe("Claude 0.3.287 queue delivery and external inputs", () => {
+  it.each([false, true])("separates private absorbed external context evidence from SDK-visible trailing input (absorbed: %s)", async absorbed => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.prompt("Original work.");
+    const external = fixture.attachment({ type: "queued_command", delivery_id: "external-context", isMeta: true,
+      origin: { kind: "peer" }, prompt: "External context." });
+    if (absorbed) fixture.bookkeeping({ type: "queue-operation", operation: "remove", reason: "absorbed_mid_turn", deliveryId: "external-context" });
+    const messages = await ours(fixture);
+    const context = messages.find(({ uuid }) => uuid === external);
+    expect(context).toMatchObject({ is_meta: true, isQueuedCommand: true });
+    if (absorbed) expect(context).toHaveProperty("sedesAbsorbedMidTurn", true);
+    else expect(context).not.toHaveProperty("sedesAbsorbedMidTurn");
+    // This named field is Sedes-private; every SDK field must still agree.
+    const sdkMessages = messages.map(message => {
+      const { sedesAbsorbedMidTurn: _privateEvidence, ...sdkMessage } = message as SessionMessage & { sedesAbsorbedMidTurn?: true };
+      return sdkMessage;
+    });
+    expect(sdkMessages).toEqual(await sdk(fixture));
+  });
+
   it.each(["delivery", "source"])("uses %s absorption evidence when the next row is another prompt", async (identity) => {
     const fixture = new ClaudeTranscriptFixture(workspace);
     fixture.prompt("Start work.");

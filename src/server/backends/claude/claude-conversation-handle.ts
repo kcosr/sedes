@@ -1638,7 +1638,13 @@ export class ClaudeConversationHandle implements ConversationHandle {
     const compaction = externalInput ? undefined : this.#liveCompaction;
     if (!externalInput) this.#liveCompaction = undefined;
     const compactSummary = compaction !== undefined && message.type === "user" && message.isSynthetic === true;
-    const sessionMessage = liveSessionMessage(message, compactSummary);
+    // Stream order places external context before the exact native result.
+    // A terminal result clears this root, so later external input cannot
+    // inherit a failed/interrupted Sedes turn lacking a terminal assistant.
+    const absorbedMidTurn = externalInput && message.type === "user" && message.isSynthetic === true &&
+      (this.#runState === "running" || this.#runState === "stopping") && this.#nativeTurnRoot !== undefined &&
+      this.#turnConsuming([this.#nativeTurnRoot]) !== undefined;
+    const sessionMessage = liveSessionMessage(message, compactSummary, absorbedMidTurn);
     if (!sessionMessage) {
       this.#emit({
         type: "resnapshot_required",
@@ -3128,6 +3134,7 @@ type ClaudeObservedSessionMessage = SessionMessage & {
   readonly origin?: unknown;
   readonly isCompactSummary?: true;
   readonly is_meta?: true;
+  readonly sedesAbsorbedMidTurn?: true;
 };
 
 function isCompactSummaryMessage(message: SessionMessage): boolean {
@@ -3155,6 +3162,7 @@ function record(value: unknown): Readonly<Record<string, unknown>> | undefined {
 function liveSessionMessage(
   message: SDKMessage,
   compactSummary = false,
+  absorbedMidTurn = false,
 ): ClaudeObservedSessionMessage | undefined {
   if (message.type !== "user" && message.type !== "assistant") return undefined;
   if (
@@ -3177,6 +3185,7 @@ function liveSessionMessage(
       ? { timestamp: message.timestamp }
       : {}),
     ...(message.type === "user" && message.isSynthetic === true ? { is_meta: true as const } : {}),
+    ...(absorbedMidTurn ? { sedesAbsorbedMidTurn: true as const } : {}),
     ...(compactSummary ? { isCompactSummary: true as const } : {}),
   };
 }

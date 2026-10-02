@@ -225,7 +225,8 @@ export async function resolveClaudeSessionMessages(
   const messages = chain
     .map((entry, index) => localCommands.has(index)
       ? { ...entry, isCompletedLocalCommand: true }
-      : convertQueuedCommand(entry, deliveredIndexes.get(index) ?? (replies[index]! || trailingUuids.has(entry.uuid)), chainUuids))
+      : convertQueuedCommand(entry, deliveredIndexes.get(index) ?? (replies[index]! || trailingUuids.has(entry.uuid)),
+        deliveredIndexes.get(index) === true, chainUuids))
     .filter((entry) => isVisible(entry, includeSystemMessages))
     .map(toSessionMessage);
   return page(messages, options);
@@ -620,6 +621,7 @@ function replyFollows(chain: readonly ClaudeTranscriptEntry[], localCommands: Re
 function convertQueuedCommand(
   entry: ClaudeTranscriptEntry,
   answered: boolean,
+  absorbed: boolean,
   chainUuids: Set<string>,
 ): ClaudeTranscriptEntry {
   if (!answered || entry.type !== "attachment") return entry;
@@ -648,6 +650,8 @@ function convertQueuedCommand(
     isMeta: Boolean(attachment.isMeta),
     ...(origin !== undefined ? { origin } : {}),
     isQueuedCommand: true,
+    ...(absorbed && Boolean(attachment.isMeta) && claudeMessageHasVisibleExternalOrigin(origin)
+      ? { sedesAbsorbedMidTurn: true } : {}),
     isSidechain: entry.isSidechain,
     teamName: entry.teamName,
   };
@@ -681,6 +685,7 @@ function toSessionMessage(entry: ClaudeTranscriptEntry): SessionMessage {
       ? { is_meta: true }
       : {}),
     ...(entry.isQueuedCommand === true ? { isQueuedCommand: true } : {}),
+    ...(entry.sedesAbsorbedMidTurn === true ? { sedesAbsorbedMidTurn: true } : {}),
     ...(entry.isCompletedLocalCommand === true ? { isCompletedLocalCommand: true } : {}),
     timestamp: entry.timestamp as string,
     ...(origin ? { origin } : {}),

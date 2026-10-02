@@ -262,6 +262,9 @@ export class ClaudeRuntimeWorkerHost {
         ...("is_meta" in message && message.is_meta === true
           ? { is_meta: true as const }
           : {}),
+        ...("sedesAbsorbedMidTurn" in message && message.sedesAbsorbedMidTurn === true
+          ? { sedesAbsorbedMidTurn: true as const }
+          : {}),
         ...("timestamp" in message && typeof message.timestamp === "string"
           ? { timestamp: message.timestamp }
           : {}),

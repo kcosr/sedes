@@ -249,6 +249,8 @@ interface ParsedSessionMessage {
   readonly origin?: unknown;
   /** Native meta input is context from Claude or an external source, not a Sedes prompt. */
   readonly meta?: true;
+  /** Sedes-private: exact native queue absorption, independent of later visibility. */
+  readonly absorbedMidTurn?: true;
   /** Anthropic Messages API identity shared by streamed and durable blocks. */
   readonly assistantMessageId?: string;
   /** Explicit null means this streamed block is not a turn boundary. */
@@ -909,7 +911,8 @@ function buildTimeline(
     // claiming input acceptance or moving the response's usage ownership.
     const joinsCurrent = startsTurn && current !== undefined && (
       steerRoot !== undefined && steerRoot !== null && current.completionCorrelations.includes(steerRoot) ||
-      externalMetaInput && isUnsettledTurn(current)
+      externalMetaInput && (message.absorbedMidTurn === true ||
+        isUnsettledTurn(current) && !hasTerminalReceipt(terminalReceipts, current.backendTurnId))
     );
     if (startsTurn && !joinsCurrent) {
       finishTurn();
@@ -1527,6 +1530,7 @@ function parseMessages(
       message: candidate.message,
       ...(candidate.origin !== undefined ? { origin: candidate.origin } : {}),
       ...(type === "user" && candidate.is_meta === true ? { meta: true as const } : {}),
+      ...(type === "user" && candidate.sedesAbsorbedMidTurn === true ? { absorbedMidTurn: true as const } : {}),
       ...(type === "assistant" &&
       isPlainRecord(candidate.message) &&
       boundedNativeId(candidate.message.id)

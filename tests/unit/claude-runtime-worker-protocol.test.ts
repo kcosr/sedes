@@ -429,6 +429,7 @@ describe("ClaudeRuntimeWorkerHost", () => {
             origin: { kind: "peer" },
             isQueuedCommand: true,
             is_meta: true,
+            sedesAbsorbedMidTurn: true,
           },
           {
             type: "user",
@@ -463,6 +464,10 @@ describe("ClaudeRuntimeWorkerHost", () => {
       expect(() => claudeRuntimeSessionMessagesResponseSchema.parse({ nextCursor: null, messages: [
         { type: "user", uuid: SUMMARY_ID, session_id: SESSION_ID, message: {}, parent_tool_use_id: null,
           parent_agent_id: null, is_meta: false },
+      ] })).toThrow();
+      expect(() => claudeRuntimeSessionMessagesResponseSchema.parse({ nextCursor: null, messages: [
+        { type: "user", uuid: SUMMARY_ID, session_id: SESSION_ID, message: {}, parent_tool_use_id: null,
+          parent_agent_id: null, sedesAbsorbedMidTurn: false },
       ] })).toThrow();
       expect(sdk.getSessionMessages).toHaveBeenCalledWith(
         SESSION_ID,
@@ -1291,6 +1296,7 @@ function helperFacade(): ClaudeSdkFacade {
         origin: { kind: "peer" },
         isQueuedCommand: true,
         is_meta: true,
+        sedesAbsorbedMidTurn: true,
       } as never,
       {
         type: "user",

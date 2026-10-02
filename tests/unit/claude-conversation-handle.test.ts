@@ -6144,6 +6144,61 @@ describe("Claude image reads and meta rows", () => {
     await reloaded.close();
   });
 
+  it.each([
+    { status: "failed", queued: false }, { status: "failed", queued: true },
+    { status: "interrupted", queued: false }, { status: "interrupted", queued: true },
+  ] as const)("separates external input after an unanswered $status Sedes turn (queued: $queued)", async ({ status, queued }) => {
+    const transcript = new ClaudeTranscriptFixture();
+    transcript.prompt("Look at the screenshot", { uuid: PROMPT_ID });
+    const [call] = transcript.reply([{ type: "tool_use", id: "read-before-stop", name: "Read", input: { file_path: "/workspace/notes.txt" } }], { stopReason: "tool_use" });
+    const resultRow = transcript.toolResult("read-before-stop", call!, "notes");
+    const captured: UsageObservation[] = [];
+    const usage: UsageSink = { ...NO_USAGE_SINK, enabled: true, open: () => ({ registerTurns: () => {},
+      capture: entries => { captured.push(...entries); return true; }, gap: () => {}, reconcile: () => true, seal: () => {} }) };
+    const { handle, settings, provider, turnId } = await startedTurn({ usage });
+    provider.messages.push(live(transcript, call!));
+    provider.messages.push(live(transcript, resultRow));
+    provider.messages.push(nativeFrames.result([PROMPT_ID], { subtype: "error_during_execution", is_error: true,
+      errors: ["Original turn stopped."], terminal_reason: status === "interrupted" ? "aborted_streaming" : "error" }));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).turnsById[turnId]!.status).toBe(status));
+    const scope = { tenantId: BINDING.tenantId, principalId: BINDING.ownerPrincipalId };
+    const receiptKey = { applicationThreadId: BINDING.applicationThreadId, backendTurnId: turnId };
+    const receipt = settings.findTerminalReceipt(scope, receiptKey);
+    const writeTerminal = vi.spyOn(settings, "writeTerminalReceipt");
+
+    const external = queued
+      ? transcript.attachment({ type: "queued_command", isMeta: true, origin: { kind: "peer" }, prompt: "External follow-up." })
+      : transcript.prompt("External follow-up.", { isMeta: true, origin: { kind: "peer" } });
+    const externalMessage = (await history(transcript)).find(({ uuid }) => uuid === external)!;
+    expect(externalMessage).not.toHaveProperty("sedesAbsorbedMidTurn");
+    provider.messages.push({ ...externalMessage, isSynthetic: true } as unknown as SDKMessage);
+    const answer = transcript.answer("External answer after the stopped turn.");
+    provider.messages.push(live(transcript, answer));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).orderedBackendTurnIds).toHaveLength(2));
+    const running = await projectionSnapshot(handle);
+    const providerTurn = running.orderedBackendTurnIds[1]!;
+    expect(running).toMatchObject({ runState: "running", activeBackendTurnId: providerTurn });
+    expect(running.turnsById[turnId]).toMatchObject({ status, completionCorrelations: [PROMPT_ID] });
+    expect(running.turnsById[providerTurn]).toMatchObject({ status: "in_progress" });
+    expect(running.turnsById[providerTurn]).not.toHaveProperty("completionCorrelations");
+    provider.messages.push(nativeFrames.result([external], { origin: { kind: "peer" } }));
+    await vi.waitFor(async () => expect((await projectionSnapshot(handle)).runState).toBe("idle"));
+    const settled = await projectionSnapshot(handle);
+    expect(settled.turnsById[providerTurn]).toMatchObject({ status: "completed" });
+    expect(writeTerminal).not.toHaveBeenCalled();
+    expect(settings.findTerminalReceipt(scope, receiptKey)).toEqual(receipt);
+    const finalUsage = captured.filter(observation => observation.id === `${messageId(transcript, answer)}:message`);
+    expect(finalUsage).toHaveLength(1);
+    expect(finalUsage[0]!.facts[0]!.turn?.backendTurnId).toBe(providerTurn);
+    await handle.close();
+    const reloaded = createHandle(fixture(), vi.fn(), { settings, usage, initialMessages: await history(transcript), resumeSession: true }).handle;
+    expect(identities(await projectionSnapshot(reloaded))).toEqual(identities(settled));
+    expect(settings.findTerminalReceipt(scope, receiptKey)).toEqual(receipt);
+    expect(captured.filter(observation => observation.id === `${messageId(transcript, answer)}:message`)
+      .every(observation => observation.facts[0]!.turn?.backendTurnId === providerTurn)).toBe(true);
+    await reloaded.close();
+  });
+
   it.each(["peer", "channel", "observer", "observer-activity", "slack-ping"])("keeps standalone synthetic %s input running until its exact result, with reload identity", async (kind) => {
     const transcript = new ClaudeTranscriptFixture();
     const input = transcript.prompt("External source input.", { isMeta: true, origin: { kind } });

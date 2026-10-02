@@ -810,6 +810,14 @@ private worker history transport; live synthetic inputs carry the same role.
 These inputs remain visible inside an unfinished native turn, preserving its
 tool results, terminal receipt, and assistant usage ownership. They never add
 their UUIDs to Sedes completion correlations or acknowledge pending Steer.
+When a terminal receipt already settles that turn, only exact native
+`absorbed_mid_turn` bookkeeping allows an external input to remain inside it.
+The reader preserves this evidence as the private `sedesAbsorbedMidTurn` flag;
+ordinary external rows and queued rows visible only because they trail the
+conversation open a separate provider turn after the receipt, including when
+the settled turn has no final assistant row. Live projection uses the active
+native input root and result order to retain the same distinction. No
+transcript/server timestamp comparison decides ownership.
 After a native answer, a standalone external input opens its own UUID-derived
 provider turn. Live projection keeps it in progress until the native result;
 coalesced external UUIDs can identify that result without creating a Sedes

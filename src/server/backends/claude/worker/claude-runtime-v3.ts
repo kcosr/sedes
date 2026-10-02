@@ -227,6 +227,8 @@ export const claudeRuntimeSessionMessageSchema = z.strictObject({
   origin: boundedJsonValueSchema.optional(),
   /** Native meta inputs retain their context role across history transport. */
   is_meta: z.literal(true).optional(),
+  /** Sedes-private proof that an external input was absorbed before its turn settled. */
+  sedesAbsorbedMidTurn: z.literal(true).optional(),
   timestamp: z.iso.datetime().optional(),
   /** Claude Code's compaction summary; the SDK carries it on history rows. */
   isCompactSummary: z.literal(true).optional(),
