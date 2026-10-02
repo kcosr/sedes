@@ -245,10 +245,14 @@ test("sidebar execution scope filters creation and persists responsively", async
         response.url().endsWith("/api/workspaces/open") &&
         response.status() === 201,
     );
+    // A folder no project is named after starts a new project named for it.
+    await expect(projectDialog.getByRole("combobox", { name: "Project", exact: true })).toContainText("New project");
+    await expect(projectDialog.getByRole("textbox", { name: "New project name" })).toHaveValue(browsedProjectLabel);
     await projectDialog.getByRole("button", { name: "Add project" }).click();
     const openResponse = await opened;
     expect(openResponse.request().postDataJSON()).toMatchObject({
       path: path.join(fixtureRoot, browsedProjectLabel),
+      project: { kind: "new", name: browsedProjectLabel },
     });
     await expect(projectDialog).toBeHidden();
     await expect(
@@ -561,48 +565,183 @@ test("sidebar execution scope filters creation and persists responsively", async
   await page.setViewportSize(desktopViewport!);
   await page.goto("/settings/projects");
   const projects = page.getByRole("region", { name: "Projects", exact: true });
-  const projectRow = projects.getByRole("listitem").filter({ hasText: path.join(fixtureRoot, browsedProjectLabel) });
+  const browsedPath = path.join(fixtureRoot, browsedProjectLabel);
+  const locationRow = projects.getByTestId("location-settings-row").filter({ hasText: browsedPath });
+  const locationActions = locationRow.getByRole("button", { name: `Actions for Local · ${browsedPath}`, exact: true });
   await searchProjectFilter(page, projects, "environment", "LOCAL", "Local", testInfo, "projects-environment-search-desktop.png");
   // The scripted Codex discovery adds "Imported Codex history — src" alongside
   // the two threads created above, regardless of the sidebar's target filter.
-  await expect(projectRow).toContainText("3 threads");
+  await expect(locationRow).toContainText("3 threads");
   await projects.getByRole("heading", { name: "Projects", exact: true }).scrollIntoViewIfNeeded();
   await capture(page, testInfo, "projects-settings-desktop.png");
-  await projectRow.getByRole("button", { name: `Remove project ${browsedProjectLabel}` }).click();
-  const removal = page.getByRole("dialog", { name: `Remove project ${browsedProjectLabel}?` });
+  await locationActions.click();
+  await page.getByRole("menuitem", { name: "Remove location…", exact: true }).click();
+  const removal = page.getByRole("dialog", { name: `Remove “${browsedProjectLabel}” from “${browsedProjectLabel}”?` });
   await expect(removal).toContainText("Files, conversation history, and saved application data are retained");
+  // The project's last active location offers to remove the project too, unticked.
+  await expect(removal.getByRole("checkbox", { name: `Also remove project “${browsedProjectLabel}”` })).not.toBeChecked();
+  await capture(page, testInfo, "projects-remove-location-desktop.png");
   const removed = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith("/remove"));
-  await removal.getByRole("button", { name: "Remove project", exact: true }).click();
+  await removal.getByRole("button", { name: "Remove location", exact: true }).click();
   const removedResponse = await removed;
+  expect(removedResponse.url()).toContain("/api/workspaces/");
   expect(removedResponse.status(), await removedResponse.text()).toBe(200);
-  // Removing a location answers with its project.
-  const removedProject = await removedResponse.json() as { locations: Array<{ id: string; removed: boolean }> };
+  // Removing a location answers with its project, which stays active.
+  const removedProject = await removedResponse.json() as { removed: boolean; locations: Array<{ id: string; removed: boolean }> };
+  expect(removedProject.removed).toBe(false);
   const removedLocation = removedProject.locations.find(location => location.removed)!;
-  await expect(projectRow.getByRole("button", { name: `Restore project ${browsedProjectLabel}` })).toBeVisible();
+  await expect(locationRow).toContainText("Removed");
   await expect(desktopSidebar.getByText(alternateTitle, { exact: true })).toBeHidden();
   await expect(desktopSidebar.getByText(primaryTitle, { exact: true })).toBeHidden();
   await page.reload();
   const restored = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith(`/api/workspaces/${removedLocation.id}/open`));
-  await projectRow.getByRole("button", { name: `Restore project ${browsedProjectLabel}` }).click();
+  await locationActions.click();
+  await page.getByRole("menuitem", { name: "Restore location", exact: true }).click();
   const restoredResponse = await restored;
   expect(restoredResponse.status(), await restoredResponse.text()).toBe(200);
   expect(await restoredResponse.json()).toMatchObject({ id: removedLocation.id });
-  await expect(projectRow).toContainText("3 threads");
-  await expect(projectRow.getByRole("button", { name: `Remove project ${browsedProjectLabel}` })).toBeVisible();
+  await expect(locationRow).toContainText("3 threads");
+  await expect(locationRow).not.toContainText("Removed");
   await expect(desktopSidebar.getByText(alternateTitle, { exact: true })).toBeVisible();
   await expectNoPageOverflow(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await expectMinimumHeight(projectRow.getByRole("button", { name: `Remove project ${browsedProjectLabel}` }), 44);
+  await expectMinimumHeight(locationActions, 44);
   await expectNoPageOverflow(page);
   await projects.getByRole("button", { name: "Filters", exact: true }).click();
   await searchProjectFilter(page, projects, "environment", "LOCAL", "Local", testInfo, "projects-environment-search-mobile.png");
-  await searchProjectFilter(page, projects, "status", "remembered", "Remembered projects", testInfo, "projects-status-search-mobile.png");
+  await searchProjectFilter(page, projects, "status", "active", "Active", testInfo, "projects-status-search-mobile.png");
   await projects.getByRole("button", { name: "Show results", exact: true }).click();
   await expect(projects.getByRole("button", { name: "Filters (2)", exact: true })).toBeVisible();
-  await expect(projectRow).toContainText("3 threads");
+  await expect(locationRow).toContainText("3 threads");
   await projects.getByRole("heading", { name: "Projects", exact: true }).scrollIntoViewIfNeeded();
   await capture(page, testInfo, "projects-settings-mobile.png");
 
+});
+
+test("Settings renames, moves, merges, removes, and restores projects", async ({ page }, testInfo) => {
+  const root = path.join(loadE2ERunContext().workspacesDirectory, "project-management");
+  const [alphaPath, betaPath, gammaPath] = ["alpha", "beta", "gamma"].map(name => path.join(root, name)) as [string, string, string];
+  await Promise.all([alphaPath, betaPath, gammaPath].map(directory => mkdir(directory, { recursive: true })));
+  await page.goto("/");
+  const session = normalizedApplicationSessionSchema.parse(await (await page.request.get("/api/application/session")).json());
+  const snapshot = normalizedApplicationSnapshotSchema.parse(await (await page.request.get("/api/application/snapshot")).json());
+  const environmentId = snapshot.environments.find(({ kind }) => kind === "local")!.id;
+  const headers = { "Content-Type": "application/json", "X-CSRF-Token": session.csrfToken };
+  // Two projects share the name "Alpha", which the duplicate-name note offers to merge.
+  for (const directory of [alphaPath, gammaPath]) {
+    const opened = await page.request.post("/api/workspaces/open", {
+      headers, data: { environmentId, path: directory, project: { kind: "new", name: "Alpha" } },
+    });
+    expect(opened.status(), await opened.text()).toBe(201);
+  }
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/settings/projects");
+  const settings = page.getByRole("region", { name: "Projects", exact: true });
+  await settings.getByRole("searchbox", { name: "Search projects" }).fill("project-management");
+  const projectRow = (locationPath: string) =>
+    settings.getByTestId("project-settings-row").filter({ has: page.getByTestId("location-settings-row").filter({ hasText: locationPath }) });
+  const projectActions = (locationPath: string) =>
+    projectRow(locationPath).locator(".projects-project-row").getByRole("button", { name: /^Actions for / });
+  const choose = async (dialog: Locator, field: string, option: string) => {
+    await dialog.getByRole("combobox", { name: field, exact: true }).click();
+    await page.getByRole("option", { name: option, exact: true }).click();
+  };
+  const response = (method: string, route: RegExp) => page.waitForResponse(candidate =>
+    candidate.request().method() === method && route.test(new URL(candidate.url()).pathname));
+  const note = settings.locator(".projects-duplicates");
+  await expect(note).toContainText("“Alpha” · 2 projects");
+  await expect(note.getByRole("button", { name: "Merge projects named Alpha", exact: true })).toBeVisible();
+
+  // Add a location to the first project from its menu.
+  await projectActions(alphaPath).click();
+  await page.getByRole("menuitem", { name: "Add location…", exact: true }).click();
+  const addLocation = page.getByRole("dialog", { name: "Add location", exact: true });
+  await expect(addLocation.getByRole("textbox", { name: "Project", exact: true })).toHaveValue(/^Alpha · /);
+  await addLocation.getByLabel("Absolute directory path").fill(betaPath);
+  const added = response("POST", /^\/api\/workspaces\/open$/u);
+  await addLocation.getByRole("button", { name: "Add location", exact: true }).click();
+  const addedResponse = await added;
+  expect(addedResponse.status(), await addedResponse.text()).toBe(201);
+  expect(addedResponse.request().postDataJSON()).toMatchObject({ path: betaPath, project: { kind: "existing" } });
+  await expect(projectRow(alphaPath).getByTestId("location-settings-row")).toHaveCount(2);
+  await expect(projectRow(alphaPath)).toContainText("2 locations");
+  await capture(page, testInfo, "projects-settings-two-levels-desktop.png");
+
+  // Rename the second "Alpha", which clears the duplicate-name note.
+  await projectActions(gammaPath).click();
+  await page.getByRole("menuitem", { name: "Rename…", exact: true }).click();
+  const rename = page.getByRole("dialog", { name: "Rename project “Alpha”", exact: true });
+  await rename.getByRole("textbox", { name: "Project name" }).fill("Gamma");
+  const renamed = response("PATCH", /^\/api\/projects\/[^/]+$/u);
+  await rename.getByRole("button", { name: "Rename", exact: true }).click();
+  expect((await renamed).status()).toBe(200);
+  await expect(rename).toBeHidden();
+  await expect(projectRow(gammaPath).locator(".projects-project-row")).toContainText("Gamma");
+  await expect(note).toBeHidden();
+
+  // Move a location into the renamed project.
+  await projectRow(alphaPath).getByRole("button", { name: `Actions for Local · ${betaPath}`, exact: true }).click();
+  await page.getByRole("menuitem", { name: "Move to project…", exact: true }).click();
+  const move = page.getByRole("dialog", { name: "Move “beta” to another project", exact: true });
+  await expect(move).toContainText("tasks, and workpads move with it");
+  await choose(move, "Move to", "Gamma — on Local");
+  const moved = response("POST", /^\/api\/workspaces\/[^/]+\/move$/u);
+  await move.getByRole("button", { name: "Move location", exact: true }).click();
+  expect((await moved).status()).toBe(200);
+  await expect(move).toBeHidden();
+  await expect(projectRow(gammaPath).getByTestId("location-settings-row")).toHaveCount(2);
+  await expect(projectRow(alphaPath).getByTestId("location-settings-row")).toHaveCount(1);
+
+  // Merge "Alpha" into "Gamma"; the merged project is deleted.
+  await projectActions(alphaPath).click();
+  await page.getByRole("menuitem", { name: "Merge into…", exact: true }).click();
+  const merge = page.getByRole("dialog", { name: "Merge “Alpha” into another project", exact: true });
+  await expect(merge).toContainText("This can’t be undone.");
+  await choose(merge, "Into", "Gamma — on Local");
+  await capture(page, testInfo, "projects-merge-dialog-desktop.png");
+  const merged = response("POST", /^\/api\/projects\/[^/]+\/merge$/u);
+  await merge.getByRole("button", { name: "Merge projects", exact: true }).click();
+  expect((await merged).status()).toBe(200);
+  await expect(merge).toBeHidden();
+  await expect(settings.getByTestId("project-settings-row").filter({ hasText: `${root}${path.sep}` })).toHaveCount(1);
+  await expect(projectRow(alphaPath)).toContainText("3 locations");
+
+  // Remove the whole project, then restore it with every location its removal took.
+  await projectActions(gammaPath).click();
+  await page.getByRole("menuitem", { name: "Remove project…", exact: true }).click();
+  const remove = page.getByRole("dialog", { name: "Remove project “Gamma”?", exact: true });
+  await expect(remove).toContainText("its 3 active locations");
+  const removedProject = response("POST", /^\/api\/projects\/[^/]+\/remove$/u);
+  await remove.getByRole("button", { name: "Remove project", exact: true }).click();
+  const removedProjectResponse = await removedProject;
+  expect(removedProjectResponse.status(), await removedProjectResponse.text()).toBe(200);
+  await expect(remove).toBeHidden();
+  await expect(projectRow(gammaPath).locator(".projects-project-row")).toContainText("Removed");
+  await expect(projectRow(gammaPath).getByTestId("location-settings-row").filter({ hasText: "Removed" })).toHaveCount(3);
+
+  await projectActions(gammaPath).click();
+  await page.getByRole("menuitem", { name: "Restore project…", exact: true }).click();
+  const restore = page.getByRole("dialog", { name: "Restore project “Gamma”?", exact: true });
+  const choices = restore.getByRole("group", { name: "Locations to restore" }).getByRole("checkbox");
+  await expect(choices).toHaveCount(3);
+  for (const choice of await choices.all()) await expect(choice).toBeChecked();
+  const restoredProject = response("POST", /^\/api\/projects\/[^/]+\/restore$/u);
+  await restore.getByRole("button", { name: "Restore project", exact: true }).click();
+  const restoredProjectResponse = await restoredProject;
+  expect(restoredProjectResponse.status(), await restoredProjectResponse.text()).toBe(200);
+  const results = page.getByRole("dialog", { name: "Restored project “Gamma”", exact: true }).getByRole("list", { name: "Restored locations" });
+  await expect(results.getByRole("listitem")).toHaveCount(3);
+  await expect(results.getByRole("listitem").filter({ hasText: "Restored" })).toHaveCount(3);
+  await capture(page, testInfo, "projects-restore-results-desktop.png");
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(projectRow(gammaPath).locator(".projects-project-row")).not.toContainText("Removed");
+  await expect(projectRow(gammaPath).getByTestId("location-settings-row").filter({ hasText: "Removed" })).toHaveCount(0);
+  await expectNoPageOverflow(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectMinimumHeight(projectActions(gammaPath), 44);
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "projects-settings-two-levels-mobile.png");
 });
 
 test("archived threads honor the shared sidebar scope and search", async ({
