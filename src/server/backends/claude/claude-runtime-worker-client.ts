@@ -54,13 +54,13 @@ import {
   claudeRuntimeSessionMessagesOperation,
   claudeRuntimeSessionTranscriptOperation,
   claudeRuntimeSessionRenameOperation,
-  registerClaudeRuntimeV2HostOperations,
+  registerClaudeRuntimeV3HostOperations,
   type ClaudeRuntimeCanUseToolRequest,
   type ClaudeRuntimeCanUseToolResponse,
   type ClaudeRuntimeQueryFailedEvent,
   type ClaudeRuntimeQueryMessageEvent,
   type ClaudeRuntimePermissionResponseAckRequest,
-} from "./worker/claude-runtime-v2.js";
+} from "./worker/claude-runtime-v3.js";
 
 export interface ClaudeRuntimeWorkerClientPeer {
   call<Request, Response>(
@@ -110,7 +110,7 @@ export class ClaudeRuntimeWorkerClient implements ClaudeOwnedRuntimeClient {
       startupEnvironmentVariables: input.startupEnvironmentVariables,
       initializationTimeoutMs: input.initializationTimeoutMs,
     });
-    registerClaudeRuntimeV2HostOperations(input.hostRegistry, {
+    registerClaudeRuntimeV3HostOperations(input.hostRegistry, {
       canUseTool: async (request, context) =>
         await this.#canUseTool(request, context.signal),
       acknowledgePermissionResponse: async (request) =>

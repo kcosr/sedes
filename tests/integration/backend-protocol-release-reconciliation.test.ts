@@ -34,7 +34,7 @@ const releaseValidationCases = [
     label: "Claude",
     backendKind: "claude_agent_sdk",
     connectionKind: "claude_agent_sdk",
-    supportedRelease: "0.3.283",
+    supportedRelease: "0.3.287",
     unsupportedRelease: "0.3.225",
   },
   {

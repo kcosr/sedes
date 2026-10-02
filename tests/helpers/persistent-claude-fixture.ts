@@ -16,7 +16,7 @@ export class FakePersistentClaudeSession implements ClaudeOwnedRuntimeSession {
   closed = false;
   readonly initialization: ClaudeSdkSessionInitialization = {
     models: [], commands: [], skillNames: [], terminalCommandNames: [], account: {},
-    actualModel: "claude-sonnet-4-6", actualPermissionMode: "default", cliRelease: "2.1.283",
+    actualModel: "claude-sonnet-4-6", actualPermissionMode: "default", cliRelease: "2.1.287",
   };
   readonly startupProbeUuid = randomUUID();
   readonly safeSkills = [];
@@ -57,7 +57,7 @@ export function createFakePersistentClaudeRuntime() {
     forkSession: vi.fn<ClaudeRuntimeClient["forkSession"]>(async (options) =>
       await runClaudeForkLaunch(createSession, options)),
     probe: vi.fn<ClaudeRuntimeClient["probe"]>(async () => ({
-      cliRelease: "2.1.283", account: {}, models: [], commands: [], skillNames: [], terminalCommandNames: [],
+      cliRelease: "2.1.287", account: {}, models: [], commands: [], skillNames: [], terminalCommandNames: [],
     })),
     listSessions: vi.fn<ClaudeRuntimeClient["listSessions"]>(async () => []),
     getSessionInfo: vi.fn<ClaudeRuntimeClient["getSessionInfo"]>(async () => undefined),

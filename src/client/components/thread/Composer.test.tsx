@@ -106,6 +106,7 @@ class FakeComposerStore {
         name: { text: "review" },
         displayName: { text: "Review Changes" },
         reference: "$review",
+        aliases: ["old-directory"],
         description: { text: "Review the current changes" },
       },
       {
@@ -3145,6 +3146,19 @@ describe("Composer delivery guards", () => {
         expect.any(String),
       ),
     );
+  });
+
+  it("finds an alias in the skill picker and submits the canonical selection", async () => {
+    const store = new FakeComposerStore(snapshot(), "");
+    render(<Composer store={store as unknown as ThreadClientStore} />);
+    type("/skill OLD-DIRECTORY");
+    fireEvent.click(await screen.findByRole("button", { name: /Review Changes/u }));
+    expect(screen.getByTestId("selected-skill")).toHaveTextContent("Review Changes");
+    type("please inspect");
+    pressEnter(store);
+    await waitFor(() => expect(store.deliver).toHaveBeenCalledWith(
+      "submit", expect.objectContaining({ text: "please inspect", selectedSkillId: "skill-review" }), expect.any(String),
+    ));
   });
 
   it("sends a selected skill without requiring prompt text", async () => {

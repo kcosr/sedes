@@ -428,6 +428,13 @@ browser, make the Sedes host read an execution-host path, or silently widen
 workspace authority to account-global roots. Account-global roots require an
 explicit installation-owned capability and a fixed documented allowlist.
 
+Skill aliases in normalized catalogs are bounded search metadata, not alternate
+submission identifiers. Resolve native primary-name, builtin, and terminal
+collisions inside the backend before exposing them. Picker selection retains
+the canonical opaque skill ID, and backend submission revalidates that exact
+skill against its current catalog. A backend that does not qualify native
+aliases omits them.
+
 The shared application and browser may receive only:
 
 - normalized IDs, capabilities, messages, turns, interactions, and errors;

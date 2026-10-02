@@ -155,7 +155,9 @@ export async function exerciseClaudeParityCoverage(
 
   await page.getByRole("button", { name: "Choose skill" }).click();
   const skillPicker = page.getByRole("dialog", { name: "Choose a skill" });
+  await skillPicker.getByRole("searchbox", { name: "Search skills" }).fill("old-review-directory");
   await expect(skillPicker.getByText("review", { exact: true })).toBeVisible();
+  await capture(page, testInfo, "claude-skill-alias-search.png");
   await skillPicker.getByText("review", { exact: true }).click();
   await expect(page.getByTestId("selected-skill")).toContainText("review");
   await composer

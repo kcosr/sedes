@@ -29,9 +29,9 @@ import {
   claudeRuntimeQuerySendRequestSchema,
   claudeRuntimeSessionMessagesResponseSchema,
   claudeRuntimeWorkerOperations,
-  registerClaudeRuntimeV2HostOperations,
-  registerClaudeRuntimeV2WorkerOperations,
-} from "../../src/server/backends/claude/worker/claude-runtime-v2.js";
+  registerClaudeRuntimeV3HostOperations,
+  registerClaudeRuntimeV3WorkerOperations,
+} from "../../src/server/backends/claude/worker/claude-runtime-v3.js";
 import {
   ClaudeRuntimeWorkerHost,
   type ClaudeRuntimeWorkerProtocolPeer,
@@ -47,7 +47,7 @@ const context = () => ({
   signal: new AbortController().signal,
 });
 
-describe("claude_runtime@2 protocol", () => {
+describe("claude_runtime@3 protocol", () => {
   it("names exactly one query and one input identity when withdrawing input", () => {
     const queryId = randomUUID(), operationId = randomUUID();
     expect(claudeRuntimeQueryCancelInputRequestSchema.parse({ queryId, operationId })).toEqual({ queryId, operationId });
@@ -104,7 +104,7 @@ describe("claude_runtime@2 protocol", () => {
   it("publishes one exact closed worker inventory and the parked reverse operation", () => {
     const workerRegistry = new SidecarOperationRegistry();
     const noHandler = vi.fn(async () => ({})) as never;
-    registerClaudeRuntimeV2WorkerOperations(workerRegistry, {
+    registerClaudeRuntimeV3WorkerOperations(workerRegistry, {
       initialize: noHandler,
       probe: noHandler,
       listSessions: noHandler,
@@ -126,7 +126,7 @@ describe("claude_runtime@2 protocol", () => {
     expect(workerRegistry.capabilities()).toEqual([
       {
         capabilityId: "claude_runtime",
-        majorVersion: 2,
+        majorVersion: 3,
         operations: [
           "query.cancel_input",
           "query.close",
@@ -153,14 +153,14 @@ describe("claude_runtime@2 protocol", () => {
     expect(claudeRuntimeQueryContextUsageOperation.responseSchema.safeParse({ usedTokens: 1, windowTokens: 100, percent: 1, categories: [] }).success).toBe(false);
 
     const hostRegistry = new SidecarOperationRegistry();
-    registerClaudeRuntimeV2HostOperations(hostRegistry, {
+    registerClaudeRuntimeV3HostOperations(hostRegistry, {
       canUseTool: noHandler,
       acknowledgePermissionResponse: noHandler,
     });
     expect(hostRegistry.capabilities()).toEqual([
       {
         capabilityId: "claude_runtime",
-        majorVersion: 2,
+        majorVersion: 3,
         operations: ["query.can_use_tool", "query.permission_response_ack"],
       },
     ]);
@@ -736,6 +736,31 @@ describe("ClaudeRuntimeWorkerHost", () => {
     }
   });
 
+  it("preserves command aliases and builtin precedence through probe and query catalogs", async () => {
+    const previousConfig = process.env.CLAUDE_CONFIG_DIR;
+    const configDirectory = await mkdtemp("/tmp/sedes-claude-worker-test-");
+    const commands = [
+      { name: "review", description: "Review", argumentHint: "[path]", aliases: ["old-review"], builtin: true },
+      { name: "custom", description: "Custom", argumentHint: "", builtin: false },
+    ];
+    const queryFixture = queryFacade(Promise.resolve({ ...queryInitialization(), commands }));
+    const host = new ClaudeRuntimeWorkerHost({ sdk: queryFixture.sdk, peer: inertPeer() });
+    try {
+      await host.handlers.initialize({ executablePath: process.execPath, configDirectory, initializationTimeoutMs: 1_000 }, context());
+      const probed = claudeRuntimeProbeOperation.responseSchema.parse(await host.handlers.probe({ cwd: "/workspace" }, context()));
+      expect(probed.commands).toEqual(commands);
+      const opened = claudeRuntimeQueryOpenOperation.responseSchema.parse(await host.handlers.openQuery({
+        queryId: QUERY_ID, sessionId: SESSION_ID, cwd: "/workspace", launch: "new", enableCanUseTool: false, environment: {},
+      }, context()));
+      expect(opened.initialization.commands).toEqual(commands);
+    } finally {
+      await host.close();
+      if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previousConfig;
+      await rm(configDirectory, { recursive: true });
+    }
+  });
+
   it("owns one SDK query, emits bounded messages, and reverses permissions", async () => {
     const previousConfig = process.env.CLAUDE_CONFIG_DIR;
     const configDirectory = await mkdtemp("/tmp/sedes-claude-worker-test-");
@@ -1241,7 +1266,7 @@ describe("ClaudeRuntimeWorkerHost", () => {
 
 function helperFacade(): ClaudeSdkFacade {
   return {
-    readCliRelease: vi.fn(async () => "2.1.283"),
+    readCliRelease: vi.fn(async () => "2.1.287"),
     readCliAuthStatus: vi.fn(async () => ({ loggedIn: true })),
     createQuery: vi.fn(() => {
       throw new Error("unused");
@@ -1300,7 +1325,7 @@ function queryFacade(
   const close = vi.fn();
   const cancelAsyncMessage = vi.fn(async (_messageUuid: string) => true);
   const sdk: ClaudeSdkFacade = {
-    readCliRelease: vi.fn(async () => "2.1.283"),
+    readCliRelease: vi.fn(async () => "2.1.287"),
     readCliAuthStatus: vi.fn(async () => ({
       loggedIn: true,
       authMethod: "claude.ai",
@@ -1323,7 +1348,7 @@ function queryFacade(
           type: "system",
           subtype: "init",
           apiKeySource: "oauth",
-          claude_code_version: "2.1.283",
+          claude_code_version: "2.1.287",
           cwd: "/workspace",
           tools: [],
           mcp_servers: [],

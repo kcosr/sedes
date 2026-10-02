@@ -2,6 +2,7 @@ import type { GetSessionMessagesOptions, SessionMessage } from "@anthropic-ai/cl
 import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { claudeConfigDirectory, type ClaudeChildEnvironment } from "./claude-child-environment.js";
+import { claudeMessageHasVisibleExternalOrigin } from "./claude-message-scope.js";
 
 /**
  * Sedes-owned reader for Claude Code's native JSONL transcripts.
@@ -18,7 +19,7 @@ import { claudeConfigDirectory, type ClaudeChildEnvironment } from "./claude-chi
  * its last parallel tool call. SDK 0.3.283 walks up from the file-latest
  * childless main-conversation row of any type, so a system notice Claude Code
  * attaches to an old row still ends its read there. This reader walks from the
- * true tip and otherwise reproduces 0.3.283's conversion exactly: compaction
+ * true tip and otherwise reproduces 0.3.287's conversion: compaction
  * relinking, parallel fragment and tool-result re-insertion, queued-command
  * conversion, completed local commands, filtering, origin mapping, and
  * offset/limit slicing.
@@ -64,6 +65,12 @@ export type ClaudeTranscriptEntry = Readonly<Record<string, unknown>> & {
   readonly type: string;
   readonly uuid: string;
 };
+
+/** Queue absorption evidence is bookkeeping, not a conversation row. */
+export interface ClaudeParsedTranscript {
+  readonly entries: readonly ClaudeTranscriptEntry[];
+  readonly delivered: ReadonlyMap<string, number>;
+}
 
 export type ClaudeTranscriptReadOptions = Pick<GetSessionMessagesOptions, "includeSystemMessages" | "offset" | "limit"> & {
   /**
@@ -142,8 +149,13 @@ export async function readClaudeSessionMessages(
  * Parses transcript lines exactly as the SDK does: a row that is not complete
  * JSON, including a final line Claude Code is still appending, is skipped.
  */
-export async function parseClaudeTranscript(contents: Buffer): Promise<ClaudeTranscriptEntry[]> {
+export async function parseClaudeTranscript(contents: Buffer): Promise<ClaudeParsedTranscript> {
   const entries: ClaudeTranscriptEntry[] = [];
+  const delivered = new Map<string, number>();
+  const deliveryCopies = new Map<string, string[]>();
+  const deliveryCopyUuids = new Set<string>();
+  const commandCopies = new Map<string, string>();
+  const mixedCommands = new Set<string>();
   let offset = 0;
   let nextYield = PARSE_YIELD_BYTES;
   while (offset < contents.length) {
@@ -163,31 +175,66 @@ export async function parseClaudeTranscript(contents: Buffer): Promise<ClaudeTra
     } catch {
       continue;
     }
-    if (isTranscriptEntry(value)) entries.push(value);
+    const row = record(value);
+    if (!row) continue;
+    if (row.type === "queue-operation" && row.operation === "remove" && row.reason === "absorbed_mid_turn") {
+      const key = typeof row.deliveryId === "string" && row.deliveryId !== "" ? `delivery:${row.deliveryId}`
+        : typeof row.commandUuid === "string" ? `uuid:${row.commandUuid}` : undefined;
+      if (key !== undefined) delivered.set(key, (delivered.get(key) ?? 0) + 1);
+    }
+    if (!isTranscriptEntry(row)) continue;
+    entries.push(row);
+    const key = queuedDeliveryKey(row);
+    if (key?.startsWith("delivery:") && !deliveryCopyUuids.has(row.uuid)) {
+      deliveryCopyUuids.add(row.uuid);
+      const copies = deliveryCopies.get(key);
+      if (copies) copies.push(row.uuid);
+      else deliveryCopies.set(key, [row.uuid]);
+    } else if (key?.startsWith("uuid:")) {
+      const payload = JSON.stringify(row.attachment);
+      const previous = commandCopies.get(key);
+      if (previous === undefined) commandCopies.set(key, payload);
+      else if (previous !== payload) mixedCommands.add(key);
+    }
   }
-  return entries;
+  // Legacy source UUIDs cannot distinguish copies carrying different payloads.
+  for (const key of mixedCommands) delivered.delete(key);
+  // Count delivery copies across the whole file before selecting a branch.
+  for (const [key, copies] of deliveryCopies) {
+    const count = delivered.get(key) ?? 0;
+    for (const uuid of copies.slice(Math.max(0, copies.length - count))) delivered.set(`entry:${uuid}`, 1);
+  }
+  return { entries, delivered };
 }
 
 /** Projects parsed rows to the SDK's `SessionMessage` shape from the true tip. */
 export async function resolveClaudeSessionMessages(
-  entries: readonly ClaudeTranscriptEntry[],
+  transcript: ClaudeParsedTranscript,
   options: ClaudeTranscriptReadOptions = {},
 ): Promise<SessionMessage[]> {
-  const chain = await resolveActiveChain(entries, options.resumableOnly === true);
+  const { entries, delivered } = transcript;
+  const active = await resolveActiveChain(entries, options.resumableOnly === true);
+  const trailing = trailingQueuedCommands(entries, active.chain, active.leaf);
+  const trailingUuids = new Set(trailing.map(({ uuid }) => uuid));
+  const chain = [...active.chain, ...trailing];
   const localCommands = completedLocalCommands(chain);
   const replies = replyFollows(chain, localCommands);
+  const deliveredIndexes = deliveredQueuedIndexes(chain, delivered);
   const chainUuids = new Set(chain.map(({ uuid }) => uuid));
   const includeSystemMessages = options.includeSystemMessages ?? false;
   const messages = chain
     .map((entry, index) => localCommands.has(index)
       ? { ...entry, isCompletedLocalCommand: true }
-      : convertQueuedCommand(entry, replies[index]!, chainUuids))
+      : convertQueuedCommand(entry, deliveredIndexes.get(index) ?? (replies[index]! || trailingUuids.has(entry.uuid)), chainUuids))
     .filter((entry) => isVisible(entry, includeSystemMessages))
     .map(toSessionMessage);
   return page(messages, options);
 }
 
-async function resolveActiveChain(entries: readonly ClaudeTranscriptEntry[], resumableOnly: boolean): Promise<ClaudeTranscriptEntry[]> {
+async function resolveActiveChain(entries: readonly ClaudeTranscriptEntry[], resumableOnly: boolean): Promise<{
+  readonly chain: readonly ClaudeTranscriptEntry[];
+  readonly leaf?: ClaudeTranscriptEntry;
+}> {
   const byUuid = new Map<string, ClaudeTranscriptEntry>();
   const lastIndex = new Map<string, number>();
   entries.forEach((entry, index) => {
@@ -201,7 +248,7 @@ async function resolveActiveChain(entries: readonly ClaudeTranscriptEntry[], res
   const continued = (entry: ClaudeTranscriptEntry | undefined) =>
     entry && byUuid.get(relinkedTails.get(entry.uuid) ?? entry.uuid);
   const tip = continued(activeTip(entries, lastIndex, entries.length));
-  if (!tip) return [];
+  if (!tip) return { chain: [] };
   const onChain = new Set<string>();
   // The newest segment is the SDK's chain: what the model sees now.
   const newest: ClaudeTranscriptEntry[] = [];
@@ -221,7 +268,77 @@ async function resolveActiveChain(entries: readonly ClaudeTranscriptEntry[], res
   }
   const chain = segments.reverse().flat();
   await yieldToEventLoop();
-  return reinsertParallelFragments(byUuid, chain, onChain);
+  return {
+    chain: reinsertParallelFragments(byUuid, chain, onChain),
+    leaf: newest.findLast((entry) => entry.type === "user" || entry.type === "assistant"),
+  };
+}
+
+/** Attachments after the active leaf are visible unless they lead into an abandoned branch. */
+function trailingQueuedCommands(
+  entries: readonly ClaudeTranscriptEntry[],
+  chain: readonly ClaudeTranscriptEntry[],
+  leaf: ClaudeTranscriptEntry | undefined,
+): ClaudeTranscriptEntry[] {
+  if (!leaf) return [];
+  const children = new Map<string, ClaudeTranscriptEntry[]>();
+  const byUuid = new Map(entries.map((entry) => [entry.uuid, entry]));
+  const selected = new Set(chain.map(({ uuid }) => uuid));
+  const abandoned = new Set<string>();
+  for (const entry of entries) {
+    if (typeof entry.parentUuid === "string" && entry.parentUuid && entry.type !== "user" && entry.type !== "assistant") {
+      const siblings = children.get(entry.parentUuid);
+      if (siblings) siblings.push(entry);
+      else children.set(entry.parentUuid, [entry]);
+    }
+    if ((entry.type === "user" || entry.type === "assistant") && !entry.isSidechain && !entry.teamName && !selected.has(entry.uuid)) {
+      for (let parent = parentOf(entry, byUuid); parent && !selected.has(parent.uuid) && !abandoned.has(parent.uuid); parent = parentOf(parent, byUuid)) {
+        abandoned.add(parent.uuid);
+      }
+    }
+  }
+  const trailing: ClaudeTranscriptEntry[] = [];
+  const pending = [leaf];
+  while (pending.length > 0) {
+    const entry = pending.pop()!;
+    if (entry !== leaf) {
+      if (selected.has(entry.uuid)) continue;
+      selected.add(entry.uuid);
+      if (entry.type === "attachment" && property(entry.attachment, "type") === "queued_command" && !abandoned.has(entry.uuid)) trailing.push(entry);
+    }
+    const descendants = [...(children.get(entry.uuid) ?? [])].sort(byTimestamp);
+    for (let index = descendants.length - 1; index >= 0; index--) {
+      if (!selected.has(descendants[index]!.uuid)) pending.push(descendants[index]!);
+    }
+  }
+  return trailing;
+}
+
+function queuedDeliveryKey(entry: ClaudeTranscriptEntry): string | undefined {
+  if (entry.type !== "attachment") return undefined;
+  const attachment = record(entry.attachment);
+  if (attachment?.type !== "queued_command") return undefined;
+  if (typeof attachment.delivery_id === "string" && attachment.delivery_id !== "") return `delivery:${attachment.delivery_id}`;
+  if (typeof attachment.source_uuid === "string" && attachment.source_uuid !== "") return `uuid:${attachment.source_uuid}`;
+  return undefined;
+}
+
+/** An explicit undelivered copy overrides the reply/trailing-row heuristic. */
+function deliveredQueuedIndexes(chain: readonly ClaudeTranscriptEntry[], delivered: ReadonlyMap<string, number>): Map<number, boolean> {
+  const indexes = new Map<string, number[]>();
+  chain.forEach((entry, index) => {
+    const key = queuedDeliveryKey(entry);
+    if (key === undefined || !delivered.has(key)) return;
+    const copies = indexes.get(key);
+    if (copies) copies.push(index);
+    else indexes.set(key, [index]);
+  });
+  const result = new Map<number, boolean>();
+  for (const [key, copies] of indexes) {
+    copies.forEach((index, copy) => result.set(index, key.startsWith("delivery:")
+      ? delivered.has(`entry:${chain[index]!.uuid}`) : copy >= copies.length - delivered.get(key)!));
+  }
+  return result;
 }
 
 /**
@@ -497,8 +614,8 @@ function replyFollows(chain: readonly ClaudeTranscriptEntry[], localCommands: Re
 
 /**
  * An answered queued-command attachment reads as the message it carried:
- * a prompt, steer, task notification, or other queued input. Meta and
- * forwarded commands stay attachments.
+ * a prompt, steer, task notification, or other queued input. Internal meta
+ * and forwarded commands stay attachments.
  */
 function convertQueuedCommand(
   entry: ClaudeTranscriptEntry,
@@ -511,7 +628,7 @@ function convertQueuedCommand(
   const prompt = attachment.prompt;
   if (
     attachment.type !== "queued_command" ||
-    Boolean(attachment.isMeta) ||
+    Boolean(attachment.isMeta) && !claudeMessageHasVisibleExternalOrigin(attachment.origin) ||
     (typeof prompt !== "string" && !Array.isArray(prompt)) ||
     isForwardedIntent(attachment.forwardedIntent)
   ) {
@@ -528,7 +645,7 @@ function convertQueuedCommand(
     sessionId: entry.sessionId,
     timestamp: entry.timestamp,
     message: { role: "user", content: prompt },
-    isMeta: false,
+    isMeta: Boolean(attachment.isMeta),
     ...(origin !== undefined ? { origin } : {}),
     isQueuedCommand: true,
     isSidechain: entry.isSidechain,
@@ -545,7 +662,7 @@ function queuedCommandOrigin(attachment: Readonly<Record<string, unknown>>): unk
 
 function isVisible(entry: ClaudeTranscriptEntry, includeSystemMessages: boolean): boolean {
   if (entry.type !== "user" && entry.type !== "assistant" && !(entry.type === "system" && includeSystemMessages)) return false;
-  return !entry.isMeta && !entry.isSidechain && !entry.teamName;
+  return (!entry.isMeta || claudeMessageHasVisibleExternalOrigin(entry.origin)) && !entry.isSidechain && !entry.teamName;
 }
 
 function toSessionMessage(entry: ClaudeTranscriptEntry): SessionMessage {
@@ -558,6 +675,7 @@ function toSessionMessage(entry: ClaudeTranscriptEntry): SessionMessage {
     parent_tool_use_id: null,
     parent_agent_id: null,
     ...(entry.interruptedByShutdown === true ? { interruptedByShutdown: true } : {}),
+    ...(entry.toolDenialUnanswered === "stream-closed" ? { toolDenialUnanswered: "stream-closed" } : {}),
     ...(entry.isCompactSummary === true ? { isCompactSummary: true } : {}),
     ...(entry.isMeta === true || entry.isCompactSummary === true || entry.isVisibleInTranscriptOnly === true
       ? { is_meta: true }

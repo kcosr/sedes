@@ -1,12 +1,11 @@
 /**
  * Sticky runtime floor for the one reviewed Claude SDK protocol profile.
- * Earlier releases resume after an interrupted tool call with a hidden
- * "Continue" prompt and fail SDK turns after plain-string assistant content
- * (both fixed in 2.1.281).
+ * The 2.1.287 floor qualifies queued-input history, detached continuations,
+ * permission initialization, and stream completion with SDK 0.3.287.
  */
-export const CLAUDE_CODE_MINIMUM_VERSION = "2.1.281";
+export const CLAUDE_CODE_MINIMUM_VERSION = "2.1.287";
 /** Newest Claude Code release exercised against this profile. */
-export const CLAUDE_CODE_TESTED_THROUGH_VERSION = "2.1.283";
+export const CLAUDE_CODE_TESTED_THROUGH_VERSION = "2.1.287";
 /** Stable releases with known contract defects, independent of ordering. */
 export const CLAUDE_CODE_EXCLUDED_VERSIONS: readonly string[] = Object.freeze(
   [],

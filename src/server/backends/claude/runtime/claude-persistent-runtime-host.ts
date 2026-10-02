@@ -9,7 +9,7 @@ import type { CanUseTool, PermissionResult, SDKMessage } from "@anthropic-ai/cla
 import type { ClaudeOwnedRuntimeClient, ClaudeOwnedRuntimeSession, ClaudeRuntimeClient, ClaudeRuntimeForkResult, ClaudeRuntimeSession } from "../claude-runtime-client.js";
 import { claudeForkLaunchFailure } from "../claude-fork-launch.js";
 import { SidecarOperationError } from "../../../../internal/sidecar-protocol/operation-registry.js";
-import type { ClaudeRuntimeAgentToolMcp } from "../worker/claude-runtime-v2.js";
+import type { ClaudeRuntimeAgentToolMcp } from "../worker/claude-runtime-v3.js";
 import type { PersistentSidecarServiceRegistry } from "../../../sidecar/persistent-sidecar-service-registry.js";
 import { SidecarResourceHandoffPendingError } from "../../../sidecar/persistent-sidecar-service-registry.js";
 import type { SidecarUpgradeBlocker } from "../../../../internal/sidecar-protocol/service-management-v1.js";

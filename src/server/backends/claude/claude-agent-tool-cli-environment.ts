@@ -3,7 +3,7 @@ import { isAgentToolCliEndpoint } from "../../../internal/agent-tool-cli-protoco
 import { pathForRemoteRoot } from "../../execution/remote-path.js";
 import type { AgentToolCliAvailability } from "../module.js";
 import type { AgentToolPresentationMode } from "../../../shared/protocol/conversation.js";
-import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v2.js";
+import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v3.js";
 
 /**
  * Builds the complete environment required by the Agent SDK when Sedes's

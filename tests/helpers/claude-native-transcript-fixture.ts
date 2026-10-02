@@ -259,7 +259,7 @@ export class ClaudeTranscriptFixture {
     const uuid = typeof row.uuid === "string" ? row.uuid : randomUUID();
     const complete: Row = { parentUuid: this.#tip, isSidechain: false, ...row, uuid, timestamp: this.#timestamp(),
       userType: "external", entrypoint: "sdk-ts", cwd: this.#cwd, sessionId: this.sessionId,
-      version: "2.1.283", gitBranch: "main" };
+      version: "2.1.287", gitBranch: "main" };
     this.rows.push(complete);
     this.#lines.push(JSON.stringify(complete));
     if (complete.isSidechain !== true) {

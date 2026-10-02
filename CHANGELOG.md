@@ -4,6 +4,15 @@
 
 ### Breaking Changes
 
+- Claude now requires Claude Code 2.1.287 or newer and uses Agent SDK 0.3.287.
+  Update Claude Code on every execution host. Rebuild local workers for
+  `claude_runtime@3` and upgrade Claude sidecars for
+  `claude_persistent_runtime@4`, which preserves skill command classification
+  and the updated history behavior.
+
+- Browser and packaged clients require client protocol 132 for searchable
+  skill aliases. Upgrade clients together with the server.
+
 - Remote OpenCode requires a matching sidecar build with private OpenCode
   runtime capability major 2 and tool capabilities. Upgrade existing execution sidecars before
   connecting this backend. (#17)
@@ -33,7 +42,7 @@
   browser protocol change is required for this fix. (#15)
 
 - Codex viewed images use a new `viewed_image` transcript item, introduced
-  in client protocol 123. This build requires client protocol 131; see the
+  in client protocol 123. This build requires client protocol 132; see the
   client protocol entries below. (#11, #13, #14)
 
 - Claude backends require Claude Code 2.1.281 or newer and are tested through
@@ -78,6 +87,10 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Find Claude skills by their safe native aliases in the skill picker,
+  including directory names supplied for renamed skills. Selecting a match
+  invokes the canonical skill.
 
 - Show Claude and OpenCode context occupancy in the composer and Session stats,
   and OpenCode transcript counters across the retained active branch. These
@@ -204,6 +217,10 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- Claude imports without a saved permission selection now honor the native
+  initialized mode under SDK 0.3.287. Native defaults can differ from the old
+  SDK's implicit `default`; Sedes blocks new submissions for disallowed modes.
 
 - In a thread, Tasks docks beside Chat as a workspace panel instead of a
   floating card, and resizes, collapses, docks on another edge, and closes
@@ -408,6 +425,10 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Claude history retains eligible external-origin messages and chooses queued
+  inputs using native delivery evidence, matching the updated SDK while
+  keeping internal startup markers hidden.
 
 - Archive progress now offers **Dismiss** throughout. Closing progress keeps
   the archive workflow running, including required choices, and reports failures

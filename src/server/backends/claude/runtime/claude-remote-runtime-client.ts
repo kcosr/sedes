@@ -13,7 +13,7 @@ import { SidecarOperationError } from "../../../../internal/sidecar-protocol/ope
 import type { ClaudeSdkSessionInitialization } from "../claude-sdk-session.js";
 import { verifyClaudeRuntimeVersion } from "../claude-release-guard.js";
 import { resolveClaudeSafeSkills, type ClaudeSafeSkill } from "../claude-skills.js";
-import * as worker from "../worker/claude-runtime-v2.js";
+import * as worker from "../worker/claude-runtime-v3.js";
 import { CLAUDE_PERSISTENT_MAXIMUM_SESSIONS, claudePersistentOpenRequestSchema, claudePersistentRetireResponseSchema, claudePersistentSubmissionDispositionResponseSchema, claudePersistentConfigurationSchema, claudePersistentAttachmentSchema, claudePersistentSendResponseSchema, type ClaudePersistentCommand, type ClaudePersistentEvent } from "./claude-persistent-runtime-wire.js";
 import { ClaudeSidecarRuntimeConnection, claudePersistentRuntimeOperations } from "./claude-sidecar-runtime.js";
 import { CLAUDE_CONTEXT_USAGE_TIMEOUT_MS } from "../claude-context-usage.js";

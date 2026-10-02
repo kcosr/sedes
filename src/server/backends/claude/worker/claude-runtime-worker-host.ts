@@ -34,8 +34,8 @@ import {
   claudeRuntimePermissionResponseAckOperation,
   claudeRuntimeQueryFailedEventSchema,
   claudeRuntimeQueryMessageEventSchema,
-  type ClaudeRuntimeV2WorkerHandlers,
-} from "./claude-runtime-v2.js";
+  type ClaudeRuntimeV3WorkerHandlers,
+} from "./claude-runtime-v3.js";
 import type { ClaudeQueryProcessScope } from "./tracked-claude-sdk-facade.js";
 
 export interface ClaudeRuntimeWorkerProtocolPeer {
@@ -88,12 +88,12 @@ type RuntimeConfiguration = {
 /**
  * Provider-private owner for all SDK and native-store work in one worker
  * generation. The main server communicates with this host only through the
- * closed claude_runtime@2 binding.
+ * closed claude_runtime@3 binding.
  */
 export class ClaudeRuntimeWorkerHost {
-  readonly handlers: ClaudeRuntimeV2WorkerHandlers;
+  readonly handlers: ClaudeRuntimeV3WorkerHandlers;
   readonly #sdk: ClaudeSdkFacade;
-  readonly #history = new ClaudeHistoryPager<Awaited<ReturnType<ClaudeRuntimeV2WorkerHandlers["getSessionMessages"]>>["messages"][number]>();
+  readonly #history = new ClaudeHistoryPager<Awaited<ReturnType<ClaudeRuntimeV3WorkerHandlers["getSessionMessages"]>>["messages"][number]>();
   readonly #peer: ClaudeRuntimeWorkerProtocolPeer;
   readonly #maximumQueries: number;
   readonly #queries = new Map<string, ActiveQuery>();
@@ -122,7 +122,7 @@ export class ClaudeRuntimeWorkerHost {
       (() => ({ sdk: options.sdk, settled: async () => undefined }));
     this.#peer = options.peer;
     this.#maximumQueries = maximumQueries;
-    const handlers: ClaudeRuntimeV2WorkerHandlers = {
+    const handlers: ClaudeRuntimeV3WorkerHandlers = {
       initialize: async (request, context) =>
         await this.#initialize(request, context.signal),
       probe: async ({ cwd }, context) => await this.#probe(cwd, context.signal),
@@ -216,7 +216,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #listSessions(
-    request: Parameters<ClaudeRuntimeV2WorkerHandlers["listSessions"]>[0],
+    request: Parameters<ClaudeRuntimeV3WorkerHandlers["listSessions"]>[0],
   ) {
     this.#assertOpen();
     const sessions = await this.#sdk.listSessions(
@@ -227,7 +227,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #getSessionInfo(
-    request: Parameters<ClaudeRuntimeV2WorkerHandlers["getSessionInfo"]>[0],
+    request: Parameters<ClaudeRuntimeV3WorkerHandlers["getSessionInfo"]>[0],
   ) {
     this.#assertOpen();
     const session = await this.#sdk.getSessionInfo(
@@ -239,7 +239,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #getSessionMessages(
-    request: Parameters<ClaudeRuntimeV2WorkerHandlers["getSessionMessages"]>[0],
+    request: Parameters<ClaudeRuntimeV3WorkerHandlers["getSessionMessages"]>[0],
   ) {
     this.#assertOpen();
     const { sessionId, offset: _offset, limit: _limit, cursor: _cursor, maintenance: _maintenance, ...options } = request;
@@ -274,7 +274,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #renameSession(
-    request: Parameters<ClaudeRuntimeV2WorkerHandlers["renameSession"]>[0],
+    request: Parameters<ClaudeRuntimeV3WorkerHandlers["renameSession"]>[0],
   ) {
     this.#assertOpen();
     await this.#sdk.renameSession(
@@ -287,7 +287,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #openQuery(
-    request: Parameters<ClaudeRuntimeV2WorkerHandlers["openQuery"]>[0],
+    request: Parameters<ClaudeRuntimeV3WorkerHandlers["openQuery"]>[0],
     signal: AbortSignal,
   ) {
     this.#assertOpen();
@@ -463,7 +463,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #sendQuery(
-    request: Parameters<ClaudeRuntimeV2WorkerHandlers["sendQuery"]>[0],
+    request: Parameters<ClaudeRuntimeV3WorkerHandlers["sendQuery"]>[0],
   ) {
     this.#assertOpen();
     if (
@@ -589,7 +589,7 @@ export class ClaudeRuntimeWorkerHost {
   }
 
   async #initialize(
-    request: Parameters<ClaudeRuntimeV2WorkerHandlers["initialize"]>[0],
+    request: Parameters<ClaudeRuntimeV3WorkerHandlers["initialize"]>[0],
     signal: AbortSignal,
   ): Promise<{ readonly initialized: true; readonly configDirectory: string }> {
     this.#assertOpen();
@@ -880,12 +880,14 @@ function projectCommand(command: {
   readonly description: string;
   readonly argumentHint: string;
   readonly aliases?: readonly string[];
+  readonly builtin?: boolean;
 }) {
   return {
     name: command.name,
     description: command.description,
     argumentHint: command.argumentHint,
     ...(command.aliases ? { aliases: [...command.aliases] } : {}),
+    ...(command.builtin !== undefined ? { builtin: command.builtin } : {}),
   };
 }
 

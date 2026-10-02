@@ -1,6 +1,6 @@
 import { backgroundActivitySchema } from "../../../../shared/protocol/background-activity.js";
 import { z } from "zod";
-import * as worker from "../worker/claude-runtime-v2.js";
+import * as worker from "../worker/claude-runtime-v3.js";
 
 /** Resident sessions plus running fork launches, per persistent runtime. */
 export const CLAUDE_PERSISTENT_MAXIMUM_SESSIONS = 32;

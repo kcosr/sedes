@@ -3,7 +3,7 @@ import { ClaudeContextUsageTracker } from "./claude-context-usage.js";
 import type { UsageSink } from "../../usage/contracts.js";
 import { turnFailure } from "../turn-failure.js";
 import type { ResolvedEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
-import { claudeMessageIsChildOwned } from "./claude-message-scope.js";
+import { claudeMessageHasVisibleExternalOrigin, claudeMessageIsChildOwned } from "./claude-message-scope.js";
 import { ClaudeBackgroundActivity } from "./claude-background-activity.js";
 import {
   claudeCommandLifecycle,
@@ -1620,16 +1620,14 @@ export class ClaudeConversationHandle implements ConversationHandle {
       return;
     }
     if (message.type !== "user" && message.type !== "assistant") return;
-    // Claude Code streams its meta rows, such as the dimension note after a
-    // resized image read, as synthetic user rows. Provider history omits meta
-    // rows, so they are neither a prompt nor a turn boundary here either. The
-    // one synthetic row history keeps is a compaction summary, which follows
-    // its boundary.
-    if (message.type === "user" && message.isSynthetic === true && this.#liveCompaction === undefined) return;
+    // Synthetic rows from external sources are visible in native history.
+    // Internal notes stay hidden except for the summary after a compaction.
+    const externalInput = message.type === "user" && claudeMessageHasVisibleExternalOrigin(message.origin);
+    if (message.type === "user" && message.isSynthetic === true && !externalInput && this.#liveCompaction === undefined) return;
     // Claude Code streams a compaction's summary right after its boundary, as
     // a synthetic user row; history marks the same row as the summary.
-    const compaction = this.#liveCompaction;
-    this.#liveCompaction = undefined;
+    const compaction = externalInput ? undefined : this.#liveCompaction;
+    if (!externalInput) this.#liveCompaction = undefined;
     const compactSummary = compaction !== undefined && message.type === "user" && message.isSynthetic === true;
     const sessionMessage = liveSessionMessage(message, compactSummary);
     if (!sessionMessage) {
@@ -3294,6 +3292,7 @@ function mergeUsage(
 }
 
 const startupFailureMessages: Record<SDKStartupFailureReason, string> = {
+  provider_not_allowed: "Claude managed settings do not allow the selected provider.",
   org_pin_api_key_conflict: "Claude organization policy conflicts with the configured API key.",
   org_verify_failed: "Claude could not verify the required organization.",
   org_pin_mismatch: "Claude is signed into a different organization than required.",

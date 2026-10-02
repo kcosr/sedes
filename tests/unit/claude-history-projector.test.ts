@@ -19,6 +19,8 @@ import { claudeForkContextBoundaryText } from "../../src/server/backends/claude/
 import { USER_FORK_CONTEXT_BOUNDARY } from "../../src/server/backends/fork-context-boundary.js";
 import { claudeAttachmentEnvelope } from "../../src/server/backends/claude/claude-attachment-manifest.js";
 import { claudeViewedImagePublicationKey } from "../../src/server/backends/claude/claude-viewed-images.js";
+import { parseClaudeTranscript, resolveClaudeSessionMessages } from "../../src/server/backends/claude/claude-native-transcript.js";
+import { ClaudeTranscriptFixture } from "../helpers/claude-native-transcript-fixture.js";
 import type { OutputImageArtifactDescriptor } from "../../src/server/output-artifacts/contracts.js";
 import { MAXIMUM_BACKEND_ITEMS_PER_TURN, type BackendConversationSnapshot } from "../../src/shared/protocol/backend.js";
 import {
@@ -190,6 +192,32 @@ describe("Claude turn completion from native stop reasons", () => {
     const settled = projectClaudeHistory([...answered, row(4, "msg-2", { type: "text", text: "And that" }, "end_turn")], [], authentication);
     expect(settled.snapshot.turnsById[id]?.status).toBe("completed");
     expect(settled.terminalCheckpointUuidByBackendTurnId.get(id)).toBe(uuid(4));
+  });
+
+  it.each([false, true])("never treats a newly visible trailing queue as accepted Steer without scoped consumption (absorbed: %s)", async (absorbed) => {
+    const fixture = new ClaudeTranscriptFixture();
+    fixture.prompt("Original request.", { uuid: uuid(1) });
+    fixture.answer("Original answer.");
+    const before = await resolveClaudeSessionMessages(await parseClaudeTranscript(Buffer.from(fixture.jsonl())));
+    fixture.attachment({ type: "queued_command", source_uuid: uuid(3), delivery_id: "delivery-steer", prompt: "Pending steer." });
+    if (absorbed) fixture.bookkeeping({ type: "queue-operation", operation: "remove", reason: "absorbed_mid_turn",
+      deliveryId: "delivery-steer", commandUuid: uuid(3) });
+    const messages = await resolveClaudeSessionMessages(await parseClaudeTranscript(Buffer.from(fixture.jsonl())));
+    expect(messages.at(-1)).toMatchObject({ uuid: uuid(3), isQueuedCommand: true });
+
+    const pending = { ...historyAuthentication, steerOperations: new Map([[uuid(3), null]]) };
+    const original = projectClaudeHistory(before, [], pending);
+    const projection = projectClaudeHistory(messages, [], pending);
+    expect(projection.snapshot).toEqual(original.snapshot);
+    expect(projection.usage?.counters).toEqual(original.usage?.counters);
+    expect(projection.snapshot.turnsById[projection.snapshot.orderedBackendTurnIds[0]!]!.completionCorrelations).toEqual([uuid(1)]);
+
+    const consumed = projectClaudeHistory(messages, [], { ...historyAuthentication, steerOperations: new Map([[uuid(3), uuid(1)]]) });
+    expect(consumed.snapshot.orderedBackendTurnIds).toEqual(original.snapshot.orderedBackendTurnIds);
+    expect(consumed.snapshot.turnsById[consumed.snapshot.orderedBackendTurnIds[0]!]!).toMatchObject({
+      status: "in_progress", completionCorrelations: [uuid(1), uuid(3)],
+    });
+    expect(consumed.usage?.counters?.userMessages).toBe(2);
   });
 
   it("closes a turn that ended on a tool result as interrupted when Claude Code resumes it", () => {

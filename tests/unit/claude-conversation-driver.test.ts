@@ -66,7 +66,7 @@ const instance: AgentBackendInstance = {
   label: "Claude",
   enabled: true,
   configurationRevision: 1,
-  protocolRelease: "0.3.283",
+  protocolRelease: "0.3.287",
 };
 const connection: AgentConnectionProfile = {
   id: "claude-profile-1",
@@ -1244,6 +1244,47 @@ describe("ClaudeConversationBackendDriver", () => {
     await handle.close();
   });
 
+  it.each([
+    { observed: "acceptEdits", allowed: ["default", "acceptEdits"], adopt: true },
+    { observed: "auto", allowed: ["default", "auto"], adopt: true },
+    { observed: "acceptEdits", allowed: ["default"], adopt: false },
+    { observed: "auto", allowed: ["default"], adopt: false },
+    { observed: "plan", allowed: ["default", "auto"], adopt: false },
+  ] as const)("handles native import mode $observed under policy $allowed", async (scenario) => {
+    const sdk = fakeSdk({ streamPermissionMode: scenario.observed });
+    const adopted = vi.fn();
+    const driver = createDriver(sdk, {
+      importedSettings: true,
+      onAdoptPermissionMode: adopted,
+      permissionPolicy: { allowedModes: [...scenario.allowed] },
+    });
+    const handle = await driver.attach({
+      scope, workspace, binding: binding(),
+      opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
+    });
+    try {
+      // SDK 0.3.287 delegates an omitted mode to native settings. Only a
+      // recognized allowlisted result becomes the imported selection.
+      expect(sdk.createQuery.mock.calls[0]![0].options).not.toHaveProperty("permissionMode");
+      if (scenario.adopt) expect(adopted).toHaveBeenCalledWith(scenario.observed);
+      else expect(adopted).not.toHaveBeenCalled();
+      // An import also has no model selection. A denied mode must fail on
+      // permission admission itself, before an input can reach the provider.
+      await expect(handle.submit({
+        applicationOperationId: operationId, mutationId: "import-permission",
+        reconciliationToken: "import-permission-receipt", source: { kind: "user" },
+        text: "Never reaches provider", contextExcerpts: [], attachments: [], taskContexts: [],
+      })).rejects.toMatchObject({
+        backendCode: scenario.adopt ? "claude_execution_settings_unresolved" : "claude_permission_mode_unresolved",
+        crossedSubmissionBoundary: false,
+      });
+      expect(nativeInputCount(sdk)).toBe(0);
+    } finally {
+      await handle.close();
+      await driver.close();
+    }
+  });
+
   it("forks an exact older completed turn with an application-reserved child and no model turn", async () => {
     const sdk = fakeSdk();
     const copySkillInvocationsForFork = vi.fn(() => undefined);
@@ -2175,7 +2216,7 @@ describe("ClaudeConversationBackendDriver native history", () => {
     await fixture.write(configDirectory, workspace.canonicalPath);
     const { driver } = nativeStoreDriver();
     const view = await readViaDriver(driver);
-    // SDK 0.3.283 resolves a startup-message tip like Sedes. 0.3.274 read this
+    // SDK 0.3.287 resolves a startup-message tip like Sedes. 0.3.274 read this
     // transcript only to its last dead end; an anchor may come from that view.
     expect(await getSessionMessages(sessionId, { dir: workspace.canonicalPath })).toEqual(view);
     const truncatedView = view.slice(0, view.findIndex(({ uuid }) => uuid === compare.deadEnd) + 1);
@@ -2191,6 +2232,35 @@ describe("ClaudeConversationBackendDriver native history", () => {
       await expect(driver.reconcileSubmission({ ...attachment(), applicationOperationId: operationId, retryAnchor: anchor }))
         .resolves.toMatchObject({ status: "accepted", backendTurn: { completionCorrelations: [operationId] } });
     }
+  });
+
+  it.each([false, true])("keeps visible queued Steer unaccepted until consumption is retained (absorbed: %s)", async (absorbed) => {
+    const fixture = transcript();
+    const original = fixture.prompt("Original task.");
+    fixture.answer("Original answer.");
+    fixture.attachment({ type: "queued_command", source_uuid: operationId, delivery_id: "delivery-pending", prompt: "Pending steer." });
+    if (absorbed) fixture.bookkeeping({ type: "queue-operation", operation: "remove", reason: "absorbed_mid_turn",
+      commandUuid: operationId, deliveryId: "delivery-pending" });
+    await fixture.write(configDirectory, workspace.canonicalPath);
+    const steerOperations = new Map<string, string | null>([[operationId, null]]);
+    const submissionDisposition = vi.fn<() => Promise<"submitted" | "cancelled" | "not_sent">>(async () => "submitted");
+    const { sdk, driver } = nativeStoreDriver({ steerOperations, submissionDisposition });
+    const input = { ...attachment(), applicationOperationId: operationId };
+    const messages = await readViaDriver(driver);
+    expect(messages.at(-1)).toMatchObject({ uuid: operationId, isQueuedCommand: true });
+    await expect(driver.reconcileSubmission(input)).resolves.toMatchObject({ status: "unresolved" });
+    // Visible queue records cannot establish safe retry, either: both trailing
+    // enqueues and absorbed inputs have the same public SessionMessage shape.
+    for (const disposition of ["cancelled", "not_sent"] as const) {
+      submissionDisposition.mockResolvedValue(disposition);
+      await expect(driver.reconcileSubmission(input)).resolves.toMatchObject({ status: "unresolved",
+        diagnostic: { text: expect.stringContaining("conflicts with retained native input evidence") } });
+    }
+    steerOperations.set(operationId, original);
+    await expect(driver.reconcileSubmission(input)).resolves.toMatchObject({ status: "accepted",
+      backendTurn: { completionCorrelations: [original, operationId] } });
+    expect(sdk.createQuery).not.toHaveBeenCalled();
+    await driver.close();
   });
 
   it("reconciles a prompt Claude Code closed unanswered on resume as interrupted, not completed", async () => {
@@ -2370,7 +2440,7 @@ function createDriver(
 function fakeSdk(
   options: {
     readonly streamModel?: string;
-    readonly streamPermissionMode?: "default" | "acceptEdits";
+    readonly streamPermissionMode?: "default" | "acceptEdits" | "auto" | "plan";
     readonly effortError?: Error;
     readonly streamSkills?: readonly string[];
     readonly terminalCommands?: readonly string[];
@@ -2432,7 +2502,7 @@ function fakeSdk(
     },
   } satisfies SDKControlInitializeResponse;
   const sdk = {
-    readCliRelease: vi.fn(async () => options.cliRelease ?? "2.1.283"),
+    readCliRelease: vi.fn(async () => options.cliRelease ?? "2.1.287"),
     readCliAuthStatus: vi.fn(async () => options.authStatus ?? ({
       loggedIn: true,
       authMethod: "claude.ai",
@@ -2451,7 +2521,7 @@ function fakeSdk(
           type: "system",
           subtype: "init",
           apiKeySource: "oauth",
-          claude_code_version: "2.1.283",
+          claude_code_version: "2.1.287",
           cwd: "/workspace",
           tools: [],
           mcp_servers: [],

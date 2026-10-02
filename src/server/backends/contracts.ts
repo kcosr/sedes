@@ -175,6 +175,8 @@ export interface BackendComposerCommand {
  * Provider-neutral skill catalog entry. `id` is an opaque, workspace-scoped
  * selection identity; `displayName` is optional provider-authored presentation
  * text; and `reference` is native composer syntax used for provider invocation.
+ * `aliases` are bounded alternate names for searching this canonical entry;
+ * they never replace its selection identity or invocation reference.
  * Native paths and skill bodies never cross this boundary.
  */
 export interface BackendSkillDescriptor {
@@ -183,6 +185,7 @@ export interface BackendSkillDescriptor {
   readonly displayName?: string;
   readonly reference: string;
   readonly description?: string;
+  readonly aliases?: readonly string[];
 }
 
 export interface BackendCatalog {

@@ -44,7 +44,7 @@ import {
   claudeRuntimeCanUseToolOperation,
   claudeRuntimeHostOperations,
   claudeRuntimeWorkerOperations,
-} from "./worker/claude-runtime-v2.js";
+} from "./worker/claude-runtime-v3.js";
 import { CLAUDE_RUNTIME_WORKER_CLEANUP_PROVEN_FAILURE_EXIT_CODE } from "./worker/claude-outer-process-supervisor.js";
 
 export interface ClaudeManagedRuntimeOwnerOptions {

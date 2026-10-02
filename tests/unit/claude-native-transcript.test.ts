@@ -241,7 +241,7 @@ describe("Claude native transcript reader", () => {
     expect(messages).toEqual(await sdk(fixture));
   });
 
-  it("maps task-notification origins and hides meta peer hand-back rows", async () => {
+  it("maps task-notification origins and shows meta peer hand-back rows", async () => {
     const fixture = new ClaudeTranscriptFixture(workspace);
     fixture.prompt("Run the build in the background.");
     fixture.text("Started.");
@@ -251,7 +251,7 @@ describe("Claude native transcript reader", () => {
     });
     fixture.text("The build finished.");
     const messages = await ours(fixture);
-    expect(uuids(messages)).not.toContain(handBack);
+    expect(messages.find(({ uuid }) => uuid === handBack)).toMatchObject({ is_meta: true, origin: { kind: "peer", peer: "synthetic" } });
     expect(messages.find(({ uuid }) => uuid === notification)).toMatchObject({
       origin: { kind: "task-notification", subkind: "background_task" },
     });
@@ -382,8 +382,147 @@ describe("Claude native transcript reader", () => {
       `\t${JSON.stringify({ type: "progress", uuid: "b" })}\r`,
       "{\"type\":\"user\"",
     ].join("\n")));
-    expect(entries).toEqual([{ type: "user", uuid: "a" }, { type: "progress", uuid: "b" }]);
-    expect(await resolveClaudeSessionMessages([])).toEqual([]);
+    expect(entries).toEqual({ entries: [{ type: "user", uuid: "a" }, { type: "progress", uuid: "b" }], delivered: new Map() });
+    expect(await resolveClaudeSessionMessages(await parseClaudeTranscript(Buffer.alloc(0)))).toEqual([]);
+  });
+});
+
+describe("Claude 0.3.287 queue delivery and external inputs", () => {
+  it.each(["delivery", "source"])("uses %s absorption evidence when the next row is another prompt", async (identity) => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.prompt("Start work.");
+    const sourceUuid = randomUUID();
+    fixture.attachment({ type: "queued_command", source_uuid: sourceUuid, prompt: "Delivered while working.",
+      ...(identity === "delivery" ? { delivery_id: "delivery-one" } : {}) });
+    fixture.bookkeeping({ type: "queue-operation", operation: "remove", reason: "absorbed_mid_turn",
+      commandUuid: sourceUuid, ...(identity === "delivery" ? { deliveryId: "delivery-one" } : {}) });
+    fixture.prompt("Next prompt.");
+    const messages = await ours(fixture);
+    expect(messages.find(({ uuid }) => uuid === sourceUuid)).toMatchObject({ isQueuedCommand: true });
+    expect(messages).toEqual(await sdk(fixture));
+  });
+
+  it.each(["delivery", "source"])("selects the last absorbed %s copy even when earlier copies have replies", async (identity) => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.prompt("Start work.");
+    const sourceUuid = randomUUID();
+    const payload = { type: "queued_command", source_uuid: sourceUuid, prompt: "One queued command.",
+      ...(identity === "delivery" ? { delivery_id: "delivery-one" } : {}) };
+    fixture.attachment(payload);
+    fixture.answer("Interrupted delivery copy.");
+    const last = fixture.attachment(payload);
+    fixture.bookkeeping({ type: "queue-operation", operation: "remove", reason: "absorbed_mid_turn",
+      commandUuid: sourceUuid, ...(identity === "delivery" ? { deliveryId: "delivery-one" } : {}) });
+    fixture.answer("Actual delivered copy.");
+    const messages = await ours(fixture);
+    expect(messages.filter(({ uuid }) => uuid === sourceUuid)).toHaveLength(1);
+    expect(messages.find(({ uuid }) => uuid === sourceUuid)).toHaveProperty("timestamp", fixture.rows.find(({ uuid }) => uuid === last)?.timestamp);
+    expect(messages).toEqual(await sdk(fixture));
+  });
+
+  it("counts delivery copies across abandoned branches without resurrecting an earlier answered copy", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    const prompt = fixture.prompt("Start work.");
+    const sourceUuid = randomUUID();
+    const payload = { type: "queued_command", source_uuid: sourceUuid, delivery_id: "delivery-one", prompt: "Copied delivery." };
+    fixture.attachment(payload);
+    fixture.answer("Active reply.");
+    fixture.from(prompt).attachment(payload);
+    fixture.bookkeeping({ type: "queue-operation", operation: "remove", reason: "absorbed_mid_turn", deliveryId: "delivery-one" });
+    fixture.startupMessage();
+    const messages = await ours(fixture);
+    expect(uuids(messages)).not.toContain(sourceUuid);
+    expect(messages).toEqual(await sdk(fixture));
+  });
+
+  it("falls back to reply evidence when a legacy source UUID has different payload copies", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.prompt("Start work.");
+    const sourceUuid = randomUUID();
+    fixture.attachment({ type: "queued_command", source_uuid: sourceUuid, prompt: "First payload." });
+    fixture.answer("First reply.");
+    fixture.attachment({ type: "queued_command", source_uuid: sourceUuid, prompt: "Changed payload." });
+    fixture.bookkeeping({ type: "queue-operation", operation: "remove", reason: "absorbed_mid_turn", commandUuid: sourceUuid });
+    fixture.answer("Second reply.");
+    const messages = await ours(fixture);
+    expect(messages.find(({ uuid }) => uuid === sourceUuid)?.message).toMatchObject({ content: "First payload." });
+    expect(messages).toEqual(await sdk(fixture));
+  });
+
+  it("reads trailing queued siblings through progress rows in timestamp order", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.prompt("Start work.");
+    const leaf = fixture.answer("Done.");
+    const bridge = randomUUID();
+    fixture.bookkeeping({ type: "progress", uuid: bridge, parentUuid: leaf, timestamp: "2026-01-02T03:04:08.000Z" });
+    const first = fixture.from(bridge).attachment({ type: "queued_command", prompt: "After progress." });
+    const second = fixture.from(leaf).attachment({ type: "queued_command", prompt: "Direct child." });
+    const messages = await ours(fixture);
+    expect(uuids(messages).slice(-2)).toEqual([first, second]);
+    expect(messages.slice(-2)).toEqual([expect.objectContaining({ isQueuedCommand: true }), expect.objectContaining({ isQueuedCommand: true })]);
+    expect(messages).toEqual(await sdk(fixture));
+  });
+
+  it("excludes trailing queued ancestors of an abandoned main conversation", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    const prompt = fixture.prompt("Rewound prompt.");
+    const abandoned = fixture.attachment({ type: "queued_command", prompt: "Abandoned delivery." });
+    fixture.answer("Abandoned reply.");
+    // A rewritten copy makes this prompt the true active tip again.
+    fixture.from(null).prompt("Rewound prompt.", { uuid: prompt });
+    const active = fixture.from(prompt).attachment({ type: "queued_command", prompt: "Current delivery." });
+    const messages = await ours(fixture);
+    expect(uuids(messages)).toEqual([prompt, active]);
+    expect(uuids(messages)).not.toContain(abandoned);
+    expect(messages).toEqual(await sdk(fixture));
+  });
+
+  it("only appends trailing queued inputs from the newest compaction segment", async () => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    const oldPrompt = fixture.prompt("Old work.");
+    const oldReply = fixture.answer("Old answer.");
+    const oldQueue = fixture.attachment({ type: "queued_command", prompt: "Unconsumed old input." });
+    fixture.compaction("Summary.");
+    fixture.prompt("Current work.");
+    fixture.answer("Current answer.");
+    const currentQueue = fixture.attachment({ type: "queued_command", prompt: "Current trailing input." });
+    const messages = await ours(fixture);
+    expect(uuids(messages).slice(0, 2)).toEqual([oldPrompt, oldReply]);
+    expect(uuids(messages)).not.toContain(oldQueue);
+    expect(messages.at(-1)).toMatchObject({ uuid: currentQueue, isQueuedCommand: true });
+    expect(messages.slice(2)).toEqual(await sdk(fixture));
+    expect(await ours(fixture, { resumableOnly: true })).toEqual(await sdk(fixture));
+  });
+
+  it.each(["peer", "channel", "observer", "observer-activity", "slack-ping"])("keeps %s meta inputs in both regular and queued rows", async (kind) => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.prompt("Start work.");
+    const regular = fixture.prompt("External input.", { isMeta: true, origin: { kind } });
+    const queued = fixture.attachment({ type: "queued_command", prompt: "External queued input.", isMeta: true, origin: { kind } });
+    const messages = await ours(fixture);
+    for (const uuid of [regular, queued]) expect(messages.find(message => message.uuid === uuid))
+      .toMatchObject({ type: "user", is_meta: true, origin: { kind } });
+    expect(messages).toEqual(await sdk(fixture));
+  });
+
+  it.each(["unclassified", "human", "task-notification", "unknown"])("hides internal or unsupported %s meta inputs", async (kind) => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    const prompt = fixture.prompt("Start work.");
+    fixture.prompt("Internal input.", { isMeta: true, origin: { kind } });
+    fixture.attachment({ type: "queued_command", prompt: "Internal queued input.", isMeta: true, origin: { kind } });
+    expect(uuids(await ours(fixture))).toEqual([prompt]);
+    expect(await ours(fixture)).toEqual(await sdk(fixture));
+  });
+
+  it.each(["stream-closed", "unsupported"])("preserves only supported unanswered-tool metadata (%s)", async (toolDenialUnanswered) => {
+    const fixture = new ClaudeTranscriptFixture(workspace);
+    fixture.prompt("Read a file.");
+    const [call] = fixture.reply([{ type: "tool_use", id: "toolu-closed", name: "Read", input: { file_path: "/synthetic/file" } }]);
+    const result = fixture.toolResult("toolu-closed", call!, "The tool stream ended.", { toolDenialUnanswered });
+    const messages = await ours(fixture);
+    if (toolDenialUnanswered === "stream-closed") expect(messages.find(({ uuid }) => uuid === result)).toHaveProperty("toolDenialUnanswered", "stream-closed");
+    else expect(messages.find(({ uuid }) => uuid === result)).not.toHaveProperty("toolDenialUnanswered");
+    expect(messages).toEqual(await sdk(fixture));
   });
 });
 

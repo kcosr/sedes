@@ -16,7 +16,7 @@ const agentToolSourceCapabilities =
 
 function fakeSdk(): ClaudeSdkFacade {
   return {
-    readCliRelease: vi.fn(async () => "2.1.283"),
+    readCliRelease: vi.fn(async () => "2.1.287"),
     readCliAuthStatus: vi.fn(async () => ({
       loggedIn: true,
       authMethod: "claude.ai",
@@ -49,7 +49,7 @@ function configuration(
     backend: {
       id: "claude-local",
       kind: "claude_agent_sdk" as const,
-      protocolRelease: "0.3.283",
+      protocolRelease: "0.3.287",
       enabled: true,
       modelPolicy: { type: "catalog" as const },
       moduleConfiguration: {
@@ -183,7 +183,7 @@ describe("ClaudeBackendModule", () => {
         label: "Claude",
         enabled: true,
         configurationRevision: 0,
-        protocolRelease: "0.3.283",
+        protocolRelease: "0.3.287",
       };
       const connection = {
         id: "claude-connection",
@@ -328,7 +328,7 @@ describe("ClaudeBackendModule", () => {
         label: "Claude",
         enabled: true,
         configurationRevision: 0,
-        protocolRelease: "0.3.283",
+        protocolRelease: "0.3.287",
       };
       const connection = {
         id: "claude-connection",

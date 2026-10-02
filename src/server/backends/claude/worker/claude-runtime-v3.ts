@@ -15,7 +15,7 @@ import { CLAUDE_HISTORY_PAGE_MESSAGES } from "../claude-session-history.js";
 import { CLAUDE_CONTEXT_USAGE_TIMEOUT_MS, claudeContextUsageSchema } from "../claude-context-usage.js";
 
 export const CLAUDE_RUNTIME_CAPABILITY_ID = "claude_runtime" as const;
-export const CLAUDE_RUNTIME_MAJOR_VERSION = 2 as const;
+export const CLAUDE_RUNTIME_MAJOR_VERSION = 3 as const;
 // HSC1's current frame ceiling is a little over 96 MiB. Keep enough room for
 // the request/event envelope and JSON escaping rather than treating the whole
 // transport frame as provider payload authority.
@@ -175,6 +175,7 @@ export const claudeRuntimeSlashCommandSchema = z.strictObject({
   description: z.string().max(65_536),
   argumentHint: boundedStringSchema,
   aliases: z.array(boundedStringSchema).max(128).optional(),
+  builtin: z.boolean().optional(),
 });
 
 export const claudeRuntimeInitializationSchema = z.strictObject({
@@ -671,7 +672,7 @@ type HandlerFor<Definition> = Definition extends {
   ? SidecarOperationHandler<Request, Response>
   : never;
 
-export interface ClaudeRuntimeV2WorkerHandlers {
+export interface ClaudeRuntimeV3WorkerHandlers {
   readonly initialize: HandlerFor<typeof claudeRuntimeInitializeOperation>;
   readonly probe: HandlerFor<typeof claudeRuntimeProbeOperation>;
   readonly listSessions: HandlerFor<typeof claudeRuntimeSessionListOperation>;
@@ -707,9 +708,9 @@ export interface ClaudeRuntimeV2WorkerHandlers {
   readonly closeQuery: HandlerFor<typeof claudeRuntimeQueryCloseOperation>;
 }
 
-export function registerClaudeRuntimeV2WorkerOperations(
+export function registerClaudeRuntimeV3WorkerOperations(
   registry: SidecarOperationRegistry,
-  handlers: ClaudeRuntimeV2WorkerHandlers,
+  handlers: ClaudeRuntimeV3WorkerHandlers,
 ): void {
   registry.register(claudeRuntimeInitializeOperation, handlers.initialize);
   registry.register(claudeRuntimeProbeOperation, handlers.probe);
@@ -754,7 +755,7 @@ export function registerClaudeRuntimeV2WorkerOperations(
   registry.register(claudeRuntimeQueryCloseOperation, handlers.closeQuery);
 }
 
-export function registerClaudeRuntimeV2HostOperations(
+export function registerClaudeRuntimeV3HostOperations(
   registry: SidecarOperationRegistry,
   handlers: {
     readonly canUseTool: HandlerFor<typeof claudeRuntimeCanUseToolOperation>;

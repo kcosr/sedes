@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -12,6 +13,105 @@ import {
 import { expect, it } from "vitest";
 import { projectClaudeHistory } from "../../src/server/backends/claude/claude-history-projector.js";
 import { claudeResultIsUnrelated } from "../../src/server/backends/claude/claude-result-lifecycle.js";
+import { claudeSkillId, findClaudeSafeSkill, resolveClaudeSafeSkills } from "../../src/server/backends/claude/claude-skills.js";
+
+it("finds a renamed native skill by directory alias and invokes its canonical name", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "sedes-claude-skill-alias-"));
+  const home = path.join(root, "home"), workspace = path.join(root, "workspace");
+  await mkdir(home);
+  await mkdir(workspace);
+  for (const [directory, name] of [
+    ["old-directory", "renamed-skill"],
+    ["usage-shadow", "usage"],
+    ["color-shadow", "color"],
+    ["source-directory", "unreachable-name"],
+    ["other-directory", "source-directory"],
+  ]) {
+    const directoryPath = path.join(workspace, ".claude", "skills", directory!);
+    await mkdir(directoryPath, { recursive: true });
+    await writeFile(path.join(directoryPath, "SKILL.md"), `---\nname: ${name}\ndescription: Fixture ${directory}\n---\nSEDES_CANONICAL_SKILL_BODY ${directory}\n`);
+  }
+  const requests: string[] = [], errors: unknown[] = [];
+  const server = createServer(async (request, response) => {
+    try {
+      if (!request.url?.startsWith("/v1/messages") || request.url.includes("count_tokens")) { response.writeHead(404).end(); return; }
+      expect(request.headers["x-api-key"]).toBe("sedes-local-fixture-only");
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      requests.push(JSON.stringify((JSON.parse(Buffer.concat(chunks).toString()) as { messages: unknown }).messages));
+      expect(requests).toHaveLength(1);
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      const send = (type: string, fields: Record<string, unknown>) => response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`);
+      const usage = { input_tokens: 12, output_tokens: 1 };
+      send("message_start", { message: { id: "msg_alias", type: "message", role: "assistant", model: "claude-sonnet-5", content: [], stop_reason: null, stop_sequence: null, usage } });
+      send("content_block_start", { index: 0, content_block: { type: "text", text: "" } });
+      send("content_block_delta", { index: 0, delta: { type: "text_delta", text: "SEDES_ALIAS_OK" } });
+      send("content_block_stop", { index: 0 });
+      send("message_delta", { delta: { stop_reason: "end_turn", stop_sequence: null }, usage });
+      send("message_stop", {});
+      response.end();
+    } catch (error) { errors.push(error); response.destroy(); }
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("fixture_address_missing");
+  const environment: Record<string, string | undefined> = Object.fromEntries(Object.keys(process.env).map(key => [key, undefined]));
+  Object.assign(environment, { PATH: process.env.PATH, HOME: home, TMPDIR: root, CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
+    ANTHROPIC_API_KEY: "sedes-local-fixture-only", ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_AUTOUPDATER: "1" });
+  const sessionId = randomUUID();
+  let select!: (content: string) => void, finish!: () => void, initialized!: () => void;
+  const selection = new Promise<string>(resolve => { select = resolve; });
+  const finished = new Promise<void>(resolve => { finish = resolve; });
+  const streamInitialized = new Promise<void>(resolve => { initialized = resolve; });
+  async function* prompt(): AsyncGenerator<SDKUserMessage> {
+    yield { type: "user", session_id: sessionId, parent_tool_use_id: null, uuid: randomUUID(),
+      message: { role: "user", content: "Fixture startup" }, isSynthetic: true, shouldQuery: false };
+    yield { type: "user", session_id: sessionId, parent_tool_use_id: null, uuid: randomUUID(), message: { role: "user", content: await selection } };
+    await finished;
+  }
+  const abortController = new AbortController(), timer = setTimeout(() => abortController.abort(), 20_000);
+  const session = query({ prompt: prompt(), options: { pathToClaudeCodeExecutable: process.env.SEDES_REAL_CLAUDE_EXECUTABLE ?? "claude",
+    cwd: workspace, env: environment, sessionId, model: "claude-sonnet-5", effort: "low", settingSources: ["project"],
+    settings: { disableAllHooks: true }, tools: [], mcpServers: {}, strictMcpConfig: true, plugins: [], permissionMode: "dontAsk", maxTurns: 1, abortController } });
+  let skillNames: readonly string[] = [], terminalCommandNames: readonly string[] = [];
+  const consumed = (async () => {
+    for await (const message of session) {
+      if (message.type === "system" && message.subtype === "init") {
+        skillNames = message.skills;
+        terminalCommandNames = message.terminal_slash_commands ?? [];
+        initialized();
+      }
+      if (message.type === "result") { expect(message.subtype).toBe("success"); return; }
+    }
+  })();
+  try {
+    const [catalog] = await Promise.all([session.initializationResult(), streamInitialized]);
+    expect(skillNames).toContain("old-directory");
+    expect(skillNames).not.toContain("renamed-skill");
+    expect(catalog.commands).toContainEqual(expect.objectContaining({ name: "renamed-skill", aliases: ["old-directory"] }));
+    expect(catalog.commands.filter(command => command.name === "usage").map(command => Boolean(command.builtin)).sort()).toEqual([false, true]);
+    const skills = resolveClaudeSafeSkills({ commands: catalog.commands, skillNames, terminalCommandNames });
+    expect(skills.some(skill => ["usage", "color", "doctor", "unreachable-name"].includes(skill.name))).toBe(false);
+    const selected = findClaudeSafeSkill(skills, claudeSkillId("renamed-skill"));
+    expect(selected).toMatchObject({ name: "renamed-skill", reference: "/renamed-skill", aliases: ["old-directory"] });
+    select(`/${selected.commandName} SEDES_ALIAS_ARGUMENT`);
+    await consumed;
+    expect(errors).toEqual([]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toContain("SEDES_CANONICAL_SKILL_BODY old-directory");
+    expect(requests[0]).toContain("SEDES_ALIAS_ARGUMENT");
+  } finally {
+    clearTimeout(timer);
+    select("Unused fixture input");
+    finish();
+    session.close();
+    await consumed.catch(() => undefined);
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30_000);
 
 /** Actual SDK/native CLI, deterministic localhost provider, no account credentials.
  * This does not change the authenticated suite's no-tools preflight contract. */

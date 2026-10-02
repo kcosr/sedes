@@ -27,7 +27,7 @@ import {
   resolveClaudeSafeSkills,
   type ClaudeSafeSkill,
 } from "./claude-skills.js";
-import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v2.js";
+import type { ClaudeRuntimeAgentToolMcp } from "./worker/claude-runtime-v3.js";
 import { CLAUDE_FORK_LAUNCH_PERMISSION_MODE } from "./claude-fork-launch.js";
 import { CLAUDE_CONTEXT_USAGE_TIMEOUT_MS, projectClaudeContextUsage, waitClaudeContextUsage, type ClaudeContextUsage } from "./claude-context-usage.js";
 

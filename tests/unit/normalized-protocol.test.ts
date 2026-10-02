@@ -18,6 +18,7 @@ import {
   boundedValueSchema,
   conversationItemSchema,
   conversationTurnSchema,
+  composerSkillDescriptorSchema,
   createTaskRequestSchema,
   fileRangeSchema,
   forkThreadRequestSchema,
@@ -60,6 +61,16 @@ import {
   workspaceFileWriteResultSchema,
 } from "../../src/shared/index.js";
 import { SEDES_VERSION } from "../../src/shared/version.js";
+
+describe("normalized skill aliases", () => {
+  it("bounds search names without changing canonical selection identity or reference", () => {
+    const skill = { id: "skill-id", name: { text: "canonical" }, reference: "/canonical", aliases: ["old-directory"] };
+    expect(composerSkillDescriptorSchema.parse(skill)).toEqual(skill);
+    for (const aliases of [[""], ["x".repeat(161)], Array.from({ length: 129 }, () => "alias"), [{ name: "alias" }]]) {
+      expect(composerSkillDescriptorSchema.safeParse({ ...skill, aliases }).success).toBe(false);
+    }
+  });
+});
 
 describe("application session and resume contracts", () => {
   it("keeps session metadata strict and inventory-free", () => {
@@ -2359,7 +2370,7 @@ describe("application sidebar background-work wire contract", () => {
     advisories: [], defaultNewThreadTargetId: "target-1", counts, tasks: [],
   };
   it("carries the same counts through snapshot and thread-upsert events without changing run state", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(131);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(132);
     expect(normalizedApplicationEventSchema.parse({ type: "snapshot", generation: "generation-1", snapshot }))
       .toMatchObject({ snapshot: { threads: [{ runState: "idle", backgroundWork }] } });
     expect(normalizedApplicationEventSchema.parse({ type: "thread_upsert", generation: "generation-1", thread, counts }))

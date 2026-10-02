@@ -276,6 +276,7 @@ function fixture(options: {
             name: "review",
             description: "Review changes",
             argumentHint: "[path]",
+            aliases: ["old-directory"],
           },
         ]
       : [],
@@ -290,7 +291,7 @@ function fixture(options: {
     },
   } satisfies SDKControlInitializeResponse;
   const sdk = {
-    readCliRelease: vi.fn(async () => "2.1.283"),
+    readCliRelease: vi.fn(async () => "2.1.287"),
     readCliAuthStatus: vi.fn(async () => ({
       loggedIn: true,
       authMethod: "claude.ai",
@@ -311,7 +312,7 @@ function fixture(options: {
           type: "system",
           subtype: "init",
           apiKeySource: "oauth",
-          claude_code_version: "2.1.283",
+          claude_code_version: "2.1.287",
           cwd: input.options.cwd!,
           tools: [],
           mcp_servers: [],
@@ -319,7 +320,7 @@ function fixture(options: {
           permissionMode: options.initPermissionMode ?? "default",
           slash_commands: options.safeSkill ? ["review"] : [],
           output_style: "default",
-          skills: options.safeSkill ? ["review"] : [],
+          skills: options.safeSkill ? ["old-directory"] : [],
           plugins: [],
           uuid: crypto.randomUUID(),
           session_id: SESSION_ID,
@@ -2515,9 +2516,10 @@ describe("ClaudeConversationHandle", () => {
     await handle.close();
   });
 
-  it.each(["error_during_execution", "success", "error_max_turns", "startup_failure", "multiline_diagnostic", "stack_only"])("retains failed terminal evidence after Claude's trailing idle signal (%s)", async (subtype) => {
+  it.each(["error_during_execution", "success", "error_max_turns", "startup_failure", "provider_not_allowed", "multiline_diagnostic", "stack_only"])("retains failed terminal evidence after Claude's trailing idle signal (%s)", async (subtype) => {
     const expectedFailure = subtype === "error_max_turns" ? "Claude reached the configured turn limit."
       : subtype === "startup_failure" ? "Claude proxy configuration is invalid."
+      : subtype === "provider_not_allowed" ? "Claude managed settings do not allow the selected provider."
       : subtype === "stack_only" ? "The provider reported a failure but supplied no explanation."
       : "provider failed";
     const provider = fixture();
@@ -2542,7 +2544,7 @@ describe("ClaudeConversationHandle", () => {
     await submitted;
     provider.messages.push({
       type: "result",
-      subtype: ["startup_failure", "multiline_diagnostic", "stack_only"].includes(subtype) ? "error_during_execution" : subtype,
+      subtype: ["startup_failure", "provider_not_allowed", "multiline_diagnostic", "stack_only"].includes(subtype) ? "error_during_execution" : subtype,
       duration_ms: 10,
       duration_api_ms: 8,
       is_error: true,
@@ -2565,6 +2567,7 @@ describe("ClaudeConversationHandle", () => {
       permission_denials: [],
       ...(subtype === "success" ? { result: "provider failed" }
         : subtype === "startup_failure" ? { startup_failure_reason: "proxy_invalid", errors: ["private startup stderr that must not be retained"] }
+        : subtype === "provider_not_allowed" ? { startup_failure_reason: "provider_not_allowed", errors: ["private provider policy stderr that must not be retained"] }
         : subtype === "multiline_diagnostic" ? { errors: ["  at privateStack (/private/file:1:2)\nError:\nprovider failed\n  at otherPrivateStack (/private/other:3:4)", "second unrelated diagnostic"] }
         : subtype === "stack_only" ? { errors: ["Error:\n  at privateStack (/private/file:1:2)"] }
         : { errors: subtype === "error_max_turns" ? [] : ["provider failed"] }),
@@ -3247,6 +3250,22 @@ describe("ClaudeConversationHandle", () => {
       await handle.close();
     },
   );
+
+  it("rejects a directly typed skill alias before crossing the boundary", async () => {
+    const provider = fixture({ safeSkill: true });
+    const { handle } = createHandle(provider);
+    await handle.establishProjection({ signal: new AbortController().signal });
+    await expect(handle.submit({
+      applicationOperationId: OPERATION_ID,
+      mutationId: "mutation-skill-alias",
+      source: { kind: "user" },
+      reconciliationToken: "reconcile-skill-alias",
+      text: "/old-directory inspect",
+      contextExcerpts: [], attachments: [], taskContexts: [],
+    })).rejects.toMatchObject({ backendCode: "claude_slash_commands_unavailable", crossedSubmissionBoundary: false });
+    expect(provider.controls.setModel).not.toHaveBeenCalled();
+    await handle.close();
+  });
 
   it("rejects a stale Claude skill selection before crossing the boundary", async () => {
     const provider = fixture({ safeSkill: true });
@@ -5594,6 +5613,23 @@ describe("Claude compaction, lost processes, and bounded Stop", () => {
     return { ...created, provider, events, turnId };
   }
 
+  it("keeps an external synthetic input distinct from the following compaction summary", async () => {
+    const provider = fixture();
+    const { handle } = createHandle(provider, vi.fn(), { initialMessages: settledTurn, resumeSession: true });
+    await handle.establishProjection({ signal: new AbortController().signal });
+    provider.messages.push(boundary([]));
+    provider.messages.push({ type: "user", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
+      isSynthetic: true, origin: { kind: "peer" }, message: { role: "user", content: "External hand-back." } } as SDKMessage);
+    provider.messages.push(summary);
+    await vi.waitFor(async () => expect((await handle.usage()).counters?.compactions).toBe(1));
+    const snapshot = await projectionSnapshot(handle);
+    expect(JSON.stringify(Object.values(snapshot.itemsById).filter(item => item.semanticKind === "compaction")))
+      .toContain("Summary: synthetic.");
+    expect(JSON.stringify(Object.values(snapshot.itemsById).filter(item => item.semanticKind === "user_message")))
+      .toContain("External hand-back.");
+    await handle.close();
+  });
+
   it("keeps a turn Claude compacts, shows the summary as its marker, and settles it with its own result", async () => {
     const { handle, settings, provider, events, turnId } = await compactedTurn();
     const compacted = await projectionSnapshot(handle);
@@ -5942,6 +5978,7 @@ describe("Claude image reads and meta rows", () => {
   const live = (transcript: ClaudeTranscriptFixture, uuid: string) => {
     const row = transcript.rows.find(candidate => candidate.uuid === uuid)!;
     return { type: row.type, uuid, session_id: SESSION_ID, parent_tool_use_id: null, message: row.message,
+      ...(row.origin !== undefined ? { origin: row.origin } : {}),
       ...(row.isMeta === true ? { isSynthetic: true } : {}) } as unknown as SDKMessage;
   };
   const messageId = (transcript: ClaudeTranscriptFixture, uuid: string) =>
@@ -6036,6 +6073,29 @@ describe("Claude image reads and meta rows", () => {
     expect(JSON.stringify(liveSnapshot)).not.toContain("displayed at");
     expect(events.some(({ event }) => event.type === "resnapshot_required")).toBe(false);
     expect(application.rejected).toEqual([]);
+    await handle.close();
+
+    const reloaded = createHandle(fixture(), vi.fn(), { settings, initialMessages: reloadedMessages, resumeSession: true }).handle;
+    expect(identities(await projectionSnapshot(reloaded))).toEqual(identities(liveSnapshot));
+    await reloaded.close();
+  });
+
+  it.each(["peer", "channel", "observer", "observer-activity", "slack-ping"])("shows synthetic %s input live with the same identity as reload", async (kind) => {
+    const transcript = new ClaudeTranscriptFixture();
+    const input = transcript.prompt("External source input.", { isMeta: true, origin: { kind } });
+    const answer = transcript.answer("External input answered.");
+    const reloadedMessages = await history(transcript);
+    expect(reloadedMessages.some(({ uuid }) => uuid === input)).toBe(true);
+
+    const provider = fixture();
+    const { handle, settings } = createHandle(provider, vi.fn());
+    await handle.establishProjection({ signal: new AbortController().signal });
+    provider.messages.push(live(transcript, input));
+    provider.messages.push(live(transcript, answer));
+    provider.messages.push(nativeFrames.result([input]));
+    await vi.waitFor(async () => expect(JSON.stringify(await projectionSnapshot(handle))).toContain("External input answered."));
+    const liveSnapshot = await projectionSnapshot(handle);
+    expect(JSON.stringify(liveSnapshot)).toContain("External source input.");
     await handle.close();
 
     const reloaded = createHandle(fixture(), vi.fn(), { settings, initialMessages: reloadedMessages, resumeSession: true }).handle;
