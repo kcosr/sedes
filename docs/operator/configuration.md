@@ -290,7 +290,7 @@ installation bootstrap field. The server derives tenant and principal
 authority for each read and write, and precedence between layers is stated
 with each setting.
 
-The separate database configuration contains up to 16 environments, 32
+The separate database configuration contains up to 16 environments, 64
 backends, and 64 targets. Empty configuration is valid. Environment IDs are
 UUIDs; backend and target IDs use bounded alphanumeric/dot/dash/underscore
 identifiers. Labels are bounded display text, not identity. IDs are

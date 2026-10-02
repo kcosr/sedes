@@ -220,6 +220,8 @@
 
 ### Changed
 
+- Raise the per-account backend limit from 32 to 64.
+
 - Claude imports and sessions whose saved permission mode is no longer
   allowed launch with an explicit allowed mode, preferring `default`.
   Native defaults cannot silently broaden the initial permission mode.
