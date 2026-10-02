@@ -318,6 +318,7 @@
   space. Panels tabbed together or split against each other keep their
   per-thread size. Layouts saved before the upgrade keep their sizes until you
   open, dock, or resize the panel.
+  ([#37](https://github.com/kcosr/sedes/pull/37))
 
 - A project's Tasks and Workpads are shared by every location of the project,
   on every host. Tasks' **Project** view and Workpads' **Project** scope
