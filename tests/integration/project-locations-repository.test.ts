@@ -123,6 +123,7 @@ describe("project and location repository", () => {
     expect(f.project(first.projectId)).toEqual({
       tenantId: f.scope.tenantId, ownerPrincipalId: f.scope.principalId, id: first.projectId, name: "sedes",
       revision: 1, membershipRevision: 1, removedAt: null, createdAt: first.createdAt, updatedAt: first.createdAt,
+      taskCount: 0, workpadCount: 0,
       locations: [{
         id: first.id, environmentId: f.local.id, environmentLabel: "Local", displayName: "sedes",
         canonicalPath: "/srv/sedes", available: true, removedAt: null, removedWithProject: false,
@@ -190,7 +191,7 @@ describe("project and location repository", () => {
       locations: [{ id: a.id, removedAt: expect.any(Number), removedWithProject: false, threadCount: 1 }],
     });
     expect(f.inventory.listWorkspaces(f.scope)).toEqual([]);
-    expect(() => f.revalidate(a)).toThrow(/removed/);
+    expect(() => f.revalidate(a)).toThrow("This location was removed. Restore it in Settings → Projects before starting new work.");
 
     const restored = f.open("/srv/a", { restoreRemoved: true });
     expect(restored).toMatchObject({ id: a.id, projectId: a.projectId });
@@ -268,6 +269,61 @@ describe("project and location repository", () => {
     expect(() => f.inventory.restoreProject(stranger, beta.projectId, { expectedRevision: 1, now: f.now() }))
       .toThrow(domainError("not_found"));
     expect(f.inventory.listProjects(f.scope)).toEqual(projects);
+  });
+
+  it("counts retained project work exactly once, isolated by tenant and principal", () => {
+    const f = fixture();
+    const first = f.open("/srv/counts");
+    const second = f.open("/srv/counts-other", { project: { kind: "existing", projectId: first.projectId } });
+    const empty = f.open("/srv/empty");
+    const threadId = f.thread(first.id);
+    const tasks = new TaskRepository(f.database);
+    const workpads = new WorkpadRepository(f.database);
+    const projectScope = { kind: "project" as const, projectId: first.projectId };
+    const createTask = (scope: Parameters<TaskRepository["create"]>[1]["scope"]) => tasks.create(f.scope, {
+      scope, title: "Work", mutationId: randomUUID(), now: f.now(),
+    });
+    createTask(projectScope);
+    const completed = createTask(projectScope);
+    tasks.update(f.scope, completed.id, { completed: true, expectedRevision: completed.revision, mutationId: randomUUID(), now: f.now() });
+    createTask({ kind: "global" });
+    createTask({ kind: "thread", threadId });
+    workpads.create(f.scope, { title: "Current", scope: projectScope }, undefined, f.now());
+    const archived = workpads.create(f.scope, { title: "Archived", scope: projectScope }, undefined, f.now());
+    workpads.update(f.scope, archived.id, { expectedRevision: 0, archived: true }, undefined, f.now());
+    workpads.create(f.scope, { title: "Global", scope: { kind: "global" } }, undefined, f.now());
+    workpads.create(f.scope, { title: "Thread", scope: { kind: "thread", threadId } }, undefined, f.now());
+
+    // Projects may share an ID across tenants; principal ownership also filters
+    // distinct projects in the same tenant.
+    for (const foreign of [
+      { tenantId: f.scope.tenantId, principalId: randomUUID() },
+      { tenantId: randomUUID(), principalId: f.scope.principalId },
+    ]) {
+      if (foreign.tenantId !== f.scope.tenantId) f.database.prepare("INSERT INTO tenants(id, created_at) VALUES (?, 1)").run(foreign.tenantId);
+      f.database.prepare("INSERT INTO principals(tenant_id, id, kind, created_at) VALUES (?, ?, 'local_human', 1)").run(foreign.tenantId, foreign.principalId);
+      const projectId = foreign.tenantId === f.scope.tenantId ? randomUUID() : first.projectId;
+      f.database.prepare(`INSERT INTO projects(tenant_id, owner_principal_id, id, name, revision, membership_revision, removed_at, created_at, updated_at)
+        VALUES (?, ?, ?, 'Foreign project', 0, 0, NULL, 1, 1)`).run(foreign.tenantId, foreign.principalId, projectId);
+      tasks.create(foreign, { title: "Foreign task", scope: { kind: "project", projectId }, mutationId: randomUUID(), now: f.now() });
+      workpads.create(foreign, { title: "Foreign workpad", scope: { kind: "project", projectId } }, undefined, f.now());
+      expect(f.inventory.listProjects(foreign)).toEqual([expect.objectContaining({
+        id: projectId, taskCount: 1, workpadCount: 1, locations: [],
+      })]);
+    }
+
+    const counts = () => f.inventory.listProjects(f.scope).map(({ id, taskCount, workpadCount }) => ({ id, taskCount, workpadCount }));
+    const expected = [
+      { id: first.projectId, taskCount: 2, workpadCount: 2 },
+      { id: empty.projectId, taskCount: 0, workpadCount: 0 },
+    ];
+    expect(counts()).toEqual(expected);
+    f.removeLocation(first.id);
+    f.removeLocation(second.id);
+    expect(counts()).toEqual(expected);
+    f.removeProject(first.projectId);
+    expect(counts()).toEqual(expected);
+    expect(f.project(first.projectId)).toMatchObject({ taskCount: 2, workpadCount: 2, removedAt: expect.any(Number) });
   });
 
   it("renames an active project with a revision check", () => {
@@ -412,6 +468,7 @@ describe("project and location repository", () => {
     });
 
     expect(merged.movedTaskIds).toEqual([projectTask.id]);
+    expect(merged.project).toMatchObject({ taskCount: 2, workpadCount: 2 });
     expect(merged.movedWorkpads).toEqual([
       { id: pad.id, revision: 1 },
       { id: archived.id, revision: 2 },
@@ -475,8 +532,8 @@ describe("project and location repository", () => {
     expect(f.project(queued.projectId)).toEqual(current);
 
     // Single-location removal still reports only its first blocker.
-    expect(() => f.removeLocation(queued.id)).toThrow(domainError("invalid_transition", "Resolve running, queued, or uncertain work before removing this project."));
-    expect(() => f.removeLocation(terminalLocation.id)).toThrow(domainError("invalid_transition", "End live or interrupted terminals before removing this project."));
+    expect(() => f.removeLocation(queued.id)).toThrow(domainError("invalid_transition", "Resolve running, queued, or uncertain work before removing this location."));
+    expect(() => f.removeLocation(terminalLocation.id)).toThrow(domainError("invalid_transition", "End live or interrupted terminals before removing this location."));
   });
 
   it("removes a project with its active locations and restores only the project", () => {

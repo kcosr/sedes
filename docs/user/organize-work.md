@@ -120,7 +120,10 @@ drafts, Tasks, and other saved records remain intact, and thread inventory
 states are preserved. End live or interrupted terminals, resolve running,
 queued, or uncertain work, and pause enabled schedules first. Removal stops new
 work and conversation discovery for that location. When it is the project's last
-active location, you can also remove the project in the same step.
+active location, you can also remove the project in the same step. The **Also
+remove project** checkbox shows how many project-owned Tasks and Workpads that
+will hide, including completed Tasks and archived Workpads. These counts
+exclude the thread-owned items hidden with the location itself.
 
 **Remove project** removes every active location of the project at once and
 hides the project's Tasks and Workpads until you restore it. If anything

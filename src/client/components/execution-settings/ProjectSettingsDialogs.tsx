@@ -75,6 +75,12 @@ export function locationName(context: ProjectDialogContext, location: ProjectLoc
   return `${context.environmentLabel(location)} · ${location.path}`;
 }
 
+/** Counts remain live without replacing the structural revisions being confirmed. */
+function projectWithCurrentCounts(context: ProjectDialogContext, project: ProjectSummary): ProjectSummary {
+  const current = context.projects.find(({ id }) => id === project.id);
+  return current ? { ...project, taskCount: current.taskCount, workpadCount: current.workpadCount } : project;
+}
+
 /** How the records a dialog shows read in the reloaded list. */
 type Reconciled<T> =
   | { readonly kind: "unchanged" }
@@ -275,14 +281,14 @@ export function RemoveProjectDialog({ open, onOpenChange, context, project: open
   readonly project: ProjectSummary;
 }): React.JSX.Element {
   const shown = useShownRecords(context, opened, (projects, current) => reconcileProject(projects, current, "active"));
-  const project = shown.records;
+  const project = projectWithCurrentCounts(context, shown.records);
   const removal = useProjectRemoval(context);
   const focusReturn = useFocusReturn();
   const active = project.locations.filter(({ removed }) => !removed);
   const threads = active.reduce((total, location) => total + location.threadCount, 0);
   return <ConfirmDialog open={open} onOpenChange={(next) => { if (!next) removal.reset(); onOpenChange(next); }}
     title={`Remove project “${project.name}”?`} confirmLabel="Remove project" pendingLabel="Removing…"
-    description={`Hide this project with its tasks and workpads${active.length > 0 ? `, its ${countLabel(active.length, "active location")}, and their ${countLabel(threads, "thread")}` : ""} from the working inventory. Files, conversation history, and saved application data are retained, and you can restore the project here.`}
+    description={`Hide this project with its ${countLabel(project.taskCount, "task")} and ${countLabel(project.workpadCount, "workpad")}${active.length > 0 ? `, its ${countLabel(active.length, "active location")}, and their ${countLabel(threads, "thread")}` : ""} from the working inventory. Files, conversation history, and saved application data are retained, and you can restore the project here.`}
     confirmDisabled={shown.unavailable} errorDetail={removal.errorDetail(project) ?? shown.changes}
     onConfirm={() => removal.run(() => shown.attempt((current) => removeProject(context, current)))} {...focusReturn} />;
 }
@@ -302,7 +308,8 @@ export function RemoveLocationDialog({ open, onOpenChange, context, project: ope
       ? `It is now the last active location of “${name}”.`
       : `Another location of “${name}” is active now, so removing this one keeps the project.`] };
   });
-  const { project, location } = shown.records;
+  const { location } = shown.records;
+  const project = projectWithCurrentCounts(context, shown.records.project);
   const removal = useProjectRemoval(context);
   const focusReturn = useFocusReturn();
   const lastActive = isLastActiveLocation(shown.records);
@@ -311,7 +318,7 @@ export function RemoveLocationDialog({ open, onOpenChange, context, project: ope
     title={`Remove “${location.label}” from “${project.name}”?`}
     confirmLabel={removesProject ? "Remove project" : "Remove location"} pendingLabel="Removing…"
     description={`${removesProject
-      ? `Hide this location (${locationName(context, location)}), its ${countLabel(location.threadCount, "thread")}, and “${project.name}” with its tasks and workpads from the working inventory.`
+      ? `Hide this location (${locationName(context, location)}), its ${countLabel(location.threadCount, "thread")}, and “${project.name}” with its ${countLabel(project.taskCount, "task")} and ${countLabel(project.workpadCount, "workpad")} from the working inventory.`
       : `Hide this location (${locationName(context, location)}) and its ${countLabel(location.threadCount, "thread")} from the working inventory; the tasks and workpads of “${project.name}” stay.`} Files, conversation history, and saved application data are retained, and you can restore the location here. Stop running work, pause schedules, and end terminals before removal.`}
     confirmDisabled={shown.unavailable}
     errorDetail={(removesProject ? removal.errorDetail(project) : undefined) ?? shown.changes}
@@ -321,7 +328,7 @@ export function RemoveLocationDialog({ open, onOpenChange, context, project: ope
     {...focusReturn}>
     {lastActive ? <label className="execution-checkbox-option">
       <Checkbox checked={alsoProject} onCheckedChange={(checked) => { setAlsoProject(checked === true); removal.reset(); }} />
-      <span>Also remove project “{project.name}”</span>
+      <span>Also remove project “{project.name}” ({countLabel(project.taskCount, "task")} and {countLabel(project.workpadCount, "workpad")})</span>
     </label> : undefined}
   </ConfirmDialog>;
 }

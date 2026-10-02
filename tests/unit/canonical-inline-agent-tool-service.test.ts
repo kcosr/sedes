@@ -855,7 +855,11 @@ describe("CanonicalInlineAgentToolService", () => {
       additionalDefinitions: [writeDefinition({ execute })],
     });
     const request = { toolId: "example.write", schemaVersion: 2, requestId: "removed-project", input: {} };
-    await expect(service.invoke(request, source)).rejects.toMatchObject({ code: "conflict", message, retryable: false });
+    await expect(service.invoke(request, source)).rejects.toMatchObject({
+      code: "conflict",
+      message: "This project or location was removed. Restore it before adding saved work.",
+      retryable: false,
+    });
     execute.mockRejectedValueOnce(Object.assign(new Error("private database diagnostic"), { code: "SQLITE_CONSTRAINT_TRIGGER" }));
     await expect(service.invoke({ ...request, requestId: "unrelated-database-failure" }, source))
       .rejects.toMatchObject({ code: "internal_error", message: "The tool invocation failed." });

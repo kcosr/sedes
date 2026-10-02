@@ -312,7 +312,12 @@ function rejected(run: () => unknown, message: string): void {
   let error: unknown;
   try { run(); } catch (caught) { error = caught; }
   expect(error).toMatchObject({ code: "SQLITE_CONSTRAINT_TRIGGER", message });
-  expect(projectRemovalAdmissionError(error)).toMatchObject({ code: "invalid_transition", message });
+  expect(projectRemovalAdmissionError(error)).toMatchObject({
+    code: "invalid_transition",
+    message: message === addedMessage
+      ? "This project or location was removed. Restore it before adding saved work."
+      : "This project or location was removed. Restore it before moving saved work into it.",
+  });
 }
 
 describe("shared project tasks migration", () => {

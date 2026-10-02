@@ -261,9 +261,11 @@ Review a thread under **Thread actions → Environment variables…**, then use
 ## Projects
 
 Open **Settings → Projects** (or `/settings/projects`) to manage projects and
-their locations. Each project row shows its name, location count, and, for an
-active project, how many Tasks belong to the project, with its locations
-underneath: each shows its environment, path, thread count, and whether it is
+their locations. Each project row shows its name and counts of locations,
+Tasks, and Workpads, including for removed projects. Task and Workpad counts
+cover items owned directly by the project, including completed Tasks and
+archived Workpads; they exclude global and thread-owned items. Each location
+underneath shows its environment, path, thread count, and whether it is
 available. The list includes removed projects and locations, marked **Removed**,
 and locations on unavailable environments. Search by project name, folder, path,
 or environment, or use the searchable environment and status selectors. In a
@@ -285,6 +287,9 @@ moved to another or a new project, removed, or restored. Removal hides threads
 from the working inventory and creation choices; files, history, drafts, and
 saved application data remain intact. Removing a location keeps the project's
 Tasks and Workpads; removing the project hides them too until you restore it.
+The removal confirmation shows the project's Task and Workpad counts. When
+removing its last active location, **Also remove project** shows those counts
+so you can see the additional saved work that will be hidden.
 Stop running or queued work, resolve uncertain operations, pause schedules, and
 end terminals before removal; removing a project lists anything that still
 blocks it. Restoration rechecks current directory access; unavailable hosts or

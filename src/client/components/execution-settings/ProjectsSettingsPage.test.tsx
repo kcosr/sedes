@@ -28,25 +28,25 @@ function location(id: string, overrides: Partial<ProjectLocation> = {}): Project
 // a removed project with locations on Local, aw-personal, and a host that no
 // longer exists; and an empty project.
 const sedes: ProjectSummary = {
-  id: "project-sedes", name: "sedes", revision: 2, membershipRevision: 5, removed: false,
+  id: "project-sedes", name: "sedes", revision: 2, membershipRevision: 5, removed: false, taskCount: 2, workpadCount: 3,
   locations: [
     location("sedes-local", { path: "/src/sedes", threadCount: 3 }),
     location("sedes-remote", { environmentId: "remote", environmentLabel: "aw-personal", path: "/home/k/sedes", removed: true }),
   ],
 };
 const twin: ProjectSummary = {
-  id: "project-twin", name: "sedes", revision: 1, membershipRevision: 1, removed: false,
+  id: "project-twin", name: "sedes", revision: 1, membershipRevision: 1, removed: false, taskCount: 1, workpadCount: 0,
   locations: [location("twin-local", { path: "/work/sedes", threadCount: 1, revision: 7 })],
 };
 const retired: ProjectSummary = {
-  id: "project-retired", name: "Retired", revision: 3, membershipRevision: 9, removed: true,
+  id: "project-retired", name: "Retired", revision: 3, membershipRevision: 9, removed: true, taskCount: 4, workpadCount: 1,
   locations: [
     location("retired-build", { environmentId: "build", environmentLabel: "Build host", label: "retired", path: "/srv/retired", removed: true, removedWithProject: true, available: false }),
     location("retired-local", { label: "retired", path: "/src/retired", removed: true, removedWithProject: true }),
     location("retired-remote", { environmentId: "remote", environmentLabel: "aw-personal", label: "old", path: "/home/k/old", removed: true }),
   ],
 };
-const empty: ProjectSummary = { id: "project-empty", name: "Empty", revision: 0, membershipRevision: 0, removed: false, locations: [] };
+const empty: ProjectSummary = { id: "project-empty", name: "Empty", revision: 0, membershipRevision: 0, removed: false, taskCount: 0, workpadCount: 0, locations: [] };
 
 /**
  * A server that keeps its projects and checks expected revisions as the real
@@ -119,7 +119,7 @@ function fakeServer(initial: readonly ProjectSummary[]) {
       const { project, location } = place(locationId);
       if (location.revision !== request.expectedRevision) throw conflict("The location changed. Refresh and try again.");
       const destination = request.target.kind === "existing" ? find(request.target.projectId) : {
-        id: `project-${request.target.name}`, name: request.target.name, revision: 0, membershipRevision: 0, removed: false, locations: [],
+        id: `project-${request.target.name}`, name: request.target.name, revision: 0, membershipRevision: 0, removed: false, taskCount: 0, workpadCount: 0, locations: [],
       };
       save({ ...project, membershipRevision: project.membershipRevision + 1, locations: project.locations.filter(({ id }) => id !== locationId) });
       return save({
@@ -186,6 +186,8 @@ function setup(initial: readonly ProjectSummary[] = [sedes, twin, retired, empty
     },
   } as unknown as ApplicationClientState;
   const listeners = new Set<() => void>();
+  type WorkpadChange = { workpadId: string; revision: number; change: "document" | "draft" } | undefined;
+  const workpadListeners = new Set<(change: WorkpadChange) => void>();
   const api = server?.api ?? {
     listProjects: vi.fn(async () => ({ projects })),
     renameProject: vi.fn(async (_id: string, request: { name: string }) => ({ ...sedes, name: request.name.trim() })),
@@ -202,12 +204,15 @@ function setup(initial: readonly ProjectSummary[] = [sedes, twin, retired, empty
   const reopenWorkspace = vi.fn(async (id: string) => id);
   const store = {
     api, reopenWorkspace, openWorkspace: vi.fn(),
+    normalized: { subscribeWorkpadChanges: (listener: (change: WorkpadChange) => void) => { workpadListeners.add(listener); return () => workpadListeners.delete(listener); } },
     getSnapshot: () => state,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); },
   } as unknown as ApplicationClientStore;
   render(<ProjectsSettingsPage store={store} />);
   return {
     api, reopenWorkspace,
+    snapshot: () => state.snapshot!,
+    publishWorkpad: (change: WorkpadChange) => act(() => workpadListeners.forEach(listener => listener(change))),
     setProjects: (next: readonly ProjectSummary[]) => { projects = next; },
     publish: (snapshot: Partial<NonNullable<ApplicationClientState["snapshot"]>>) => {
       state = { ...state, snapshot: { ...state.snapshot!, ...snapshot } } as ApplicationClientState;
@@ -233,12 +238,63 @@ async function choose(user: ReturnType<typeof userEvent.setup>, combobox: string
 }
 
 describe("ProjectsSettingsPage", () => {
+  it("refreshes task membership and workpad documents while keeping open removal counts current", async () => {
+    const user = userEvent.setup();
+    const f = setup();
+    await screen.findByText("Retired");
+    await chooseAction(user, "Local · /src/sedes", "Remove location…");
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByRole("checkbox")).toHaveAccessibleName("Also remove project “sedes” (2 tasks and 3 workpads)");
+    await user.click(within(dialog).getByRole("checkbox"));
+
+    f.setProjects([{ ...sedes, taskCount: 1 }, twin, retired, empty]);
+    f.publish({ tasks: f.snapshot().tasks.filter(({ id }) => id !== "task-1") });
+    await waitFor(() => expect(within(dialog).getByRole("checkbox")).toHaveAccessibleName("Also remove project “sedes” (1 task and 3 workpads)"));
+    expect(dialog).toHaveTextContent("with its 1 task and 3 workpads from the working inventory");
+    expect(projectRow("sedes")).toHaveTextContent("1 task · 3 workpads");
+
+    f.setProjects([{ ...sedes, taskCount: 1, workpadCount: 4 }, twin, retired, empty]);
+    f.publishWorkpad({ workpadId: "new-pad", revision: 0, change: "document" });
+    await waitFor(() => expect(within(dialog).getByRole("checkbox")).toHaveAccessibleName("Also remove project “sedes” (1 task and 4 workpads)"));
+    expect(projectRow("sedes")).toHaveTextContent("1 task · 4 workpads");
+
+    const requests = f.api.listProjects.mock.calls.length;
+    f.publishWorkpad({ workpadId: "new-pad", revision: 1, change: "draft" });
+    // Changing task content/completion does not alter the retained-object total.
+    f.publish({ tasks: f.snapshot().tasks.map(task => ({ ...task, title: "Renamed", completedAt: "2026-10-02T00:00:00Z" })) });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+    expect(f.api.listProjects).toHaveBeenCalledTimes(requests);
+
+    f.setProjects([{ ...sedes, taskCount: 0, workpadCount: 4 }, { ...twin, taskCount: 2 }, retired, empty]);
+    f.publish({ tasks: f.snapshot().tasks.map(task => task.id === "task-2" ? { ...task, scope: { kind: "project", projectId: twin.id } } : task) });
+    await waitFor(() => expect(projectRow("sedes")).toHaveTextContent("0 tasks · 4 workpads"));
+    expect(projectRow("sedes", 1)).toHaveTextContent("2 tasks · 0 workpads");
+
+    f.setProjects([{ ...sedes, taskCount: 0, workpadCount: 5 }, twin, retired, empty]);
+    f.publishWorkpad(undefined);
+    await waitFor(() => expect(within(dialog).getByRole("checkbox")).toHaveAccessibleName("Also remove project “sedes” (0 tasks and 5 workpads)"));
+  });
+
+  it("explains changed project counts when a failed removal reloads the dialog", async () => {
+    const user = userEvent.setup();
+    const f = setup();
+    await screen.findByText("Retired");
+    await chooseAction(user, "Local · /src/sedes", "Remove location…");
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("checkbox"));
+    f.setProjects([{ ...sedes, taskCount: 5, workpadCount: 1 }, twin, retired, empty]);
+    f.api.removeProject.mockRejectedValueOnce(new ApiError(409, "conflict", "Refresh and try again.", false));
+    await user.click(within(dialog).getByRole("button", { name: "Remove project" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("The project now has 5 tasks and 1 workpad.");
+    expect(within(dialog).getByRole("checkbox")).toHaveAccessibleName("Also remove project “sedes” (5 tasks and 1 workpad)");
+  });
+
   it("lists projects with their locations, counts, availability, and removal", async () => {
     setup();
     await screen.findByText("Retired");
     expect(screen.getAllByTestId("project-settings-row").map((row) =>
       row.querySelector(".projects-project-row")!.textContent)).toEqual([
-      "sedes2 locations · 1 removed · 2 tasks", "sedes1 location · 1 task", "RetiredRemoved3 locations", "Empty0 locations · 0 tasks",
+      "sedes2 locations · 1 removed · 2 tasks · 3 workpads", "sedes1 location · 1 task · 0 workpads", "RetiredRemoved3 locations · 4 tasks · 1 workpad", "Empty0 locations · 0 tasks · 0 workpads",
     ]);
     const local = within(projectRow("sedes")).getAllByTestId("location-settings-row")[0]!;
     expect(local).toHaveTextContent("Local");
@@ -339,12 +395,12 @@ describe("ProjectsSettingsPage", () => {
       "Hide this location (Local · /src/sedes) and its 3 threads from the working inventory; the tasks and workpads of “sedes” stay.");
     expect(dialog).toHaveTextContent("Files, conversation history, and saved application data are retained");
     // Its other location is already removed, so this is the project's last active one.
-    const alsoProject = within(dialog).getByRole("checkbox", { name: "Also remove project “sedes”" });
+    const alsoProject = within(dialog).getByRole("checkbox", { name: /Also remove project “sedes”/ });
     expect(alsoProject).not.toBeChecked();
     // Removing the project too hides its tasks and workpads as well.
     await user.click(alsoProject);
     expect(dialog).toHaveTextContent(
-      "Hide this location (Local · /src/sedes), its 3 threads, and “sedes” with its tasks and workpads from the working inventory.");
+      "Hide this location (Local · /src/sedes), its 3 threads, and “sedes” with its 2 tasks and 3 workpads from the working inventory.");
     await user.click(alsoProject);
     await user.click(within(dialog).getByRole("button", { name: "Remove location" }));
     expect(api.removeLocation).toHaveBeenCalledWith("sedes-local", { expectedRevision: 4 });
@@ -353,7 +409,7 @@ describe("ProjectsSettingsPage", () => {
 
     await chooseAction(user, "Local · /work/sedes", "Remove location…");
     dialog = screen.getByRole("dialog", { name: "Remove “sedes” from “sedes”?" });
-    await user.click(within(dialog).getByRole("checkbox", { name: "Also remove project “sedes”" }));
+    await user.click(within(dialog).getByRole("checkbox", { name: /Also remove project “sedes”/ }));
     api.removeProject.mockRejectedValueOnce(new ProjectRemovalBlockedApiError(400, "Resolve running work before removing it.", false, [
       { locationId: "twin-local", environmentId: "local", kind: "durable_work", threadIds: ["thread-1", "thread-gone"] },
     ]));
@@ -374,7 +430,7 @@ describe("ProjectsSettingsPage", () => {
     await chooseAction(user, "sedes · /src/sedes", "Remove project…");
     const dialog = screen.getByRole("dialog", { name: "Remove project “sedes”?" });
     expect(dialog).toHaveTextContent(
-      "Hide this project with its tasks and workpads, its 1 active location, and their 3 threads from the working inventory.");
+      "Hide this project with its 2 tasks and 3 workpads, its 1 active location, and their 3 threads from the working inventory.");
     api.removeProject.mockRejectedValueOnce(new ProjectRemovalBlockedApiError(400, "Resolve work first.", false, [
       { locationId: "sedes-local", environmentId: "local", kind: "durable_work", threadIds: ["thread-1"] },
       { locationId: "sedes-local", environmentId: "local", kind: "enabled_schedule", threadIds: ["thread-a", "thread-b"] },
@@ -403,7 +459,7 @@ describe("ProjectsSettingsPage", () => {
     await screen.findByText("Empty");
     await chooseAction(user, "Empty", "Remove project…");
     const dialog = screen.getByRole("dialog", { name: "Remove project “Empty”?" });
-    expect(dialog).toHaveTextContent(/^Remove project “Empty”\?Hide this project with its tasks and workpads from the working inventory\./u);
+    expect(dialog).toHaveTextContent(/^Remove project “Empty”\?Hide this project with its 0 tasks and 0 workpads from the working inventory\./u);
     await user.click(within(dialog).getByRole("button", { name: "Remove project" }));
     expect(api.removeProject).toHaveBeenCalledWith("project-empty", { expectedRevision: 0, expectedMembershipRevision: 0 });
   });
@@ -533,7 +589,7 @@ describe("ProjectsSettingsPage", () => {
     await screen.findByText("sedes");
     await chooseAction(user, "Local · /src/sedes", "Remove location…");
     const dialog = screen.getByRole("dialog", { name: "Remove “sedes” from “sedes”?" });
-    await user.click(within(dialog).getByRole("checkbox", { name: "Also remove project “sedes”" }));
+    await user.click(within(dialog).getByRole("checkbox", { name: /Also remove project “sedes”/ }));
     // Another client restores the project's other location.
     await server.elsewhere.reopenWorkspace("sedes-remote");
     await user.click(within(dialog).getByRole("button", { name: "Remove project" }));

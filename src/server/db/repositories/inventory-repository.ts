@@ -141,6 +141,8 @@ export type InventoryProjectLocationRecord = {
 };
 
 export type InventoryProjectListing = InventoryProjectRecord & {
+  readonly taskCount: number;
+  readonly workpadCount: number;
   readonly locations: readonly InventoryProjectLocationRecord[];
 };
 
@@ -247,9 +249,9 @@ function sameRemovalLocations(
 
 // The single-location removal path reports the first blocker in this order.
 const locationRemovalMessages: Readonly<Record<DurableProjectRemovalBlockerKind, string>> = {
-  durable_work: "Resolve running, queued, or uncertain work before removing this project.",
-  enabled_schedule: "Pause scheduled work before removing this project. Restore will leave schedules paused.",
-  live_terminal: "End live or interrupted terminals before removing this project.",
+  durable_work: "Resolve running, queued, or uncertain work before removing this location.",
+  enabled_schedule: "Pause scheduled work before removing this location. Restore will leave schedules paused.",
+  live_terminal: "End live or interrupted terminals before removing this location.",
 };
 
 export type InventoryThreadRecord = {
@@ -1033,7 +1035,7 @@ export class InventoryRepository {
 
   assertWorkspaceActive(scope: RequestScope, workspaceId: string): void {
     if (this.isWorkspaceRemoved(scope, workspaceId)) {
-      throw new DomainError("invalid_transition", "This project was removed. Restore it in Settings → Projects before starting new work.");
+      throw new DomainError("invalid_transition", "This location was removed. Restore it in Settings → Projects before starting new work.");
     }
   }
 
@@ -1056,11 +1058,11 @@ export class InventoryRepository {
     const workspace = this.getWorkspace(scope, workspaceId);
     if (this.isWorkspaceRemoved(scope, workspaceId)) return;
     if (workspace.revision !== input.expectedRevision) {
-      throw new DomainError("conflict", "The project changed. Refresh and try again.");
+      throw new DomainError("conflict", "The location changed. Refresh and try again.");
     }
     const threadIds = this.listThreadIdsForWorkspace(scope, workspaceId);
     if (JSON.stringify(threadIds) !== JSON.stringify(input.expectedThreadIds)) {
-      throw new DomainError("conflict", "The project's threads changed. Refresh and try again.");
+      throw new DomainError("conflict", "The location's threads changed. Refresh and try again.");
     }
     const [blocker] = this.#locationRemovalBlockers(scope, {
       workspaceId, environmentId: workspace.environmentId, threadIds,
@@ -3635,7 +3637,23 @@ export class InventoryRepository {
       group.push({ ...location, available: available === 1, removedWithProject: removedWithProject === 1 });
       locations.set(owner, group);
     }
-    return projects.map(project => ({ ...project, locations: locations.get(project.id) ?? [] }));
+    // Exact project ownership survives location/project removal. Count retained
+    // objects, including completed tasks and archived workpads, without joining
+    // locations (which would multiply shared objects across directories).
+    const counts = (table: "tasks" | "workpads") => new Map(
+      (this.database.prepare(`SELECT project_id AS projectId, COUNT(*) AS count FROM ${table}
+        WHERE tenant_id = ? AND owner_principal_id = ? AND scope_kind = 'project'
+          ${projectId === undefined ? "" : "AND project_id = ?"}
+        GROUP BY project_id`).all(scope.tenantId, scope.principalId, ...only) as Array<{
+          projectId: string; count: number;
+        }>).map(({ projectId: id, count }) => [id, count]),
+    );
+    const tasks = counts("tasks");
+    const workpads = counts("workpads");
+    return projects.map(project => ({
+      ...project, taskCount: tasks.get(project.id) ?? 0, workpadCount: workpads.get(project.id) ?? 0,
+      locations: locations.get(project.id) ?? [],
+    }));
   }
 
   #bumpGeneration(scope: RequestScope): void {

@@ -867,7 +867,7 @@ describe("principal agent-tool client persistence and admission", () => {
     }
   });
 
-  it("treats a removed default workspace as unavailable", () => {
+  it("treats a removed default location as unavailable", () => {
     const value = fixture();
     try {
       const created = createClient(value, { toolIds: ["thread.status", "thread.list"] });
@@ -893,10 +893,10 @@ describe("principal agent-tool client persistence and admission", () => {
         value.service().replaceForManagement(value.scope, created.client.id, replacement(created.client)),
       ).toThrowError(expect.objectContaining({
         code: "invalid_transition",
-        message: "The default workspace is unavailable.",
+        message: "The default location is unavailable.",
       }));
       expect(() => createClient(value)).toThrowError(
-        expect.objectContaining({ message: "The default workspace is unavailable." }),
+        expect.objectContaining({ message: "The default location is unavailable." }),
       );
     } finally {
       value.database.close();

@@ -17,7 +17,7 @@ describe("background activity boundary", () => {
 describe("sidebar background-work contract", () => {
   const schema = normalizedApplicationThreadSummarySchema.shape.backgroundWork;
   it("exposes only bounded normalized counts on the current protocol", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(134);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(135);
     expect(schema.parse(undefined)).toBeUndefined();
     expect(schema.parse({ agents: 2, commands: 1, other: 0 })).toEqual({ agents: 2, commands: 1, other: 0 });
   });

@@ -54,6 +54,8 @@ function presentProject(project: InventoryProjectListing): ProjectSummary {
     revision: project.revision,
     membershipRevision: project.membershipRevision,
     removed: project.removedAt !== null,
+    taskCount: project.taskCount,
+    workpadCount: project.workpadCount,
     locations: project.locations.map((location) => ({
       id: location.id,
       environmentId: location.environmentId,

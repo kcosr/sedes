@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SEDES_CLIENT_PROTOCOL_VERSION } from "../../shared/index.js";
+import { SEDES_CLIENT_PROTOCOL_VERSION, projectSummarySchema } from "../../shared/index.js";
 import { SEDES_VERSION } from "../../shared/version.js";
 import {
   ApiClient,
@@ -33,6 +33,8 @@ const project = {
   name: "sedes",
   revision: 1,
   membershipRevision: 2,
+  taskCount: 3,
+  workpadCount: 2,
   removed: false,
   locations: [location],
 };
@@ -71,6 +73,14 @@ function serve(respond: (call: Call) => Response) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("ApiClient project management", () => {
+  it("requires nonnegative integer project counts", () => {
+    expect(projectSummarySchema.parse(project)).toMatchObject({ taskCount: 3, workpadCount: 2 });
+    for (const field of ["taskCount", "workpadCount"] as const) {
+      for (const invalid of [undefined, -1, 0.5]) {
+        expect(projectSummarySchema.safeParse({ ...project, [field]: invalid }).success).toBe(false);
+      }
+    }
+  });
   it("sends each project and location operation with its expected revisions", async () => {
     const restored = {
       project,

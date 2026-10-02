@@ -4,6 +4,10 @@
 
 ### Breaking Changes
 
+- Browser and packaged clients require client protocol 135. Project summaries
+  now include Task and Workpad counts. Upgrade clients together with the server.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
+
 - Browser and packaged clients require client protocol 134, which scopes
   Tasks and Workpads to `global`, `project`, or `thread`, gives each Task an
   `associatedProjectId`, and reduces a transcript `task_context` part to the
@@ -111,7 +115,7 @@
   browser protocol change is required for this fix. (#15)
 
 - Codex viewed images use a new `viewed_image` transcript item, introduced
-  in client protocol 123. This build requires client protocol 134; see the
+  in client protocol 123. This build requires client protocol 135; see the
   client protocol entries above and below. (#11, #13, #14)
 
 - Sidecars must use runtime protocol 14, which reads Claude history through the
@@ -149,6 +153,12 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- **Settings → Projects** shows Task and Workpad counts for active and removed
+  projects, including completed Tasks and archived Workpads. Removal dialogs
+  and **Also remove project** show the project-owned saved work that will be
+  hidden; thread-owned items are separate.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
 
 - Projects can span several directories and environments. Each directory on
   one environment is a location of exactly one project, such as the same
@@ -574,6 +584,10 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Tool client default-location errors and location-removal guards now use
+  accurate location terminology while preserving project-level diagnostics.
+  ([#34](https://github.com/kcosr/sedes/pull/34))
 
 - Removing a project or location while terminal work blocked it could return
   an internal server error. Terminal conflicts now return their own error from

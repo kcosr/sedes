@@ -87,7 +87,7 @@ function agentsApplicationStore(api: Record<string, unknown> = {}) {
   };
   const { backendOverrides: _overrides, description: _description, ...rest } = agent;
   const summary = { ...rest, overrideCount: 0, sedesTools: null };
-  const state = { snapshot: { environments: [], workspaces: [], threads: [] } } as unknown as ApplicationClientState;
+  const state = { snapshot: { environments: [], workspaces: [], threads: [], tasks: [] } } as unknown as ApplicationClientState;
   const applicationStore = {
     api: {
       listProjects: vi.fn(async () => ({ projects: [] })),
@@ -96,6 +96,7 @@ function agentsApplicationStore(api: Record<string, unknown> = {}) {
       getSavedAgentOptions: vi.fn(async () => ({ kind: "targets", targets: [] })),
       ...api,
     },
+    normalized: { subscribeWorkpadChanges: () => () => {} },
     getSnapshot: () => state, subscribe: () => () => {},
   } as unknown as ApplicationClientStore;
   return { applicationStore, agent };
@@ -162,8 +163,11 @@ describe("SettingsView", () => {
   it("routes Projects as its own page without embedding it in environment settings", async () => {
     const { controls } = executionControls();
     const listProjects = vi.fn(async () => ({ projects: [] }));
-    const state = { snapshot: { environments: [], workspaces: [], threads: [] } } as unknown as ApplicationClientState;
-    const applicationStore = { api: { listProjects }, getSnapshot: () => state, subscribe: () => () => {} } as unknown as ApplicationClientStore;
+    const state = { snapshot: { environments: [], workspaces: [], threads: [], tasks: [] } } as unknown as ApplicationClientState;
+    const applicationStore = {
+      api: { listProjects }, normalized: { subscribeWorkpadChanges: () => () => {} },
+      getSnapshot: () => state, subscribe: () => () => {},
+    } as unknown as ApplicationClientStore;
     renderSettings({ configuration: controls, applicationStore, page: "projects" });
 
     expect(await screen.findByText("No projects yet")).toBeVisible();
