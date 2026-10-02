@@ -343,7 +343,7 @@ function renderSidebar(
       })),
     },
     createThread: vi.fn(),
-    openWorkspace: vi.fn().mockResolvedValue("workspace-new"),
+    openWorkspace: vi.fn().mockResolvedValue({ id: "workspace-new", projectId: "project-new-project" }),
     refresh: vi.fn().mockResolvedValue(undefined),
     subscribe: () => () => undefined,
     getSnapshot: vi.fn(() => state),
@@ -3313,6 +3313,7 @@ describe("InventorySidebar view modes", () => {
     );
     await user.click(screen.getByRole("option", { name: "Build host" }));
     await user.type(screen.getByLabelText("Absolute directory path"), "/srv/new");
+    store.openWorkspace.mockResolvedValueOnce({ id: "workspace-new", projectId: "project-new-remote-project" });
     const published = makeState([], {
         environments: [
           {
@@ -3396,7 +3397,7 @@ describe("InventorySidebar view modes", () => {
       displayPath: { text: "/srv/project" },
       available: true,
     };
-    const { rerenderSidebar } = renderSidebar([], {
+    const { store, rerenderSidebar } = renderSidebar([], {
       environments,
       workspaces: [remoteWorkspace],
     });
@@ -3407,6 +3408,7 @@ describe("InventorySidebar view modes", () => {
     );
     await user.click(screen.getByRole("option", { name: "Build host" }));
     await user.type(screen.getByLabelText("Absolute directory path"), "/srv/new");
+    store.openWorkspace.mockResolvedValueOnce({ id: "workspace-new", projectId: "project-new-remote-project" });
     await user.click(within(screen.getByRole("dialog", { name: "Add project" })).getByRole("button", { name: "Add project" }));
 
     setSidebarInventoryScope({
@@ -3437,6 +3439,46 @@ describe("InventorySidebar view modes", () => {
     expect(
       JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY) ?? "{}"),
     ).not.toMatchObject({ projectFilterId: "project-new-remote-project" });
+  });
+
+  it("waits for a location the dialog moved to be listed in its new project", async () => {
+    const user = userEvent.setup();
+    const environment = {
+      id: "environment-local",
+      kind: "local" as const,
+      label: { text: "This machine" },
+      available: true,
+      directoryBrowsing: "unavailable" as const,
+    };
+    const location = {
+      id: "workspace-moved",
+      environmentId: environment.id,
+      projectId: "project-old-home",
+      label: { text: "Old home" },
+      displayPath: { text: "/srv/moved" },
+      available: true,
+    };
+    const { store, rerenderSidebar } = renderSidebar([], {
+      environments: [environment],
+      workspaces: [location],
+    });
+    await user.click(screen.getByRole("button", { name: "Add project" }));
+    await user.type(screen.getByRole("textbox", { name: "Absolute directory path" }), "/srv/moved");
+    store.openWorkspace.mockResolvedValueOnce({ id: "workspace-moved", projectId: "project-new-home" });
+    await user.click(within(screen.getByRole("dialog", { name: "Add project" })).getByRole("button", { name: "Add project" }));
+    // Still listed in its old project: the filter must not follow it there.
+    expect(
+      JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY) ?? "{}"),
+    ).not.toMatchObject({ projectFilterId: "project-old-home" });
+    rerenderSidebar(makeState([], {
+      environments: [environment],
+      workspaces: [{ ...location, projectId: "project-new-home" }],
+    }));
+    await waitFor(() =>
+      expect(
+        JSON.parse(localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY) ?? "{}"),
+      ).toMatchObject({ projectFilterId: "project-new-home" }),
+    );
   });
 
   it("retains a pending opened workspace across delayed publications", async () => {

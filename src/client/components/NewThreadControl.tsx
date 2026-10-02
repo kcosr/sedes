@@ -159,7 +159,8 @@ export function NewThreadControl({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   // The location Add project created, until the snapshot publishes it.
-  const [pendingLocationId, setPendingLocationId] = useState<string>();
+  /** An added location, until the catalog lists it in its project. */
+  const [pendingLocation, setPendingLocation] = useState<{ readonly id: string; readonly projectId: string }>();
   const [projectScopeReleased, setProjectScopeReleased] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string>();
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>();
@@ -430,7 +431,7 @@ export function NewThreadControl({
   const effectiveVariableCount = variablesSnapshot ? variableRows(Object.entries(variablesSnapshot.layers).map(([scope, values]) => ({ scope: scope as "environment" | "backend" | "agent" | "thread", values }))).filter(row => row.entry.kind !== "unset").length : 0;
   const canCreate = Boolean(
     variablesPreview.result &&
-    !pendingLocationId &&
+    !pendingLocation &&
     !scopeConflict &&
     selectedWorkspace?.available &&
     selectedTarget?.available &&
@@ -538,7 +539,7 @@ export function NewThreadControl({
     setSelectedProjectId(undefined);
     setSelectedWorkspaceId(undefined);
     setAddProjectOpen(false);
-    setPendingLocationId(undefined);
+    setPendingLocation(undefined);
     setProjectScopeReleased(false);
     setRequiresWorkspaceReselection(false);
     setRequiresTargetReselection(false);
@@ -582,15 +583,17 @@ export function NewThreadControl({
   };
 
   useEffect(() => {
-    const added = workspaces.find(({ id }) => id === pendingLocationId);
+    // A moved location is already listed; wait until it is in its new project.
+    const added = workspaces.find(({ id, projectId }) =>
+      id === pendingLocation?.id && projectId === pendingLocation.projectId);
     if (!added || !projects.some(({ id }) => id === added.projectId)) return;
     setProjectScopeReleased(true);
     setSelectedProjectId(added.projectId);
     setSelectedWorkspaceId(added.id);
     setRequiresWorkspaceReselection(false);
     releaseTargetOutside(added.environmentId);
-    setPendingLocationId(undefined);
-  }, [pendingLocationId, projects, workspaces]);
+    setPendingLocation(undefined);
+  }, [pendingLocation, projects, workspaces]);
 
   // Templates belong to the API's principal, not the currently selected
   // project. Once started, keep the catalog read across scope/picker changes.
@@ -1376,15 +1379,15 @@ export function NewThreadControl({
               </Field>
             )}
             <Button type="button" size="sm" variant="outline" className="new-thread-add-project"
-              disabled={pending || Boolean(pendingLocationId)} onClick={() => setAddProjectOpen(true)}>
-              <Plus size={14} /> {pendingLocationId ? "Adding project…" : "Add project"}
+              disabled={pending || Boolean(pendingLocation)} onClick={() => setAddProjectOpen(true)}>
+              <Plus size={14} /> {pendingLocation ? "Adding project…" : "Add project"}
             </Button>
             {addProjectOpen && <AddProjectDialog store={store} environments={environments}
               projects={projects} workspaces={workspaces}
               initialEnvironmentId={effectiveEnvironmentId}
               environmentLocked={scopedEnvironmentId !== undefined}
               onClose={() => setAddProjectOpen(false)}
-              onAdded={(id) => setPendingLocationId(id)} />}
+              onAdded={({ id, projectId }) => setPendingLocation({ id, projectId })} />}
             {needsTargetPicker && (
               <Field label="Target" id={`${pickerId}-target`}>
                 <SearchableSelect

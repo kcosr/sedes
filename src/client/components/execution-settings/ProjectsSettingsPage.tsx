@@ -240,7 +240,7 @@ export function ProjectsSettingsPage({ store }: {
     {dialog?.kind === "add" && dialogOpen ? <AddProjectDialog key={dialog.key} store={store} environments={environments}
       projects={snapshot?.projects ?? []} workspaces={snapshot?.workspaces ?? []}
       initialEnvironmentId={filter || undefined} {...(dialog.projectId === undefined ? {} : { projectId: dialog.projectId })}
-      onClose={() => setDialogOpen(false)} onAdded={(_id, addedEnvironmentId) => {
+      onClose={() => setDialogOpen(false)} onAdded={(_added, addedEnvironmentId) => {
         setStatus("all"); setSearch("");
         if (filter && filter !== addedEnvironmentId) setFilter("");
         void refresh();

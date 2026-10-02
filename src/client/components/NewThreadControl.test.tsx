@@ -278,7 +278,7 @@ function control(options?: {
         sedesTools: undefined,
       }),
   };
-  const openWorkspace = vi.fn().mockResolvedValue("workspace-added");
+  const openWorkspace = vi.fn().mockResolvedValue({ id: "workspace-added", projectId: "project-added" });
   let store = { api, createThread, openWorkspace } as unknown as ApplicationClientStore;
   let workspaces = options?.workspaces ?? (options?.allWorkspaces ? [workspace, secondWorkspace] : [options?.constrainedWorkspace ?? workspace]);
   let projects = options?.projects ?? projectsFor(workspaces);

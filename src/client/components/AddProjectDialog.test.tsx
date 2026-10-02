@@ -51,13 +51,14 @@ const conflict: LocationConflict = {
 function setup(options: { readonly projectId?: string; readonly environmentLocked?: boolean } = {}) {
   const api = {
     browseExecutionEnvironmentDirectories: vi.fn(),
-    moveLocation: vi.fn(async () => ({})),
+    // The project the location moved into.
+    moveLocation: vi.fn(async (): Promise<{ id: string }> => ({ id: "project-moved" })),
     restoreProject: vi.fn(async (): Promise<{ project: unknown; locations: readonly RestoredLocationResult[] }> => ({
       project: {}, locations: [{ id: conflict.workspaceId, status: "restored" }],
     })),
   };
-  const openWorkspace = vi.fn(async () => "added-location");
-  const reopenWorkspace = vi.fn(async (id: string) => id);
+  const openWorkspace = vi.fn(async () => ({ id: "added-location", projectId: "project-added" }));
+  const reopenWorkspace = vi.fn(async (id: string) => ({ id, projectId: "project-reopened" }));
   const onAdded = vi.fn();
   const onClose = vi.fn();
   const store = { api, openWorkspace, reopenWorkspace } as unknown as Pick<ApplicationClientStore, "api" | "openWorkspace" | "reopenWorkspace">;
@@ -102,7 +103,7 @@ describe("AddProjectDialog", () => {
     await user.type(name, "Billing service");
     await user.click(within(dialog()).getByRole("button", { name: "Add project" }));
     expect(openWorkspace).toHaveBeenCalledWith("/src/billing/", "local", { kind: "new", name: "Billing service" });
-    await waitFor(() => expect(onAdded).toHaveBeenCalledWith("added-location", "local"));
+    await waitFor(() => expect(onAdded).toHaveBeenCalledWith({ id: "added-location", projectId: "project-added" }, "local"));
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -148,7 +149,7 @@ describe("AddProjectDialog", () => {
       target: { kind: "existing", projectId: "project-notes" }, expectedRevision: 6,
     });
     expect(reopenWorkspace).not.toHaveBeenCalled();
-    await waitFor(() => expect(onAdded).toHaveBeenCalledWith("existing-location", "local"));
+    await waitFor(() => expect(onAdded).toHaveBeenCalledWith({ id: "existing-location", projectId: "project-moved" }, "local"));
   });
 
   it("moves and restores a removed location, or restores it in its own project", async () => {
@@ -165,7 +166,7 @@ describe("AddProjectDialog", () => {
     await user.click(within(alert).getByRole("button", { name: "Restore in “Old home”" }));
     expect(reopenWorkspace).toHaveBeenCalledWith("existing-location");
     expect(api.moveLocation).not.toHaveBeenCalled();
-    await waitFor(() => expect(onAdded).toHaveBeenCalledWith("existing-location", "local"));
+    await waitFor(() => expect(onAdded).toHaveBeenCalledWith({ id: "existing-location", projectId: "project-reopened" }, "local"));
 
     cleanup();
     const second = setup();
@@ -204,7 +205,7 @@ describe("AddProjectDialog", () => {
     await user.click(within(dialog()).getByRole("button", { name: "Add project" }));
     alert = await within(dialog()).findByRole("alert");
     await user.click(within(alert).getByRole("button", { name: "Restore project “Old home”" }));
-    await waitFor(() => expect(onAdded).toHaveBeenCalledWith("existing-location", "local"));
+    await waitFor(() => expect(onAdded).toHaveBeenCalledWith({ id: "existing-location", projectId: "project-old" }, "local"));
 
     cleanup();
     const other = setup();
@@ -217,7 +218,7 @@ describe("AddProjectDialog", () => {
       target: { kind: "new", name: "old" }, expectedRevision: 6,
     });
     expect(other.reopenWorkspace).toHaveBeenCalledWith("existing-location");
-    await waitFor(() => expect(other.onAdded).toHaveBeenCalledWith("existing-location", "local"));
+    await waitFor(() => expect(other.onAdded).toHaveBeenCalledWith({ id: "existing-location", projectId: "project-reopened" }, "local"));
   });
 
   it("adds a location to a fixed project from its menu", async () => {

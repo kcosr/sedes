@@ -507,6 +507,8 @@ export function InventorySidebar({
   const [pendingOpenedWorkspace, setPendingOpenedWorkspace] = useState<
     | {
         readonly id: string;
+        /** A moved location is already listed; wait until it is in this project. */
+        readonly projectId: string;
         readonly scopePreferenceKey: string;
       }
     | undefined
@@ -517,7 +519,8 @@ export function InventorySidebar({
       setPendingOpenedWorkspace(undefined);
       return;
     }
-    const openedWorkspace = workspaces.find(({ id }) => id === pendingOpenedWorkspace.id);
+    const openedWorkspace = workspaces.find(({ id, projectId }) =>
+      id === pendingOpenedWorkspace.id && projectId === pendingOpenedWorkspace.projectId);
     if (openedWorkspace) {
       const eventId = store.normalized.replayCursor;
       setSidebarInventoryScope(
@@ -2158,10 +2161,10 @@ export function InventorySidebar({
           initialEnvironmentId={scope.effectiveEnvironmentId ?? undefined}
           environmentLocked={scope.effectiveEnvironmentId !== null}
           onClose={() => setAddProjectOpen(false)}
-          onAdded={(workspaceId) => {
+          onAdded={({ id, projectId }) => {
             // Wait for the authoritative catalog before persisting the new
             // filter and opening the location's project group.
-            setPendingOpenedWorkspace({ id: workspaceId, scopePreferenceKey });
+            setPendingOpenedWorkspace({ id, projectId, scopePreferenceKey });
           }}
         />}
       </div>

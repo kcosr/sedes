@@ -102,6 +102,18 @@ describe("ApiClient project management", () => {
     ]);
   });
 
+  it("reports the project an opened or restored location is in", async () => {
+    const calls = serve(() => Response.json({ id: locationId, projectId }, { status: 201 }));
+    const api = new ApiClient();
+    await expect(api.openWorkspace("/src/sedes", environmentId, { kind: "existing", projectId }))
+      .resolves.toEqual({ id: locationId, projectId });
+    await expect(api.reopenWorkspace(locationId)).resolves.toEqual({ id: locationId, projectId });
+    expect(calls.map(({ path, method }) => [method, path])).toEqual([
+      ["POST", "/api/workspaces/open"],
+      ["POST", `/api/workspaces/${locationId}/open`],
+    ]);
+  });
+
   it("rejects invalid requests before sending them", async () => {
     const calls = serve(() => Response.json(project));
     const api = new ApiClient();

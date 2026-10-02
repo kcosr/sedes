@@ -13,7 +13,7 @@ import { listProjectsResultSchema, locationConflictErrorSchema, mergeProjectRequ
   projectRemovalBlockedErrorSchema, projectSummarySchema, removeLocationRequestSchema,
   removeProjectRequestSchema, renameProjectRequestSchema, restoreProjectRequestSchema,
   restoreProjectResultSchema, type ListProjectsResult, type LocationConflict,
-  type MergeProjectRequest, type MoveLocationRequest, type ProjectAssignment,
+  type MergeProjectRequest, type MoveLocationRequest, type OpenWorkspaceResult, type ProjectAssignment,
   type ProjectRemovalBlocker, type ProjectSummary, type RemoveLocationRequest,
   type RemoveProjectRequest, type RenameProjectRequest, type RestoreProjectRequest,
   type RestoreProjectResult } from "../../shared/index.js";
@@ -1855,9 +1855,9 @@ export class ApiClient {
    * already is. A directory in another or a removed project is refused with a
    * {@link LocationConflictApiError}.
    */
-  async openWorkspace(path: string, environmentId: string, project: ProjectAssignment): Promise<string> {
+  openWorkspace(path: string, environmentId: string, project: ProjectAssignment): Promise<OpenWorkspaceResult> {
     const request = openWorkspaceRequestSchema.parse({ path, environmentId, project });
-    const result = await this.#mutation(
+    return this.#mutation(
       "/api/workspaces/open",
       openWorkspaceResultSchema,
       {
@@ -1865,7 +1865,6 @@ export class ApiClient {
         body: JSON.stringify(request),
       },
     );
-    return result.id;
   }
 
   browseExecutionEnvironmentDirectories(
@@ -1881,13 +1880,13 @@ export class ApiClient {
     );
   }
 
-  async reopenWorkspace(workspaceId: string): Promise<string> {
-    const result = await this.#mutation(
+  /** Restores or revalidates a known location; it never changes project. */
+  reopenWorkspace(workspaceId: string): Promise<OpenWorkspaceResult> {
+    return this.#mutation(
       `/api/workspaces/${encodeURIComponent(workspaceId)}/open`,
       openWorkspaceResultSchema,
       { method: "POST" },
     );
-    return result.id;
   }
 
   createThread(rawRequest: CreateThreadRequest): Promise<CreateThreadResult> {

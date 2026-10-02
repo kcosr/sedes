@@ -7,6 +7,7 @@ import {
   type NormalizedEnvironmentSummary,
   type NormalizedProjectSummary,
   type NormalizedWorkspaceSummary,
+  type OpenWorkspaceResult,
   type ProjectAssignment,
 } from "../../shared/index.js";
 import { LocationConflictApiError } from "../api/ApiClient.js";
@@ -74,7 +75,8 @@ export function AddProjectDialog({
   readonly environmentLocked?: boolean;
   /** Adds a location to this project; the project cannot be changed. */
   readonly projectId?: string;
-  readonly onAdded: (workspaceId: string, environmentId: string) => void;
+  /** The location and the project it is in once the dialog's action commits. */
+  readonly onAdded: (added: OpenWorkspaceResult, environmentId: string) => void;
   readonly onClose: () => void;
 }): React.JSX.Element {
   const [environmentId, setEnvironmentId] = useState(
@@ -111,14 +113,14 @@ export function AddProjectDialog({
     : `“${selectedProject ? projectLocations.projectLabel(selectedProject.id) ?? selectedProject.name : "this project"}”`;
   const reset = () => { setConflict(undefined); setError(""); };
 
-  const run = async (operation: () => Promise<string | undefined>) => {
+  const run = async (operation: () => Promise<OpenWorkspaceResult | undefined>) => {
     if (pending) return;
     setPending(true);
     setError("");
     try {
-      const id = await operation();
-      if (id !== undefined) {
-        onAdded(id, environmentId);
+      const added = await operation();
+      if (added !== undefined) {
+        onAdded(added, environmentId);
         onClose();
       }
     } catch (cause) {
@@ -146,9 +148,11 @@ export function AddProjectDialog({
       return;
     }
     void run(async () => {
-      await store.api.moveLocation(existing.workspaceId, { target, expectedRevision: existing.locationRevision });
+      const project = await store.api.moveLocation(existing.workspaceId, { target, expectedRevision: existing.locationRevision });
       setConflict(undefined);
-      return existing.locationRemoved ? store.reopenWorkspace(existing.workspaceId) : existing.workspaceId;
+      return existing.locationRemoved
+        ? store.reopenWorkspace(existing.workspaceId)
+        : { id: existing.workspaceId, projectId: project.id };
     });
   };
   const restoreInOwnProject = (existing: LocationConflict) =>
@@ -164,7 +168,7 @@ export function AddProjectDialog({
       setError(`Restored project “${existing.projectName}”, but not this location: ${location.error.message}`);
       return undefined;
     }
-    return existing.workspaceId;
+    return { id: existing.workspaceId, projectId: existing.projectId };
   });
 
   const conflictAlert = conflict ? <ConflictAlert conflict={conflict} destination={destination} pending={pending}
