@@ -50,7 +50,10 @@ A tenant first opens at its `size.preferredWidth`; with `size.preferredShare`
 it takes that share of the stage instead, kept between its minimum and
 preferred width (Tasks takes 35%: 300px at 1024px, 380px at 1440px). The rules
 are in `workspace-panels/layout-fit.ts`; declare a new tenant's minimum in its
-`size`.
+`size`. From then on, each side panel keeps one share of the stage width (or
+height, docked above or below) in every thread layout: a resize records it,
+and each thread's splits are fitted to it, so Chat absorbs the difference
+(`workspace-panels/panel-sizes.ts`).
 
 ## Tokens
 

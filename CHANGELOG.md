@@ -312,6 +312,13 @@
 
 ### Changed
 
+- Side panels keep one size in every thread. Resizing Files, Workpads, Tasks,
+  or Terminals resizes it in every thread's layout, and opening, collapsing,
+  or closing another panel leaves its width alone; Chat takes the remaining
+  space. Panels tabbed together or split against each other keep their
+  per-thread size. Layouts saved before the upgrade keep their sizes until you
+  open, dock, or resize the panel.
+
 - A project's Tasks and Workpads are shared by every location of the project,
   on every host. Tasks' **Project** view and Workpads' **Project** scope
   follow the current thread's project, adding a Task there never asks for a

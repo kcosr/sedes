@@ -25,8 +25,21 @@ import {
 import type { WorkspacePanelTenantRegistry } from "./registry.js";
 import type { PanelPresentation } from "./panel-presentation.js";
 import { projectPanelLayout } from "./layout-presentation.js";
+import {
+  MAX_PANEL_SHARE,
+  MIN_PANEL_SHARE,
+  SIDE_PANEL_KINDS,
+  edgeAxis,
+  fitPanelSizes,
+  measurePanelSizes,
+  splitSizes,
+  withPanelSizes,
+  type MeasuredPanelSize,
+  type PanelSize,
+  type SidePanelKind,
+} from "./panel-sizes.js";
 
-export const PANEL_SIZE_STORAGE_KEY = "sedes-panel-instance-sizes@4";
+export const PANEL_SIZE_STORAGE_KEY = "sedes-panel-instance-sizes@5";
 export const WORKSPACE_FILES_STATE_STORAGE_KEY =
   "sedes-workspace-files-panel-state@1";
 export const WORKPADS_STATE_STORAGE_KEY = "sedes-workpads-panel-state@1";
@@ -53,16 +66,10 @@ const CLOSED_SHARED_PANEL: SharedPanelVisibility = Object.freeze({
   open: false,
   collapsed: false,
 });
-const PANEL_SIZE_STORAGE_VERSION = 4 as const;
+const PANEL_SIZE_STORAGE_VERSION = 5 as const;
 const PANEL_COLLAPSED_STORAGE_VERSION = 4 as const;
 export function panelCollapsedStorageKey(threadId: string): string {
   return `sedes-thread-panel-instance-collapsed@4:${encodeURIComponent(threadId)}`;
-}
-const MIN_RETAINED_PANEL_FRACTION = 0.05;
-const MAX_RETAINED_PANEL_FRACTION = 0.95;
-
-interface RetainedPanelSize {
-  readonly fraction: number;
 }
 
 export interface PanelFocusRequest {
@@ -119,6 +126,8 @@ interface SharedPanelState {
   readonly workspaceDirty: Map<string, Map<string, Set<string>>>;
   readonly threadStores: Map<string, PanelLayoutStore>;
   readonly sharedPanels: Map<SharedPanelKind, SharedPanelVisibility>;
+  /** Side panel sizes, shared by every thread layout (see panel-sizes.ts). */
+  readonly panelSizes: Map<SidePanelKind, PanelSize>;
   workspaceFilesState?: SharedPanelVisibility;
 }
 
@@ -205,7 +214,6 @@ export class PanelLayoutStore {
   readonly #createProducerId: () => string;
   readonly #threadId: string;
   readonly #shared: SharedPanelState;
-  readonly #retainedPanelSizes: Map<PanelKind, RetainedPanelSize>;
   readonly #listeners = new Set<() => void>();
   readonly #intents = new Map<PanelInstanceId, unknown>();
   #focusSequence = 0;
@@ -235,25 +243,24 @@ export class PanelLayoutStore {
             CLOSED_SHARED_PANEL,
         ]),
       ),
+      panelSizes: readPanelSizes(this.#storage),
     };
     let stored: string | null = null;
-    let storedSizes: string | null = null;
     let storedCollapsed: string | null = null;
     try {
       stored =
         this.#storage?.getItem(panelLayoutStorageKey(this.#threadId)) ?? null;
-      storedSizes = this.#storage?.getItem(PANEL_SIZE_STORAGE_KEY) ?? null;
       storedCollapsed =
         this.#storage?.getItem(panelCollapsedStorageKey(this.#threadId)) ??
         null;
     } catch {
       // Denied storage must not prevent the workbench from loading.
     }
-    this.#retainedPanelSizes = deserializeRetainedPanelSizes(storedSizes);
     const tree = deserializePanelLayout(this.#threadId, stored);
+    const collapsed = deserializeCollapsedPanels(storedCollapsed, tree);
     this.#snapshot = {
-      tree,
-      collapsed: deserializeCollapsedPanels(storedCollapsed, tree),
+      tree: fitPanelSizes(tree, collapsed, this.#shared.panelSizes),
+      collapsed,
       revision: 0,
     };
     this.#reconcileSharedPanels();
@@ -275,6 +282,7 @@ export class PanelLayoutStore {
     if (existing) {
       existing.#reconcileWorkspaceFiles();
       existing.#reconcileSharedPanels();
+      existing.#fitPanelSizes();
       return existing;
     }
     const store = new PanelLayoutStore(this.registry, {
@@ -511,10 +519,11 @@ export class PanelLayoutStore {
 
   openPanelInstance(panel: PanelInstance, input: PanelOpenInput = {}): boolean {
     if (this.hasPanel(panel.panelInstanceId)) return false;
+    const edge = input.edge ?? this.#preferredEdge(panel.kind);
     const tree = openLayoutPanel(this.#snapshot.tree, panel, {
-      edge: input.edge ?? this.#preferredEdge(panel.kind),
+      edge,
       preferredPanelFraction:
-        this.#retainedPanelSizes.get(panel.kind)?.fraction ??
+        this.#sharedPanelSize(panel.kind, edge) ??
         this.#preferredFraction(panel.kind, input),
       splitId: this.#createId("split"),
       stackId: this.#createId("stack"),
@@ -540,6 +549,7 @@ export class PanelLayoutStore {
             ),
       persistTree: true,
     });
+    this.#rememberFirstPanelSize(panel.kind);
     return true;
   }
 
@@ -675,7 +685,6 @@ export class PanelLayoutStore {
   closePanel(panelInstanceId: string): boolean {
     const panel = this.panel(panelInstanceId);
     if (!panel) return false;
-    this.#rememberPanelSize(panelInstanceId, panel.kind);
     const tree = closeLayoutPanel(this.#snapshot.tree, panelInstanceId);
     const collapsed = new Set(this.#snapshot.collapsed);
     collapsed.delete(panelInstanceId);
@@ -707,15 +716,31 @@ export class PanelLayoutStore {
       stackId: this.#createId("stack"),
     });
     if (tree === this.#snapshot.tree) return false;
+    const kind = this.panel(panelInstanceId)!.kind;
+    this.#publish({ tree, persistTree: true });
+    this.#rememberFirstPanelSize(kind);
+    return true;
+  }
+
+  /**
+   * Resizing a split remembers the size of the side panel beside the divider
+   * for every thread. The other side panels keep theirs, so Chat takes up the
+   * difference.
+   */
+  resizeSplit(splitId: string, sizes: readonly number[]): boolean {
+    const { tree, resized } = this.#resizedLayout(splitId, sizes);
+    if (tree === this.#snapshot.tree) return false;
+    this.#rememberPanelSizes(resized, { replace: true });
     this.#publish({ tree, persistTree: true });
     return true;
   }
 
-  resizeSplit(splitId: string, sizes: readonly number[]): boolean {
-    const tree = resizeLayoutSplit(this.#snapshot.tree, splitId, sizes);
-    if (tree === this.#snapshot.tree) return false;
-    this.#publish({ tree, persistTree: true });
-    return true;
+  /** Every split's sizes once `resizeSplit` commits, for a divider preview. */
+  previewSplitResize(
+    splitId: string,
+    sizes: readonly number[],
+  ): ReadonlyMap<string, readonly [number, number]> {
+    return splitSizes(this.#resizedLayout(splitId, sizes).tree);
   }
 
   setWorkspaceTenantDirty(
@@ -802,23 +827,71 @@ export class PanelLayoutStore {
     });
   }
 
-  #rememberPanelSize(panelInstanceId: PanelInstanceId, kind: PanelKind): void {
-    const fraction = panelFractionInParent(
+  #sharedPanelSize(
+    kind: PanelKind,
+    edge: PanelPlacementEdge,
+  ): number | undefined {
+    if (kind === "chat") return undefined;
+    return this.#shared.panelSizes.get(kind)?.[edgeAxis(edge)];
+  }
+
+  #fitPanelSizes(): void {
+    const tree = fitPanelSizes(
       this.#snapshot.tree,
-      panelInstanceId,
+      this.#snapshot.collapsed,
+      this.#shared.panelSizes,
     );
-    if (
-      fraction === undefined ||
-      fraction < MIN_RETAINED_PANEL_FRACTION ||
-      fraction > MAX_RETAINED_PANEL_FRACTION
-    )
-      return;
-    this.#retainedPanelSizes.set(kind, { fraction });
+    if (tree !== this.#snapshot.tree) this.#publish({ tree });
+  }
+
+  #resizedLayout(
+    splitId: string,
+    sizes: readonly number[],
+  ): {
+    readonly tree: PanelLayoutTree;
+    readonly resized: readonly MeasuredPanelSize[];
+  } {
+    const { collapsed } = this.#snapshot;
+    const tree = resizeLayoutSplit(this.#snapshot.tree, splitId, sizes);
+    const resized = measurePanelSizes(tree, collapsed).filter(
+      (size) => size.splitId === splitId,
+    );
+    return {
+      tree: fitPanelSizes(
+        tree,
+        collapsed,
+        withPanelSizes(this.#shared.panelSizes, resized),
+      ),
+      resized,
+    };
+  }
+
+  /** The size a side panel first opens or docks at carries to other threads. */
+  #rememberFirstPanelSize(kind: PanelKind): void {
+    this.#rememberPanelSizes(
+      measurePanelSizes(this.#snapshot.tree, this.#snapshot.collapsed).filter(
+        (size) => size.kind === kind,
+      ),
+      { replace: false },
+    );
+  }
+
+  #rememberPanelSizes(
+    measured: readonly MeasuredPanelSize[],
+    options: { readonly replace: boolean },
+  ): void {
+    const sizes = this.#shared.panelSizes;
+    let changed = false;
+    for (const { kind, axis, share } of measured) {
+      const current = sizes.get(kind)?.[axis];
+      if (current === share || (!options.replace && current !== undefined))
+        continue;
+      sizes.set(kind, { ...sizes.get(kind), [axis]: share });
+      changed = true;
+    }
+    if (!changed) return;
     try {
-      this.#storage?.setItem(
-        PANEL_SIZE_STORAGE_KEY,
-        serializeRetainedPanelSizes(this.#retainedPanelSizes),
-      );
+      this.#storage?.setItem(PANEL_SIZE_STORAGE_KEY, serializePanelSizes(sizes));
     } catch {
       // Persistence is best effort.
     }
@@ -855,7 +928,10 @@ export class PanelLayoutStore {
       if (state.open && !panel) {
         tree = openLayoutPanel(tree, { panelInstanceId: kind, kind }, {
           edge: this.#preferredEdge(kind),
-          preferredPanelFraction: this.#retainedPanelSizes.get(kind)?.fraction,
+          preferredPanelFraction: this.#sharedPanelSize(
+            kind,
+            this.#preferredEdge(kind),
+          ),
           splitId: this.#createId("split"),
           stackId: this.#createId("stack"),
         });
@@ -891,8 +967,10 @@ export class PanelLayoutStore {
         { panelInstanceId: "workspace-files", kind: "files" },
         {
           edge: this.#preferredEdge("files"),
-          preferredPanelFraction:
-            this.#retainedPanelSizes.get("files")?.fraction,
+          preferredPanelFraction: this.#sharedPanelSize(
+            "files",
+            this.#preferredEdge("files"),
+          ),
           splitId: this.#createId("split"),
           stackId: this.#createId("stack"),
         },
@@ -920,11 +998,15 @@ export class PanelLayoutStore {
     const previousShared = new Map(
       SHARED_PANEL_KINDS.map((kind) => [kind, this.#sharedVisibility(kind)]),
     );
-    const tree = "tree" in input ? input.tree! : this.#snapshot.tree;
     const collapsed =
       input.collapsed === undefined
         ? this.#snapshot.collapsed
         : new SnapshotReadonlySet(input.collapsed);
+    const tree = fitPanelSizes(
+      "tree" in input ? input.tree! : this.#snapshot.tree,
+      collapsed,
+      this.#shared.panelSizes,
+    );
     const focusRequest =
       "focusRequest" in input
         ? input.focusRequest
@@ -1040,22 +1122,6 @@ function tenantIdForKind(kind: "files" | "workpads" | "tasks"): string {
   return kind === "files" ? "workspace-files" : kind;
 }
 
-function panelFractionInParent(
-  tree: PanelLayoutTree,
-  panelInstanceId: string,
-): number | undefined {
-  if (!tree || tree.kind === "tabs") return undefined;
-  for (const index of [0, 1] as const) {
-    if (findPanel(tree.children[index], panelInstanceId)) {
-      return (
-        panelFractionInParent(tree.children[index], panelInstanceId) ??
-        tree.sizes[index]
-      );
-    }
-  }
-  return undefined;
-}
-
 function deserializeCollapsedPanels(
   serialized: string | null,
   tree: PanelLayoutTree,
@@ -1093,12 +1159,13 @@ function serializeCollapsedPanels(
   });
 }
 
-function deserializeRetainedPanelSizes(
-  serialized: string | null,
-): Map<PanelKind, RetainedPanelSize> {
-  const retained = new Map<PanelKind, RetainedPanelSize>();
-  if (serialized === null) return retained;
+function readPanelSizes(
+  storage: PanelLayoutStorage | undefined,
+): Map<SidePanelKind, PanelSize> {
+  const sizes = new Map<SidePanelKind, PanelSize>();
   try {
+    const serialized = storage?.getItem(PANEL_SIZE_STORAGE_KEY);
+    if (!serialized) return sizes;
     const parsed: unknown = JSON.parse(serialized);
     if (
       typeof parsed !== "object" ||
@@ -1106,29 +1173,36 @@ function deserializeRetainedPanelSizes(
       Array.isArray(parsed) ||
       (parsed as Record<string, unknown>).version !== PANEL_SIZE_STORAGE_VERSION
     )
-      return retained;
-    const sizes = (parsed as Record<string, unknown>).sizes;
-    if (typeof sizes !== "object" || sizes === null || Array.isArray(sizes))
-      return retained;
-    for (const kind of ["chat", "files", "workpads", "tasks", "terminals"] as const) {
-      const raw = (sizes as Record<string, unknown>)[kind];
+      return sizes;
+    const stored = (parsed as Record<string, unknown>).sizes;
+    if (typeof stored !== "object" || stored === null || Array.isArray(stored))
+      return sizes;
+    for (const kind of SIDE_PANEL_KINDS) {
+      const raw = (stored as Record<string, unknown>)[kind];
       if (typeof raw !== "object" || raw === null || Array.isArray(raw))
         continue;
-      const fraction = (raw as Record<string, unknown>).fraction;
-      if (
-        typeof fraction === "number" &&
-        Number.isFinite(fraction) &&
-        fraction >= MIN_RETAINED_PANEL_FRACTION &&
-        fraction <= MAX_RETAINED_PANEL_FRACTION
-      )
-        retained.set(kind, { fraction });
+      const size: { width?: number; height?: number } = {};
+      for (const axis of ["width", "height"] as const) {
+        const share = (raw as Record<string, unknown>)[axis];
+        if (
+          typeof share === "number" &&
+          Number.isFinite(share) &&
+          share >= MIN_PANEL_SHARE &&
+          share <= MAX_PANEL_SHARE
+        )
+          size[axis] = share;
+      }
+      if (size.width !== undefined || size.height !== undefined)
+        sizes.set(kind, size);
     }
-  } catch {}
-  return retained;
+  } catch {
+    // Denied or malformed storage starts without shared sizes.
+  }
+  return sizes;
 }
 
-function serializeRetainedPanelSizes(
-  sizes: ReadonlyMap<PanelKind, RetainedPanelSize>,
+function serializePanelSizes(
+  sizes: ReadonlyMap<SidePanelKind, PanelSize>,
 ): string {
   return JSON.stringify({
     version: PANEL_SIZE_STORAGE_VERSION,

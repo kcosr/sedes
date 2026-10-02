@@ -1606,6 +1606,13 @@ function PanelLayoutReady({
     );
     // Flex factors of at least 1 each, so a pane held at its minimum leaves
     // the other pane all the remaining space.
+    // The divider position the layout holds, without a drag preview.
+    const committed = resolveSplit(
+      split,
+      split.sizes,
+      row ? width : height,
+      panelMinimum,
+    ).sizes[0];
     const flex = Math.min(sizes[0], sizes[1]);
     const tracks = `minmax(${minimums[0]}px, ${sizes[0] / flex}fr) ${SPLIT_HANDLE_SIZE}px minmax(${minimums[1]}px, ${sizes[1] / flex}fr)`;
     const fractionOf = (value: number) => (free > 0 ? value / free : sizes[0]);
@@ -1635,17 +1642,19 @@ function PanelLayoutReady({
           testId="workspace-panel-resize-handle"
           onPreview={(value) => {
             const fraction = fractionOf(value);
-            setPreviewSizes((current) =>
-              new Map(current).set(split.id, [fraction, 1 - fraction]),
+            // Other side panels keep their shared sizes as the divider moves.
+            setPreviewSizes(
+              Math.abs(value - committed) < 0.5
+                ? new Map()
+                : store.previewSplitResize(split.id, [fraction, 1 - fraction]),
             );
           }}
           onCommit={(value) => {
             const fraction = fractionOf(value);
-            setPreviewSizes((current) => {
-              const next = new Map(current);
-              next.delete(split.id);
-              return next;
-            });
+            setPreviewSizes(new Map());
+            // A divider released where it was, which can differ from its
+            // fraction while minimums hold, must not resize every thread.
+            if (Math.abs(value - committed) < 0.5) return;
             store.resizeSplit(split.id, [fraction, 1 - fraction]);
           }}
         />

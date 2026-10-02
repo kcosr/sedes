@@ -3054,6 +3054,47 @@ describe("PanelLayout panel minimums", () => {
     expect(store.isVisible("workspace-files")).toBe(true);
   });
 
+  it("does not resize when a divider is released where it was", () => {
+    measureStage(1_185);
+    const store = setup({ extraTenants: [tasksTenant] });
+    fireEvent.click(tasksToggle());
+    act(() => {
+      store.openPanel("workspace-files", { availableWidth: 1_185, focus: false });
+    });
+    const root = store.getSnapshot().tree as SplitNode;
+    act(() => {
+      store.resizeSplit(root.id, [0.2, 0.8]);
+    });
+    const resized = store.getSnapshot().tree;
+    const capture = {
+      hasPointerCapture: vi.fn(() => true),
+      setPointerCapture: vi.fn(),
+      releasePointerCapture: vi.fn(),
+    };
+    const prototype = HTMLElement.prototype as unknown as Record<string, unknown>;
+    const originals = Object.keys(capture).map(
+      (key) => [key, Object.getOwnPropertyDescriptor(prototype, key)] as const,
+    );
+    Object.assign(prototype, capture);
+    try {
+      // Chat and Tasks' minimums hold this divider at 665px, not at its 20%.
+      expect(handles()[0]).toHaveAttribute("aria-valuenow", "665");
+      fireEvent.pointerDown(handles()[0]!, {
+        button: 0,
+        isPrimary: true,
+        pointerId: 1,
+        clientX: 665,
+      });
+      fireEvent.pointerUp(handles()[0]!, { pointerId: 1, clientX: 665 });
+    } finally {
+      for (const [key, descriptor] of originals) {
+        if (descriptor) Object.defineProperty(prototype, key, descriptor);
+        else delete prototype[key];
+      }
+    }
+    expect(store.getSnapshot().tree).toBe(resized);
+  });
+
   it("collapses the least recently used side panel when an arriving panel cannot fit", () => {
     measureStage(764);
     const store = setup({ extraTenants: [tasksTenant] });

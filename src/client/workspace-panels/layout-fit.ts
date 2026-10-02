@@ -21,7 +21,7 @@ import { projectPanelLayout } from "./layout-presentation.js";
  * collapsed until it does, like a person would to make room. Chat and the
  * arriving panel stay; a collapsed panel is restored from the panel menu or
  * its shortcut, as usual. Resizing the window or switching threads never
- * changes the layout: the minimums then shrink together instead.
+ * collapses a panel: the minimums then shrink together instead.
  */
 
 /** The width (row) or height (column) of the divider between split panes. */

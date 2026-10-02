@@ -137,8 +137,9 @@ Workpads is a singleton `workpads` panel instance registered with the workspace
 panel tenant registry. The shared layout owns its split/tab placement, resizing,
 chrome, collapse state, and narrow-screen foreground selection. Its stable
 portal retains the editor across docking, collapse, viewport changes, and thread
-switches. Its open and collapsed state is shared across this client's thread
-layouts; the selected document and editor stay mounted during thread navigation.
+switches. Its open and collapsed state and its size are shared across this
+client's thread layouts; the selected document and editor stay mounted during
+thread navigation.
 Closing it or leaving the thread workbench unmounts it, with unsynced draft protection.
 The document scopes remain principal-owned Global, Project, and Thread scopes,
 independent of the client panel layout. Hidden panels suspend change
