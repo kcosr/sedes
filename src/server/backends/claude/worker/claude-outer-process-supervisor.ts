@@ -62,9 +62,15 @@ export class ClaudeOuterProcessSupervisor {
           throw new Error("claude_runtime_worker_process_group_unregistration_invalid");
         }
       } else if (groupExists(message.processGroupId)) {
-        // The gate vanished before registration. Without a recorded process
-        // identity, only ESRCH proves that this group can be forgotten.
-        throw new Error("claude_runtime_worker_process_group_unregistration_invalid");
+        // A stopped gate can die before its identity is recorded. It cannot
+        // exec or spawn descendants before registration is acknowledged, but
+        // its zombie may still keep this group addressable. Require positive
+        // exited-only evidence; an invisible addressable group remains unknown.
+        const members = [...readProcessTableSync().values()]
+          .filter((entry) => entry.processGroupId === message.processGroupId);
+        if (members.length === 0 || members.some((entry) => !entry.exited)) {
+          throw new Error("claude_runtime_worker_process_group_unregistration_invalid");
+        }
       }
       this.#processGroups.delete(message.processGroupId);
     }

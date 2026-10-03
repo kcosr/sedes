@@ -120,13 +120,45 @@ describe("Claude outer process supervisor cleanup proof", () => {
       .toThrow("claude_runtime_worker_process_group_unregistration_invalid");
   });
 
-  it("requires group absence when the gate vanished before its identity was recorded", () => {
+  it("accepts a zombie gate that died before its live identity was recorded", () => {
+    current = table(entry(100), entry(200, 1, 200, true));
     supervisor.accept(message("process_group_registered", 200));
-    current = table(entry(200, 1, 200, true));
-    expect(() => supervisor.accept(message("process_group_unregistered", 200)))
-      .toThrow("claude_runtime_worker_process_group_unregistration_invalid");
-    current = table();
     expect(() => supervisor.accept(message("process_group_unregistered", 200))).not.toThrow();
     expect(supervisor.registeredProcessGroupCount).toBe(1);
+  });
+
+  it("accepts group absence when the gate vanished before its identity was recorded", () => {
+    supervisor.accept(message("process_group_registered", 200));
+    expect(() => supervisor.accept(message("process_group_unregistered", 200))).not.toThrow();
+    expect(supervisor.registeredProcessGroupCount).toBe(1);
+  });
+
+  it("rejects live members when the gate died before its identity was recorded", () => {
+    current = table(entry(200, 1, 200, true));
+    supervisor.accept(message("process_group_registered", 200));
+    current = table(entry(200, 1, 200, true), entry(201, 1, 200));
+    expect(() => supervisor.accept(message("process_group_unregistered", 200)))
+      .toThrow("claude_runtime_worker_process_group_unregistration_invalid");
+    expect(supervisor.registeredProcessGroupCount).toBe(2);
+  });
+
+  it.each(["addressable", "permission denied"])("retains an unrecorded gate's invisible group that is %s", (kind) => {
+    supervisor.accept(message("process_group_registered", 200));
+    current = table();
+    vi.mocked(process.kill).mockImplementation(() => {
+      if (kind === "permission denied") throw Object.assign(new Error("denied"), { code: "EPERM" });
+      return true;
+    });
+    expect(() => supervisor.accept(message("process_group_unregistered", 200)))
+      .toThrow("claude_runtime_worker_process_group_unregistration_invalid");
+    expect(supervisor.registeredProcessGroupCount).toBe(2);
+  });
+
+  it("retains an unrecorded gate's group when process-table inspection fails", () => {
+    current = table(entry(200, 1, 200, true));
+    supervisor.accept(message("process_group_registered", 200));
+    vi.mocked(readProcessTableSync).mockImplementation(() => { throw new Error("process_table_unavailable"); });
+    expect(() => supervisor.accept(message("process_group_unregistered", 200))).toThrow("process_table_unavailable");
+    expect(supervisor.registeredProcessGroupCount).toBe(2);
   });
 });
