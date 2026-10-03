@@ -235,7 +235,8 @@ environments under [Project resources](#project-resources).
   `expectedRevision` and returns `{ taskId, deleted: true }`. It deletes only
   completed Tasks, atomically checking completion and revision under the
   caller's tenant/principal ownership and admitted resource authority. Open
-  Tasks are rejected as invalid input; stale revisions conflict. Its
+  Tasks are rejected as invalid input; stale revisions and retained thread-reset
+  references conflict. Its
   description says to invoke it only at the user's request. Successful
   deletion uses the existing Task removal publication and retry path.
   The tool is available through the shared catalog on each supported agent

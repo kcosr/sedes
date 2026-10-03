@@ -927,6 +927,21 @@ export class TaskRepository {
           "Only completed tasks can be deleted.",
         );
       }
+      const retainedByReset = this.database
+        .prepare(
+          `
+            SELECT 1 FROM thread_force_reset_promoted_tasks
+            WHERE tenant_id = ? AND principal_id = ? AND task_id = ?
+            LIMIT 1
+          `,
+        )
+        .get(scope.tenantId, scope.principalId, taskId);
+      if (retainedByReset) {
+        throw new DomainError(
+          "conflict",
+          "The task is still referenced by a thread reset.",
+        );
+      }
       const changed = this.database
         .prepare(
           `
