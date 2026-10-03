@@ -7,7 +7,7 @@ import { executeNotificationScript } from "../../src/server/runtime/notification
 
 const directories: string[] = [];
 const payload: NotificationPayload = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   notificationId: "notification-1",
   event: "turn.completed",
   occurredAt: "2026-09-05T14:32:10.000Z",

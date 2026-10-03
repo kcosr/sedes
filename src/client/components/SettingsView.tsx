@@ -50,6 +50,8 @@ import {
 import { MobileSettingsPage } from "./settings/pages/MobileSettingsPage.js";
 import { ServerSettingsPage } from "./settings/pages/ServerSettingsPage.js";
 import { TerminalSettingsPage } from "./settings/pages/TerminalSettingsPage.js";
+import { useNativeVoice } from "../voice/VoiceProvider.js";
+import { VoiceSettingsPage } from "../voice/VoiceSettingsPage.js";
 
 /** The controls a client holds; each page needs some of them. */
 export interface SettingsSources {
@@ -68,6 +70,7 @@ export function useSettingsPages(sources: SettingsSources): SettingsPageEntry[] 
   const pairedClients = Boolean(useAuthenticationControls());
   const prompts = Boolean(sources.cannedPrompts);
   const notifications = Boolean(sources.notifications);
+  const voice = Boolean(useNativeVoice());
   const execution = Boolean(sources.configuration);
   const projects = Boolean(sources.applicationStore);
   const agents = Boolean(sources.applicationStore);
@@ -76,9 +79,9 @@ export function useSettingsPages(sources: SettingsSources): SettingsPageEntry[] 
   const serverProfiles = Boolean(sources.serverSettings);
   return useMemo(
     () => availableSettingsPages({
-      prompts, notifications, execution, projects, agents, toolClients, pairedClients, electronConnection, serverProfiles,
+      prompts, notifications, voice, execution, projects, agents, toolClients, pairedClients, electronConnection, serverProfiles,
     }),
-    [prompts, notifications, execution, projects, agents, toolClients, pairedClients, electronConnection, serverProfiles],
+    [prompts, notifications, voice, execution, projects, agents, toolClients, pairedClients, electronConnection, serverProfiles],
   );
 }
 
@@ -109,6 +112,7 @@ export function SettingsView({
     configuration,
   } = sources;
   const pages = useSettingsPages(sources);
+  const voice = useNativeVoice();
   const navInSidebar = useSettingsNavInSidebar();
   const route = useRoute();
   // Escape goes up a level, to the same places as the "‹" links and the return control.
@@ -193,6 +197,8 @@ export function SettingsView({
             <CannedPromptsSettingsPage store={cannedPrompts} />
           ) : page === "notifications" && notifications ? (
             <NotificationSettingsPage store={notifications} />
+          ) : page === "voice" && voice && applicationStore ? (
+            <VoiceSettingsPage store={voice} applicationStore={applicationStore} />
           ) : page === "mobile" ? (
             <MobileSettingsPage />
           ) : page === "terminal" ? (

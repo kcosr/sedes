@@ -59,6 +59,7 @@ import {
   projectClassifiedAssistantResult,
 } from "./completion-result-projection.js";
 import type { BoundedText } from "../../shared/protocol/payload.js";
+import { boundText } from "./payload-policy.js";
 
 export const DEFAULT_PROJECTION_UPDATE_INTERVAL_MILLISECONDS = 50;
 export const DEFAULT_MAXIMUM_PENDING_PROJECTION_ITEMS = 512;
@@ -100,6 +101,13 @@ type AncillaryBackendEvent = Extract<
 >;
 
 export type ConversationActorEvent =
+  | {
+      readonly type: "live_progress";
+      readonly applicationTurnId: string;
+      readonly applicationItemId: string;
+      readonly backendCorrelations: readonly string[];
+      readonly text: BoundedText;
+    }
   | {
       readonly type: "nonblocking_questions";
       readonly sourceItemId: string;
@@ -1327,13 +1335,26 @@ export class ConversationActor {
             await this.#recoverProjection();
             return;
           }
+          const projectionGeneration = this.#projector.timeline().generation;
           const application = this.#projector.apply(event);
           await this.#applyProjection(application);
-          if (application.kind === "resnapshot_required") {
+          if (application.kind === "resnapshot_required" || this.#projector.timeline().generation !== projectionGeneration) {
             // The replacement snapshot is the sole authority after a rejected
-            // event. Snapshot replay publishes any submission/completion that
+            // event, including coalescer recovery. Snapshot replay publishes any submission/completion that
             // actually survived recovery.
             return;
+          }
+          if ((nativeEvent.type === "item_completed" || nativeEvent.type === "item_updated") && nativeEvent.liveProgress &&
+              nativeEvent.item.semanticKind === "assistant_message" && nativeEvent.item.status === "completed" &&
+              nativeEvent.item.responsePhase === "provisional" && nativeEvent.item.markdown.text.trim()) {
+            const timeline = this.#projector.timeline();
+            const item = this.#projector.itemForBackendId(nativeEvent.item.backendItemId);
+            const backendTurn = this.#projector.backendTurns().find(turn => turn.backendTurnId === nativeEvent.item.backendTurnId);
+            if (item && backendTurn?.status === "in_progress" && backendTurn.completionCorrelations?.length &&
+                timeline.activeTurnId === item.turnId && timeline.runState === "running") {
+              this.#publish({ type: "live_progress", applicationTurnId: item.turnId, applicationItemId: item.id,
+                backendCorrelations: backendTurn.completionCorrelations, text: boundText(nativeEvent.item.markdown.text, 8_192) });
+            }
           }
           if (
             event.event.type === "turn_started" ||

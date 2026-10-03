@@ -495,7 +495,8 @@ export class ApiClient {
   #appliedSessionSequence = 0;
   #sessionPromise?: Promise<NormalizedApplicationSession>;
 
-  constructor(endpoint: SedesServerEndpoint = sameOriginSedesServer, credentialOverride?: string | null) {
+  constructor(endpoint: SedesServerEndpoint = sameOriginSedesServer, credentialOverride?: string | null,
+    readonly clientOrigin?: { readonly clientId: string }) {
     this.#endpoint = endpoint;
     this.#credentialOverride = credentialOverride;
   }
@@ -1643,7 +1644,8 @@ export class ApiClient {
     threadId: string,
     rawOperation: ThreadApplicationOperation,
   ): Promise<ThreadApplicationMutationResult> {
-    const operation = threadApplicationOperationSchema.parse(rawOperation);
+    const operation = threadApplicationOperationSchema.parse(rawOperation.kind === "deliver" && this.clientOrigin
+      ? { ...rawOperation, origin: rawOperation.origin ?? this.clientOrigin } : rawOperation);
     return this.#mutation<ThreadApplicationMutationResult>(
       `/api/threads/${encodeURIComponent(threadId)}/operations`,
       operation.kind === "deliver"

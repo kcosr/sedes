@@ -1,3 +1,4 @@
+import { scriptDelivery } from "../support/notification-settings.js";
 import { QuestionRequestRepository } from "../../src/server/db/repositories/question-request-repository.js";
 import Database from "better-sqlite3";
 import { describe, expect, it, vi } from "vitest";
@@ -2827,7 +2828,7 @@ describe("nonblocking question notifications", () => {
         arguments: [],
         timeoutSeconds: 30,
         expectedRevision: 0,
-        events: ["question.requested"],
+        delivery: scriptDelivery(["question.requested"]),
       });
       const observer = new NotificationLifecycleObserver(
         new InventoryRepository(current.database),
@@ -2846,7 +2847,7 @@ describe("nonblocking question notifications", () => {
       await flush();
       expect(executor).toHaveBeenCalledTimes(1);
       expect(executor.mock.calls[0]![0].payload).toEqual({
-        schemaVersion: 3,
+        schemaVersion: 4,
         notificationId: expect.any(String),
         event: "question.requested",
         occurredAt: request.createdAt,
@@ -3020,7 +3021,7 @@ describe("passive lifecycle notification sources", () => {
         arguments: [],
         timeoutSeconds: 30,
         expectedRevision: 0,
-        events: ["approval.requested", "input.requested"],
+        delivery: scriptDelivery(["approval.requested", "input.requested"]),
       });
       const observer = new NotificationLifecycleObserver(
         new InventoryRepository(current.database),

@@ -1,8 +1,11 @@
 import { z } from "zod";
 import type { ClassifiedAssistantResult } from "./completion-result.js";
 import type { InteractionKind } from "./interactions.js";
+import { interactionKindSchema } from "./interactions.js";
+import { boundedTextSchema, requireSerializedByteLimit } from "./payload.js";
 
 export const notificationEventKindSchema = z.enum([
+  "turn.progress",
   "turn.completed",
   "turn.failed",
   "turn.interrupted",
@@ -14,6 +17,28 @@ export const notificationEventKindSchema = z.enum([
   "question.requested",
 ]);
 export type NotificationEventKind = z.infer<typeof notificationEventKindSchema>;
+
+export const voiceActionSchema = z.enum(["none", "speak", "speakThenListen"]);
+export type VoiceAction = z.infer<typeof voiceActionSchema>;
+export const eventDeliverySchema = z.strictObject({
+  script: z.boolean(),
+  voice: voiceActionSchema,
+});
+export const notificationDeliverySchema = z.record(notificationEventKindSchema, eventDeliverySchema)
+  .superRefine((delivery, context) => {
+    for (const event of ["turn.progress", "approval.requested", "input.requested", "question.requested"] as const) {
+      if (delivery[event].voice === "speakThenListen") context.addIssue({
+        code: "custom", path: [event, "voice"], message: "This event cannot start recognition.",
+      });
+    }
+  });
+export type NotificationDelivery = z.infer<typeof notificationDeliverySchema>;
+
+export function defaultNotificationDelivery(): NotificationDelivery {
+  return Object.fromEntries(notificationEventKindSchema.options.map((event) => [event, {
+    script: false, voice: event === "turn.completed" ? "speakThenListen" : "speak",
+  }])) as NotificationDelivery;
+}
 
 export const notificationAssistantResultPhaseSchema = z.enum([
   "provisional",
@@ -55,16 +80,10 @@ const configFields = {
       "Select each response phase only once.",
     ),
   ...scriptFields,
-  events: z
-    .array(notificationEventKindSchema)
-    .max(notificationEventKindSchema.options.length)
-    .refine(
-      (events) => new Set(events).size === events.length,
-      "Select each event only once.",
-    ),
+  delivery: notificationDeliverySchema,
 };
-const validScript = (input: { enabled: boolean; scriptPath: string }) =>
-  !input.enabled || input.scriptPath.startsWith("/");
+const validScript = (input: { enabled: boolean; scriptPath: string; delivery: NotificationDelivery }) =>
+  !input.enabled || !Object.values(input.delivery).some((entry) => entry.script) || input.scriptPath.startsWith("/");
 
 export const notificationSettingsSchema = z
   .strictObject({
@@ -73,7 +92,7 @@ export const notificationSettingsSchema = z
     revision: z.number().int().nonnegative(),
   })
   .refine(validScript, {
-    message: "Enabled notifications require an absolute script path.",
+    message: "Enabled script delivery requires an absolute script path.",
     path: ["scriptPath"],
   });
 export type NotificationSettings = z.infer<typeof notificationSettingsSchema>;
@@ -84,7 +103,7 @@ export const updateNotificationSettingsRequestSchema = z
     expectedRevision: z.number().int().nonnegative(),
   })
   .refine(validScript, {
-    message: "Enabled notifications require an absolute script path.",
+    message: "Enabled script delivery requires an absolute script path.",
     path: ["scriptPath"],
   });
 export type UpdateNotificationSettingsRequest = z.infer<
@@ -129,8 +148,9 @@ export type NotificationEventPayload = {
   readonly workspace?: { readonly id: string; readonly name: string };
   readonly turn?: {
     readonly id: string;
-    readonly outcome: "completed" | "failed" | "interrupted";
+    readonly outcome?: "completed" | "failed" | "interrupted";
   };
+  readonly progress?: { readonly itemId: string; readonly text: string; readonly truncation?: z.infer<typeof boundedTextSchema>["truncation"] };
   readonly interaction?: {
     readonly id: string;
     readonly kind: InteractionKind;
@@ -152,7 +172,50 @@ export type NotificationEventPayload = {
 export type NotificationPayload = Omit<NotificationEventPayload, "event"> & {
   /** Selected completion text phases: omitted means excluded; null means unavailable. */
   readonly assistantResult?: Partial<ClassifiedAssistantResult>;
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly notificationId: string;
   readonly event: NotificationEventKind | "notification.test";
 };
+
+const identity = z.string().min(1).max(512);
+const noticeText = z.string().max(65_536);
+export const notificationPayloadSchema = z.strictObject({
+  schemaVersion: z.literal(4),
+  notificationId: identity,
+  event: z.union([notificationEventKindSchema, z.literal("notification.test")]),
+  occurredAt: z.iso.datetime(), title: noticeText, message: noticeText,
+  thread: z.strictObject({ id: identity, title: noticeText }).optional(),
+  workspace: z.strictObject({ id: identity, name: noticeText }).optional(),
+  turn: z.strictObject({ id: identity, outcome: z.enum(["completed", "failed", "interrupted"]).optional() }).optional(),
+  progress: boundedTextSchema.extend({ itemId: identity }).optional(),
+  interaction: z.strictObject({ id: identity, kind: interactionKindSchema }).optional(),
+  question: z.strictObject({ id: identity, questionCount: z.number().int().nonnegative() }).optional(),
+  wake: z.strictObject({ reason: noticeText, reminderText: noticeText.optional() }).optional(),
+  automation: z.strictObject({ id: identity, name: noticeText, runId: identity,
+    trigger: z.enum(["scheduled", "manual"]), stage: noticeText.optional(), diagnostic: noticeText.optional() }).optional(),
+  assistantResult: z.strictObject({
+    provisional: boundedTextSchema.nullable().optional(),
+    unclassified: boundedTextSchema.nullable().optional(),
+    final: boundedTextSchema.nullable().optional(),
+  }).optional(),
+}).superRefine((value, context) => requireSerializedByteLimit(value, context, 65_536, "Notification exceeds 64 KiB."));
+
+export const voiceRecognitionTargetSchema = z.strictObject({
+  threadId: identity, activityToken: identity, sourceTurnId: identity.optional(),
+});
+export type VoiceRecognitionTarget = z.infer<typeof voiceRecognitionTargetSchema>;
+export const notificationPolicySchema = z.strictObject({
+  generation: z.number().int().nonnegative(), settings: notificationSettingsSchema,
+});
+export type NotificationPolicy = z.infer<typeof notificationPolicySchema>;
+export const voiceNotificationSchema = z.strictObject({
+  payload: notificationPayloadSchema,
+  sourceEventId: identity,
+  voice: voiceActionSchema,
+  generation: z.number().int().nonnegative(),
+  origin: z.strictObject({ clientId: identity }).optional(),
+  recognitionTarget: voiceRecognitionTargetSchema.optional(),
+  /** Only state-attention events with the same explicit subject may coalesce. */
+  subjectId: identity.optional(),
+});
+export type VoiceNotification = z.infer<typeof voiceNotificationSchema>;

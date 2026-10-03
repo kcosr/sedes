@@ -209,7 +209,7 @@ const presentationProvider: ThreadBackendPresentationProvider = {
  * driver, actors, the runtime coordinator, thread publication, the durable
  * queue, and thread mutations. Nothing is attached until a test acts.
  */
-export async function createInMemoryThreadRuntimeHarness() {
+export async function createInMemoryThreadRuntimeHarness(options: { readonly retentionMilliseconds?: number } = {}) {
   const database = openOverlayDatabase(":memory:");
   const scope = new SingleUserIdentityProvider(database).getScope();
   const legacyInventory = new ThreadInventoryService(
@@ -342,7 +342,7 @@ export async function createInMemoryThreadRuntimeHarness() {
   const actors = new ConversationActorManager({
     environments,
     attachmentDelivery: {} as never,
-    retentionMilliseconds: 0,
+    retentionMilliseconds: options.retentionMilliseconds ?? 0,
     runtimeBudget: 8,
     onAuthoritativeSubmission: (eventScope, applicationThreadId, input) =>
       observeSubmission?.(eventScope, applicationThreadId, input),
@@ -427,7 +427,7 @@ export async function createInMemoryThreadRuntimeHarness() {
     bridge: new ConversationEventBridge(new ThreadEventPresentation(threads), (eventScope, threadId, turns) => usage.registerVisibleTurns(eventScope, threadId, turns)),
     interactions,
     hubs: threadHubs,
-    retentionMilliseconds: 0,
+    retentionMilliseconds: options.retentionMilliseconds ?? 0,
     onThreadChanged: publishApplicationThread,
     onAuthoritativeSettled: (eventScope, applicationThreadId) =>
       queueDispatcher.onAuthoritativeSettled(eventScope, applicationThreadId),

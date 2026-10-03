@@ -9,6 +9,40 @@ the containing history page must also fit its limit.
 This guide covers the full conversation workflow, from an empty draft through
 running, queued, completed, and forked work.
 
+## Speak to a thread on Android
+
+After configuring [Android voice](../operator/clients/voice.md), use the
+microphone control to send spoken text. It targets the visible thread, then
+your pinned Voice thread, or asks you to choose one. Voice sends a separate
+message and preserves the unsent composer draft. It can also make the first
+send to an empty thread.
+
+The recording chip shows the target. Select the chip to change that target
+before recognition finishes; navigating to another thread alone does not
+redirect a recording. Once recognition finishes, its target and delivery
+policy stay fixed through any connection recovery.
+
+Spoken input queues while a thread is running. Enable **Follow composer's
+selected mode** to use the client's Queue/Steer preference instead. When
+supported, Steer addresses the current turn or conversation; if that target
+is no longer available at admission, the message queues. An unavailable
+thread produces an error rather than redirecting the message elsewhere.
+
+Response mode speaks selected notifications and may listen afterward. Manual
+mode keeps completion speech silent but can still listen afterward; other
+selected notices remain spoken. Automatic listening requires both the
+event's **Speak then listen** setting and **Auto-listen**, plus a current,
+idle target with no blocking input or unresolved admission. It never types
+an answer into an approval or question form.
+
+**Skip** ends the current speech and retains an eligible follow-up recording.
+**Stop** cancels the current voice interaction without stopping the agent;
+other queued notices may continue. **Off** clears the voice queue. The
+notification silence bell suppresses automatic voice and script delivery,
+while explicit recording remains available. A send that may have reached
+the server remains in input recovery; **Resume input** explicitly authorizes
+another attempt with the same message identity.
+
 ## Turn speed
 
 Completed Pi turns can show a small **tok/s** value at the left of the turn

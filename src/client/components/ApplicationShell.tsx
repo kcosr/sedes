@@ -64,6 +64,7 @@ import {
 } from "./ElectronConnectionSettings.js";
 import type { ToolClientSettingsResources } from "./tool-clients/ToolClientsSettingsPage.js";
 import { describeProjectLocations } from "../app/project-locations.js";
+import { VoiceControls } from "../voice/VoiceControls.js";
 
 export function ApplicationShell({
   state,
@@ -447,6 +448,7 @@ export function ApplicationShell({
           </DialogPrimitive.Portal>
         </DialogPrimitive.Root>
         <div className="application-main">
+          <div className="application-view">
           <div
             ref={workspaceElement}
             className="application-workspace"
@@ -467,6 +469,8 @@ export function ApplicationShell({
               toolClients={toolClients}
             />
           ) : null}
+          </div>
+          <VoiceControls threads={state.snapshot?.threads ?? []} />
         </div>
         <DiscardChangesDialog
           open={Boolean(workspaceNavConfirm)}

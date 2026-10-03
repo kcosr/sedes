@@ -4435,6 +4435,7 @@ async function main(): Promise<void> {
   let observeAuthoritativeCompletion:
     AuthoritativeCompletionObserver | undefined;
   const actors = new ConversationActorManager({
+    onLiveProgress: (eventScope, threadId, input) => notificationLifecycle.progress(eventScope, threadId, input),
     environments: execution,
     attachmentDelivery,
     deliveryInputSnapshots,

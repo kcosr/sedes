@@ -27,6 +27,7 @@ import type { ComposerAttachmentDeliveryService } from "../../src/server/compose
 import type {
   AuthoritativeCompletionObserver,
   AuthoritativeSubmissionObserver,
+  LiveProgressObserver,
 } from "../../src/server/conversations/conversation-actor-manager.js";
 import type { ConversationActor, ConversationActorEvent } from "../../src/server/conversations/conversation-actor.js";
 import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
@@ -298,6 +299,7 @@ function fixture(
   retentionMilliseconds = 10,
   deliveryInputSnapshots?: DeliveryInputSnapshotRepository,
   runtimeBudget = 8,
+  onLiveProgress?: LiveProgressObserver,
 ) {
   const closeOrder: string[] = [];
   const handle = new FakeHandle(closeOrder);
@@ -361,6 +363,7 @@ function fixture(
     ...(deliveryInputSnapshots ? { deliveryInputSnapshots } : {}),
     ...(onAuthoritativeCompletion ? { onAuthoritativeCompletion } : {}),
     ...(onAuthoritativeSubmission ? { onAuthoritativeSubmission } : {}),
+    ...(onLiveProgress ? { onLiveProgress } : {}),
   });
   const manager = {
     acquire: (
@@ -5220,6 +5223,55 @@ describe("ConversationActorManager", () => {
     );
     acquired.release();
     await manager.close();
+  });
+
+  it("publishes qualified live progress after projection, including late phase evidence, but not snapshots or terminal backfill", async () => {
+    const observed = vi.fn<LiveProgressObserver>();
+    const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8, observed);
+    const base = snapshot("running", "Inspecting the files");
+    const initial = { ...base, turnsById: { "turn-1": { ...base.turnsById["turn-1"]!, completionCorrelations: ["accepted-input"] } } };
+    handle.establishmentSnapshots[0] = initial;
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      expect(observed).not.toHaveBeenCalled();
+      const item = { ...initial.itemsById["item-1"]!, semanticKind: "assistant_message" as const,
+        status: "completed" as const, markdown: { text: "Inspecting the files" } };
+      handle.emit(0, { type: "item_completed", item }, 0);
+      await acquired.actor.captureSnapshotState();
+      expect(observed).not.toHaveBeenCalled();
+      handle.emit(0, { type: "item_updated", item: { ...item, responsePhase: "provisional" }, liveProgress: true }, 1);
+      await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+      const progress = observed.mock.calls[0]![2];
+      expect(progress).toMatchObject({ applicationTurnId: projectedTurnId, backendCorrelations: ["accepted-input"], text: { text: "Inspecting the files" } });
+      expect(progress.applicationItemId).not.toBe("item-1");
+      expect(acquired.actor.timeline.itemsById[progress.applicationItemId]).toMatchObject({ status: "completed" });
+      handle.emit(0, { type: "turn_completed", turn: { ...initial.turnsById["turn-1"]!, status: "completed", endedBy: "agent_settled" } }, 2);
+      await acquired.actor.captureSnapshotState();
+      expect(acquired.actor.timeline.turnsById[progress.applicationTurnId]?.status).toBe("completed");
+      handle.emit(0, { type: "item_updated", item: { ...item, responsePhase: "provisional" }, liveProgress: true }, 3);
+      await acquired.actor.captureSnapshotState();
+      expect(observed).toHaveBeenCalledTimes(1);
+    } finally { acquired.release(); await manager.close(); }
+  });
+
+  it("rejects progress from a sequence-gap replacement or a provider-only turn", async () => {
+    const observed = vi.fn<LiveProgressObserver>();
+    const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8, observed);
+    const initial = snapshot("running", "Progress");
+    handle.establishmentSnapshots[0] = initial;
+    handle.establishmentSnapshots.push(initial);
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      const item = { ...initial.itemsById["item-1"]!, semanticKind: "assistant_message" as const,
+        status: "completed" as const, markdown: { text: "Progress" }, responsePhase: "provisional" as const };
+      handle.emit(0, { type: "item_completed", item, liveProgress: true }, 0);
+      await acquired.actor.captureSnapshotState();
+      expect(observed).not.toHaveBeenCalled();
+      handle.emit(0, { type: "item_updated", item, liveProgress: true }, 4);
+      await acquired.actor.captureSnapshotState();
+      expect(handle.establishCount).toBe(2);
+      expect(observed).not.toHaveBeenCalled();
+    } finally { acquired.release(); await manager.close(); }
   });
 
   it("publishes a backend capability refresh after a run-state transition", async () => {

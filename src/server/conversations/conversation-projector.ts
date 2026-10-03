@@ -471,6 +471,11 @@ export class ConversationProjector {
     return undefined;
   }
 
+  itemForBackendId(backendItemId: string): ConversationItem | undefined {
+    const itemId = this.#itemIds.get(backendItemId);
+    return itemId === undefined ? undefined : this.#items.get(itemId);
+  }
+
   matchesApplicationTurnId(
     backendTurnId: string,
     applicationTurnId: string,

@@ -56,6 +56,7 @@ meaning of "Local" in each layer, read the
 Start with the platform guide:
 
 - [Build, connect, and verify Android](android.md)
+- [Configure and verify Android voice](voice.md)
 - [Build, connect, and verify Electron](electron.md)
 
 For server startup, state, backups, Tailscale Serve, and the complete deployment

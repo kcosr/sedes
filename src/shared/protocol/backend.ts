@@ -864,10 +864,13 @@ export const backendConversationEventSchema = z
     z.strictObject({
       type: z.literal("item_updated"),
       item: backendItemSchema,
+      /** Native live progress evidence, never reconstructed from history or terminal classification. */
+      liveProgress: z.literal(true).optional(),
     }),
     z.strictObject({
       type: z.literal("item_completed"),
       item: backendItemSchema,
+      liveProgress: z.literal(true).optional(),
     }),
     z.strictObject({
       type: z.literal("interaction_opened"),
@@ -903,6 +906,11 @@ export const backendConversationEventSchema = z
     }),
   ])
   .superRefine((event, context) => {
+    if ((event.type === "item_updated" || event.type === "item_completed") && event.liveProgress &&
+        (event.item.semanticKind !== "assistant_message" || event.item.status !== "completed" ||
+         event.item.responsePhase !== "provisional" || event.item.markdown.text.trim().length === 0)) {
+      context.addIssue({ code: "custom", message: "Live progress requires a completed provisional assistant message.", path: ["liveProgress"] });
+    }
     if (event.type === "item_started" && event.item.status !== "streaming") {
       context.addIssue({
         code: "custom",

@@ -4456,6 +4456,7 @@ class PiConversationHandle implements ConversationHandle {
       this.#emit({
         type: "item_completed",
         item: this.#assistantItem(state, "completed", responsePhase),
+        ...(evidence === "provisional" && state.kind === "assistant_message" && state.text.trim() ? { liveProgress: true as const } : {}),
       });
       if (
         state.kind === "assistant_message" &&
@@ -4484,6 +4485,7 @@ class PiConversationHandle implements ConversationHandle {
       this.#emit({
         type: "item_completed",
         item: this.#assistantItem(state, "completed", responsePhase),
+        ...(evidence === "provisional" && state.text.trim() ? { liveProgress: true as const } : {}),
       });
       if (evidence === "terminal_candidate") {
         this.#terminalAssistantItemIds.add(state.itemId);

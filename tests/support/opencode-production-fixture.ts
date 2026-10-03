@@ -81,6 +81,7 @@ export class OpenCodeProductionFixture {
   static async create(topology: OpenCodeProductionTopology, ownership: OpenCodeProductionOwnership, options: {
     readonly beforeBackend?: (fixture: OpenCodeProductionFixture) => Promise<void>;
     readonly waitReady?: boolean;
+    readonly packagedClients?: readonly ("android" | "electron")[];
   } = {}) {
     const directory = await mkdtemp(path.join(os.tmpdir(), "oc-prod-"));
     const model = await startOpencodeModelFixture();
@@ -93,7 +94,7 @@ export class OpenCodeProductionFixture {
       await writeFile(path.join(account.rootDirectory, "http-password"), account.password, { mode: 0o600 });
       await execFile("git", ["init", "--quiet", account.workspace]);
       await writeFile(path.join(account.workspace, "fixture.txt"), "isolated OpenCode carrier qualification\n");
-      await writeFile(path.join(directory, "server.json"), JSON.stringify({ schemaVersion: 11, packagedClients: [] }));
+      await writeFile(path.join(directory, "server.json"), JSON.stringify({ schemaVersion: 11, packagedClients: options.packagedClients ?? [] }));
       const artifact = await buildProductionSidecarArtifact(path.join(directory, "artifact"));
       const connectorPath = path.join(directory, "connector.mjs");
       if (topology === "outbound") await buildProductionOutboundConnector(connectorPath);
@@ -202,7 +203,7 @@ export class OpenCodeProductionFixture {
     if (!target?.available) return false;
     this.targetId = target.id; return true;
   }); }
-  async createThread() {
+  async createThread(title = "Stock OpenCode qualification") {
     const workspace = await this.json("/api/workspaces/open", "POST", { path: this.workspace, environmentId: this.environmentId, project: { kind: "new", name: "workspace" } }) as { id: string };
     // Stock provider plugins settle asynchronously after native startup. Use
     // the same fresh editor catalog read as the UI, not a synthetic session.
@@ -214,7 +215,7 @@ export class OpenCodeProductionFixture {
       const options = savedAgentOptionsResultSchema.parse(value);
       return options.kind === "configuration" && options.configuration.fields.some(field => field.id === "model" && field.options.some(option => option.available && String(option.value) === qualifiedOpenCodeModelId({ providerID: "probe", id: "probe-model" })));
     });
-    const created = await this.json("/api/threads", "POST", { workspaceId: workspace.id, title: "Stock OpenCode qualification", executionWorkspace: { kind: "direct" }, configuration: { kind: "custom", targetId: this.targetId, sedesTools: { enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "native", mode: "progressive" }, accessBoundary: "thread" } } }) as { threadId: string };
+    const created = await this.json("/api/threads", "POST", { workspaceId: workspace.id, title, executionWorkspace: { kind: "direct" }, configuration: { kind: "custom", targetId: this.targetId, sedesTools: { enabled: true, enabledToolIds: ["thread.status"], presentation: { surface: "native", mode: "progressive" }, accessBoundary: "thread" } } }) as { threadId: string };
     await this.openStream(created.threadId);
     return created.threadId;
   }

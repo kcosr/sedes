@@ -1691,7 +1691,12 @@ export class ClaudeConversationHandle implements ConversationHandle {
           this.#setRunState("running", true);
         }
         this.#usage = mergeUsage(this.#projection.usage ?? {}, this.#usage);
-        this.#emitProjectionDelta(previous.snapshot, this.#projection.snapshot);
+        const liveToolUse = message.type === "assistant" && this.#messages.some(row => {
+          if (row.type !== "assistant" || !isRecord(row.message) || row.message.id !== message.message.id) return false;
+          return row.message.stop_reason === "tool_use" || Array.isArray(row.message.content) &&
+            row.message.content.some(block => isRecord(block) && block.type === "tool_use");
+        });
+        this.#emitProjectionDelta(previous.snapshot, this.#projection.snapshot, undefined, liveToolUse);
       } else {
         // The summary precedes the output the compaction preserved, as it
         // does in history; items already published move.
@@ -2557,6 +2562,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
     previous: BackendConversationSnapshot,
     next: BackendConversationSnapshot,
     terminalTurnId?: string,
+    liveToolUse = false,
   ): void {
     // History infers completion between assistant/tool blocks. A live turn
     // remains active until its native result; publishing those intermediate
@@ -2585,11 +2591,16 @@ export class ClaudeConversationHandle implements ConversationHandle {
       for (const itemId of turn.orderedBackendItemIds) {
         const priorItem = previous.itemsById[itemId];
         const item = next.itemsById[itemId]!;
+        const progress = liveToolUse && turnId === liveTurnId && turn.status === "in_progress" &&
+          item.semanticKind === "assistant_message" && item.status === "completed" &&
+          item.responsePhase === "provisional" && item.markdown.text.trim()
+          ? { liveProgress: true as const } : {};
         if (!priorItem) {
           this.#emit({
             type:
               item.status === "streaming" ? "item_started" : "item_completed",
             item,
+            ...progress,
           });
         } else if (!same(priorItem, item)) {
           this.#emit({
@@ -2598,6 +2609,7 @@ export class ClaudeConversationHandle implements ConversationHandle {
                 ? "item_completed"
                 : "item_updated",
             item,
+            ...progress,
           });
         }
       }

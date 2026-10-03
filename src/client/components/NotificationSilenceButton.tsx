@@ -14,8 +14,8 @@ export function NotificationSilenceButton({
   const settings = state.settings;
   const active = Boolean(settings?.enabled && !settings.silenced);
   const label = settings?.silenced
-    ? "Resume external notifications"
-    : "Silence external notifications";
+    ? "Resume notifications"
+    : "Silence notifications";
   return (
     <span className="notification-silence-control">
       <Button

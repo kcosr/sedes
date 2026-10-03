@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
   notificationSettingsSchema,
+  defaultNotificationDelivery,
   type NotificationSettings,
   type UpdateNotificationSettingsRequest,
 } from "../../../shared/protocol/notification.js";
@@ -11,17 +12,11 @@ import type { RequestScope } from "../../identity/identity-provider.js";
 export const DEFAULT_NOTIFICATION_SETTINGS: Readonly<NotificationSettings> =
   Object.freeze({
     enabled: false,
-    assistantResultPhases: [],
+    assistantResultPhases: ["final", "unclassified"],
     scriptPath: "",
     arguments: [],
     timeoutSeconds: 30,
-    events: [
-      "turn.completed",
-      "turn.failed",
-      "thread.woke",
-      "automation.started",
-      "automation.failed",
-    ],
+    delivery: defaultNotificationDelivery(),
     silenced: false,
     revision: 0,
   } satisfies NotificationSettings);
@@ -40,7 +35,10 @@ export type NotificationDispatchSettings = {
 };
 
 export class NotificationRepository {
-  constructor(readonly database: Database.Database) {}
+  constructor(readonly database: Database.Database) {
+    // A previous process's policy must never authorize a new native interaction.
+    database.prepare("UPDATE principal_notification_settings SET dispatch_generation = dispatch_generation + 1").run();
+  }
 
   assertScope(scope: RequestScope): void {
     if (

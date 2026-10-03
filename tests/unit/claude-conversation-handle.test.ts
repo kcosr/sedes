@@ -1118,6 +1118,54 @@ describe("ClaudeConversationHandle", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("qualifies late tool-use group reclassification as live progress without terminal or history backfill", async () => {
+    const provider = fixture();
+    const { handle } = createHandle(provider);
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    try {
+      provider.messages.push({ type: "user", message: { role: "user", content: "Inspect the files" },
+        parent_tool_use_id: null, uuid: OPERATION_ID, session_id: SESSION_ID, origin: { kind: "human" },
+      } as SDKMessage);
+      const text = (id: string, value: string) => ({
+        type: "assistant", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
+        message: { id, type: "message", role: "assistant", model: "claude-sonnet-5", content: [{ type: "text", text: value }],
+          stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } },
+      }) as SDKMessage;
+      const early = text("earlier-unclassified", "First thought");
+      provider.messages.push(early);
+      const inspection = text("tool-group", "Inspecting now");
+      provider.messages.push(inspection);
+      await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "item_completed",
+        item: expect.objectContaining({ markdown: { text: "Inspecting now" } }) })));
+      const initialItem = events.find(event => event.type === "item_completed" && event.item.semanticKind === "assistant_message" && event.item.markdown.text === "Inspecting now");
+      const progress = () => events.filter(event => "liveProgress" in event && event.liveProgress);
+      expect(progress()).toEqual([]);
+      const tool = { type: "assistant", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
+        message: { id: "tool-group", type: "message", role: "assistant", model: "claude-sonnet-5",
+          content: [{ type: "tool_use", id: "read-file", name: "Read", input: { file_path: "/workspace/README.md" } }],
+          stop_reason: "tool_use", stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } },
+      } as SDKMessage;
+      provider.messages.push(tool);
+      await vi.waitFor(() => expect(progress()).toHaveLength(1));
+      expect(progress()[0]).toMatchObject({ type: "item_updated", item: { backendItemId: initialItem && "item" in initialItem ? initialItem.item.backendItemId : "missing",
+        responsePhase: "provisional", markdown: { text: "Inspecting now" } } });
+      provider.messages.push(tool);
+      provider.messages.push({ type: "user", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: "read-file", content: "Read complete", is_error: false }] },
+        origin: { kind: "human" },
+      } as SDKMessage);
+      provider.messages.push(nativeFrames.text("final-group", "Finished"));
+      provider.messages.push(nativeFrames.result([OPERATION_ID]));
+      await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "turn_completed" })));
+      expect(progress()).toHaveLength(1);
+      const history = await handle.history({ limit: 10 });
+      expect(JSON.stringify(history)).not.toContain("liveProgress");
+      expect(Object.values(history.itemsById)).toContainEqual(expect.objectContaining({ markdown: { text: "First thought" }, responsePhase: "provisional" }));
+    } finally { await handle.close(); }
+  });
+
   it("fails closed when accumulated live text exceeds the complete message limit", async () => {
     const provider = fixture();
     const onError = vi.fn();

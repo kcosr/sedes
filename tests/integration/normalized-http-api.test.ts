@@ -1,3 +1,4 @@
+import { scriptDelivery } from "../support/notification-settings.js";
 import { UsageService } from "../../src/server/usage/usage-service.js";
 import { ScopedThreadEventHubRegistry } from "../../src/server/events/thread-runtime-coordinator.js";
 import { NotificationRepository } from "../../src/server/db/repositories/notification-repository.js";
@@ -3109,7 +3110,7 @@ describe("normalized HTTP application contract", () => {
         scriptPath: "/usr/local/bin/sedes-notify",
         arguments: ["--mobile"],
         timeoutSeconds: 15,
-        events: ["turn.completed", "automation.started"],
+        delivery: scriptDelivery(["turn.completed", "automation.started"]),
         expectedRevision: 0,
       };
       await current
@@ -3139,7 +3140,7 @@ describe("normalized HTTP application contract", () => {
         .expect(400);
       await current
         .mutate(request(current.app).put(route))
-        .send({ ...config, expectedRevision: 1, events: ["read.receipt"] })
+        .send({ ...config, expectedRevision: 1, delivery: { ...scriptDelivery([]), "read.receipt": { script: true, voice: "none" } } })
         .expect(400);
       await current
         .withHost(request(current.app).put(`${route}/silence`))
@@ -4699,7 +4700,7 @@ describe("normalized HTTP application contract", () => {
       .set(SEDES_AGENT_TOOL_SOURCE_CAPABILITY_HEADER, sourceCapability)
       .send({
         toolId: "agent.context",
-        schemaVersion: 3,
+        schemaVersion: 4,
         requestId: "request-1",
         input: {},
       })

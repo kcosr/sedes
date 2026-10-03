@@ -32,6 +32,8 @@ import type { DeliveryInputOrigin } from "../../../shared/protocol/conversation.
 import type { BoundedDisplayText } from "../../../shared/protocol/payload.js";
 import { ThreadCompletionCallbackRepository } from "./thread-completion-callback-repository.js";
 import { boundDisplayText } from "../../conversations/payload-policy.js";
+import type { ClientOrigin } from "../../../shared/protocol/thread-input.js";
+import { DirectInputRepository } from "./direct-input-repository.js";
 
 export type QueuedInputState =
   | "pending"
@@ -325,6 +327,7 @@ export class QueuedInputRepository {
       readonly id?: string;
       readonly mutationId: string;
       readonly text: string;
+      readonly origin?: ClientOrigin;
       readonly selectedSkillId?: string;
       readonly contextExcerpts: readonly ContextExcerpt[];
       readonly attachmentIds: readonly string[];
@@ -351,6 +354,12 @@ export class QueuedInputRepository {
                 readonly resolvedDeliveryMode: "submit" | "queue";
               }
           ))
+        | {
+            readonly kind: "direct_input";
+            readonly resolvedDeliveryMode: "submit" | "queue" | "steer";
+            readonly resolvedSteerTarget?: SteerTarget;
+            readonly expectedThreadRevision: number;
+          }
         | {
             /** Ordinary user input admitted independently of the composer. */
             readonly kind: "question_response";
@@ -512,6 +521,7 @@ export class QueuedInputRepository {
             "The queue mutation ID was reused with different input.",
           );
         }
+        new DirectInputRepository(this.database).recordOrigin(scope, applicationThreadId, input.mutationId, input.origin);
         return { item: replay, replayed: true };
       }
       const threadRevision = this.#boundThreadRevision(
@@ -616,6 +626,7 @@ export class QueuedInputRepository {
       this.#assertActiveCapacity(scope, applicationThreadId);
       if (
         (input.source.kind === "composer" ||
+          input.source.kind === "direct_input" ||
           input.source.kind === "question_response" ||
           input.source.kind === "completion_callback") &&
         input.source.resolvedDeliveryMode === "steer"
@@ -730,11 +741,13 @@ export class QueuedInputRepository {
             ? JSON.stringify(steerTargetSchema.parse(input.source.requestedSteerTarget))
             : null,
           input.source.kind === "composer" ||
+            input.source.kind === "direct_input" ||
             input.source.kind === "question_response" ||
             input.source.kind === "completion_callback"
             ? input.source.resolvedDeliveryMode
             : "queue",
           (input.source.kind === "composer" ||
+            input.source.kind === "direct_input" ||
             input.source.kind === "question_response" ||
             input.source.kind === "completion_callback") &&
             input.source.resolvedDeliveryMode === "steer"
@@ -748,6 +761,7 @@ export class QueuedInputRepository {
             : null,
           input.now,
         );
+      new DirectInputRepository(this.database).recordOrigin(scope, applicationThreadId, input.mutationId, input.origin);
       if (input.source.kind === "completion_callback") {
         this.#callbacks.markMaterialized(scope, input.source.callbackId, {
           queuedInputId: id,

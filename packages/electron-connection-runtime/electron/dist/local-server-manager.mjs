@@ -692,8 +692,10 @@ export function checkLocalHealth(input) {
               !decoded ||
               typeof decoded !== "object" ||
               Array.isArray(decoded) ||
-              Object.keys(decoded).length !== 1 ||
-              decoded.status !== "ok"
+              Object.keys(decoded).length !== 2 ||
+              decoded.status !== "ok" ||
+              typeof decoded.version !== "string" ||
+              decoded.version.length === 0
             ) throw new Error("invalid_health");
             resolve();
           } catch (error) {

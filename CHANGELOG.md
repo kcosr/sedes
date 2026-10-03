@@ -4,6 +4,12 @@
 
 ### Breaking Changes
 
+- Client protocol 137 adds direct text admission, live voice notifications, and
+  per-event Script/Voice delivery. Upgrade packaged clients with the server.
+  Notification script payloads use schema version 4; reinstall separately copied
+  hooks. The database upgrade preserves existing script selections and response
+  phases while replacing the old event-list settings contract.
+
 - Codex Speed is provider feature `codex.fast_mode@2`, which replaces the
   Fast mode enable/disable actions with `set_standard`, `set_fast`, and
   `set_ultrafast`. Clients that only know `codex.fast_mode@1` hide the control
@@ -187,6 +193,11 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Android native voice supports spoken notifications, automatic or explicit
+  recording, thread targeting, foreground-service controls, and durable input
+  recovery without changing composer drafts. Live progress is available for
+  Codex, Pi, and Claude; other backends retain completion announcements.
 
 - Codex threads can use **Ultrafast** speed when the account's Codex model
   catalog offers it. When a model offers both Fast and Ultrafast, the
@@ -691,6 +702,8 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Electron managed Local accepts the server's versioned health response.
 
 - Changing a thread setting right after Codex confirmed a Fast mode change
   no longer fails with "The Codex thread or settings changed in another

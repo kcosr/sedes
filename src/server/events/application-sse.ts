@@ -13,6 +13,8 @@ export interface ApplicationEventStreamOptions {
   /** Explicit client recovery bypasses the current checkpoint. */
   readonly initialHandshake?: "authoritative_replacement";
   readonly onReplay?: () => void;
+  /** Live-only named frames. Never enter the inventory projection or replay cursor. */
+  readonly subscribeTransient?: (listener: (frame: string) => void) => () => void;
   readonly pendingEventLimit?: number;
   readonly pendingByteLimit?: number;
   readonly drainTimeoutMilliseconds?: number;
@@ -73,6 +75,9 @@ export async function serveApplicationEventStream(
 
   let pending: ApplicationEventEnvelope[] = [];
   let pendingBytes = 0;
+  let transient: string[] = [];
+  let transientBytes = 0;
+  let removeTransient: (() => void) | undefined;
   let live = false;
   let closed = false;
   let drain:
@@ -89,8 +94,11 @@ export async function serveApplicationEventStream(
     drain?.finish(false);
     subscription?.close();
     removeHubClose?.();
+    removeTransient?.();
     pending = [];
     pendingBytes = 0;
+    transient = [];
+    transientBytes = 0;
     request.removeListener("close", cleanup);
     response.removeListener("close", cleanup);
   };
@@ -110,8 +118,8 @@ export async function serveApplicationEventStream(
       return true;
     }
     if (
-      pending.length + 1 > pendingEventLimit ||
-      pendingBytes + bytes > pendingByteLimit
+      pending.length + transient.length + 1 > pendingEventLimit ||
+      pendingBytes + transientBytes + bytes > pendingByteLimit
     )
       return false;
     pending.push(envelope);
@@ -145,7 +153,13 @@ export async function serveApplicationEventStream(
   };
   function flush(): void {
     try {
-      while (!closed && !drain && pending.length) {
+      while (!closed && !drain && (pending.length || transient.length)) {
+        if (transient.length) {
+          const frame = transient.shift()!;
+          transientBytes -= Buffer.byteLength(frame, "utf8");
+          write(frame);
+          continue;
+        }
         const envelope = pending.shift()!;
         const encoded = hub.encoded(envelope);
         pendingBytes -= encoded.bytes;
@@ -194,6 +208,18 @@ export async function serveApplicationEventStream(
   heartbeat.unref();
   request.once("close", cleanup);
   response.once("close", cleanup);
+  removeTransient = options.subscribeTransient?.((frame) => {
+    try {
+      if (closed) return;
+      if (live && !drain) { write(frame); return; }
+      const bytes = Buffer.byteLength(frame, "utf8");
+      if (pending.length + transient.length + 1 > pendingEventLimit ||
+        pendingBytes + transientBytes + bytes > pendingByteLimit) { close(); return; }
+      transient.push(frame);
+      transientBytes += bytes;
+    } catch { close(); }
+  });
+  if (closed) { removeTransient?.(); return; }
 
   try {
     let throughSequence = subscription.watermark;
@@ -210,8 +236,14 @@ export async function serveApplicationEventStream(
       if (!(await writeInitial(baseline))) return;
       throughSequence = sequence;
     }
-    while (pending.length || drain) {
+    while (pending.length || transient.length || drain) {
       if (drain && !(await drain.promise)) return;
+      if (transient.length) {
+        const frame = transient.shift()!;
+        transientBytes -= Buffer.byteLength(frame, "utf8");
+        write(frame);
+        continue;
+      }
       if (!pending.length) continue;
       const event = pending.shift()!;
       pendingBytes -= hub.encoded(event).bytes;

@@ -11273,6 +11273,9 @@ describe("CodexConversationHandle", () => {
           event.type === "item_completed") &&
         event.item.semanticKind === "assistant_message",
     );
+    expect(assistantLifecycle.filter(event => "liveProgress" in event && event.liveProgress)).toEqual([
+      expect.objectContaining({ type: "item_completed", item: expect.objectContaining({ responsePhase: "provisional" }) }),
+    ]);
     expect(assistantLifecycle).toEqual([
       expect.objectContaining({
         type: "item_started",

@@ -6,7 +6,7 @@ import { AuthenticationGate, NavigationScopeContext, readPairingToken } from "./
 import { authenticatedFetch, getEndpointCredential, notifyUnauthorized, setEndpointCredential } from "./auth-transport.js";
 import { configuredSedesServer, sameOriginSedesServer } from "../app/server-endpoint.js";
 const native = vi.hoisted(() => ({ enabled: false, get: vi.fn(), set: vi.fn(), remove: vi.fn() }));
-vi.mock("../app/client-platform.js", () => ({ isPackagedClient: () => native.enabled }));
+vi.mock("../app/client-platform.js", () => ({ isPackagedClient: () => native.enabled, isAndroidClient: () => false }));
 vi.mock("../app/client-credentials.js", () => ({ getCredential: native.get, setCredential: native.set, removeCredential: native.remove }));
 afterEach(() => { cleanup(); native.enabled = false; vi.clearAllMocks(); vi.unstubAllGlobals(); window.history.replaceState({}, "", "/"); });
 describe("connection authentication", () => {

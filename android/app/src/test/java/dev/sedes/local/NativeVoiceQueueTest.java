@@ -1,0 +1,92 @@
+package dev.sedes.local;
+
+import static org.junit.Assert.*;
+import java.util.List;
+import org.json.JSONObject;
+import org.junit.Test;
+
+public class NativeVoiceQueueTest {
+    private NativeVoiceSettings settings(String mode) {
+        return NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("audioMode", mode));
+    }
+    private JSONObject envelope(String id, String event, String text, String subject) {
+        JSONObject result = NativeVoiceJson.object("sourceEventId", id, "generation", 1, "voice", "speakThenListen",
+            "recognitionTarget", NativeVoiceJson.object("threadId", "thread-a", "activityToken", "epoch-1"),
+            "payload", NativeVoiceJson.object("schemaVersion", 4, "notificationId", id, "event", event,
+                "occurredAt", "2026-10-03T00:00:00Z", "title", "Completed", "message", "Workspace: Example",
+                "thread", NativeVoiceJson.object("id", "thread-a", "title", "Thread A"),
+                "assistantResult", NativeVoiceJson.object("final", NativeVoiceJson.object("text", text))));
+        if (subject != null) NativeVoiceJson.put(result, "subjectId", subject);
+        if (event.equals("turn.progress") || event.endsWith(".requested")) NativeVoiceJson.put(result, "voice", "speak");
+        if (event.equals("turn.progress")) NativeVoiceJson.put(result.optJSONObject("payload"), "progress", NativeVoiceJson.object("itemId", id, "text", text));
+        return result;
+    }
+    @Test public void manualCompletionIsSilentWithOnlyItsEligibleFollowup() {
+        NativeVoiceQueue.Item item = new NativeVoiceQueue.Item(envelope("one", "turn.completed", "Answer", null), settings("manual"));
+        assertEquals("", item.speech); assertTrue(item.followUp);
+        JSONObject notice = envelope("two", "thread.woke", "Answer", "wake-1");
+        NativeVoiceQueue.Item standalone = new NativeVoiceQueue.Item(notice, settings("manual"));
+        assertFalse(standalone.speech.isEmpty()); assertFalse(standalone.followUp);
+        NativeVoiceJson.put(notice, "voice", "speak");
+        NativeVoiceQueue.Item speak = new NativeVoiceQueue.Item(notice, settings("response"));
+        assertFalse(speak.followUp);
+    }
+    @Test public void equivalentAttentionIsReplacedAtArrivalPosition() {
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        queue.add(new NativeVoiceQueue.Item(envelope("old", "approval.requested", "", "approval-a"), settings("response")));
+        queue.add(new NativeVoiceQueue.Item(envelope("middle", "turn.completed", "Middle", null), settings("response")));
+        queue.add(new NativeVoiceQueue.Item(envelope("new", "approval.requested", "", "approval-a"), settings("response")));
+        assertEquals(2, queue.size()); assertEquals("middle", queue.take().id); assertEquals("new", queue.take().id);
+    }
+    @Test public void responseOverflowEvictsOnlyOldestProgressAndPreservesOrder() {
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        for (int i = 0; i < 64; i++) queue.add(new NativeVoiceQueue.Item(envelope("item-" + i,
+            i == 2 ? "turn.progress" : "turn.completed", "Text", null), settings("response")));
+        assertTrue(queue.add(new NativeVoiceQueue.Item(envelope("last", "turn.completed", "Text", null), settings("response"))));
+        assertEquals(64, queue.size()); assertEquals("item-0", queue.take().id); assertEquals("item-1", queue.take().id); assertEquals("item-3", queue.take().id);
+        assertEquals(1, queue.state().optInt("droppedCount"));
+    }
+    @Test public void exhaustedProgressEvictionNeverDropsTerminalContent() {
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        for (int i = 0; i < 64; i++) queue.add(new NativeVoiceQueue.Item(envelope("item-" + i, "turn.completed", "Text", null), settings("response")));
+        assertFalse(queue.add(new NativeVoiceQueue.Item(envelope("last", "turn.progress", "Text", null), settings("response"))));
+        assertFalse(queue.add(new NativeVoiceQueue.Item(envelope("terminal-overflow", "turn.completed", "Text", null), settings("response"))));
+        assertEquals(64, queue.size());
+    }
+    @Test public void speechBytesIncludeContextAndTerminalParts() {
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        for (int i = 0; i < 30; i++) queue.add(new NativeVoiceQueue.Item(envelope("big-" + i, "turn.completed", "é".repeat(7000), null), settings("response")));
+        assertTrue(queue.bytes() <= NativeVoiceQueue.MAX_BYTES); assertTrue(queue.size() < 30); assertTrue(queue.state().optInt("droppedCount") > 0);
+    }
+    @Test public void remembersCompletedAndRejectedSources() {
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        for (int i = 0; i < 4096; i++) { assertTrue(queue.remember("event-" + i)); }
+        assertFalse(queue.remember("event-0")); assertFalse(queue.remember("event-4095"));
+    }
+    @Test public void finishingLongActiveSpeechRefreshesItsCompletedDedupPosition() {
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        queue.remember("long-active");
+        for (int i = 0; i < 5000; i++) queue.remember("later-" + i);
+        queue.completed("long-active");
+        assertFalse(queue.remember("long-active"));
+        for (int i = 0; i < 4096; i++) queue.remember("new-" + i);
+        assertFalse(queue.remember("long-active"));
+    }
+    @Test public void chunksPreserveAllUtf16TextWithoutSplittingSurrogates() {
+        String text = "A sentence. " + "🦦".repeat(4000) + " And another sentence.";
+        List<String> parts = NativeVoiceQueue.chunks(text, 5000);
+        assertEquals(text, String.join("", parts)); assertTrue(parts.size() > 1);
+        for (String part : parts) { assertTrue(part.length() <= 5000); assertFalse(Character.isHighSurrogate(part.charAt(part.length() - 1))); }
+    }
+    @Test public void localStopGrammarDoesNotConsumeNormalCommands() {
+        assertTrue(NativeVoiceQueue.isStopCommand(" Stop listening! ")); assertTrue(NativeVoiceQueue.isStopCommand("STOP。"));
+        assertFalse(NativeVoiceQueue.isStopCommand("do not stop")); assertFalse(NativeVoiceQueue.isStopCommand("stop the server"));
+    }
+    @Test public void pendingPresentationReevaluatesModesAndCancelledRearmDoesNotReturn() {
+        NativeVoiceQueue queue = new NativeVoiceQueue();
+        queue.add(new NativeVoiceQueue.Item(envelope("pending", "turn.completed", "Answer", null), settings("response")));
+        queue.reconfigure(settings("manual")); assertEquals(0, queue.bytes());
+        queue.reconfigure(settings("response")); assertTrue(queue.bytes() > 0);
+        queue.cancelFollowups(); queue.reconfigure(settings("response")); assertFalse(queue.take().followUp);
+    }
+}

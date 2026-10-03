@@ -12,8 +12,14 @@ describe("Steer target migration", () => {
         ORDER BY type, name`).all();
       const before = objects();
       expect(before).toContainEqual({ name: "queued_inputs_project_admission", type: "trigger" });
-      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      applyDatabaseMigrations(database, backendNormalizedMigrations.filter(migration => migration.version <= 101));
       expect(objects()).toEqual(before);
+      applyDatabaseMigrations(database, backendNormalizedMigrations);
+      expect(objects()).toEqual(expect.arrayContaining(before));
+      expect(objects()).toEqual(expect.arrayContaining([
+        { name: "input_activity_queue_insert", type: "trigger" },
+        { name: "input_activity_queue_update", type: "trigger" },
+      ]));
     } finally { database.close(); }
   });
 });

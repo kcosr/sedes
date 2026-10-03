@@ -819,6 +819,7 @@ export class ConversationBindingRepository {
               mutationId: string;
               sourceKind:
                 | "composer"
+                | "direct_input"
                 | "automation"
                 | "user_fork"
                 | "agent_control"
@@ -945,6 +946,7 @@ export class ConversationBindingRepository {
             mutationId: string;
             sourceKind:
               | "composer"
+              | "direct_input"
               | "automation"
               | "user_fork"
               | "agent_control"
@@ -1176,6 +1178,7 @@ export class ConversationBindingRepository {
     source: {
       readonly sourceKind:
         | "composer"
+        | "direct_input"
         | "automation"
         | "user_fork"
         | "agent_control"
@@ -1242,6 +1245,7 @@ export class ConversationBindingRepository {
     source: {
       readonly sourceKind:
         | "composer"
+        | "direct_input"
         | "automation"
         | "user_fork"
         | "agent_control"

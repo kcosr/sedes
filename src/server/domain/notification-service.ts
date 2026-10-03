@@ -1,9 +1,12 @@
 import type { ClassifiedAssistantResult } from "../../shared/protocol/completion-result.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { BoundedText } from "../../shared/protocol/payload.js";
 import {
   testNotificationRequestSchema,
   updateNotificationSettingsRequestSchema,
+  notificationPayloadSchema,
+  voiceNotificationSchema,
+  type VoiceRecognitionTarget,
   type NotificationEventPayload,
   type NotificationAssistantResultPhase,
   type NotificationPayload,
@@ -25,6 +28,16 @@ type Pending = {
   readonly payload: NotificationPayload;
   readonly generation: number;
 };
+export type VoiceNotificationContext = {
+  readonly origin?: { readonly clientId: string };
+  readonly recognitionTarget?: VoiceRecognitionTarget;
+  readonly subjectId?: string;
+  /** The epoch and recipients are captured before waiting for terminal settlement. */
+  readonly settlement?: Promise<VoiceRecognitionTarget | undefined>;
+};
+type Subscriber = { readonly scope: RequestScope; readonly listener: (frame: string) => void };
+const sameScope = (left: RequestScope, right: RequestScope) =>
+  left.tenantId === right.tenantId && left.principalId === right.principalId;
 
 /** Passive, best-effort hooks. No durable delivery queue, receipts, or retries. */
 export class NotificationService {
@@ -34,6 +47,8 @@ export class NotificationService {
     Promise<NotificationTestResult>
   >();
   readonly #cwd = process.cwd();
+  readonly #subscribers = new Set<Subscriber>();
+  readonly #deferred = new Map<object, RequestScope>();
   #closed = false;
   #scheduled = false;
 
@@ -50,6 +65,16 @@ export class NotificationService {
     return this.input.repository.read(scope);
   }
 
+  /** Subscribe and deliver policy synchronously; this lane has no replay or inventory cursor. */
+  subscribe(scope: RequestScope, listener: (frame: string) => void): () => void {
+    const policy = this.input.repository.readDispatch(scope);
+    if (this.#closed) return () => {};
+    const subscriber = { scope: { ...scope }, listener };
+    this.#subscribers.add(subscriber);
+    this.#deliver(subscriber, "notification_policy", policy);
+    return () => { this.#subscribers.delete(subscriber); };
+  }
+
   update(
     scope: RequestScope,
     input: UpdateNotificationSettingsRequest,
@@ -60,6 +85,7 @@ export class NotificationService {
       this.#now(),
     );
     this.#discardPending(scope);
+    this.#publishPolicy(scope);
     return settings;
   }
 
@@ -70,7 +96,10 @@ export class NotificationService {
       silenced,
       this.#now(),
     );
-    if (before.silenced !== silenced) this.#discardPending(scope);
+    if (before.silenced !== silenced) {
+      this.#discardPending(scope);
+      this.#publishPolicy(scope);
+    }
     return settings;
   }
 
@@ -87,7 +116,7 @@ export class NotificationService {
       );
     }
     return this.#execute(script, {
-      schemaVersion: 3,
+      schemaVersion: 4,
       notificationId: randomUUID(),
       event: "notification.test",
       occurredAt: new Date(this.#now()).toISOString(),
@@ -101,6 +130,7 @@ export class NotificationService {
     event: NotificationEventPayload,
     eventKey: string,
     assistantResult?: ClassifiedAssistantResult,
+    voiceContext: VoiceNotificationContext = {},
   ): void {
     if (this.#closed) return;
     try {
@@ -114,14 +144,12 @@ export class NotificationService {
       if (
         !dispatch ||
         !dispatch.settings.enabled ||
-        dispatch.settings.silenced ||
-        !dispatch.settings.events.includes(event.event) ||
-        this.#pending.length >= MAX_PENDING
+        dispatch.settings.silenced
       )
         return;
       let payload: NotificationPayload = {
         ...structuredClone(event),
-        schemaVersion: 3,
+        schemaVersion: 4,
         notificationId: randomUUID(),
       };
       // Event metadata is bounded independently of any source transcript size.
@@ -140,12 +168,37 @@ export class NotificationService {
           dispatch.settings.assistantResultPhases,
         );
       }
-      this.#pending.push({
-        scope: { ...scope },
-        payload,
-        generation: dispatch.generation,
-      });
-      this.#schedule();
+      payload = notificationPayloadSchema.parse(payload);
+      const channels = dispatch.settings.delivery[event.event];
+      if (channels.script && this.#pending.length < MAX_PENDING) {
+        this.#pending.push({ scope: { ...scope }, payload, generation: dispatch.generation });
+        this.#schedule();
+      }
+      if (channels.voice !== "none") {
+        const recipients = [...this.#subscribers].filter((subscriber) => sameScope(scope, subscriber.scope));
+        if (!recipients.length) return;
+        const { settlement, ...context } = voiceContext;
+        const envelope = {
+          payload, sourceEventId: createHash("sha256").update(eventKey).digest("hex"),
+          voice: channels.voice, generation: dispatch.generation, ...context,
+        };
+        const publish = (recognitionTarget: VoiceRecognitionTarget | undefined) => {
+          if (this.#closed || this.input.repository.readDispatch(scope).generation !== dispatch.generation) return;
+          const value = voiceNotificationSchema.parse({ ...envelope, recognitionTarget });
+          for (const recipient of recipients) this.#deliver(recipient, "notification", value);
+        };
+        if (settlement) {
+          // Bound transient waiting independently from script capacity. No later subscribers join.
+          if (this.#deferred.size >= 128) { publish(undefined); return; }
+          const key = {};
+          this.#deferred.set(key, scope);
+          void settlement.then((target) => {
+            if (this.#deferred.delete(key)) publish(target);
+          }, () => {
+            if (this.#deferred.delete(key)) publish(undefined);
+          }).catch(() => this.#report("Deferred voice notification could not be processed."));
+        } else publish(context.recognitionTarget);
+      }
     } catch {
       this.#report("Notification event could not be processed.");
     }
@@ -154,6 +207,8 @@ export class NotificationService {
   async close(): Promise<void> {
     this.#closed = true;
     this.#pending.length = 0;
+    this.#deferred.clear();
+    this.#subscribers.clear();
     for (const controller of this.#active.keys()) controller.abort();
     await Promise.allSettled(this.#active.values());
   }
@@ -180,9 +235,7 @@ export class NotificationService {
           current.generation !== pending.generation ||
           !current.settings.enabled ||
           current.settings.silenced ||
-          !current.settings.events.includes(
-            pending.payload.event as NotificationEventPayload["event"],
-          )
+          !current.settings.delivery[pending.payload.event as NotificationEventPayload["event"]].script
         )
           continue;
         void this.#execute(current.settings, pending.payload).then((result) => {
@@ -229,6 +282,9 @@ export class NotificationService {
   }
 
   #discardPending(scope: RequestScope): void {
+    for (const [key, pendingScope] of this.#deferred) {
+      if (sameScope(scope, pendingScope)) this.#deferred.delete(key);
+    }
     for (let index = this.#pending.length - 1; index >= 0; index -= 1) {
       const pending = this.#pending[index]!;
       if (
@@ -238,6 +294,19 @@ export class NotificationService {
         this.#pending.splice(index, 1);
       }
     }
+  }
+
+  #publishPolicy(scope: RequestScope): void {
+    const policy = this.input.repository.readDispatch(scope);
+    for (const subscriber of [...this.#subscribers]) {
+      if (sameScope(scope, subscriber.scope)) this.#deliver(subscriber, "notification_policy", policy);
+    }
+  }
+
+  #deliver(subscriber: Subscriber, event: string, data: unknown): void {
+    if (!this.#subscribers.has(subscriber)) return;
+    try { subscriber.listener(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
+    catch { this.#subscribers.delete(subscriber); }
   }
 
   #now(): number {

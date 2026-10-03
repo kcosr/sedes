@@ -1,6 +1,8 @@
+import { scriptDelivery } from "../support/notification-settings.js";
 import { notificationAssistantResultMigration } from "../../src/server/db/migrations/103-notification-assistant-result.js";
 import { notificationAssistantResultPhasesMigration } from "../../src/server/db/migrations/105-notification-assistant-result-phases.js";
 import { notificationPhaseSelectionMigration } from "../../src/server/db/migrations/106-notification-phase-selection.js";
+import { notificationDeliveryMigration } from "../../src/server/db/migrations/130-notification-delivery.js";
 import type { BoundedText } from "../../src/shared/protocol/payload.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -15,6 +17,7 @@ import {
   type NotificationEventPayload,
   type NotificationAssistantResultPhase,
   type NotificationTestResult,
+  type VoiceRecognitionTarget,
 } from "../../src/shared/protocol/notification.js";
 import { notificationSettingsMigration } from "../../src/server/db/migrations/087-notification-settings.js";
 import { NotificationRepository } from "../../src/server/db/repositories/notification-repository.js";
@@ -32,7 +35,7 @@ const config = {
   ...script,
   enabled: true,
   assistantResultPhases: [] as NotificationAssistantResultPhase[],
-  events: ["turn.completed"] as const,
+  delivery: scriptDelivery(["turn.completed"]),
   expectedRevision: 0,
 };
 const success: NotificationTestResult = {
@@ -93,22 +96,114 @@ function event(at = 1001): NotificationEventPayload {
   };
 }
 function enable(service: NotificationService) {
-  return service.update(scope, { ...config, events: [...config.events] });
+  return service.update(scope, { ...config, delivery: config.delivery });
 }
 const flush = async () => {
   for (let i = 0; i < 8; i += 1) await Promise.resolve();
 };
 
 describe("notification settings and passive hooks", () => {
+  it("migrates script selections without changing existing phases, silence or event consumption", () => {
+    const { service, database, repository } = fixture();
+    enable(service);
+    service.setSilenced(scope, true);
+    repository.consume(scope, "already-consumed", 1001);
+    const { delivery: _delivery, expectedRevision: _revision, ...old } = config;
+    database.prepare("UPDATE principal_notification_settings SET config_json = ?").run(JSON.stringify({
+      ...old, events: ["turn.completed", "question.requested"], assistantResultPhases: ["provisional"],
+    }));
+    database.exec(notificationDeliveryMigration.sql);
+    const settings = repository.read(scope);
+    expect(settings).toMatchObject({ enabled: true, silenced: true, assistantResultPhases: ["provisional"],
+      scriptPath: script.scriptPath, arguments: script.arguments, revision: 2 });
+    expect(settings).not.toHaveProperty("events");
+    expect(settings.delivery).toEqual(scriptDelivery(["turn.completed", "question.requested"]));
+    expect(repository.consume(scope, "already-consumed", 1001)).toBeNull();
+  });
+
+  it("supports voice-only policy, sends policy before speech, and never replays speech", () => {
+    const { service, executor } = fixture();
+    const first: string[] = [];
+    service.subscribe(scope, frame => first.push(frame));
+    expect(first[0]).toContain("event: notification_policy\n");
+    service.update(scope, { ...config, scriptPath: "", delivery: scriptDelivery([]) });
+    service.emit(scope, event(), "voice-only");
+    expect(first.map(frame => frame.split("\n")[0])).toEqual([
+      "event: notification_policy", "event: notification_policy", "event: notification",
+    ]);
+    expect(first.join("")).not.toMatch(/^id:/m);
+    const later = vi.fn();
+    service.subscribe(scope, later);
+    expect(later).toHaveBeenCalledOnce();
+    expect(later.mock.calls[0]![0]).toContain("event: notification_policy");
+    expect(executor).not.toHaveBeenCalled();
+    service.setSilenced(scope, true);
+    service.emit(scope, event(1002), "muted");
+    service.setSilenced(scope, false);
+    service.emit(scope, event(1002), "muted");
+    expect(first.filter(frame => frame.startsWith("event: notification\n"))).toHaveLength(1);
+  });
+
+  it("delivers voice independently of script saturation and isolates subscribers by principal", async () => {
+    let finish!: (result: NotificationTestResult) => void;
+    const pending = new Promise<NotificationTestResult>(resolve => { finish = resolve; });
+    const { service, executor } = fixture(vi.fn<typeof executeNotificationScript>().mockReturnValue(pending));
+    enable(service);
+    const speech = vi.fn(), wrongScope = vi.fn();
+    service.subscribe(scope, speech);
+    service.subscribe(other, wrongScope);
+    for (let index = 0; index < 100; index++) service.emit(scope, event(1001 + index), `burst-${index}`);
+    await flush();
+    expect(speech).toHaveBeenCalledTimes(101);
+    expect(wrongScope).toHaveBeenCalledOnce();
+    expect(executor).toHaveBeenCalledTimes(4);
+    const closing = service.close();
+    finish(success);
+    await closing;
+  });
+
+  it("fixes delayed recipients at emission, removes disconnected recipients, and invalidates old policy", async () => {
+    const { service } = fixture();
+    enable(service);
+    const retained = vi.fn(), departed = vi.fn(), later = vi.fn();
+    service.subscribe(scope, retained);
+    const disconnect = service.subscribe(scope, departed);
+    let settle!: (target: VoiceRecognitionTarget | undefined) => void;
+    const settlement = new Promise<VoiceRecognitionTarget | undefined>(resolve => { settle = resolve; });
+    service.emit(scope, event(), "deferred", undefined, { settlement });
+    disconnect();
+    service.subscribe(scope, later);
+    settle({ threadId: "thread", activityToken: "original-token", sourceTurnId: "turn" });
+    await flush();
+    expect(retained).toHaveBeenCalledTimes(2);
+    expect(retained.mock.calls[1]![0]).toContain('"activityToken":"original-token"');
+    expect(departed).toHaveBeenCalledOnce();
+    expect(later).toHaveBeenCalledOnce();
+    let settleOld!: (target: VoiceRecognitionTarget | undefined) => void;
+    service.emit(scope, event(1003), "obsolete", undefined, { settlement: new Promise(resolve => { settleOld = resolve; }) });
+    service.setSilenced(scope, true);
+    settleOld({ threadId: "thread", activityToken: "obsolete" });
+    await flush();
+    expect(retained).toHaveBeenCalledTimes(3); // Only the new policy.
+  });
+
+  it("advances policy generation on restart even when saved settings have not changed", () => {
+    const { service, repository, database } = fixture();
+    enable(service);
+    const old = repository.readDispatch(scope);
+    const restarted = new NotificationRepository(database).readDispatch(scope);
+    expect(restarted.generation).toBeGreaterThan(old.generation);
+    expect(restarted.settings).toEqual(old.settings);
+  });
   it.each([true, false])("migrates the old master setting %s to effective phase selections without changing principal state", (included) => {
     const { service, database, repository } = fixture();
-    expect(service.read(scope)).toMatchObject({ assistantResultPhases: [] });
+    expect(service.read(scope)).toMatchObject({ assistantResultPhases: ["final", "unclassified"] });
     expect(service.read(scope)).not.toHaveProperty("includeAssistantResult");
     service.update(scope, {
-      ...config, events: [...config.events], assistantResultPhases: ["provisional", "final"],
+      ...config, delivery: config.delivery, assistantResultPhases: ["provisional", "final"],
     });
     service.setSilenced(scope, true);
-    repository.update(other, { ...config, events: ["turn.failed"], assistantResultPhases: [] }, 1234);
+    repository.update(other, { ...config, delivery: scriptDelivery(["turn.failed"]), assistantResultPhases: [] }, 1234);
     database.prepare(`UPDATE principal_notification_settings
       SET config_json = json_set(config_json, '$.includeAssistantResult', json(?))`).run(JSON.stringify(included));
     const readRows = () => database.prepare(
@@ -127,7 +222,7 @@ describe("notification settings and passive hooks", () => {
       assistantResultPhases: included ? ["provisional", "final"] : [], silenced: true, revision: 1,
     });
     expect(repository.read(other)).toMatchObject({
-      assistantResultPhases: [], silenced: false, events: ["turn.failed"],
+      assistantResultPhases: [], silenced: false, delivery: scriptDelivery(["turn.failed"]),
     });
   });
 
@@ -151,7 +246,7 @@ describe("notification settings and passive hooks", () => {
     const { service, database, repository } = fixture();
     enable(service);
     service.setSilenced(scope, true);
-    repository.update(other, { ...config, events: ["turn.failed"] }, 1234);
+    repository.update(other, { ...config, delivery: scriptDelivery(["turn.failed"]) }, 1234);
     database.exec(`UPDATE principal_notification_settings
       SET config_json = json_remove(config_json, '$.assistantResultPhases')`);
     const before = database.prepare(
@@ -168,7 +263,7 @@ describe("notification settings and passive hooks", () => {
       config_json: JSON.stringify({ ...JSON.parse(row.config_json), assistantResultPhases: [] }),
     })));
     expect(repository.read(scope)).toMatchObject({ assistantResultPhases: [], silenced: true, revision: 1 });
-    expect(repository.read(other)).toMatchObject({ assistantResultPhases: [], silenced: false, events: ["turn.failed"] });
+    expect(repository.read(other)).toMatchObject({ assistantResultPhases: [], silenced: false, delivery: scriptDelivery(["turn.failed"]) });
   });
 
   it.each([true, false])("migrates pre-selection preferences with payload enabled %s to their prior effective output", (included) => {
@@ -215,7 +310,7 @@ describe("notification settings and passive hooks", () => {
     const { service, executor } = fixture();
     service.update(scope, {
       ...config,
-      events: [...config.events],
+      delivery: config.delivery,
       assistantResultPhases: ["final"],
     });
     const classified = { provisional: null, final: result, unclassified: null };
@@ -236,7 +331,7 @@ describe("notification settings and passive hooks", () => {
   ])("sends only selected phase keys %j, preserving selected null", async (...assistantResultPhases) => {
     const { service, executor } = fixture();
     service.update(scope, {
-      ...config, events: [...config.events],
+      ...config, delivery: config.delivery,
       assistantResultPhases,
     });
     const result = { provisional: { text: "Progress" }, final: null, unclassified: { text: "Unknown" } };
@@ -254,7 +349,7 @@ describe("notification settings and passive hooks", () => {
 
   it("never reads unselected sections and snapshots only the selected text", async () => {
     const { service, executor } = fixture();
-    service.update(scope, { ...config, events: [...config.events], assistantResultPhases: ["final"] });
+    service.update(scope, { ...config, delivery: config.delivery, assistantResultPhases: ["final"] });
     const final = { text: "Final answer" };
     const result = {
       get provisional(): BoundedText { throw new Error("must not read provisional"); },
@@ -271,7 +366,7 @@ describe("notification settings and passive hooks", () => {
   it("does not inspect any sections when phase selection is empty", async () => {
     const { service, executor } = fixture();
     service.update(scope, {
-      ...config, events: [...config.events], assistantResultPhases: [],
+      ...config, delivery: config.delivery, assistantResultPhases: [],
     });
     const result = {
       get provisional(): BoundedText { throw new Error("must not inspect"); },
@@ -290,7 +385,7 @@ describe("notification settings and passive hooks", () => {
       const { service, executor } = fixture();
       service.update(scope, {
         ...config,
-        events: [kind],
+        delivery: scriptDelivery([kind]),
         assistantResultPhases: ["final"],
       });
       service.emit(scope, { ...event(), event: kind }, "other-kind", {
@@ -313,7 +408,7 @@ describe("notification settings and passive hooks", () => {
       const { service, executor } = fixture();
       service.update(scope, {
         ...config,
-        events: [...config.events],
+        delivery: config.delivery,
         assistantResultPhases: ["final"],
       });
       const source: BoundedText = {
@@ -360,7 +455,7 @@ describe("notification settings and passive hooks", () => {
   it("discards provisional and unclassified bytes before shortening final text", async () => {
     const { service, executor } = fixture();
     service.update(scope, {
-      ...config, events: [...config.events], assistantResultPhases: ["provisional", "final", "unclassified"],
+      ...config, delivery: config.delivery, assistantResultPhases: ["provisional", "final", "unclassified"],
     });
     service.emit(scope, { ...event(), message: "m".repeat(60_000) }, "priority", {
       final: { text: "Final answer" }, provisional: { text: "p".repeat(10_000) }, unclassified: { text: "u".repeat(10_000) },
@@ -377,7 +472,7 @@ describe("notification settings and passive hooks", () => {
     const { service, executor } = fixture();
     service.update(scope, {
       ...config,
-      events: [...config.events],
+      delivery: config.delivery,
       assistantResultPhases: ["final"],
     });
     const metadata = event();
@@ -385,7 +480,7 @@ describe("notification settings and passive hooks", () => {
       JSON.stringify({
         ...metadata,
         message: "",
-        schemaVersion: 3,
+        schemaVersion: 4,
         notificationId: "0".repeat(36),
       }),
     );
@@ -406,13 +501,13 @@ describe("notification settings and passive hooks", () => {
     const { service, executor } = fixture();
     service.update(scope, {
       ...config,
-      events: [...config.events],
+      delivery: config.delivery,
       assistantResultPhases: ["final"],
     });
     service.emit(scope, event(), "pending", { provisional: null, final: { text: "Private response" }, unclassified: null });
     service.update(scope, {
       ...config,
-      events: [...config.events],
+      delivery: config.delivery,
       expectedRevision: 1,
     });
     await flush();
@@ -428,7 +523,7 @@ describe("notification settings and passive hooks", () => {
   it("invalidates queued selections by generation without replaying consumed events", async () => {
     const { service, executor, repository } = fixture();
     service.update(scope, {
-      ...config, events: [...config.events], assistantResultPhases: ["final"],
+      ...config, delivery: config.delivery, assistantResultPhases: ["final"],
     });
     const result = {
       provisional: { text: "Progress" }, final: { text: "Done" }, unclassified: null,
@@ -436,7 +531,7 @@ describe("notification settings and passive hooks", () => {
     service.emit(scope, event(), "queued-selection", result);
     // A repository-level update also invalidates pending work in the service.
     repository.update(scope, {
-      ...config, expectedRevision: 1, events: [...config.events],
+      ...config, expectedRevision: 1, delivery: config.delivery,
       assistantResultPhases: ["provisional"],
     }, 1000);
     await flush();
@@ -450,17 +545,17 @@ describe("notification settings and passive hooks", () => {
     });
   });
 
-  it("accepts every notification category together without changing existing defaults", () => {
+  it("requires a complete delivery map and rejects automatic listening for progress and forms", () => {
     const { service } = fixture();
-    expect(service.read(scope).events).not.toContain("question.requested");
-    const events = [...notificationEventKindSchema.options];
-    expect(service.update(scope, { ...config, events }).events).toEqual(events);
-    expect(
-      updateNotificationSettingsRequestSchema.safeParse({
-        ...config,
-        events: ["question.requested", "question.requested"],
-      }).success,
-    ).toBe(false);
+    expect(Object.values(service.read(scope).delivery).every(entry => !entry.script)).toBe(true);
+    const delivery = scriptDelivery(notificationEventKindSchema.options);
+    expect(service.update(scope, { ...config, delivery }).delivery).toEqual(delivery);
+    expect(updateNotificationSettingsRequestSchema.safeParse({ ...config, events: ["turn.completed"] }).success).toBe(false);
+    for (const kind of ["turn.progress", "approval.requested", "input.requested", "question.requested"] as const) {
+      expect(updateNotificationSettingsRequestSchema.safeParse({ ...config,
+        delivery: { ...delivery, [kind]: { script: true, voice: "speakThenListen" } },
+      }).success).toBe(false);
+    }
   });
 
   it("keeps principal state isolated and rejects unknown authority", async () => {
@@ -475,7 +570,7 @@ describe("notification settings and passive hooks", () => {
     const wrong = { tenantId: "tenant", principalId: "unknown" };
     expect(() => service.read(wrong)).toThrow("unavailable");
     expect(() =>
-      service.update(wrong, { ...config, events: [...config.events] }),
+      service.update(wrong, { ...config, delivery: config.delivery }),
     ).toThrow("unavailable");
     await expect(service.test(wrong, script)).rejects.toThrow("unavailable");
     expect(executor).not.toHaveBeenCalled();
@@ -490,7 +585,7 @@ describe("notification settings and passive hooks", () => {
     });
     const next = service.update(scope, {
       ...config,
-      events: [...config.events],
+      delivery: config.delivery,
       expectedRevision: 1,
       scriptPath: "/new/script",
     });
@@ -502,7 +597,7 @@ describe("notification settings and passive hooks", () => {
     expect(() =>
       service.update(scope, {
         ...config,
-        events: [...config.events],
+        delivery: config.delivery,
         expectedRevision: 1,
       }),
     ).toThrow("changed");
@@ -518,7 +613,7 @@ describe("notification settings and passive hooks", () => {
     );
     database.exec(notificationSettingsMigration.sql);
     let repository = new NotificationRepository(database);
-    repository.update(scope, { ...config, events: [...config.events] }, 1000);
+    repository.update(scope, { ...config, delivery: config.delivery }, 1000);
     repository.setSilenced(scope, true, 1001);
     expect(repository.consume(scope, "event", 1002)).not.toBeNull();
     database.close();
@@ -560,7 +655,7 @@ describe("notification settings and passive hooks", () => {
       cwd: process.cwd(),
       payload: {
         ...event(),
-        schemaVersion: 3,
+        schemaVersion: 4,
         notificationId: expect.any(String),
       },
     });
@@ -594,7 +689,7 @@ describe("notification settings and passive hooks", () => {
     service.emit(scope, event(), "old");
     service.update(scope, {
       ...config,
-      events: [...config.events],
+      delivery: config.delivery,
       expectedRevision: 1,
       scriptPath: "/replacement",
     });

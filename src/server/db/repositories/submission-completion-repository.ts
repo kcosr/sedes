@@ -453,6 +453,13 @@ export class SubmissionCompletionRepository {
     return row ? present(row) : undefined;
   }
 
+  hasActiveAcceptedCorrelation(scope: RequestScope, applicationThreadId: string, correlations: readonly string[]): boolean {
+    const statement = this.database.prepare(`SELECT 1 FROM submission_completion_observations
+      WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ?
+        AND backend_correlation = ? AND completion_observed_at IS NULL LIMIT 1`);
+    return correlations.some(correlation => statement.get(scope.tenantId, scope.principalId, applicationThreadId, correlation) !== undefined);
+  }
+
   #nextAttentionCreatedAt(
     scope: RequestScope,
     applicationThreadId: string,

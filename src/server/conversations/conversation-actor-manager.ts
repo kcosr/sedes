@@ -112,6 +112,17 @@ export type AuthoritativeSubmissionObserver = (
   },
 ) => void | Promise<void>;
 
+export type LiveProgressObserver = (
+  scope: ExecutionScope,
+  applicationThreadId: string,
+  input: {
+    readonly applicationTurnId: string;
+    readonly applicationItemId: string;
+    readonly backendCorrelations: readonly string[];
+    readonly text: BoundedText;
+  },
+) => void;
+
 interface ActorEntry {
   readonly access: "execution" | "history";
   readonly nativeEffects: ConversationNativeEffectFence;
@@ -249,6 +260,7 @@ export class ConversationActorManager {
   readonly #runtimeBudget: number;
   readonly #onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
   readonly #onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
+  readonly #onLiveProgress?: LiveProgressObserver;
   readonly #entries = new Map<string, ActorEntry>();
   readonly #maintenance = new Map<string, ActorMaintenance>();
   #pressureReclaimer?: ConversationRuntimePressureReclaimer;
@@ -263,6 +275,7 @@ export class ConversationActorManager {
     readonly runtimeBudget: number;
     readonly onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
     readonly onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
+    readonly onLiveProgress?: LiveProgressObserver;
     readonly onNonblockingQuestions?: NonblockingQuestionObserver;
     readonly onHistoricalQuestion?: HistoricalQuestionObserver;
   }) {
@@ -271,6 +284,7 @@ export class ConversationActorManager {
     this.#deliveryInputSnapshots = input.deliveryInputSnapshots;
     this.#onAuthoritativeCompletion = input.onAuthoritativeCompletion;
     this.#onAuthoritativeSubmission = input.onAuthoritativeSubmission;
+    this.#onLiveProgress = input.onLiveProgress;
     this.#onNonblockingQuestions = input.onNonblockingQuestions;
     this.#onHistoricalQuestion = input.onHistoricalQuestion;
     assertConversationRetentionMilliseconds(input.retentionMilliseconds);
@@ -1266,6 +1280,17 @@ export class ConversationActorManager {
         initialObserver: (event) => {
 
           onStateChanged();
+          if (event.type === "live_progress" && this.#onLiveProgress) {
+            // Preceding submission observers establish durable admission first.
+            // Delayed observers must never revive progress after the live turn ends.
+            observationChain = observationChain.then(() => {
+              const timeline = actor?.timeline;
+              if (signal.aborted || !timeline || timeline.runState !== "running" ||
+                  timeline.activeTurnId !== event.applicationTurnId ||
+                  timeline.turnsById[event.applicationTurnId]?.status !== "in_progress") return;
+              this.#onLiveProgress?.(input.scope, input.binding.applicationThreadId, event);
+            }).catch(() => undefined);
+          }
           if (
             (event.type === "authoritative_completion" && this.#onAuthoritativeCompletion) ||
             (event.type === "authoritative_submission" && this.#onAuthoritativeSubmission)

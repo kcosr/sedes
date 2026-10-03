@@ -19,18 +19,21 @@ public final class ClientCredentialsPlugin extends Plugin {
     }
     @PluginMethod public void setCredential(PluginCall call) {
         try {
+            NativeVoiceRuntime.get(getContext()).credentialChanging(call.getString("profileId"), call.getString("serverUrl"));
             new ClientCredentialStore(getContext()).setCredential(call.getString("profileId"), call.getString("serverUrl"), call.getString("credential"));
             call.resolve();
         } catch (Exception error) { call.reject("The credential could not be saved securely.", "credential_storage_unavailable"); }
     }
     @PluginMethod public void removeProfileCredentials(PluginCall call) {
         try {
+            NativeVoiceRuntime.get(getContext()).credentialChanging(call.getString("profileId"), null);
             new ClientCredentialStore(getContext()).removeProfileCredentials(call.getString("profileId"));
             call.resolve();
         } catch (Exception error) { call.reject("The credentials could not be removed.", "credential_storage_unavailable"); }
     }
     @PluginMethod public void removeCredential(PluginCall call) {
         try {
+            NativeVoiceRuntime.get(getContext()).credentialChanging(call.getString("profileId"), call.getString("serverUrl"));
             new ClientCredentialStore(getContext()).removeCredential(call.getString("profileId"), call.getString("serverUrl"));
             call.resolve();
         } catch (Exception error) { call.reject("The credential could not be removed.", "credential_storage_unavailable"); }

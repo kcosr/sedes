@@ -9945,11 +9945,26 @@ tr.diff-hunk td {
 }
 
 .application-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: clip;
+}
+
+.application-view {
+  flex: 1;
   position: relative;
   min-width: 0;
   min-height: 0;
   overflow: clip;
 }
+
+.voice-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2); padding: var(--space-1) var(--space-2); border-top: 1px solid var(--border); background: var(--background); }
+.voice-active { display: flex; flex: 1; min-width: 0; align-items: center; gap: var(--space-2); font-size: var(--text-meta); }
+.voice-thread { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.voice-actions { display: flex; flex: 0 0 auto; align-items: center; }
+.voice-error { flex-basis: 100%; color: var(--destructive); font-size: var(--text-meta); }
 
 .application-workspace {
   width: 100%;

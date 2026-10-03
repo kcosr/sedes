@@ -1,0 +1,233 @@
+import { randomUUID } from "node:crypto";
+import { execFile as execCallback } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { notificationSettingsSchema, voiceNotificationSchema } from "../../src/shared/protocol/notification.js";
+import { directInputReceiptSchema, threadInputContextSchema } from "../../src/shared/protocol/thread-input.js";
+import { startVoiceAdapterFixture, waitForVoice } from "../support/voice-adapter-fixture.js";
+import { OpenCodeProductionFixture } from "../support/opencode-production-fixture.js";
+
+const execFile = promisify(execCallback);
+const androidSerial = process.env.SEDES_VOICE_ANDROID_SERIAL;
+const adbPath = process.env.SEDES_ADB_EXECUTABLE ?? (process.env.ANDROID_HOME ? path.join(process.env.ANDROID_HOME, "platform-tools/adb") : "adb");
+async function adb(args: string[], timeout = 30_000) {
+  if (!androidSerial) throw new Error("An explicit isolated emulator serial is required.");
+  return execFile(adbPath, ["-s", androidSerial, ...args], { timeout, maxBuffer: 8 * 1024 * 1024 });
+}
+
+describe("native voice production pipeline with loopback providers", () => {
+  let adapter: Awaited<ReturnType<typeof startVoiceAdapterFixture>>;
+  let app: OpenCodeProductionFixture;
+  let artifactDirectory: string;
+  let androidInstalled = false;
+  const reversePorts = new Set<number>();
+  beforeAll(async () => {
+    await mkdir(path.resolve("test-results"), { recursive: true });
+    artifactDirectory = await mkdtemp(path.resolve("test-results/voice-run-"));
+    console.log(`Voice artifacts: ${artifactDirectory}`);
+    adapter = await startVoiceAdapterFixture(artifactDirectory);
+    app = await OpenCodeProductionFixture.create("local", "external", { packagedClients: ["android"] });
+    const { revision, silenced: _silenced, ...settings } = notificationSettingsSchema.parse(await app.json("/api/application/notifications"));
+    await app.json("/api/application/notifications", "PUT", { ...settings, enabled: true, expectedRevision: revision });
+    if (androidSerial) {
+      expect((await adb(["shell", "getprop", "ro.kernel.qemu"])).stdout.trim(), "Use a disposable emulator; the harness clears its Sedes application state.").toBe("1");
+      await adb(["install", "-r", path.resolve("android/app/build/outputs/apk/debug/app-debug.apk")], 90_000);
+      androidInstalled = true;
+      await adb(["install", "-r", path.resolve("android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk")], 90_000);
+      await adb(["reverse", `tcp:${app.port}`, `tcp:${app.port}`]);
+      reversePorts.add(app.port);
+      await adb(["reverse", `tcp:${adapter.port}`, `tcp:${adapter.port}`]);
+      reversePorts.add(adapter.port);
+    }
+  });
+  afterAll(async () => {
+    const errors: unknown[] = [];
+    const cleanup = async (action: () => Promise<unknown>) => {
+      try { await action(); } catch (error) { errors.push(error); }
+    };
+    if (androidSerial) {
+      if (androidInstalled) await cleanup(() => adb(["shell", "am", "force-stop", "dev.sedes.local"]));
+      for (const port of reversePorts) await cleanup(() => adb(["reverse", "--remove", `tcp:${port}`]));
+    }
+    if (app) {
+      await cleanup(() => writeFile(path.join(artifactDirectory, "sedes.log"), app.logs + "\n" + app.streamErrors.join("\n")));
+      await cleanup(() => app.close());
+    }
+    if (adapter) await cleanup(() => adapter.close());
+    if (errors.length) throw new AggregateError(errors, "Voice fixture cleanup failed");
+  });
+
+  it("uses real adapter capability negotiation, PCM, ASR finalization cancellation and reconnect", async () => {
+    const client = await adapter.connect();
+    try {
+      expect((await adapter.post("/api/media/tts", { clientId: client.clientId, requestId: "tts-contract", text: "**Fixture:** `voice`" })).status).toBe(202);
+      expect(await client.next("media_tts_end", "tts-contract")).toMatchObject({ status: "completed" });
+      const chunks = client.messages.filter(message => message.type === "media_tts_audio_chunk" && message.requestId === "tts-contract");
+      expect(chunks).toHaveLength(2);
+      expect(chunks.every(chunk => chunk.sampleRate === 24_000 && chunk.encoding === "pcm_s16le")).toBe(true);
+      expect(Buffer.concat(chunks.map(chunk => Buffer.from(chunk.chunkBase64 as string, "base64")))).toEqual(adapter.pcm);
+      expect(adapter.texts.at(-1)).toBe("Fixture: voice");
+      adapter.transcripts.push("voice contract input");
+      const recognize = (requestId: string) => {
+        client.socket.send(JSON.stringify({ type: "media_stt_start", requestId, sampleRate: 16_000, channels: 1, encoding: "pcm_s16le" }));
+        client.socket.send(JSON.stringify({ type: "media_stt_chunk", requestId, chunkBase64: adapter.pcm.toString("base64") }));
+        client.socket.send(JSON.stringify({ type: "media_stt_end", requestId }));
+      };
+      recognize("stt-contract");
+      expect(await client.next("media_stt_result", "stt-contract")).toMatchObject({ success: true, text: "voice contract input" });
+      expect(adapter.wavs.at(-1)?.subarray(44)).toEqual(adapter.pcm);
+      const trace = client.messages.filter(message => message.requestId === "stt-contract").map(message => message.type);
+      expect(trace.indexOf("media_stt_stopped")).toBeLessThan(trace.indexOf("media_stt_started"));
+      adapter.setAsrDelay(500);
+      adapter.transcripts.push("must not submit after cancel");
+      recognize("stt-cancel");
+      await client.next("media_stt_started", "stt-cancel");
+      expect((await adapter.post("/api/media/stt/cancel", { clientId: client.clientId, requestId: "stt-cancel" })).status).toBe(200);
+      expect(await client.next("media_stt_result", "stt-cancel")).toMatchObject({ canceled: true, success: false });
+      adapter.setAsrDelay(0);
+      const second = await adapter.connect();
+      expect(second.clientId).not.toBe(client.clientId);
+      second.socket.terminate();
+      expect(adapter.errors).toEqual([]);
+    } finally { adapter.setAsrDelay(0); client.socket.terminate(); }
+  });
+
+  it("admits content once without touching drafts, emits a live voice completion, and never replays it", async () => {
+    const threadId = await app.createThread();
+    const otherThreadId = await app.createThread();
+    const initial = await app.thread(threadId);
+    await app.json(`/api/threads/${threadId}/draft`, "PUT", {
+      text: "Keep this unsent composer draft", contextExcerpts: [], attachmentIds: [], taskReferenceIds: [], expectedRevision: initial.draft.revision,
+    });
+    const savedDraft = (await app.thread(threadId)).draft;
+    const feed = await voiceFeed(app);
+    try {
+      await waitForVoice(() => feed.frames.find(frame => frame.event === "notification_policy"));
+      const input = { mutationId: randomUUID(), text: "First spoken production fixture input", origin: { clientId: randomUUID() }, runningPolicy: { mode: "queue" } };
+      const receipt = directInputReceiptSchema.parse(await app.json(`/api/threads/${threadId}/inputs`, "POST", input));
+      expect(receipt, JSON.stringify(receipt)).toMatchObject({ mutationId: input.mutationId, threadId, admittedMode: "submit", status: "accepted" });
+      const frame = await waitForVoice(() => feed.frames.find(frame => frame.event === "notification" && frame.value.payload?.thread?.id === threadId));
+      const notification = voiceNotificationSchema.parse(frame.value);
+      expect(frame.id).toBeUndefined();
+      expect(notification).toMatchObject({ voice: "speakThenListen", origin: input.origin, payload: { event: "turn.completed" } });
+      expect(notification.recognitionTarget?.threadId).toBe(threadId);
+      const context = threadInputContextSchema.parse(await app.json(`/api/threads/${threadId}/input-context`));
+      expect(context).toMatchObject({ authority: "current", automaticListenEligible: true, activityToken: notification.recognitionTarget?.activityToken });
+      expect((await app.thread(threadId)).draft).toEqual(savedDraft);
+      expect(directInputReceiptSchema.parse(await app.json(`/api/threads/${threadId}/inputs`, "POST", input))).toEqual(receipt);
+      expect(await app.json(`/api/input-receipts/${input.mutationId}`)).toEqual({ status: "found", receipt });
+      expect((await app.request(`/api/threads/${otherThreadId}/inputs`, "POST", input)).status).toBe(409);
+      expect(app.model.requests.filter(request => request.lastRole === "user" && request.lastText === input.text)).toHaveLength(1);
+      const reconnected = await voiceFeed(app);
+      try {
+        await waitForVoice(() => reconnected.frames.find(frame => frame.event === "notification_policy"));
+        expect(reconnected.frames.filter(frame => frame.event === "notification")).toEqual([]);
+      } finally { await reconnected.close(); }
+
+      // JSON expansion may exceed the application's ordinary 256 KiB parser,
+      // while the exact unescaped content still fits the 64 KiB contract.
+      const escaped = { ...input, mutationId: randomUUID(), text: "\u0001".repeat(50_000) };
+      expect(JSON.stringify(escaped).length).toBeGreaterThan(256 * 1024);
+      const oversizedText = { ...input, mutationId: randomUUID(), text: "é".repeat(32_769) };
+      expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", oversizedText)).status).toBe(400);
+      const overParser = { ...input, mutationId: randomUUID(), text: "\u0001".repeat(90_000) };
+      expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", overParser)).status).toBe(413);
+      expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", escaped)).status).toBe(200);
+    } finally { await feed.close(); }
+  });
+
+  it.skipIf(!androidSerial)("validates Android Keystore recovery, cancellation, and real AudioRecord/AudioTrack", async () => {
+    const result = await adb(["shell", "am", "instrument", "-w", "-r", "-e", "class",
+      "dev.sedes.local.NativeVoiceStoreTest,dev.sedes.local.NativeVoiceRuntimeTest,dev.sedes.local.NativeVoiceAudioTest", "dev.sedes.local.test/androidx.test.runner.AndroidJUnitRunner"], 180_000);
+    await writeFile(path.join(artifactDirectory, "android-native-smoke.log"), result.stdout + result.stderr);
+    expect(result.stdout).toContain("OK (");
+    expect(result.stdout).not.toMatch(/FAILURES|INSTRUMENTATION_FAILED/u);
+  });
+
+  for (const [mode, scenario] of [["response", "cycle"], ["manual", "cycle"], ["response", "background"],
+    ["response", "skip"], ["response", "stop"], ["response", "retarget"],
+    ["response", "lost-ack"], ["response", "lost-send"], ["response", "cancel-uncertain"]] as const) {
+    it.skipIf(!androidSerial)(`runs packaged Android ${mode}/${scenario} through the actual UI and media stack`, async () => {
+      await adb(["shell", "pm", "clear", "dev.sedes.local"]);
+      const threadTitle = `Voice ${mode} ${scenario}`;
+      const threadId = await app.createThread(threadTitle);
+      const secondThreadTitle = `Retarget ${mode} ${scenario}`;
+      const secondThreadId = scenario === "retarget" ? await app.createThread(secondThreadTitle) : undefined;
+      const pairingCode = app.authentication.createPairing({ kind: "management" }).token;
+      const text = `voice fixture reply ${mode} ${scenario}`;
+      adapter.transcripts.splice(0, adapter.transcripts.length, text, "");
+      // Give the real playback action a usable window even on software emulators.
+      adapter.setTtsDurationSeconds(scenario === "skip" ? 12 : 1);
+      const before = app.model.requests.length;
+      const ttsBefore = adapter.texts.length;
+      const args = { serverOrigin: app.url, adapterOrigin: adapter.url, pairingCode, threadId, threadTitle, mode, scenario,
+        initialText: `native voice fixture start ${mode} ${scenario}`,
+        ...(secondThreadId ? { secondThreadId, secondThreadTitle } : {}) };
+      try {
+        const result = await adb(["shell", "am", "instrument", "-w", "-r", "-e", "class", "dev.sedes.local.NativeVoiceE2eTest#nativeConversationCycle",
+          ...Object.entries(args).flatMap(([key, value]) => ["-e", key, shellArgument(value)]),
+          "dev.sedes.local.test/androidx.test.runner.AndroidJUnitRunner"], 330_000);
+        await writeFile(path.join(artifactDirectory, `android-${mode}-${scenario}.log`), result.stdout + result.stderr);
+        expect(result.stdout).toContain("OK (");
+        expect(result.stdout).not.toMatch(/FAILURES|INSTRUMENTATION_FAILED/u);
+        const rawResult = /^INSTRUMENTATION_STATUS: voiceResult=(.+)$/mu.exec(result.stdout)?.[1];
+        expect(rawResult).toBeDefined();
+        const evidence = JSON.parse(rawResult!);
+        expect(evidence).toMatchObject({ draftPreserved: true, audioSource: "deterministic-pcm", audioSink: "AudioTrack" });
+        expect(evidence.journalOutstanding).toBe(0);
+        const submissions = () => app.model.requests.slice(before).filter(request => request.lastRole === "user" && request.lastText === text);
+        // A definitive admission receipt may precede asynchronous provider dispatch.
+        if (scenario !== "stop") await waitForVoice(() => submissions().length > 0);
+        expect(submissions()).toHaveLength(scenario === "stop" ? 0 : 1);
+        if (mode === "manual") expect(adapter.texts.length).toBe(ttsBefore);
+        if (secondThreadId) {
+          const target = await app.thread(secondThreadId);
+          expect(JSON.stringify(target)).toContain(text);
+          expect(JSON.stringify(await app.thread(threadId))).not.toContain(text);
+        }
+        expect(adapter.errors).toEqual([]);
+      } finally {
+        const screenshotDirectory = path.join(artifactDirectory, `android-${mode}-${scenario}-screenshots`);
+        await mkdir(screenshotDirectory, { recursive: true });
+        await adb(["pull", "/sdcard/Android/data/dev.sedes.local/files/native-voice/", screenshotDirectory], 60_000)
+          .catch(async error => { await writeFile(path.join(screenshotDirectory, "capture-error.txt"), String(error)); });
+        const logcat = await adb(["logcat", "-d", "-t", "1500"]);
+        await writeFile(path.join(artifactDirectory, `android-${mode}-${scenario}-logcat.log`), logcat.stdout);
+      }
+    }, 360_000);
+  }
+});
+
+// adb shell reparses the remote command; execFile alone cannot protect spaces.
+function shellArgument(value: string): string { return "'" + value.replaceAll("'", "'\\''") + "'"; }
+
+type VoiceFrame = { event: string; id?: string; value: any };
+export async function voiceFeed(app: OpenCodeProductionFixture) {
+  const controller = new AbortController();
+  const response = await fetch(`${app.url}/api/application/events`, { headers: { Authorization: `Bearer ${app.credential}` }, signal: controller.signal });
+  if (!response.ok || !response.body) throw new Error(`SSE open failed: ${response.status}`);
+  const frames: VoiceFrame[] = [];
+  const reader = response.body.getReader();
+  const done = (async () => {
+    let buffer = "";
+    const decoder = new TextDecoder();
+    try {
+      for (;;) {
+        const next = await reader.read();
+        if (next.done) break;
+        buffer += decoder.decode(next.value, { stream: true }).replace(/\r\n/gu, "\n");
+        let end: number;
+        while ((end = buffer.indexOf("\n\n")) !== -1) {
+          const raw = buffer.slice(0, end); buffer = buffer.slice(end + 2);
+          const event = /^event: ?(.+)$/mu.exec(raw)?.[1];
+          const data = /^data: ?(.+)$/mu.exec(raw)?.[1];
+          const id = /^id: ?(.+)$/mu.exec(raw)?.[1];
+          if (event && data) frames.push({ event, value: JSON.parse(data), ...(id ? { id } : {}) });
+        }
+      }
+    } catch (error) { if (!controller.signal.aborted) throw error; }
+  })();
+  return { frames, async close() { controller.abort(); await done; } };
+}

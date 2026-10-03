@@ -240,7 +240,9 @@ public final class OutputImageActionsPlugin extends Plugin {
                 OutputStream output = getContext().getContentResolver().openOutputStream(destination, "w")
             ) {
                 if (output == null) throw new IOException("save_destination_unavailable");
-                input.transferTo(output);
+                byte[] buffer = new byte[8192];
+                int count;
+                while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
                 output.flush();
             }
             Toast.makeText(getContext(), "Image saved", Toast.LENGTH_SHORT).show();

@@ -316,13 +316,20 @@ stores and how threads use it.
 
 ## Notifications
 
-Configure **Settings → Notifications** to invoke one executable script on the
-Sedes server when a selected event occurs. Enter its absolute **Server script
-path**, optional **Arguments (one per line)**, and **Timeout (seconds)**, choose
-events, then turn on **Enable notifications** and save. Settings follow the current Sedes user
-across clients and server restarts.
+Configure **Settings → Notifications** to choose Script and Voice delivery for
+each event. Script delivery invokes one executable on the Sedes server. Enter
+its absolute **Server script path**, optional **Arguments (one per line)**, and
+**Timeout (seconds)** when using that channel. Voice delivery chooses Off,
+Speak, or Speak then listen on Android. Turn on **Enable notifications** and save.
+These settings follow the current Sedes user across clients and server restarts.
 
-Available events are **Turn completed**, **Turn failed**, **Turn interrupted**,
+Fresh settings include Final and Unclassified completion text. Provisional text
+can repeat progress already spoken; select it only if that repetition is useful.
+Progress, approvals, blocking input, and nonblocking questions never open the
+microphone automatically. See [Android voice](../operator/clients/voice.md) for
+local audio modes, microphone settings, and target selection.
+
+Available events are **Live progress**, **Turn completed**, **Turn failed**, **Turn interrupted**,
 **Snooze wake**, **Automation started**, **Automation failed**, **Approval requested**,
 and **Input requested**. A turn event
 requires an authoritative terminal outcome; a pause in output or a disconnected
@@ -337,18 +344,19 @@ requested covers new blocking questions, choices, text input, and editor request
 including Codex blocking questions. Nonblocking questions covers questions an
 agent asks while it keeps working, such as Codex async questions; the
 notification carries the question count, never the question text. These three
-events are opt-in. They fire when the backend accepts a new request, even
+events are speak-only by default; script delivery is opt-in. They fire when the backend accepts a new request, even
 without an open browser; reconnecting or redisplaying the same pending dialog
 does not notify again. Answering, approving, rejecting, or dismissing a request
 does not send a notification or affect an already emitted hook.
 
-The bell in application navigation **silences** external notifications without
+The bell in application navigation **silences** automatic script and voice notifications without
 changing their configuration. A blue bell indicates notifications are enabled
 and unsilenced; a gray slashed bell indicates they are silenced or disabled in
 Settings. Silence follows the user across clients and
 restarts. Resuming does not send a backlog. Opening a thread, acknowledging its
 completion, or dismissing a wake reminder has no effect on these passive hooks.
-An already running script cannot be unsent.
+An already running script cannot be unsent. Silence cancels automatic voice
+work, while explicit microphone recording remains available.
 
 **Send test notification** invokes the script using the fields currently in the
 form, including unsaved edits. It works while disabled or silenced and displays

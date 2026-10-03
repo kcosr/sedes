@@ -239,7 +239,7 @@ const piWithdrawnSteer = {
 
 function fakeSessionFactory(
   assistantResponseCount = 1,
-  includeToolLoop = false,
+  includeToolLoop: boolean | { readonly text: string } = false,
   onCompact: (manager: PiSdkSession["sessionManager"]) => void = () =>
     undefined,
   userPersistenceDelayMilliseconds = 0,
@@ -329,6 +329,7 @@ function fakeSessionFactory(
                   name: "read",
                   arguments: { path: "README.md" },
                 },
+                ...(typeof includeToolLoop === "object" ? [{ type: "text" as const, text: includeToolLoop.text }] : []),
               ],
               api: "test",
               provider: "test",
@@ -364,6 +365,11 @@ function fakeSessionFactory(
                 partial: toolAssistant,
               },
             } as never);
+            if (typeof includeToolLoop === "object") {
+              emit({ type: "message_update", message: toolAssistant, assistantMessageEvent: {
+                type: "text_delta", contentIndex: 1, delta: includeToolLoop.text, partial: toolAssistant,
+              } } as never);
+            }
             manager.appendMessage(toolAssistant);
             emit({
               type: "message_end",
@@ -9300,7 +9306,7 @@ describe("Pi conversation backend driver", () => {
       agentTools: noAgentTools,
       toolAccessPolicy: fullToolAccessPolicy,
       sessionDirectory: fixture.sessions,
-      sessionFactory: fakeSessionFactory(1, true),
+      sessionFactory: fakeSessionFactory(1, { text: "Inspecting the README" }),
     };
     const driver = new PiConversationBackendDriver(options);
     const created = await driver.create({
@@ -9339,6 +9345,11 @@ describe("Pi conversation backend driver", () => {
     expect(
       liveEvents.filter((event) => event.type === "resnapshot_required"),
     ).toEqual([]);
+    expect(liveEvents.filter(event => "liveProgress" in event && event.liveProgress)).toEqual([
+      expect.objectContaining({ type: "item_completed", item: expect.objectContaining({
+        semanticKind: "assistant_message", responsePhase: "provisional", markdown: { text: "Inspecting the README" },
+      }) }),
+    ]);
     expect(
       new Set(
         liveEvents.flatMap((event) =>
@@ -10657,6 +10668,9 @@ describe("Pi conversation backend driver", () => {
       event.item.semanticKind === "assistant_message" && event.item.responsePhase === "final");
     expect(finalUpdates).toHaveLength(2);
     expect(finalUpdates.every(event => events.indexOf(event) < completionIndex)).toBe(true);
+    // These are stop candidates; only settlement retrospectively classifies
+    // the earlier one provisional. It is never live progress evidence.
+    expect(events.filter(event => "liveProgress" in event && event.liveProgress)).toEqual([]);
     await handle.close();
     const reopened = await driver.attach({
       scope, workspace: fixture.workspace,

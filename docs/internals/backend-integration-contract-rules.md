@@ -2121,7 +2121,24 @@ phase means no evidence, not final. Strip this field at browser projection.
 Classify all text blocks of one native message together. Codex preserves native
 phase labels; Pi uses settled native assistant-message evidence; Claude uses
 native message groups and terminal evidence/receipts. Grok intentionally remains
-unclassified because ACP chunks do not establish a final-message boundary.
+unclassified because ACP chunks do not establish a final-message boundary;
+OpenCode also intentionally remains unclassified.
+
+Live progress is a separate, passive observation of an already projected,
+completed provisional assistant item on an active Sedes-accepted turn. Providers
+must attach `liveProgress: true` to the qualifying live `item_completed` or
+`item_updated` event; phase plus a running turn alone is insufficient evidence.
+Codex qualifies native commentary completion, Pi qualifies native assistant
+message-end containing a tool call, and Claude qualifies a live tool-use
+message group, including earlier closed text reclassified by a later block of
+that same group. Grok and OpenCode intentionally do not produce live progress.
+History, snapshots, terminal retrospective classification, reasoning, tool
+output, and provider-only turns never create progress. The annotation is
+server-private and does not enter normalized browser items or sidecar native
+protocols. The actor emits only after successful projection, and the observer
+requires a principal-scoped accepted submission correlation. Deduplicate by the
+stable normalized thread, turn, and item identity; no text matching or partial
+delta notification is allowed.
 
 The authoritative completion transaction freezes the three nullable sections.
 Historical rows with unavailable classification remain unavailable on replay;
@@ -2132,10 +2149,10 @@ wrong-scope denial, event eligibility, generation fencing, and disabled-path
 avoidance of result copying. Partition before bounding with one 16 KiB text
 budget, prioritizing final, then provisional, then unclassified. The serialized
 64 KiB notification limit can further shorten sections or omit the result
-without dropping otherwise valid metadata. Notification version 3 carries these
+without dropping otherwise valid metadata. Notification version 4 carries these
 selected sections, omitting unselected keys; scripts must not accept obsolete
 shapes as aliases. The principal-owned `assistantResultPhases` selection defaults
-to empty and shares notification revision/generation fencing. It is the sole
+to final and unclassified on new settings and shares notification revision/generation fencing. It is the sole
 response-inclusion control; no separate master boolean is accepted. Filtering
 precedes response copying: unselected sections must not be read or cloned. An
 empty phase selection produces metadata-only delivery.

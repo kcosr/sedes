@@ -4,4 +4,6 @@
     <string name="title_activity_main">Sedes</string>
     <string name="package_name">dev.sedes.local</string>
     <string name="custom_url_scheme">dev.sedes.local</string>
+    <string name="voice_stop">Stop</string>
+    <string name="voice_skip">Skip</string>
 </resources>

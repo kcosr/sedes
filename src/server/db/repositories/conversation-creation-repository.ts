@@ -1,4 +1,6 @@
 import type Database from "better-sqlite3";
+import type { ClientOrigin } from "../../../shared/protocol/thread-input.js";
+import { DirectInputRepository } from "./direct-input-repository.js";
 import { DomainError } from "../../domain/errors.js";
 import type { RequestScope } from "../../identity/identity-provider.js";
 import type { ContextExcerpt } from "../../../shared/protocol/context-excerpts.js";
@@ -53,7 +55,8 @@ export type ConversationCreationAttemptRecord = {
     | "automation"
     | "user_fork"
     | "agent_control"
-    | "principal_client";
+    | "principal_client"
+    | "direct_input";
   readonly sourceAutomationId: string | null;
   readonly sourceAutomationRunId: string | null;
   readonly initiatingAgentThreadId: string | null;
@@ -163,7 +166,18 @@ type ThreadTargetRow = {
   readonly revision: number;
 };
 
-export type PrepareCreationAttemptInput =
+export type PrepareCreationAttemptInput = (
+  | {
+      readonly attemptId: string;
+      readonly mutationId: string;
+      readonly expectedThreadRevision: number;
+      readonly creationKind: "first_input";
+      readonly sourceKind: "direct_input";
+      readonly initialInputText: string;
+      readonly initialAttachmentIds: readonly [];
+      readonly backendCreationCorrelation: string;
+      readonly now: number;
+    }
   | {
       readonly attemptId: string;
       readonly mutationId: string;
@@ -279,7 +293,7 @@ export type PrepareCreationAttemptInput =
       readonly initialAttachmentIds: readonly [];
       readonly backendCreationCorrelation: string;
       readonly now: number;
-    };
+    }) & { readonly origin?: ClientOrigin };
 
 const phaseTransitions: Readonly<
   Record<CreationAttemptPhase, readonly CreationAttemptPhase[]>
@@ -418,6 +432,9 @@ export class ConversationCreationRepository {
             "conflict",
             "The creation mutation ID was reused with different input.",
           );
+        }
+        if (input.creationKind === "first_input") {
+          new DirectInputRepository(this.database).recordOrigin(scope, applicationThreadId, input.mutationId, input.origin);
         }
         return replay;
       }
@@ -604,6 +621,9 @@ export class ConversationCreationRepository {
           targetOperationId: input.mutationId,
           registeredAt: input.now,
         });
+      }
+      if (input.creationKind === "first_input") {
+        new DirectInputRepository(this.database).recordOrigin(scope, applicationThreadId, input.mutationId, input.origin);
       }
       return this.get(scope, applicationThreadId, input.attemptId);
     })();

@@ -65,6 +65,8 @@ import {
 import { Button } from "../components/ui/button.js";
 import { ThreadArchiveOperationHost } from "../operations/ThreadArchiveOperationHost.js";
 import { OperationOverlayHost } from "../operations/OperationOverlay.js";
+import { useClientOrigin } from "../voice/VoiceProvider.js";
+import { disconnectNativeVoice } from "../voice/native-voice-plugin.js";
 
 export function App({
   panelTenants = workspacePanelTenants,
@@ -92,6 +94,9 @@ function AndroidApp({ panelTenants }: { readonly panelTenants: WorkspacePanelTen
   useEffect(() => { let alive = true; void loadPackagedConnections().then((value) => { if (alive) setConnections(value); }).catch((error: unknown) => { if (alive) { setStorageError(messageFrom(error)); setConnections(emptyPackagedConnections()); } }); return () => { alive = false; }; }, []);
   if (!connections) return <FullPageLoading />;
   const save = async (next: PackagedConnectionPreferences) => {
+    const previous = connections.profiles.find(profile => profile.id === connections.selectedProfileId);
+    const selected = next.profiles.find(profile => profile.id === next.selectedProfileId);
+    if (previous?.id !== selected?.id || previous?.baseUrl !== selected?.baseUrl) await disconnectNativeVoice();
     setConnections(await savePackagedConnections(next)); setStorageError(undefined); navigate("/", { replace: true });
   };
   const controls: ServerSettingsControls = {
@@ -679,8 +684,9 @@ function ConnectedApp({
   electronConnectionSettings?: ElectronConnectionSettingsControls;
   panelTenants: WorkspacePanelTenantRegistry;
 }): React.JSX.Element {
+  const clientOrigin = useClientOrigin();
   const dependencies = useMemo(() => {
-    const api = new ApiClient(endpoint);
+    const api = new ApiClient(endpoint, undefined, clientOrigin);
     const transport = new BrowserEventStreamTransport(endpoint);
     const threadRegistry = new ThreadStoreRegistry(api, transport);
     const applicationStore = new ApplicationClientStore(api, transport);
@@ -697,7 +703,7 @@ function ConnectedApp({
       disposed: false,
       panelLayoutStore: new PanelLayoutStore(panelTenants),
     };
-  }, [endpoint.baseUrl, panelTenants]);
+  }, [endpoint.baseUrl, panelTenants, clientOrigin]);
   const state = useApplicationStore(dependencies.applicationStore);
 
   useEffect(() => {

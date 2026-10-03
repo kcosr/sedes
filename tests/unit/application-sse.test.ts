@@ -130,6 +130,52 @@ function publishByteBoundarySuffix(
 }
 
 describe("serveApplicationEventStream", () => {
+  it("closes both lanes when a transient frame cannot be written", async () => {
+    const hub = new ApplicationEventHub();
+    const baseline = hub.publish({ type: "snapshot", generation: hub.generation, snapshot: emptySnapshot });
+    const request = new FakeRequest();
+    const response = new FakeResponse();
+    const unsubscribe = vi.fn();
+    let transient!: (frame: string) => void;
+    await serveApplicationEventStream(request as unknown as Request, response as unknown as Response, hub,
+      async () => ({ envelope: baseline }), {
+        subscribeTransient: listener => { transient = listener; return unsubscribe; },
+      });
+    response.writeResult = () => { throw new Error("socket unavailable"); };
+    expect(() => transient('event: notification\ndata: {}\n\n')).not.toThrow();
+    expect(response.end).toHaveBeenCalledOnce();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    const writes = response.writes.length;
+    hub.publish({ type: "inventory_counts_changed", generation: hub.generation, counts: emptySnapshot.counts });
+    expect(response.writes).toHaveLength(writes);
+  });
+
+  it("keeps transient policy and notifications outside inventory replay and snapshot supersession", async () => {
+    const hub = new ApplicationEventHub();
+    const baseline = hub.publish({ type: "snapshot", generation: hub.generation, snapshot: emptySnapshot });
+    let release!: (value: { envelope: ApplicationEventEnvelope }) => void;
+    const checkpoint = new Promise<{ envelope: ApplicationEventEnvelope }>(resolve => { release = resolve; });
+    const request = new FakeRequest();
+    const response = new FakeResponse();
+    let transient!: (frame: string) => void;
+    const unsubscribe = vi.fn();
+    const serving = serveApplicationEventStream(request as unknown as Request, response as unknown as Response, hub, () => checkpoint, {
+      subscribeTransient: listener => { transient = listener; listener('event: notification_policy\ndata: {"generation":1}\n\n'); return unsubscribe; },
+    });
+    transient('event: notification\ndata: {"sourceEventId":"one"}\n\n');
+    const replacement = hub.publish({ type: "snapshot", generation: hub.generation, snapshot: emptySnapshot });
+    release({ envelope: replacement });
+    await serving;
+    const special = response.writes.filter(frame => frame.startsWith("event: notification"));
+    expect(special).toHaveLength(2);
+    expect(special[0]).toContain("notification_policy");
+    expect(special.join("")).not.toMatch(/^id:/m);
+    expect(hub.watermark).toBe(2);
+    expect(hub.subscribe(() => {}, baseline.eventId).replay).toEqual([]);
+    response.emit("close");
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    hub.close();
+  });
   it.each([31, 32, 33])(
     "selects replay or one current checkpoint for a %i-event gap without constructing rejected replay",
     async (gap) => {

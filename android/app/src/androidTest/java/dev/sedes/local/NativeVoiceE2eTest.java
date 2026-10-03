@@ -1,0 +1,260 @@
+package dev.sedes.local;
+
+import static org.junit.Assert.*;
+import android.app.Instrumentation;
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.content.Context;
+import android.content.Intent;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.SystemClock;
+import android.service.notification.StatusBarNotification;
+import android.webkit.WebView;
+import android.view.View;
+import android.graphics.Bitmap;
+import java.io.File;
+import java.io.FileOutputStream;
+import androidx.test.platform.app.InstrumentationRegistry;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.junit.Assume;
+import org.junit.Test;
+
+/** Opt-in full-system lane. The host starts real Sedes/adapter with loopback provider fixtures. */
+public class NativeVoiceE2eTest {
+    private Instrumentation instrumentation;
+    private WebView web;
+    private NativeVoiceRuntime runtime;
+    private final List<String> phases = new CopyOnWriteArrayList<>();
+    private final List<String> screenshots = new CopyOnWriteArrayList<>();
+    private String runLabel;
+
+    @Test(timeout = 300000) public void nativeConversationCycle() throws Exception {
+        Bundle args = InstrumentationRegistry.getArguments();
+        String server = args.getString("serverOrigin"), adapter = args.getString("adapterOrigin"), pairing = args.getString("pairingCode");
+        Assume.assumeTrue("Requires the isolated native voice host harness", server != null && adapter != null && pairing != null);
+        String thread = required(args, "threadId"), title = args.getString("threadTitle", "Voice fixture");
+        String mode = args.getString("mode", "response"), scenario = args.getString("scenario", "cycle");
+        runLabel = scenario + "-" + mode + "-" + System.currentTimeMillis();
+        String initial = args.getString("initialText", "native voice fixture start"), draft = args.getString("draftText", "unsent draft preserved by voice");
+        instrumentation = InstrumentationRegistry.getInstrumentation(); Context context = instrumentation.getTargetContext();
+        NativeVoiceAudioTest.grant(context, "android.permission.RECORD_AUDIO");
+        if (Build.VERSION.SDK_INT >= 33) NativeVoiceAudioTest.grant(context, "android.permission.POST_NOTIFICATIONS");
+        MainActivity activity = (MainActivity) instrumentation.startActivitySync(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        instrumentation.runOnMainSync(() -> web = activity.getBridge().getWebView()); runtime = NativeVoiceRuntime.get(context);
+        NativeVoiceRuntime.Observer observer = (event, value) -> {
+            if (event.equals("stateChanged")) { String phase = value.optString("phase"); if (phases.isEmpty() || !phase.equals(phases.get(phases.size() - 1))) phases.add(phase); }
+        };
+        runtime.observe(observer);
+        AtomicInteger inputAttempts = new AtomicInteger(), receiptReads = new AtomicInteger();
+        AtomicBoolean allowReceipt = new AtomicBoolean(false);
+        List<String> mutationIds = new CopyOnWriteArrayList<>();
+        boolean recoveryScenario = scenario.equals("lost-ack") || scenario.equals("lost-send") || scenario.equals("cancel-uncertain");
+        if (recoveryScenario) NativeVoiceHttp.setTestTransport(new NativeVoiceHttp.TestTransport() {
+            public boolean before(String method, String path, JSONObject body, NativeVoiceHttp.Result result) {
+                if (method.equals("POST") && path.endsWith("/inputs")) {
+                    mutationIds.add(body.optString("mutationId"));
+                    int attempt = inputAttempts.incrementAndGet();
+                    if (scenario.equals("lost-send") && attempt == 1) { result.done(0, null, "test_send_not_delivered"); return true; }
+                }
+                return false;
+            }
+            public boolean after(String method, String path, JSONObject body, int status, JSONObject response, NativeVoiceHttp.Result result) {
+                if (method.equals("POST") && path.endsWith("/inputs") && !scenario.equals("lost-send")) {
+                    result.done(0, null, "test_response_not_delivered"); return true;
+                }
+                if (method.equals("GET") && path.startsWith("/api/input-receipts/")) {
+                    receiptReads.incrementAndGet();
+                    if (!allowReceipt.get()) { result.done(0, null, "test_response_not_delivered"); return true; }
+                }
+                return false;
+            }
+        });
+        AtomicInteger supplied = new AtomicInteger(), silenceChunks = new AtomicInteger();
+        AtomicBoolean allowCaptureCompletion = new AtomicBoolean();
+        NativeVoiceAudio.setTestSource(() -> {
+            int speechChunks = scenario.equals("retarget") ? 60 : 10;
+            int index = supplied.getAndIncrement();
+            // Keep speech present until the UI action under test is applied, regardless of emulator speed.
+            boolean speech = index < speechChunks || !allowCaptureCompletion.get();
+            if (!speech && silenceChunks.getAndIncrement() >= 20) return null;
+            SystemClock.sleep(80);
+            byte[] pcm = new byte[3200];
+            if (speech) for (int i = 0; i < 1600; i++) {
+                short sample = (short) (6000 * Math.sin(2 * Math.PI * 440 * (index * 1600 + i) / 16000));
+                pcm[i * 2] = (byte) sample; pcm[i * 2 + 1] = (byte) (sample >> 8);
+            }
+            return pcm;
+        });
+        long began = SystemClock.elapsedRealtime();
+        try {
+            waitJs("document.querySelector('#setting-sedes-name') !== null", 45000);
+            input("#setting-sedes-name", "Voice fixture " + System.currentTimeMillis()); input("#setting-sedes-server", server);
+            clickText("Add & connect"); waitJs("document.querySelector('#pairing-token') !== null", 45000);
+            input("#pairing-token", pairing); clickText("Pair connection");
+            await(() -> runtime.snapshot().optString("originClientId", "").length() > 0 && !runtime.snapshot().isNull("originClientId"), 45000, "native authenticated bootstrap");
+            waitJs("document.querySelector('[aria-label=\"Voice settings\"]') !== null", 30000);
+            click("[aria-label=\"Voice settings\"]"); waitJs("Array.from(document.querySelectorAll('label')).some(x=>x.textContent.trim()==='Adapter URL')", 15000);
+            inputByLabel("Adapter URL", adapter); click("[aria-label=\"Save Adapter URL\"]");
+            await(() -> adapter.equals(runtime.snapshot().optJSONObject("settings").optString("adapterUrl")), 15000, "adapter URL saved");
+            selectByLabel("Audio mode", mode);
+            await(() -> runtime.snapshot().optBoolean("ready"), 45000, "native adapter handshake");
+            await(() -> runtime.snapshot().optString("phase").equals("idle"), 10000, "idle after handshake with an empty queue");
+            assertTrue("Idle voice must offer explicit recording", runtime.snapshot().optJSONObject("actions").optBoolean("canStart"));
+            // Route through the actual bundled application; all subsequent operations use its UI.
+            js("(()=>{history.pushState({},''," + JSONObject.quote("/threads/" + thread) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
+            waitJs("document.querySelector('[data-testid=\"composer\"] textarea:not(:disabled)') !== null", 45000);
+            input("[data-testid=\"composer\"] textarea", initial);
+            waitJs("!!document.querySelector('[aria-label=\"Send message\"]:not(:disabled)')", 15000); click("[aria-label=\"Send message\"]");
+            waitJs("document.querySelector('[data-testid=\"composer\"] textarea')?.value === ''", 15000);
+            input("[data-testid=\"composer\"] textarea", draft);
+            if (!scenario.equals("background") && !scenario.equals("skip") && !scenario.equals("stop") && !scenario.equals("retarget")) screenshot("active");
+            if (scenario.equals("background")) {
+                instrumentation.runOnMainSync(() -> activity.moveTaskToBack(true));
+                await(() -> !runtime.snapshot().optJSONObject("foreground").optBoolean("visible"), 10000, "native background visibility");
+                screenshot("background");
+            }
+            if (scenario.equals("skip")) { await(() -> runtime.snapshot().optJSONObject("actions").optBoolean("canSkip"), 45000, "speech before Skip"); notificationAction(context, "Skip"); }
+            if (scenario.equals("stop")) {
+                await(() -> runtime.snapshot().optString("phase").equals("listening"), 45000, "recognition before Stop"); notificationAction(context, "Stop");
+                SystemClock.sleep(1500); assertFalse(phases.contains("submitting"));
+            } else {
+                if (scenario.equals("retarget")) {
+                    String second = required(args, "secondThreadId");
+                    await(() -> runtime.snapshot().optString("phase").equals("listening"), 45000, "recognition before retarget");
+                    click("[aria-label=\"Change recording target\"]"); clickText(args.getString("secondThreadTitle", second));
+                    await(() -> second.equals(runtime.snapshot().optJSONObject("active").optString("recognitionThreadId")), 10000, "retarget applied");
+                    screenshot("retargeted");
+                }
+                allowCaptureCompletion.set(true);
+                await(() -> phases.contains("submitting"), 60000, "recognized text admission");
+                if (recoveryScenario) {
+                    await(() -> runtime.snapshot().optString("phase").equals("recovering") && receiptReads.get() >= 1, 15000, "uncertain input after transport loss");
+                    assertEquals(1, runtime.snapshot().optJSONArray("recovery").length());
+                    String mutation = runtime.snapshot().optJSONArray("recovery").optJSONObject(0).optString("mutationId");
+                    assertEquals(mutationIds.get(0), mutation);
+                    screenshot("uncertain");
+                    if (scenario.equals("cancel-uncertain")) {
+                        notificationAction(context, "Stop");
+                        await(() -> runtime.snapshot().optJSONArray("recovery").optJSONObject(0).optBoolean("cancelled"), 10000, "durable cancellation intent");
+                        SystemClock.sleep(1200); assertEquals(1, inputAttempts.get());
+                        assertTrue(runtime.snapshot().isNull("active"));
+                        // Re-entering the same authenticated binding must reconcile the journal read-only.
+                        allowReceipt.set(true);
+                        JSONObject bound = runtime.snapshot();
+                        command("disconnect", new JSONObject());
+                        command("setConnection", NativeVoiceJson.object("profileId", bound.optString("profileId"), "serverOrigin", server, "identity", bound.optString("identity")));
+                    } else {
+                        allowReceipt.set(true);
+                        click("[aria-label=\"Voice settings\"]"); clickText("Resume input");
+                    }
+                }
+                await(() -> runtime.snapshot().optJSONArray("recovery").length() == 0 && !runtime.snapshot().optString("phase").equals("submitting"), 45000, "definitive input receipt");
+                if (recoveryScenario) {
+                    assertEquals(scenario.equals("lost-send") ? 2 : 1, inputAttempts.get());
+                    assertEquals(1, new java.util.HashSet<>(mutationIds).size());
+                    js("(()=>{history.pushState({},''," + JSONObject.quote("/threads/" + thread) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
+                }
+            }
+            if (scenario.equals("background")) instrumentation.startActivitySync(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            waitJs("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(draft), 15000);
+            screenshot("settled");
+            assertTrue("Capture did not traverse the deterministic audio source", supplied.get() > 0);
+            if (mode.equals("response") && !scenario.equals("stop")) assertTrue("No actual AudioTrack playback phase", phases.contains("speaking"));
+            JSONObject result = NativeVoiceJson.object("scenario", scenario, "mode", mode, "elapsedMs", SystemClock.elapsedRealtime() - began,
+                "phases", new JSONArray(phases), "captureChunks", supplied.get(), "audioSource", "deterministic-pcm", "audioSink", "AudioTrack",
+                "draftPreserved", true, "journalOutstanding", runtime.snapshot().optJSONArray("recovery").length(),
+                "inputAttempts", inputAttempts.get(), "receiptReads", receiptReads.get(), "mutationIds", new JSONArray(mutationIds),
+                "screenshots", new JSONArray(screenshots));
+            Bundle resultBundle = new Bundle(); resultBundle.putString("voiceResult", result.toString()); instrumentation.sendStatus(0, resultBundle);
+        } finally {
+            runtime.unobserve(observer);
+            JSONObject snapshot = runtime.snapshot();
+            CountDownLatch stopped = new CountDownLatch(1);
+            if (!snapshot.isNull("identity")) runtime.command("updateSettings", NativeVoiceJson.object("expectedRevision", snapshot.optLong("settingsRevision"),
+                "patch", NativeVoiceJson.object("audioMode", "off")), false, new NativeVoiceRuntime.Reply() {
+                    public void done(JSONObject ignored) { stopped.countDown(); } public void failed(String code, String message) { stopped.countDown(); } });
+            else stopped.countDown();
+            stopped.await(10, TimeUnit.SECONDS); NativeVoiceAudio.setTestSource(null); NativeVoiceHttp.setTestTransport(null);
+            instrumentation.runOnMainSync(activity::finish);
+        }
+    }
+    private void screenshot(String phase) throws Exception {
+        File directory = new File(instrumentation.getTargetContext().getExternalFilesDir(null), "native-voice");
+        assertTrue("Screenshot directory unavailable", directory.isDirectory() || directory.mkdirs());
+        File output = new File(directory, runLabel + "-" + phase + ".png");
+        Bitmap bitmap = instrumentation.getUiAutomation().takeScreenshot(); assertNotNull("Screenshot unavailable", bitmap);
+        try (FileOutputStream stream = new FileOutputStream(output)) { assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)); }
+        finally { bitmap.recycle(); }
+        screenshots.add(output.getAbsolutePath());
+    }
+    private JSONObject command(String action, JSONObject args) throws Exception {
+        CountDownLatch done = new CountDownLatch(1); AtomicReference<JSONObject> value = new AtomicReference<>(); AtomicReference<String> error = new AtomicReference<>();
+        runtime.command(action, args, true, new NativeVoiceRuntime.Reply() {
+            public void done(JSONObject result) { value.set(result); done.countDown(); }
+            public void failed(String code, String message) { error.set(code); done.countDown(); }
+        });
+        assertTrue("Native command did not finish: " + action, done.await(30, TimeUnit.SECONDS)); assertNull(error.get()); return value.get();
+    }
+    private static String required(Bundle args, String name) { String value = args.getString(name); if (value == null) throw new IllegalArgumentException("Missing instrumentation argument " + name); return value; }
+    private static void await(BooleanSupplier condition, long timeout, String description) {
+        long end = SystemClock.elapsedRealtime() + timeout;
+        while (!condition.getAsBoolean() && SystemClock.elapsedRealtime() < end) SystemClock.sleep(50);
+        assertTrue("Timed out waiting for " + description, condition.getAsBoolean());
+    }
+    private String js(String source) throws Exception {
+        CountDownLatch done = new CountDownLatch(1); AtomicReference<String> value = new AtomicReference<>();
+        instrumentation.runOnMainSync(() -> web.evaluateJavascript("(()=>{" + "return (" + source + ");})()", result -> { value.set(result); done.countDown(); }));
+        assertTrue("WebView JavaScript did not return", done.await(15, TimeUnit.SECONDS)); return value.get();
+    }
+    private void waitJs(String condition, long timeout) throws Exception {
+        long end = SystemClock.elapsedRealtime() + timeout;
+        while (SystemClock.elapsedRealtime() < end) { if ("true".equals(js(condition))) return; SystemClock.sleep(100); }
+        fail("Timed out waiting for UI: " + condition + "; body=" + js("document.body.innerText.slice(0,1800)"));
+    }
+    private void click(String selector) throws Exception {
+        assertEquals("true", js("(()=>{const e=document.querySelector(" + JSONObject.quote(selector) + ");if(!e||e.disabled)return false;e.click();return true})()"));
+    }
+    private void clickText(String text) throws Exception {
+        waitJs("Array.from(document.querySelectorAll('button')).some(x=>x.textContent.trim()===" + JSONObject.quote(text) + "&&!x.disabled)", 15000);
+        assertEquals("true", js("(()=>{const e=Array.from(document.querySelectorAll('button')).find(x=>x.textContent.trim()===" + JSONObject.quote(text) + ");e.click();return true})()"));
+    }
+    private void input(String selector, String value) throws Exception {
+        assertEquals("true", js("(()=>{const e=document.querySelector(" + JSONObject.quote(selector) + ");if(!e)return false;const p=e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(p,'value').set.call(e," + JSONObject.quote(value) + ");e.dispatchEvent(new Event('input',{bubbles:true}));return true})()"));
+    }
+    private void inputByLabel(String label, String value) throws Exception {
+        assertEquals("true", js("(()=>{const l=Array.from(document.querySelectorAll('label')).find(x=>x.textContent.trim()===" + JSONObject.quote(label) + ");const e=document.getElementById(l.htmlFor);Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e," + JSONObject.quote(value) + ");e.dispatchEvent(new Event('input',{bubbles:true}));return true})()"));
+    }
+    private void selectByLabel(String label, String value) throws Exception {
+        assertEquals("true", js("(()=>{const l=Array.from(document.querySelectorAll('label')).find(x=>x.textContent.trim()===" + JSONObject.quote(label) + ");const e=document.getElementById(l.htmlFor);e.value=" + JSONObject.quote(value) + ";e.dispatchEvent(new Event('change',{bubbles:true}));return true})()"));
+    }
+    private static void notificationAction(Context context, String title) throws Exception {
+        long deadline = SystemClock.elapsedRealtime() + 10000;
+        while (SystemClock.elapsedRealtime() < deadline) {
+            for (StatusBarNotification notification : context.getSystemService(NotificationManager.class).getActiveNotifications()) {
+                if (notification.getNotification().actions != null) for (Notification.Action action : notification.getNotification().actions)
+                    if (title.contentEquals(action.title)) { action.actionIntent.send(); return; }
+                if (notification.getNotification().bigContentView != null && (title.equals("Stop") || title.equals("Skip"))) {
+                    AtomicBoolean clicked = new AtomicBoolean();
+                    InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                        View view = notification.getNotification().bigContentView.apply(context, null);
+                        View button = view.findViewById(title.equals("Stop") ? R.id.voice_notification_stop : R.id.voice_notification_skip);
+                        if (button != null) clicked.set(button.performClick());
+                    });
+                    if (clicked.get()) return;
+                }
+            }
+            SystemClock.sleep(50);
+        }
+        fail("Notification action missing: " + title);
+    }
+}
