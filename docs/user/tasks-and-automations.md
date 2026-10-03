@@ -9,7 +9,7 @@ A Task contains:
 
 - a title;
 - optional notes or follow-up steps;
-- complete and pinned state;
+- complete, pinned, and backlog state;
 - optional absolute file references; and
 - one scope: Global, Project, or Thread.
 
@@ -29,8 +29,15 @@ A Project Task belongs to the whole project, so every
 host. It stays with the project when you move or remove a location, and is
 hidden while the project is removed. A Thread Task follows its thread.
 
-Complete a Task when the work is done. Completion does not send a provider
-message or settle its thread.
+Pin a Task to keep it at the top of its section. Send a Task to the
+**Backlog** when it is still open but not current work: it waits in a
+collapsed **Backlog** section, out of the way but not lost. Pin and Backlog are
+independent, so a pinned backlog Task is a high-priority backlog item and sits
+at the top of the Backlog section.
+
+Complete a Task when the work is done. Completing a Task unpins it and takes it
+out of the Backlog; reopening it returns it to the open list. Completion does
+not send a provider message or settle its thread.
 
 ## Open Tasks
 
@@ -51,13 +58,12 @@ On phones and other narrow screens, Tasks opens as a bottom sheet. Resizing
 the window across that width closes the sheet, unless you are editing a Task:
 then Tasks stays open in the new presentation, with your edit as you left it.
 
-The button's badge counts the current thread's open Tasks. The Tasks header
-counts what the list shows: the view's open Tasks, like its scope segment, or
-"1 of 3" while a search or **Only** narrows them, and completed Tasks under
-**Show** › **Completed**.
+The button's badge counts the current thread's open Tasks, backlog Tasks
+included. The Tasks header counts the view's open Tasks, Backlog included,
+like its scope segment, or "1 of 3" while a search or **Only** narrows them.
 
-Only open Tasks directly scoped to a thread contribute to that sidebar row's
-Task count. Project and global Tasks, and Tasks on fork descendants, are not
+Only open Tasks directly scoped to a thread, backlog Tasks included,
+contribute to that sidebar row's Task count. Project and global Tasks, and Tasks on fork descendants, are not
 rolled into the parent row.
 
 ## Choose a view
@@ -101,6 +107,8 @@ once. Searching never blocks adding.
   Task. In the notes field, press Ctrl+Enter (Command+Enter on macOS) or select
   **Add task**. **Add a task with notes** in the Tasks menu opens the same
   field.
+- While **Only** › **Pinned** or **Only** › **Backlog** is on, a new Task is
+  created pinned or in the Backlog to match, so it stays in view.
 - Paste several lines to create one Task per line. Sedes asks first, in a
   **Create N tasks?** dialog that previews the titles. It ignores empty lines,
   removes list bullets, numbers, and checkboxes, and accepts up to 50 lines at
@@ -120,32 +128,54 @@ clears the search and closes it.
 
 | Option | Choices |
 | --- | --- |
-| **Sort** | **Pinned, then newest** (the default), **Recently updated**, or **Title** |
-| **Show** | **Open** (the default, with completed Tasks in a collapsed section) or **Completed** |
-| **Only** | Any of **Pinned**, **With notes**, and **With files** |
+| **Sort** | **Newest** (the default), **Recently updated**, or **Title** |
+| **Only** | Any of **Pinned**, **Backlog**, **With notes**, and **With files** |
 | **Group by project** | All only; on by default |
 | **Include thread tasks** | Project only; off by default |
 | **Search notes** | Off by default |
 
-Each view remembers its own options on this device. While **Show** or **Only**
-hides Tasks, a chip for each one, such as **Pinned only**, sits under the
-scope control, and the filter icon shows a dot; select a chip's **×** to
-remove it. When nothing matches, the list offers to reset them. On phones,
-View options are in the sheet's **⋯** menu.
+Each view remembers its own options on this device. While **Only** hides
+Tasks, a chip for each choice, such as **Pinned only**, sits under the scope
+control, and the filter icon shows a dot; select a chip's **×** to remove it.
+When nothing matches, the list offers to reset them. On phones, View options
+are in the sheet's **⋯** menu.
 
-With the default sort, pinned Tasks come first, then the most recently created.
-Editing or moving a Task does not change its creation order.
+The **Pin** button in the Tasks header, beside Search, is the same setting as
+**Only** › **Pinned**: select it to see only pinned Tasks, and again to see
+them all.
+
+The list always has the same shape: the open Tasks, then a collapsed
+**Backlog** section, then a collapsed **Completed** section, each with its
+count and shown only when it has Tasks. Sort orders the Tasks within each
+section, and pinned Tasks always come first. **Newest** puts the most recently
+created first, so a new backlog Task sits at the top of the Backlog; editing or
+moving a Task does not change its creation order. Completed Tasks are never
+pinned, and with **Newest** the most recently completed come first.
+
+**Only** › **Pinned** narrows every section to pinned Tasks; pinned backlog
+Tasks stay in the Backlog section. **Only** › **Backlog** makes the backlog
+Tasks the list, grouped like any list in All, with no Backlog section. Neither
+shows completed Tasks.
 
 ## Work with a Task
 
 Each row shows the completion circle, the title, and small indicators for
 notes, the number of linked files, and a pin. Its **⋯** menu appears on hover
-or focus, and always on touch screens.
+or focus, and always on touch screens. On touch screens, a row with a line
+saying where its Task belongs shows the indicators at the end of that line, so
+the title has the row's whole width.
 
 Select the circle, or press Space, to complete a Task. Completed Tasks are
-muted, struck through, and collected in a collapsed **Completed** section,
-with its count, at the end of the list, most recently completed first. Pinning does not lift
-a completed Task. Select the circle again to reopen it.
+muted, struck through, and collected in the collapsed **Completed** section.
+Select the circle again to reopen it.
+
+Choose **Send to Backlog** in the row menu, or press B, to move a Task into
+the collapsed **Backlog** section; **Take out of Backlog** returns it. When
+the open list is empty but the Backlog is not, the list says so.
+
+Opening a Task from a transcript card shows it even when a search or **Only**
+option would hide it, and expands its Backlog or Completed section. The search
+and options stay as they were; the Task stays shown until you change them.
 
 Only the Task you act on waits for the server. The add row and the other rows
 stay available, and errors appear at the top of the list until you dismiss
@@ -176,8 +206,12 @@ it. You can change:
 - **Belongs to**, a searchable list of this thread, this project, Global, and
   your other projects and threads, which moves the Task;
 - **Files**, where **Add file** takes an absolute path and reports a problem
-  on the field; and
-- **Pinned**.
+  on the field;
+- **Pinned**; and
+- **Backlog**.
+
+A completed Task can't be pinned or sent to the Backlog: both switches are off
+and say to reopen the Task first.
 
 Choose **Save**, or press Ctrl+Enter (Command+Enter on macOS). Closing with
 unsaved changes asks before discarding them. If the Task changed elsewhere
@@ -192,6 +226,7 @@ The row's **⋯** menu has:
 - **Add to prompt**;
 - **Edit…**;
 - **Pin** or **Unpin**;
+- **Send to Backlog** or **Take out of Backlog**;
 - **Move to**, with **This thread**, **This project**, **Global**, and
   **Choose…**, which searches every project and thread; and
 - **Delete…**.
@@ -242,13 +277,15 @@ shortcuts** in the Tasks menu lists them.
 | Space | Complete or reopen |
 | E | Edit |
 | P | Pin or unpin |
+| B | Send to or take out of the Backlog |
 | M | Move to… |
 | Delete | Delete, after confirmation |
 | Ctrl+Enter (Command+Enter on macOS) | Add to prompt |
 | Escape | Close the details, then the search |
 
-The Right arrow moves from a row to its **⋯** button. On a group or
-**Completed** heading, the Right and Left arrows expand and collapse it. In the
+P and B do nothing on a completed Task. The Right arrow moves from a row to its
+**⋯** button. On a group, **Backlog**, or **Completed** heading, the Right and
+Left arrows expand and collapse it. In the
 phone sheet, Escape closes Tasks once the details and search are closed.
 
 ## Link files to a Task

@@ -2372,7 +2372,7 @@ describe("application sidebar background-work wire contract", () => {
     advisories: [], defaultNewThreadTargetId: "target-1", counts, tasks: [],
   };
   it("carries the same counts through snapshot and thread-upsert events without changing run state", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(135);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(136);
     expect(normalizedApplicationEventSchema.parse({ type: "snapshot", generation: "generation-1", snapshot }))
       .toMatchObject({ snapshot: { threads: [{ runState: "idle", backgroundWork }] } });
     expect(normalizedApplicationEventSchema.parse({ type: "thread_upsert", generation: "generation-1", thread, counts }))

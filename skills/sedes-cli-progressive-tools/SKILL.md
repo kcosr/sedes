@@ -135,6 +135,15 @@ intended fields. A revision conflict is authoritative: read again before
 deciding whether another update is appropriate. Never create again to correct
 or verify an uncertain creation.
 
+### Pin and backlog
+
+Every task carries `pinned` and `backlog`. A pinned task sorts first within its
+section; a backlog task is open but not current work. Task lists include
+backlog tasks unless the `backlog` filter excludes them, so a task that may
+already exist can be in the backlog. Pin a task, or move it into or out of the
+backlog, only when the user asks. Completing a task unpins it and takes it out
+of the backlog, and a completed task cannot be pinned or put in the backlog.
+
 ## Policy and source authority
 
 - Re-list once after a denial or disappearance. Do not retry through raw HTTP,

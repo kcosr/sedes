@@ -28,6 +28,7 @@ export function presentTask(record: TaskRecord): Task {
     title: record.title,
     details: record.details,
     pinned: record.pinned,
+    backlog: record.backlog,
     files: record.files,
     completedAt:
       record.completedAt === null

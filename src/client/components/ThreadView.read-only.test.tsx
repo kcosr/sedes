@@ -482,6 +482,7 @@ describe("ThreadView backend interaction modes", () => {
       title: "Attach me",
       details: "",
       pinned: false,
+      backlog: false,
       files: [],
       completedAt: null,
       revision: 2,

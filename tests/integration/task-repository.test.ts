@@ -406,7 +406,7 @@ describe("task repository", () => {
           mutationId,
           now: 2_000,
         }),
-      ).toEqual({ ...record, pinned: false, files: [] });
+      ).toEqual({ ...record, pinned: false, backlog: false, files: [] });
       expect(
         current.tasks.update(current.scope, taskId, {
           title: legacyUpdatedRecord.title,
@@ -414,7 +414,7 @@ describe("task repository", () => {
           mutationId: legacyUpdateMutationId,
           now: 2_500,
         }),
-      ).toEqual({ ...legacyUpdatedRecord, pinned: false, files: [] });
+      ).toEqual({ ...legacyUpdatedRecord, pinned: false, backlog: false, files: [] });
       expect(current.database.pragma("foreign_key_check")).toEqual([]);
     } finally {
       current.database.close();
@@ -1337,7 +1337,7 @@ describe("task repository", () => {
           mutationId: "create-before-projects",
           now: 2_000,
         }),
-      ).toEqual({ ...rest, scopeKind: "project", projectId });
+      ).toEqual({ ...rest, scopeKind: "project", projectId, backlog: false });
       // The update fingerprint covered the former scope and an unstored
       // expected revision, so its replay fails closed.
       expect(() =>
@@ -1627,6 +1627,182 @@ describe("task repository", () => {
         now: 5_000,
       });
       expect(replayed).toEqual(reopened);
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("keeps pin and backlog independent and clears both on completion", () => {
+    const current = fixture();
+    const hash = (parts: readonly unknown[]) =>
+      createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+    const receiptFingerprint = (mutationId: string) =>
+      (
+        current.database
+          .prepare(
+            "SELECT request_fingerprint AS fingerprint FROM task_mutation_receipts WHERE mutation_id = ?",
+          )
+          .get(mutationId) as { readonly fingerprint: string }
+      ).fingerprint;
+    try {
+      const plain = current.tasks.create(current.scope, {
+        title: "Plain",
+        scope: { kind: "global" },
+        mutationId: "backlog-plain",
+        now: 1_000,
+      });
+      expect(plain).toMatchObject({ pinned: false, backlog: false });
+      // A create outside the backlog fingerprints as it did before Backlog.
+      expect(receiptFingerprint("backlog-plain")).toBe(
+        hash(["create_task", "Plain", "", false, [], "global"]),
+      );
+
+      const later = current.tasks.create(current.scope, {
+        title: "Later",
+        pinned: true,
+        backlog: true,
+        scope: { kind: "global" },
+        mutationId: "backlog-later",
+        now: 1_100,
+      });
+      expect(later).toMatchObject({ pinned: true, backlog: true });
+      expect(() =>
+        current.tasks.create(current.scope, {
+          title: "Later",
+          pinned: true,
+          scope: { kind: "global" },
+          mutationId: "backlog-later",
+          now: 1_200,
+        }),
+      ).toThrow(domainError("conflict"));
+
+      const out = current.tasks.update(current.scope, later.id, {
+        backlog: false,
+        expectedRevision: 0,
+        mutationId: "backlog-out",
+        now: 1_300,
+      });
+      expect(out).toMatchObject({ pinned: true, backlog: false, revision: 1 });
+      expect(receiptFingerprint("backlog-out")).toBe(
+        hash(["update_task", later.id, null, null, null, 0, null, null, null, false]),
+      );
+      const pinOnly = current.tasks.update(current.scope, later.id, {
+        pinned: false,
+        expectedRevision: 1,
+        mutationId: "backlog-pin-only",
+        now: 1_350,
+      });
+      // An update without backlog keeps its pre-Backlog fingerprint.
+      expect(receiptFingerprint("backlog-pin-only")).toBe(
+        hash(["update_task", later.id, null, null, null, 1, false, null, null]),
+      );
+      const both = current.tasks.update(current.scope, later.id, {
+        pinned: true,
+        backlog: true,
+        expectedRevision: pinOnly.revision,
+        mutationId: "backlog-both",
+        now: 1_400,
+      });
+      expect(both).toMatchObject({ pinned: true, backlog: true });
+
+      const summaries = (backlog?: boolean) =>
+        current.tasks
+          .listPage(current.scope, {
+            taskScope: { kind: "global" },
+            scopeMode: "exact",
+            ...(backlog === undefined ? {} : { backlog }),
+            projection: "summary",
+            pageSize: 50,
+          })
+          .items.map(({ id, pinned, backlog: inBacklog }) => ({
+            id,
+            pinned,
+            backlog: inBacklog,
+          }));
+      expect(summaries()).toEqual([
+        { id: plain.id, pinned: false, backlog: false },
+        { id: later.id, pinned: true, backlog: true },
+      ]);
+      expect(summaries(true)).toEqual([
+        { id: later.id, pinned: true, backlog: true },
+      ]);
+      expect(summaries(false)).toEqual([
+        { id: plain.id, pinned: false, backlog: false },
+      ]);
+
+      const completed = current.tasks.update(current.scope, later.id, {
+        completed: true,
+        expectedRevision: both.revision,
+        mutationId: "backlog-complete",
+        now: 1_500,
+      });
+      expect(completed).toMatchObject({
+        completedAt: 1_500,
+        pinned: false,
+        backlog: false,
+      });
+      for (const placement of [{ pinned: true }, { backlog: true }]) {
+        expect(() =>
+          current.tasks.update(current.scope, later.id, {
+            ...placement,
+            expectedRevision: completed.revision,
+            mutationId: `backlog-completed-${Object.keys(placement)[0]}`,
+            now: 1_600,
+          }),
+        ).toThrow(domainError("bad_request"));
+      }
+      // A stale revision reports the conflict, not the completed state.
+      expect(() =>
+        current.tasks.update(current.scope, later.id, {
+          pinned: true,
+          expectedRevision: 0,
+          mutationId: "backlog-completed-stale",
+          now: 1_600,
+        }),
+      ).toThrow(domainError("task_revision_conflict"));
+
+      const reopened = current.tasks.update(current.scope, later.id, {
+        completed: false,
+        backlog: true,
+        expectedRevision: completed.revision,
+        mutationId: "backlog-reopen",
+        now: 1_700,
+      });
+      expect(reopened).toMatchObject({
+        completedAt: null,
+        pinned: false,
+        backlog: true,
+      });
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("completes open thread tasks out of the backlog and unpinned when archiving", () => {
+    const current = fixture();
+    try {
+      const open = current.tasks.create(current.scope, {
+        title: "Backlogged thread task",
+        pinned: true,
+        backlog: true,
+        scope: { kind: "thread", threadId: current.firstThreadId },
+        mutationId: "disposition-backlog",
+        now: 1_000,
+      });
+      expect(
+        current.tasks.applyOpenThreadTaskDisposition(
+          current.scope,
+          [current.firstThreadId],
+          "complete",
+          2_000,
+        ),
+      ).toEqual([open.id]);
+      expect(current.tasks.get(current.scope, open.id)).toMatchObject({
+        completedAt: 2_000,
+        pinned: false,
+        backlog: false,
+        revision: 1,
+      });
     } finally {
       current.database.close();
     }

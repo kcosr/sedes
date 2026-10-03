@@ -227,6 +227,7 @@ function makeTask(
     title: `Task ${id}`,
     details: "",
     pinned: false,
+    backlog: false,
     files: [],
     completedAt,
     revision: 0,

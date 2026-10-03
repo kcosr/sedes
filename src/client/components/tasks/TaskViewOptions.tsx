@@ -1,8 +1,8 @@
 import {
   AlignLeft,
   ArrowDownAZ,
-  Circle,
-  CircleCheck,
+  ArrowDownToLine,
+  CalendarArrowDown,
   Clock,
   FileText,
   Layers,
@@ -18,29 +18,24 @@ import {
   DropdownMenuSeparator,
 } from "../ui/dropdown-menu.js";
 import type {
-  TasksShow,
   TasksSort,
   TasksView,
   TasksViewOptions,
 } from "../../app/tasks-panel-store.js";
 
+// Pinned tasks lead each section whatever the sort.
 const SORTS: readonly { value: TasksSort; label: string; icon: typeof Pin }[] = [
-  { value: "pinned-newest", label: "Pinned, then newest", icon: Pin },
+  { value: "newest", label: "Newest", icon: CalendarArrowDown },
   { value: "updated", label: "Recently updated", icon: Clock },
   { value: "title", label: "Title", icon: ArrowDownAZ },
-];
-
-const SHOWS: readonly { value: TasksShow; label: string; icon: typeof Pin }[] = [
-  { value: "open", label: "Open", icon: Circle },
-  { value: "completed", label: "Completed", icon: CircleCheck },
 ];
 
 // Choosing an option keeps the menu open, so several can be set in a row.
 const keepOpen = (event: Event) => event.preventDefault();
 
 /**
- * The View options rows (sort, show, only, grouping, search notes) for one
- * view: the desktop View options menu, and on phones part of the ⋯ menu.
+ * The View options rows (sort, only, grouping, search notes) for one view:
+ * the desktop View options menu, and on phones part of the ⋯ menu.
  */
 export function TaskViewOptionsItems({
   view,
@@ -70,23 +65,6 @@ export function TaskViewOptionsItems({
         ))}
       </DropdownMenuRadioGroup>
       <DropdownMenuSeparator />
-      <DropdownMenuLabel>Show</DropdownMenuLabel>
-      <DropdownMenuRadioGroup
-        aria-label="Show"
-        value={options.show}
-        onValueChange={(value) => {
-          const show = SHOWS.find((candidate) => candidate.value === value);
-          if (show) onChange({ show: show.value });
-        }}
-      >
-        {SHOWS.map(({ value, label, icon: Icon }) => (
-          <DropdownMenuRadioItem key={value} value={value} onSelect={keepOpen}>
-            <Icon />
-            {label}
-          </DropdownMenuRadioItem>
-        ))}
-      </DropdownMenuRadioGroup>
-      <DropdownMenuSeparator />
       <DropdownMenuLabel>Only</DropdownMenuLabel>
       <DropdownMenuCheckboxItem
         checked={options.onlyPinned}
@@ -95,6 +73,14 @@ export function TaskViewOptionsItems({
       >
         <Pin />
         Pinned
+      </DropdownMenuCheckboxItem>
+      <DropdownMenuCheckboxItem
+        checked={options.onlyBacklog}
+        onCheckedChange={(onlyBacklog) => onChange({ onlyBacklog })}
+        onSelect={keepOpen}
+      >
+        <ArrowDownToLine />
+        Backlog
       </DropdownMenuCheckboxItem>
       <DropdownMenuCheckboxItem
         checked={options.onlyWithNotes}

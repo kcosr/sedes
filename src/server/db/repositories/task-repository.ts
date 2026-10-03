@@ -7,6 +7,7 @@ import {
   taskQuerySchema,
   taskScopeModeSchema,
   taskTitleSchema,
+  TASK_COMPLETED_UNPLACED_MESSAGE,
   type OpenTaskDisposition,
   type TaskListProjection,
   type TaskScope,
@@ -27,6 +28,7 @@ export type TaskRecord = {
   readonly title: string;
   readonly details: string;
   readonly pinned: boolean;
+  readonly backlog: boolean;
   readonly files: readonly string[];
   readonly completedAt: number | null;
   readonly revision: number;
@@ -56,6 +58,7 @@ export type TaskListSummary = Pick<
   | "threadId"
   | "title"
   | "pinned"
+  | "backlog"
   | "completedAt"
   | "revision"
   | "createdAt"
@@ -91,8 +94,9 @@ export type TaskListPage =
       readonly nextCursor?: string;
     };
 
-type TaskRow = Omit<TaskRecord, "pinned" | "files"> & {
+type TaskRow = Omit<TaskRecord, "pinned" | "backlog" | "files"> & {
   readonly pinned: 0 | 1;
+  readonly backlog: 0 | 1;
   readonly filesJson: string;
 };
 
@@ -101,8 +105,9 @@ type AssociatedTaskRow = TaskRow & {
   readonly associatedWorkspaceId: string | null;
 };
 
-type TaskSummaryRow = Omit<TaskListSummary, "pinned"> & {
+type TaskSummaryRow = Omit<TaskListSummary, "pinned" | "backlog"> & {
   readonly pinned: 0 | 1;
+  readonly backlog: 0 | 1;
 };
 
 type TaskMutationReceipt = {
@@ -198,6 +203,7 @@ const columns = `
   title,
   details,
   pinned,
+  backlog,
   files_json AS filesJson,
   completed_at AS completedAt,
   revision,
@@ -364,6 +370,7 @@ export class TaskRepository {
       readonly scopeMode: TaskScopeMode;
       readonly completed?: boolean;
       readonly pinned?: boolean;
+      readonly backlog?: boolean;
       readonly query?: string;
       readonly projection: TaskListProjection;
       readonly cursor?: string;
@@ -391,13 +398,14 @@ export class TaskRepository {
         ? undefined
         : asciiLowercase(taskQuerySchema.parse(input.query).trim());
     const resolved = this.#resolveScope(scope, input.taskScope);
-    const queryFingerprint = fingerprint("task.list@4", [
+    const queryFingerprint = fingerprint("task.list@5", [
       scope.tenantId,
       scope.principalId,
       ...scopeFingerprintParts(input.taskScope),
       scopeMode,
       input.completed ?? null,
       input.pinned ?? null,
+      input.backlog ?? null,
       query ?? null,
       projection,
       input.pageSize,
@@ -452,6 +460,7 @@ export class TaskRepository {
           ? "completed_at IS NOT NULL"
           : "completed_at IS NULL",
       input.pinned === undefined ? undefined : "pinned = ?",
+      input.backlog === undefined ? undefined : "backlog = ?",
       query === undefined
         ? undefined
         : "(instr(lower(title), ?) > 0 OR instr(lower(details), ?) > 0)",
@@ -462,7 +471,7 @@ export class TaskRepository {
           SELECT id, scope_kind AS scopeKind, project_id AS projectId,
             thread_id AS threadId,
             ${associatedProjectColumn},
-            title, pinned, completed_at AS completedAt,
+            title, pinned, backlog, completed_at AS completedAt,
             revision, created_at AS createdAt, updated_at AS updatedAt,
             json_array_length(files_json) AS fileCount
           FROM tasks
@@ -478,6 +487,7 @@ export class TaskRepository {
         scope.principalId,
         ...scopeSelection.values,
         ...(input.pinned === undefined ? [] : [input.pinned ? 1 : 0]),
+        ...(input.backlog === undefined ? [] : [input.backlog ? 1 : 0]),
         ...(query === undefined ? [] : [query, query]),
         ...(after ? [after.createdAt, after.createdAt, after.id] : []),
         input.pageSize + 1,
@@ -517,6 +527,7 @@ export class TaskRepository {
     const items = rows.slice(0, input.pageSize).map((row) => ({
       ...row,
       pinned: row.pinned === 1,
+      backlog: row.backlog === 1,
     }));
     const last = items.at(-1);
     return {
@@ -606,6 +617,7 @@ export class TaskRepository {
       readonly title: string;
       readonly details?: string;
       readonly pinned?: boolean;
+      readonly backlog?: boolean;
       readonly files?: readonly string[];
       readonly scope: TaskScope;
       readonly mutationId: string;
@@ -616,14 +628,18 @@ export class TaskRepository {
     const details = input.details ?? "";
     taskDetailsSchema.parse(details);
     const pinned = input.pinned ?? false;
+    const backlog = input.backlog ?? false;
     const files = input.files ?? [];
     taskFilesSchema.parse(files);
+    // A request that leaves a task out of the backlog fingerprints as it did
+    // before Backlog existed, so a retry across the upgrade still replays.
     const requestFingerprint = fingerprint("create_task", [
       input.title,
       details,
       pinned,
       files,
       ...scopeFingerprintParts(input.scope),
+      ...(backlog ? [{ backlog }] : []),
     ]);
     return this.database.transaction(() => {
       const replayed = this.#replayedTask(
@@ -640,10 +656,10 @@ export class TaskRepository {
           `
             INSERT INTO tasks(
               tenant_id, owner_principal_id, id, scope_kind, project_id,
-              thread_id, title, details, pinned, files_json,
+              thread_id, title, details, pinned, backlog, files_json,
               completed_at, revision, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)
           `,
         )
         .run(
@@ -656,6 +672,7 @@ export class TaskRepository {
           input.title,
           details,
           pinned ? 1 : 0,
+          backlog ? 1 : 0,
           JSON.stringify(files),
           input.now,
           input.now,
@@ -681,6 +698,7 @@ export class TaskRepository {
       readonly details?: string;
       readonly completed?: boolean;
       readonly pinned?: boolean;
+      readonly backlog?: boolean;
       readonly files?: readonly string[];
       readonly scope?: TaskScope;
       readonly expectedRevision: number;
@@ -698,20 +716,23 @@ export class TaskRepository {
       input.completed ?? null,
       input.expectedRevision,
     ] as const;
+    // Each later field extends the fingerprint only when a request sets it,
+    // so earlier request shapes keep their fingerprints.
+    const extendedFingerprintParts = [
+      ...legacyFingerprintParts,
+      input.pinned ?? null,
+      input.files ?? null,
+      input.scope === undefined ? null : scopeFingerprintParts(input.scope),
+    ] as const;
     const requestFingerprint = fingerprint(
       "update_task",
-      input.pinned === undefined &&
-        input.files === undefined &&
-        input.scope === undefined
-        ? legacyFingerprintParts
-        : [
-            ...legacyFingerprintParts,
-            input.pinned ?? null,
-            input.files ?? null,
+      input.backlog !== undefined
+        ? [...extendedFingerprintParts, input.backlog]
+        : input.pinned === undefined &&
+            input.files === undefined &&
             input.scope === undefined
-              ? null
-              : scopeFingerprintParts(input.scope),
-          ],
+          ? legacyFingerprintParts
+          : extendedFingerprintParts,
     );
     return this.database.transaction(() => {
       const replayed = this.#replayedTask(
@@ -722,6 +743,16 @@ export class TaskRepository {
       );
       if (replayed) return replayed;
       const current = this.get(scope, taskId);
+      if (current.revision !== input.expectedRevision) {
+        throw new DomainError(
+          "task_revision_conflict",
+          "The task changed in another client.",
+        );
+      }
+      const completed = input.completed ?? current.completedAt !== null;
+      if (completed && (input.pinned === true || input.backlog === true)) {
+        throw new DomainError("bad_request", TASK_COMPLETED_UNPLACED_MESSAGE);
+      }
       const resolvedScope =
         input.scope === undefined
           ? undefined
@@ -740,9 +771,18 @@ export class TaskRepository {
         assignments.push("completed_at = ?");
         values.push(input.completed ? input.now : null);
       }
-      if (input.pinned !== undefined) {
-        assignments.push("pinned = ?");
-        values.push(input.pinned ? 1 : 0);
+      // Completing a task takes it out of the backlog and unpins it.
+      if (input.completed === true) {
+        assignments.push("pinned = 0", "backlog = 0");
+      } else {
+        if (input.pinned !== undefined) {
+          assignments.push("pinned = ?");
+          values.push(input.pinned ? 1 : 0);
+        }
+        if (input.backlog !== undefined) {
+          assignments.push("backlog = ?");
+          values.push(input.backlog ? 1 : 0);
+        }
       }
       if (input.files !== undefined) {
         assignments.push("files_json = ?");
@@ -1031,7 +1071,8 @@ export class TaskRepository {
       disposition === "complete"
         ? `
           UPDATE tasks
-          SET completed_at = ?, revision = revision + 1, updated_at = ?
+          SET completed_at = ?, pinned = 0, backlog = 0,
+            revision = revision + 1, updated_at = ?
           WHERE tenant_id = ? AND owner_principal_id = ?
             AND scope_kind = 'thread' AND thread_id IN (${placeholders})
             AND completed_at IS NULL
@@ -1138,10 +1179,11 @@ export class TaskRepository {
   }
 
   #presentRow(row: TaskRow): TaskRecord {
-    const { pinned, filesJson, ...record } = row;
+    const { pinned, backlog, filesJson, ...record } = row;
     return {
       ...record,
       pinned: pinned === 1,
+      backlog: backlog === 1,
       files: taskFilesSchema.parse(JSON.parse(filesJson)),
     };
   }

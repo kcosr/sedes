@@ -4,6 +4,24 @@
 
 ### Breaking Changes
 
+- Browser and packaged clients require client protocol 136, which gives every
+  Task a `backlog` field. Upgrade clients together with the server.
+  ([#39](https://github.com/kcosr/sedes/pull/39))
+
+- Agent tools `task.list@5`, `task.get@3`, `task.create@3`, and
+  `task.update@3` replace their previous versions. Every returned Task carries
+  `backlog` next to `pinned`; `task.list` accepts a `backlog` filter and
+  includes backlog Tasks when it is omitted; `task.create` and `task.update`
+  accept `backlog`. Callers must describe these tools again; the previous
+  versions and earlier `task.list` cursors are rejected.
+  ([#39](https://github.com/kcosr/sedes/pull/39))
+
+- Completing a Task now unpins it and takes it out of the backlog, and a
+  completed Task can't be pinned or put in the backlog: such a request is
+  rejected as a bad request. The upgrade unpins Tasks that are already
+  completed.
+  ([#39](https://github.com/kcosr/sedes/pull/39))
+
 - Codex persistent runtimes require protocol 3 to preserve settings updates
   that race a resume. Rebuild and upgrade execution sidecars with the server;
   older retained runtimes must be replaced before reattachment.
@@ -158,6 +176,15 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Tasks have a **Backlog**: open Tasks that aren't current work wait in a
+  collapsed Backlog section between the open Tasks and Completed. Send a Task
+  there, or take it out, from its ⋯ menu, with the B key, or with the Backlog
+  switch in the edit dialog. Pin stays independent: a pinned backlog Task sits
+  at the top of the Backlog section. View options › Only gains Backlog, and
+  the Tasks header has a Pin button that shows only pinned Tasks. Task counts
+  still include backlog Tasks.
+  ([#39](https://github.com/kcosr/sedes/pull/39))
 
 - **Settings → Projects** shows Task and Workpad counts for active and removed
   projects, including completed Tasks and archived Workpads. Removal dialogs
@@ -316,6 +343,17 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- Tasks View options no longer have a Show group: Completed is always the
+  collapsed section at the end of the list. Sorting orders Tasks within each
+  section, with pinned Tasks always first, so "Pinned, then newest" is now
+  Newest.
+  ([#39](https://github.com/kcosr/sedes/pull/39))
+
+- Rows in the Tasks list that show a scope or location line are taller, and on
+  phones their notes, files, and pin indicators move to that line so the title
+  gets the full width.
+  ([#39](https://github.com/kcosr/sedes/pull/39))
 
 - Side panels keep one size in every thread. Resizing Files, Workpads, Tasks,
   or Terminals resizes it in every thread's layout, and opening, collapsing,
@@ -618,6 +656,16 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- A Task added while the Pinned filter is on is created pinned instead of
+  disappearing, and opening a Task that a filter hides no longer turns the
+  filter off.
+  ([#39](https://github.com/kcosr/sedes/pull/39))
+
+- Attached Tasks are stored in a fixed attachment format instead of the live
+  Task shape, so changing Task fields can't make stored or signed message
+  attachments unreadable.
+  ([#39](https://github.com/kcosr/sedes/pull/39))
 
 - Codex threads retain their saved security policy when a restart or upgrade
   replaces the UDS connection to a persistent app-server. Newer settings

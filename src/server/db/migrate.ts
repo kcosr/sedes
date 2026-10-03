@@ -15,6 +15,7 @@ import { openCodeRecoveryRetirementMigration } from "./migrations/124-opencode-r
 import { openCodeObservationCursorsMigration } from "./migrations/125-opencode-observation-cursors.js";
 import { projectsAndLocationsMigration } from "./migrations/126-projects-and-locations.js";
 import { sharedProjectTasksMigration } from "./migrations/127-shared-project-tasks.js";
+import { taskBacklogMigration } from "./migrations/128-task-backlog.js";
 import { conversationStopReceiptsMigration } from "./migrations/119-conversation-stop-receipts.js";
 import { claudeTurnFailureDetailsMigration } from "./migrations/109-claude-turn-failure-details.js";
 import { forkEnvironmentFingerprintsMigration } from "./migrations/108-fork-environment-fingerprints.js";
@@ -268,6 +269,7 @@ export const backendNormalizedMigrations = [
   openCodeObservationCursorsMigration,
   projectsAndLocationsMigration,
   sharedProjectTasksMigration,
+  taskBacklogMigration,
 ] as const;
 
 export type DatabaseMigration = {

@@ -124,6 +124,7 @@ function associatedTask(
     title: "Task",
     details: "",
     pinned: false,
+    backlog: false,
     files: [],
     completedAt: null,
     revision: 0,
@@ -134,7 +135,7 @@ function associatedTask(
 
 describe("execution-target application protocol", () => {
   it("uses the current client protocol for associated task presentation", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(135);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(136);
   });
 
   it("enforces exact associated-project semantics on task projections", () => {

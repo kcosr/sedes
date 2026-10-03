@@ -543,16 +543,23 @@ export class ApplicationClientStore {
     return this.#state.snapshot?.tasks ?? [];
   }
 
+  /**
+   * `placement` creates the task pinned or in the backlog, so a task added
+   * while Only › Pinned or Only › Backlog is on stays in view.
+   */
   async createTask(
     title: string,
     scope: TaskScope,
     details?: string,
+    placement: { readonly pinned?: boolean; readonly backlog?: boolean } = {},
   ): Promise<Task> {
     return this.api.createTask({
       mutationId: crypto.randomUUID(),
       title,
       scope,
       ...(details === undefined || details.length === 0 ? {} : { details }),
+      ...(placement.pinned ? { pinned: true } : {}),
+      ...(placement.backlog ? { backlog: true } : {}),
     });
   }
 
@@ -564,6 +571,7 @@ export class ApplicationClientStore {
       readonly completed?: boolean;
       readonly scope?: TaskScope;
       readonly pinned?: boolean;
+      readonly backlog?: boolean;
       readonly files?: readonly string[];
     },
   ): Promise<Task> {

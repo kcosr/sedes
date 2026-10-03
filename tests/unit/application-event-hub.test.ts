@@ -83,6 +83,7 @@ function publishByteBoundarySuffix(
       title: "Multibyte replay",
       details: "",
       pinned: false,
+      backlog: false,
       files: [],
       completedAt: null,
       revision: 1,

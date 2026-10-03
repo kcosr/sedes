@@ -2563,8 +2563,8 @@ for accepted or uncertain outcomes; remove it only after authoritative evidence
 proves non-acceptance. A backend must not create a second input snapshot,
 attachment or Task store, replay record, or security policy.
 
-A delivery snapshot holds each Task whole, scope included, as it was at
-acceptance. Normalized `task_context` message parts, from backends and to the
+A delivery snapshot holds each Task, scope included, as it was at acceptance,
+in Task attachment format v1. Normalized `task_context` message parts, from backends and to the
 browser, carry only its scope-free display projection (`MessageTaskContext`:
 ID, title, details, completion time, and revision), which is everything a
 renderer reads. The whole snapshot stays on the server, in queued inputs,
@@ -2575,20 +2575,28 @@ Claude verifies a tag over the re-serialized JSON, and Pi verifies its
 task-context marker HMAC and recomputes its submission fingerprint from the
 stored contexts on replay. Snapshots accepted before projects existed carry
 the scope `{ kind: "workspace", workspaceId }`, and rewriting them would break
-those signatures and fingerprints. The server-only stored schema in
-`src/server/domain/materialized-task-contexts.ts` therefore accepts exactly
-that strict legacy scope beside the current ones. It extends the live Task
-schema and transforms nothing, so a parsed snapshot re-serializes to its
-original bytes. Only carrier inspectors and stored-row parsers use it; it is
-never part of a browser or normalized backend contract. Migration 127
+those signatures and fingerprints.
+
+The server-only schema in `src/server/domain/materialized-task-contexts.ts`
+defines format v1 field by field, with its own limits, and does not follow the
+live Task schema. It accepts exactly that strict legacy scope beside the
+current ones, and it transforms nothing: parsing emits keys in v1's order, so
+a parsed snapshot re-serializes to its original bytes. A live Task becomes a v1
+snapshot by taking v1's fields only (`materializeTaskContext`), so Task fields
+added since, such as `backlog`, never reach a snapshot. Only carrier
+inspectors and stored-row parsers use the schema; it is never part of a
+browser or normalized backend contract. Changing it changes how every stored
+and signed snapshot parses, so a different attachment shape is a new format
+version that Sedes writes from then on while still reading v1. Migration 127
 rewrote only contexts no provider had received (pending, never-retried queued
 inputs and unsubmitted creation attempts), and the server never writes the
 legacy scope again. This is the one permitted legacy Task shape under the
 historical-carrier rule in
-[Configuration and persistence](#configuration-and-persistence). A
-Task schema change must keep every stored carrier parseable byte for byte, and
-tests cover history projection, reconciliation or recovery, and replay for
-each carrier with legacy and current scopes.
+[Configuration and persistence](#configuration-and-persistence). Every
+stored carrier must stay parseable byte for byte, and tests cover history
+projection, reconciliation or recovery, and replay for each carrier with
+legacy and current scopes, v1's literal bytes and limits, and a live Task with
+fields outside v1.
 
 Before crossing the provider boundary, Sedes resolves scope and ownership,
 stages immutable attachment bytes through the exact execution environment, and

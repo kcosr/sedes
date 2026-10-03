@@ -10,7 +10,9 @@ import {
 } from "react";
 import {
   AlignLeft,
+  ArrowDownToLine,
   ArrowRightLeft,
+  ArrowUpFromLine,
   ChevronRight,
   Circle,
   CircleCheck,
@@ -49,11 +51,13 @@ import {
   type TaskGroup,
 } from "./task-view-model.js";
 
-export type TaskAction = "complete" | "pin" | "move" | "delete";
+export type TaskAction = "complete" | "pin" | "backlog" | "move" | "delete";
 
 export interface TaskListActions {
   toggleComplete(task: AssociatedTask): void;
+  /** Pin and Backlog do nothing for a completed task, which is never either. */
   togglePin(task: AssociatedTask): void;
+  toggleBacklog(task: AssociatedTask): void;
   addToPrompt(task: AssociatedTask): void;
   edit(task: AssociatedTask): void;
   requestDelete(task: AssociatedTask): void;
@@ -184,7 +188,11 @@ function MoveToItems({ task }: { readonly task: AssociatedTask }): React.JSX.Ele
   );
 }
 
-/** The row's ⋯ menu: Add to prompt · Edit… · Pin · Move to › · Delete…. */
+/**
+ * The row's ⋯ menu: Add to prompt · Edit… · Pin · Send to Backlog · Move
+ * to › · Delete…. A completed task is never pinned or in the backlog, so it
+ * has neither.
+ */
 export function TaskRowMenu({
   task,
   focusable,
@@ -197,6 +205,7 @@ export function TaskRowMenu({
 }): React.JSX.Element {
   const { actions, touch, surfaceActive } = useTaskList();
   const [open, setOpen] = useState(false);
+  const completed = task.completedAt !== null;
   return (
     <DropdownMenu
       presentation={touch ? "sheet" : "menu"}
@@ -236,11 +245,23 @@ export function TaskRowMenu({
           <span>Edit…</span>
           {!touch && <DropdownMenuShortcut aria-hidden="true">E</DropdownMenuShortcut>}
         </DropdownMenuItem>
-        <DropdownMenuItem aria-keyshortcuts="P" onSelect={() => actions.togglePin(task)}>
-          {task.pinned ? <PinOff /> : <Pin />}
-          <span>{task.pinned ? "Unpin" : "Pin"}</span>
-          {!touch && <DropdownMenuShortcut aria-hidden="true">P</DropdownMenuShortcut>}
-        </DropdownMenuItem>
+        {!completed && (
+          <>
+            <DropdownMenuItem aria-keyshortcuts="P" onSelect={() => actions.togglePin(task)}>
+              {task.pinned ? <PinOff /> : <Pin />}
+              <span>{task.pinned ? "Unpin" : "Pin"}</span>
+              {!touch && <DropdownMenuShortcut aria-hidden="true">P</DropdownMenuShortcut>}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              aria-keyshortcuts="B"
+              onSelect={() => actions.toggleBacklog(task)}
+            >
+              {task.backlog ? <ArrowUpFromLine /> : <ArrowDownToLine />}
+              <span>{task.backlog ? "Take out of Backlog" : "Send to Backlog"}</span>
+              {!touch && <DropdownMenuShortcut aria-hidden="true">B</DropdownMenuShortcut>}
+            </DropdownMenuItem>
+          </>
+        )}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
             <ArrowRightLeft />
@@ -264,18 +285,30 @@ export function TaskRowMenu({
   );
 }
 
+/** "has notes, 2 files, pinned": what the row's indicators show, or "". */
+function indicatorsText(task: AssociatedTask): string {
+  const files = task.files.length;
+  return [
+    task.details.trim().length > 0 ? "has notes" : undefined,
+    files > 0 ? `${files} file${files === 1 ? "" : "s"}` : undefined,
+    task.pinned ? "pinned" : undefined,
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
+/**
+ * The notes, files and pin indicators. Inside a row's second line (touch
+ * density) they are hidden with it, and the row says them separately.
+ */
 function TaskIndicators({ task }: { readonly task: AssociatedTask }): React.JSX.Element | null {
   const notes = task.details.trim().length > 0;
   const files = task.files.length;
-  if (!notes && files === 0 && !task.pinned) return null;
-  const described = [
-    notes ? "has notes" : undefined,
-    files > 0 ? `${files} file${files === 1 ? "" : "s"}` : undefined,
-    task.pinned ? "pinned" : undefined,
-  ].filter(Boolean);
+  const described = indicatorsText(task);
+  if (described.length === 0) return null;
   return (
-    <span className="tasks-row-meta" title={described.join(", ")}>
-      <span className="sr-only">{described.join(", ")}</span>
+    <span className="tasks-row-meta" title={described}>
+      <span className="sr-only">{described}</span>
       {notes && <AlignLeft aria-hidden="true" />}
       {files > 0 && (
         <span className="tasks-row-files" aria-hidden="true">
@@ -514,6 +547,10 @@ export function TaskRow({
   const locationId = useId();
   const busy = pending(task.id);
   const draggable = !touch && taskDrag !== undefined;
+  // On touch the indicators join the second line, so the title has the
+  // row's whole width.
+  const indicatorsOnLocation = touch && location !== undefined;
+  const indicators = indicatorsText(task);
   return (
     <li
       className="tasks-row"
@@ -561,6 +598,7 @@ export function TaskRow({
               <span className="tasks-row-location" aria-hidden="true">
                 <ScopeIcon kind={location.kind} />
                 <span className="tasks-row-location-label">{location.label}</span>
+                {indicatorsOnLocation && <TaskIndicators task={task} />}
               </span>
             </>
           ) : (
@@ -572,7 +610,11 @@ export function TaskRow({
             In {location.label}
           </span>
         )}
-        <TaskIndicators task={task} />
+        {!indicatorsOnLocation ? (
+          <TaskIndicators task={task} />
+        ) : indicators.length > 0 ? (
+          <span className="sr-only">{indicators}</span>
+        ) : null}
         <TaskRowMenu task={task} focusable={focusable} />
       </div>
       {expanded && inlineDetail && (
@@ -602,7 +644,7 @@ export function PendingTaskRow({ title }: { readonly title: string }): React.JSX
   );
 }
 
-/** A collapsible heading (an All group or Completed) that takes part in list navigation. */
+/** A collapsible heading (an All group, Backlog or Completed) that takes part in list navigation. */
 export function TaskListHeading({
   navKey,
   focusable,

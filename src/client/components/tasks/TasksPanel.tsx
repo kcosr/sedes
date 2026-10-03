@@ -30,6 +30,7 @@ import {
   Keyboard,
   ListFilter,
   Pencil,
+  Pin,
   Search,
   X,
 } from "lucide-react";
@@ -117,8 +118,6 @@ import { TaskViewOptionsItems } from "./TaskViewOptions.js";
 import { ScopeIcon, useTaskDestinations } from "./task-destinations.js";
 import {
   clampView,
-  compareCompleted,
-  compareOpen,
   destinationScope,
   groupTasks,
   inViewScope,
@@ -132,6 +131,7 @@ import {
   scopeKey,
   TASK_PASTE_MAX_TITLES,
   TASKS_VIEW_LABEL,
+  taskSections,
   viewFilters,
   viewUnavailableReason,
   type TaskGroup,
@@ -195,6 +195,18 @@ interface PendingMove {
   readonly scope: TaskScope;
 }
 
+/**
+ * A revealed task that the view's Only options or search would hide. It is
+ * shown anyway, without changing or saving them, for as long as the view,
+ * its options and the search stay as they were when it was revealed.
+ */
+interface RevealedTask {
+  readonly taskId: string;
+  readonly view: TasksView;
+  readonly options: TasksViewOptions;
+  readonly query: string;
+}
+
 const NO_PENDING: ReadonlySet<TaskAction> = new Set();
 
 function errorMessage(error: unknown): string {
@@ -245,6 +257,7 @@ const KEYBOARD_SHORTCUTS: readonly { key: string; action: string }[] = [
   { key: "Space", action: "Complete or reopen" },
   { key: "E", action: "Edit" },
   { key: "P", action: "Pin or unpin" },
+  { key: "B", action: "Send to or take out of the Backlog" },
   { key: "M", action: "Move to…" },
   { key: "Delete", action: "Delete" },
   { key: "Ctrl/⌘ Enter", action: "Add to prompt" },
@@ -254,9 +267,9 @@ const KEYBOARD_SHORTCUTS: readonly { key: string; action: string }[] = [
 /**
  * The Tasks header and body, for a docked panel or a phone sheet: count and
  * actions, one scope control that follows the current chat, the add row,
- * search, the list (grouped in All) with inline detail, and the Completed
- * section. Pending state is per task and action, so nothing else is ever
- * disabled and focus is never dropped.
+ * search, the list (grouped in All) with inline detail, and the collapsed
+ * Backlog and Completed sections. Pending state is per task and action, so
+ * nothing else is ever disabled and focus is never dropped.
  */
 export function TasksPanelContent({
   presentation,
@@ -300,6 +313,7 @@ export function TasksPanelContent({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [moveMenuId, setMoveMenuId] = useState<string | null>(null);
   const [activeNavKey, setActiveNavKey] = useState<string | null>(null);
+  const [backlogOpen, setBacklogOpen] = useState(false);
   const [completedOpen, setCompletedOpen] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -317,6 +331,7 @@ export function TasksPanelContent({
   const [creating, setCreating] = useState<readonly PendingCreate[]>([]);
   const [pending, setPending] = useState<PendingActions>(() => new Map());
   const [revealId, setRevealId] = useState<string | null>(null);
+  const [revealed, setRevealed] = useState<RevealedTask | null>(null);
   const [focusRequest, setFocusRequest] = useState<string | null>(null);
   const pendingRef = useRef<PendingActions>(pending);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -347,7 +362,10 @@ export function TasksPanelContent({
     },
     [],
   );
-  /** Runs one action on one task; a repeat while it runs is ignored. */
+  /**
+   * Runs one action on one task; a repeat while it runs is ignored. A
+   * failure is reported as `failure` (naming the task) and the reason.
+   */
   const runTask = useCallback(
     async <T,>(
       task: AssociatedTask,
@@ -362,7 +380,7 @@ export function TasksPanelContent({
         setError(null);
         return { ok: true, value };
       } catch (cause) {
-        setError(`${failure} “${task.title}”: ${errorMessage(cause)}`);
+        setError(`${failure}: ${errorMessage(cause)}`);
         return { ok: false };
       } finally {
         markPending(task.id, action, false);
@@ -373,32 +391,37 @@ export function TasksPanelContent({
 
   // ── What the view shows ──────────────────────────────────────────────────
   const query = normalizeQuery(searchOpen ? searchText : "");
-  const filtered = useMemo(
+  // A revealed task stays shown until the view, its options or the search change.
+  const revealedId =
+    revealed !== null &&
+    revealed.view === view &&
+    revealed.options === options &&
+    revealed.query === query
+      ? revealed.taskId
+      : undefined;
+  // Once they change, the exception is over for good: going back to the same
+  // search or options does not bring the task back.
+  useEffect(() => {
+    if (revealed !== null && revealedId === undefined) setRevealed(null);
+  }, [revealed, revealedId]);
+  const {
+    main: mainTasks,
+    backlog: backlogSection,
+    completed: completedSection,
+  } = useMemo(
     () =>
-      tasks.filter(
-        (task) =>
-          inViewScope(task, view, context, options.includeThreadTasks) &&
-          matchesQuery(task, query, options.searchNotes) &&
-          matchesOnly(task, options),
+      taskSections(
+        tasks.filter(
+          (task) =>
+            inViewScope(task, view, context, options.includeThreadTasks) &&
+            (task.id === revealedId ||
+              (matchesQuery(task, query, options.searchNotes) &&
+                matchesOnly(task, options))),
+        ),
+        options,
       ),
-    [tasks, view, context, options, query],
+    [tasks, view, context, options, query, revealedId],
   );
-  const openTasks = useMemo(
-    () =>
-      filtered
-        .filter(({ completedAt }) => completedAt === null)
-        .sort(compareOpen(options.sort)),
-    [filtered, options.sort],
-  );
-  const doneTasks = useMemo(
-    () =>
-      filtered
-        .filter(({ completedAt }) => completedAt !== null)
-        .sort(compareCompleted(options.sort)),
-    [filtered, options.sort],
-  );
-  const mainTasks = options.show === "completed" ? doneTasks : openTasks;
-  const completedSection = options.show === "open" ? doneTasks : [];
   const groups = useMemo(
     () =>
       view === "all" && options.groupByProject
@@ -446,14 +469,27 @@ export function TasksPanelContent({
     };
     if (groups) groups.forEach(pushGroup);
     else for (const task of mainTasks) keys.push(taskNavKey(task.id));
-    if (completedSection.length > 0) {
-      keys.push("completed");
-      if (completedOpen) {
-        for (const task of completedSection) keys.push(taskNavKey(task.id));
-      }
-    }
+    const pushSection = (
+      key: string,
+      tasks: readonly AssociatedTask[],
+      open: boolean,
+    ) => {
+      if (tasks.length === 0) return;
+      keys.push(key);
+      if (open) for (const task of tasks) keys.push(taskNavKey(task.id));
+    };
+    pushSection("backlog", backlogSection, backlogOpen);
+    pushSection("completed", completedSection, completedOpen);
     return keys;
-  }, [groups, mainTasks, completedSection, completedOpen, collapsedGroups]);
+  }, [
+    groups,
+    mainTasks,
+    backlogSection,
+    backlogOpen,
+    completedSection,
+    completedOpen,
+    collapsedGroups,
+  ]);
   const rovingKey =
     activeNavKey !== null && navKeys.includes(activeNavKey)
       ? activeNavKey
@@ -515,13 +551,13 @@ export function TasksPanelContent({
   });
 
   // Reveal requests (transcript "Open task"): switch to a view that holds
-  // the task, make it visible, expand it and move focus to it.
+  // the task, make it visible, expand it and move focus to it. The view's
+  // options and the search are left as they are: a task they hide is shown
+  // as an exception (`revealed`).
   useTaskReveal(({ taskId }) => {
     const task = store.getTasks().find(({ id }) => id === taskId);
     if (!task) return;
     setTasksLastView(revealView(task, context));
-    setSearchOpen(false);
-    setSearchText("");
     setRevealId(taskId);
   });
   useEffect(() => {
@@ -531,21 +567,13 @@ export function TasksPanelContent({
       setRevealId(null);
       return;
     }
-    if (
-      !matchesOnly(task, options) ||
-      (options.show === "completed" && task.completedAt === null)
-    ) {
-      setOptions({
-        show: "open",
-        onlyPinned: false,
-        onlyWithNotes: false,
-        onlyWithFiles: false,
-      });
-      return;
-    }
-    if (task.completedAt !== null && options.show === "open") {
-      setCompletedOpen(true);
-    }
+    setRevealed(
+      matchesOnly(task, options) && matchesQuery(task, query, options.searchNotes)
+        ? null
+        : { taskId: task.id, view, options, query },
+    );
+    if (task.completedAt !== null) setCompletedOpen(true);
+    else if (task.backlog && !options.onlyBacklog) setBacklogOpen(true);
     const scope = scopeKey(task.scope);
     const parent =
       task.scope.kind === "thread" && task.associatedProjectId
@@ -564,7 +592,7 @@ export function TasksPanelContent({
     setActiveNavKey(taskNavKey(task.id));
     setRevealId(null);
     setFocusRequest(task.id);
-  }, [revealId, tasks, options, setOptions]);
+  }, [revealId, tasks, view, options, query]);
 
   // Focus a row once it has rendered (reveal, leaving the phone detail).
   useLayoutEffect(() => {
@@ -615,7 +643,7 @@ export function TasksPanelContent({
         task,
         "complete",
         () => store.updateTask(task, { completed }),
-        completed ? "Couldn't complete" : "Couldn't reopen",
+        `${completed ? "Couldn't complete" : "Couldn't reopen"} “${task.title}”`,
       );
       if (!result.ok) return;
       announce(completed ? `Completed “${task.title}”.` : `Reopened “${task.title}”.`);
@@ -729,17 +757,47 @@ export function TasksPanelContent({
     [onRequestClose, panelLayoutStore, sheet, store, workspace],
   );
 
+  // The server refuses to pin a completed task or put it in the backlog.
+  const togglePin = useCallback(
+    (task: AssociatedTask) => {
+      if (task.completedAt !== null) return;
+      void runTask(
+        task,
+        "pin",
+        () => store.updateTask(task, { pinned: !task.pinned }),
+        `${task.pinned ? "Couldn't unpin" : "Couldn't pin"} “${task.title}”`,
+      );
+    },
+    [runTask, store],
+  );
+  const toggleBacklog = useCallback(
+    async (task: AssociatedTask) => {
+      if (task.completedAt !== null) return;
+      const backlog = !task.backlog;
+      const result = await runTask(
+        task,
+        "backlog",
+        () => store.updateTask(task, { backlog }),
+        backlog
+          ? `Couldn't send “${task.title}” to the Backlog`
+          : `Couldn't take “${task.title}” out of the Backlog`,
+      );
+      if (!result.ok) return;
+      announce(
+        backlog
+          ? `Sent “${task.title}” to the Backlog.`
+          : `Took “${task.title}” out of the Backlog.`,
+      );
+    },
+    [announce, runTask, store],
+  );
+
   const actions: TaskListActions = useMemo(
     () => ({
       toggleComplete: (task) =>
         void setCompleted(task, task.completedAt === null),
-      togglePin: (task) =>
-        void runTask(
-          task,
-          "pin",
-          () => store.updateTask(task, { pinned: !task.pinned }),
-          task.pinned ? "Couldn't unpin" : "Couldn't pin",
-        ),
+      togglePin,
+      toggleBacklog: (task) => void toggleBacklog(task),
       addToPrompt,
       edit: (task) => setEditingId(task.id),
       requestDelete: (task) => setDeletingId(task.id),
@@ -751,7 +809,16 @@ export function TasksPanelContent({
         if (sheet) onRequestClose();
       },
     }),
-    [addToPrompt, moveTo, onRequestClose, openFile, runTask, setCompleted, sheet, store],
+    [
+      addToPrompt,
+      moveTo,
+      onRequestClose,
+      openFile,
+      setCompleted,
+      sheet,
+      toggleBacklog,
+      togglePin,
+    ],
   );
 
   const environment: TaskListEnvironment = useMemo(
@@ -767,11 +834,13 @@ export function TasksPanelContent({
     [actions, active, destinations, pending, taskDrag, touch, workspace?.available],
   );
 
+  // New tasks match the Pinned and Backlog filters, so they stay in view.
+  const placement = { pinned: options.onlyPinned, backlog: options.onlyBacklog };
   const addTask = (title: string, notes: string) => {
     if (!destination) return;
     const key = crypto.randomUUID();
     setCreating((current) => [...current, { key, title, scope: destination }]);
-    void store.createTask(title, destination, notes || undefined).then(
+    void store.createTask(title, destination, notes || undefined, placement).then(
       (created) => {
         setError(null);
         setCreating((current) =>
@@ -803,6 +872,7 @@ export function TasksPanelContent({
   const changeView = (next: TasksView) => {
     if (viewUnavailableReason(next, context) !== undefined) return;
     setTasksLastView(next);
+    setRevealed(null);
     setError(null);
   };
 
@@ -855,6 +925,11 @@ export function TasksPanelContent({
       case "P":
         event.preventDefault();
         actions.togglePin(task);
+        return;
+      case "b":
+      case "B":
+        event.preventDefault();
+        actions.toggleBacklog(task);
         return;
       case "m":
       case "M":
@@ -1067,6 +1142,25 @@ export function TasksPanelContent({
 
   const emptyState = (() => {
     if (mainTasks.length > 0 || visibleCreating.length > 0) return null;
+    // Matches in a collapsed section are still matches: say where they are
+    // rather than offering to clear a search or filter that works.
+    if (
+      (searchFiltering || filtering) &&
+      (backlogSection.length > 0 || completedSection.length > 0)
+    ) {
+      return (
+        <EmptyState
+          variant="inline"
+          className="tasks-empty"
+          title="Nothing current matches."
+          description={
+            backlogSection.length > 0
+              ? "The matching tasks wait in the Backlog."
+              : "The matching tasks are completed."
+          }
+        />
+      );
+    }
     if (searchFiltering) {
       return (
         <EmptyState
@@ -1082,28 +1176,37 @@ export function TasksPanelContent({
       );
     }
     if (filtering) {
-      const nothing = options.show === "completed" && !options.onlyPinned && !options.onlyWithNotes && !options.onlyWithFiles;
       return (
         <EmptyState
           variant="inline"
           className="tasks-empty"
-          title={nothing ? "No completed tasks." : "No tasks match the view options."}
+          title="No tasks match the view options."
           action={
             <Button
               variant="ghost"
               size="sm"
               onClick={() =>
                 setOptions({
-                  show: "open",
                   onlyPinned: false,
+                  onlyBacklog: false,
                   onlyWithNotes: false,
                   onlyWithFiles: false,
                 })
               }
             >
-              {nothing ? "Show open tasks" : "Reset view options"}
+              Reset view options
             </Button>
           }
+        />
+      );
+    }
+    if (backlogSection.length > 0) {
+      return (
+        <EmptyState
+          variant="inline"
+          className="tasks-empty"
+          title="Nothing current."
+          description="Every open task here waits in the Backlog."
         />
       );
     }
@@ -1237,6 +1340,21 @@ export function TasksPanelContent({
     </Button>
   );
 
+  // The header's way to Only › Pinned: the same View option.
+  const pinnedOnlyButton = (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      className="tasks-header-button tasks-pinned-toggle"
+      aria-label="Show only pinned tasks"
+      aria-pressed={options.onlyPinned}
+      title="Show only pinned tasks"
+      onClick={() => setOptions({ onlyPinned: !options.onlyPinned })}
+    >
+      <Pin aria-hidden="true" />
+    </Button>
+  );
+
   // Docked only. Phones have no room for it: the sheet's ⋯ carries the
   // View options.
   const viewOptionsMenu = (
@@ -1272,33 +1390,26 @@ export function TasksPanelContent({
     </Button>
   );
 
-  // The header counts what the list shows, like the segments when nothing
-  // narrows it; search or an Only option makes it "1 of 3", out of the
-  // segment's count. Show › Completed counts completed tasks.
-  const listedKind = options.show === "completed" ? "completed" : "open";
-  const listedTotal =
-    options.show === "completed"
-      ? tasks.filter(
-          (task) =>
-            task.completedAt !== null &&
-            inViewScope(task, view, context, options.includeThreadTasks),
-        ).length
-      : viewCount(view);
+  // The header counts the open tasks the list shows, the Backlog's
+  // included, like the segments when nothing narrows it; search or an Only
+  // option makes it "1 of 3", out of the segment's count.
+  const listedTotal = viewCount(view);
+  const listed = mainTasks.length + backlogSection.length;
   const countBadge =
-    mainTasks.length === listedTotal ? (
+    listed === listedTotal ? (
       <CountBadge
         count={listedTotal}
         className="tasks-title-count"
-        aria-label={`${listedTotal} ${listedKind}`}
+        aria-label={`${listedTotal} open`}
       />
     ) : (
       <span
         data-slot="count-badge"
         data-tone="neutral"
         className={cn(countBadgeVariants(), "tasks-title-count")}
-        aria-label={`${mainTasks.length} of ${listedTotal} ${listedKind} shown`}
+        aria-label={`${listed} of ${listedTotal} open shown`}
       >
-        {mainTasks.length} of {listedTotal}
+        {listed} of {listedTotal}
       </span>
     );
 
@@ -1392,6 +1503,7 @@ export function TasksPanelContent({
       panelActions={
         <>
           {searchButton}
+          {pinnedOnlyButton}
           {viewOptionsMenu}
         </>
       }
@@ -1407,6 +1519,7 @@ export function TasksPanelContent({
       </h2>
       <div className="tasks-header-actions">
         {searchButton}
+        {pinnedOnlyButton}
         <DropdownMenu
           presentation={touch ? "sheet" : "menu"}
           open={active && headerMenuOpen}
@@ -1471,6 +1584,25 @@ export function TasksPanelContent({
         </ul>
       )}
       {emptyState}
+      {backlogSection.length > 0 && (
+        <section className="tasks-section" aria-label="Backlog tasks">
+          <TaskListHeading
+            variant="section"
+            navKey="backlog"
+            focusable={rovingKey === "backlog"}
+            expanded={backlogOpen}
+            onToggle={() => setBacklogOpen((open) => !open)}
+            onKeyDown={onHeadingKeyDown}
+            label="Backlog"
+            count={backlogSection.length}
+          />
+          {backlogOpen && (
+            <ul className="tasks-list" aria-label="Backlog tasks">
+              {backlogSection.map(renderRow)}
+            </ul>
+          )}
+        </section>
+      )}
       {completedSection.length > 0 && (
         <section className="tasks-section" aria-label="Completed tasks">
           <TaskListHeading
@@ -1686,7 +1818,7 @@ export function TasksPanelContent({
           while (remaining.length > 0) {
             const title = remaining.at(-1)!;
             try {
-              await store.createTask(title, destination);
+              await store.createTask(title, destination, undefined, placement);
             } catch (cause) {
               setPasteTitles([...remaining]);
               throw cause;

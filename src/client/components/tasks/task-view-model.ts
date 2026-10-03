@@ -25,7 +25,7 @@ export const TASK_PASTE_MAX_TITLES = 50;
 
 /** A View option that narrows the list, shown as a removable chip. */
 export interface TasksViewFilter {
-  readonly key: "completed" | "pinned" | "notes" | "files";
+  readonly key: "pinned" | "backlog" | "notes" | "files";
   readonly label: string;
   /** The change that removes it. */
   readonly clear: Partial<TasksViewOptions>;
@@ -34,10 +34,10 @@ export interface TasksViewFilter {
 /** The options that narrow the list beyond the view's default, in menu order. */
 export function viewFilters(options: TasksViewOptions): readonly TasksViewFilter[] {
   const filters: TasksViewFilter[] = [];
-  if (options.show === "completed")
-    filters.push({ key: "completed", label: "Completed", clear: { show: "open" } });
   if (options.onlyPinned)
     filters.push({ key: "pinned", label: "Pinned only", clear: { onlyPinned: false } });
+  if (options.onlyBacklog)
+    filters.push({ key: "backlog", label: "Backlog only", clear: { onlyBacklog: false } });
   if (options.onlyWithNotes)
     filters.push({ key: "notes", label: "With notes", clear: { onlyWithNotes: false } });
   if (options.onlyWithFiles)
@@ -182,6 +182,7 @@ export function matchesOnly(
 ): boolean {
   return (
     (!options.onlyPinned || task.pinned) &&
+    (!options.onlyBacklog || task.backlog) &&
     (!options.onlyWithNotes || task.details.trim().length > 0) &&
     (!options.onlyWithFiles || task.files.length > 0)
   );
@@ -190,13 +191,10 @@ export function matchesOnly(
 const time = (value: string | null): number =>
   value === null ? 0 : Date.parse(value);
 
-/**
- * The open list's order. The default puts pinned tasks first, then the
- * newest; editing never reorders it.
- */
-export function compareOpen(
-  sort: TasksSort,
-): (left: AssociatedTask, right: AssociatedTask) => number {
+type TaskComparator = (left: AssociatedTask, right: AssociatedTask) => number;
+
+/** The chosen sort alone. Newest is by creation, so editing never reorders it. */
+function compareBySort(sort: TasksSort): TaskComparator {
   return (left, right) => {
     if (sort === "title") {
       return (
@@ -213,22 +211,64 @@ export function compareOpen(
       );
     }
     return (
-      Number(right.pinned) - Number(left.pinned) ||
       time(right.createdAt) - time(left.createdAt) ||
       left.id.localeCompare(right.id)
     );
   };
 }
 
-/** Completed tasks: most recently completed first; pinning does not lift them. */
-export function compareCompleted(
-  sort: TasksSort,
-): (left: AssociatedTask, right: AssociatedTask) => number {
-  if (sort !== "pinned-newest") return compareOpen(sort);
+/** An open section's order (the list, and Backlog): pinned tasks first in every sort. */
+export function compareOpen(sort: TasksSort): TaskComparator {
+  const bySort = compareBySort(sort);
+  return (left, right) =>
+    Number(right.pinned) - Number(left.pinned) || bySort(left, right);
+}
+
+/**
+ * Completed tasks, which are never pinned: by default the most recently
+ * completed first.
+ */
+export function compareCompleted(sort: TasksSort): TaskComparator {
+  if (sort !== "newest") return compareBySort(sort);
   return (left, right) =>
     time(right.completedAt) - time(left.completedAt) ||
     time(right.createdAt) - time(left.createdAt) ||
     left.id.localeCompare(right.id);
+}
+
+/** What one view lists: the main list, then the collapsed sections. */
+export interface TaskSections {
+  /** Open tasks that are current work; under Only › Backlog, the backlog tasks. */
+  readonly main: readonly AssociatedTask[];
+  /** Open tasks that are not current work; none under Only › Backlog. */
+  readonly backlog: readonly AssociatedTask[];
+  readonly completed: readonly AssociatedTask[];
+}
+
+/**
+ * Splits the tasks a view shows (already searched and filtered) into its
+ * sections, each in the chosen order. Under Only › Backlog the backlog
+ * tasks are the main list, so there is no Backlog section. Only › Pinned
+ * and Only › Backlog leave Completed empty: a completed task is never
+ * pinned or in the backlog.
+ */
+export function taskSections(
+  tasks: readonly AssociatedTask[],
+  options: TasksViewOptions,
+): TaskSections {
+  const main: AssociatedTask[] = [];
+  const backlog: AssociatedTask[] = [];
+  const completed: AssociatedTask[] = [];
+  for (const task of tasks) {
+    if (task.completedAt !== null) completed.push(task);
+    else if (task.backlog && !options.onlyBacklog) backlog.push(task);
+    else main.push(task);
+  }
+  return {
+    main: main.sort(compareOpen(options.sort)),
+    backlog: backlog.sort(compareOpen(options.sort)),
+    completed: completed.sort(compareCompleted(options.sort)),
+  };
 }
 
 export type TaskGroupKind = "global" | "project" | "thread";

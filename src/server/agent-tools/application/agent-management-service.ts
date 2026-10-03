@@ -103,6 +103,7 @@ export type AgentTaskSummary = {
   readonly associatedProjectId: string | null;
   readonly title: string;
   readonly pinned: boolean;
+  readonly backlog: boolean;
   readonly completedAt: string | null;
   readonly revision: number;
   readonly createdAt: string;
@@ -572,6 +573,7 @@ export class AgentManagementService {
       readonly scopeMode: TaskScopeMode;
       readonly completed?: boolean;
       readonly pinned?: boolean;
+      readonly backlog?: boolean;
       readonly query?: string;
       readonly projection: "summary" | "full";
       readonly cursor?: string;
@@ -595,6 +597,7 @@ export class AgentManagementService {
         ? {}
         : { completed: request.completed }),
       ...(request.pinned === undefined ? {} : { pinned: request.pinned }),
+      ...(request.backlog === undefined ? {} : { backlog: request.backlog }),
       ...(request.query === undefined ? {} : { query: request.query }),
       projection: request.projection,
       ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
@@ -624,6 +627,7 @@ export class AgentManagementService {
         associatedProjectId: item.associatedProjectId,
         title: item.title,
         pinned: item.pinned,
+        backlog: item.backlog,
         completedAt:
           item.completedAt === null
             ? null
@@ -659,6 +663,7 @@ export class AgentManagementService {
       readonly title: string;
       readonly details?: string;
       readonly pinned?: boolean;
+      readonly backlog?: boolean;
       readonly files?: readonly string[];
       readonly taskScope: TaskScope;
     },
@@ -669,6 +674,7 @@ export class AgentManagementService {
       title: request.title,
       ...(request.details === undefined ? {} : { details: request.details }),
       ...(request.pinned === undefined ? {} : { pinned: request.pinned }),
+      ...(request.backlog === undefined ? {} : { backlog: request.backlog }),
       ...(request.files === undefined ? {} : { files: [...request.files] }),
       scope: request.taskScope,
     });

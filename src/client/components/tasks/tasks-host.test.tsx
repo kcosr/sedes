@@ -82,6 +82,7 @@ function makeStore(): ApplicationClientStore {
           title: "Audit error states",
           details: "",
           pinned: false,
+          backlog: false,
           files: [],
           completedAt: null,
           revision: 0,

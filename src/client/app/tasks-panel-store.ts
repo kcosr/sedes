@@ -17,17 +17,22 @@ export const TASKS_VIEWS: readonly TasksView[] = [
   "all",
 ];
 
-/** Pinned then newest (the default), most recently updated, or by title. */
-export type TasksSort = "pinned-newest" | "updated" | "title";
+/**
+ * The order within each section: newest (the default), most recently
+ * updated, or by title. Pinned tasks lead every section in every sort.
+ */
+export type TasksSort = "newest" | "updated" | "title";
 
-/** Open tasks (Completed collapsed at the end) or completed tasks only. */
-export type TasksShow = "open" | "completed";
-
-/** The View options of one view, remembered per view. */
+/**
+ * The View options of one view, remembered per view. The list always ends
+ * with the collapsed Backlog and Completed sections; the Only options
+ * combine.
+ */
 export interface TasksViewOptions {
   readonly sort: TasksSort;
-  readonly show: TasksShow;
   readonly onlyPinned: boolean;
+  /** The backlog tasks become the list, without the Backlog section. */
+  readonly onlyBacklog: boolean;
   readonly onlyWithNotes: boolean;
   readonly onlyWithFiles: boolean;
   /** Applies to All. */
@@ -50,13 +55,15 @@ export const TASKS_PANEL_STORAGE_KEY = "sedes.tasks.panel";
 /** The retired floating card's width; deleted by the version 1 migration. */
 const RETIRED_WIDTH_STORAGE_KEY = "sedes.tasks.panel.width";
 
-const TASKS_SORTS: readonly TasksSort[] = ["pinned-newest", "updated", "title"];
-const TASKS_SHOWS: readonly TasksShow[] = ["open", "completed"];
+// A retired sort ("pinned-newest", from when pins were a sort) reads as the
+// default, and a retired `show` choice is dropped: Completed is always the
+// collapsed section now.
+const TASKS_SORTS: readonly TasksSort[] = ["newest", "updated", "title"];
 
 const BASE_VIEW_OPTIONS: TasksViewOptions = Object.freeze({
-  sort: "pinned-newest",
-  show: "open",
+  sort: "newest",
   onlyPinned: false,
+  onlyBacklog: false,
   onlyWithNotes: false,
   onlyWithFiles: false,
   groupByProject: true,
@@ -115,8 +122,8 @@ function parseViewOptions(
   if (!isRecord(value)) return fallback;
   return {
     sort: pick(value.sort, TASKS_SORTS, fallback.sort),
-    show: pick(value.show, TASKS_SHOWS, fallback.show),
     onlyPinned: flag(value.onlyPinned, fallback.onlyPinned),
+    onlyBacklog: flag(value.onlyBacklog, fallback.onlyBacklog),
     onlyWithNotes: flag(value.onlyWithNotes, fallback.onlyWithNotes),
     onlyWithFiles: flag(value.onlyWithFiles, fallback.onlyWithFiles),
     groupByProject: flag(value.groupByProject, fallback.groupByProject),

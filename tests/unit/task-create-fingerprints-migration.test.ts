@@ -118,6 +118,8 @@ describe("task create fingerprint migration", () => {
           Object.entries(record).filter(([key]) => key !== "environmentId" && key !== "workspaceId"),
         ),
         projectId: null,
+        // Migration 128 gave every receipted record its backlog state.
+        backlog: false,
       });
       expect(() => tasks.create(scope, {
         title: record.title,

@@ -1,5 +1,5 @@
 import { UsageService } from "../../src/server/usage/usage-service.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Request as ExpressRequest } from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
@@ -212,6 +212,7 @@ function fixture() {
         .get(workspace.id) as { readonly projectId: string }
     ).projectId,
     threadId: thread.thread.id,
+    database,
     publishTaskChange,
     withHost,
     mutate,
@@ -244,7 +245,7 @@ describe("tasks HTTP contract", () => {
     }
   });
 
-  it("creates task content, pin state, and file metadata atomically", async () => {
+  it("creates task content, pin and backlog state, and file metadata atomically", async () => {
     const current = fixture();
     try {
       await current
@@ -254,6 +255,7 @@ describe("tasks HTTP contract", () => {
           title: "Complete initial task",
           details: "No follow-up patch required",
           pinned: true,
+          backlog: true,
           files: ["/tmp/spec.md"],
           scope: { kind: "global" },
         })
@@ -263,6 +265,7 @@ describe("tasks HTTP contract", () => {
             title: "Complete initial task",
             details: "No follow-up patch required",
             pinned: true,
+            backlog: true,
             files: ["/tmp/spec.md"],
             completedAt: null,
             revision: 0,
@@ -332,6 +335,7 @@ describe("tasks HTTP contract", () => {
         title: "Review the release notes",
         details: "",
         pinned: false,
+        backlog: false,
         files: [],
         completedAt: null,
         revision: 0,
@@ -348,7 +352,8 @@ describe("tasks HTTP contract", () => {
           title: "Review and publish the release notes",
           details: "Include the migration section",
           completed: true,
-          pinned: true,
+          pinned: false,
+          backlog: false,
           files: ["/does/not/need/to/exist.md", "/tmp/release.zip"],
           scope: { kind: "project", projectId: current.projectId },
         })
@@ -357,7 +362,8 @@ describe("tasks HTTP contract", () => {
         id: taskId,
         title: "Review and publish the release notes",
         details: "Include the migration section",
-        pinned: true,
+        pinned: false,
+        backlog: false,
         files: ["/does/not/need/to/exist.md", "/tmp/release.zip"],
         scope: { kind: "project", projectId: current.projectId },
         completedAt: expect.any(String),
@@ -404,6 +410,83 @@ describe("tasks HTTP contract", () => {
     }
   });
 
+  it("replays an update that completed and pinned a task before the completion rule", async () => {
+    const current = fixture();
+    try {
+      const created = await current
+        .mutate(request(current.app).post("/api/tasks"))
+        .send({
+          mutationId: randomUUID(),
+          title: "Committed before the upgrade",
+          scope: { kind: "global" },
+        })
+        .expect(201);
+      const taskId = created.body.task.id as string;
+      // What the previous release committed for {completed, pinned}, with the
+      // backlog field migration 128 adds to receipted records.
+      const mutationId = randomUUID();
+      const record = {
+        ...new TaskRepository(current.database).get(current.owner, taskId),
+        pinned: true,
+        completedAt: 5_000,
+        revision: 1,
+        updatedAt: 5_000,
+      };
+      current.database
+        .prepare(`
+          INSERT INTO task_mutation_receipts(
+            tenant_id, principal_id, mutation_id, operation_kind,
+            request_fingerprint, result_json, created_at
+          ) VALUES (?, ?, ?, 'update_task', ?, ?, 5000)
+        `)
+        .run(
+          current.owner.tenantId,
+          current.owner.principalId,
+          mutationId,
+          createHash("sha256")
+            .update(
+              JSON.stringify([
+                "update_task",
+                taskId,
+                null,
+                null,
+                true,
+                0,
+                true,
+                null,
+                null,
+              ]),
+            )
+            .digest("hex"),
+          JSON.stringify({ version: 1, record }),
+        );
+      const body = { expectedRevision: 0, completed: true, pinned: true };
+      await current
+        .mutate(request(current.app).patch(`/api/tasks/${taskId}`))
+        .send({ mutationId, ...body })
+        .expect(200)
+        .expect(({ body: replayed }) => {
+          expect(replayed.task).toMatchObject({
+            id: taskId,
+            pinned: true,
+            backlog: false,
+            completedAt: new Date(5_000).toISOString(),
+            revision: 1,
+          });
+        });
+      // The same change as a new mutation is refused.
+      await current
+        .mutate(request(current.app).patch(`/api/tasks/${taskId}`))
+        .send({ mutationId: randomUUID(), ...body })
+        .expect(400)
+        .expect(({ body: refused }) => {
+          expect(refused.error.code).toBe("bad_request");
+        });
+    } finally {
+      current.close();
+    }
+  });
+
   it("maps stale revisions, unknown tasks, and invalid bodies to contract errors", async () => {
     const current = fixture();
     try {
@@ -432,6 +515,36 @@ describe("tasks HTTP contract", () => {
             retryable: false,
           });
         });
+
+      // A completed task is never pinned or in the backlog.
+      await current
+        .mutate(request(current.app).patch(`/api/tasks/${taskId}`))
+        .send({
+          mutationId: randomUUID(),
+          expectedRevision: 0,
+          completed: true,
+          backlog: true,
+        })
+        .expect(400)
+        .expect(({ body }) => {
+          expect(body.error.code).toBe("bad_request");
+        });
+      await current
+        .mutate(request(current.app).patch(`/api/tasks/${taskId}`))
+        .send({ mutationId: randomUUID(), expectedRevision: 0, completed: true })
+        .expect(200);
+      await current
+        .mutate(request(current.app).patch(`/api/tasks/${taskId}`))
+        .send({ mutationId: randomUUID(), expectedRevision: 1, pinned: true })
+        .expect(400)
+        .expect(({ body }) => {
+          expect(body.error).toMatchObject({
+            code: "bad_request",
+            message:
+              "A completed task can't be pinned or in the backlog. Reopen it first.",
+          });
+        });
+      current.publishTaskChange.mockClear();
 
       await current
         .mutate(request(current.app).patch(`/api/tasks/${randomUUID()}`))

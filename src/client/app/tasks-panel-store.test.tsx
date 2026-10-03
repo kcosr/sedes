@@ -58,9 +58,12 @@ describe("tasks panel preferences", () => {
   it("returns defaults when nothing is stored", () => {
     expect(getTasksPanelPreferences()).toEqual(TASKS_PANEL_DEFAULTS);
     expect(TASKS_PANEL_DEFAULTS.lastView).toBe("thread");
-    expect(TASKS_VIEW_OPTIONS_DEFAULTS.all).toMatchObject({
-      sort: "pinned-newest",
-      show: "open",
+    expect(TASKS_VIEW_OPTIONS_DEFAULTS.all).toEqual({
+      sort: "newest",
+      onlyPinned: false,
+      onlyBacklog: false,
+      onlyWithNotes: false,
+      onlyWithFiles: false,
       groupByProject: true,
       includeThreadTasks: false,
       searchNotes: false,
@@ -71,7 +74,7 @@ describe("tasks panel preferences", () => {
     setTasksLastView("project");
     setTasksViewOptions("project", { includeThreadTasks: true, sort: "title" });
     setTasksViewOptions("all", { groupByProject: false });
-    setTasksViewOptions("thread", { onlyPinned: true, searchNotes: true });
+    setTasksViewOptions("thread", { onlyPinned: true, onlyBacklog: true, searchNotes: true });
 
     expect(getTasksPanelPreferences().lastView).toBe("project");
     expect(getTasksViewOptions("project")).toEqual({
@@ -86,6 +89,7 @@ describe("tasks panel preferences", () => {
     expect(getTasksViewOptions("thread")).toEqual({
       ...TASKS_VIEW_OPTIONS_DEFAULTS.thread,
       onlyPinned: true,
+      onlyBacklog: true,
       searchNotes: true,
     });
     expect(getTasksViewOptions("global")).toEqual(
@@ -125,7 +129,7 @@ describe("tasks panel preferences", () => {
         version: 2,
         lastView: "all",
         views: {
-          all: { sort: "bogus", show: "completed", groupByProject: "yes" },
+          all: { sort: "bogus", groupByProject: "yes", onlyBacklog: true },
           project: "nope",
         },
       }),
@@ -135,9 +139,34 @@ describe("tasks panel preferences", () => {
       lastView: "all",
       views: {
         ...TASKS_VIEW_OPTIONS_DEFAULTS,
-        all: { ...TASKS_VIEW_OPTIONS_DEFAULTS.all, show: "completed" },
+        all: { ...TASKS_VIEW_OPTIONS_DEFAULTS.all, onlyBacklog: true },
       },
     });
+  });
+
+  it("reads options saved before Backlog: the pin sort and Show are retired", () => {
+    seed(
+      JSON.stringify({
+        version: 2,
+        lastView: "thread",
+        views: {
+          thread: { sort: "pinned-newest", show: "completed", onlyPinned: true },
+          project: { sort: "title", show: "open" },
+        },
+      }),
+    );
+    expect(getTasksViewOptions("thread")).toEqual({
+      ...TASKS_VIEW_OPTIONS_DEFAULTS.thread,
+      sort: "newest",
+      onlyPinned: true,
+    });
+    expect(getTasksViewOptions("project")).toEqual({
+      ...TASKS_VIEW_OPTIONS_DEFAULTS.project,
+      sort: "title",
+    });
+    // The next write drops the retired fields.
+    setTasksViewOptions("global", { searchNotes: true });
+    expect(JSON.stringify(stored())).not.toMatch(/pinned-newest|"show"/u);
   });
 });
 

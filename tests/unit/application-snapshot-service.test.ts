@@ -308,6 +308,7 @@ describe("ApplicationSnapshotService", () => {
         title: "Moving thread task",
         details: "",
         pinned: false,
+        backlog: false,
         files: [],
         completedAt: null,
         revision: 0,

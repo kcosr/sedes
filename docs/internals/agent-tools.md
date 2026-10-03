@@ -218,13 +218,19 @@ environments under [Project resources](#project-resources).
   `projectId` the call is a conflict that names the project. A location whose
   project was removed is a conflict, so neither thread agents nor Tool clients
   can restore a removed project.
-- `task.list@4`, `task.get@2`, `task.create@2`, `task.update@2`, and
+- `task.list@5`, `task.get@3`, `task.create@3`, `task.update@3`, and
   `workpad.list`, `workpad.get`, `workpad.revisions`, `workpad.create`, and
   `workpad.update` at version 2 take and return `global`, `project`, and
   `thread` scopes. Input `{ kind: "project", projectId? }` defaults to the
   caller's project; output never contains a workspace scope. Task summaries
   and full list items report `associatedProjectId`: the Task's project, the
   current project of a thread Task's thread, or null for a global Task.
+- Every Task the task tools return, summary or full, carries `pinned` and
+  `backlog`. `task.list` includes backlog Tasks unless its `backlog` filter
+  excludes them, and `task.create` and `task.update` accept `backlog`. Their
+  descriptions tell agents to pin or backlog a Task only when the user asks.
+  Completing a Task clears both, and pinning or backlogging a completed Task
+  is rejected as invalid input.
 - `thread.archive@2` names its open-Task dispositions `move_to_project`,
   `move_to_global`, and `keep`; `move_to_project` moves each archived thread's
   open Tasks to that thread's project.
