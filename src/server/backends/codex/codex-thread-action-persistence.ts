@@ -70,6 +70,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
   readonly #scope: RequestScope;
   readonly #backendInstanceId: string;
   readonly #settings: CodexThreadExecutionSettingsRepository;
+  readonly #desiredSettingsChanged: (scope: RequestScope, applicationThreadId: string) => void;
   readonly #featureMutations: ProviderFeatureMutationRepository;
   readonly #executionPolicy: CodexExecutionPolicyAllowlist;
   readonly #modelPolicy: CompiledBackendModelPolicy;
@@ -110,6 +111,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
     readonly scope: RequestScope;
     readonly backendInstanceId: string;
     readonly settings: CodexThreadExecutionSettingsRepository;
+    readonly desiredSettingsChanged: (scope: RequestScope, applicationThreadId: string) => void;
     readonly featureMutations: ProviderFeatureMutationRepository;
     readonly executionPolicy: CodexExecutionPolicyAllowlist;
     readonly modelPolicy: CompiledBackendModelPolicy;
@@ -140,6 +142,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
     this.#scope = Object.freeze({ ...input.scope });
     this.#backendInstanceId = input.backendInstanceId;
     this.#settings = input.settings;
+    this.#desiredSettingsChanged = input.desiredSettingsChanged;
     this.#featureMutations = input.featureMutations;
     this.#executionPolicy = input.executionPolicy;
     this.#modelPolicy = input.modelPolicy;
@@ -554,6 +557,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
     applicationThreadId: string,
     desired: CodexExecutionSettingsTuple,
   ): Promise<void> {
+    this.#desiredSettingsChanged(scope, applicationThreadId);
     const updates: Promise<unknown>[] = [];
     if (this.#fastModeRuntime) {
       updates.push(

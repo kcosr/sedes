@@ -190,6 +190,12 @@ Transport implementations also own their generation boundaries:
   permits an empty idle projection after same-generation metadata confirmation.
   Other read failures remain errors, and reattachment never creates a mutation
   receipt or resumes the session with replacement settings.
+  If the native subscription must be recreated, resume includes the existing
+  thread's saved security settings after checking the current installation
+  policy. An idle thread or an entry in native loaded-thread inventory does not
+  prove that its former subscription settings survived a UDS disconnect.
+  Settings notifications newer than an in-flight resume response take
+  precedence in the retained session cache.
   Mutation admission accounts for actual queued input and retained outcome
   bytes instead of reserving a maximum-size response for every request. Four
   native mutations may run concurrently. Already running calls retain their

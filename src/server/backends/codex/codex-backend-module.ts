@@ -406,6 +406,8 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
       scope: input.context.scope,
       backendInstanceId: input.context.instance.id,
       settings: settingsRepository,
+      desiredSettingsChanged: (scope, applicationThreadId) =>
+        executionSettings.notifyDesiredSettingsChanged(scope, applicationThreadId),
       featureMutations: new ProviderFeatureMutationRepository(
         input.context.database,
       ),
@@ -749,6 +751,7 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
 export class CodexExecutionSettingsRepositoryAdapter implements CodexExecutionSettingsProvider {
   readonly #executionPolicy: CodexExecutionPolicyAllowlist;
   readonly #modelPolicy: CompiledBackendModelPolicy;
+  readonly #desiredSettingsListeners = new Map<string, Set<() => void>>();
 
   constructor(
     readonly repository: CodexThreadExecutionSettingsRepository,
@@ -764,6 +767,43 @@ export class CodexExecutionSettingsRepositoryAdapter implements CodexExecutionSe
     applicationThreadId: string,
   ): CodexExecutionSettingsTuple | null {
     return this.repository.find(scope, applicationThreadId)?.desired ?? null;
+  }
+
+  subscribeDesiredSettingsChanged(
+    scope: BackendModuleRuntimeContext["scope"],
+    applicationThreadId: string,
+    listener: () => void,
+  ): () => void {
+    const key = JSON.stringify([scope.tenantId, scope.principalId, applicationThreadId]);
+    let listeners = this.#desiredSettingsListeners.get(key);
+    if (!listeners) this.#desiredSettingsListeners.set(key, listeners = new Set());
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0 && this.#desiredSettingsListeners.get(key) === listeners) {
+        this.#desiredSettingsListeners.delete(key);
+      }
+    };
+  }
+
+  notifyDesiredSettingsChanged(
+    scope: BackendModuleRuntimeContext["scope"],
+    applicationThreadId: string,
+  ): void {
+    const key = JSON.stringify([scope.tenantId, scope.principalId, applicationThreadId]);
+    for (const listener of [...(this.#desiredSettingsListeners.get(key) ?? [])]) listener();
+  }
+
+  assertExecutionPolicyAllowed(settings: CodexExecutionPolicySelection): void {
+    if (!isCodexExecutionPolicyAllowed(settings, this.#executionPolicy)) {
+      throw new BackendError({
+        category: "rejected",
+        retryable: false,
+        crossedSubmissionBoundary: false,
+        safeMessage: "The selected Codex execution policy is no longer allowed.",
+        backendCode: "codex_execution_policy_rejected",
+      });
+    }
   }
 
   resolveFastModeDisabled(
@@ -815,18 +855,7 @@ export class CodexExecutionSettingsRepositoryAdapter implements CodexExecutionSe
     },
   ) {
     const snapshot = this.repository.freezeOperationSnapshot(scope, input);
-    if (
-      !isCodexExecutionPolicyAllowed(snapshot.settings, this.#executionPolicy)
-    ) {
-      throw new BackendError({
-        category: "rejected",
-        retryable: false,
-        crossedSubmissionBoundary: false,
-        safeMessage:
-          "The selected Codex execution policy is no longer allowed.",
-        backendCode: "codex_execution_policy_rejected",
-      });
-    }
+    this.assertExecutionPolicyAllowed(snapshot.settings);
     if (
       !this.#modelPolicy.isSelectionAllowed({
         modelId: snapshot.settings.model,

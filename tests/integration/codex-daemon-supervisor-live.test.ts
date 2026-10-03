@@ -80,10 +80,12 @@ const codexBinary = pinnedCodexTestExecutable();
 const requestOptions = Object.freeze({ timeoutMilliseconds: 5_000 });
 function liveExecutionSettings(
   selected: () => CodexExecutionSettingsTuple,
-  observeEffective: (settings: CodexObservedExecutionSettings) => void = () =>
+  observeEffective: (settings: CodexObservedExecutionSettings, imported?: CodexExecutionSettingsTuple) => void = () =>
     undefined,
 ): CodexExecutionSettingsProvider {
   return {
+    assertExecutionPolicyAllowed: () => undefined,
+    subscribeDesiredSettingsChanged: () => () => undefined,
     desiredSettings: () => selected(),
     resolveFastModeDisabled: () => selected(),
     forkSettingsEligibility: () => ({
@@ -92,7 +94,7 @@ function liveExecutionSettings(
       settings: selected(),
     }),
     freezeOperationSnapshot: () => ({ settings: selected() }),
-    observeEffective: (_scope, input) => observeEffective(input.settings),
+    observeEffective: (_scope, input) => observeEffective(input.settings, input.initializeDesired),
     markEffectiveUnknown: () => undefined,
   };
 }
@@ -1549,7 +1551,7 @@ plugins = false
     }
   }, 30_000);
 
-  it("connects to an exact-release external UDS listener, fences replacement, and never owns the daemon", async () => {
+  it("preserves security across external UDS client replacement, fences listener replacement, and never owns the daemon", async () => {
     const temporaryRoot = await mkdtemp(
       path.join(os.homedir(), ".sedes-codex-uds-live-"),
     );
@@ -1670,10 +1672,78 @@ plugins = false
           requestOptions,
         ),
       ).resolves.toMatchObject({ data: [] });
+      const instance: AgentBackendInstance = {
+        id: runtimeScope.backendInstanceId,
+        tenantId: scope.tenantId,
+        kind: "codex_app_server",
+        label: "Codex UDS security recovery",
+        enabled: true,
+        configurationRevision: 1,
+        protocolRelease: CODEX_APP_SERVER_RELEASE,
+      };
+      const connection: AgentConnectionProfile = {
+        id: "codex-uds-security-profile",
+        tenantId: scope.tenantId,
+        ownerPrincipalId: scope.principalId,
+        templateId: "codex-uds-security-template",
+        kind: "codex_app_server",
+        backendInstanceId: instance.id,
+        executionEnvironmentId: runtimeScope.executionEnvironmentId,
+        label: "Codex UDS security recovery",
+        enabled: true,
+        configurationRevision: 1,
+      };
+      const workspace = {
+        authorityRevision: 1,
+        summary: {
+          id: "12000000-0000-4000-8000-000000000005",
+          environmentId: connection.executionEnvironmentId,
+          displayName: "Codex UDS recovery workspace",
+          displayPath: workingDirectory,
+          availability: "available" as const,
+          trustState: "trusted" as const,
+          revision: 1,
+        },
+        canonicalPath: workingDirectory,
+      };
+      let selected: CodexExecutionSettingsTuple = {
+        model: "unselected",
+        reasoningEffort: "low",
+        serviceTier: "standard",
+        ...readOnlyPolicy,
+      };
+      const observations: CodexObservedExecutionSettings[] = [];
+      const makeDriver = (current: CodexDaemonSupervisor) => new CodexConversationBackendDriver({
+        instance,
+        connection,
+        client: current.client,
+        serverRequests: current.serverRequests,
+        ownership: new CodexConversationOwnershipRegistry(),
+        nativeNamespace: "test-codex-uds-security-store",
+        toolProvenanceKey: new Uint8Array(32).fill(0x55),
+        modelPolicy: catalogModelPolicy,
+        executionSettings: liveExecutionSettings(() => selected, (effective, imported) => {
+          observations.push(effective);
+          // Match production adoption: a resume observation can replace the
+          // durable desired tuple, which is then frozen for the next turn.
+          if (imported) selected = imported;
+        }),
+        outputArtifacts: createInMemoryOutputArtifactPublisher(),
+        fastModeSessions: new CodexFastModeSessionRegistry(),
+        agentToolCliEnvironment: unavailableCodexAgentToolCliEnvironmentProvider,
+        viewedImageCapture: { capture: async () => undefined },
+        usageSink: NO_USAGE_SINK,
+      });
+      selected = {
+        ...selectedCatalogSettings((await makeDriver(supervisor).catalog({ scope, workspace })).models),
+        sandboxMode: "danger-full-access",
+        networkAccess: "enabled",
+      };
       const udsThread = await supervisor.client.request(
         codexThreadStartMethod,
         {
           cwd: workingDirectory,
+          model: selected.model,
           approvalPolicy: "never",
           sandbox: "read-only",
           ephemeral: false,
@@ -1691,6 +1761,10 @@ plugins = false
         {
           threadId: udsThread.thread.id,
           clientUserMessageId: "sedes-c5b-live-uds-message",
+          model: selected.model,
+          effort: selected.reasoningEffort,
+          approvalPolicy: "never",
+          sandboxPolicy: { type: "dangerFullAccess" },
           input: [
             {
               type: "text",
@@ -1727,6 +1801,54 @@ plugins = false
         state: "ready",
         generation: 1,
       });
+      const requests = vi.spyOn(restartedSedesClient.client, "requestWithReceipt");
+      const handle = await makeDriver(restartedSedesClient).attach({
+        scope,
+        workspace,
+        binding: {
+          tenantId: scope.tenantId,
+          ownerPrincipalId: scope.principalId,
+          applicationThreadId: "13000000-0000-4000-8000-000000000005",
+          backendInstanceId: instance.id,
+          connectionProfileId: connection.id,
+          executionEnvironmentId: connection.executionEnvironmentId,
+          backendConversationId: udsThread.thread.id,
+          createdAt: new Date().toISOString(),
+        },
+        opaqueBindingDetail: serializeCodexBindingDetail({
+          threadId: udsThread.thread.id,
+          sessionId: udsThread.thread.sessionId,
+          nativeAncestry: null,
+          correlationAncestorThreadIds: [],
+        }),
+      });
+      try {
+        await handle.establishProjection({ signal: new AbortController().signal });
+        expect(selected).toMatchObject({ sandboxMode: "danger-full-access", networkAccess: "enabled" });
+        expect(observations.at(-1)).toMatchObject({ sandboxMode: "danger-full-access", approvalPolicy: "never" });
+        const completed = nextNotification(restartedSedesClient.client, "turn/completed",
+          (params) => isRecord(params) && params.threadId === udsThread.thread.id);
+        await handle.submit({
+          applicationOperationId: "sedes-uds-security-after-restart",
+          source: { kind: "user" },
+          mutationId: "sedes-uds-security-after-restart",
+          reconciliationToken: "sedes-uds-security-after-restart",
+          contextExcerpts: [],
+          taskContexts: [],
+          attachments: [],
+          text: "Complete the disposable post-reconnect security check.",
+        });
+        expect(requests.mock.calls.find(([method]) => method.method === "turn/start")?.[1]).toMatchObject({
+          sandboxPolicy: { type: "dangerFullAccess" },
+          approvalPolicy: "never",
+        });
+        await completed;
+        expect(external.pid).toBe(replacementPid);
+        expect(processExists(replacementPid)).toBe(true);
+      } finally {
+        await handle.close();
+        requests.mockRestore();
+      }
       await restartedSedesClient.close();
       supervisor = undefined;
       expect(processExists(replacementPid)).toBe(true);

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type Database from "better-sqlite3";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexExecutionSettingsRepositoryAdapter } from "../../src/server/backends/codex/codex-backend-module.js";
 import { CodexThreadExecutionSettingsRepository } from "../../src/server/backends/codex/codex-thread-execution-settings-repository.js";
 import { parseResolvedBackendConfiguration } from "../support/resolved-backend-configuration.js";
@@ -644,6 +644,25 @@ describe("Codex execution settings persistence", () => {
       retryable: false,
       backendCode: "codex_execution_policy_rejected",
     }));
+  });
+
+  it("validates saved resume security against current policy without replacing durable intent", () => {
+    const target = fixture();
+    const repository = new CodexThreadExecutionSettingsRepository(target.database);
+    const desired = {
+      model: "gpt-5.6-codex", reasoningEffort: "medium", serviceTier: "standard" as const,
+      ...unrestrictedPolicy,
+    };
+    repository.initialize(target.scope, { applicationThreadId: target.threadId, desired, now: 314 });
+    const restricted = new CodexExecutionSettingsRepositoryAdapter(repository,
+      { ...allExecutionPolicy, allowedSandboxModes: ["read-only"] }, catalogModelPolicy);
+    expect(() => restricted.assertExecutionPolicyAllowed(desired)).toThrowError(expect.objectContaining({
+      backendCode: "codex_execution_policy_rejected", crossedSubmissionBoundary: false,
+    }));
+    expect(repository.find(target.scope, target.threadId)?.desired).toEqual(desired);
+    const allowed = new CodexExecutionSettingsRepositoryAdapter(repository, allExecutionPolicy, catalogModelPolicy);
+    expect(() => allowed.assertExecutionPolicyAllowed(desired)).not.toThrow();
+    expect(repository.find(target.scope, target.threadId)?.desired).toEqual(desired);
   });
 
   it("invalidates every confirmed thread for one principal and backend without erasing observations", () => {
@@ -1354,6 +1373,31 @@ describe("Codex execution settings persistence", () => {
     })).toMatchObject({
       settings: readOnlyPolicy,
     });
+  });
+
+  it("scopes desired-settings notifications and releases replaced subscriptions safely", () => {
+    const target = fixture();
+    const adapter = new CodexExecutionSettingsRepositoryAdapter(
+      new CodexThreadExecutionSettingsRepository(target.database), allExecutionPolicy, catalogModelPolicy,
+    );
+    const listener = vi.fn();
+    const unsubscribe = adapter.subscribeDesiredSettingsChanged(target.scope, target.threadId, listener);
+    adapter.notifyDesiredSettingsChanged({ ...target.scope, tenantId: "another-tenant" }, target.threadId);
+    adapter.notifyDesiredSettingsChanged({ ...target.scope, principalId: "another-owner" }, target.threadId);
+    adapter.notifyDesiredSettingsChanged(target.scope, "another-thread");
+    expect(listener).not.toHaveBeenCalled();
+    adapter.notifyDesiredSettingsChanged(target.scope, target.threadId);
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    const replacement = vi.fn();
+    const unsubscribeReplacement = adapter.subscribeDesiredSettingsChanged(target.scope, target.threadId, replacement);
+    unsubscribe();
+    adapter.notifyDesiredSettingsChanged(target.scope, target.threadId);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(replacement).toHaveBeenCalledTimes(1);
+    unsubscribeReplacement();
+    adapter.notifyDesiredSettingsChanged(target.scope, target.threadId);
+    expect(replacement).toHaveBeenCalledTimes(1);
   });
 
   it("audits and replays provider feature mutations without cross-owner aliases", () => {

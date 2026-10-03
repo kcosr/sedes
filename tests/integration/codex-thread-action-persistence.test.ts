@@ -115,6 +115,7 @@ function fixture(
     readonly imported?: boolean;
     readonly unbound?: boolean;
     readonly managedTui?: CodexManagedTuiController;
+    readonly desiredSettingsChanged?: (scope: RequestScope, applicationThreadId: string) => void;
     readonly fastModeRuntime?: {
       syncServiceTier(
         scope: RequestScope,
@@ -203,6 +204,7 @@ function fixture(
     codexThreadId,
     piThreadId: createBound("pi-thread", piProfile.id, "native-pi-thread"),
     persistence: new CodexThreadActionPersistence({
+      desiredSettingsChanged: input.desiredSettingsChanged ?? (() => undefined),
       database,
       scope,
       backendInstanceId: "codex-primary",
@@ -437,6 +439,36 @@ describe("Codex interactive action persistence", () => {
       current.settings.find(current.scope, current.codexThreadId)?.desired
         ?.serviceTier,
     ).toBe("fast");
+  });
+
+  it("notifies a committed execution-policy edit before failed native synchronization", async () => {
+    const notified = vi.fn();
+    const managedTui = {
+      syncSettings: vi.fn(async () => {
+        expect(notified).toHaveBeenCalledOnce();
+        throw new Error("tui_sync_failed");
+      }),
+    } as unknown as CodexManagedTuiController;
+    const current = fixture({ managedTui, desiredSettingsChanged: notified });
+    const thread = current.inventory.getThread(current.scope, current.codexThreadId).thread;
+    const settings = current.settings.find(current.scope, current.codexThreadId)!;
+    notified.mockImplementation((changedScope, applicationThreadId) => {
+      expect(current.database.inTransaction).toBe(false);
+      expect(current.settings.find(changedScope, applicationThreadId)?.desired?.sandboxMode).toBe("workspace-write");
+      expect(current.featureMutations.find(changedScope, "policy-edit")?.state).toBe("accepted");
+    });
+    const mutation = { mutationId: "policy-edit", expectedThreadRevision: thread.revision, now: 400,
+      operation: { action: "perform_provider_feature" as const,
+        feature: { featureId: "codex.execution", schemaVersion: 1 }, actionId: "set_sandbox_workspace",
+        arguments: null, expectedFeatureRevision: settings.revision },
+    };
+    await expect(current.persistence.performProviderFeature(current.scope, current.codexThreadId, mutation))
+      .rejects.toThrow("tui_sync_failed");
+    expect(notified).toHaveBeenCalledExactlyOnceWith(current.scope, current.codexThreadId);
+    // The committed receipt makes retry a replay; it must not repeat the edit.
+    await expect(current.persistence.performProviderFeature(current.scope, current.codexThreadId, mutation))
+      .resolves.toEqual({ applicationOperationId: "policy-edit" });
+    expect(notified).toHaveBeenCalledOnce();
   });
 
   it("durably replays managed TUI Start and Stop without repeating either external effect", async () => {
@@ -960,6 +992,7 @@ describe("Codex interactive action persistence", () => {
     });
     const inventory = new InventoryRepository(database);
     const persistence = new CodexThreadActionPersistence({
+      desiredSettingsChanged: () => undefined,
       database,
       scope,
       backendInstanceId: "codex-primary",

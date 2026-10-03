@@ -130,6 +130,7 @@ import {
   type CodexLiveProjectionSeed,
 } from "./codex-live-projection-overlay.js";
 import { CodexProjectionWorkQueue } from "./codex-projection-work-queue.js";
+import { CodexHistoryReader } from "./codex-history-reader.js";
 import {
   codexClientUserMessageId,
   copyCodexSubmissionCorrelationKey,
@@ -155,6 +156,7 @@ import {
   isCodexApprovalReviewer,
   type CodexApprovalPolicy,
   type CodexApprovalReviewer,
+  type CodexExecutionPolicySelection,
   type CodexNetworkAccess,
   type CodexSandboxMode,
 } from "./codex-execution-policy.js";
@@ -219,6 +221,12 @@ export type CodexObservedExecutionSettings =
  * adapter while tests can prove the exact provider boundary independently.
  */
 export interface CodexExecutionSettingsProvider {
+  assertExecutionPolicyAllowed(settings: CodexExecutionPolicySelection): void;
+  subscribeDesiredSettingsChanged(
+    scope: ExecutionScope,
+    applicationThreadId: string,
+    listener: () => void,
+  ): Unsubscribe;
   desiredSettings(
     scope: ExecutionScope,
     applicationThreadId: string,
@@ -363,6 +371,7 @@ export class CodexConversationHandle implements ConversationHandle {
   readonly #opaqueBindingDetail: string;
   readonly #client: CodexSharedClientFacade;
   readonly #executionSettings: CodexExecutionSettingsProvider;
+  readonly #unsubscribeDesiredSettings: Unsubscribe;
   readonly #outputArtifacts: OutputArtifactPublisher;
   readonly #viewedImageCapture: CodexViewedImageCaptureCoordinator;
   #reservedViewedImageBytes = 0;
@@ -446,6 +455,11 @@ export class CodexConversationHandle implements ConversationHandle {
   #establishmentSettled: Promise<void> | undefined;
   #establishedGeneration = 0;
   #subscribedGeneration = 0;
+  #policyHistory: {
+    readonly reader: CodexHistoryReader;
+    readonly capabilities: BackendCapabilityDocument;
+    recoveryRequested: boolean;
+  } | undefined;
   #snapshotWindow: BackendConversationSnapshot | undefined;
   #projectedItemByNativeCoordinate = new Map<
     string,
@@ -650,6 +664,9 @@ export class CodexConversationHandle implements ConversationHandle {
           });
         })
       : () => undefined;
+    this.#unsubscribeDesiredSettings = this.#executionSettings.subscribeDesiredSettingsChanged(
+      this.#scope(), this.binding.applicationThreadId, this.#recoverAllowedExecutionPolicy,
+    );
   }
 
   async establishProjection(
@@ -700,6 +717,10 @@ export class CodexConversationHandle implements ConversationHandle {
         projection = fallback;
       }
       this.#assertOpen();
+      if (this.#policyHistory?.recoveryRequested) {
+        throw codexError("unavailable", "Codex activity or execution settings changed while its history was being read.",
+          "codex_execution_policy_history_changed", true);
+      }
       this.#projectionEpoch += 1;
       this.#projectionSubscriptionClaimed = false;
       const epoch = this.#projectionEpoch;
@@ -745,6 +766,10 @@ export class CodexConversationHandle implements ConversationHandle {
       try {
         resumed = await this.#readResumeUntilQuiet(signal);
       } catch (error) {
+        if (error instanceof BackendError && error.backendCode === "codex_execution_policy_history_changed" &&
+            attempt < MAXIMUM_ESTABLISHMENT_ATTEMPTS - 1) {
+          continue;
+        }
         const recoveryGeneration = this.#terminalErrorRecoveryGeneration;
         const lifecycle = this.#client.lifecycleSnapshot();
         if (
@@ -771,6 +796,9 @@ export class CodexConversationHandle implements ConversationHandle {
       }
       this.#assertEstablishmentMayContinue(signal);
       this.#assertCurrentReceipt(resumed.generation);
+      if (this.#policyHistory) {
+        return { snapshot: resumed.snapshot, history: resumed.history };
+      }
       const goalNotificationSequenceBeforeRefresh =
         this.#lastGoalNotificationGeneration === resumed.generation
           ? this.#lastGoalNotificationInboundSequence
@@ -820,6 +848,7 @@ export class CodexConversationHandle implements ConversationHandle {
 
   async history(input: HistoryPageInput): Promise<BackendHistoryPage> {
     this.#assertOpen();
+    if (this.#policyHistory) return await this.#policyHistory.reader.history(input);
     input.signal?.throwIfAborted();
     const snapshot = this.#snapshotWindow;
     const nativeThread = this.#nativeThread;
@@ -963,6 +992,7 @@ export class CodexConversationHandle implements ConversationHandle {
 
   async locateTurn(input: LocateTurnInput): Promise<LocateTurnResult> {
     this.#assertOpen();
+    if (this.#policyHistory) return await this.#policyHistory.reader.locateTurn(input);
     input.signal?.throwIfAborted();
     if (this.#projectionInvalidated) {
       throw codexError(
@@ -1095,7 +1125,34 @@ export class CodexConversationHandle implements ConversationHandle {
     return this.#capabilities();
   }
 
+  readonly #recoverAllowedExecutionPolicy = (): void => {
+    const history = this.#policyHistory;
+    if (!history || history.recoveryRequested || this.#closing || this.#closed) return;
+    try {
+      if (!this.#hasAllowedExecutionPolicy()) return;
+      history.recoveryRequested = true;
+      // Durable settings edits must wake a history-only projection even when
+      // the mutation gateway only publishes its cached actor snapshot.
+      this.#emit({ type: "resnapshot_required", reason: "contradictory_state" });
+    } catch (error) {
+      if (!isExecutionPolicyRejected(error)) this.#reportError(error);
+    }
+  };
+
+  #hasAllowedExecutionPolicy(): boolean {
+    const desired = this.#executionSettings.desiredSettings(this.#scope(), this.binding.applicationThreadId);
+    if (!desired) return false;
+    try {
+      this.#executionSettings.assertExecutionPolicyAllowed(desired);
+      return true;
+    } catch (error) {
+      if (isExecutionPolicyRejected(error)) return false;
+      throw error;
+    }
+  }
+
   #capabilities(): BackendCapabilityDocument {
+    if (this.#policyHistory) return this.#policyHistory.capabilities;
     const forkSettings = this.#executionSettings.forkSettingsEligibility(
       this.#scope(),
       this.binding.applicationThreadId,
@@ -1212,6 +1269,7 @@ export class CodexConversationHandle implements ConversationHandle {
 
   async usage(): Promise<UsageSnapshot> {
     this.#assertOpen();
+    if (this.#policyHistory) return {};
     const lifecycle = this.#client.lifecycleSnapshot();
     if (
       lifecycle.state !== "ready" ||
@@ -1227,6 +1285,12 @@ export class CodexConversationHandle implements ConversationHandle {
     readonly usage: UsageSnapshot;
   }> {
     this.#assertOpen();
+    if (this.#policyHistory) {
+      const projection = await this.#policyHistory.reader.readSnapshot({
+        signal: new AbortController().signal,
+      });
+      return { snapshot: projection.snapshot, usage: {} };
+    }
     if (this.#snapshotWindow) {
       const lifecycle = this.#client.lifecycleSnapshot();
       const runState =
@@ -2171,6 +2235,7 @@ export class CodexConversationHandle implements ConversationHandle {
 
   async respond(input: InteractionResponseInput): Promise<void> {
     this.#assertOpen();
+    if (this.#policyHistory) this.#assertMutableProjection();
     try {
       await this.#interactions.respond(input);
     } catch (error) {
@@ -2210,6 +2275,7 @@ export class CodexConversationHandle implements ConversationHandle {
     readonly safeMessage?: string;
   }> {
     this.#assertOpen();
+    if (this.#policyHistory) this.#assertMutableProjection();
     if (
       input.featureId === CODEX_TUI_FEATURE_REF.featureId &&
       input.schemaVersion === CODEX_TUI_FEATURE_REF.schemaVersion
@@ -2513,7 +2579,7 @@ export class CodexConversationHandle implements ConversationHandle {
   async #recoverFastModeProjection(
     projection: CodexFastModeProjection,
   ): Promise<void> {
-    if (this.#closing || this.#closed) return;
+    if (this.#closing || this.#closed || this.#policyHistory) return;
     if (projection.unavailableReason === "feature_disabled") {
       try {
         if (await this.#restoreSupersedingFastModeSettings(projection)) {
@@ -2554,6 +2620,7 @@ export class CodexConversationHandle implements ConversationHandle {
           if (
             !this.#closing &&
             !this.#closed &&
+            !this.#policyHistory &&
             generation !== 0 &&
             lifecycle.state === "ready" &&
             lifecycle.generation === generation &&
@@ -2610,7 +2677,7 @@ export class CodexConversationHandle implements ConversationHandle {
   async #restoreSupersedingFastModeSettings(
     recoveredProjection: CodexFastModeProjection,
   ): Promise<boolean> {
-    if (this.#closing || this.#closed) return true;
+    if (this.#closing || this.#closed || this.#policyHistory) return true;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const currentProjection = this.#fastModeSessions.projection(
         this.#scope(),
@@ -2716,9 +2783,70 @@ export class CodexConversationHandle implements ConversationHandle {
     });
   }
 
+  async #releasePolicyHistory(): Promise<void> {
+    const history = this.#policyHistory;
+    this.#policyHistory = undefined;
+    await history?.reader.close();
+  }
+
+  async #readPolicyRejectedHistory(
+    inspectedThread: CodexThread,
+    generation: number,
+    inboundSequence: number,
+    signal: AbortSignal,
+  ): Promise<CodexStableResumeProjection> {
+    const validateQuiescentThread = (thread: CodexThread) => {
+      this.#validateThread(thread);
+      if (thread.status.type !== "idle" && thread.status.type !== "notLoaded") {
+        throw codexError("unavailable", "Codex must become idle before history can be read with the saved execution policy unavailable.",
+          "codex_execution_policy_history_not_idle", true);
+      }
+    };
+    validateQuiescentThread(inspectedThread);
+    const reader = new CodexHistoryReader({
+      client: this.#client,
+      threadId: this.binding.backendConversationId,
+      correlationScope: this.#correlationScope,
+      validateThread: validateQuiescentThread,
+      mapError: mapCodexReadError,
+      project: (thread, before, limit, captureSignal, timestamps) =>
+        this.#projectNativeHistorySliceDurably(thread, before, limit, new Map(), { signal: captureSignal }, timestamps),
+    });
+    const policyHistory = { reader, capabilities: await reader.backendCapabilities(), recoveryRequested: false };
+    this.#policyHistory = policyHistory;
+    this.#recoverAllowedExecutionPolicy();
+    try {
+      const projection = await reader.readSnapshot({ signal });
+      this.#assertEstablishmentMayContinue(signal);
+      this.#assertCurrentReceipt(generation);
+      if (policyHistory.recoveryRequested) {
+        throw codexError("unavailable", "Codex activity or execution settings changed while its history was being read.",
+          "codex_execution_policy_history_changed", true);
+      }
+      // Detached history has no native subscription or observed execution
+      // tuple. Keep the rejected selection intact until the user repairs it.
+      this.#establishedGeneration = generation;
+      this.#subscribedGeneration = 0;
+      this.#model = undefined;
+      this.#modelInputModalities = ["text"];
+      this.#nativeThread = undefined;
+      this.#snapshotWindow = undefined;
+      this.#lastSettingsObservation = undefined;
+      this.#projectionInvalidated = false;
+      this.#clearPaginatedHistoryAuthority();
+      this.#liveProjectionOverlay.dispose();
+      this.#markConfirmationUnknown();
+      return { ...projection, generation, inboundSequence };
+    } catch (error) {
+      await this.#releasePolicyHistory();
+      throw error;
+    }
+  }
+
   async #readResumeUntilQuiet(
     signal: AbortSignal,
   ): Promise<CodexStableResumeProjection> {
+    await this.#releasePolicyHistory();
     try {
       for (
         let attempt = 0;
@@ -2755,7 +2883,7 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#publishControl(inspected.result.thread, inspected.generation, controlObservationBeforeRead);
         const historyMode = assertCodexHistoryMode(inspected.result.thread);
 
-        const desiredBeforeResume = this.#executionSettings.desiredSettings(
+        let desiredBeforeResume = this.#executionSettings.desiredSettings(
           this.#scope(), this.binding.applicationThreadId,
         );
         let resumed;
@@ -2770,6 +2898,14 @@ export class CodexConversationHandle implements ConversationHandle {
             },
           );
           if (!resumed) {
+            if (desiredBeforeResume) {
+              try {
+                this.#executionSettings.assertExecutionPolicyAllowed(desiredBeforeResume);
+              } catch (error) {
+                if (!isExecutionPolicyRejected(error)) throw error;
+                return await this.#readPolicyRejectedHistory(inspected.result.thread, inspected.generation, inspected.inboundSequence, signal);
+              }
+            }
             const cliEnvironment =
               await this.#acquireAgentToolCliEnvironment(signal);
             this.#assertEstablishmentMayContinue(signal);
@@ -2782,8 +2918,28 @@ export class CodexConversationHandle implements ConversationHandle {
             }
             this.#assertCurrentReceipt(inspected.generation);
             const executionEnvironment = await this.#resolveThreadEnvironment(this.binding.applicationThreadId);
+            // A new native subscription can rebuild the thread from global
+            // config even while the external app-server process stays alive.
+            // Restore the saved security selection for that reconstruction.
+            // Codex ignores these overrides when another subscription retains
+            // the live session, whose returned settings remain authoritative.
+            desiredBeforeResume = this.#executionSettings.desiredSettings(
+              this.#scope(), this.binding.applicationThreadId,
+            );
+            if (desiredBeforeResume) {
+              try {
+                this.#executionSettings.assertExecutionPolicyAllowed(desiredBeforeResume);
+              } catch (error) {
+                if (!isExecutionPolicyRejected(error)) throw error;
+                this.#releaseAgentToolCliEnvironmentLease();
+                return await this.#readPolicyRejectedHistory(inspected.result.thread, inspected.generation, inspected.inboundSequence, signal);
+              }
+            }
+            const resumePolicy = desiredBeforeResume
+              ? codexExecutionPolicy(desiredBeforeResume).thread
+              : undefined;
             const resumeConfig = withCodexAgentToolCliEnvironment(
-              withCodexExecutionEnvironment({}, executionEnvironment),
+              withCodexExecutionEnvironment(resumePolicy?.configOverrides ?? {}, executionEnvironment),
               {
                 resolution: cliEnvironment,
                 executionEnvironment,
@@ -2795,6 +2951,13 @@ export class CodexConversationHandle implements ConversationHandle {
               codexThreadResumeMethod,
               {
                 threadId: this.binding.backendConversationId,
+                ...(resumePolicy
+                  ? {
+                      sandbox: resumePolicy.sandbox,
+                      approvalPolicy: resumePolicy.approvalPolicy,
+                      approvalsReviewer: resumePolicy.approvalsReviewer,
+                    }
+                  : {}),
                 ...(desiredBeforeResume
                   ? {
                       serviceTier: encodeCodexServiceTier(
@@ -3377,6 +3540,12 @@ export class CodexConversationHandle implements ConversationHandle {
   }
 
   #assertMutableProjection(): CodexThread {
+    if (this.#policyHistory) {
+      const desired = this.#executionSettings.desiredSettings(this.#scope(), this.binding.applicationThreadId);
+      if (desired) this.#executionSettings.assertExecutionPolicyAllowed(desired);
+      throw codexError("unavailable", "Codex must restore its allowed execution settings before accepting work.",
+        "codex_execution_policy_reconciliation_required", true);
+    }
     const lifecycle = this.#client.lifecycleSnapshot();
     if (
       lifecycle.state !== "ready" ||
@@ -4123,6 +4292,20 @@ export class CodexConversationHandle implements ConversationHandle {
 
   readonly #consumeNotification: CodexNotificationListener = (notification) => {
     this.#observeControlNotification(notification);
+    if (this.#policyHistory) {
+      const lifecycle = this.#client.lifecycleSnapshot();
+      const threadId = isCodexRpcUndecodableNotification(notification)
+        ? notification.nativeThreadId : notificationThreadId(notification.params);
+      if (this.#closing || this.#closed || lifecycle.state !== "ready" ||
+          notification.generation !== lifecycle.generation || threadId !== this.binding.backendConversationId ||
+          !["thread/status/changed", "turn/started", "turn/completed"].includes(notification.method)) return;
+      // Detached history cannot project live work. Refresh its frozen reader
+      // when native activity changes, and fence a read still being captured.
+      this.#policyHistory.recoveryRequested = true;
+      this.#recordMutation(notification.generation, notification.sequence);
+      this.#invalidateProjection("contradictory_state");
+      return;
+    }
     if (this.#deferPaginatedEstablishmentNotification(notification)) return;
     if (
       this.#pendingNotificationWork === 0 &&
@@ -4181,7 +4364,7 @@ export class CodexConversationHandle implements ConversationHandle {
   readonly #applyNotificationNow = async (
     notification: Parameters<CodexNotificationListener>[0],
   ): Promise<void> => {
-    if (this.#closing || this.#closed) return;
+    if (this.#closing || this.#closed || this.#policyHistory) return;
     if (isCodexRpcUndecodableNotification(notification)) {
       if (notification.nativeThreadId !== this.binding.backendConversationId) {
         return;
@@ -5578,6 +5761,7 @@ export class CodexConversationHandle implements ConversationHandle {
     }
     this.#usageCapture?.seal();
     this.#closing = true;
+    this.#unsubscribeDesiredSettings();
     this.#controlLifetime.abort();
     this.#viewedImageCapture.close();
     this.#projectionWorkQueue.execute(() => {
@@ -5589,6 +5773,7 @@ export class CodexConversationHandle implements ConversationHandle {
     await this.#establishmentSettled;
     await this.#desiredInitializationSettled;
     await this.#notificationWork;
+    await this.#releasePolicyHistory();
     this.#interactions.close();
     this.#closed = true;
     this.#unsubscribeNotifications();
@@ -5792,6 +5977,7 @@ export class CodexConversationHandle implements ConversationHandle {
 
   #ownsServerRequestRoute(route: CodexServerRequestRoute): boolean {
     if (
+      this.#policyHistory ||
       route.nativeThreadId !== this.binding.backendConversationId ||
       !this.#nativeThread
     ) {
@@ -6546,6 +6732,10 @@ function isUnmaterializedThreadError(
     error instanceof CodexRpcRemoteError &&
     /(?:not materialized yet|no rollout found)/iu.test(error.message)
   );
+}
+
+function isExecutionPolicyRejected(error: unknown): error is BackendError {
+  return error instanceof BackendError && error.backendCode === "codex_execution_policy_rejected";
 }
 
 export function codexObservedExecutionSettings(

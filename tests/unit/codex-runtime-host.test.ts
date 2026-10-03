@@ -5,13 +5,31 @@ import { CodexRuntimeClient } from "../../src/server/backends/codex/runtime/code
 import { CodexSharedClientFacade } from "../../src/server/backends/codex/codex-client-facade.js";
 import { codexRuntimeMethod, type CodexRuntimeAuthority, type CodexRuntimeEvent } from "../../src/server/backends/codex/runtime/codex-runtime-protocol.js";
 import type { CodexRpcRequestReceipt, CodexInboundServerRequest } from "../../src/server/backends/codex/rpc/codex-rpc-client.js";
-import { decodeCodexServerRequestParams } from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
+import { decodeCodexServerNotificationParams, decodeCodexServerRequestParams, type OfficialCodexClientRequestResult } from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 import type { CodexRuntimeReceiptSink } from "../../src/server/backends/codex/runtime/codex-runtime-receipt-store.js";
 
 const scope = { tenantId: "tenant", principalId: "principal", executionEnvironmentId: "remote", backendInstanceId: "backend" };
 const authority: CodexRuntimeAuthority = { scope, runtimeId: "runtime", controllerId: "1" };
 const request = { operationId: "operation", generation: 1, method: "thread/name/set" as const, params: { threadId: "thread", name: "name" }, timeoutMilliseconds: 1000 };
 const modelResult = { data: [], nextCursor: null };
+function resumed(): OfficialCodexClientRequestResult<"thread/resume"> {
+  return codexRuntimeMethod("thread/resume").decodeResult({
+    thread: {
+      id: "thread", extra: {}, sessionId: "session", forkedFromId: null, parentThreadId: null,
+      preview: "A thread", ephemeral: false, section: null, sectionEnteredAt: null,
+      projectId: null, historyMode: "legacy", modelProvider: "openai", model: null,
+      reasoningEffort: null, createdAt: 1_700_000_000, updatedAt: 1_700_000_100,
+      recencyAt: 1_700_000_100, status: { type: "idle" }, path: "/provider/rollout.jsonl",
+      cwd: "/workspace", cliVersion: "0.160.0", source: "appServer", canAcceptDirectInput: true,
+      threadSource: null, agentNickname: null, agentRole: null, gitInfo: null, name: "Fixture", turns: [],
+    },
+    model: "gpt-5.6", modelProvider: "openai", serviceTier: "default", cwd: "/workspace",
+    runtimeWorkspaceRoots: ["/workspace"], instructionSources: [], approvalPolicy: "never",
+    approvalsReviewer: "user", sandbox: { type: "readOnly", networkAccess: false },
+    activePermissionProfile: { id: ":read-only", extends: null }, reasoningEffort: "low",
+    multiAgentMode: "explicitRequestOnly", initialTurnsPage: null, turnsBackwardsCursor: null, itemsBackwardsCursor: null,
+  }) as OfficialCodexClientRequestResult<"thread/resume">;
+}
 function fixture() {
   let settle!: (value: CodexRpcRequestReceipt<unknown>) => void;
   const promise = new Promise<CodexRpcRequestReceipt<unknown>>(resolve => { settle = resolve; });
@@ -29,10 +47,10 @@ function fixture() {
 const sink: CodexRuntimeReceiptSink = { reserve: () => { throw new Error("not used"); }, recordOutcome: () => "untracked", pending: () => [], reconcileRecordedApplicationState: () => 0, releaseRejected: () => false, compactRetiredRuntime: () => 0 };
 
 describe("persistent Codex runtime ownership", () => {
-  it("rejects a retained host predating native unsubscribe configuration invalidation", async () => {
+  it.each([1, 2])("rejects retained protocol %s without current session configuration guarantees", async protocolVersion => {
     const f = fixture();
     const snapshot = await f.connect();
-    vi.spyOn(f.host, "attach").mockResolvedValue({ ...snapshot, protocolVersion: 1 as typeof snapshot.protocolVersion });
+    vi.spyOn(f.host, "attach").mockResolvedValue({ ...snapshot, protocolVersion: protocolVersion as typeof snapshot.protocolVersion });
     const remote = new CodexRuntimeClient({ connection: f.host, authority, receipts: sink });
     await expect(remote.start()).rejects.toThrow("codex_runtime_protocol_mismatch");
     expect(remote.client.lifecycleSnapshot().state).not.toBe("ready");
@@ -67,6 +85,76 @@ describe("persistent Codex runtime ownership", () => {
       expect(f.dispatch).not.toHaveBeenCalled();
       await f.host.acknowledge(authority, request.operationId);
     } finally { tracker.mockRestore(); }
+  });
+
+  it("reattaches a replacement controller with settings newer than its retained resume receipt", async () => {
+    const f = fixture();
+    const initial = resumed();
+    await f.connect();
+    try {
+      await f.host.submit(authority, { ...request, method: "thread/resume", params: { threadId: "thread" } });
+      f.settle({ result: initial, generation: 1, inboundSequence: 10 });
+      // Both frames arrive before the async resume continuation installs its
+      // receipt. The later settings frame must survive that installation.
+      f.client.forwardNotification(1, { kind: "decoded_notification", generation: 1, sequence: 11,
+        method: "thread/settings/updated", params: decodeCodexServerNotificationParams("thread/settings/updated", {
+          threadId: "thread", threadSettings: {
+            cwd: "/workspace", approvalPolicy: "never", approvalsReviewer: "user",
+            sandboxPolicy: { type: "dangerFullAccess" }, activePermissionProfile: null,
+            model: "gpt-5.6", modelProvider: "openai", serviceTier: "default", effort: "high",
+            summary: null, collaborationMode: { mode: "default", settings: {
+              model: "gpt-5.6", reasoning_effort: "high", developer_instructions: null,
+            } }, multiAgentMode: "explicitRequestOnly", personality: null, disabledPluginIds: [],
+          },
+        }) });
+      await vi.waitFor(() => expect(f.host.readRetainedOutcome(request.operationId)).toMatchObject({
+        status: "completed", receipt: { inboundSequence: 10, result: { sandbox: { type: "readOnly" } } },
+      }));
+      await f.host.detach(authority);
+      const replacement = { ...authority, controllerId: "replacement" };
+      await f.host.attach(replacement, () => {});
+      f.dispatch.mockImplementation(async () => ({ result: { thread: initial.thread }, generation: 1, inboundSequence: 12 }));
+      expect(await f.host.reattachThread(replacement, "thread", 1_000)).toMatchObject({ result: {
+        sandbox: { type: "dangerFullAccess" }, reasoningEffort: "high", activePermissionProfile: null,
+      } });
+      expect(f.dispatch).toHaveBeenCalledTimes(3);
+      await f.host.acknowledge(replacement, request.operationId);
+    } finally { f.host.dispose(); }
+  });
+
+  it("repairs unknown retained settings through an ordinary native resume", async () => {
+    const f = fixture();
+    const initial = resumed();
+    await f.connect();
+    try {
+      await f.host.submit(authority, { ...request, method: "thread/resume", params: { threadId: "thread" } });
+      f.settle({ result: initial, generation: 1, inboundSequence: 10 });
+      await vi.waitFor(() => expect(f.host.readRetainedOutcome(request.operationId).status).toBe("completed"));
+      f.client.forwardNotification(1, { kind: "undecodable_notification", generation: 1, sequence: 11,
+        method: "thread/settings/updated", nativeThreadId: "thread", code: "codex_rpc_notification_params_undecodable" });
+      await f.host.detach(authority);
+      const replacement = { ...authority, controllerId: "replacement" };
+      await f.host.attach(replacement, () => {});
+
+      await expect(f.host.reattachThread(replacement, "thread", 1_000)).resolves.toBeUndefined();
+      expect(f.dispatch).toHaveBeenCalledOnce();
+      const current: OfficialCodexClientRequestResult<"thread/resume"> = {
+        ...initial, sandbox: { type: "dangerFullAccess" }, activePermissionProfile: null, reasoningEffort: "high",
+      };
+      f.dispatch.mockResolvedValue({ result: current, generation: 1, inboundSequence: 12 });
+      await f.host.submit(replacement, { ...request, operationId: "repair", method: "thread/resume", params: { threadId: "thread" } });
+      await vi.waitFor(() => expect(f.host.readRetainedOutcome("repair")).toMatchObject({
+        status: "completed", receipt: { result: { sandbox: { type: "dangerFullAccess" } } },
+      }));
+
+      f.dispatch.mockResolvedValue({ result: { thread: current.thread }, generation: 1, inboundSequence: 13 });
+      await expect(f.host.reattachThread(replacement, "thread", 1_000)).resolves.toMatchObject({ result: {
+        sandbox: { type: "dangerFullAccess" }, reasoningEffort: "high", activePermissionProfile: null,
+      } });
+      expect(f.dispatch).toHaveBeenCalledTimes(4);
+      await f.host.acknowledge(replacement, request.operationId);
+      await f.host.acknowledge(replacement, "repair");
+    } finally { f.host.dispose(); }
   });
 
   it("uses definitions identity rather than resolved environment values for replay", async () => {

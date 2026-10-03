@@ -4,6 +4,10 @@
 
 ### Breaking Changes
 
+- Codex persistent runtimes require protocol 3 to preserve settings updates
+  that race a resume. Rebuild and upgrade execution sidecars with the server;
+  older retained runtimes must be replaced before reattachment.
+
 - Browser and packaged clients require client protocol 135. Project summaries
   now include Task and Workpad counts. Upgrade clients together with the server.
   ([#34](https://github.com/kcosr/sedes/pull/34))
@@ -613,6 +617,12 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Codex threads retain their saved security policy when a restart or upgrade
+  replaces the UDS connection to a persistent app-server. Newer settings
+  notifications also survive an in-flight resume response. Idle threads whose
+  saved policy is no longer allowed open as history only until an allowed policy
+  is selected, without starting a native session.
 
 - Slower conversation snapshots no longer overwrite newer completion attention,
   which could leave an unread dot stuck or restore it after acknowledgment.

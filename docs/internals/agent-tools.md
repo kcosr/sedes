@@ -435,7 +435,7 @@ Injection is per thread and never changes operator configuration:
   variable. The server lives while Codex keeps the thread loaded; a resume
   that carries config rebuilds an idle, unsubscribed loaded thread with the
   current entry. Tool-policy retirement unsubscribes Sedes and invalidates the
-  persistent runtime's cached attach metadata (Codex runtime protocol 2).
+  persistent runtime's cached attach metadata (Codex runtime protocol 3).
   Unsubscribe does not immediately unload the native thread or stop its MCP
   process; reconstruction happens on the next configuration-bearing resume.
   Another external client subscribed to the same native thread can prevent

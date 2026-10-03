@@ -606,6 +606,7 @@ describe("Codex interactive presentation collaborators", () => {
 
     const database = {} as Database.Database;
     const actions = new CodexThreadActionPersistence({
+      desiredSettingsChanged: () => undefined,
       database,
       scope,
       backendInstanceId: backend.id,

@@ -306,8 +306,9 @@ back to the other.
 
 Idle Native tool-policy and presentation changes unsubscribe Sedes before the
 next resume rebuilds the tool catalog and shell environment. Remote persistent
-runtimes require Codex runtime protocol 2; upgrade existing sidecars before
-reconnecting. If another external client has the same native thread open,
+runtimes require Codex runtime protocol 3, which preserves newer settings
+notifications across an in-flight resume response; upgrade existing sidecars
+before reconnecting. If another external client has the same native thread open,
 close that thread there first: Codex can otherwise keep the old configuration.
 A running Sedes-managed TUI blocks these changes; close it first. A bound
 conversation without materialized history needs its first message before a
