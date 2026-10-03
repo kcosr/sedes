@@ -1698,7 +1698,7 @@ describe("TasksPanel Backlog and Pin", () => {
     const backlog = within(dialog).getByRole("switch", { name: "Backlog" });
     expect(backlog).not.toBeChecked();
     expect(backlog).toHaveAccessibleDescription(
-      "Backlog tasks are open but not current work; they wait in the collapsed Backlog section.",
+      "Backlog tasks wait, still open, in a collapsed section.",
     );
     await user.click(backlog);
     await user.click(within(dialog).getByRole("button", { name: "Save" }));

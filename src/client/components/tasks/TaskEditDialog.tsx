@@ -427,7 +427,7 @@ export function TaskEditDialog({
                 description={
                   completed
                     ? "Reopen the task to send it to the Backlog."
-                    : "Backlog tasks are open but not current work; they wait in the collapsed Backlog section."
+                    : "Backlog tasks wait, still open, in a collapsed section."
                 }
                 orientation="horizontal"
               >
