@@ -160,6 +160,10 @@ Adapter TTS completion is distinct from AudioTrack drain. A logical item stays
 active through all chunks, actual drain, recognition, and input admission.
 The PCM producer writes an app-private cache spool; a single 64 KiB playback pump
 reads it. A request is bounded by ten minutes of PCM and 256 MiB of disk data.
+At end of stream, bounded nonblocking silence primes the output buffer when
+short audio or a final tail after underrun cannot reach Android's start threshold.
+Drain waits only for the original audio frames and discards remaining silence;
+the shared drain deadline and generation checks bound priming and cancellation.
 Drain, cancellation, or error removes the spool, and process initialization
 prunes files left by process loss without deleting other live audio owners.
 The adapter's `media_stt_started` event describes ASR processing after capture, not

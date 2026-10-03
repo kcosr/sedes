@@ -706,6 +706,9 @@
 
 ### Fixed
 
+- Short Android voice cues and speech now start and drain even with zero startup
+  pre-roll or a playback underrun, without delaying completion for added silence.
+
 - Android recognition now plays success and descending failure/cancellation
   tones after capture stops, using the existing Recognition cues and Cue gain
   settings. The start tone now matches Assistant's rising cue.

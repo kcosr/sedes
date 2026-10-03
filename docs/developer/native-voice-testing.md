@@ -70,7 +70,9 @@ PCM. Native runtime checks exercise final-result deduplication, cue failure and
 timeout, explicit Stop, Off/disconnect cancellation, frozen Queue/Steer choice,
 and adapter loss after recognition. Those orchestration checks substitute only
 cue playback to control drain callbacks; a separate AudioTrack check plays all
-three real cues. Cue feedback adds one bounded 15-second timeout case to the
+three real cues. Additional AudioTrack checks cover 20/140 ms speech with zero
+pre-roll, a short final tail after underrun, and cancellation of a stalled tail
+followed by a new short stream. Cue feedback adds one bounded 15-second timeout case to the
 native smoke lane.
 
 Server/adapter checks verify capability negotiation before HTTP media calls,

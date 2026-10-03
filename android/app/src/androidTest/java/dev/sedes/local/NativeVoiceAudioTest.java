@@ -3,10 +3,14 @@ package dev.sedes.local;
 import static org.junit.Assert.*;
 import android.content.Context;
 import android.content.Intent;
+import android.media.AudioTrack;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
 import androidx.test.platform.app.InstrumentationRegistry;
+import java.io.File;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -75,6 +79,81 @@ public class NativeVoiceAudioTest {
             assertFalse("Drained speech left private PCM behind", spool.exists());
         } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
     }
+    @Test public void shortPcmStreamsDrainWithoutStartupPreRoll() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(
+            new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        PlaybackProbe probe = new PlaybackProbe();
+        NativeVoiceAudio audio = new NativeVoiceAudio(context, probe);
+        try {
+            audio.configure(NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("startupPreRollMs", 0)));
+            for (int durationMs : new int[] { 20, 140 }) {
+                String request = "short-pcm-" + durationMs;
+                long began = SystemClock.elapsedRealtime();
+                audio.begin(request);
+                audio.pcm(request, 24000, new byte[24000 * 2 * durationMs / 1000]);
+                File spool = audio.spoolForTest(); assertNotNull(spool);
+                audio.end(request);
+                probe.await(request);
+                assertTrue("Drained before the short PCM played", SystemClock.elapsedRealtime() - began >= durationMs * 3 / 4);
+                assertFalse("Short PCM left private audio behind", spool.exists());
+                assertNull(audio.spoolForTest()); assertTrue(probe.completed.isEmpty());
+            }
+        } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
+    }
+    @Test public void shortFinalTailDrainsAfterAudioTrackUnderrun() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(
+            new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        PlaybackProbe probe = new PlaybackProbe();
+        NativeVoiceAudio audio = new NativeVoiceAudio(context, probe);
+        try {
+            audio.configure(NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("startupPreRollMs", 0)));
+            audio.begin("underrun-tail");
+            audio.pcm("underrun-tail", 24000, new byte[24000]);
+            File spool = audio.spoolForTest(); assertNotNull(spool);
+            AudioTrack track = awaitTrack(audio);
+            awaitPlayedFrames(track, 12000);
+            // Model a provider gap after the first half-second has completely played.
+            SystemClock.sleep(250);
+            assertTrue("Fixture did not cause an AudioTrack underrun", track.getUnderrunCount() > 0);
+            assertTrue("An unfinished stream reported completion", probe.completed.isEmpty());
+            audio.pcm("underrun-tail", 24000, new byte[24000 * 2 / 50]);
+            audio.end("underrun-tail");
+            probe.await("underrun-tail");
+            assertFalse(spool.exists()); assertNull(audio.spoolForTest()); assertTrue(probe.completed.isEmpty());
+        } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
+    }
+    @Test public void stoppingAStalledTailDoesNotCompleteOrBlockTheNextStream() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(
+            new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        PlaybackProbe probe = new PlaybackProbe();
+        NativeVoiceAudio audio = new NativeVoiceAudio(context, probe);
+        try {
+            audio.configure(NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("startupPreRollMs", 0)));
+            audio.begin("cancelled-tail");
+            audio.pcm("cancelled-tail", 24000, new byte[24000]);
+            AudioTrack track = awaitTrack(audio);
+            awaitPlayedFrames(track, 12000);
+            track.pause();
+            audio.pcm("cancelled-tail", 24000, new byte[24000 * 2 / 50]);
+            File oldSpool = audio.spoolForTest(); assertNotNull(oldSpool);
+            audio.end("cancelled-tail");
+            // The paused sink cannot consume this tail or finish a full-buffer prime.
+            SystemClock.sleep(100);
+            assertTrue(probe.completed.isEmpty()); assertNull(probe.failure.get());
+            audio.stop(); assertFalse(oldSpool.exists());
+            audio.begin("replacement-short-pcm");
+            audio.pcm("replacement-short-pcm", 24000, new byte[24000 * 2 / 50]);
+            File nextSpool = audio.spoolForTest(); assertNotNull(nextSpool);
+            audio.end("cancelled-tail");
+            audio.end("replacement-short-pcm");
+            probe.await("replacement-short-pcm");
+            assertFalse(nextSpool.exists()); assertNull(audio.spoolForTest());
+            assertNull("Cancelled stream produced a late callback", probe.completed.poll(250, TimeUnit.MILLISECONDS));
+        } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
+    }
     @Test public void fastLongSpeechUsesBoundedDiskAndStopRemovesOnlyItsSpool() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(
@@ -106,6 +185,28 @@ public class NativeVoiceAudioTest {
     static void grant(Context context, String permission) throws Exception {
         try (ParcelFileDescriptor.AutoCloseInputStream input = new ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().getUiAutomation()
             .executeShellCommand("pm grant " + context.getPackageName() + " " + permission))) { while (input.read() != -1) {} }
+    }
+    private static AudioTrack awaitTrack(NativeVoiceAudio audio) throws Exception {
+        long deadline = SystemClock.elapsedRealtime() + 5000;
+        AudioTrack track;
+        while ((track = audio.trackForTest()) == null && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(10);
+        assertNotNull("AudioTrack did not open", track);
+        return track;
+    }
+    private static void awaitPlayedFrames(AudioTrack track, long frames) {
+        long deadline = SystemClock.elapsedRealtime() + 5000;
+        while ((track.getPlaybackHeadPosition() & 0xffffffffL) < frames && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(10);
+        assertTrue("Fixture PCM did not finish playing", (track.getPlaybackHeadPosition() & 0xffffffffL) >= frames);
+    }
+    private static final class PlaybackProbe extends Listener {
+        final BlockingQueue<String> completed = new LinkedBlockingQueue<>();
+        final AtomicReference<String> failure = new AtomicReference<>();
+        @Override public void drained(String id) { completed.add(id); }
+        @Override public void failed(String id, String reason) { failure.set(reason); completed.add(id); }
+        void await(String id) throws Exception {
+            assertEquals("AudioTrack did not drain the expected request", id, completed.poll(5, TimeUnit.SECONDS));
+            assertNull(failure.get());
+        }
     }
     static class Listener implements NativeVoiceAudio.Listener {
         public void drained(String requestId) {}

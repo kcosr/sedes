@@ -160,11 +160,13 @@ final class NativeVoiceAudio {
                 if (android.os.SystemClock.elapsedRealtime() >= deadline) throw new IllegalStateException("speech_timeout");
             }
             long drainDeadline = android.os.SystemClock.elapsedRealtime() + 15000;
+            long drainFrames = primeDrain(current, drainDeadline);
+            if (drainFrames < 0) return;
             while (true) {
                 synchronized (lock) {
                     if (current != generation) return;
                     if (track == null) throw new IllegalStateException("empty_pcm_stream");
-                    if ((track.getPlaybackHeadPosition() & 0xffffffffL) >= frames) break;
+                    if ((track.getPlaybackHeadPosition() & 0xffffffffL) >= drainFrames) break;
                 }
                 if (android.os.SystemClock.elapsedRealtime() >= drainDeadline) throw new IllegalStateException("playback_drain_timeout");
                 Thread.sleep(10);
@@ -175,6 +177,33 @@ final class NativeVoiceAudio {
     }
     long pendingPcmBytes() { synchronized (lock) { return spoolWritten - spoolRead; } }
     File spoolForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return spool; } }
+    AudioTrack trackForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return track; } }
+    private long primeDrain(long current, long deadline) throws InterruptedException {
+        AudioTrack output; long target;
+        synchronized (lock) {
+            if (current != generation) return -1;
+            if (track == null) throw new IllegalStateException("empty_pcm_stream");
+            output = track; target = frames;
+            if ((output.getPlaybackHeadPosition() & 0xffffffffL) >= target) return target;
+        }
+        // A short stream or final tail after underrun may not reach Android's start threshold.
+        // Prime one full buffer, but finish at the real PCM target and discard leftover silence.
+        long remaining = output.getBufferSizeInFrames() * 2L;
+        if (remaining <= 0) throw new IllegalStateException("playback_format_unavailable");
+        byte[] silence = new byte[(int) Math.min(PUMP_BYTES, remaining)];
+        while (remaining > 0) {
+            synchronized (lock) {
+                if (current != generation || track != output) return -1;
+                if ((output.getPlaybackHeadPosition() & 0xffffffffL) >= target) return target;
+            }
+            if (android.os.SystemClock.elapsedRealtime() >= deadline) throw new IllegalStateException("playback_drain_timeout");
+            int count = output.write(silence, 0, (int) Math.min(silence.length, remaining), AudioTrack.WRITE_NON_BLOCKING);
+            if (count < 0) throw new IllegalStateException("pcm_write_failed");
+            if (count == 0) Thread.sleep(10);
+            else remaining -= count;
+        }
+        return target;
+    }
     void cue(String id, NativeVoiceCue.Kind kind, int percent) {
         TestCuePlayer fixture = BuildConfig.DEBUG ? testCuePlayer : null;
         if (fixture != null) { stop(); fixture.play(id, kind, percent); return; }
