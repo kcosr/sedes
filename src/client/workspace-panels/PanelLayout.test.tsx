@@ -3052,29 +3052,31 @@ describe("PanelLayout panel minimums", () => {
       (split) => split.querySelector<HTMLElement>(':scope > [role="separator"]')!,
     );
 
-  it("keeps Chat and Tasks at their minimums when a wide panel takes the rest", () => {
+  it("keeps Chat and Files at their minimums when a wide Tasks takes the rest", () => {
     measureStage(1_185);
     const store = setup({ extraTenants: [tasksTenant] });
     fireEvent.click(tasksToggle());
     act(() => {
       store.openPanel("workspace-files", { availableWidth: 1_185, focus: false });
     });
+    // Files opens inside Tasks, which stays the outer column.
     const root = store.getSnapshot().tree as SplitNode;
+    expect(panelDockEdge(root, "tasks")).toBe("right");
     act(() => {
       store.resizeSplit(root.id, [0.2, 0.8]);
     });
 
-    // Chat beside Tasks needs 360 + 5 + 300: the root holds that, not 20%.
+    // Chat beside Files needs 360 + 5 + 280: the root holds that, not 20%.
     expect(splits()[0]!.style.gridTemplateColumns).toMatch(
-      /^minmax\(665px, [\d.]+fr\) 5px minmax\(280px, [\d.]+fr\)$/,
+      /^minmax\(645px, [\d.]+fr\) 5px minmax\(300px, [\d.]+fr\)$/,
     );
-    expect(handles()[0]).toHaveAttribute("aria-valuenow", "665");
-    expect(handles()[0]).toHaveAttribute("aria-valuemin", "665");
-    expect(handles()[0]).toHaveAttribute("aria-valuemax", "900");
+    expect(handles()[0]).toHaveAttribute("aria-valuenow", "645");
+    expect(handles()[0]).toHaveAttribute("aria-valuemin", "645");
+    expect(handles()[0]).toHaveAttribute("aria-valuemax", "880");
     expect(splits()[1]!.style.gridTemplateColumns).toMatch(
-      /^minmax\(360px, [\d.]+fr\) 5px minmax\(300px, [\d.]+fr\)$/,
+      /^minmax\(360px, [\d.]+fr\) 5px minmax\(280px, [\d.]+fr\)$/,
     );
-    // The nested divider moves within its own split's 665px, not the stage.
+    // The nested divider moves within its own split's 645px, not the stage.
     expect(handles()[1]).toHaveAttribute("aria-valuemin", "360");
     expect(handles()[1]).toHaveAttribute("aria-valuemax", "360");
     expect(store.isVisible("workspace-files")).toBe(true);
@@ -3103,15 +3105,15 @@ describe("PanelLayout panel minimums", () => {
     );
     Object.assign(prototype, capture);
     try {
-      // Chat and Tasks' minimums hold this divider at 665px, not at its 20%.
-      expect(handles()[0]).toHaveAttribute("aria-valuenow", "665");
+      // Chat and Files' minimums hold this divider at 645px, not at its 20%.
+      expect(handles()[0]).toHaveAttribute("aria-valuenow", "645");
       fireEvent.pointerDown(handles()[0]!, {
         button: 0,
         isPrimary: true,
         pointerId: 1,
-        clientX: 665,
+        clientX: 645,
       });
-      fireEvent.pointerUp(handles()[0]!, { pointerId: 1, clientX: 665 });
+      fireEvent.pointerUp(handles()[0]!, { pointerId: 1, clientX: 645 });
     } finally {
       for (const [key, descriptor] of originals) {
         if (descriptor) Object.defineProperty(prototype, key, descriptor);

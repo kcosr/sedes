@@ -53,7 +53,9 @@ are in `workspace-panels/layout-fit.ts`; declare a new tenant's minimum in its
 `size`. From then on, each side panel keeps one share of the stage width (or
 height, docked above or below) in every thread layout: a resize records it,
 and each thread's splits are fitted to it, so Chat absorbs the difference
-(`workspace-panels/panel-sizes.ts`).
+(`workspace-panels/panel-sizes.ts`). Tasks and Workpads also share their
+place: every thread wraps its own panels in one companion arrangement, the
+edges and order the user last set (`workspace-panels/companion-layout.ts`).
 
 ## Tokens
 

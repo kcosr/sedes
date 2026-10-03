@@ -4,6 +4,7 @@ import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { terminalProducerIdSchema } from "../../shared/index.js";
 import {
+  COMPANION_LAYOUT_STORAGE_KEY,
   PANEL_SIZE_STORAGE_KEY,
   PanelLayoutStore,
   TASKS_STATE_STORAGE_KEY,
@@ -13,6 +14,7 @@ import {
   usePanelLayout,
 } from "./panel-state.js";
 import {
+  findStackForPanel,
   panelDockEdge,
   panelLayoutStorageKey,
   type LayoutNode,
@@ -207,9 +209,9 @@ describe("PanelLayoutStore panel instances", () => {
     expect(root.forThread("thread-1").isCollapsed("tasks")).toBe(true);
     root.restorePanel("tasks");
     expect(root.forThread("thread-2").isVisible("tasks")).toBe(true);
-    // Placement stays thread-local: docking one layout leaves the other.
+    // Placement is shared too: docking in one layout docks it in every one.
     second.dockPanel("tasks", "left");
-    expect(panelDockEdge(root.forThread("thread-1").getSnapshot().tree, "tasks")).toBe("right");
+    expect(panelDockEdge(root.forThread("thread-1").getSnapshot().tree, "tasks")).toBe("left");
     second.closePanel("tasks");
     expect(root.forThread("thread-1").hasPanel("tasks")).toBe(false);
     expect(root.forThread("never-visited").hasPanel("tasks")).toBe(false);
@@ -477,6 +479,7 @@ describe("PanelLayoutStore v4 persistence", () => {
       WORKPADS_STATE_STORAGE_KEY,
       TASKS_STATE_STORAGE_KEY,
       PANEL_SIZE_STORAGE_KEY,
+      COMPANION_LAYOUT_STORAGE_KEY,
       panelLayoutStorageKey("thread-1"),
       panelCollapsedStorageKey("thread-1"),
     ]);
@@ -589,9 +592,8 @@ describe("PanelLayoutStore shared panel sizes", () => {
     });
   });
 
-  it("keeps side panel widths however each thread's layout nests them", () => {
+  it("keeps side panel widths in every thread's layout", () => {
     const root = createStore();
-    // Files opens first here, so Tasks wraps Chat and Files.
     root.openPanel("workspace-files", { availableWidth: 1_400 });
     root.openPanel("tasks", { availableWidth: 1_400 });
     const files = 360 / 1_400;
@@ -599,17 +601,16 @@ describe("PanelLayoutStore shared panel sizes", () => {
     expect(stageShare(root, "workspace-files")).toBeCloseTo(files);
     expect(stageShare(root, "tasks")).toBeCloseTo(tasks);
 
-    // A new thread's layout docks Tasks first, so Files wraps Chat and Tasks.
     const second = root.forThread("thread-2");
-    expect(parentSplit(second, "tasks").split).not.toBe(second.getSnapshot().tree);
     expect(stageShare(second, "workspace-files")).toBeCloseTo(files);
     expect(stageShare(second, "tasks")).toBeCloseTo(tasks);
 
+    // Tasks is the outer column, so its divider takes it straight to 40%.
     resizePanel(second, "tasks", 0.4);
-    const resized = 0.4 * (1 - files);
-    expect(stageShare(second, "tasks")).toBeCloseTo(resized);
+    expect(stageShare(second, "tasks")).toBeCloseTo(0.4);
+    expect(stageShare(second, "workspace-files")).toBeCloseTo(files);
     const first = root.forThread("thread-1");
-    expect(stageShare(first, "tasks")).toBeCloseTo(resized);
+    expect(stageShare(first, "tasks")).toBeCloseTo(0.4);
     expect(stageShare(first, "workspace-files")).toBeCloseTo(files);
   });
 
@@ -685,13 +686,70 @@ describe("PanelLayoutStore shared panel sizes", () => {
     const root = createStore(storage);
     root.openPanel("workspace-files", { availableWidth: 1_400 });
     const filesStack = parentSplit(root, "workspace-files").split.children[1];
-    root.openPanel("workpads", { mode: "tab", targetNodeId: filesStack.id });
+    root.openTerminalTab("terminal-1", { mode: "tab", targetNodeId: filesStack.id });
     const remembered = values.get(PANEL_SIZE_STORAGE_KEY);
 
     resizePanel(root, "workspace-files", 0.5);
     expect(values.get(PANEL_SIZE_STORAGE_KEY)).toBe(remembered);
     const reopened = root.forThread("thread-2").forThread("thread-1");
     expect(stageShare(reopened, "workspace-files")).toBeCloseTo(0.5);
+  });
+});
+
+/** Panel instance IDs left to right across the rendered row splits. */
+function rowOrder(store: PanelLayoutStore): string[] {
+  const visit = (node: LayoutNode): string[] =>
+    node.kind === "tabs"
+      ? [node.activePanelInstanceId]
+      : node.orientation === "row"
+        ? [...visit(node.children[0]), ...visit(node.children[1])]
+        : visit(node.children[0]);
+  const tree = store.getSnapshot().tree;
+  return tree ? visit(tree) : [];
+}
+
+describe("PanelLayoutStore shared Tasks and Workpads arrangement", () => {
+  it("shows Tasks and Workpads in the same order in every thread", () => {
+    const { storage } = memoryStorage();
+    const root = createStore(storage);
+    // Opened Tasks first, then Workpads: Workpads is the outer column.
+    root.openPanel("tasks");
+    root.openPanel("workpads");
+    expect(rowOrder(root)).toEqual(["chat", "tasks", "workpads"]);
+    // A new layout adds them in its own order, then takes the shared one.
+    expect(rowOrder(root.forThread("thread-2"))).toEqual(["chat", "tasks", "workpads"]);
+    expect(rowOrder(createStore(storage).forThread("thread-3"))).toEqual([
+      "chat",
+      "tasks",
+      "workpads",
+    ]);
+  });
+
+  it("takes the arrangement last set up in any thread", () => {
+    const root = createStore();
+    root.openPanel("tasks");
+    root.openPanel("workpads");
+    const second = root.forThread("thread-2");
+    second.dockPanel("tasks", "left");
+    expect(rowOrder(second)).toEqual(["tasks", "chat", "workpads"]);
+    expect(rowOrder(root.forThread("thread-1"))).toEqual(["tasks", "chat", "workpads"]);
+    // Closing and reopening puts the panel outermost on its edge.
+    root.closePanel("workpads");
+    root.openPanel("workpads", { edge: "left" });
+    expect(rowOrder(root)).toEqual(["workpads", "tasks", "chat"]);
+    expect(rowOrder(root.forThread("thread-2"))).toEqual(["workpads", "tasks", "chat"]);
+  });
+
+  it("opens Files and Terminals inside Tasks and Workpads", () => {
+    const root = createStore();
+    root.openPanel("tasks");
+    root.openPanel("workspace-files");
+    root.openTerminalTab("terminal-1");
+    expect(rowOrder(root)).toEqual(["chat", "workspace-files", "tasks"]);
+    // Tasks keeps the stage's full height; the Terminals sit under the rest.
+    const tree = root.getSnapshot().tree as SplitNode;
+    expect(panelDockEdge(tree, "tasks")).toBe("right");
+    expect(findStackForPanel(tree.children[0], "terminals")).toBeDefined();
   });
 });
 

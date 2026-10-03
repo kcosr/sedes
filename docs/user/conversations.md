@@ -561,10 +561,13 @@ least recently to make room and announces which. Chat and the panel you opened
 stay; restore the others from the **Panels** menu or their buttons. Resizing
 the window or switching threads never collapses a panel.
 
-Each side panel keeps one size in every thread. Resize Tasks in one thread
-and it is that wide in every thread; opening, collapsing, or closing another
-panel does not change it, and Chat takes the remaining space. Where a panel
-is docked stays with each thread.
+Each side panel keeps one size in every thread. Tasks and Workpads also keep
+one place: they are the outer columns, on the edges and in the order you last
+set by opening, closing, or docking either one, and Chat, Files, and Terminals
+arrange inside them per thread. Resize Tasks in one thread and it is that wide
+in every thread; opening, collapsing, or closing another panel does not change
+it, and Chat takes the remaining space. Where a panel is docked stays with each
+thread.
 
 On narrow screens, Files becomes a foreground sheet and Tasks a bottom sheet.
 Returning to Chat uses the same retained state rather than rebuilding the file

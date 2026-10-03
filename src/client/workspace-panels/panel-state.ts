@@ -38,19 +38,28 @@ import {
   type PanelSize,
   type SidePanelKind,
 } from "./panel-sizes.js";
+import {
+  COMPANION_KINDS,
+  arrangeCompanions,
+  isCompanionKind,
+  readCompanionArrangement,
+  type CompanionArrangement,
+  type CompanionPlacement,
+} from "./companion-layout.js";
 
 export const PANEL_SIZE_STORAGE_KEY = "sedes-panel-instance-sizes@5";
 export const WORKSPACE_FILES_STATE_STORAGE_KEY =
   "sedes-workspace-files-panel-state@1";
 export const WORKPADS_STATE_STORAGE_KEY = "sedes-workpads-panel-state@1";
 export const TASKS_STATE_STORAGE_KEY = "sedes-tasks-panel-state@1";
+export const COMPANION_LAYOUT_STORAGE_KEY = "sedes-panel-companions@1";
 
 /**
- * Singletons whose membership and collapse belong to this browser client
- * across every thread layout; only their placement is thread-local. Tasks
- * follows the current chat, so a thread switch keeps it docked.
+ * Singletons whose membership, collapse, and arrangement belong to this
+ * browser client across every thread layout (see companion-layout.ts). Tasks
+ * follows the current chat, so a thread switch keeps it docked in place.
  */
-const SHARED_PANEL_KINDS = ["workpads", "tasks"] as const;
+const SHARED_PANEL_KINDS = COMPANION_KINDS;
 type SharedPanelKind = (typeof SHARED_PANEL_KINDS)[number];
 const SHARED_PANEL_STORAGE_KEYS: Readonly<Record<SharedPanelKind, string>> = {
   workpads: WORKPADS_STATE_STORAGE_KEY,
@@ -128,6 +137,8 @@ interface SharedPanelState {
   readonly sharedPanels: Map<SharedPanelKind, SharedPanelVisibility>;
   /** Side panel sizes, shared by every thread layout (see panel-sizes.ts). */
   readonly panelSizes: Map<SidePanelKind, PanelSize>;
+  /** Tasks and Workpads placement, shared by every thread layout. */
+  companionArrangement?: CompanionArrangement;
   workspaceFilesState?: SharedPanelVisibility;
 }
 
@@ -244,6 +255,7 @@ export class PanelLayoutStore {
         ]),
       ),
       panelSizes: readPanelSizes(this.#storage),
+      companionArrangement: readCompanionArrangementState(this.#storage),
     };
     let stored: string | null = null;
     let storedCollapsed: string | null = null;
@@ -259,11 +271,19 @@ export class PanelLayoutStore {
     const tree = deserializePanelLayout(this.#threadId, stored);
     const collapsed = deserializeCollapsedPanels(storedCollapsed, tree);
     this.#snapshot = {
-      tree: fitPanelSizes(tree, collapsed, this.#shared.panelSizes),
+      tree: fitPanelSizes(this.#arrange(tree), collapsed, this.#shared.panelSizes),
       collapsed,
       revision: 0,
     };
     this.#reconcileSharedPanels();
+    // Before any arrangement is shared, the first thread layout sets it.
+    if (
+      options.threadId !== undefined &&
+      this.#shared.companionArrangement === undefined
+    ) {
+      const arrangement = readCompanionArrangement(this.#snapshot.tree);
+      if (arrangement) this.#setCompanionArrangement(arrangement);
+    }
     if (options.threadId) this.#shared.threadStores.set(options.threadId, this);
   }
 
@@ -282,7 +302,7 @@ export class PanelLayoutStore {
     if (existing) {
       existing.#reconcileWorkspaceFiles();
       existing.#reconcileSharedPanels();
-      existing.#fitPanelSizes();
+      existing.#conformLayout();
       return existing;
     }
     const store = new PanelLayoutStore(this.registry, {
@@ -372,6 +392,7 @@ export class PanelLayoutStore {
       focusRequest: this.#requestFocus("chat"),
       persistTree: true,
       persistCollapsed: true,
+      rememberCompanions: true,
     });
     if (hadWorkspaceFiles) {
       this.#setWorkspaceFilesState({ open: false, collapsed: false });
@@ -548,6 +569,7 @@ export class PanelLayoutStore {
               input.focusTerminalId,
             ),
       persistTree: true,
+      rememberCompanions: isCompanionKind(panel.kind),
     });
     this.#rememberFirstPanelSize(panel.kind);
     return true;
@@ -701,6 +723,7 @@ export class PanelLayoutStore {
           ? undefined
           : this.#snapshot.focusRequest,
       persistTree: true,
+      rememberCompanions: isCompanionKind(panel.kind),
       persistCollapsed: this.#snapshot.collapsed.has(panelInstanceId),
     });
     if (panel.kind === "files") {
@@ -717,7 +740,11 @@ export class PanelLayoutStore {
     });
     if (tree === this.#snapshot.tree) return false;
     const kind = this.panel(panelInstanceId)!.kind;
-    this.#publish({ tree, persistTree: true });
+    this.#publish({
+      tree,
+      persistTree: true,
+      rememberCompanions: isCompanionKind(kind),
+    });
     this.#rememberFirstPanelSize(kind);
     return true;
   }
@@ -835,13 +862,38 @@ export class PanelLayoutStore {
     return this.#shared.panelSizes.get(kind)?.[edgeAxis(edge)];
   }
 
-  #fitPanelSizes(): void {
+  /** Applies the shared companion arrangement and panel sizes. */
+  #conformLayout(): void {
     const tree = fitPanelSizes(
-      this.#snapshot.tree,
+      this.#arrange(this.#snapshot.tree),
       this.#snapshot.collapsed,
       this.#shared.panelSizes,
     );
     if (tree !== this.#snapshot.tree) this.#publish({ tree });
+  }
+
+  #arrange(tree: PanelLayoutTree): PanelLayoutTree {
+    const arrangement = this.#shared.companionArrangement;
+    if (!arrangement) return tree;
+    return arrangeCompanions(tree, arrangement, {
+      createId: (kind) => this.#createId(kind),
+      preferredEdge: (kind) => this.#preferredEdge(kind),
+    });
+  }
+
+  #setCompanionArrangement(arrangement: CompanionArrangement): void {
+    const current = this.#shared.companionArrangement;
+    if (current && JSON.stringify(current) === JSON.stringify(arrangement))
+      return;
+    this.#shared.companionArrangement = arrangement;
+    try {
+      this.#storage?.setItem(
+        COMPANION_LAYOUT_STORAGE_KEY,
+        JSON.stringify({ version: 1, arrangement }),
+      );
+    } catch {
+      // Persistence is best effort.
+    }
   }
 
   #resizedLayout(
@@ -994,6 +1046,8 @@ export class PanelLayoutStore {
     readonly focusRequest?: PanelFocusRequest;
     readonly persistTree?: boolean;
     readonly persistCollapsed?: boolean;
+    /** The user arranged Tasks or Workpads: share this layout's arrangement. */
+    readonly rememberCompanions?: boolean;
   }): void {
     const previousShared = new Map(
       SHARED_PANEL_KINDS.map((kind) => [kind, this.#sharedVisibility(kind)]),
@@ -1002,8 +1056,15 @@ export class PanelLayoutStore {
       input.collapsed === undefined
         ? this.#snapshot.collapsed
         : new SnapshotReadonlySet(input.collapsed);
+    const requestedTree = "tree" in input ? input.tree! : this.#snapshot.tree;
+    if (input.rememberCompanions) {
+      const arrangement = readCompanionArrangement(requestedTree);
+      if (arrangement) this.#setCompanionArrangement(arrangement);
+    }
+    // Every layout keeps the shared companion arrangement around its own
+    // panels, so opening Files or a terminal lands inside Tasks and Workpads.
     const tree = fitPanelSizes(
-      "tree" in input ? input.tree! : this.#snapshot.tree,
+      this.#arrange(requestedTree),
       collapsed,
       this.#shared.panelSizes,
     );
@@ -1027,8 +1088,8 @@ export class PanelLayoutStore {
       ...(focusRequest ? { focusRequest } : {}),
       revision: this.#snapshot.revision + 1,
     };
-    // Layout placement stays thread-local; Workpads and Tasks membership and
-    // collapse belong to this browser client's panel state, across threads.
+    // Workpads and Tasks membership and collapse belong to this browser
+    // client's panel state, across threads, as does their arrangement.
     if (input.persistTree || input.persistCollapsed) {
       for (const kind of SHARED_PANEL_KINDS) {
         const previous = previousShared.get(kind)!;
@@ -1157,6 +1218,42 @@ function serializeCollapsedPanels(
     version: PANEL_COLLAPSED_STORAGE_VERSION,
     collapsed: [...collapsed].sort(),
   });
+}
+
+const PLACEMENT_EDGES = ["left", "right", "top", "bottom"] as const;
+
+function readCompanionArrangementState(
+  storage: PanelLayoutStorage | undefined,
+): CompanionArrangement | undefined {
+  try {
+    const serialized = storage?.getItem(COMPANION_LAYOUT_STORAGE_KEY);
+    if (!serialized) return undefined;
+    const parsed: unknown = JSON.parse(serialized);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      (parsed as Record<string, unknown>).version !== 1 ||
+      !Array.isArray((parsed as Record<string, unknown>).arrangement)
+    )
+      return undefined;
+    const arrangement: CompanionPlacement[] = [];
+    for (const entry of (parsed as { arrangement: unknown[] }).arrangement) {
+      const { kind, edge } = (entry ?? {}) as Record<string, unknown>;
+      if (
+        !(COMPANION_KINDS as readonly unknown[]).includes(kind) ||
+        !(PLACEMENT_EDGES as readonly unknown[]).includes(edge) ||
+        arrangement.some((placement) => placement.kind === kind)
+      )
+        return undefined;
+      arrangement.push({
+        kind: kind as CompanionPlacement["kind"],
+        edge: edge as PanelPlacementEdge,
+      });
+    }
+    return arrangement;
+  } catch {
+    return undefined;
+  }
 }
 
 function readPanelSizes(

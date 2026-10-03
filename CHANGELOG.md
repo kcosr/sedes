@@ -334,6 +334,13 @@
   panel headers.
   ([#37](https://github.com/kcosr/sedes/pull/37))
 
+- Tasks and Workpads keep one place in every thread, so switching threads no
+  longer swaps them. They are the outer columns, on the edges and in the order
+  you last set by opening, closing, or docking either one; Chat, Files, and
+  Terminals arrange inside them per thread, so a bottom Terminals panel spans
+  only Chat and Files.
+  ([#37](https://github.com/kcosr/sedes/pull/37))
+
 - A project's Tasks and Workpads are shared by every location of the project,
   on every host. Tasks' **Project** view and Workpads' **Project** scope
   follow the current thread's project, adding a Task there never asks for a
