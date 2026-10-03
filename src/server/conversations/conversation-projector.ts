@@ -1078,6 +1078,7 @@ function equalBackendTurn(left: BackendTurn, right: BackendTurn): boolean {
     left.backendTurnId === right.backendTurnId &&
     left.status === right.status &&
     left.endedBy === right.endedBy &&
+    JSON.stringify(left.completionCorrelations) === JSON.stringify(right.completionCorrelations) &&
     JSON.stringify(left.failure) === JSON.stringify(right.failure) &&
     JSON.stringify(left.throughput) === JSON.stringify(right.throughput) &&
     JSON.stringify(left.forkUnavailableReason) === JSON.stringify(right.forkUnavailableReason) &&

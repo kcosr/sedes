@@ -706,6 +706,10 @@
 
 ### Fixed
 
+- Live progress notifications retain newly observed submission ownership even
+  when the visible turn is unchanged, so eligible provisional replies can be
+  spoken without waiting for a thread reload.
+
 - Short Android voice cues and speech now start and drain even with zero startup
   pre-roll or a playback underrun, without delaying completion for added silence.
 

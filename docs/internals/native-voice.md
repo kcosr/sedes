@@ -95,6 +95,9 @@ checks that the projected item is complete, nonempty provisional assistant text
 on the active turn and that projection generation survived applying the event.
 The manager resolves normalized identities; the notification lifecycle requires
 a currently admitted Sedes submission. Item/turn identity supplies deduplication.
+The projector retains updates to server-private turn completion correlations
+even when no visible turn field changes. Such updates produce no browser delta
+but immediately become available to live-progress admission checks.
 
 Codex marks completed commentary, Pi marks live tool-call message completion,
 and Claude marks the completed tool-use group or its later live classification.

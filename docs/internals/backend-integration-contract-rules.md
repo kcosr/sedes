@@ -1335,6 +1335,13 @@ inherit the behavior.
 
 ## Normalize history and live events
 
+Equality checks that suppress redundant projection work must include
+server-private authority metadata such as turn completion correlations. Retain
+metadata-only changes before deciding whether the browser needs a delta; an
+unchanged visible transcript does not make its admission evidence unchanged.
+Pi, Codex, Claude, Grok, and OpenCode use this shared projector rule. It does not
+enable live progress for Grok or OpenCode, whose producers remain unsupported.
+
 Confirmed failed turns carry bounded `failure.message` metadata, separate from
 provider transcript items and transient runtime notices. Backends select a
 provider-authored diagnostic; the shared projector supplies a generic explanation
