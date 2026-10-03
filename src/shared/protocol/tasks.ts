@@ -200,6 +200,11 @@ export const associatedTaskSchema = taskSchema
   });
 export type AssociatedTask = z.infer<typeof associatedTaskSchema>;
 
+/**
+ * Why an update that would leave a task completed and pinned or in the
+ * backlog is refused. The repository enforces it after receipt lookup, so a
+ * request that committed before the rule existed still replays.
+ */
 export const TASK_COMPLETED_UNPLACED_MESSAGE =
   "A completed task can't be pinned or in the backlog. Reopen it first.";
 
@@ -236,12 +241,6 @@ export const updateTaskRequestSchema = z
       request.files !== undefined ||
       request.scope !== undefined,
     { message: "A task update must change at least one field." },
-  )
-  .refine(
-    (request) =>
-      request.completed !== true ||
-      (request.pinned !== true && request.backlog !== true),
-    { message: TASK_COMPLETED_UNPLACED_MESSAGE },
   );
 export type UpdateTaskRequest = z.infer<typeof updateTaskRequestSchema>;
 
