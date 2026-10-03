@@ -140,6 +140,14 @@ and do not enable the wildcard LAN listener merely for tailnet access. The same
 rules apply to an operator-controlled HTTPS proxy: the proxy and network must
 provide the private network boundary in addition to Sedes pairing authentication.
 
+The Android app trusts system certificate authorities and CA certificates
+installed by the user in Android's credential settings. This applies to Sedes
+and voice-adapter HTTPS/WebSocket connections. For a private CA, install its
+certificate on the device before connecting. Certificate-chain, validity, and
+hostname checks remain enabled; the server certificate must cover the hostname
+in the saved URL. Trust follows the device's certificate store, not a Sedes
+profile setting.
+
 ## Direct trusted-home-LAN mode
 
 Direct LAN HTTP is available for a deliberately trusted home network. It is

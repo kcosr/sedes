@@ -26,6 +26,9 @@ The adapter URL may include a reverse-proxy path, such as
 WebSocket connection stay under that path. Query strings, fragments, and
 embedded credentials are not accepted.
 
+HTTPS adapters may use a private certificate authority installed in Android's
+user certificate store; see [Android HTTPS connections](android.md#connect-through-a-private-https-boundary).
+
 | Mode | Completion | Other selected events | Explicit microphone |
 | --- | --- | --- | --- |
 | Off | Disabled | Disabled | Enable voice first |

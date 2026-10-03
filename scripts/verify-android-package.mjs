@@ -119,6 +119,15 @@ async function verifySyncedAssets() {
   );
   assertOutputImageNativeContract(sourceManifest);
   assertVoiceNativeContract(sourceManifest);
+  assertNetworkSecurityManifest(sourceManifest);
+  const networkSecurity = await readFile(
+    path.join(androidRoot, "app/src/main/res/xml/network_security_config.xml"),
+    "utf8",
+  );
+  assert(/<base-config\b[^>]*\bcleartextTrafficPermitted=["']true["']/u.test(networkSecurity), "android_explicit_http_support_missing");
+  const certificateSources = [...networkSecurity.matchAll(/<certificates\b[^>]*\bsrc=["']([^"']+)["']/gu)]
+    .map(match => match[1]).sort();
+  assert(JSON.stringify(certificateSources) === JSON.stringify(["system", "user"]), "android_certificate_trust_sources_changed");
 
   const mainActivity = await readFile(
     path.join(
@@ -169,6 +178,7 @@ async function verifyAssembledPackage() {
   );
   assertVoiceNativeContract(mergedManifest);
   assertOutputImageNativeContract(mergedManifest);
+  assertNetworkSecurityManifest(mergedManifest);
 
   const debugApk = path.join(
     androidRoot,
@@ -188,6 +198,7 @@ async function verifyAssembledPackage() {
     maxBuffer: 4 * 1024 * 1024,
   });
   const entries = new Set(stdout.split(/\r?\n/u).filter(Boolean));
+  assert(entries.has("res/xml/network_security_config.xml"), "apk_network_security_config_missing");
   assert(entries.has("assets/public/index.html"), "apk_index_asset_missing");
   assert(
     entries.has("assets/capacitor.config.json"),
@@ -200,6 +211,10 @@ async function verifyAssembledPackage() {
     ),
     "apk_javascript_assets_missing",
   );
+}
+
+function assertNetworkSecurityManifest(manifest) {
+  assert(/android:networkSecurityConfig=["']@xml\/network_security_config["']/u.test(manifest), "android_network_security_config_missing");
 }
 
 function assertOutputImageNativeContract(manifest) {

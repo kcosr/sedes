@@ -706,6 +706,10 @@
 
 ### Fixed
 
+- Android HTTPS and secure WebSocket connections trust user-installed
+  certificate authorities, including private voice-adapter certificates,
+  while retaining certificate and hostname validation.
+
 - Android voice accepts adapter base URLs with reverse-proxy path prefixes and
   preserves the prefix for HTTP media requests and WebSocket connections.
 
