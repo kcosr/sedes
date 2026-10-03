@@ -4,6 +4,7 @@ import {
   type ComposerTaskReference,
 } from "../../shared/protocol/tasks.js";
 import {
+  materializeTaskContext,
   materializedTaskContextsSchema,
   type MaterializedTaskContext,
 } from "../domain/materialized-task-contexts.js";
@@ -93,7 +94,7 @@ export function materializeTaskReferences(
         "An attached task no longer exists. Remove the missing task before sending.",
       );
     }
-    contexts.push(presentTask(task));
+    contexts.push(materializeTaskContext(presentTask(task)));
   }
   return materializedTaskContextsSchema.parse(contexts);
 }
