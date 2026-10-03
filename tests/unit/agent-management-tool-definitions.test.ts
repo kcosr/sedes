@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { sedesMcpToolAnnotations } from "../../src/internal/agent-tool-mcp/mcp-tool-projection.js";
 import type { AgentManagementService } from "../../src/server/agent-tools/application/agent-management-service.js";
 import type {
   AgentToolDefinition,
@@ -8,6 +9,7 @@ import { DomainError } from "../../src/server/domain/errors.js";
 import { AgentToolRegistry } from "../../src/server/agent-tools/registry/agent-tool-registry.js";
 import {
   createTaskCreateToolDefinition,
+  createTaskDeleteToolDefinition,
   createTaskGetToolDefinition,
   createTaskListToolDefinition,
   createTaskUpdateToolDefinition,
@@ -32,6 +34,7 @@ describe("agent management tool definitions", () => {
     createTaskGetToolDefinition(service),
     createTaskCreateToolDefinition(service),
     createTaskUpdateToolDefinition(service),
+    createTaskDeleteToolDefinition(service),
   ];
 
   it("registers closed bounded versioned contracts with truthful grouping and effects", () => {
@@ -47,6 +50,7 @@ describe("agent management tool definitions", () => {
       "task.get",
       "task.create",
       "task.update",
+      "task.delete",
     ]);
     expect(
       definitions
@@ -69,6 +73,41 @@ describe("agent management tool definitions", () => {
       expect(() => registry.get(id, 2)).toThrow();
     }
     expect(registry.get("workspace.open", 3).schemaVersion).toBe(3);
+    expect(registry.get("task.delete", 1).schemaVersion).toBe(1);
+  });
+
+  it("bounds completed-task deletion and forwards trusted authority", async () => {
+    const registry = new AgentToolRegistry();
+    const deleteTask = vi.fn().mockResolvedValue({ taskId: "task-1", deleted: true });
+    const definition = createTaskDeleteToolDefinition({ deleteTask } as unknown as AgentManagementService);
+    registry.register(definition);
+    const input = { taskId: "task-1", expectedRevision: 2 };
+    expect(registry.validatesInput("task.delete", 1, input)).toBe(true);
+    for (const invalid of [
+      { taskId: "task-1" },
+      { ...input, expectedRevision: -1 },
+      { ...input, expectedRevision: 1.5 },
+      { ...input, expectedRevision: Number.MAX_SAFE_INTEGER + 1 },
+      { ...input, completed: true },
+      { ...input, taskId: "" },
+      { ...input, taskId: "x".repeat(129) },
+    ]) expect(registry.validatesInput("task.delete", 1, invalid)).toBe(false);
+    expect(registry.validatesOutput("task.delete", 1, { taskId: "task-1", deleted: true })).toBe(true);
+    expect(registry.validatesOutput("task.delete", 1, { taskId: "task-1", deleted: "true" })).toBe(false);
+    expect(definition.description).toBe("Deletes a completed task at the expected revision. Invoke only at the user’s request.");
+    expect(definition.adapters.mcp?.name).toBe("sedes_task_delete");
+    expect(definition.effects.application).toBe("destructive");
+    expect(sedesMcpToolAnnotations(definition.effects)).toEqual({
+      readOnlyHint: false, destructiveHint: true, openWorldHint: false,
+    });
+    const context = invocationContext();
+    await expect(definition.execute(input, context)).resolves.toEqual({ taskId: "task-1", deleted: true });
+    expect(deleteTask).toHaveBeenCalledWith(
+      { tenantId: context.tenantId, principalId: context.principalId },
+      input.taskId,
+      context.environmentAuthority,
+      input.expectedRevision,
+    );
   });
 
   it("enforces paging and task bounds identically through canonical schemas", () => {

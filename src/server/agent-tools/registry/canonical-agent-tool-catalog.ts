@@ -13,6 +13,7 @@ import { createAutomationSetStateToolDefinition } from "../tools/automation-set-
 import { createAutomationUpdateToolDefinition } from "../tools/automation-update-tool.js";
 import {
   createTaskCreateToolDefinition,
+  createTaskDeleteToolDefinition,
   createTaskGetToolDefinition,
   createTaskListToolDefinition,
   createTaskUpdateToolDefinition,
@@ -135,6 +136,7 @@ export function createCanonicalAgentToolDefinitions(input: {
           createTaskGetToolDefinition(input.management),
           createTaskCreateToolDefinition(input.management),
           createTaskUpdateToolDefinition(input.management),
+          createTaskDeleteToolDefinition(input.management),
           createAutomationGetToolDefinition(input.automations),
           createAutomationRunsToolDefinition(input.automations),
           createAutomationCreateToolDefinition(input.automations),

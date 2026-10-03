@@ -213,7 +213,7 @@ export class AgentManagementService {
         "listEnvironments" | "openWorkspaceForAgent"
       >;
       readonly taskRepository: TaskRepository;
-      readonly tasks: Pick<TaskService, "create" | "update">;
+      readonly tasks: Pick<TaskService, "create" | "update" | "removeCompleted">;
       /** Live authority facts, read through the same reader as admission. */
       readonly authorityReader: AgentToolEnvironmentAuthorityReader;
     },
@@ -701,6 +701,23 @@ export class AgentManagementService {
       mutationId,
       ...request,
     });
+  }
+
+  async deleteTask(
+    scope: RequestScope,
+    taskId: string,
+    authority: TrustedEnvironmentAuthorityGrant,
+    expectedRevision: number,
+  ): Promise<{ readonly taskId: string; readonly deleted: true }> {
+    const revision = this.#requireAdmittedTask(scope, taskId, authority);
+    if (revision !== expectedRevision) {
+      throw new DomainError(
+        "task_revision_conflict",
+        "The task changed in another client.",
+      );
+    }
+    await this.input.tasks.removeCompleted(scope, taskId, expectedRevision);
+    return { taskId, deleted: true };
   }
 
   /** Rechecks the task's current scope; returns the admitted revision. */

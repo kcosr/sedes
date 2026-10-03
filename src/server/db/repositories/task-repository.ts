@@ -908,6 +908,43 @@ export class TaskRepository {
     })();
   }
 
+  removeCompleted(
+    scope: RequestScope,
+    taskId: string,
+    expectedRevision: number,
+  ): void {
+    this.database.transaction(() => {
+      const current = this.get(scope, taskId);
+      if (current.revision !== expectedRevision) {
+        throw new DomainError(
+          "task_revision_conflict",
+          "The task changed in another client.",
+        );
+      }
+      if (current.completedAt === null) {
+        throw new DomainError(
+          "bad_request",
+          "Only completed tasks can be deleted.",
+        );
+      }
+      const changed = this.database
+        .prepare(
+          `
+            DELETE FROM tasks
+            WHERE tenant_id = ? AND owner_principal_id = ? AND id = ?
+              AND revision = ? AND completed_at IS NOT NULL
+          `,
+        )
+        .run(scope.tenantId, scope.principalId, taskId, expectedRevision);
+      if (changed.changes !== 1) {
+        throw new DomainError(
+          "task_revision_conflict",
+          "The task changed in another client.",
+        );
+      }
+    })();
+  }
+
   /** Idempotent, receipt-less delete following the stash-delete convention. */
   remove(scope: RequestScope, taskId: string): boolean {
     return (

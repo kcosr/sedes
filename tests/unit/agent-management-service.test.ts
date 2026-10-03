@@ -754,6 +754,69 @@ describe("AgentManagementService task authority", () => {
     return { ...current, reader, taskRepository, management, admit, create, list };
   }
 
+  it("deletes only completed tasks at the admitted revision", async () => {
+    const f = taskFixture();
+    try {
+      const task = f.create("Disposable", { kind: "thread", threadId: f.older.id });
+      await expect(f.management.deleteTask(f.scope, task.id, f.admit("task.delete", {
+        taskId: task.id, expectedRevision: 0,
+      }), 0)).rejects.toMatchObject({ code: "bad_request" });
+      const completed = f.taskRepository.update(f.scope, task.id, {
+        expectedRevision: 0, completed: true, mutationId: randomUUID(), now: 7_000,
+      });
+      const grant = f.admit("task.delete", { taskId: task.id, expectedRevision: completed.revision });
+      await expect(f.management.deleteTask(f.scope, task.id, grant, 0)).rejects.toMatchObject({ code: "task_revision_conflict" });
+      expect(f.taskRepository.get(f.scope, task.id).completedAt).not.toBeNull();
+      await expect(f.management.deleteTask(f.scope, task.id, grant, completed.revision)).resolves.toEqual({
+        taskId: task.id, deleted: true,
+      });
+      expect(f.taskRepository.find(f.scope, task.id)).toBeUndefined();
+      await expect(f.management.deleteTask(f.scope, task.id, grant, completed.revision)).rejects.toMatchObject({ code: "not_found" });
+    } finally {
+      f.database.close();
+    }
+  });
+
+  it("rechecks task deletion ownership, resource, revision, and project membership", async () => {
+    const f = taskFixture();
+    try {
+      const complete = (title: string) => {
+        const task = f.create(title, { kind: "project", projectId: f.workspaceA.projectId });
+        return f.taskRepository.update(f.scope, task.id, {
+          expectedRevision: 0, completed: true, mutationId: randomUUID(), now: 7_000,
+        });
+      };
+      const task = complete("Completed");
+      const other = complete("Other completed");
+      const grant = f.admit("task.delete", { taskId: task.id, expectedRevision: task.revision });
+      for (const foreign of [
+        { ...f.scope, principalId: "other-principal" },
+        { ...f.scope, tenantId: "other-tenant" },
+      ]) await expect(f.management.deleteTask(foreign, task.id, grant, task.revision)).rejects.toMatchObject({ code: "not_found" });
+      await expect(f.management.deleteTask(f.scope, other.id, grant, other.revision)).rejects.toThrow(/unavailable/);
+      f.taskRepository.update(f.scope, task.id, {
+        expectedRevision: task.revision, completed: false, mutationId: randomUUID(), now: 8_000,
+      });
+      await expect(f.management.deleteTask(f.scope, task.id, grant, task.revision)).rejects.toThrow(/unavailable/);
+      const otherGrant = f.admit("task.delete", { taskId: other.id, expectedRevision: other.revision });
+      new InventoryRepository(f.database).upsertWorkspace(f.scope, {
+        environmentId: f.environment.id,
+        canonicalPath: "/tmp/deletion-project-member",
+        displayName: "New location",
+        project: { kind: "existing", projectId: f.workspaceA.projectId },
+        available: true,
+        trustState: "trusted",
+        environmentConfigurationRevision: 0,
+        now: 9_000,
+      });
+      await expect(f.management.deleteTask(f.scope, other.id, otherGrant, other.revision)).rejects.toThrow(/unavailable/);
+      expect(f.taskRepository.get(f.scope, task.id).completedAt).toBeNull();
+      expect(f.taskRepository.get(f.scope, other.id).completedAt).not.toBeNull();
+    } finally {
+      f.database.close();
+    }
+  });
+
   it("lists a project across its locations only with exactly the admitted environments", () => {
     const f = taskFixture();
     try {

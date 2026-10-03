@@ -38,6 +38,7 @@ const taskListManifest = CANONICAL_AGENT_TOOL_MANIFEST["task.list"];
 const taskGetManifest = CANONICAL_AGENT_TOOL_MANIFEST["task.get"];
 const taskCreateManifest = CANONICAL_AGENT_TOOL_MANIFEST["task.create"];
 const taskUpdateManifest = CANONICAL_AGENT_TOOL_MANIFEST["task.update"];
+const taskDeleteManifest = CANONICAL_AGENT_TOOL_MANIFEST["task.delete"];
 
 type TargetScope = {
   readonly kind: "global" | "project" | "thread";
@@ -73,6 +74,14 @@ export type TaskUpdateInput = {
   readonly backlog?: boolean;
   readonly files?: readonly string[];
   readonly scope?: TargetScope;
+};
+export type TaskDeleteInput = {
+  readonly taskId: string;
+  readonly expectedRevision: number;
+};
+export type TaskDeleteResult = {
+  readonly taskId: string;
+  readonly deleted: true;
 };
 
 const taskSummarySchema = Type.Object(
@@ -435,6 +444,65 @@ export function createTaskUpdateToolDefinition(
         input.taskId,
         context.environmentAuthority,
         domainRequest,
+      );
+    },
+  };
+}
+
+export function createTaskDeleteToolDefinition(
+  service: AgentManagementService,
+): AgentToolDefinition<TaskDeleteInput, TaskDeleteResult> {
+  return {
+    ...taskDeleteManifest,
+    inputSchema: normalizeCanonicalAgentToolSchema(
+      Type.Object(
+        {
+          taskId: identifierSchema,
+          expectedRevision: Type.Integer({
+            minimum: 0,
+            maximum: Number.MAX_SAFE_INTEGER,
+          }),
+        },
+        {
+          $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
+          additionalProperties: false,
+          maxProperties: 2,
+        },
+      ),
+    ),
+    outputSchema: normalizeCanonicalAgentToolSchema(
+      Type.Object(
+        { taskId: identifierSchema, deleted: Type.Boolean() },
+        {
+          $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
+          additionalProperties: false,
+          maxProperties: 2,
+        },
+      ),
+    ),
+    requiredCapabilities: [],
+    execution: {
+      ...writeExecution("task_delete_write"),
+      maximumInputBytes: 2 * 1024,
+      maximumOutputBytes: 2 * 1024,
+    },
+    exposure,
+    adapters: {
+      pi: {
+        name: "sedes_task_delete",
+        label: "Delete Sedes task",
+        promptSnippet: taskDeleteManifest.description,
+      },
+      mcp: { name: "sedes_task_delete" },
+      http: { invocation: "inline" },
+      cli: { command: taskDeleteManifest.id },
+    },
+    execute(input, context) {
+      return service.deleteTask(
+        { tenantId: context.tenantId, principalId: context.principalId },
+        input.taskId,
+        context.environmentAuthority,
+        input.expectedRevision,
       );
     },
   };
