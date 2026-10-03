@@ -135,7 +135,13 @@ public class NativeVoiceE2eTest {
                 await(() -> !runtime.snapshot().optJSONObject("foreground").optBoolean("visible"), 10000, "native background visibility");
                 screenshot("background");
             }
-            if (scenario.equals("skip")) { await(() -> runtime.snapshot().optJSONObject("actions").optBoolean("canSkip"), 45000, "speech before Skip"); notificationAction(context, "Skip"); }
+            if (scenario.equals("skip")) {
+                await(() -> {
+                    JSONObject state = runtime.snapshot();
+                    return state.optString("phase").equals("speaking") && state.optJSONObject("actions").optBoolean("canSkip");
+                }, 45000, "AudioTrack playback before Skip");
+                notificationAction(context, "Skip");
+            }
             if (scenario.equals("stop")) {
                 await(() -> runtime.snapshot().optString("phase").equals("listening"), 45000, "recognition before Stop"); notificationAction(context, "Stop");
                 SystemClock.sleep(1500); assertFalse(phases.contains("submitting"));
