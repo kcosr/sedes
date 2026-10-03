@@ -224,6 +224,18 @@ handoff does not publish a replacement into the shared hub or recapture the
 provider. The client restores controls after `thread-live`, subject to actual
 capability freshness and outstanding mutation receipts.
 
+Queue mutation receipts can arrive before older thread SSE events. The client
+keeps stream revision validation separate from the newer queue and restored
+draft shown by an HTTP receipt. Ordered stream updates still apply unrelated
+settings, capabilities, and other application fields while preserving the
+receipt's newer queue and draft until the stream catches up. A receipt does
+not advance the SSE cursor or excuse an actual stream revision regression;
+contradictory state at the same revision still requires recovery. Receipt
+state belongs to its thread projection generation and is discarded when that
+generation changes. A checkpoint replaces the displayed receipt fields, but
+controls remain fenced if its thread or draft revision is older than an
+unconfirmed receipt's corresponding revision.
+
 Provider history remains the durable transcript. Runtime eviction, provider
 replacement, or process restart establishes a fresh projection from provider
 history. Completed compaction, changed history bounds, or contradictory native
