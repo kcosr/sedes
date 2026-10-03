@@ -127,6 +127,8 @@ describe.skipIf(!enabled)("live Codex subagent durable accounting", () => {
         serverRequests: supervisor.serverRequests, ownership: new CodexConversationOwnershipRegistry(), toolProvenanceKey: new Uint8Array(32).fill(0x5a),
         modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "model_effort"), outputArtifacts: createInMemoryOutputArtifactPublisher(),
         agentToolCliEnvironment: unavailableCodexAgentToolCliEnvironmentProvider, onError: error => diagnostics.push(error), executionSettings: {
+          assertExecutionPolicyAllowed: () => undefined,
+          subscribeDesiredSettingsChanged: () => () => undefined,
           desiredSettings: () => settings, resolveFastModeDisabled: () => settings, forkSettingsEligibility: () => ({ availability: "available", settingsRevision: 1, settings }),
           freezeOperationSnapshot: () => ({ settings }), observeEffective: () => undefined, markEffectiveUnknown: () => undefined,
         } });

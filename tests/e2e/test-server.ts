@@ -3889,6 +3889,8 @@ async function main(): Promise<void> {
     database,
   );
   const codexExecutionSettingsProvider: CodexExecutionSettingsProvider = {
+    assertExecutionPolicyAllowed: () => undefined,
+    subscribeDesiredSettingsChanged: () => () => undefined,
     desiredSettings: (providerScope, applicationThreadId) =>
       codexExecutionSettings.find(providerScope, applicationThreadId)
         ?.desired ?? null,
@@ -4286,6 +4288,7 @@ async function main(): Promise<void> {
     [
       codexBackend.id,
       new CodexThreadActionPersistence({
+        desiredSettingsChanged: () => undefined,
         database,
         scope,
         backendInstanceId: codexBackend.id,
@@ -4302,6 +4305,7 @@ async function main(): Promise<void> {
     [
       codexUdsBackend.id,
       new CodexThreadActionPersistence({
+        desiredSettingsChanged: () => undefined,
         database,
         scope,
         backendInstanceId: codexUdsBackend.id,
@@ -4318,6 +4322,7 @@ async function main(): Promise<void> {
     [
       codexStdioBackend.id,
       new CodexThreadActionPersistence({
+        desiredSettingsChanged: () => undefined,
         database,
         scope,
         backendInstanceId: codexStdioBackend.id,

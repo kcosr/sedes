@@ -110,15 +110,45 @@ execution unresolved. Send and Queue remain unavailable until the tuple is
 complete and admitted.
 
 Once Sedes has durable service-tier intent, it replays that tier after resume
-because native rollout history may omit it. Other recognized settings remain
-provider-authoritative during imported-thread adoption. A compare-and-set
-settings revision prevents a concurrent browser change from being overwritten
-by adoption.
+because native rollout history may omit it. When the persistent runtime cannot
+reattach an existing subscription, the native resume request also carries the
+saved sandbox, approval policy, reviewer, and workspace-write network
+configuration after revalidating them against the current installation policy. Replacing a UDS
+connection can otherwise reconstruct a read-only session even while the
+external app-server process and thread inventory remain alive. Rejected saved
+security settings remain unresolved rather than being replaced with defaults.
+
+When a native resume would replay a rejected policy on an idle or unloaded
+thread, Sedes opens detached history without subscribing or injecting tools.
+Execution stays disabled until the user selects an admitted policy. Persisting
+that selection signals the owning handle to reestablish its subscription.
+Active or system-error threads fail with a retryable reconciliation error
+instead of installing a static history view. Native lifecycle notifications
+invalidate a detached view so it cannot remain frozen across a turn change.
+
+The native thread configuration maps network access only for workspace-write;
+restoring a read-only thread with network enabled remains unsupported and can
+adopt the provider's network-disabled response.
+
+A retained session is reattached without replaying security settings. A native
+resume of a still-subscribed session preserves its live provider settings, and
+Sedes adopts the actual response. First-time imports without a desired tuple
+likewise obtain their settings from Codex. Sedes does not force saved security
+onto a live session owned by another client. A compare-and-set settings revision
+protects the durable adoption write.
 
 Losing the Codex daemon generation invalidates effective confirmation. A
 complete attach observation or settings notification from the replacement
 generation must confirm it again. Stale generations and partial observations
 cannot update effective state.
+
+The persistent runtime also orders settings notifications against resume
+receipts. A newer settings notification received while a resume is in flight
+must survive installation of the older resume response; reattachment must not
+revive that response's security settings. A newer undecodable settings notice
+invalidates cached settings without discarding the live subscription. Cached
+reattachment then declines, and the ordinary native resume obtains fresh
+authoritative settings. An older notification cannot repair the cache.
 
 ## Mutation, persistence, and provider application
 

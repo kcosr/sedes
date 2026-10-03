@@ -65,7 +65,13 @@ import {
 } from "../../src/server/backends/model-policy.js";
 import { CodexServerRequestRouter } from "../../src/server/backends/codex/codex-server-request-router.js";
 import { CodexGoalSessionRegistry } from "../../src/server/backends/codex/codex-goal-session.js";
+import { CODEX_GOAL_FEATURE_REF } from "../../src/server/backends/codex/codex-goal-feature.js";
 import { CodexFastModeSessionRegistry } from "../../src/server/backends/codex/codex-fast-mode-session.js";
+import { CodexExecutionSettingsRepositoryAdapter } from "../../src/server/backends/codex/codex-backend-module.js";
+import { CodexThreadActionPersistence } from "../../src/server/backends/codex/codex-thread-action-persistence.js";
+import { CodexThreadExecutionSettingsRepository } from "../../src/server/backends/codex/codex-thread-execution-settings-repository.js";
+import { CodexHistoryReader } from "../../src/server/backends/codex/codex-history-reader.js";
+import { ProviderFeatureMutationRepository } from "../../src/server/db/repositories/provider-feature-mutation-repository.js";
 import { CodexManagedTuiController } from "../../src/server/backends/codex/codex-managed-tui-controller.js";
 import { CodexRuntimeManagedTuiRegistry } from "../../src/server/backends/codex/runtime/codex-runtime-managed-tui.js";
 import type { SidecarRuntimeChannel } from "../../src/server/sidecar/runtime-channel.js";
@@ -94,6 +100,8 @@ import {
   CodexRpcRemoteError,
 } from "../../src/server/backends/codex/rpc/errors.js";
 import { ConversationProjector } from "../../src/server/conversations/conversation-projector.js";
+import { ConversationActor } from "../../src/server/conversations/conversation-actor.js";
+import type { ComposerAttachmentDeliveryService } from "../../src/server/composer-attachments/composer-attachment-delivery-service.js";
 import type { OutputArtifactPublisher } from "../../src/server/output-artifacts/contracts.js";
 import { renderTaskContextsForModel } from "../../src/server/conversations/delivery-input-projection.js";
 import { codexTaskContextCarrier } from "../../src/server/backends/codex/codex-task-contexts.js";
@@ -790,6 +798,8 @@ function executionSettingsProvider(
         : desired;
     });
   return {
+    assertExecutionPolicyAllowed: () => undefined,
+    subscribeDesiredSettingsChanged: () => () => undefined,
     forkSettingsEligibility: () => ({
       availability: "available",
       settingsRevision: 1,
@@ -819,6 +829,46 @@ function executionSettingsTuple(
     approvalReviewer: "user",
     ...overrides,
   };
+}
+
+function executionSettingsPersistenceFixture(desired: CodexExecutionSettingsTuple) {
+  // Minimal unrelated application tables; the real repositories and action
+  // persistence below own the settings write, durable receipt and notification.
+  const database = new Database(":memory:");
+  database.exec(`
+    CREATE TABLE application_threads(tenant_id TEXT, owner_principal_id TEXT, id TEXT, backend_instance_id TEXT,
+      connection_profile_id TEXT, backing_state TEXT, revision INTEGER, updated_at INTEGER);
+    CREATE TABLE agent_backend_instances(tenant_id TEXT, id TEXT, kind TEXT);
+    CREATE TABLE principal_generations(tenant_id TEXT, principal_id TEXT, inventory_generation INTEGER);
+    CREATE TABLE automation_definitions(tenant_id TEXT, owner_principal_id TEXT, anchor_thread_id TEXT, enabled INTEGER, deleted_at INTEGER);
+    CREATE TABLE codex_thread_execution_settings(
+      tenant_id TEXT, owner_principal_id TEXT, application_thread_id TEXT,
+      desired_model TEXT, desired_reasoning_effort TEXT, desired_service_tier TEXT, desired_sandbox_mode TEXT,
+      desired_network_access TEXT, desired_approval_policy TEXT, desired_approval_reviewer TEXT,
+      effective_model TEXT, effective_reasoning_effort TEXT, effective_service_tier TEXT, effective_service_tier_classification TEXT,
+      effective_sandbox_mode TEXT, effective_sandbox_classification TEXT, effective_network_access TEXT, effective_network_classification TEXT,
+      effective_approval_policy TEXT, effective_approval_policy_classification TEXT, effective_approval_reviewer TEXT,
+      effective_approval_reviewer_classification TEXT, effective_daemon_generation INTEGER, effective_confirmation_state TEXT,
+      revision INTEGER, created_at INTEGER, updated_at INTEGER, PRIMARY KEY(tenant_id,owner_principal_id,application_thread_id));
+    CREATE TABLE provider_feature_mutation_receipts(
+      tenant_id TEXT, owner_principal_id TEXT, application_thread_id TEXT, mutation_id TEXT, feature_id TEXT, schema_version INTEGER,
+      action_id TEXT, request_fingerprint TEXT, expected_thread_revision INTEGER, expected_feature_revision INTEGER,
+      state TEXT, desired_postcondition_json TEXT, result_json TEXT, created_at INTEGER, updated_at INTEGER, force_reset_at INTEGER);
+    INSERT INTO application_threads VALUES('tenant-1','principal-1','application-profile-1','codex-1','profile-1','bound',0,0);
+    INSERT INTO agent_backend_instances VALUES('tenant-1','codex-1','codex_app_server');
+    INSERT INTO principal_generations VALUES('tenant-1','principal-1',0);
+  `);
+  const repository = new CodexThreadExecutionSettingsRepository(database);
+  repository.initialize(scope, { applicationThreadId: "application-profile-1", desired, now: 1 });
+  const executionPolicy = { allowedSandboxModes: ["read-only"], allowedNetworkAccess: ["disabled", "enabled"],
+    allowedApprovalPolicies: ["never"], allowedApprovalReviewers: ["user"] } as const;
+  const adapter = new CodexExecutionSettingsRepositoryAdapter(repository, executionPolicy, catalogModelPolicy);
+  const persistence = new CodexThreadActionPersistence({ database, scope, backendInstanceId: "codex-1", settings: repository,
+    desiredSettingsChanged: (changedScope, applicationThreadId) => adapter.notifyDesiredSettingsChanged(changedScope, applicationThreadId),
+    featureMutations: new ProviderFeatureMutationRepository(database), executionPolicy, modelPolicy: catalogModelPolicy,
+    defaultExecutionPolicyByConnectionId: new Map(),
+  });
+  return { database, repository, adapter, persistence };
 }
 
 function driver(
@@ -5252,6 +5302,9 @@ describe("CodexConversationHandle", () => {
         params: {
           threadId: "thread-1",
           serviceTier: "default",
+          sandbox: "read-only",
+          approvalPolicy: "never",
+          approvalsReviewer: "user",
           config: {
             shell_environment_policy: scrubbedAgentToolShellEnvironmentPolicy,
           },
@@ -5350,6 +5403,9 @@ describe("CodexConversationHandle", () => {
         params: {
           threadId: "thread-1",
           serviceTier: "default",
+          sandbox: "read-only",
+          approvalPolicy: "never",
+          approvalsReviewer: "user",
           config: {
             shell_environment_policy: scrubbedAgentToolShellEnvironmentPolicy,
           },
@@ -8605,10 +8661,394 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it.each([
+    {
+      sandboxMode: "danger-full-access" as const,
+      networkAccess: "enabled" as const,
+      approvalPolicy: "never" as const,
+      approvalReviewer: "user" as const,
+      sandbox: { type: "dangerFullAccess" as const },
+      config: {},
+    },
+    {
+      sandboxMode: "read-only" as const,
+      networkAccess: "disabled" as const,
+      approvalPolicy: "untrusted" as const,
+      approvalReviewer: "auto_review" as const,
+      sandbox: { type: "readOnly" as const, networkAccess: false },
+      config: {},
+    },
+    {
+      sandboxMode: "workspace-write" as const,
+      networkAccess: "enabled" as const,
+      approvalPolicy: "on-request" as const,
+      approvalReviewer: "user" as const,
+      sandbox: { type: "workspaceWrite" as const, writableRoots: [], networkAccess: true, excludeTmpdirEnvVar: true, excludeSlashTmp: true },
+      config: {
+        "sandbox_workspace_write.network_access": true,
+        "sandbox_workspace_write.exclude_tmpdir_env_var": true,
+        "sandbox_workspace_write.exclude_slash_tmp": true,
+      },
+    },
+  ])("restores saved $sandboxMode security through a new native subscription and its next turn", async (policy) => {
+    const reattachThread = vi.fn(async () => undefined);
+    const harness = new RpcHarness({ reattachThread, detachThread: vi.fn(async () => undefined) });
+    let desired = executionSettingsTuple({
+      sandboxMode: policy.sandboxMode, networkAccess: policy.networkAccess,
+      approvalPolicy: policy.approvalPolicy, approvalReviewer: policy.approvalReviewer,
+    });
+    const assertExecutionPolicyAllowed = vi.fn();
+    const settings = executionSettingsProvider({
+      desiredSettings: () => desired,
+      assertExecutionPolicyAllowed,
+      observeEffective: (_scope, observation) => {
+        if (observation.initializeDesired) desired = observation.initializeDesired;
+      },
+      freezeOperationSnapshot: () => ({ settings: desired }),
+    });
+    const handle = await attachIdle(harness, driver(harness, connection,
+      new CodexConversationOwnershipRegistry(), { type: "catalog" }, settings));
+    harness.enqueue("thread/read", { thread: nativeThread() });
+    harness.enqueue("thread/resume", {
+      ...resumeResult(), approvalPolicy: policy.approvalPolicy,
+      approvalsReviewer: policy.approvalReviewer, sandbox: policy.sandbox,
+    });
+    await handle.establishProjection({ signal: new AbortController().signal });
+    expect(reattachThread).toHaveBeenCalledOnce();
+    expect(assertExecutionPolicyAllowed).toHaveBeenCalledWith(desired);
+    const resume = harness.calls.find(({ method }) => method === "thread/resume")?.params;
+    expect(resume).toMatchObject({
+      threadId: "thread-1", sandbox: policy.sandboxMode,
+      approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalReviewer,
+    });
+    if (Object.keys(policy.config).length) expect(resume).toMatchObject({ config: policy.config });
+    harness.enqueue("turn/start", { turn: { ...nativeTurn(1), items: [], itemsView: "notLoaded", status: "inProgress", completedAt: null } });
+    await handle.submit({ applicationOperationId: "restored-submit", source: { kind: "user" },
+      mutationId: "restored-mutation", reconciliationToken: "restored-token", taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" });
+    expect(harness.calls.find(({ method }) => method === "turn/start")?.params).toMatchObject({
+      approvalPolicy: policy.approvalPolicy, approvalsReviewer: policy.approvalReviewer,
+      sandboxPolicy: policy.sandbox,
+    });
+    await handle.close();
+  });
+
+  it.each(["legacy", "paginated"] as const)("keeps %s history readable after policy revocation and resumes after an admitted settings edit", async (historyMode) => {
+    const harness = new RpcHarness();
+    const rejectedDesired = executionSettingsTuple({ sandboxMode: "danger-full-access", networkAccess: "enabled" });
+    const persisted = executionSettingsPersistenceFixture(rejectedDesired);
+    const adapter = persisted.adapter;
+    const observeEffective = vi.fn(adapter.observeEffective.bind(adapter));
+    const acquire = vi.fn(unavailableCodexAgentToolCliEnvironmentProvider.acquire);
+    const settings = executionSettingsProvider({ desiredSettings: adapter.desiredSettings.bind(adapter), observeEffective,
+      subscribeDesiredSettingsChanged: adapter.subscribeDesiredSettingsChanged.bind(adapter),
+      freezeOperationSnapshot: () => ({ settings: adapter.desiredSettings(scope, "application-profile-1")! }),
+      assertExecutionPolicyAllowed: adapter.assertExecutionPolicyAllowed.bind(adapter),
+    });
+    try {
+      const handle = await attachIdle(harness, driver(harness, connection,
+        new CodexConversationOwnershipRegistry(), { type: "catalog" }, settings, undefined, undefined, { acquire }));
+      const metadata = historyMode === "legacy" ? nativeThread({ turns: [] }) : paginatedThread({ status: { type: "idle" } });
+      harness.enqueue("thread/read", { thread: metadata }, { thread: metadata });
+      if (historyMode === "legacy") harness.enqueue("thread/read", { thread: nativeThread() });
+      else {
+        harness.enqueue("thread/read", { thread: metadata });
+        harness.enqueue("thread/turns/list", { data: [notLoadedTurn(0)], nextCursor: null, backwardsCursor: "head" });
+        harness.enqueue("thread/items/list", paginatedItems(0));
+      }
+      const events: BackendConversationEvent[] = [];
+      handle.subscribe(event => events.push(event));
+      const actor = new ConversationActor({ handle,
+        projector: new ConversationProjector({ backendInstanceId: instance.id, bindingIdentity: binding().applicationThreadId }),
+        attachmentDelivery: {} as ComposerAttachmentDeliveryService,
+      });
+      await actor.start({ signal: new AbortController().signal });
+      const current = await handle.readCurrent();
+      expect(current.snapshot.orderedBackendTurnIds).toEqual([codexBackendTurnId("thread-1", "turn-0")]);
+      expect(current.usage).toEqual({});
+      expect((await handle.history({ limit: 1 })).orderedBackendTurnIds).toEqual(current.snapshot.orderedBackendTurnIds);
+      expect(actor.peekSnapshotState()?.backendCapabilities).toMatchObject({ supportsHistory: true, deliveryModes: [], actions: [] });
+      const submission = { applicationOperationId: "repaired-submit", source: { kind: "user" as const },
+        mutationId: "repaired-mutation", reconciliationToken: "repaired-token", taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" };
+      await expect(handle.submit(submission)).rejects.toMatchObject({ backendCode: "codex_execution_policy_rejected" });
+      await expect(handle.mutateProviderFeature!({ featureId: CODEX_GOAL_FEATURE_REF.featureId,
+        schemaVersion: CODEX_GOAL_FEATURE_REF.schemaVersion, actionId: "resume", arguments: null }))
+        .rejects.toMatchObject({ backendCode: "codex_execution_policy_rejected" });
+      expect(harness.calls.some(({ method }) => method === "thread/resume")).toBe(false);
+      expect(acquire).not.toHaveBeenCalled();
+      expect(observeEffective).not.toHaveBeenCalled();
+      expect(settings.desiredSettings(scope, "application-profile-1")).toEqual(rejectedDesired);
+      harness.enqueue("thread/read", { thread: metadata });
+      if (historyMode === "legacy") harness.enqueue("thread/resume", resumeResult());
+      else {
+        harness.enqueue("thread/resume", paginatedResumeResult({ shells: [notLoadedTurn(0)] }));
+        harness.enqueue("thread/items/list", paginatedItems(0));
+      }
+      // Exercise the actual action-persistence route. No capability read wakes
+      // the handle: the committed desired edit itself requests a new projection.
+      await persisted.persistence.performProviderFeature(scope, "application-profile-1", {
+        mutationId: "repair-policy", expectedThreadRevision: 0, now: 2,
+        operation: { action: "perform_provider_feature", feature: { featureId: "codex.execution", schemaVersion: 1 },
+          actionId: "set_sandbox_read_only", arguments: null, expectedFeatureRevision: 0 },
+      });
+      expect(events).toContainEqual({ type: "resnapshot_required", reason: "contradictory_state" });
+      await vi.waitFor(async () => {
+        expect((await actor.captureSnapshotState()).backendCapabilities.deliveryModes).toContain("submit");
+      });
+      harness.enqueue("turn/start", { turn: { ...nativeTurn(1), items: [], itemsView: "notLoaded", status: "inProgress", completedAt: null } });
+      await handle.submit(submission);
+      expect(harness.calls.find(({ method }) => method === "turn/start")?.params).toMatchObject({ sandboxPolicy: { type: "readOnly", networkAccess: false } });
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await actor.close();
+    } finally {
+      persisted.database.close();
+    }
+  });
+
+  it("recovers an initial attachment when a durable repair precedes history-reader installation", async () => {
+    const persisted = executionSettingsPersistenceFixture(executionSettingsTuple({ sandboxMode: "danger-full-access", networkAccess: "enabled" }));
+    const harness = new RpcHarness();
+    const handle = await attachIdle(harness, driver(harness, connection, new CodexConversationOwnershipRegistry(),
+      { type: "catalog" }, persisted.adapter));
+    const actor = new ConversationActor({ handle,
+      projector: new ConversationProjector({ backendInstanceId: instance.id, bindingIdentity: binding().applicationThreadId }),
+      attachmentDelivery: {} as ComposerAttachmentDeliveryService,
+    });
+    const capabilities = CodexHistoryReader.prototype.backendCapabilities;
+    const readingCapabilities = vi.spyOn(CodexHistoryReader.prototype, "backendCapabilities").mockImplementationOnce(async function (this: CodexHistoryReader) {
+      await persisted.persistence.performProviderFeature(scope, "application-profile-1", {
+        mutationId: "repair-during-install", expectedThreadRevision: 0, now: 2,
+        operation: { action: "perform_provider_feature", feature: { featureId: "codex.execution", schemaVersion: 1 },
+          actionId: "set_sandbox_read_only", arguments: null, expectedFeatureRevision: 0 },
+      });
+      return await capabilities.call(this);
+    });
+    try {
+      harness.enqueue("thread/read", { thread: nativeThread({ turns: [] }) }, { thread: nativeThread({ turns: [] }) },
+        { thread: nativeThread() }, { thread: nativeThread({ turns: [] }) });
+      harness.enqueue("thread/resume", resumeResult());
+      await actor.start({ signal: new AbortController().signal });
+      expect(actor.peekSnapshotState()?.backendCapabilities.deliveryModes).toContain("submit");
+      expect(harness.calls.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
+      expect(persisted.adapter.desiredSettings(scope, "application-profile-1")?.sandboxMode).toBe("read-only");
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await actor.close();
+    } finally {
+      readingCapabilities.mockRestore();
+      persisted.database.close();
+    }
+  });
+
+  describe("policy-rejected history activity", () => {
+    async function rejectedHistoryHandle(harness: RpcHarness, overrides: Partial<CodexExecutionSettingsProvider> = {}) {
+      const desired = executionSettingsTuple({ sandboxMode: "danger-full-access", networkAccess: "enabled" });
+      const acquire = vi.fn(unavailableCodexAgentToolCliEnvironmentProvider.acquire);
+      const settings = executionSettingsProvider({ desiredSettings: () => desired,
+        assertExecutionPolicyAllowed: () => { throw new BackendError({ category: "rejected", retryable: false,
+          crossedSubmissionBoundary: false, safeMessage: "The selected Codex execution policy is no longer allowed.", backendCode: "codex_execution_policy_rejected" }); },
+        ...overrides,
+      });
+      const handle = await attachIdle(harness, driver(harness, connection,
+        new CodexConversationOwnershipRegistry(), { type: "catalog" }, settings, undefined, undefined, { acquire }));
+      return { handle, acquire };
+    }
+
+    function enqueueDetachedSnapshot(harness: RpcHarness, historyMode: "legacy" | "paginated", index = 0, status: "idle" | "notLoaded" = "idle") {
+      const metadata = historyMode === "legacy" ? nativeThread({ turns: [], status: { type: status } }) : paginatedThread({ status: { type: status } });
+      const complete = historyMode === "legacy" ? nativeThread({ turns: [nativeTurn(index)], status: { type: status } }) : metadata;
+      harness.enqueue("thread/read", { thread: metadata }, { thread: metadata }, { thread: complete });
+      if (historyMode === "paginated") {
+        harness.enqueue("thread/turns/list", { data: [notLoadedTurn(index)], nextCursor: null, backwardsCursor: "head" });
+        harness.enqueue("thread/items/list", paginatedItems(index));
+      }
+    }
+
+    it.each([
+      { historyMode: "legacy", status: "active" }, { historyMode: "paginated", status: "active" },
+      { historyMode: "legacy", status: "systemError" }, { historyMode: "paginated", status: "systemError" },
+    ] as const)("defers $status $historyMode threads until idle without starting a session", async ({ historyMode, status }) => {
+      const harness = new RpcHarness();
+      const { handle, acquire } = await rejectedHistoryHandle(harness);
+      const nativeStatus = status === "active" ? { type: status, activeFlags: [] } : { type: status };
+      harness.enqueue("thread/read", { thread: historyMode === "legacy"
+        ? nativeThread({ status: nativeStatus }) : paginatedThread({ status: nativeStatus }) });
+      await expect(handle.establishProjection({ signal: new AbortController().signal })).rejects.toMatchObject({
+        category: "unavailable", retryable: true, backendCode: "codex_execution_policy_history_not_idle",
+      });
+      expect(harness.calls.map(({ method }) => method)).toEqual(["thread/read"]);
+      expect(acquire).not.toHaveBeenCalled();
+
+      enqueueDetachedSnapshot(harness, historyMode);
+      const projection = await handle.establishProjection({ signal: new AbortController().signal });
+      expect(projection.snapshot.runState).toBe("idle");
+      expect(harness.calls.some(({ method }) => method === "thread/resume")).toBe(false);
+      await handle.close();
+    });
+
+    it.each(["legacy", "paginated"] as const)("keeps unloaded %s history available without a native session", async historyMode => {
+      const harness = new RpcHarness();
+      const { handle } = await rejectedHistoryHandle(harness);
+      enqueueDetachedSnapshot(harness, historyMode, 0, "notLoaded");
+      const projection = await handle.establishProjection({ signal: new AbortController().signal });
+      expect(projection.snapshot.runState).toBe("idle");
+      expect(harness.calls.some(({ method }) => method === "thread/resume")).toBe(false);
+      await handle.close();
+    });
+
+    it.each([
+      { historyMode: "legacy", changedRead: 1 }, { historyMode: "paginated", changedRead: 1 },
+      { historyMode: "legacy", changedRead: 2 }, { historyMode: "paginated", changedRead: 2 },
+    ] as const)("rechecks $historyMode native activity at detached read $changedRead", async ({ historyMode, changedRead }) => {
+      const harness = new RpcHarness();
+      const { handle } = await rejectedHistoryHandle(harness);
+      enqueueDetachedSnapshot(harness, historyMode);
+      harness.queues.get("thread/read")![changedRead] = { thread: historyMode === "legacy"
+        ? nativeThread({ status: { type: "active", activeFlags: [] } })
+        : paginatedThread({ status: { type: "active", activeFlags: [] } }) };
+      await expect(handle.establishProjection({ signal: new AbortController().signal })).rejects.toMatchObject({
+        category: "unavailable", retryable: true, backendCode: "codex_execution_policy_history_not_idle",
+      });
+      expect(harness.calls.some(({ method }) => method === "thread/resume")).toBe(false);
+      await handle.close();
+    });
+
+    it.each(["thread/status/changed", "turn/started", "turn/completed"] as const)("refreshes detached history on scoped %s evidence", async method => {
+      const harness = new RpcHarness();
+      const { handle } = await rejectedHistoryHandle(harness);
+      enqueueDetachedSnapshot(harness, "legacy");
+      const projection = await handle.establishProjection({ signal: new AbortController().signal });
+      const events: BackendConversationEvent[] = [];
+      projection.subscribeFromNext(({ event }) => events.push(event));
+      const params = method === "thread/status/changed"
+        ? { threadId: "thread-1", status: { type: "idle" } }
+        : { threadId: "thread-1", turn: nativeTurn(1) };
+      harness.notify(method, { ...params, threadId: "foreign" });
+      harness.facade.forwardNotification(1, { kind: "decoded_notification", generation: 0, sequence: ++harness.sequence, method, params });
+      expect(events).toEqual([]);
+      harness.notify(method, params);
+      harness.notify(method, params);
+      expect(events).toEqual([{ type: "resnapshot_required", reason: "contradictory_state" }]);
+
+      enqueueDetachedSnapshot(harness, "legacy", 1);
+      const refreshed = await handle.establishProjection({ signal: new AbortController().signal });
+      expect(refreshed.snapshot.runState).toBe("idle");
+      expect(refreshed.snapshot.orderedBackendTurnIds).toEqual([codexBackendTurnId("thread-1", "turn-1")]);
+      expect(harness.calls.some(({ method }) => method === "thread/resume")).toBe(false);
+      await handle.close();
+    });
+
+    it.each([
+      { historyMode: "legacy", method: "turn/completed" }, { historyMode: "paginated", method: "turn/completed" },
+      { historyMode: "legacy", method: "thread/status/changed" }, { historyMode: "paginated", method: "thread/status/changed" },
+    ] as const)("retries $method during $historyMode capture and opens refreshed idle history", async ({ historyMode, method }) => {
+      const harness = new RpcHarness();
+      const { handle, acquire } = await rejectedHistoryHandle(harness);
+      enqueueDetachedSnapshot(harness, historyMode, 0, method === "thread/status/changed" ? "notLoaded" : "idle");
+      enqueueDetachedSnapshot(harness, historyMode, 1);
+      harness.after("thread/read", () => {});
+      harness.after("thread/read", () => {});
+      harness.after("thread/read", () => harness.notify(method, method === "thread/status/changed"
+        ? { threadId: "thread-1", status: { type: "idle" } }
+        : { threadId: "thread-1", turn: nativeTurn(1) }));
+      const projection = await handle.establishProjection({ signal: new AbortController().signal });
+      expect(projection.snapshot.runState).toBe("idle");
+      expect(projection.snapshot.orderedBackendTurnIds).toEqual([codexBackendTurnId("thread-1", "turn-1")]);
+      expect(harness.calls.filter(({ method: called }) => called === "thread/read")).toHaveLength(6);
+      expect((await handle.backendCapabilities()).deliveryModes).toEqual([]);
+      expect(harness.calls.some(({ method: called }) => called === "thread/resume")).toBe(false);
+      expect(acquire).not.toHaveBeenCalled();
+      await handle.close();
+    });
+
+    it.each([
+      { historyMode: "legacy", status: "active" }, { historyMode: "paginated", status: "active" },
+      { historyMode: "legacy", status: "systemError" }, { historyMode: "paginated", status: "systemError" },
+    ] as const)("stops $historyMode capture retries when the next inspection is $status", async ({ historyMode, status }) => {
+      const harness = new RpcHarness();
+      const { handle } = await rejectedHistoryHandle(harness);
+      enqueueDetachedSnapshot(harness, historyMode);
+      const nativeStatus = status === "active" ? { type: status, activeFlags: [] } : { type: status };
+      harness.enqueue("thread/read", { thread: historyMode === "legacy"
+        ? nativeThread({ status: nativeStatus }) : paginatedThread({ status: nativeStatus }) });
+      harness.after("thread/read", () => {});
+      harness.after("thread/read", () => {});
+      harness.after("thread/read", () => harness.notify("thread/status/changed", { threadId: "thread-1", status: nativeStatus }));
+      await expect(handle.establishProjection({ signal: new AbortController().signal })).rejects.toMatchObject({
+        category: "unavailable", retryable: true, backendCode: "codex_execution_policy_history_not_idle",
+      });
+      expect(harness.calls.filter(({ method }) => method === "thread/read")).toHaveLength(4);
+      expect(harness.calls.some(({ method }) => method === "thread/resume")).toBe(false);
+      await handle.close();
+    });
+
+    it.each(["legacy", "paginated"] as const)("bounds repeated activity during %s capture to five attempts", async historyMode => {
+      const harness = new RpcHarness();
+      const { handle } = await rejectedHistoryHandle(harness);
+      for (let attempt = 0; attempt < 5; attempt++) {
+        enqueueDetachedSnapshot(harness, historyMode, attempt);
+        harness.after("thread/read", () => {});
+        harness.after("thread/read", () => {});
+        harness.after("thread/read", () => harness.notify("turn/completed", { threadId: "thread-1", turn: nativeTurn(attempt) }));
+      }
+      await expect(handle.establishProjection({ signal: new AbortController().signal })).rejects.toMatchObject({
+        category: "unavailable", retryable: true, backendCode: "codex_execution_policy_history_changed",
+      });
+      expect(harness.calls.filter(({ method }) => method === "thread/read")).toHaveLength(15);
+      expect(harness.calls.some(({ method }) => method === "thread/resume")).toBe(false);
+      await handle.close();
+    });
+
+    it("fences activity arriving after detached capture and before projection publication", async () => {
+      const harness = new RpcHarness();
+      const { handle } = await rejectedHistoryHandle(harness, {
+        markEffectiveUnknown: () => queueMicrotask(() => harness.notify("turn/completed", { threadId: "thread-1", turn: nativeTurn(1) })),
+      });
+      enqueueDetachedSnapshot(harness, "legacy");
+      await expect(handle.establishProjection({ signal: new AbortController().signal })).rejects.toMatchObject({
+        category: "unavailable", retryable: true, backendCode: "codex_execution_policy_history_changed",
+      });
+      expect(harness.calls.some(({ method }) => method === "thread/resume")).toBe(false);
+      await handle.close();
+    });
+  });
+
+  it.each(["retained", "native"] as const)("preserves live provider security authority on %s reattachment", async (kind) => {
+    const live = resumeResult();
+    const harness = new RpcHarness(kind === "retained" ? {
+      reattachThread: async () => ({ result: live, generation: 1, inboundSequence: 2 }),
+      detachThread: vi.fn(async () => undefined),
+    } : undefined);
+    let desired = executionSettingsTuple({ sandboxMode: "danger-full-access", networkAccess: "enabled" });
+    const assertExecutionPolicyAllowed = vi.fn();
+    const settings = executionSettingsProvider({
+      desiredSettings: () => desired, assertExecutionPolicyAllowed,
+      observeEffective: (_scope, observation) => { if (observation.initializeDesired) desired = observation.initializeDesired; },
+      freezeOperationSnapshot: () => ({ settings: desired }),
+    });
+    const handle = await attachIdle(harness, driver(harness, connection,
+      new CodexConversationOwnershipRegistry(), { type: "catalog" }, settings));
+    harness.enqueue("thread/read", { thread: nativeThread() });
+    if (kind === "native") harness.enqueue("thread/resume", live);
+    await handle.establishProjection({ signal: new AbortController().signal });
+    expect(desired.sandboxMode).toBe("read-only");
+    if (kind === "retained") {
+      expect(assertExecutionPolicyAllowed).not.toHaveBeenCalled();
+      expect(harness.calls.some(({ method }) => method === "thread/resume")).toBe(false);
+    } else {
+      expect(harness.calls.find(({ method }) => method === "thread/resume")?.params).toMatchObject({ sandbox: "danger-full-access" });
+    }
+    harness.enqueue("turn/start", { turn: { ...nativeTurn(1), items: [], itemsView: "notLoaded", status: "inProgress", completedAt: null } });
+    await handle.submit({ applicationOperationId: "live-submit", source: { kind: "user" }, mutationId: "live-mutation",
+      reconciliationToken: "live-token", taskContexts: [], contextExcerpts: [], attachments: [], text: "continue" });
+    expect(harness.calls.find(({ method }) => method === "turn/start")?.params).toMatchObject({ sandboxPolicy: { type: "readOnly", networkAccess: false } });
+    if (kind === "native") harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
   it("uses an imported YOLO tuple unchanged for the first Sedes turn", async () => {
     const harness = new RpcHarness();
     let desired: CodexExecutionSettingsTuple | undefined;
     const settings = executionSettingsProvider({
+      desiredSettings: () => desired ?? null,
       observeEffective: (_scope, observation) => {
         if (observation.initializeDesired) {
           desired = observation.initializeDesired;
@@ -8639,6 +9079,8 @@ describe("CodexConversationHandle", () => {
     await handle.establishProjection({
       signal: new AbortController().signal,
     });
+
+    expect(harness.calls.find(({ method }) => method === "thread/resume")?.params).not.toHaveProperty("sandbox");
 
     expect(desired).toEqual({
       model: "gpt-5.6",
@@ -15744,6 +16186,9 @@ describe("CodexConversationHandle", () => {
     ).toEqual({
       threadId: "thread-1",
       serviceTier: "default",
+      sandbox: "read-only",
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
       config: {
         shell_environment_policy: {
           exclude: [
@@ -16046,6 +16491,9 @@ describe("CodexConversationHandle", () => {
     ).toEqual({
       threadId: "thread-1",
       serviceTier: "default",
+      sandbox: "read-only",
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
       config: {
         shell_environment_policy: scrubbedAgentToolShellEnvironmentPolicy,
       },
@@ -16095,6 +16543,9 @@ describe("CodexConversationHandle", () => {
         params: {
           threadId: "thread-1",
           serviceTier: "default",
+          sandbox: "read-only",
+          approvalPolicy: "never",
+          approvalsReviewer: "user",
           config: {
             shell_environment_policy: scrubbedAgentToolShellEnvironmentPolicy,
           },

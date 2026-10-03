@@ -9,13 +9,18 @@ import { codexRuntimeMethod } from "./codex-runtime-protocol.js";
 
 type Resume = OfficialCodexClientRequestResult<"thread/resume">;
 type Metadata = Omit<Resume, "thread" | "initialTurnsPage" | "turnsBackwardsCursor" | "itemsBackwardsCursor">;
-type ResumeActivity = {
+type SettingsObservation = {
+  sequence: number;
+  settings: OfficialCodexServerNotificationParams<"thread/settings/updated">["threadSettings"] | null;
+};
+type PendingResume = {
   generation: number;
   activity?: { sequence: number; active: boolean; turnId: string | null; known: boolean };
   goal?: { sequence: number; active: boolean };
+  settings?: SettingsObservation;
   closedSequence?: number;
 };
-type Session = { generation: number; metadata: Metadata; active: boolean; activeTurnId: string | null; activeGoal: boolean; known: boolean };
+type Session = { generation: number; metadata: Metadata; settingsSequence: number; settingsKnown: boolean; active: boolean; activeTurnId: string | null; activeGoal: boolean; known: boolean };
 const readMethod = defineCodexAppServerMethod({ method: "thread/read", refineParams: value => value, refineResult: value => value });
 const turnsMethod = defineCodexAppServerMethod({ method: "thread/turns/list", refineParams: value => value, refineResult: value => value });
 const itemsMethod = defineCodexAppServerMethod({ method: "thread/items/list", refineParams: value => value, refineResult: value => value });
@@ -25,26 +30,28 @@ const itemsMethod = defineCodexAppServerMethod({ method: "thread/items/list", re
  * than executing thread/resume with new CLI credentials/settings. */
 export class CodexRuntimeSessions {
   readonly #sessions = new Map<string, Session>();
-  readonly #pendingResumes = new Map<string, ResumeActivity>();
+  readonly #pendingResumes = new Map<string, PendingResume>();
   #inventory: ReadonlyMap<string, { active: boolean; activeGoal: boolean }> = new Map();
   readonly #evicted = new Set<string>();
   #inventoryKnown = false;
   #trackingFailed = false;
   constructor(readonly client: CodexSharedClientFacade) {}
 
-  /** Only retain activity facts while a resume result can race newer native
-   * notifications. A response is not permitted to rewind a completed child. */
+  /** Retain newer activity and settings while a resume result is awaiting its
+   * continuation. Its older receipt must not rewind either native fact. */
   trackResume(threadId: string, generation: number): { apply(receipt: CodexRpcRequestReceipt<unknown>): void; close(): void } {
     if (this.#pendingResumes.has(threadId)) throw new Error("codex_runtime_resume_already_pending");
-    const pending: ResumeActivity = { generation };
+    const pending: PendingResume = { generation };
     this.#pendingResumes.set(threadId, pending);
     return {
       apply: receipt => {
-        if (receipt.generation !== generation || this.client.lifecycleSnapshot().generation !== generation) return;
+        if (this.#pendingResumes.get(threadId) !== pending || receipt.generation !== generation || this.client.lifecycleSnapshot().generation !== generation) return;
         if ((receipt.result as Resume).thread.id !== threadId) throw new Error("codex_runtime_session_identity_mismatch");
         this.observeResult("thread/resume", receipt.result, generation);
         const session = this.#sessions.get(threadId);
         if (!session || session.generation !== generation) throw new Error("codex_runtime_session_identity_mismatch");
+        session.settingsSequence = receipt.inboundSequence;
+        if (pending.settings) this.#applySettings(session, pending.settings);
         const activity = pending.activity;
         if (activity && activity.sequence > receipt.inboundSequence) {
           session.active = activity.active;
@@ -68,11 +75,23 @@ export class CodexRuntimeSessions {
     const { thread, initialTurnsPage: _initial, turnsBackwardsCursor: _turns, itemsBackwardsCursor: _items, ...metadata } = value;
     if (!this.#sessions.has(thread.id) && this.#sessions.size >= 4096) throw new Error("codex_runtime_session_capacity_exceeded");
     this.#evicted.delete(thread.id);
-    this.#sessions.set(thread.id, { generation, metadata, active: thread.status.type === "active", activeTurnId: null, activeGoal: false, known: true });
+    this.#sessions.set(thread.id, { generation, metadata, settingsSequence: 0, settingsKnown: true, active: thread.status.type === "active", activeTurnId: null, activeGoal: false, known: true });
   }
   observeNotification(notification: CodexRpcNotification): void {
     if (notification.kind !== "decoded_notification") {
       this.#inventoryKnown = false;
+      if (notification.method === "thread/settings/updated") {
+        const observation = { sequence: notification.sequence, settings: null };
+        for (const [threadId, pending] of this.#pendingResumes) {
+          if (pending.generation === notification.generation &&
+              (!notification.nativeThreadId || notification.nativeThreadId === threadId) &&
+              (pending.settings?.sequence ?? -1) < notification.sequence) pending.settings = observation;
+        }
+        for (const [threadId, session] of this.#sessions) {
+          if (session.generation === notification.generation &&
+              (!notification.nativeThreadId || notification.nativeThreadId === threadId)) this.#applySettings(session, observation);
+        }
+      }
       for (const pending of this.#pendingResumes.values()) if (pending.generation === notification.generation) {
         pending.activity = { sequence: notification.sequence, active: true, turnId: null, known: false };
       }
@@ -97,6 +116,11 @@ export class CodexRuntimeSessions {
       } else if (notification.method === "thread/goal/updated" || notification.method === "thread/goal/cleared") {
         if ((pending.goal?.sequence ?? -1) < notification.sequence) pending.goal = { sequence: notification.sequence,
           active: notification.method === "thread/goal/updated" && (notification.params as { goal: { status: string } }).goal.status === "active" };
+      } else if (notification.method === "thread/settings/updated") {
+        if ((pending.settings?.sequence ?? -1) < notification.sequence) pending.settings = {
+          sequence: notification.sequence,
+          settings: (notification.params as OfficialCodexServerNotificationParams<"thread/settings/updated">).threadSettings,
+        };
       } else if (notification.method === "thread/closed" || notification.method === "thread/deleted") {
         pending.closedSequence = Math.max(pending.closedSequence ?? -1, notification.sequence);
       }
@@ -115,7 +139,7 @@ export class CodexRuntimeSessions {
     switch (notification.method) {
       case "thread/settings/updated": {
         const { threadSettings: settings } = notification.params as OfficialCodexServerNotificationParams<"thread/settings/updated">;
-        session.metadata = { ...session.metadata, cwd: settings.cwd, approvalPolicy: settings.approvalPolicy, approvalsReviewer: settings.approvalsReviewer, sandbox: settings.sandboxPolicy, activePermissionProfile: settings.activePermissionProfile, model: settings.model, modelProvider: settings.modelProvider, serviceTier: settings.serviceTier, reasoningEffort: settings.effort, multiAgentMode: settings.multiAgentMode };
+        this.#applySettings(session, { sequence: notification.sequence, settings });
         return;
       }
       case "turn/started": session.active = true; session.activeTurnId = (notification.params as { turn: { id: string } }).turn.id; return;
@@ -131,6 +155,15 @@ export class CodexRuntimeSessions {
       case "thread/closed":
       case "thread/deleted": this.#sessions.delete(params.threadId); return;
     }
+  }
+
+  #applySettings(session: Session, observation: SettingsObservation): void {
+    if (observation.sequence <= session.settingsSequence) return;
+    session.settingsSequence = observation.sequence;
+    session.settingsKnown = observation.settings !== null;
+    const settings = observation.settings;
+    if (!settings) return;
+    session.metadata = { ...session.metadata, cwd: settings.cwd, approvalPolicy: settings.approvalPolicy, approvalsReviewer: settings.approvalsReviewer, sandbox: settings.sandboxPolicy, activePermissionProfile: settings.activePermissionProfile, model: settings.model, modelProvider: settings.modelProvider, serviceTier: settings.serviceTier, reasoningEffort: settings.effort, multiAgentMode: settings.multiAgentMode };
   }
 
   revision(): string { return createHash("sha256").update(JSON.stringify([this.#inventoryKnown, this.#trackingFailed, [...this.#inventory].sort(), [...this.#sessions.entries()].map(([id, value]) => [id, value.generation, value.known, value.active, value.activeTurnId, value.activeGoal]).sort((left, right) => String(left[0]).localeCompare(String(right[0])))] )).digest("hex"); }
@@ -213,6 +246,9 @@ export class CodexRuntimeSessions {
   async #reattach(threadId: string, options: () => CodexRpcRequestOptions): Promise<CodexRpcRequestReceipt<Resume> | undefined> {
     const session = this.#sessions.get(threadId);
     if (!session || session.generation !== this.client.lifecycleSnapshot().generation) return undefined;
+    // Keep subscription/activity ownership, but require a native resume to
+    // recover authoritative settings instead of returning stale metadata.
+    if (!session.settingsKnown) return undefined;
     this.#evicted.delete(threadId);
     const metadata = await this.client.requestWithReceipt(readMethod, { threadId, includeTurns: false }, options());
     this.#assertCurrent(session, metadata.generation);
@@ -233,6 +269,7 @@ export class CodexRuntimeSessions {
         final.result.thread.status.type !== metadata.result.thread.status.type) {
         throw new Error("codex_runtime_session_snapshot_changed");
       }
+      if (!session.settingsKnown) return undefined;
       result = { ...session.metadata, thread: metadata.result.thread, initialTurnsPage: turns.result, turnsBackwardsCursor: turns.result.backwardsCursor, itemsBackwardsCursor: items.result.backwardsCursor };
       codexRuntimeMethod("thread/resume").decodeResult(result);
       return { ...metadata, result };
@@ -240,6 +277,7 @@ export class CodexRuntimeSessions {
     const history = await this.client.requestWithReceipt(readMethod, { threadId, includeTurns: true }, options());
     this.#assertCurrent(session, history.generation);
     if (history.result.thread.id !== threadId) throw new Error("codex_runtime_session_identity_mismatch");
+    if (!session.settingsKnown) return undefined;
     result = { ...session.metadata, thread: history.result.thread, initialTurnsPage: null, turnsBackwardsCursor: null, itemsBackwardsCursor: null };
     codexRuntimeMethod("thread/resume").decodeResult(result);
     return { ...history, result };

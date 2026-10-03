@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CodexRuntimeSessions } from "../../src/server/backends/codex/runtime/codex-runtime-sessions.js";
 import { CodexSharedClientFacade } from "../../src/server/backends/codex/codex-client-facade.js";
 import { codexRuntimeMethod } from "../../src/server/backends/codex/runtime/codex-runtime-protocol.js";
+import type { OfficialCodexServerNotificationParams } from "../../src/server/provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
 
 function thread(id = "thread", active = false) {
   return {
@@ -23,6 +24,19 @@ function resumed() {
     activePermissionProfile: { id: ":read-only", extends: null }, reasoningEffort: "low",
     multiAgentMode: "explicitRequestOnly", initialTurnsPage: null, turnsBackwardsCursor: null, itemsBackwardsCursor: null,
   });
+}
+function updatedSettings(): OfficialCodexServerNotificationParams<"thread/settings/updated"> {
+  return {
+    threadId: "thread",
+    threadSettings: {
+      cwd: "/workspace", approvalPolicy: "never", approvalsReviewer: "user",
+      sandboxPolicy: { type: "dangerFullAccess" }, activePermissionProfile: null,
+      model: "gpt-5.6", modelProvider: "openai", serviceTier: "default", effort: "high",
+      summary: null, collaborationMode: { mode: "default", settings: {
+        model: "gpt-5.6", reasoning_effort: "high", developer_instructions: null,
+      } }, multiAgentMode: "explicitRequestOnly", personality: null, disabledPluginIds: [],
+    },
+  };
 }
 function fixture(answer: (method: string, params: Record<string, unknown>) => unknown) {
   let sequence = 0;
@@ -84,11 +98,127 @@ describe("persistent Codex native session recovery", () => {
     fresh.close();
   });
 
-  it("does not resurrect a child closed after the native resume response", () => {
+  it.each([false, true])("retains newer settings across a pending resume with an existing session: %s", async existing => {
+    const f = fixture(() => ({ thread: thread() }));
+    if (existing) f.sessions.observeResult("thread/resume", resumed(), 1);
+    const pending = f.sessions.trackResume("thread", 1);
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 11,
+      method: "thread/settings/updated", params: updatedSettings() });
+    pending.apply({ result: resumed(), generation: 1, inboundSequence: 10 });
+    pending.close();
+
+    expect((await f.sessions.reattach("thread", { timeoutMilliseconds: 1_000 }))?.result).toMatchObject({
+      sandbox: { type: "dangerFullAccess" }, reasoningEffort: "high", activePermissionProfile: null,
+    });
+    expect(f.request.mock.calls.map(([method]) => method.method)).toEqual(["thread/read", "thread/read"]);
+  });
+
+  it.each([
+    { generation: 1, sequence: 9, threadId: "thread" },
+    { generation: 1, sequence: 10, threadId: "thread" },
+    { generation: 2, sequence: 11, threadId: "thread" },
+    { generation: 1, sequence: 11, threadId: "sibling" },
+  ])("does not import unrelated settings over a resume: $generation/$sequence/$threadId", async evidence => {
+    const f = fixture(() => ({ thread: thread() }));
+    const pending = f.sessions.trackResume("thread", 1);
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: evidence.generation, sequence: evidence.sequence,
+      method: "thread/settings/updated", params: { ...updatedSettings(), threadId: evidence.threadId } });
+    pending.apply({ result: resumed(), generation: 1, inboundSequence: 10 });
+    pending.close();
+
+    expect((await f.sessions.reattach("thread", { timeoutMilliseconds: 1_000 }))?.result).toMatchObject({
+      sandbox: { type: "readOnly", networkAccess: false }, reasoningEffort: "low",
+    });
+  });
+
+  it("keeps the latest settings notification while resume application is pending", async () => {
+    const f = fixture(() => ({ thread: thread() }));
+    const pending = f.sessions.trackResume("thread", 1);
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 12,
+      method: "thread/settings/updated", params: updatedSettings() });
+    const older = updatedSettings();
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 11,
+      method: "thread/settings/updated", params: { ...older, threadSettings: {
+        ...older.threadSettings, sandboxPolicy: { type: "readOnly", networkAccess: true }, effort: "medium",
+      } } });
+    pending.apply({ result: resumed(), generation: 1, inboundSequence: 10 });
+    pending.close();
+
+    expect((await f.sessions.reattach("thread", { timeoutMilliseconds: 1_000 }))?.result).toMatchObject({
+      sandbox: { type: "dangerFullAccess" }, reasoningEffort: "high",
+    });
+  });
+
+  it.each([false, true])("requires native resume for unknown settings with an existing session: %s", async existing => {
+    const f = fixture(() => ({ thread: thread() }));
+    if (existing) f.sessions.observeResult("thread/resume", resumed(), 1);
+    const pending = f.sessions.trackResume("thread", 1);
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 11,
+      method: "thread/settings/updated", params: updatedSettings() });
+    f.sessions.observeNotification({ kind: "undecodable_notification", generation: 1, sequence: 12,
+      method: "thread/settings/updated", nativeThreadId: "thread", code: "codex_rpc_notification_params_undecodable" });
+    pending.apply({ result: resumed(), generation: 1, inboundSequence: 10 });
+    pending.close();
+
+    await expect(f.sessions.reattach("thread", { timeoutMilliseconds: 1_000 })).resolves.toBeUndefined();
+    expect(f.sessions.hasCurrent("thread")).toBe(true);
+    f.sessions.evict("thread", 1);
+    expect(f.sessions.canIdle()).toBe(false);
+    expect(f.request).not.toHaveBeenCalled();
+    // Replayed older evidence cannot repair an unknown newer setting.
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 11,
+      method: "thread/settings/updated", params: updatedSettings() });
+    await expect(f.sessions.reattach("thread", { timeoutMilliseconds: 1_000 })).resolves.toBeUndefined();
+    expect(f.request).not.toHaveBeenCalled();
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 13,
+      method: "thread/settings/updated", params: updatedSettings() });
+    expect((await f.sessions.reattach("thread", { timeoutMilliseconds: 1_000 }))?.result.sandbox).toEqual({ type: "dangerFullAccess" });
+  });
+
+  it("ignores an unknown settings observation older than the resume receipt", async () => {
+    const f = fixture(() => ({ thread: thread() }));
+    const pending = f.sessions.trackResume("thread", 1);
+    f.sessions.observeNotification({ kind: "undecodable_notification", generation: 1, sequence: 9,
+      method: "thread/settings/updated", nativeThreadId: "thread", code: "codex_rpc_notification_params_undecodable" });
+    pending.apply({ result: resumed(), generation: 1, inboundSequence: 10 });
+    pending.close();
+    expect((await f.sessions.reattach("thread", { timeoutMilliseconds: 1_000 }))?.result.sandbox).toEqual({ type: "readOnly", networkAccess: false });
+  });
+
+  it.each(["legacy", "paginated"] as const)("requires native resume when settings become unknown during %s reattachment", async historyMode => {
+    const f = fixture(method => {
+      f.sessions.observeNotification({ kind: "undecodable_notification", generation: 1, sequence: 11,
+        method: "thread/settings/updated", nativeThreadId: "thread", code: "codex_rpc_notification_params_undecodable" });
+      return method === "thread/read"
+        ? { thread: { ...thread(), historyMode } }
+        : { data: [], nextCursor: null, backwardsCursor: "head" };
+    });
+    f.sessions.observeResult("thread/resume", resumed(), 1);
+    await expect(f.sessions.reattach("thread", { timeoutMilliseconds: 1_000 })).resolves.toBeUndefined();
+    expect(f.sessions.hasCurrent("thread")).toBe(true);
+    f.sessions.evict("thread", 1);
+    expect(f.sessions.canIdle()).toBe(false);
+  });
+
+  it.each(["invalidate", "close"] as const)("does not restore settings after pending resume %s", action => {
     const f = fixture(() => ({}));
     const pending = f.sessions.trackResume("thread", 1);
     f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 11,
-      method: "thread/closed", params: { threadId: "thread" } });
+      method: "thread/settings/updated", params: updatedSettings() });
+    if (action === "invalidate") f.sessions.invalidate();
+    else pending.close();
+    pending.apply({ result: resumed(), generation: 1, inboundSequence: 10 });
+    expect(f.sessions.hasCurrent("thread")).toBe(false);
+    pending.close();
+  });
+
+  it.each(["thread/closed", "thread/deleted"] as const)("does not resurrect a child after newer settings and %s", method => {
+    const f = fixture(() => ({}));
+    const pending = f.sessions.trackResume("thread", 1);
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 11,
+      method: "thread/settings/updated", params: updatedSettings() });
+    f.sessions.observeNotification({ kind: "decoded_notification", generation: 1, sequence: 12,
+      method, params: { threadId: "thread" } });
     pending.apply({ result: { ...resumed(), thread: thread("thread", true) }, generation: 1, inboundSequence: 10 });
     pending.close();
     expect(f.sessions.hasCurrent("thread")).toBe(false);
