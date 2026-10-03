@@ -668,7 +668,7 @@
 
 - Claude worker cleanup now accepts process groups containing only exited
   processes, avoiding shared-worker shutdowns that disconnect unrelated
-  conversations. Rebuild and upgrade local workers and remote sidecars.
+  conversations. Rebuild and upgrade local workers and remote sidecars. (#42)
 
 - A Task added while the Pinned filter is on is created pinned instead of
   disappearing, and opening a Task that a filter hides no longer turns the
