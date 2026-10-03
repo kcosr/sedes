@@ -102,6 +102,60 @@ describe("recordCompanionArrangement", () => {
   });
 });
 
+describe("recordCompanionArrangement for two companions split against each other", () => {
+  const preferredEdge = () => "right" as const;
+
+  it("takes the companion just opened or docked as the outer one", () => {
+    const stacked = open(open(null, workpads, "right"), tasks, "top");
+    expect(
+      recordCompanionArrangement(
+        stacked,
+        [
+          { kind: "workpads", edge: "right" },
+          { kind: "tasks", edge: "right" },
+        ],
+        preferredEdge,
+        "tasks",
+      ),
+    ).toEqual([
+      { kind: "tasks", edge: "top" },
+      { kind: "workpads", edge: "right" },
+    ]);
+    const beside = open(open(null, tasks, "right"), workpads, "left");
+    expect(
+      recordCompanionArrangement(
+        beside,
+        [
+          { kind: "tasks", edge: "right" },
+          { kind: "workpads", edge: "right" },
+        ],
+        preferredEdge,
+        "workpads",
+      ),
+    ).toEqual([
+      { kind: "workpads", edge: "left" },
+      { kind: "tasks", edge: "right" },
+    ]);
+  });
+
+  it("otherwise keeps the previous order", () => {
+    const beside = open(open(null, tasks, "right"), workpads, "left");
+    expect(
+      recordCompanionArrangement(
+        beside,
+        [
+          { kind: "workpads", edge: "left" },
+          { kind: "tasks", edge: "bottom" },
+        ],
+        preferredEdge,
+      ),
+    ).toEqual([
+      { kind: "workpads", edge: "left" },
+      { kind: "tasks", edge: "bottom" },
+    ]);
+  });
+});
+
 describe("arrangeCompanions", () => {
   const arrangement: CompanionArrangement = [
     { kind: "workpads", edge: "right" },
@@ -162,6 +216,32 @@ describe("arrangeCompanions", () => {
     expect(
       arrangeCompanions(alone, [{ kind: "tasks", edge: "left" }], options),
     ).toBe(alone);
+  });
+
+  it("accepts either side of two companions split against each other as outer", () => {
+    const beside = open(open(null, workpads, "right"), tasks, "right");
+    for (const outer of [
+      [
+        { kind: "tasks", edge: "right" },
+        { kind: "workpads", edge: "left" },
+      ],
+      [
+        { kind: "workpads", edge: "left" },
+        { kind: "tasks", edge: "right" },
+      ],
+    ] as const)
+      expect(arrangeCompanions(beside, outer, options)).toBe(beside);
+    const stacked = open(open(null, workpads, "right"), tasks, "top");
+    expect(
+      arrangeCompanions(
+        stacked,
+        [
+          { kind: "tasks", edge: "top" },
+          { kind: "workpads", edge: "right" },
+        ],
+        options,
+      ),
+    ).toBe(stacked);
   });
 
   it("leaves a layout of only companions unchanged whatever the innermost edge", () => {

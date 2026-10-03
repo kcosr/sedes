@@ -763,6 +763,32 @@ describe("PanelLayoutStore shared Tasks and Workpads arrangement", () => {
     expect(rowOrder(root)).toEqual(["chat", "workpads", "tasks"]);
   });
 
+  it("keeps a left outer companion steady when Chat closes", () => {
+    const root = createStore();
+    root.openPanel("tasks");
+    root.openPanel("workpads", { edge: "left" });
+    root.closePanel("chat");
+    expect(rowOrder(root)).toEqual(["workpads", "tasks"]);
+    const steady = root.getSnapshot();
+    expect(root.forThread("thread-1").getSnapshot()).toBe(steady);
+  });
+
+  it.each(["left", "right", "top", "bottom"] as const)(
+    "keeps Tasks docked %s in a layout of only companions, and after Chat returns",
+    (edge) => {
+      const root = createStore();
+      root.openPanel("tasks");
+      root.openPanel("workpads");
+      root.closePanel("chat");
+      root.dockPanel("tasks", edge);
+      const docked = root.getSnapshot();
+      expect(root.forThread("thread-1").getSnapshot()).toBe(docked);
+      root.openPanel("chat");
+      expect(panelDockEdge(root.getSnapshot().tree, "tasks")).toBe(edge);
+      expect(panelDockEdge(root.forThread("thread-2").getSnapshot().tree, "tasks")).toBe(edge);
+    },
+  );
+
   it("does not republish a layout of only Tasks or Workpads on a thread switch", () => {
     const root = createStore();
     root.openPanel("tasks");

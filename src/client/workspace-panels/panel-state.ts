@@ -44,6 +44,7 @@ import {
   isCompanionKind,
   recordCompanionArrangement,
   type CompanionArrangement,
+  type CompanionKind,
   type CompanionPlacement,
 } from "./companion-layout.js";
 
@@ -572,7 +573,7 @@ export class PanelLayoutStore {
               input.focusTerminalId,
             ),
       persistTree: true,
-      rememberCompanions: isCompanionKind(panel.kind),
+      rememberCompanions: isCompanionKind(panel.kind) ? panel.kind : undefined,
     });
     this.#rememberFirstPanelSize(panel.kind);
     return true;
@@ -746,7 +747,7 @@ export class PanelLayoutStore {
     this.#publish({
       tree,
       persistTree: true,
-      rememberCompanions: isCompanionKind(kind),
+      rememberCompanions: isCompanionKind(kind) ? kind : undefined,
     });
     this.#rememberFirstPanelSize(kind);
     return true;
@@ -877,11 +878,13 @@ export class PanelLayoutStore {
 
   #recordedArrangement(
     tree: PanelLayoutTree,
+    outermost?: CompanionKind,
   ): CompanionArrangement | undefined {
     return recordCompanionArrangement(
       tree,
       this.#shared.companionArrangement,
       (kind) => this.#preferredEdge(kind),
+      outermost,
     );
   }
 
@@ -1059,8 +1062,11 @@ export class PanelLayoutStore {
     readonly focusRequest?: PanelFocusRequest;
     readonly persistTree?: boolean;
     readonly persistCollapsed?: boolean;
-    /** The user arranged Tasks or Workpads: share this layout's arrangement. */
-    readonly rememberCompanions?: boolean;
+    /**
+     * The user arranged Tasks or Workpads: share this layout's arrangement.
+     * A companion kind names the one just opened or docked, which is outermost.
+     */
+    readonly rememberCompanions?: boolean | CompanionKind;
   }): void {
     const previousShared = new Map(
       SHARED_PANEL_KINDS.map((kind) => [kind, this.#sharedVisibility(kind)]),
@@ -1071,7 +1077,10 @@ export class PanelLayoutStore {
         : new SnapshotReadonlySet(input.collapsed);
     const requestedTree = "tree" in input ? input.tree! : this.#snapshot.tree;
     if (input.rememberCompanions) {
-      const arrangement = this.#recordedArrangement(requestedTree);
+      const arrangement = this.#recordedArrangement(
+        requestedTree,
+        input.rememberCompanions === true ? undefined : input.rememberCompanions,
+      );
       if (arrangement) this.#setCompanionArrangement(arrangement);
     }
     // Every layout keeps the shared companion arrangement around its own

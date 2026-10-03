@@ -58,21 +58,32 @@ function loneOtherSidePanel(node: LayoutNode): boolean {
   return kind !== "chat" && !isCompanionKind(kind);
 }
 
+interface CompanionWalk {
+  /** Outermost first; a final pair reads with its second side outer. */
+  readonly arrangement: CompanionArrangement;
+  /**
+   * The walk ended at two companions split against each other, with nothing
+   * else open there: either one can be the outer one.
+   */
+  readonly endsInPair: boolean;
+}
+
 function walkCompanions(
   tree: PanelLayoutTree,
   throughOtherPanels: boolean,
-): CompanionArrangement | undefined {
+): CompanionWalk | undefined {
   const arrangement: CompanionPlacement[] = [];
+  let endsInPair = false;
   let node: LayoutNode | null = tree;
   while (node?.kind === "split") {
     const first = loneCompanion(node.children[0]);
     const second = loneCompanion(node.children[1]);
     if (first && second) {
-      // Nothing else is open: the second side counts as the outer one.
       arrangement.push(
         { kind: second.kind as CompanionKind, edge: sideEdge(node, 1) },
         { kind: first.kind as CompanionKind, edge: sideEdge(node, 0) },
       );
+      endsInPair = true;
       node = null;
       break;
     }
@@ -104,37 +115,66 @@ function walkCompanions(
   const inside =
     node !== null &&
     panelInstances(node).some((panel) => isCompanionKind(panel.kind));
-  return inside ? undefined : arrangement;
+  return inside ? undefined : { arrangement, endsInPair };
+}
+
+/** Every reading of a walk: a final pair reads with either side outer. */
+function readings(walk: CompanionWalk): readonly CompanionArrangement[] {
+  if (!walk.endsInPair) return [walk.arrangement];
+  const outer = walk.arrangement.slice(0, -2);
+  const [second, first] = walk.arrangement.slice(-2) as [
+    CompanionPlacement,
+    CompanionPlacement,
+  ];
+  return [walk.arrangement, [...outer, first, second]];
 }
 
 /**
  * The companions wrapped around a layout, outermost first, or undefined when
- * a companion sits anywhere else, such as tabbed with another panel.
+ * a companion sits anywhere else, such as tabbed with another panel. Two
+ * companions split against each other read with the second side outer.
  */
 export function readCompanionArrangement(
   tree: PanelLayoutTree,
 ): CompanionArrangement | undefined {
-  return walkCompanions(tree, false);
+  return walkCompanions(tree, false)?.arrangement;
 }
 
 /**
- * The companions' order and edges in a layout, outermost first, stepping
- * over a lone Files or Terminals panel wrapped outside them, as layouts
- * saved before the companions were kept outermost may have. With nothing
- * but companions open, the innermost one has no edge of its own, so it
- * keeps `previous`'s edge, or its preferred one.
+ * The arrangement to share after the user opens, closes, or docks a
+ * companion, outermost first. It steps over a lone Files or Terminals panel
+ * wrapped outside the companions, as layouts saved before they were kept
+ * outermost may have. Two companions split against each other read with
+ * `outermost`, the companion just opened or docked, as the outer one, since
+ * opening and docking wrap the whole layout; otherwise in `previous`'s
+ * order. With nothing but companions open, the innermost one fills the rest
+ * of the stage, so it keeps `previous`'s edge, or its preferred one.
  */
 export function recordCompanionArrangement(
   tree: PanelLayoutTree,
   previous: CompanionArrangement | undefined,
   preferredEdge: (kind: CompanionKind) => PanelPlacementEdge,
+  outermost?: CompanionKind,
 ): CompanionArrangement | undefined {
-  const arrangement = walkCompanions(tree, true);
-  if (!arrangement?.length || !onlyCompanions(tree)) return arrangement;
+  const walk = walkCompanions(tree, true);
+  if (!walk) return undefined;
+  const pairOuter = (reading: CompanionArrangement) =>
+    reading[reading.length - 2]!.kind;
+  const choices = readings(walk);
+  const arrangement = !walk.endsInPair
+    ? walk.arrangement
+    : (choices.find((reading) => pairOuter(reading) === outermost) ??
+      choices.find((reading) => {
+        const outer = orderIn(previous, pairOuter(reading));
+        const inner = orderIn(previous, reading.at(-1)!.kind);
+        return inner !== Number.MAX_SAFE_INTEGER && outer < inner;
+      }) ??
+      choices[0]!);
+  if (!arrangement.length || !onlyCompanions(tree)) return arrangement;
   const innermost = arrangement.at(-1)!;
   const edge =
     previous?.find(({ kind }) => kind === innermost.kind)?.edge ??
-    preferredEdge(innermost.kind);
+    (walk.endsInPair ? innermost.edge : preferredEdge(innermost.kind));
   return [...arrangement.slice(0, -1), { kind: innermost.kind, edge }];
 }
 
@@ -216,7 +256,7 @@ export function arrangeCompanions(
   const placed = arrangement.filter((placement) => kinds.has(placement.kind));
   // Companions the arrangement does not place keep their current order and
   // edges, so arranging again leaves them where the last arrangement put them.
-  const current = walkCompanions(tree, true);
+  const current = walkCompanions(tree, true)?.arrangement;
   const unplacedKinds = present
     .map((panel) => panel.kind as CompanionKind)
     .filter((kind) => !placed.some((placement) => placement.kind === kind))
@@ -232,8 +272,13 @@ export function arrangeCompanions(
       options.preferredEdge(kind),
   }));
   const target = [...unplaced, ...placed];
-  const arranged = readCompanionArrangement(tree);
-  if (arranged && sameArrangement(arranged, target, onlyCompanions(tree)))
+  const arranged = walkCompanions(tree, false);
+  if (
+    arranged &&
+    readings(arranged).some((reading) =>
+      sameArrangement(reading, target, onlyCompanions(tree)),
+    )
+  )
     return tree;
 
   // A lone companion keeps its stack and split IDs and its share; both leave
