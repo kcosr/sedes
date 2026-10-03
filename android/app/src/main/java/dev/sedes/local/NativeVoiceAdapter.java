@@ -22,16 +22,16 @@ final class NativeVoiceAdapter {
     private final OkHttpClient http = client.newBuilder().readTimeout(30, TimeUnit.SECONDS).callTimeout(40, TimeUnit.SECONDS).build();
     private final Listener listener;
     private volatile WebSocket socket;
-    private volatile String clientId, origin;
+    private volatile String clientId, baseUrl;
     private volatile long generation;
     private volatile boolean ready;
     NativeVoiceAdapter(Listener listener) { this.listener = listener; }
     long generation() { return generation; }
     boolean ready() { return ready; }
-    synchronized void connect(String origin) {
-        close(); this.origin = NativeVoiceSettings.origin(origin);
+    synchronized void connect(String baseUrl) {
+        close(); this.baseUrl = NativeVoiceSettings.adapterBaseUrl(baseUrl);
         final long attempt = generation;
-        String url = this.origin.replaceFirst("^http", "ws") + "/ws";
+        String url = this.baseUrl.replaceFirst("^http", "ws") + "/ws";
         socket = client.newWebSocket(new Request.Builder().url(url).build(), new WebSocketListener() {
             public void onMessage(WebSocket webSocket, String text) {
                 if (attempt != generation || socket != webSocket) return;
@@ -61,7 +61,7 @@ final class NativeVoiceAdapter {
         WebSocket old = socket; socket = null;
         if (old != null) { old.close(1000, "voice session ended"); old.cancel(); }
     }
-    void reconnect() { if (origin != null) connect(origin); }
+    void reconnect() { if (baseUrl != null) connect(baseUrl); }
     boolean send(JSONObject value) { WebSocket current = socket; return current != null && current.queueSize() < 512 * 1024 && current.send(value.toString()); }
     void tts(String requestId, String text, Result result) {
         if (!ready) { result.done(false); return; }
@@ -75,7 +75,7 @@ final class NativeVoiceAdapter {
     }
     private void post(String path, JSONObject body, Result result) {
         final long attempt = generation;
-        Request request = new Request.Builder().url(origin + path).post(RequestBody.create(body.toString(), MediaType.get("application/json; charset=utf-8"))).build();
+        Request request = new Request.Builder().url(baseUrl + path).post(RequestBody.create(body.toString(), MediaType.get("application/json; charset=utf-8"))).build();
         http.newCall(request).enqueue(new Callback() {
             public void onFailure(Call call, IOException error) { if (attempt == generation) result.done(false); }
             public void onResponse(Call call, Response response) { try (Response closed = response) { if (attempt == generation) result.done(response.isSuccessful()); } }

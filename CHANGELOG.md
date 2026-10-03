@@ -706,6 +706,9 @@
 
 ### Fixed
 
+- Android voice accepts adapter base URLs with reverse-proxy path prefixes and
+  preserves the prefix for HTTP media requests and WebSocket connections.
+
 - Android automatic listening receives current thread authority after a composer
   first send, including when no thread view is open.
 

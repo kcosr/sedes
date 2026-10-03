@@ -12,7 +12,7 @@ controls. Browser and Electron clients do not show the Voice page.
    ASR and TTS providers are configured on that server. Sedes does not store
    those provider keys. Use a trusted private endpoint; the adapter is separate
    from Sedes and its address is not inferred from the Sedes connection.
-3. Open **Settings → Voice**, save the adapter's HTTP or HTTPS origin, select
+3. Open **Settings → Voice**, save the adapter's HTTP or HTTPS base URL, select
    **Response**, and grant microphone access. Enable notifications for visible
    service controls. **Enable voice** selects Response; the initial mode is Off.
 4. In **Settings → Notifications**, enable notifications and choose each event's
@@ -21,6 +21,10 @@ controls. Browser and Electron clients do not show the Voice page.
 
 For USB development, reverse the adapter's port as well as Sedes's port with
 `adb reverse tcp:PORT tcp:PORT`. No example private endpoint is built into Sedes.
+The adapter URL may include a reverse-proxy path, such as
+`https://voice.example/agent-voice-adapter`. HTTP media requests and the
+WebSocket connection stay under that path. Query strings, fragments, and
+embedded credentials are not accepted.
 
 | Mode | Completion | Other selected events | Explicit microphone |
 | --- | --- | --- | --- |
