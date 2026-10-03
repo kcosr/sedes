@@ -244,7 +244,7 @@ describe("tasks HTTP contract", () => {
     }
   });
 
-  it("creates task content, pin state, and file metadata atomically", async () => {
+  it("creates task content, pin and backlog state, and file metadata atomically", async () => {
     const current = fixture();
     try {
       await current
@@ -254,6 +254,7 @@ describe("tasks HTTP contract", () => {
           title: "Complete initial task",
           details: "No follow-up patch required",
           pinned: true,
+          backlog: true,
           files: ["/tmp/spec.md"],
           scope: { kind: "global" },
         })
@@ -263,6 +264,7 @@ describe("tasks HTTP contract", () => {
             title: "Complete initial task",
             details: "No follow-up patch required",
             pinned: true,
+            backlog: true,
             files: ["/tmp/spec.md"],
             completedAt: null,
             revision: 0,
@@ -332,6 +334,7 @@ describe("tasks HTTP contract", () => {
         title: "Review the release notes",
         details: "",
         pinned: false,
+        backlog: false,
         files: [],
         completedAt: null,
         revision: 0,
@@ -348,7 +351,8 @@ describe("tasks HTTP contract", () => {
           title: "Review and publish the release notes",
           details: "Include the migration section",
           completed: true,
-          pinned: true,
+          pinned: false,
+          backlog: false,
           files: ["/does/not/need/to/exist.md", "/tmp/release.zip"],
           scope: { kind: "project", projectId: current.projectId },
         })
@@ -357,7 +361,8 @@ describe("tasks HTTP contract", () => {
         id: taskId,
         title: "Review and publish the release notes",
         details: "Include the migration section",
-        pinned: true,
+        pinned: false,
+        backlog: false,
         files: ["/does/not/need/to/exist.md", "/tmp/release.zip"],
         scope: { kind: "project", projectId: current.projectId },
         completedAt: expect.any(String),
@@ -432,6 +437,36 @@ describe("tasks HTTP contract", () => {
             retryable: false,
           });
         });
+
+      // A completed task is never pinned or in the backlog.
+      await current
+        .mutate(request(current.app).patch(`/api/tasks/${taskId}`))
+        .send({
+          mutationId: randomUUID(),
+          expectedRevision: 0,
+          completed: true,
+          backlog: true,
+        })
+        .expect(400)
+        .expect(({ body }) => {
+          expect(body.error.code).toBe("bad_request");
+        });
+      await current
+        .mutate(request(current.app).patch(`/api/tasks/${taskId}`))
+        .send({ mutationId: randomUUID(), expectedRevision: 0, completed: true })
+        .expect(200);
+      await current
+        .mutate(request(current.app).patch(`/api/tasks/${taskId}`))
+        .send({ mutationId: randomUUID(), expectedRevision: 1, pinned: true })
+        .expect(400)
+        .expect(({ body }) => {
+          expect(body.error).toMatchObject({
+            code: "bad_request",
+            message:
+              "A completed task can't be pinned or in the backlog. Reopen it first.",
+          });
+        });
+      current.publishTaskChange.mockClear();
 
       await current
         .mutate(request(current.app).patch(`/api/tasks/${randomUUID()}`))

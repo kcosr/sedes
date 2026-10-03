@@ -67,6 +67,7 @@ function task(index = 1, patch: Partial<AssociatedTask> = {}): AssociatedTask {
     title: "Task",
     details: "",
     pinned: false,
+    backlog: false,
     files: [],
     completedAt: null,
     revision: 0,

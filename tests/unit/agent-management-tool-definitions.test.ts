@@ -62,8 +62,12 @@ describe("agent management tool definitions", () => {
     expect(registry.get("thread.list", 5).schemaVersion).toBe(5);
     expect(registry.get("thread.create", 5).schemaVersion).toBe(5);
     expect(() => registry.get("thread.create", 4)).toThrow();
-    expect(registry.get("task.list", 4).schemaVersion).toBe(4);
-    expect(() => registry.get("task.list", 3)).toThrow();
+    expect(registry.get("task.list", 5).schemaVersion).toBe(5);
+    expect(() => registry.get("task.list", 4)).toThrow();
+    for (const id of ["task.get", "task.create", "task.update"] as const) {
+      expect(registry.get(id, 3).schemaVersion).toBe(3);
+      expect(() => registry.get(id, 2)).toThrow();
+    }
     expect(registry.get("workspace.open", 3).schemaVersion).toBe(3);
   });
 
@@ -168,49 +172,81 @@ describe("agent management tool definitions", () => {
       }),
     ).toBe(false);
     expect(
-      registry.validatesInput("task.create", 2, {
+      registry.validatesInput("task.create", 3, {
         title: "Bounded task",
         scope: { kind: "global" },
         files: ["/tmp/design.md"],
       }),
     ).toBe(true);
     expect(
-      registry.validatesInput("task.update", 2, {
+      registry.validatesInput("task.update", 3, {
         taskId: "task-1",
         expectedRevision: -1,
         completed: true,
       }),
     ).toBe(false);
     expect(
-      registry.validatesInput("task.list", 4, {
+      registry.validatesInput("task.list", 5, {
         scope: { kind: "project" },
         scopeMode: "subtree",
         completed: false,
         pinned: true,
+        backlog: false,
         query: "release",
         projection: "full",
       }),
     ).toBe(true);
     expect(
-      registry.validatesInput("task.list", 4, {
+      registry.validatesInput("task.create", 3, {
+        title: "Later",
+        pinned: true,
+        backlog: true,
+        scope: { kind: "thread" },
+      }),
+    ).toBe(true);
+    expect(
+      registry.validatesInput("task.update", 3, {
+        taskId: "task-1",
+        expectedRevision: 0,
+        backlog: false,
+      }),
+    ).toBe(true);
+    const placed = {
+      id: "task-1",
+      scope: { kind: "global" },
+      title: "Placed",
+      details: "",
+      pinned: true,
+      backlog: true,
+      files: [],
+      completedAt: null,
+      revision: 0,
+      createdAt: "2026-10-03T00:00:00.000Z",
+      updatedAt: "2026-10-03T00:00:00.000Z",
+    };
+    expect(registry.validatesOutput("task.get", 3, placed)).toBe(true);
+    const { backlog: _backlog, ...unplaced } = placed;
+    expect(registry.validatesOutput("task.get", 3, unplaced)).toBe(false);
+    expect(
+      registry.validatesInput("task.list", 5, {
         scope: { kind: "global" },
       }),
     ).toBe(false);
     // The former workspace scope has no input alias.
     expect(
-      registry.validatesInput("task.list", 4, {
+      registry.validatesInput("task.list", 5, {
         scope: { kind: "workspace", workspaceId: "workspace-a" },
         scopeMode: "exact",
       }),
     ).toBe(false);
     expect(
-      registry.validatesInput("task.create", 2, {
+      registry.validatesInput("task.create", 3, {
         title: "Shared",
         scope: { kind: "project", projectId: "project-a" },
       }),
     ).toBe(true);
     expect(
-      registry.validatesInput("task.update", 2, {
+      registry.validatesInput("task.update", 3, {
         taskId: "task-1",
         expectedRevision: 0,
       }),

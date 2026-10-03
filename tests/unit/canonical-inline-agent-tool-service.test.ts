@@ -751,7 +751,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "task.update",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "empty-task-update",
           input: {
             taskId: "0191cfe0-7d51-7a51-ae51-111111111111",

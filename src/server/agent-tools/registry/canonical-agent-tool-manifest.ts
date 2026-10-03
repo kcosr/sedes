@@ -388,16 +388,16 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "task.list": manifestEntry({
     environmentAuthority: { kind: "scoped_query", resource: "task" },
     id: "task.list",
-    schemaVersion: 4,
+    schemaVersion: 5,
     description:
-      "Lists filtered tasks in one scope or its descendant scopes as summaries or bounded full records.",
+      "Lists filtered tasks in one scope or its descendant scopes as summaries or bounded full records. Backlog tasks are included unless filtered out.",
     catalog: { groupId: "tasks", label: "List tasks", order: 10 },
     effects: { application: "read", modelUsage: "none", external: "none" },
   }),
   "task.get": manifestEntry({
     environmentAuthority: { kind: "direct_resource", resource: "task" },
     id: "task.get",
-    schemaVersion: 2,
+    schemaVersion: 3,
     description: "Returns one complete principal-owned Sedes task.",
     catalog: { groupId: "tasks", label: "Get task", order: 20 },
     effects: { application: "read", modelUsage: "none", external: "none" },
@@ -405,18 +405,18 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "task.create": manifestEntry({
     environmentAuthority: { kind: "scope_transition", resource: "task" },
     id: "task.create",
-    schemaVersion: 2,
+    schemaVersion: 3,
     description:
-      "Creates an open task atomically with its content, pin, files, and scope.",
+      "Creates an open task atomically with its content, pin, backlog stage, files, and scope.",
     catalog: { groupId: "tasks", label: "Create task", order: 30 },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),
   "task.update": manifestEntry({
     environmentAuthority: { kind: "scope_transition", resource: "task" },
     id: "task.update",
-    schemaVersion: 2,
+    schemaVersion: 3,
     description:
-      "Atomically updates one or more mutable task fields against an expected revision.",
+      "Atomically updates one or more mutable task fields against an expected revision. Completing a task unpins it and takes it out of the backlog.",
     catalog: { groupId: "tasks", label: "Update task", order: 40 },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),

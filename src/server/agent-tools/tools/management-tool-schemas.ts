@@ -86,12 +86,18 @@ export const taskTargetScopeSchema = Type.Union([
   ),
 ]);
 
+export const taskPinnedDescription =
+  "Pinned tasks sort first within their section. Completing a task unpins it.";
+export const taskBacklogDescription =
+  "Backlog tasks are open but not current work. Completing a task takes it out of the backlog.";
+
 const taskOutputProperties = {
   id: identifierSchema,
   scope: taskScopeSchema,
   title: taskTitleSchema,
   details: taskDetailsSchema,
-  pinned: Type.Boolean(),
+  pinned: Type.Boolean({ description: taskPinnedDescription }),
+  backlog: Type.Boolean({ description: taskBacklogDescription }),
   files: taskFilesSchema,
   completedAt: Type.Union([isoDateSchema, Type.Null()]),
   revision: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
@@ -107,13 +113,13 @@ export const nestedTaskOutputSchema = Type.Object(
         "Read-only project association: the task's project, or the current project of a thread task's thread; null only for global tasks.",
     }),
   },
-  { additionalProperties: false, maxProperties: 11 },
+  { additionalProperties: false, maxProperties: 12 },
 );
 
 export const taskOutputSchema = Type.Object(taskOutputProperties, {
   $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
   additionalProperties: false,
-  maxProperties: 10,
+  maxProperties: 11,
 });
 
 export function resolveTaskTargetScope(

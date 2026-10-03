@@ -46,8 +46,13 @@ describe("Task attachment format v1", () => {
   });
 
   it("captures only v1 fields of a live Task, in v1 order", () => {
-    const live: Task = taskSchema.parse(JSON.parse(threadCopy));
-    // A field the live Task gains later stays out of the attachment.
+    // Backlog arrived after v1, so it never reaches an attachment.
+    const live: Task = taskSchema.parse({
+      ...JSON.parse(threadCopy),
+      backlog: true,
+    });
+    expect(JSON.stringify(materializeTaskContext(live))).toBe(threadCopy);
+    // Nor does any field the live Task gains later.
     const grown = { ...live, laterField: true } as Task;
     const copy = materializeTaskContext(grown);
     expect(Object.keys(copy)).toEqual(V1_KEYS);

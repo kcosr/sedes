@@ -98,6 +98,15 @@ an update, pass its current revision as the expected revision, and change only
 the intended fields. A revision conflict requires a fresh read. Never retry an
 uncertain write or create again to verify it.
 
+### Pin and backlog
+
+Every task carries `pinned` and `backlog`. A pinned task sorts first within its
+section; a backlog task is open but not current work. Task lists include
+backlog tasks unless the `backlog` filter excludes them, so a task that may
+already exist can be in the backlog. Pin a task, or move it into or out of the
+backlog, only when the user asks. Completing a task unpins it and takes it out
+of the backlog, and a completed task cannot be pinned or put in the backlog.
+
 ## Policy and source authority
 
 - If an operation is missing or denied, stop rather than using a progressive

@@ -18,7 +18,10 @@ import {
   type MessageTaskContext,
   type Task,
 } from "../../src/shared/index.js";
-import { materializedTaskContextsSchema } from "../../src/server/domain/materialized-task-contexts.js";
+import {
+  materializeTaskContext,
+  materializedTaskContextsSchema,
+} from "../../src/server/domain/materialized-task-contexts.js";
 
 const task = {
   id: "10000000-0000-4000-8000-000000000001",
@@ -29,6 +32,7 @@ const task = {
   title: "Implement composer Task references",
   details: "Preserve exact task identity and revision.",
   pinned: true,
+  backlog: false,
   files: ["/work/sedes/src/shared/protocol/tasks.ts"],
   completedAt: null,
   revision: 7,
@@ -48,7 +52,7 @@ const reference = { taskId: task.id, titleSnapshot: task.title };
 
 describe("composer Task reference protocol", () => {
   it("uses the current protocol version for the atomic normalized cutover", () => {
-    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(135);
+    expect(SEDES_CLIENT_PROTOCOL_VERSION).toBe(136);
   });
 
   it("bounds ordered draft references and rejects duplicate Task ids", () => {
@@ -104,10 +108,13 @@ describe("composer Task reference protocol", () => {
   });
 
   it("validates immutable contexts and counts them in semantic input bytes", () => {
-    expect(materializedTaskContextsSchema.parse([task])).toEqual([task]);
-    expect(materializedTaskContextsSchema.safeParse([task, task]).success).toBe(
-      false,
-    );
+    const context = materializeTaskContext(task);
+    expect(materializedTaskContextsSchema.parse([context])).toEqual([context]);
+    expect(
+      materializedTaskContextsSchema.safeParse([context, context]).success,
+    ).toBe(false);
+    // A live Task is not an attachment: v1 has no backlog field.
+    expect(materializedTaskContextsSchema.safeParse([task]).success).toBe(false);
     expect(
       normalizedDraftSchema.safeParse({
         text: "x".repeat(MAXIMUM_COMPOSER_INPUT_BYTES),

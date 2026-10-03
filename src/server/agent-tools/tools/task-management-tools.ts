@@ -26,6 +26,8 @@ import {
   taskFilesSchema,
   taskOutputSchema,
   taskQuerySchema,
+  taskBacklogDescription,
+  taskPinnedDescription,
   taskScopeSchema,
   taskTargetScopeSchema,
   taskTitleSchema,
@@ -47,6 +49,7 @@ export type TaskListInput = {
   readonly scopeMode: "exact" | "subtree";
   readonly completed?: boolean;
   readonly pinned?: boolean;
+  readonly backlog?: boolean;
   readonly query?: string;
   readonly projection?: "summary" | "full";
   readonly cursor?: string;
@@ -56,6 +59,7 @@ export type TaskCreateInput = {
   readonly title: string;
   readonly details?: string;
   readonly pinned?: boolean;
+  readonly backlog?: boolean;
   readonly files?: readonly string[];
   readonly scope: TargetScope;
 };
@@ -66,6 +70,7 @@ export type TaskUpdateInput = {
   readonly details?: string;
   readonly completed?: boolean;
   readonly pinned?: boolean;
+  readonly backlog?: boolean;
   readonly files?: readonly string[];
   readonly scope?: TargetScope;
 };
@@ -79,15 +84,21 @@ const taskSummarySchema = Type.Object(
         "Read-only project association: the task's project, or the current project of a thread task's thread; null only for global tasks.",
     }),
     title: taskTitleSchema,
-    pinned: Type.Boolean(),
+    pinned: Type.Boolean({ description: taskPinnedDescription }),
+    backlog: Type.Boolean({ description: taskBacklogDescription }),
     completedAt: Type.Union([isoDateSchema, Type.Null()]),
     revision: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
     createdAt: isoDateSchema,
     updatedAt: isoDateSchema,
     fileCount: Type.Integer({ minimum: 0, maximum: 16 }),
   },
-  { additionalProperties: false, maxProperties: 10 },
+  { additionalProperties: false, maxProperties: 11 },
 );
+
+/** Pin and backlog are the user's to set; an agent changes them on request. */
+function placementInputDescription(action: string): string {
+  return `${action} only when the user asks. A completed task cannot be pinned or in the backlog.`;
+}
 
 const readExecution = (concurrencyClass: string) => ({
   form: "inline" as const,
@@ -141,6 +152,12 @@ export function createTaskListToolDefinition(
           }),
           completed: Type.Optional(Type.Boolean()),
           pinned: Type.Optional(Type.Boolean()),
+          backlog: Type.Optional(
+            Type.Boolean({
+              description:
+                "Only backlog tasks (true) or only tasks outside the backlog (false). Omit to include both.",
+            }),
+          ),
           query: Type.Optional(taskQuerySchema),
           projection: Type.Optional(
             Type.String({
@@ -170,7 +187,7 @@ export function createTaskListToolDefinition(
         {
           $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
           additionalProperties: false,
-          maxProperties: 8,
+          maxProperties: 9,
         },
       ),
     ),
@@ -216,6 +233,9 @@ export function createTaskListToolDefinition(
               ? {}
               : { completed: input.completed }),
             ...(input.pinned === undefined ? {} : { pinned: input.pinned }),
+            ...(input.backlog === undefined
+              ? {}
+              : { backlog: input.backlog }),
             ...(input.query === undefined
               ? {}
               : { query: taskQueryRequestSchema.parse(input.query) }),
@@ -278,14 +298,21 @@ export function createTaskCreateToolDefinition(
         {
           title: taskTitleSchema,
           details: Type.Optional(taskDetailsSchema),
-          pinned: Type.Optional(Type.Boolean()),
+          pinned: Type.Optional(
+            Type.Boolean({ description: placementInputDescription("Pin") }),
+          ),
+          backlog: Type.Optional(
+            Type.Boolean({
+              description: placementInputDescription("Put in the backlog"),
+            }),
+          ),
           files: Type.Optional(taskFilesSchema),
           scope: taskTargetScopeSchema,
         },
         {
           $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
           additionalProperties: false,
-          maxProperties: 5,
+          maxProperties: 6,
         },
       ),
     ),
@@ -310,6 +337,7 @@ export function createTaskCreateToolDefinition(
         title: input.title,
         ...(input.details === undefined ? {} : { details: input.details }),
         ...(input.pinned === undefined ? {} : { pinned: input.pinned }),
+        ...(input.backlog === undefined ? {} : { backlog: input.backlog }),
         ...(input.files === undefined ? {} : { files: input.files }),
         scope,
       });
@@ -323,6 +351,9 @@ export function createTaskCreateToolDefinition(
             ? {}
             : { details: request.details }),
           ...(request.pinned === undefined ? {} : { pinned: request.pinned }),
+          ...(request.backlog === undefined
+            ? {}
+            : { backlog: request.backlog }),
           ...(request.files === undefined ? {} : { files: request.files }),
           taskScope: request.scope,
         },
@@ -347,7 +378,14 @@ export function createTaskUpdateToolDefinition(
           title: Type.Optional(taskTitleSchema),
           details: Type.Optional(taskDetailsSchema),
           completed: Type.Optional(Type.Boolean()),
-          pinned: Type.Optional(Type.Boolean()),
+          pinned: Type.Optional(
+            Type.Boolean({ description: placementInputDescription("Pin") }),
+          ),
+          backlog: Type.Optional(
+            Type.Boolean({
+              description: placementInputDescription("Put in the backlog"),
+            }),
+          ),
           files: Type.Optional(taskFilesSchema),
           scope: Type.Optional(taskTargetScopeSchema),
         },
@@ -355,7 +393,7 @@ export function createTaskUpdateToolDefinition(
           $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
           additionalProperties: false,
           minProperties: 3,
-          maxProperties: 8,
+          maxProperties: 9,
         },
       ),
     ),
@@ -386,6 +424,7 @@ export function createTaskUpdateToolDefinition(
           ? {}
           : { completed: input.completed }),
         ...(input.pinned === undefined ? {} : { pinned: input.pinned }),
+        ...(input.backlog === undefined ? {} : { backlog: input.backlog }),
         ...(input.files === undefined ? {} : { files: input.files }),
         ...(scope === undefined ? {} : { scope }),
       });

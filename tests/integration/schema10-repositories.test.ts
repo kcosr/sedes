@@ -43,6 +43,7 @@ import { ThreadInventoryService } from "../support/schema9/thread-inventory-serv
 import type { RequestScope } from "../../src/server/identity/identity-provider.js";
 import { SingleUserIdentityProvider } from "../../src/server/identity/identity-provider.js";
 import { presentTask } from "../../src/server/application/task-presentation.js";
+import { materializeTaskContext } from "../../src/server/domain/materialized-task-contexts.js";
 import {
   composerInputUtf8Bytes,
   MAXIMUM_COMPOSER_INPUT_BYTES,
@@ -1032,14 +1033,16 @@ describe("inactive schema-10 repositories", () => {
     try {
       const repository = new DeliveryInputSnapshotRepository(fixture.database);
       const tasks = new TaskRepository(fixture.database);
-      const task = presentTask(
-        tasks.create(fixture.scope, {
-          title: "Snapshot task",
-          details: "Immutable delivery context",
-          scope: { kind: "global" },
-          mutationId: "delivery-snapshot-task",
-          now: 600,
-        }),
+      const task = materializeTaskContext(
+        presentTask(
+          tasks.create(fixture.scope, {
+            title: "Snapshot task",
+            details: "Immutable delivery context",
+            scope: { kind: "global" },
+            mutationId: "delivery-snapshot-task",
+            now: 600,
+          }),
+        ),
       );
       const excerpt = {
         id: "018f47cb-5f45-7f93-8d8d-bdb808b1f021",
@@ -2461,14 +2464,16 @@ describe("inactive schema-10 repositories", () => {
         const queue = new QueuedInputRepository(fixture.database);
         const taskContexts = ["first", "second", "third", "fourth"].map(
           (suffix, index) =>
-            presentTask(
-              tasks.create(fixture.scope, {
-                title: `Boundary ${suffix}`,
-                details: `${suffix}:`.padEnd(49_000, "d"),
-                scope: { kind: "global" },
-                mutationId: `task-context-boundary-create-${suffix}`,
-                now: 590 + index,
-              }),
+            materializeTaskContext(
+              presentTask(
+                tasks.create(fixture.scope, {
+                  title: `Boundary ${suffix}`,
+                  details: `${suffix}:`.padEnd(49_000, "d"),
+                  scope: { kind: "global" },
+                  mutationId: `task-context-boundary-create-${suffix}`,
+                  now: 590 + index,
+                }),
+              ),
             ),
         );
         const taskBytes = composerInputUtf8Bytes({

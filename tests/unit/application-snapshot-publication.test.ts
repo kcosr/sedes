@@ -149,6 +149,7 @@ function associatedThreadTask(
     title: "Thread task",
     details: "",
     pinned: false,
+    backlog: false,
     files: [],
     completedAt: null,
     revision: 0,
