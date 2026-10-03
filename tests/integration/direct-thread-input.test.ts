@@ -4,7 +4,7 @@ import { directInputRequestSchema, type DirectInputRequest } from "../../src/sha
 import { DirectInputRepository } from "../../src/server/db/repositories/direct-input-repository.js";
 import { ThreadActivityService } from "../../src/server/conversations/thread-activity-service.js";
 import { NotificationLifecycleObserver } from "../../src/server/domain/notification-lifecycle-observer.js";
-import type { ThreadInputRuntimeObservation } from "../../src/server/events/thread-runtime-coordinator.js";
+import type { ConversationInputRuntimeObservation } from "../../src/server/conversations/conversation-actor-manager.js";
 import { createInMemoryThreadRuntimeHarness } from "../support/in-memory-thread-runtime-harness.js";
 
 type Harness = Awaited<ReturnType<typeof createInMemoryThreadRuntimeHarness>>;
@@ -18,11 +18,39 @@ async function draft(harness: Harness, initialText = "Keep this composer text") 
   });
 }
 async function settled(harness: Harness, threadId: string) {
-  await vi.waitFor(() => expect(harness.runtimes.observeInputRuntime(harness.scope, threadId)?.settled).toBe(true), { timeout: 15_000 });
+  await vi.waitFor(() => expect(harness.actors.observeInputRuntime(harness.scope, threadId)?.settled).toBe(true), { timeout: 15_000 });
   await Promise.all(harness.completionFollowUps.splice(0));
 }
 
 describe("direct thread input admission", { timeout: 30_000 }, () => {
+  it("observes a composer first send without requiring an open thread view", async () => {
+    const contexts: ReturnType<ThreadActivityService["notificationContext"]>[] = [];
+    const h = await createInMemoryThreadRuntimeHarness({ retentionMilliseconds: 60_000,
+      onCompletion: (scope, threadId, turnId) => contexts.push(h.mutations.activity.notificationContext(scope, threadId, turnId)),
+    });
+    try {
+      const created = await draft(h, "First composer input");
+      const id = created.applicationThreadId;
+      const origin = { clientId: randomUUID() };
+      await expect(h.mutations.mutate(h.scope, id, {
+        kind: "deliver", mode: "submit", mutationId: randomUUID(), origin,
+        expectedThreadRevision: h.inventoryRepository.getThread(h.scope, id).thread.revision,
+        expectedDraftRevision: h.inventoryRepository.getDraft(h.scope, id).revision,
+      })).resolves.toMatchObject({ status: "delivery_accepted" });
+      await settled(h, id);
+      const context = await h.mutations.inputContext(h.scope, id);
+      expect(context).toMatchObject({
+        authority: "current", automaticListenEligible: true,
+      });
+      await vi.waitFor(() => expect(contexts.length).toBeGreaterThan(0));
+      expect(contexts[0]).toMatchObject({ origin, recognitionTarget: {
+        threadId: id, activityToken: context.activityToken, sourceTurnId: context.sourceTurnId,
+      } });
+      if (contexts[0]!.settlement) await expect(contexts[0]!.settlement).resolves.toEqual(contexts[0]!.recognitionTarget);
+      expect(h.runtimes.observeRuntimes(h.scope, [id]).has(id)).toBe(false);
+    } finally { await h.close(); }
+  });
+
   it("submits an unopened unbound thread, preserves the draft, and binds principal-wide replay and initiating origin", async () => {
     const h = await createInMemoryThreadRuntimeHarness({ retentionMilliseconds: 60_000 });
     try {
@@ -35,9 +63,9 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       expect(receipt).toMatchObject({ mutationId: input.mutationId, threadId: id, admittedMode: "submit", status: "accepted" });
       expect(h.inventoryRepository.getDraft(h.scope, id)).toEqual(originalDraft);
       await settled(h, id);
-      const observed = h.runtimes.observeInputRuntime(h.scope, id)!;
+      const observed = h.actors.observeInputRuntime(h.scope, id)!;
       expect(h.mutations.activity.originForTurn(h.scope, id, observed.sourceTurnId!)).toEqual(input.origin);
-      expect(h.mutations.inputContext(h.scope, id)).toMatchObject({ authority: "current", automaticListenEligible: true });
+      expect(await h.mutations.inputContext(h.scope, id)).toMatchObject({ authority: "current", automaticListenEligible: true });
       expect(await h.mutations.admitInput(h.scope, id, input)).toEqual(receipt);
       expect(h.mutations.readInputReceipt(h.scope, input.mutationId)).toEqual({ status: "found", receipt });
       for (const changed of [
@@ -48,10 +76,51 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       await expect(h.mutations.admitInput(h.scope, second.applicationThreadId, input)).rejects.toMatchObject({ code: "conflict" });
       const other = { ...h.scope, principalId: randomUUID() };
       expect(h.mutations.readInputReceipt(other, input.mutationId)).toEqual({ status: "notObserved" });
-      expect(() => h.mutations.inputContext(other, id)).toThrow();
+      await expect(h.mutations.inputContext(other, id)).rejects.toThrow();
       await expect(h.mutations.admitInput(other, id, request())).rejects.toThrow();
       expect(h.database.prepare("SELECT COUNT(*) AS count FROM conversation_creation_attempts WHERE mutation_id = ?").get(input.mutationId)).toEqual({ count: 1 });
     } finally { await h.close(); }
+  });
+
+  it("keeps readiness reads non-attaching and applies cached settings and current durable policy", async () => {
+    const h = await createInMemoryThreadRuntimeHarness({ retentionMilliseconds: 60_000 });
+    try {
+      const created = await draft(h);
+      const id = created.applicationThreadId;
+      const acquire = vi.spyOn(h.actors, "acquire");
+      const catalog = vi.spyOn(h.driver, "catalog");
+      expect(await h.mutations.inputContext(h.scope, id)).toMatchObject({ authority: "unbound", automaticListenEligible: false });
+      expect(acquire).not.toHaveBeenCalled();
+      expect(catalog).not.toHaveBeenCalled();
+      await h.mutations.admitInput(h.scope, id, request());
+      await settled(h, id);
+      const presentation = h.mutations.input.presentation;
+      const current = await presentation.readCached(h.scope, id);
+      const cached = vi.spyOn(presentation, "readCached");
+      cached.mockResolvedValueOnce({ ...current, interactionMode: "read_only" });
+      expect(await h.mutations.inputContext(h.scope, id)).toMatchObject({ authority: "current", automaticListenEligible: false });
+      cached.mockResolvedValueOnce({ ...current, settingDescriptors: [{
+        id: "model", label: { text: "Model" }, requiredForFirstSubmission: true,
+        available: true, options: [],
+      }] });
+      expect(await h.mutations.inputContext(h.scope, id)).toMatchObject({ authority: "current", automaticListenEligible: false });
+      expect(await h.mutations.inputContext(h.scope, id)).toMatchObject({ automaticListenEligible: true });
+
+      let release!: (value: typeof current) => void;
+      cached.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+      const pending = h.mutations.inputContext(h.scope, id);
+      const before = h.inventoryRepository.getThread(h.scope, id);
+      h.inventoryRepository.transitionInventory(h.scope, id, {
+        mutationId: randomUUID(), expectedRevision: before.inventory.inventoryRevision,
+        change: { action: "snooze", snoozedUntil: Date.now() + 60_000 }, now: Date.now(),
+      });
+      release(current);
+      expect(await pending).toMatchObject({ automaticListenEligible: false });
+      acquire.mockClear(); catalog.mockClear();
+      expect(await h.mutations.inputContext(h.scope, id)).toMatchObject({ automaticListenEligible: false });
+      expect(acquire).not.toHaveBeenCalled();
+      expect(catalog).not.toHaveBeenCalled();
+    } finally { vi.restoreAllMocks(); await h.close(); }
   });
 
   it("rolls first-send preparation back with a failed receipt write and never touches the composer", async () => {
@@ -106,8 +175,8 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       });
       const initial = request("Initial voice turn");
       await h.mutations.admitInput(h.scope, id, initial);
-      await vi.waitFor(() => expect(h.mutations.inputContext(h.scope, id).steer.availability).toBe("available"), { timeout: 15_000 });
-      const active = h.mutations.inputContext(h.scope, id);
+      await vi.waitFor(async () => expect((await h.mutations.inputContext(h.scope, id)).steer.availability).toBe("available"), { timeout: 15_000 });
+      const active = await h.mutations.inputContext(h.scope, id);
       if (active.steer.availability !== "available") throw new Error("missing_test_steer");
       const emit = vi.fn();
       const notifications = new NotificationLifecycleObserver(h.inventoryRepository, emit);
@@ -131,7 +200,7 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       expect(h.inventoryRepository.getDraft(h.scope, id)).toEqual(before);
       const firstTurn = active.sourceTurnId!;
       expect(h.mutations.activity.originForTurn(h.scope, id, firstTurn)).toEqual(initial.origin);
-      expect(h.mutations.inputContext(h.scope, id).automaticListenEligible).toBe(false);
+      expect((await h.mutations.inputContext(h.scope, id)).automaticListenEligible).toBe(false);
       const receipts = new DirectInputRepository(h.database);
       expect(receipts.lookup(h.scope, queue.mutationId)).toMatchObject({ status: "found", receipt: { queuedInputId: queued.queuedInputId, admittedMode: "queue" } });
       for (const row of h.database.prepare("SELECT id FROM queued_inputs WHERE application_thread_id = ? AND state = 'pending'").all(id) as { id: string }[]) {
@@ -158,27 +227,37 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       const id = created.applicationThreadId;
       await h.mutations.admitInput(h.scope, id, request());
       await settled(h, id);
-      let observation: ThreadInputRuntimeObservation | undefined = { ...h.runtimes.observeInputRuntime(h.scope, id)!, runState: "running", settled: false, sourceTurnStatus: "in_progress" };
-      activity = new ThreadActivityService({ database: h.database, runtimes: { observeInputRuntime: () => observation, subscribeInputActivity: () => () => undefined } });
-      const running = activity.capture(h.scope, id);
+      let observation: ConversationInputRuntimeObservation | undefined = { ...h.actors.observeInputRuntime(h.scope, id)!, runState: "running", settled: false, sourceTurnStatus: "in_progress" };
+      activity = new ThreadActivityService({ database: h.database, actors: { observeInputRuntime: () => observation, subscribeInputActivity: () => () => undefined }, presentation: h.mutations.input.presentation });
+      const running = await activity.capture(h.scope, id);
       observation = { ...observation, sourceTurnStatus: "completed" };
-      const terminal = activity.capture(h.scope, id);
+      const terminal = await activity.capture(h.scope, id);
       expect(terminal.activityToken).not.toBe(running.activityToken);
       const context = activity.notificationContext(h.scope, id, observation.sourceTurnId);
       expect(context.settlement).toBeDefined();
       observation = { ...observation, runState: "idle", settled: true };
-      expect(activity.capture(h.scope, id)).toMatchObject({ activityToken: terminal.activityToken, automaticListenEligible: true });
+      expect(await activity.capture(h.scope, id)).toMatchObject({ activityToken: terminal.activityToken, automaticListenEligible: true });
       await expect(context.settlement).resolves.toMatchObject({ threadId: id, activityToken: terminal.activityToken });
       h.database.prepare("UPDATE application_threads SET title = ?, revision = revision + 1 WHERE id = ?").run("Metadata only", id);
-      expect(activity.capture(h.scope, id).activityToken).toBe(terminal.activityToken);
+      expect((await activity.capture(h.scope, id)).activityToken).toBe(terminal.activityToken);
+      const presentation = await h.mutations.input.presentation.readCached(h.scope, id);
+      let release!: (value: typeof presentation) => void;
+      const cached = vi.spyOn(h.mutations.input.presentation, "readCached")
+        .mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+      const inFlight = activity.capture(h.scope, id);
+      observation = { ...observation, generation: "replacement-owner" };
+      release(presentation);
+      expect(await inFlight).toMatchObject({ authority: "current", automaticListenEligible: false, steer: { availability: "unavailable" } });
+      expect(await activity.capture(h.scope, id)).toMatchObject({ automaticListenEligible: true });
+      cached.mockRestore();
       observation = { ...observation, runState: "running", settled: false, sourceTurnStatus: "in_progress" };
-      const again = activity.capture(h.scope, id);
+      const again = await activity.capture(h.scope, id);
       expect(again.activityToken).not.toBe(running.activityToken);
       expect(again.activityToken).not.toBe(terminal.activityToken);
       observation = undefined;
-      expect(activity.capture(h.scope, id)).toMatchObject({ authority: "unavailable", automaticListenEligible: false });
-      const reboot = new ThreadActivityService({ database: h.database, runtimes: { observeInputRuntime: () => observation, subscribeInputActivity: () => () => undefined } });
-      expect(reboot.capture(h.scope, id).activityToken).not.toBe(activity.capture(h.scope, id).activityToken);
+      expect(await activity.capture(h.scope, id)).toMatchObject({ authority: "unavailable", automaticListenEligible: false });
+      const reboot = new ThreadActivityService({ database: h.database, actors: { observeInputRuntime: () => observation, subscribeInputActivity: () => () => undefined }, presentation: h.mutations.input.presentation });
+      expect((await reboot.capture(h.scope, id)).activityToken).not.toBe((await activity.capture(h.scope, id)).activityToken);
       reboot.close();
     } finally { activity?.close(); await h.close(); }
   });

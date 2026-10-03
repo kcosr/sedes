@@ -85,6 +85,10 @@ scenario's result; it is not evidence of real microphone speech quality.
 
 Every invocation writes `test-results/voice-run-*`, including adapter/Sedes
 logs, Android instrumentation results, native screenshots, and logcat captures.
+Each Android scenario also saves `android-<mode>-<scenario>-voice-diagnostics.json`
+with policy, content-free notification target summaries, and input-context
+observations. Failures include native state captured before cleanup and current
+server input contexts, so missing recognition authority is visible directly.
 Inspect both active and settled screenshots. Cleanup stops owned servers,
 removes the temporary adapter clone and owned adb reverse rules, and force
 stops the test app. The emulator remains caller-owned.

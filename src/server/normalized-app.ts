@@ -1458,7 +1458,7 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     const requestScope = await scope(request);
     const { threadId } = threadRouteParametersSchema.parse(request.params);
     response.setHeader("Cache-Control", "no-store");
-    response.json(threadInputContextSchema.parse(dependencies.threads.inputContext(requestScope, threadId)));
+    response.json(threadInputContextSchema.parse(await dependencies.threads.inputContext(requestScope, threadId)));
   });
 
   routes.post("/api/threads/:threadId/inputs", async (request, response) => {

@@ -176,6 +176,19 @@ public class NativeVoiceE2eTest {
                 "inputAttempts", inputAttempts.get(), "receiptReads", receiptReads.get(), "mutationIds", new JSONArray(mutationIds),
                 "screenshots", new JSONArray(screenshots));
             Bundle resultBundle = new Bundle(); resultBundle.putString("voiceResult", result.toString()); instrumentation.sendStatus(0, resultBundle);
+        } catch (Exception | AssertionError failure) {
+            // Capture before cleanup turns voice Off and removes the state that explains the failure.
+            try {
+                JSONObject diagnostic = NativeVoiceJson.object("scenario", scenario, "mode", mode,
+                    "threadId", thread, "elapsedMs", SystemClock.elapsedRealtime() - began,
+                    "reason", failure.getMessage(), "phases", new JSONArray(phases),
+                    "state", diagnosticState(runtime.snapshot()), "captureChunks", supplied.get(),
+                    "inputAttempts", inputAttempts.get(), "receiptReads", receiptReads.get(),
+                    "mutationIds", new JSONArray(mutationIds), "screenshots", new JSONArray(screenshots));
+                Bundle resultBundle = new Bundle(); resultBundle.putString("voiceFailure", diagnostic.toString());
+                instrumentation.sendStatus(0, resultBundle);
+            } catch (Exception | AssertionError diagnosticFailure) { failure.addSuppressed(diagnosticFailure); }
+            throw failure;
         } finally {
             runtime.unobserve(observer);
             JSONObject snapshot = runtime.snapshot();
@@ -187,6 +200,26 @@ public class NativeVoiceE2eTest {
             stopped.await(10, TimeUnit.SECONDS); NativeVoiceAudio.setTestSource(null); NativeVoiceHttp.setTestTransport(null);
             instrumentation.runOnMainSync(activity::finish);
         }
+    }
+    private static JSONObject diagnosticState(JSONObject state) {
+        JSONObject result = select(state, "connectionGeneration", "stateRevision", "settingsRevision", "originClientId", "phase", "ready", "readiness", "queue", "actions");
+        NativeVoiceJson.put(result, "settings", select(state.optJSONObject("settings"), "audioMode", "autoListen", "ignoreOtherDevices",
+            "onlyVoiceThread", "voiceThreadId", "followComposerMode", "recognitionCues"));
+        NativeVoiceJson.put(result, "active", select(state.optJSONObject("active"), "id", "eventKind", "threadId", "recognitionThreadId", "automatic"));
+        NativeVoiceJson.put(result, "foreground", select(state.optJSONObject("foreground"), "visible", "threadId"));
+        JSONArray errors = state.optJSONArray("errors"), codes = new JSONArray();
+        if (errors != null) for (int i = 0; i < errors.length(); i++) codes.put(select(errors.optJSONObject(i), "code"));
+        NativeVoiceJson.put(result, "errors", codes);
+        JSONArray recovery = state.optJSONArray("recovery"), pending = new JSONArray();
+        if (recovery != null) for (int i = 0; i < recovery.length(); i++) pending.put(select(recovery.optJSONObject(i), "mutationId", "threadId", "status", "cancelled"));
+        NativeVoiceJson.put(result, "recovery", pending);
+        return result;
+    }
+    private static JSONObject select(JSONObject source, String... keys) {
+        if (source == null) return null;
+        JSONObject result = new JSONObject();
+        for (String key : keys) if (source.has(key)) NativeVoiceJson.put(result, key, source.opt(key));
+        return result;
     }
     private void screenshot(String phase) throws Exception {
         File directory = new File(instrumentation.getTargetContext().getExternalFilesDir(null), "native-voice");

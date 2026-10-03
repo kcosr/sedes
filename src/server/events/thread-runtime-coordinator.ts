@@ -15,7 +15,6 @@ import type {
 } from "../conversations/conversation-actor.js";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import type { ThreadRunState } from "../../shared/protocol/conversation.js";
-import type { SteerTarget } from "../../shared/protocol/conversation.js";
 import type {
   NormalizedThreadEvent,
   NormalizedThreadSnapshot,
@@ -192,22 +191,6 @@ export type ThreadRuntimeObservation =
       readonly retirable: boolean;
     };
 
-/** Current local authority for input; obtaining it never attaches a provider. */
-export interface ThreadInputRuntimeObservation {
-  readonly generation: string;
-  readonly authoritative: boolean;
-  readonly runState: ThreadRunState;
-  readonly settled: boolean;
-  readonly sourceTurnId?: string;
-  readonly sourceTurnStatus?: string;
-  readonly firstInput?: { readonly operationId?: string };
-  readonly blockingInteractionIds: readonly string[];
-  readonly submitAvailable: boolean;
-  readonly queueAvailable: boolean;
-  readonly steerSupported: boolean;
-  readonly steerTarget?: SteerTarget;
-}
-
 export class ThreadRuntimeNotIdleError extends Error {
   constructor() {
     super("The thread runtime is not idle.");
@@ -283,7 +266,6 @@ export class ThreadRuntimeCoordinator {
     applicationThreadId: string,
   ) => void | Promise<void>;
   readonly #entries = new Map<string, RuntimeEntry>();
-  readonly #inputActivityListeners = new Set<(scope: RequestScope, threadId: string) => void>();
   readonly #maintenance = new Map<string, Promise<unknown>>();
   readonly #shutdownController = new AbortController();
   readonly #detached = new WeakSet<object>();
@@ -1099,49 +1081,6 @@ export class ThreadRuntimeCoordinator {
     return observed;
   }
 
-  subscribeInputActivity(listener: (scope: RequestScope, threadId: string) => void): () => void {
-    this.#inputActivityListeners.add(listener);
-    return () => this.#inputActivityListeners.delete(listener);
-  }
-
-  #publishInputActivity(scope: RequestScope, threadId: string): void {
-    for (const listener of this.#inputActivityListeners) {
-      try { listener(scope, threadId); } catch { /* An observer cannot change runtime authority. */ }
-    }
-  }
-
-  observeInputRuntime(scope: RequestScope, threadId: string, sourceTurnId?: string): ThreadInputRuntimeObservation | undefined {
-    const entry = this.#entries.get(scopedKey(scope, threadId));
-    const runtime = entry?.runtime;
-    if (!entry || entry.eviction || !runtime || runtime.actor.closed || this.#detached.has(runtime)) return undefined;
-    const timeline = runtime.actor.timeline;
-    const turnId = sourceTurnId ?? timeline.activeTurnId ?? timeline.orderedTurnIds.at(-1);
-    const turn = turnId ? timeline.turnsById[turnId] : undefined;
-    const firstInput = turn?.orderedItemIds.map(id => timeline.itemsById[id]).find(item => item?.kind === "user_message");
-    const modes = runtime.hub.snapshot?.capabilities.deliveryModes ?? [];
-    const steer = modes.find(mode => mode.id === "steer");
-    const authoritative = entry.applicationOverlayReady && !runtime.actor.readOnly &&
-      !runtime.actor.replacementRequired && !runtime.actor.projectionRecoveryRequired &&
-      timeline.runState !== "disconnected" && timeline.runState !== "reconciling";
-    const steerTarget: SteerTarget | undefined = authoritative && timeline.runState === "running" && steer?.available
-      ? steer.steerTarget === "conversation" ? { kind: "conversation" }
-        : steer.steerTarget === "turn" && timeline.activeTurnId ? { kind: "turn", turnId: timeline.activeTurnId } : undefined
-      : undefined;
-    return {
-      generation: `${entry.generation}:${timeline.generation}`,
-      authoritative, runState: timeline.runState, settled: runtime.actor.authoritativelySettled,
-      ...(turn ? { sourceTurnId: turn.id, sourceTurnStatus: turn.status } : {}),
-      ...(firstInput?.kind === "user_message" ? { firstInput: {
-        ...(firstInput.deliveryOperationId ? { operationId: firstInput.deliveryOperationId } : {}),
-      } } : {}),
-      blockingInteractionIds: runtime.hub.snapshot?.interactions.map(item => item.id).sort() ?? [],
-      submitAvailable: modes.some(mode => mode.id === "submit" && mode.available),
-      queueAvailable: modes.some(mode => mode.id === "queue" && mode.available),
-      steerSupported: steer !== undefined,
-      ...(steerTarget ? { steerTarget } : {}),
-    };
-  }
-
   /**
    * Runs a synchronous commit, such as a database transaction, with every
    * thread's runtime observed in the same turn. Neither a Sedes admission nor
@@ -1451,12 +1390,6 @@ export class ThreadRuntimeCoordinator {
         bridge,
       );
       const summarySubscription = hub.subscribeInternal(({ event }) => {
-        if (event.type === "snapshot" || event.type === "run_state" || event.type === "turn_upsert" ||
-            event.type === "interaction_opened" || event.type === "interaction_resolved" ||
-            event.type === "capabilities_changed" || event.type === "queue_changed" ||
-            event.type === "thread_changed" || event.type === "notice") {
-          this.#publishInputActivity(scope, applicationThreadId);
-        }
         if (
           event.type === "snapshot" ||
           event.type === "run_state" ||
@@ -1849,7 +1782,6 @@ export class ThreadRuntimeCoordinator {
   async #dispose(runtime: EstablishedRuntime, automatic = false): Promise<void> {
     if (this.#detached.has(runtime)) return;
     this.#detached.add(runtime);
-    this.#publishInputActivity(runtime.scope, runtime.applicationThreadId);
     // Publish after fencing reads, before asynchronous teardown. A late old
     // generation's cleanup cannot clear a replacement runtime's summary.
     const entry = this.#entries.get(
@@ -1906,7 +1838,6 @@ export class ThreadRuntimeCoordinator {
   #detach(runtime: EstablishedRuntime): void {
     if (this.#detached.has(runtime)) return;
     this.#detached.add(runtime);
-    this.#publishInputActivity(runtime.scope, runtime.applicationThreadId);
     try {
       runtime.unsubscribeActorClosed();
     } catch {

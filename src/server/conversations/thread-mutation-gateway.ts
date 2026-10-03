@@ -1,3 +1,4 @@
+import type { ConversationActorManager } from "./conversation-actor-manager.js";
 import type { SteerTarget } from "../../shared/protocol/conversation.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -298,6 +299,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       readonly completions: SubmissionCompletionRepository;
       readonly queueGateway: QueuedInputConversationGateway;
       readonly runtimes: ThreadRuntimeCoordinator;
+      readonly actors: ConversationActorManager;
       readonly interactions: InteractionBroker;
       readonly presentation: ThreadApplicationPresentationReader;
       readonly agentToolPolicies: Pick<
@@ -338,10 +340,10 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
   }
 
   get activity(): ThreadActivityService {
-    return this.#activity ??= new ThreadActivityService({ database: this.input.bindings.database, runtimes: this.input.runtimes });
+    return this.#activity ??= new ThreadActivityService({ database: this.input.bindings.database, actors: this.input.actors, presentation: this.input.presentation });
   }
 
-  inputContext(scope: RequestScope, applicationThreadId: string): ThreadInputContext {
+  inputContext(scope: RequestScope, applicationThreadId: string): Promise<ThreadInputContext> {
     return this.activity.capture(scope, applicationThreadId);
   }
 
@@ -383,11 +385,11 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       if (target.backingState !== "bound") throw new DomainError("invalid_transition", "The target is being created or requires recovery.");
       const runtime = await this.#acquireActiveWorkspaceRuntime(scope, applicationThreadId);
       try {
-        const generation = this.input.runtimes.observeInputRuntime(scope, applicationThreadId)?.generation;
+        const generation = this.input.actors.observeInputRuntime(scope, applicationThreadId)?.generation;
         await this.input.runtimes.commitWithRuntimesObserved(scope, [applicationThreadId], () => database.transaction(() => {
           if (receipts.replay(scope, applicationThreadId, request)) return;
           const current = validateInventory();
-          const observed = this.input.runtimes.observeInputRuntime(scope, applicationThreadId);
+          const observed = this.input.actors.observeInputRuntime(scope, applicationThreadId);
           if (!generation || observed?.generation !== generation || !observed.authoritative) {
             throw new DomainError("invalid_transition", "The input target's runtime authority changed.");
           }
@@ -400,9 +402,13 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           if (request.runningPolicy.mode === "steer" && steer && request.runningPolicy.target.kind !== steer.steerTarget) {
             throw new DomainError("invalid_transition", "The requested steering target is not supported by this backend.");
           }
+          const steerTarget: SteerTarget | undefined = timeline.runState === "running" && steer?.available
+            ? steer.steerTarget === "conversation" ? { kind: "conversation" }
+              : steer.steerTarget === "turn" && timeline.activeTurnId ? { kind: "turn", turnId: timeline.activeTurnId } : undefined
+            : undefined;
           let mode: "submit" | "queue" | "steer" = settled ? "submit" : "queue";
-          if (!settled && request.runningPolicy.mode === "steer" && observed.steerTarget &&
-              JSON.stringify(request.runningPolicy.target) === JSON.stringify(observed.steerTarget)) mode = "steer";
+          if (!settled && request.runningPolicy.mode === "steer" && steerTarget &&
+              JSON.stringify(request.runningPolicy.target) === JSON.stringify(steerTarget)) mode = "steer";
           if (!modes.some(candidate => candidate.id === mode && candidate.available)) {
             throw new DomainError("invalid_transition", "The requested input cannot currently be admitted.");
           }
@@ -410,7 +416,7 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
             mutationId: request.mutationId, text: request.text, origin: request.origin,
             contextExcerpts: [], attachmentIds: [], taskReferences: [],
             source: { kind: "direct_input", expectedThreadRevision: current.thread.revision,
-              resolvedDeliveryMode: mode, ...(mode === "steer" ? { resolvedSteerTarget: observed.steerTarget! } : {}) },
+              resolvedDeliveryMode: mode, ...(mode === "steer" ? { resolvedSteerTarget: steerTarget! } : {}) },
             now: this.#now(),
           });
           receipts.record(scope, applicationThreadId, request, { admittedMode: mode, queuedInputId: queued.item.id, now: this.#now() });

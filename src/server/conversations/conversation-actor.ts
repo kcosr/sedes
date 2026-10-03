@@ -161,6 +161,14 @@ export interface ConversationActorSnapshotState {
   };
 }
 
+export interface ConversationActorInputState {
+  readonly state: ConversationActorSnapshotState;
+  readonly authoritative: boolean;
+  readonly settled: boolean;
+  /** Server-internal identities used only to detect changes to pending input. */
+  readonly blockingInteractionIds: readonly string[];
+}
+
 export interface ConversationActorHistoryCapture {
   readonly generation: string;
   readonly page: HistoryPage;
@@ -221,6 +229,7 @@ export class ConversationActor {
   readonly #environmentLease: ExecutionEnvironmentLease | undefined;
   readonly #attachmentDelivery: ComposerAttachmentDeliveryService;
   readonly #drainAuthoritativeObservers?: () => Promise<void>;
+  readonly #onInputStateChanged?: () => void;
   readonly #persistDeliveryInputSnapshot?: (
     input: PrepareDeliveryInputSnapshot,
   ) => void;
@@ -264,6 +273,7 @@ export class ConversationActor {
     readonly handle: ConversationHandle;
     /** Installed before establishment so durable observers cannot miss startup events. */
     readonly initialObserver?: ConversationActorListener;
+    readonly onInputStateChanged?: () => void;
     /** Absent only for a passive history projection with no execution authority. */
     readonly environmentLease?: ExecutionEnvironmentLease;
     readonly attachmentDelivery: ComposerAttachmentDeliveryService;
@@ -288,6 +298,7 @@ export class ConversationActor {
     this.#environmentLease = input.environmentLease;
     this.#attachmentDelivery = input.attachmentDelivery;
     this.#drainAuthoritativeObservers = input.drainAuthoritativeObservers;
+    this.#onInputStateChanged = input.onInputStateChanged;
     this.#persistDeliveryInputSnapshot = input.persistDeliveryInputSnapshot;
     this.#removeDeliveryInputSnapshot = input.removeDeliveryInputSnapshot;
     this.#projector = input.projector;
@@ -324,6 +335,7 @@ export class ConversationActor {
         // subscriber before capturing a new baseline. Keep irreversible
         // handle closure observable through the independent raw event rail.
         this.#handleReplacementRequired = true;
+        this.#notifyInputStateChanged();
         this.#establishmentAbort?.abort(
           new Error("conversation_actor_handle_replacement_required"),
         );
@@ -554,6 +566,7 @@ export class ConversationActor {
         this.#removeDeliveryInputSnapshot?.(applicationOperationId);
       } finally {
         this.#awaitingAuthoritativeIdle = false;
+        this.#notifyInputStateChanged();
       }
     });
   }
@@ -919,6 +932,23 @@ export class ConversationActor {
     return this.#snapshotState;
   }
 
+  /** Current local input facts; never queues work, repairs projection, or reads the provider. */
+  peekInputState(): ConversationActorInputState | undefined {
+    const state = this.#snapshotState;
+    if (!this.#started || this.#closing || this.#closed || !state) return undefined;
+    const authoritative = !this.readOnly && !this.#establishing &&
+      this.#unsubscribeProjection !== undefined && !this.#handleReplacementRequired &&
+      !this.#projectionRecoveryRequired &&
+      state.timeline.generation === this.#projector.timeline().generation &&
+      state.timeline.runState !== "disconnected" && state.timeline.runState !== "reconciling";
+    return {
+      state,
+      authoritative,
+      settled: authoritative && this.authoritativelySettled,
+      blockingInteractionIds: [...this.#pendingInteractions.keys()].sort(),
+    };
+  }
+
   /**
    * Runs an application-owned mutation in the same mailbox as turn-starting
    * backend mutations, but only while the authoritative actor is settled.
@@ -1113,6 +1143,7 @@ export class ConversationActor {
     if (this.#closed) return Promise.resolve();
     if (this.#closePromise) return this.#closePromise;
     this.#closing = true;
+    this.#notifyInputStateChanged();
     this.#explicitStopPending = beforeCleanup !== undefined;
     this.#establishmentAbort?.abort();
     this.#abortHistoryReads("conversation_actor_history_cancelled_by_close");
@@ -1194,6 +1225,7 @@ export class ConversationActor {
       const claimed = await this.#mailbox.enqueue(async () => {
         if (this.#closing || !predicate()) return false;
         this.#closing = true;
+        this.#notifyInputStateChanged();
         this.#establishmentAbort?.abort();
         this.#abortHistoryReads("conversation_actor_history_cancelled_by_close");
         await this.#closeResources(failures, evicted);
@@ -1259,6 +1291,7 @@ export class ConversationActor {
     this.#unsubscribeProjection = undefined;
     previousSubscription?.();
     this.#establishing = true;
+    this.#notifyInputStateChanged();
     let established: EstablishedBackendProjection;
     try {
       established = await this.#handle.establishProjection({ signal });
@@ -1689,11 +1722,13 @@ export class ConversationActor {
     this.#abortHistoryReads("conversation_actor_history_preempted_by_mutation");
     return this.#enqueue(async () => {
       this.#awaitingAuthoritativeIdle = true;
+      this.#notifyInputStateChanged();
       try {
         return await operation();
       } catch (error) {
         if (error instanceof BackendError && !error.crossedSubmissionBoundary) {
           this.#awaitingAuthoritativeIdle = false;
+          this.#notifyInputStateChanged();
         }
         throw error;
       }
@@ -1836,6 +1871,7 @@ export class ConversationActor {
   }
 
   #publish(event: ConversationActorEvent): void {
+    this.#notifyInputStateChanged();
     for (const listener of [...this.#listeners]) {
       try {
         listener(event);
@@ -1843,5 +1879,10 @@ export class ConversationActor {
         // One browser subscriber cannot poison the conversation actor.
       }
     }
+  }
+
+  #notifyInputStateChanged(): void {
+    try { this.#onInputStateChanged?.(); }
+    catch { /* A passive input observer cannot affect provider work. */ }
   }
 }

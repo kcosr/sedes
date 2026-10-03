@@ -662,6 +662,7 @@ describe("queue dispatch and existing conversation Stop control", () => {
     const releaseControl = vi.fn();
     const acquireProjection = vi.fn(async () => { throw new Error("Stop must not acquire transcript projection"); });
     const gateway = new ThreadMutationGateway({
+      actors: {} as never,
       bindings: new ConversationBindingRepository(fixture.database), inventory: new InventoryRepository(fixture.database),
       operations, completions: new SubmissionCompletionRepository(fixture.database), queue, queueGateway: nativeGateway,
       runtimes: { acquire: acquireProjection, acquireExistingControl: () => ({ control: {

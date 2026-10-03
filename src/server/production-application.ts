@@ -1642,6 +1642,7 @@ export async function startProductionApplication(
     });
     mutations = new ThreadMutationGateway({
       bindings,
+      actors,
       inventory: inventoryRepository,
       lifecycle,
       forks,

@@ -165,11 +165,16 @@ describe("native voice production pipeline with loopback providers", () => {
       const args = { serverOrigin: app.url, adapterOrigin: adapter.url, pairingCode, threadId, threadTitle, mode, scenario,
         initialText: `native voice fixture start ${mode} ${scenario}`,
         ...(secondThreadId ? { secondThreadId, secondThreadTitle } : {}) };
+      const diagnosticPath = path.join(artifactDirectory, `android-${mode}-${scenario}-voice-diagnostics.json`);
+      const observer = await observeScenarioVoice(app, [threadId, ...(secondThreadId ? [secondThreadId] : [])]);
+      let instrumentationOutput = "";
+      let scenarioFailed = false;
       try {
         const result = await adb(["shell", "am", "instrument", "-w", "-r", "-e", "class", "dev.sedes.local.NativeVoiceE2eTest#nativeConversationCycle",
           ...Object.entries(args).flatMap(([key, value]) => ["-e", key, shellArgument(value)]),
           "dev.sedes.local.test/androidx.test.runner.AndroidJUnitRunner"], 330_000);
-        await writeFile(path.join(artifactDirectory, `android-${mode}-${scenario}.log`), result.stdout + result.stderr);
+        instrumentationOutput = result.stdout + result.stderr;
+        await writeFile(path.join(artifactDirectory, `android-${mode}-${scenario}.log`), instrumentationOutput);
         expect(result.stdout).toContain("OK (");
         expect(result.stdout).not.toMatch(/FAILURES|INSTRUMENTATION_FAILED/u);
         const rawResult = /^INSTRUMENTATION_STATUS: voiceResult=(.+)$/mu.exec(result.stdout)?.[1];
@@ -188,13 +193,33 @@ describe("native voice production pipeline with loopback providers", () => {
           expect(JSON.stringify(await app.thread(threadId))).not.toContain(text);
         }
         expect(adapter.errors).toEqual([]);
+        await writeFile(diagnosticPath, JSON.stringify({ mode, scenario, ...await observer.report(false) }, null, 2));
+      } catch (failure) {
+        scenarioFailed = true;
+        if (!instrumentationOutput && failure && typeof failure === "object") {
+          const output = failure as { stdout?: unknown; stderr?: unknown };
+          instrumentationOutput = [output.stdout, output.stderr].filter(value => typeof value === "string").join("");
+        }
+        const diagnostics = { mode, scenario, native: nativeEvidence(instrumentationOutput), ...await observer.report(true) };
+        try {
+          await writeFile(path.join(artifactDirectory, `android-${mode}-${scenario}.log`), instrumentationOutput);
+          await writeFile(diagnosticPath, JSON.stringify(diagnostics, null, 2));
+        } catch (artifactError) { console.error("Could not save Android voice failure artifacts:", artifactError); }
+        // Include the useful evidence in the test failure itself, even when artifact collection is unavailable.
+        throw new Error(`Android voice ${mode}/${scenario} failed. Voice diagnostics (${diagnosticPath}): ${JSON.stringify(diagnostics)}`, { cause: failure });
       } finally {
-        const screenshotDirectory = path.join(artifactDirectory, `android-${mode}-${scenario}-screenshots`);
-        await mkdir(screenshotDirectory, { recursive: true });
-        await adb(["pull", "/sdcard/Android/data/dev.sedes.local/files/native-voice/", screenshotDirectory], 60_000)
-          .catch(async error => { await writeFile(path.join(screenshotDirectory, "capture-error.txt"), String(error)); });
-        const logcat = await adb(["logcat", "-d", "-t", "1500"]);
-        await writeFile(path.join(artifactDirectory, `android-${mode}-${scenario}-logcat.log`), logcat.stdout);
+        await observer.close();
+        try {
+          const screenshotDirectory = path.join(artifactDirectory, `android-${mode}-${scenario}-screenshots`);
+          await mkdir(screenshotDirectory, { recursive: true });
+          await adb(["pull", "/sdcard/Android/data/dev.sedes.local/files/native-voice/", screenshotDirectory], 60_000)
+            .catch(async error => { await writeFile(path.join(screenshotDirectory, "capture-error.txt"), String(error)); });
+          const logcat = await adb(["logcat", "-d", "-t", "1500"]);
+          await writeFile(path.join(artifactDirectory, `android-${mode}-${scenario}-logcat.log`), logcat.stdout);
+        } catch (captureFailure) {
+          if (!scenarioFailed) throw captureFailure;
+          console.error("Android voice failure artifact capture also failed:", captureFailure);
+        }
       }
     }, 360_000);
   }
@@ -204,7 +229,7 @@ describe("native voice production pipeline with loopback providers", () => {
 function shellArgument(value: string): string { return "'" + value.replaceAll("'", "'\\''") + "'"; }
 
 type VoiceFrame = { event: string; id?: string; value: any };
-export async function voiceFeed(app: OpenCodeProductionFixture) {
+export async function voiceFeed(app: OpenCodeProductionFixture, onFrame?: (frame: VoiceFrame) => void) {
   const controller = new AbortController();
   const response = await fetch(`${app.url}/api/application/events`, { headers: { Authorization: `Bearer ${app.credential}` }, signal: controller.signal });
   if (!response.ok || !response.body) throw new Error(`SSE open failed: ${response.status}`);
@@ -224,10 +249,89 @@ export async function voiceFeed(app: OpenCodeProductionFixture) {
           const event = /^event: ?(.+)$/mu.exec(raw)?.[1];
           const data = /^data: ?(.+)$/mu.exec(raw)?.[1];
           const id = /^id: ?(.+)$/mu.exec(raw)?.[1];
-          if (event && data) frames.push({ event, value: JSON.parse(data), ...(id ? { id } : {}) });
+          if (event && data) {
+            const frame = { event, value: JSON.parse(data), ...(id ? { id } : {}) };
+            frames.push(frame); onFrame?.(frame);
+          }
         }
       }
     } catch (error) { if (!controller.signal.aborted) throw error; }
   })();
+  // Preserve the close() rejection without leaving a failed observer unhandled during a long device run.
+  void done.catch(() => undefined);
   return { frames, async close() { controller.abort(); await done; } };
+}
+
+function nativeEvidence(output: string): unknown {
+  const failure = /^INSTRUMENTATION_STATUS: voiceFailure=(.+)$/mu.exec(output)?.[1];
+  const completed = /^INSTRUMENTATION_STATUS: voiceResult=(.+)$/mu.exec(output)?.[1];
+  const value = failure ?? completed;
+  if (!value) return { unavailable: "Instrumentation did not report its state." };
+  try { return { status: failure ? "failed" : "completed", value: JSON.parse(value) }; }
+  catch { return { unavailable: "Instrumentation state was invalid JSON." }; }
+}
+
+async function inputContextEvidence(app: OpenCodeProductionFixture, threadId: string) {
+  const requestedAt = new Date().toISOString();
+  try {
+    const response = await fetch(`${app.url}/api/threads/${threadId}/input-context`, {
+      headers: { Authorization: `Bearer ${app.credential}` }, signal: AbortSignal.timeout(5_000),
+    });
+    const context = threadInputContextSchema.safeParse(await response.json());
+    return { requestedAt, receivedAt: new Date().toISOString(), threadId, httpStatus: response.status,
+      ...(context.success ? { inputContext: context.data } : { invalidInputContext: context.error.issues.map(issue => ({ path: issue.path, code: issue.code })) }) };
+  } catch (error) {
+    return { requestedAt, threadId, readError: error instanceof Error ? error.name : typeof error };
+  }
+}
+
+async function observeScenarioVoice(app: OpenCodeProductionFixture, threadIds: string[]) {
+  type Observation = { receivedAt: string; envelope: unknown; contextAtNotification?: Awaited<ReturnType<typeof inputContextEvidence>> };
+  const notifications: Observation[] = [];
+  const pending = new Set<Promise<void>>();
+  let latestPolicy: unknown = null;
+  let streamError: string | undefined;
+  let stopped = false;
+  const feed = await voiceFeed(app, frame => {
+    if (frame.event === "notification_policy") {
+      const parsed = notificationSettingsSchema.safeParse(frame.value.settings);
+      latestPolicy = parsed.success ? { receivedAt: new Date().toISOString(), generation: frame.value.generation,
+        enabled: parsed.data.enabled, silenced: parsed.data.silenced, revision: parsed.data.revision, delivery: parsed.data.delivery }
+        : { invalidPolicy: true };
+      return;
+    }
+    if (frame.event !== "notification") return;
+    const parsed = voiceNotificationSchema.safeParse(frame.value);
+    if (!parsed.success) {
+      notifications.push({ receivedAt: new Date().toISOString(), envelope: { invalidNotification: parsed.error.issues.map(issue => ({ path: issue.path, code: issue.code })) } });
+      if (notifications.length > 16) notifications.shift();
+      return;
+    }
+    const value = parsed.data;
+    const threadId = value.recognitionTarget?.threadId ?? value.payload.thread?.id;
+    if (!threadId || !threadIds.includes(threadId)) return;
+    const observation: Observation = { receivedAt: new Date().toISOString(), envelope: {
+      sourceEventId: value.sourceEventId, generation: value.generation, voice: value.voice,
+      notificationId: value.payload.notificationId, event: value.payload.event,
+      threadId: value.payload.thread?.id, turnId: value.payload.turn?.id,
+      recognitionTarget: value.recognitionTarget ?? null, origin: value.origin ?? null,
+    } };
+    notifications.push(observation);
+    if (notifications.length > 16) notifications.shift();
+    // Sample authority when the server emits the notice, without delaying its delivery or the device scenario.
+    const read = inputContextEvidence(app, threadId).then(context => { observation.contextAtNotification = context; }).finally(() => { pending.delete(read); });
+    pending.add(read);
+  });
+  const close = async () => {
+    if (stopped) return;
+    stopped = true;
+    try { await feed.close(); } catch (error) { streamError = error instanceof Error ? error.name : typeof error; }
+    await Promise.allSettled([...pending]);
+  };
+  return { close, async report(failed: boolean) {
+    const atFailure = failed ? Promise.all(threadIds.map(threadId => inputContextEvidence(app, threadId))) : undefined;
+    await close();
+    return { latestPolicy, notifications, ...(streamError ? { streamError } : {}),
+      ...(atFailure ? { atFailure: await atFailure } : {}) };
+  } };
 }

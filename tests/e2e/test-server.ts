@@ -4937,6 +4937,7 @@ async function main(): Promise<void> {
       snapshots.publish(eventScope, applicationThreadId),
   });
   const mutations = new ThreadMutationGateway({
+    actors,
     bindings,
     inventory: inventoryRepository,
     lifecycle,

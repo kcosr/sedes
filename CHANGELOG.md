@@ -703,6 +703,9 @@
 
 ### Fixed
 
+- Android automatic listening receives current thread authority after a composer
+  first send, including when no thread view is open.
+
 - Electron managed Local accepts the server's versioned health response.
 
 - Changing a thread setting right after Codex confirmed a Fast mode change

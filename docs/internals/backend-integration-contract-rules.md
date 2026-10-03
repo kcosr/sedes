@@ -1989,6 +1989,18 @@ observation; `canEvict` is exclusively a cleanup-safety check. A thread may
 accept a new ordinary message while its background work or notifications still
 prevent retirement.
 
+Direct-input and automatic-listen activity authority comes from the scoped
+`ConversationActorManager` owner, independently of the thread-view runtime
+coordinator. Observe only cached, current execution actors and never attach,
+hydrate, or recover a provider merely to answer an input-context read. Publish
+actor activity transitions even without an open view so a return to an earlier
+state cannot reuse an old activity token. Closing, maintenance, eviction,
+read-only history, and failed projection recovery provide no current authority.
+Compose automatic-listen readiness with current durable availability, pending
+input/recovery, cached presentation settings, and normalized blocking
+interactions. This shared contract applies to all five backends; steering still
+uses each backend's declared target and delivery capabilities.
+
 Application thread summaries project this observation as optional
 `backgroundWork` category counts, without descriptions or provider identities.
 This is volatile thread/runtime-generation state delivered through the existing

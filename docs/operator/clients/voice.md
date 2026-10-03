@@ -48,6 +48,8 @@ is idle, available, has no blocking interaction or pending input recovery, and
 has not begun newer activity. A missing or stale target leaves an announcement
 without recording. Notifications without client-origin metadata, such as
 automation, remain eligible when explicitly configured to speak then listen.
+Readiness follows the server's current conversation owner even when no thread
+view is open. Reading readiness does not start or reconnect a conversation.
 
 Explicit recording uses the visible foreground thread, then the pinned
 **Voice thread**, then a picker. It can target a running thread. The active
