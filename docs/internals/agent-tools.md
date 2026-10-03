@@ -231,6 +231,18 @@ environments under [Project resources](#project-resources).
   descriptions tell agents to pin or backlog a Task only when the user asks.
   Completing a Task clears both, and pinning or backlogging a completed Task
   is rejected as invalid input.
+- `task.delete@1` (`sedes_task_delete`) accepts `taskId` and
+  `expectedRevision` and returns `{ taskId, deleted: true }`. It deletes only
+  completed Tasks, atomically checking completion and revision under the
+  caller's tenant/principal ownership and admitted resource authority. Open
+  Tasks are rejected as invalid input; stale revisions and retained thread-reset
+  references conflict. Its
+  description says to invoke it only at the user's request. Successful
+  deletion uses the existing Task removal publication and retry path.
+  The tool is available through the shared catalog on each supported agent
+  presentation: Pi Native/CLI, Codex and Claude Native MCP/CLI, Grok CLI, and
+  OpenCode Native/Progressive and eligible owned CLI runtimes. Existing
+  backend restrictions on presentations and topology still apply.
 - `thread.archive@2` names its open-Task dispositions `move_to_project`,
   `move_to_global`, and `keep`; `move_to_project` moves each archived thread's
   open Tasks to that thread's project.

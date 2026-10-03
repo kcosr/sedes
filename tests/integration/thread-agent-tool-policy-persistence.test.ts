@@ -396,6 +396,7 @@ describe("thread agent tool policy persistence", () => {
         "task.get",
         "task.create",
         "task.update",
+        "task.delete",
         "workpad.list",
         "workpad.get",
         "workpad.revisions",

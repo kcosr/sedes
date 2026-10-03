@@ -54,6 +54,84 @@ function fixture() {
 }
 
 describe("task service publication retry", () => {
+  it("publishes a committed completed-task deletion and retries failed publication", async () => {
+    const current = fixture();
+    try {
+      const created = current.repository.create(current.scope, {
+        title: "Completed deletion",
+        scope: { kind: "global" },
+        mutationId: "create-completed-deletion",
+        now: 1_000,
+      });
+      const completed = current.repository.update(current.scope, created.id, {
+        completed: true,
+        expectedRevision: created.revision,
+        mutationId: "complete-deletion",
+        now: 2_000,
+      });
+      const taskExistsAtPublication: boolean[] = [];
+      const publishTaskChange = vi.fn(async (): Promise<void> => {
+        taskExistsAtPublication.push(
+          current.repository.find(current.scope, created.id) !== undefined,
+        );
+        if (publishTaskChange.mock.calls.length === 1) {
+          throw new Error("publication_down");
+        }
+      });
+      const onRetryPending = vi.fn();
+      const service = new TaskService(
+        current.repository,
+        { publishTaskChange },
+        onRetryPending,
+      );
+
+      await expect(
+        service.removeCompleted(
+          current.scope,
+          created.id,
+          completed.revision,
+          3_000,
+        ),
+      ).resolves.toBeUndefined();
+      expect(current.repository.find(current.scope, created.id)).toBeUndefined();
+      expect(publishTaskChange).toHaveBeenCalledWith(current.scope, created.id);
+      expect(taskExistsAtPublication).toEqual([false]);
+      expect(onRetryPending).toHaveBeenCalledTimes(1);
+      expect(service.getNearestDeadline()).toBe(4_000);
+
+      await service.reconcileDue(3_999);
+      expect(publishTaskChange).toHaveBeenCalledTimes(1);
+      await service.reconcileDue(4_000);
+      expect(publishTaskChange).toHaveBeenCalledTimes(2);
+      expect(taskExistsAtPublication).toEqual([false, false]);
+      expect(service.getNearestDeadline()).toBeNull();
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("does not publish a rejected completed-task deletion", async () => {
+    const current = fixture();
+    try {
+      const created = current.repository.create(current.scope, {
+        title: "Still open",
+        scope: { kind: "global" },
+        mutationId: "create-rejected-deletion",
+        now: 1_000,
+      });
+      const publishTaskChange = vi.fn().mockResolvedValue(undefined);
+      const service = new TaskService(current.repository, { publishTaskChange });
+      await expect(
+        service.removeCompleted(current.scope, created.id, created.revision, 2_000),
+      ).rejects.toMatchObject({ code: "bad_request" });
+      expect(current.repository.get(current.scope, created.id)).toEqual(created);
+      expect(publishTaskChange).not.toHaveBeenCalled();
+      expect(service.getNearestDeadline()).toBeNull();
+    } finally {
+      current.database.close();
+    }
+  });
+
   it("returns immediately after admitting a committed create publication", async () => {
     const current = fixture();
     try {

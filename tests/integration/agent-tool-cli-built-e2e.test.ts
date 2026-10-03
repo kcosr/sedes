@@ -81,6 +81,7 @@ const fullToolCatalog = [
   "task.get",
   "task.create",
   "task.update",
+  "task.delete",
   "automation.get",
   "automation.runs",
   "automation.create",
@@ -718,6 +719,12 @@ describe("built Sedes agent-tool CLI", () => {
         },
       });
 
+      await expect(run([
+        "task", "delete", "--task-id", taskId,
+        "--expected-revision", "0", "--json",
+      ])).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("invalid_input") });
+      expect(taskRepository.get(scope, taskId).completedAt).toBeNull();
+
       const updatedTask = JSON.parse(
         (
           await run([
@@ -738,6 +745,20 @@ describe("built Sedes agent-tool CLI", () => {
         completedAt: expect.any(String),
         revision: 1,
       });
+      await expect(run([
+        "task", "delete", "--task-id", taskId,
+        "--expected-revision", "0", "--json",
+      ])).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("conflict") });
+      const deletedTask = JSON.parse((await run([
+        "task", "delete", "--task-id", taskId,
+        "--expected-revision", "1", "--json",
+      ])).stdout);
+      expect(deletedTask).toEqual({ taskId, deleted: true });
+      expect(taskRepository.find(scope, taskId)).toBeUndefined();
+      await expect(run([
+        "tool", "invoke", "task.delete", "--input-json",
+        JSON.stringify({ taskId, expectedRevision: 1 }), "--json",
+      ])).rejects.toMatchObject({ code: 1, stderr: expect.stringContaining("not_found") });
 
       const globalTask = JSON.parse(
         (

@@ -420,6 +420,15 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
     catalog: { groupId: "tasks", label: "Update task", order: 40 },
     effects: { application: "write", modelUsage: "none", external: "none" },
   }),
+  "task.delete": manifestEntry({
+    environmentAuthority: { kind: "direct_resource", resource: "task" },
+    id: "task.delete",
+    schemaVersion: 1,
+    description:
+      "Deletes a completed task at the expected revision. Invoke only at the user’s request.",
+    catalog: { groupId: "tasks", label: "Delete task", order: 50 },
+    effects: { application: "destructive", modelUsage: "none", external: "none" },
+  }),
   "automation.get": manifestEntry({
     environmentAuthority: {
       kind: "direct_resource",

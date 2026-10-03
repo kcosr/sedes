@@ -134,7 +134,7 @@ const grantAuthority = {
 
 describe("agent-tool environment authority", () => {
   it("declares an explicit disposition for the complete canonical catalog", () => {
-    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(37);
+    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(38);
     expect(
       CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES.every(
         ({ environmentAuthority }) => environmentAuthority.kind.length > 0,
@@ -607,6 +607,16 @@ describe("agent-tool environment authority", () => {
         presentationChangedTool,
       ),
     ).toBe(baseline);
+  });
+
+  it("resolves task deletion to the current task environment and revision", () => {
+    const resolver = new AgentToolEnvironmentAuthorityResolver(reader);
+    const resolved = resolver.resolve(request("task.delete", { taskId: "task-b", expectedRevision: 4 }));
+    expect(resolved.targetEnvironmentIds).toEqual(["env-b"]);
+    expect(resolved.resolvedResourceRefs).toContainEqual({
+      kind: "task", id: "task-b", threadId: "thread-b", environmentId: "env-b", revision: 4, label: "Remote task",
+    });
+    expect(() => resolver.resolve(request("task.delete", { taskId: "missing", expectedRevision: 0 }))).toThrow();
   });
 
   it("binds task transition authority to the current task revision", () => {

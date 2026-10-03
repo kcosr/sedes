@@ -177,6 +177,11 @@
 
 ### Added
 
+- Agents can delete completed Tasks at the expected revision with
+  `task.delete` (`sedes_task_delete`). The tool description limits use to
+  the user's request.
+  ([#40](https://github.com/kcosr/sedes/pull/40))
+
 - Tasks have a **Backlog**: open Tasks that aren't current work wait in a
   collapsed Backlog section between the open Tasks and Completed. Send a Task
   there, or take it out, from its ⋯ menu, with the B key, or with the Backlog

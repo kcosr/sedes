@@ -1960,6 +1960,98 @@ describe("task repository", () => {
     }
   });
 
+  it("deletes completed tasks only at the reviewed revision", () => {
+    const current = fixture();
+    try {
+      const created = current.tasks.create(current.scope, {
+        title: "Reviewed completed task",
+        scope: { kind: "global" },
+        mutationId: "create-completed-delete",
+        now: 1_000,
+      });
+      expect(() =>
+        current.tasks.removeCompleted(current.scope, created.id, created.revision),
+      ).toThrow(domainError("bad_request"));
+      expect(current.tasks.get(current.scope, created.id)).toEqual(created);
+
+      const completed = current.tasks.update(current.scope, created.id, {
+        completed: true,
+        expectedRevision: created.revision,
+        mutationId: "complete-delete-target",
+        now: 2_000,
+      });
+      const edited = current.tasks.update(current.scope, created.id, {
+        details: "New work recorded while completed",
+        expectedRevision: completed.revision,
+        mutationId: "edit-completed-delete-target",
+        now: 3_000,
+      });
+      expect(() =>
+        current.tasks.removeCompleted(
+          current.scope,
+          created.id,
+          completed.revision,
+        ),
+      ).toThrow(domainError("task_revision_conflict"));
+      expect(current.tasks.get(current.scope, created.id)).toEqual(edited);
+
+      for (const foreign of [
+        { ...current.scope, principalId: "foreign-principal" },
+        { ...current.scope, tenantId: "foreign-tenant" },
+      ]) {
+        expect(() =>
+          current.tasks.removeCompleted(foreign, created.id, edited.revision),
+        ).toThrow(domainError("not_found"));
+      }
+      expect(current.tasks.get(current.scope, created.id)).toEqual(edited);
+
+      current.tasks.removeCompleted(current.scope, created.id, edited.revision);
+      expect(current.tasks.find(current.scope, created.id)).toBeUndefined();
+      expect(() =>
+        current.tasks.removeCompleted(current.scope, created.id, edited.revision),
+      ).toThrow(domainError("not_found"));
+    } finally {
+      current.database.close();
+    }
+  });
+
+  it("preserves a reopened task for both stale and current delete requests", () => {
+    const current = fixture();
+    try {
+      const created = current.tasks.create(current.scope, {
+        title: "Reopened task",
+        scope: { kind: "thread", threadId: current.firstThreadId },
+        mutationId: "create-reopened-delete",
+        now: 1_000,
+      });
+      const completed = current.tasks.update(current.scope, created.id, {
+        completed: true,
+        expectedRevision: created.revision,
+        mutationId: "complete-reopened-delete",
+        now: 2_000,
+      });
+      const reopened = current.tasks.update(current.scope, created.id, {
+        completed: false,
+        expectedRevision: completed.revision,
+        mutationId: "reopen-delete-target",
+        now: 3_000,
+      });
+      expect(() =>
+        current.tasks.removeCompleted(
+          current.scope,
+          created.id,
+          completed.revision,
+        ),
+      ).toThrow(domainError("task_revision_conflict"));
+      expect(() =>
+        current.tasks.removeCompleted(current.scope, created.id, reopened.revision),
+      ).toThrow(domainError("bad_request"));
+      expect(current.tasks.get(current.scope, created.id)).toEqual(reopened);
+    } finally {
+      current.database.close();
+    }
+  });
+
   it("removes tasks idempotently", () => {
     const current = fixture();
     try {

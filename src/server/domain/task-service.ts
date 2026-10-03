@@ -108,6 +108,16 @@ export class TaskService {
     await this.publishTaskChange(scope, taskId, now);
   }
 
+  async removeCompleted(
+    scope: RequestScope,
+    taskId: string,
+    expectedRevision: number,
+    now = Date.now(),
+  ): Promise<void> {
+    this.repository.removeCompleted(scope, taskId, expectedRevision);
+    await this.publishTaskChange(scope, taskId, now);
+  }
+
   /**
    * Publish a committed task change, queueing a scheduler-driven retry on
    * failure instead of throwing. Also satisfies TaskChangePublisher so other

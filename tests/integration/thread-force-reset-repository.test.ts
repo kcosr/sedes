@@ -970,6 +970,35 @@ describe("thread force-reset repository", () => {
     },
   );
 
+  it("preserves completed tasks retained by force-reset history when deletion is requested", () => {
+    const current = fixture();
+    try {
+      const seeded = prepareRootBlockers(current);
+      const resets = new ThreadForceResetRepository(current.database);
+      const impact = resets.impact(current.scope, current.childId);
+      const reset = resets.forceReset(current.scope, current.childId, {
+        expectedBlockerFingerprint: impact.blockerFingerprint,
+        mutationId: "force-reset-retained-task-delete",
+        now: 700,
+      });
+      expect(reset.promotedTaskIds).toContain(seeded.completedTaskId);
+      const tasks = new TaskRepository(current.database);
+      const completed = tasks.get(current.scope, seeded.completedTaskId);
+      expect(completed.completedAt).not.toBeNull();
+      expect(() =>
+        tasks.removeCompleted(current.scope, completed.id, completed.revision),
+      ).toThrow(
+        expect.objectContaining({
+          code: "conflict",
+          message: "The task is still referenced by a thread reset.",
+        }),
+      );
+      expect(tasks.get(current.scope, completed.id)).toEqual(completed);
+    } finally {
+      current.database.close();
+    }
+  });
+
   it("resets only a prepared fork child when started from it and never reaches its running source", () => {
     const current = fixture();
     try {
