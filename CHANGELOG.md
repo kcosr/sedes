@@ -8,12 +8,12 @@
   Fast mode enable/disable actions with `set_standard`, `set_fast`, and
   `set_ultrafast`. Clients that only know `codex.fast_mode@1` hide the control
   until they are upgraded.
-  (PR pending)
+  ([#44](https://github.com/kcosr/sedes/pull/44))
 
 - The managed Codex TUI uses sidecar capability `codex_managed_tui@2`, which
   accepts the Ultrafast tier. Rebuild and upgrade execution sidecars with the
   server; an older sidecar is rejected at connection.
-  (PR pending)
+  ([#44](https://github.com/kcosr/sedes/pull/44))
 
 - Browser and packaged clients require client protocol 136, which gives every
   Task a `backlog` field. Upgrade clients together with the server.
@@ -194,7 +194,7 @@
   Ultrafast; a model with only Fast keeps the one-click toggle. Saved Agents
   offer every speed the model has. A new tier appears after the Codex daemon
   restarts. Migration 129 widens the stored service-tier values.
-  (PR pending)
+  ([#44](https://github.com/kcosr/sedes/pull/44))
 
 - Opt-in Claude worker lifecycle diagnostics record process exits, cleanup and
   fencing reasons, probe failures, and affected session UUIDs to diagnose
@@ -377,7 +377,7 @@
   returns the thread to Standard, as does reconnecting after the account's
   catalog stops offering it; Ultrafast never steps down to Fast. A managed
   TUI won't start or keep running with a speed the model no longer offers.
-  (PR pending)
+  ([#44](https://github.com/kcosr/sedes/pull/44))
 
 - Tasks View options no longer have a Show group: Completed is always the
   collapsed section at the end of the list. Sorting orders Tasks within each
@@ -695,11 +695,11 @@
 - Changing a thread setting right after Codex confirmed a Fast mode change
   no longer fails with "The Codex thread or settings changed in another
   client." Backend-confirmed settings revisions now reach open clients.
-  (PR pending)
+  ([#44](https://github.com/kcosr/sedes/pull/44))
 
 - Forking a Codex thread with Fast selected no longer fails before the fork
   is created.
-  (PR pending)
+  ([#44](https://github.com/kcosr/sedes/pull/44))
 
 - Deleting or restoring queued inputs no longer causes an unnecessary thread
   reconnect when the HTTP response arrives before older stream updates,
