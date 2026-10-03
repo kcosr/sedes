@@ -102,12 +102,20 @@ public class NativeVoiceE2eTest {
             clickText("Add & connect"); waitJs("document.querySelector('#pairing-token') !== null", 45000);
             input("#pairing-token", pairing); clickText("Pair connection");
             await(() -> runtime.snapshot().optString("originClientId", "").length() > 0 && !runtime.snapshot().isNull("originClientId"), 45000, "native authenticated bootstrap");
-            waitJs("document.querySelector('[aria-label=\"Voice settings\"]') !== null", 30000);
-            click("[aria-label=\"Voice settings\"]"); waitJs("Array.from(document.querySelectorAll('label')).some(x=>x.textContent.trim()==='Adapter URL')", 15000);
+            waitJs("document.querySelector('button[aria-label=\"Open thread navigation\"], button[aria-label=\"Show sidebar\"], button[aria-label=\"Hide sidebar\"]') !== null", 30000);
+            assertEquals("Voice Off hides the bottom bar", "false", js("document.querySelector('[aria-label=\"Voice controls\"]') !== null"));
+            if ("true".equals(js("document.querySelector('button[aria-label=\"Open thread navigation\"]') !== null"))) click("button[aria-label=\"Open thread navigation\"]");
+            else if ("true".equals(js("document.querySelector('button[aria-label=\"Show sidebar\"]') !== null"))) click("button[aria-label=\"Show sidebar\"]");
+            waitJs("document.querySelector('button[aria-label=\"Settings\"]') !== null", 15000);
+            click("button[aria-label=\"Settings\"]");
+            waitJs("document.querySelector('[data-testid=\"settings-page\"][data-page=\"voice\"]') !== null", 15000);
+            click("[data-testid=\"settings-page\"][data-page=\"voice\"]");
+            waitJs("Array.from(document.querySelectorAll('label')).some(x=>x.textContent.trim()==='Adapter URL')", 15000);
             inputByLabel("Adapter URL", adapter); click("[aria-label=\"Save Adapter URL\"]");
             await(() -> adapter.equals(runtime.snapshot().optJSONObject("settings").optString("adapterUrl")), 15000, "adapter URL saved");
             selectByLabel("Audio mode", mode);
             await(() -> runtime.snapshot().optBoolean("ready"), 45000, "native adapter handshake");
+            waitJs("document.querySelector('[aria-label=\"Voice controls\"]') !== null", 15000);
             await(() -> runtime.snapshot().optString("phase").equals("idle"), 10000, "idle after handshake with an empty queue");
             assertTrue("Idle voice must offer explicit recording", runtime.snapshot().optJSONObject("actions").optBoolean("canStart"));
             // Route through the actual bundled application; all subsequent operations use its UI.

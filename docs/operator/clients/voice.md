@@ -70,7 +70,9 @@ Grok has no steering. Spoken input never edits or clears the composer draft.
 - **Skip** ends current speech and retains an eligible listen afterward.
 - **Stop** cancels the current interaction and its automatic listen. It leaves
   other queued notices in place.
-- **Off** clears queued audio and stops voice.
+- **Off** clears queued audio, stops voice, and hides the bottom voice bar and
+  service notification. Open **Settings → Voice** and select Manual or Response
+  to enable voice again.
 - The navigation **Silence notifications** bell cancels automatic voice work
   and silences scripts across clients. Explicit recording remains available.
 - With **Recognize stop command**, only the complete utterances “stop” and

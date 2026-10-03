@@ -383,6 +383,9 @@
 
 ### Changed
 
+- The Android voice bar is hidden when Audio mode is Off. Enable voice again
+  from Settings → Voice.
+
 - Codex Fast mode is now called **Speed** in the composer, docs, and saved
   Agent settings. Changing to a model that doesn't offer the selected speed
   returns the thread to Standard, as does reconnecting after the account's

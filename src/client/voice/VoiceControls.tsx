@@ -34,9 +34,10 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   }, [store, threadId, threadTitle, composerMode, state.native?.connectionGeneration]);
   const native = state.native;
   if (!native) return <div className="voice-controls"><Button variant="ghost" onClick={() => navigate(settingsPath("voice"))}>Voice unavailable</Button></div>;
+  if (native.settings.audioMode === "off") return null;
   const act = (action: () => ReturnType<typeof store.plugin.getState>) => { void store.run(action).catch(() => undefined); };
   const start = () => {
-    if (native.settings.audioMode === "off" || !native.ready) { navigate(settingsPath("voice")); return; }
+    if (!native.ready) { navigate(settingsPath("voice")); return; }
     const available = (id: string | null) => threads.find(thread => thread.id === id && thread.available &&
       (thread.inventoryState === "active" || thread.inventoryState === "settled"));
     const target = available(threadId) ?? available(native.settings.voiceThreadId);
@@ -56,7 +57,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
       <span>{phaseLabel(native.phase)}</span>
     </div> : null}
     <div className="voice-actions">
-      {!busy ? <Button variant="ghost" size="icon" aria-label={native.settings.audioMode === "off" ? "Enable voice" : "Start voice recording"}
+      {!busy ? <Button variant="ghost" size="icon" aria-label="Start voice recording"
         title={native.ready ? "Start voice recording" : voiceReadiness(native.readiness)} disabled={state.pending} onClick={start}><Mic size={18} /></Button> : null}
       {native.actions.canSkip ? <Button variant="ghost" size="icon" disabled={state.pending} aria-label="Skip voice playback" onClick={() => act(() => store.plugin.skipCurrentPlayback(store.commandContext()))}><SkipForward size={18} /></Button> : null}
       {native.actions.canStop ? <Button variant="ghost" size="icon" disabled={state.pending} aria-label="Stop voice interaction" onClick={() => act(() => store.plugin.stopCurrentInteraction(store.commandContext()))}><Square size={16} /></Button> : null}
