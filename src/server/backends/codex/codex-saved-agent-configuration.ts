@@ -14,10 +14,15 @@ import {
   isCodexExecutionPolicyAllowed,
   type CodexExecutionPolicyAllowlist,
 } from "./codex-execution-policy.js";
-import type {
-  CodexExecutionSettingsTuple,
-  CodexServiceTierSelection,
-} from "./codex-thread-execution-settings-repository.js";
+import type { CodexExecutionSettingsTuple } from "./codex-thread-execution-settings-repository.js";
+import {
+  codexModelOffersServiceTier,
+  codexServiceTierSelectionSchema,
+  type CodexAcceleratedServiceTier,
+} from "./codex-service-tier.js";
+
+const SPEED_LABELS: Readonly<Record<CodexAcceleratedServiceTier, string>> =
+  Object.freeze({ fast: "Fast", ultrafast: "Ultrafast" });
 
 export const CODEX_SAVED_AGENT_OVERRIDE_IDS = [
   "model",
@@ -81,8 +86,8 @@ const fieldMetadata: Readonly<
     description: "The reasoning effort supported by the selected model.",
   },
   service_tier: {
-    label: "Service tier",
-    description: "The standard or Fast service tier for the selected model.",
+    label: "Speed",
+    description: "Standard, or a faster speed the selected model offers.",
   },
   sandbox_mode: {
     label: "Sandbox",
@@ -145,8 +150,7 @@ export class CodexSavedAgentConfiguration {
       }
       if (
         (override.id === "service_tier" &&
-          override.value !== "standard" &&
-          override.value !== "fast") ||
+          !codexServiceTierSelectionSchema.safeParse(override.value).success) ||
         (override.id === "sandbox_mode" &&
           !CODEX_SANDBOX_MODES.includes(
             override.value as (typeof CODEX_SANDBOX_MODES)[number],
@@ -245,12 +249,13 @@ export class CodexSavedAgentConfiguration {
     }
 
     const defaultServiceTier =
-      selectedModel.fastMode?.defaultSelection ?? "standard";
-    const serviceTier = (overrides.get("service_tier") ??
-      defaultServiceTier) as CodexServiceTierSelection;
+      selectedModel.serviceTiers?.defaultSelection ?? "standard";
+    const serviceTier = codexServiceTierSelectionSchema.safeParse(
+      overrides.get("service_tier") ?? defaultServiceTier,
+    ).data;
     if (
-      (serviceTier !== "standard" && serviceTier !== "fast") ||
-      (serviceTier === "fast" && !selectedModel.fastMode)
+      serviceTier === undefined ||
+      !codexModelOffersServiceTier(selectedModel, serviceTier)
     ) {
       throw targetUnavailable(
         "The selected Codex service tier is unavailable for this model.",
@@ -335,11 +340,13 @@ export class CodexSavedAgentConfiguration {
       ),
       field(
         "service_tier",
-        input.selectedModel.fastMode?.defaultSelection ?? "standard",
+        input.selectedModel.serviceTiers?.defaultSelection ?? "standard",
         input.settings.serviceTier,
         [
           option("standard", "Standard"),
-          ...(input.selectedModel.fastMode ? [option("fast", "Fast")] : []),
+          ...(input.selectedModel.serviceTiers?.offered ?? []).map(
+            ({ selection }) => option(selection, SPEED_LABELS[selection]),
+          ),
         ],
       ),
       field(

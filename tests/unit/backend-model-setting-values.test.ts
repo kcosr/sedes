@@ -16,17 +16,37 @@ describe("tuple-valued backend model settings", () => {
     const encoded = encodeCodexModelSetting(
       modelId,
       reasoningEffort,
-      true,
-      "fast",
+      ["fast", "ultrafast"],
+      "ultrafast",
     );
 
     expect(encoded.length).toBeGreaterThan(240);
     expect(decodeCodexModelSetting(encoded)).toEqual({
       modelId,
       defaultReasoningEffort: reasoningEffort,
-      supportsFastMode: true,
-      defaultServiceTier: "fast",
+      offeredServiceTiers: ["fast", "ultrafast"],
+      defaultServiceTier: "ultrafast",
     });
+  });
+
+  it("rejects Codex model values whose speeds are not a closed ordered set", () => {
+    const encode = (tuple: unknown) =>
+      `codex-model:${Buffer.from(JSON.stringify(tuple), "utf8").toString("base64url")}`;
+    expect(
+      decodeCodexModelSetting(encode(["gpt", "high", [], "standard"])),
+    ).toMatchObject({ offeredServiceTiers: [], defaultServiceTier: "standard" });
+    for (const tuple of [
+      ["gpt", "high", true, "fast"],
+      ["gpt", "high", ["ultrafast", "fast"], "standard"],
+      ["gpt", "high", ["fast", "fast"], "standard"],
+      ["gpt", "high", ["priority"], "standard"],
+      ["gpt", "high", ["fast"], "ultrafast"],
+      ["gpt", "high", [], "fast"],
+    ]) {
+      expect(() => decodeCodexModelSetting(encode(tuple))).toThrow(
+        "codex_model_setting_invalid",
+      );
+    }
   });
 
   it("carries bounded composite tuples through presentation and mutation", () => {

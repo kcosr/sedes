@@ -291,7 +291,7 @@ describe("Codex interactive action persistence", () => {
     ).toEqual({ kind: "quiet_thread" });
   });
 
-  it("persists Fast mode atomically and synchronizes only after acceptance", async () => {
+  it("persists Fast speed atomically and synchronizes only after acceptance", async () => {
     const syncServiceTier = vi.fn().mockResolvedValue(undefined);
     const current = fixture({ fastModeRuntime: { syncServiceTier } });
     const thread = current.inventory.getThread(
@@ -304,8 +304,8 @@ describe("Codex interactive action persistence", () => {
     )!;
     const operation = {
       action: "perform_provider_feature" as const,
-      feature: { featureId: "codex.fast_mode", schemaVersion: 1 },
-      actionId: "enable",
+      feature: { featureId: "codex.fast_mode", schemaVersion: 2 },
+      actionId: "set_fast",
       arguments: null,
       expectedFeatureRevision: settings.revision,
     };
@@ -354,7 +354,7 @@ describe("Codex interactive action persistence", () => {
     expect(syncServiceTier).not.toHaveBeenCalled();
   });
 
-  it("persists Fast mode on an unbound draft without native synchronization", async () => {
+  it("persists Fast speed on an unbound draft without native synchronization", async () => {
     const syncServiceTier = vi.fn().mockResolvedValue(undefined);
     const current = fixture({
       unbound: true,
@@ -378,8 +378,8 @@ describe("Codex interactive action persistence", () => {
           expectedThreadRevision: thread.revision,
           operation: {
             action: "perform_provider_feature",
-            feature: { featureId: "codex.fast_mode", schemaVersion: 1 },
-            actionId: "enable",
+            feature: { featureId: "codex.fast_mode", schemaVersion: 2 },
+            actionId: "set_fast",
             arguments: null,
             expectedFeatureRevision: settings.revision,
           },
@@ -426,8 +426,8 @@ describe("Codex interactive action persistence", () => {
           expectedThreadRevision: thread.revision,
           operation: {
             action: "perform_provider_feature",
-            feature: { featureId: "codex.fast_mode", schemaVersion: 1 },
-            actionId: "enable",
+            feature: { featureId: "codex.fast_mode", schemaVersion: 2 },
+            actionId: "set_fast",
             arguments: null,
             expectedFeatureRevision: settings.revision,
           },
@@ -439,6 +439,72 @@ describe("Codex interactive action persistence", () => {
       current.settings.find(current.scope, current.codexThreadId)?.desired
         ?.serviceTier,
     ).toBe("fast");
+  });
+
+  it("persists Ultrafast and Standard speeds and rejects retired Fast mode actions", async () => {
+    const syncServiceTier = vi.fn().mockResolvedValue(undefined);
+    const current = fixture({ fastModeRuntime: { syncServiceTier } });
+    const perform = async (mutationId: string, actionId: string, now: number) => {
+      const thread = current.inventory.getThread(
+        current.scope,
+        current.codexThreadId,
+      ).thread;
+      const settings = current.settings.find(
+        current.scope,
+        current.codexThreadId,
+      )!;
+      return current.persistence.performProviderFeature(
+        current.scope,
+        current.codexThreadId,
+        {
+          mutationId,
+          expectedThreadRevision: thread.revision,
+          operation: {
+            action: "perform_provider_feature",
+            feature: { featureId: "codex.fast_mode", schemaVersion: 2 },
+            actionId,
+            arguments: null,
+            expectedFeatureRevision: settings.revision,
+          },
+          now,
+        },
+      );
+    };
+
+    await expect(perform("speed-ultrafast", "set_ultrafast", 410)).resolves.toEqual({
+      applicationOperationId: "speed-ultrafast",
+    });
+    expect(
+      current.settings.find(current.scope, current.codexThreadId)?.desired
+        ?.serviceTier,
+    ).toBe("ultrafast");
+    expect(syncServiceTier).toHaveBeenLastCalledWith(
+      current.scope,
+      current.codexThreadId,
+      "ultrafast",
+    );
+    expect(
+      current.featureMutations.find(current.scope, "speed-ultrafast"),
+    ).toMatchObject({ state: "accepted", result: { serviceTier: "ultrafast" } });
+
+    await expect(perform("speed-standard", "set_standard", 411)).resolves.toEqual({
+      applicationOperationId: "speed-standard",
+    });
+    expect(
+      current.settings.find(current.scope, current.codexThreadId)?.desired
+        ?.serviceTier,
+    ).toBe("standard");
+    expect(syncServiceTier).toHaveBeenLastCalledWith(
+      current.scope,
+      current.codexThreadId,
+      "standard",
+    );
+
+    await expect(perform("speed-retired", "enable", 412)).rejects.toThrow();
+    expect(
+      current.settings.find(current.scope, current.codexThreadId)?.desired
+        ?.serviceTier,
+    ).toBe("standard");
   });
 
   it("notifies a committed execution-policy edit before failed native synchronization", async () => {
@@ -787,7 +853,7 @@ describe("Codex interactive action persistence", () => {
     const modelValue = encodeCodexModelSetting(
       "gpt-5.7-codex",
       "medium",
-      true,
+      ["fast"],
       "standard",
     );
     current.persistence.persistAccepted(current.scope, current.codexThreadId, {
@@ -892,7 +958,7 @@ describe("Codex interactive action persistence", () => {
         value: encodeCodexModelSetting(
           "gpt-fast-capable",
           "medium",
-          true,
+          ["fast"],
           "standard",
         ),
       },
@@ -917,7 +983,7 @@ describe("Codex interactive action persistence", () => {
         value: encodeCodexModelSetting(
           "gpt-standard-only",
           "low",
-          false,
+          [],
           "standard",
         ),
       },
@@ -926,6 +992,57 @@ describe("Codex interactive action persistence", () => {
     expect(
       current.settings.find(current.scope, current.codexThreadId)?.desired,
     ).toMatchObject({ model: "gpt-standard-only", serviceTier: "standard" });
+  });
+
+  it("retains Ultrafast only on models that offer it and never steps down to Fast", () => {
+    const current = fixture();
+    const changeModel = (
+      mutationId: string,
+      model: string,
+      offered: readonly ("fast" | "ultrafast")[],
+      now: number,
+    ) => {
+      const thread = current.inventory.getThread(
+        current.scope,
+        current.codexThreadId,
+      ).thread;
+      const settings = current.settings.find(
+        current.scope,
+        current.codexThreadId,
+      )!;
+      current.persistence.persistAccepted(current.scope, current.codexThreadId, {
+        mutationId,
+        expectedThreadRevision: thread.revision,
+        settingsGuard: { kind: "staged", expectedRevision: settings.revision },
+        operation: {
+          action: "set_setting",
+          settingId: "model",
+          value: encodeCodexModelSetting(model, "medium", offered, "standard"),
+        },
+        now,
+      });
+      return current.settings.find(current.scope, current.codexThreadId)
+        ?.desired;
+    };
+    const settings = current.settings.find(
+      current.scope,
+      current.codexThreadId,
+    )!;
+    current.settings.updateDesired(current.scope, current.codexThreadId, {
+      expectedRevision: settings.revision,
+      desired: { ...settings.desired!, serviceTier: "ultrafast" },
+      now: 690,
+    });
+
+    expect(
+      changeModel("ultrafast-capable", "gpt-ultrafast", ["fast", "ultrafast"], 691),
+    ).toMatchObject({ model: "gpt-ultrafast", serviceTier: "ultrafast" });
+    expect(
+      changeModel("ultrafast-only", "gpt-ultrafast-only", ["ultrafast"], 692),
+    ).toMatchObject({ model: "gpt-ultrafast-only", serviceTier: "ultrafast" });
+    expect(
+      changeModel("fast-only", "gpt-fast-only", ["fast"], 693),
+    ).toMatchObject({ model: "gpt-fast-only", serviceTier: "standard" });
   });
 
   it("persists Goal receipts with replay, fingerprint conflict, and uncertain recovery", async () => {
@@ -1165,7 +1282,7 @@ describe("Codex interactive action persistence", () => {
     const modelValue = encodeCodexModelSetting(
       "gpt-5.7-codex",
       "medium",
-      true,
+      ["fast"],
       "standard",
     );
     current.persistence.persistAccepted(current.scope, current.codexThreadId, {

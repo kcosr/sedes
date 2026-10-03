@@ -10557,11 +10557,13 @@ tr.diff-hunk td {
     opacity var(--motion-fast);
 }
 
-.codex-fast-mode-toggle:hover:not([aria-disabled="true"]) {
+.codex-fast-mode-toggle:hover:not([aria-disabled="true"]),
+.codex-fast-mode-toggle[aria-expanded="true"] {
   background: color-mix(in oklch, var(--warning) 12%, transparent);
 }
 
-.codex-fast-mode-toggle[aria-pressed="true"] {
+/* Fast or Ultrafast selected, as a pressed toggle or as the Speed menu. */
+.codex-fast-mode-toggle[data-accelerated="true"] {
   color: var(--warning);
 }
 

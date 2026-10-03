@@ -875,13 +875,13 @@ describe("Codex production application integration", () => {
               desiredValue: encodeCodexModelSetting(
                 "gpt-5.6-codex",
                 "low",
-                true,
+                ["fast"],
                 "standard",
               ),
               effectiveValue: encodeCodexModelSetting(
                 "gpt-5.6-codex",
                 "low",
-                true,
+                ["fast"],
                 "standard",
               ),
               applicationState: "effective",

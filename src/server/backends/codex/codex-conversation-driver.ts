@@ -6,7 +6,11 @@ import type { ThreadEnvironmentResolver } from "../../environment-variables/runt
 import { createHash } from "node:crypto";
 import { posix as posixPath, win32 as windowsPath } from "node:path";
 import { z } from "zod";
-import { boundDisplayText } from "../../conversations/payload-policy.js";
+import {
+  boundDisplayText,
+  boundText,
+} from "../../conversations/payload-policy.js";
+import { CODEX_SPEED_TIER_DESCRIPTION_MAXIMUM_LENGTH } from "./codex-fast-mode-feature.js";
 import type { ValidatedWorkspace } from "../../execution/contracts.js";
 import { MAXIMUM_BACKEND_SNAPSHOT_OR_PAGE_BYTES } from "../../../shared/protocol/payload.js";
 import {
@@ -112,8 +116,9 @@ import {
   type CodexAgentToolCliEnvironmentResolution,
 } from "./codex-agent-tool-cli-environment.js";
 import {
-  CODEX_NATIVE_FAST_SERVICE_TIER,
-  CODEX_NATIVE_ULTRAFAST_SERVICE_TIER,
+  CODEX_ACCELERATED_SERVICE_TIERS,
+  codexModelOffersServiceTier,
+  decodeCodexCatalogServiceTier,
   encodeCodexServiceTier,
 } from "./codex-service-tier.js";
 import { CodexAppServerBindingError } from "../../provider-protocol/bindings/codex-app-server/codex-app-server-binding.js";
@@ -621,17 +626,15 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         );
       if (supportedReasoningEfforts.length === 0) continue;
       const serviceTierIds = model.serviceTiers.map(({ id }) => id);
-      // Codex 0.153 advertises Ultrafast as a distinct native tier. Sedes has
-      // no corresponding normalized selection, so admit its reviewed catalog
-      // metadata while continuing to project only the pinned Fast tier.
+      // The account-scoped catalog is the only availability authority for
+      // accelerated tiers. Unknown native tiers fail closed.
       if (
         new Set(serviceTierIds).size !== serviceTierIds.length ||
         serviceTierIds.some(
           (id) =>
             id.trim().length === 0 ||
             id.length > 120 ||
-            (id !== CODEX_NATIVE_FAST_SERVICE_TIER &&
-              id !== CODEX_NATIVE_ULTRAFAST_SERVICE_TIER),
+            decodeCodexCatalogServiceTier(id) === undefined,
         )
       ) {
         throw invalidModelCatalog(
@@ -640,10 +643,24 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
             : "codex_model_catalog_service_tier_unknown",
         );
       }
-      const fastTier = model.serviceTiers.find(
-        ({ id }) => id === CODEX_NATIVE_FAST_SERVICE_TIER,
+      const offeredServiceTiers = CODEX_ACCELERATED_SERVICE_TIERS.flatMap(
+        (selection) => {
+          const tier = model.serviceTiers.find(
+            ({ id }) => decodeCodexCatalogServiceTier(id) === selection,
+          );
+          if (!tier) return [];
+          // Byte bounding also bounds the UTF-16 length of the state schema.
+          const description = boundText(
+            tier.description.trim(),
+            CODEX_SPEED_TIER_DESCRIPTION_MAXIMUM_LENGTH,
+          ).text;
+          return [{ selection, ...(description ? { description } : {}) }];
+        },
       );
-      const fastDescription = fastTier?.description.trim();
+      const catalogDefaultServiceTier =
+        model.defaultServiceTier === null
+          ? undefined
+          : decodeCodexCatalogServiceTier(model.defaultServiceTier);
       output.push({
         // model/list has no provider field. Namespace the catalog by the
         // immutable Sedes connection rather than inventing "openai" for
@@ -663,17 +680,17 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         ...(supportedReasoningEfforts.includes(model.defaultReasoningEffort)
           ? { defaultReasoningEffort: model.defaultReasoningEffort }
           : {}),
-        ...(fastTier
+        ...(offeredServiceTiers.length > 0
           ? {
-              fastMode: {
-                supported: true as const,
+              serviceTiers: {
+                offered: offeredServiceTiers,
                 defaultSelection:
-                  model.defaultServiceTier === CODEX_NATIVE_FAST_SERVICE_TIER
-                    ? ("fast" as const)
+                  catalogDefaultServiceTier !== undefined &&
+                  offeredServiceTiers.some(
+                    ({ selection }) => selection === catalogDefaultServiceTier,
+                  )
+                    ? catalogDefaultServiceTier
                     : ("standard" as const),
-                ...(fastDescription
-                  ? { description: boundDisplayText(fastDescription).text }
-                  : {}),
               },
             }
           : {}),
@@ -1615,7 +1632,7 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
       input.scope,
       input.childApplicationThreadId,
     );
-    if (childDesired?.serviceTier === "fast") {
+    if (childDesired && childDesired.serviceTier !== "standard") {
       const currentModels = await this.#modelCatalogFresh({
         scope: input.scope,
         workspace: input.workspace,
@@ -1625,7 +1642,10 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
           candidate.provider === this.connection.id &&
           candidate.id === childDesired.model,
       );
-      if (selectedModel && !selectedModel.fastMode) {
+      if (
+        selectedModel &&
+        !codexModelOffersServiceTier(selectedModel, childDesired.serviceTier)
+      ) {
         this.#executionSettings.resolveFastModeDisabled(input.scope, {
           applicationThreadId: input.childApplicationThreadId,
           now: this.#nowMilliseconds(),
@@ -2588,8 +2608,8 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
     if (
       !model ||
       !model.supportedReasoningEfforts?.includes(settings.reasoningEffort) ||
-      (settings.serviceTier === "fast" &&
-        (!model.fastMode ||
+      (settings.serviceTier !== "standard" &&
+        (!codexModelOffersServiceTier(model, settings.serviceTier) ||
           (fastModeApplicationThreadId !== undefined &&
             (fastModeProjection?.availability !== "available" ||
               fastModeProjection.enabled !== true))))

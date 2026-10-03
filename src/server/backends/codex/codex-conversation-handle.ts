@@ -2497,7 +2497,7 @@ export class CodexConversationHandle implements ConversationHandle {
   ): Promise<CodexSettingsObservationReceipt> {
     if (
       desired === undefined ||
-      (desired === "fast" && !fastModeEnabled) ||
+      (desired !== "standard" && !fastModeEnabled) ||
       (observation.settings.serviceTierClassification === "recognized" &&
         observation.settings.serviceTier === desired)
     ) {

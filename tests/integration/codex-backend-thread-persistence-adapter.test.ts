@@ -823,8 +823,8 @@ describe("Codex backend thread persistence adapter", () => {
             supportedReasoningEfforts: ["low"],
             defaultReasoningEffort: "low",
             inputModalities: ["text"],
-            fastMode: {
-              supported: true,
+            serviceTiers: {
+              offered: [{ selection: "fast" }],
               defaultSelection: "fast",
             },
           },

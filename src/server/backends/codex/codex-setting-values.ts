@@ -1,14 +1,20 @@
+import {
+  CODEX_ACCELERATED_SERVICE_TIERS,
+  type CodexAcceleratedServiceTier,
+  type CodexServiceTierSelection,
+} from "./codex-service-tier.js";
+
 export function encodeCodexModelSetting(
   modelId: string,
   defaultReasoningEffort: string,
-  supportsFastMode: boolean,
-  defaultServiceTier: "standard" | "fast",
+  offeredServiceTiers: readonly CodexAcceleratedServiceTier[],
+  defaultServiceTier: CodexServiceTierSelection,
 ): string {
   const value = `codex-model:${Buffer.from(
     JSON.stringify([
       modelId,
       defaultReasoningEffort,
-      supportsFastMode,
+      offeredServiceTiers,
       defaultServiceTier,
     ]),
     "utf8",
@@ -20,8 +26,8 @@ export function encodeCodexModelSetting(
 export function decodeCodexModelSetting(value: string): {
   readonly modelId: string;
   readonly defaultReasoningEffort: string;
-  readonly supportsFastMode: boolean;
-  readonly defaultServiceTier: "standard" | "fast";
+  readonly offeredServiceTiers: readonly CodexAcceleratedServiceTier[];
+  readonly defaultServiceTier: CodexServiceTierSelection;
 } {
   if (!value.startsWith("codex-model:")) {
     throw new Error("codex_model_setting_invalid");
@@ -46,16 +52,33 @@ export function decodeCodexModelSetting(value: string): {
     typeof decoded[1] !== "string" ||
     decoded[1].length === 0 ||
     decoded[1].length > 120 ||
-    typeof decoded[2] !== "boolean" ||
-    (decoded[3] !== "standard" && decoded[3] !== "fast") ||
-    (!decoded[2] && decoded[3] !== "standard")
+    !isOfferedServiceTierList(decoded[2]) ||
+    (decoded[3] !== "standard" && !decoded[2].includes(decoded[3]))
   ) {
     throw new Error("codex_model_setting_invalid");
   }
   return {
     modelId: decoded[0] as string,
     defaultReasoningEffort: decoded[1] as string,
-    supportsFastMode: decoded[2] as boolean,
-    defaultServiceTier: decoded[3] as "standard" | "fast",
+    offeredServiceTiers: decoded[2],
+    defaultServiceTier: decoded[3] as CodexServiceTierSelection,
   };
+}
+
+/** Unique accelerated tiers in Sedes order. */
+function isOfferedServiceTierList(
+  value: unknown,
+): value is CodexAcceleratedServiceTier[] {
+  return (
+    Array.isArray(value) &&
+    value.every((tier) =>
+      (CODEX_ACCELERATED_SERVICE_TIERS as readonly unknown[]).includes(tier),
+    ) &&
+    value.every(
+      (tier, index) =>
+        index === 0 ||
+        CODEX_ACCELERATED_SERVICE_TIERS.indexOf(value[index - 1]) <
+          CODEX_ACCELERATED_SERVICE_TIERS.indexOf(tier),
+    )
+  );
 }

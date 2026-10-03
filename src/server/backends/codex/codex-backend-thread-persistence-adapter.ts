@@ -301,7 +301,7 @@ export class CodexBackendThreadPersistenceAdapter
     this.initializeResolvedNewThread(scope, applicationThreadId, connection, {
       model: model.id,
       reasoningEffort: model.defaultReasoningEffort!,
-      serviceTier: model.fastMode?.defaultSelection ?? "standard",
+      serviceTier: model.serviceTiers?.defaultSelection ?? "standard",
       sandboxMode: defaults.sandboxMode,
       networkAccess: defaults.networkAccess,
       approvalPolicy: defaults.approvalPolicy,

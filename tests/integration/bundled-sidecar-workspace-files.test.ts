@@ -764,7 +764,7 @@ describe("bundled sedes sidecar", () => {
             { capabilityId: "workspace_files", majorVersion: 8 },
             { capabilityId: "codex_runtime", majorVersion: 1 },
             { capabilityId: "interactive_terminal", majorVersion: 2 },
-            { capabilityId: "codex_managed_tui", majorVersion: 1 },
+            { capabilityId: "codex_managed_tui", majorVersion: 2 },
           ],
           offeredSedesCapabilities: [],
         });

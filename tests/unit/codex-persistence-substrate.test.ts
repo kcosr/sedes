@@ -219,7 +219,7 @@ describe("Codex interactive presentation collaborators", () => {
     const selectedModelValue = encodeCodexModelSetting(
       "gpt-5.6-codex",
       "high",
-      false,
+      [],
       "standard",
     );
     expect(
@@ -378,7 +378,7 @@ describe("Codex interactive presentation collaborators", () => {
     expect(presentation.automationAllowed).toBe(true);
   });
 
-  it("advertises Fast mode only for an enabled loaded thread and supported model", async () => {
+  it("advertises Speed only for an enabled loaded thread and supported model", async () => {
     const provider = presentationProvider({
       fastModeRuntime: {
         projection: () => ({
@@ -415,10 +415,14 @@ describe("Codex interactive presentation collaborators", () => {
             supportedReasoningEfforts: ["low", "high"],
             defaultReasoningEffort: "low",
             inputModalities: ["text"],
-            fastMode: {
-              supported: true,
+            serviceTiers: {
+              offered: [
+                {
+                  selection: "fast",
+                  description: "About 1.5x faster with higher usage.",
+                },
+              ],
               defaultSelection: "standard",
-              description: "About 1.5x faster with higher usage.",
             },
           },
         ],
@@ -438,20 +442,26 @@ describe("Codex interactive presentation collaborators", () => {
     expect(presentation.providerFeatureCapabilities[1]).toMatchObject({
       revision: 0,
       availability: "available",
-      operations: [expect.objectContaining({ actionId: "enable" })],
+      operations: [expect.objectContaining({ actionId: "set_fast" })],
     });
     expect(presentation.providerFeatureStates[1]).toMatchObject({
-      ref: { featureId: "codex.fast_mode", schemaVersion: 1 },
+      ref: { featureId: "codex.fast_mode", schemaVersion: 2 },
       revision: 0,
       state: boundValue({
         desired: "standard",
         effective: "standard",
         applicationState: "applied",
+        offered: [
+          {
+            selection: "fast",
+            description: "About 1.5x faster with higher usage.",
+          },
+        ],
       }),
     });
   });
 
-  it("advertises Fast mode as pending on an eligible unbound draft", async () => {
+  it("advertises Speed as pending on an eligible unbound draft", async () => {
     const provider = presentationProvider({ backingState: "unbound" });
     const presentation = await provider.read({
       scope,
@@ -480,10 +490,14 @@ describe("Codex interactive presentation collaborators", () => {
             supportedReasoningEfforts: ["low", "high"],
             defaultReasoningEffort: "low",
             inputModalities: ["text"],
-            fastMode: {
-              supported: true,
+            serviceTiers: {
+              offered: [
+                {
+                  selection: "fast",
+                  description: "About 1.5x faster with higher usage.",
+                },
+              ],
               defaultSelection: "standard",
-              description: "About 1.5x faster with higher usage.",
             },
           },
         ],
@@ -503,16 +517,118 @@ describe("Codex interactive presentation collaborators", () => {
     expect(presentation.providerFeatureCapabilities[1]).toMatchObject({
       revision: 0,
       availability: "available",
-      operations: [expect.objectContaining({ actionId: "enable" })],
+      operations: [expect.objectContaining({ actionId: "set_fast" })],
     });
     expect(presentation.providerFeatureStates[1]).toMatchObject({
-      ref: { featureId: "codex.fast_mode", schemaVersion: 1 },
+      ref: { featureId: "codex.fast_mode", schemaVersion: 2 },
       revision: 0,
       state: boundValue({
         desired: "standard",
         effective: null,
         applicationState: "pending",
+        offered: [
+          {
+            selection: "fast",
+            description: "About 1.5x faster with higher usage.",
+          },
+        ],
       }),
+    });
+  });
+
+  it("offers every catalog speed except the current one and encodes them in model values", async () => {
+    const provider = presentationProvider({
+      desiredServiceTier: "ultrafast",
+      fastModeRuntime: {
+        projection: () => ({
+          revision: 1,
+          enabled: true,
+          availability: "available" as const,
+        }),
+      },
+    });
+    const presentation = await provider.read({
+      scope,
+      applicationThreadId: "thread-one",
+      backend,
+      connection,
+      workspace: {
+        authorityRevision: 0,
+        summary: {
+          id: "workspace-one",
+          environmentId: connection.executionEnvironmentId,
+          displayName: "Workspace",
+          displayPath: "/workspace",
+          availability: "available",
+          trustState: "trusted",
+          revision: 0,
+        },
+        canonicalPath: "/workspace",
+      },
+      catalog: {
+        models: [
+          {
+            provider: connection.id,
+            id: "gpt-5.6-codex",
+            label: "GPT-5.6 Codex",
+            supportedReasoningEfforts: ["low", "high"],
+            defaultReasoningEffort: "low",
+            inputModalities: ["text"],
+            serviceTiers: {
+              offered: [
+                { selection: "fast" },
+                {
+                  selection: "ultrafast",
+                  description: "The fastest available responses.",
+                },
+              ],
+              defaultSelection: "fast",
+            },
+          },
+        ],
+        commands: [],
+        skills: [],
+        notices: [],
+      },
+      effectiveSettings: {
+        model: { provider: connection.id, id: "gpt-5.6-codex" },
+        thinkingLevel: "high",
+      },
+    });
+
+    expect(presentation.providerFeatureCapabilities[1]).toMatchObject({
+      ref: { featureId: "codex.fast_mode", schemaVersion: 2 },
+      availability: "available",
+    });
+    expect(
+      presentation.providerFeatureCapabilities[1]!.operations.map(
+        ({ actionId }) => actionId,
+      ),
+    ).toEqual(["set_standard", "set_fast"]);
+    expect(presentation.providerFeatureStates[1]).toMatchObject({
+      state: boundValue({
+        desired: "ultrafast",
+        effective: "ultrafast",
+        applicationState: "applied",
+        offered: [
+          { selection: "fast" },
+          {
+            selection: "ultrafast",
+            description: "The fastest available responses.",
+          },
+        ],
+      }),
+    });
+    expect(
+      presentation.settings.values.find(({ id }) => id === "model"),
+    ).toMatchObject({
+      desiredValue: encodeCodexModelSetting(
+        "gpt-5.6-codex",
+        "high",
+        ["fast", "ultrafast"],
+        "fast",
+      ),
+      applicationState: "effective",
     });
   });
 
@@ -554,8 +670,8 @@ describe("Codex interactive presentation collaborators", () => {
             supportedReasoningEfforts: ["low", "high"],
             defaultReasoningEffort: "low",
             inputModalities: ["text"],
-            fastMode: {
-              supported: true,
+            serviceTiers: {
+              offered: [{ selection: "fast" }],
               defaultSelection: "standard",
             },
           },
@@ -571,7 +687,7 @@ describe("Codex interactive presentation collaborators", () => {
     });
 
     expect(presentation.providerFeatureCapabilities[1]).toMatchObject({
-      ref: { featureId: "codex.fast_mode", schemaVersion: 1 },
+      ref: { featureId: "codex.fast_mode", schemaVersion: 2 },
       availability: "read_only",
       operations: [],
     });
@@ -580,6 +696,7 @@ describe("Codex interactive presentation collaborators", () => {
         desired: "standard",
         effective: "standard",
         applicationState: "unknown",
+        offered: [{ selection: "fast" }],
       }),
     });
   });
@@ -653,6 +770,7 @@ function presentationProvider(
     readonly backingState?: "unbound" | "bound";
     readonly modelPolicy?: CompiledBackendModelPolicy;
     readonly desiredExecutionPolicy?: CodexExecutionPolicySelection;
+    readonly desiredServiceTier?: "standard" | "fast" | "ultrafast";
   } = {},
 ): CodexThreadPresentationProvider {
   const backingState = input.backingState ?? "bound";
@@ -670,7 +788,7 @@ function presentationProvider(
       desired: {
         model: "gpt-5.6-codex",
         reasoningEffort: "high",
-        serviceTier: "standard",
+        serviceTier: input.desiredServiceTier ?? "standard",
         ...(input.desiredExecutionPolicy ?? defaultExecutionPolicy),
       },
       effective:
@@ -678,7 +796,7 @@ function presentationProvider(
           ? {
               model: "gpt-5.6-codex",
               reasoningEffort: "high",
-              serviceTier: "standard",
+              serviceTier: input.desiredServiceTier ?? "standard",
               serviceTierClassification: "recognized",
               sandboxMode: "read-only",
               sandboxClassification: "recognized",

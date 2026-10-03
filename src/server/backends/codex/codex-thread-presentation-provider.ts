@@ -16,8 +16,14 @@ import {
 } from "./codex-execution-feature.js";
 import {
   CODEX_FAST_MODE_FEATURE_REF,
-  type CodexFastModeStateV1,
+  CODEX_SPEED_ACTION_BY_SELECTION,
+  type CodexFastModeStateV2,
 } from "./codex-fast-mode-feature.js";
+import {
+  CODEX_ACCELERATED_SERVICE_TIERS,
+  codexModelOffersServiceTier,
+  type CodexServiceTierSelection,
+} from "./codex-service-tier.js";
 import {
   availableCodexGoalActionIds,
   CODEX_GOAL_FEATURE_REF,
@@ -129,8 +135,9 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
           value: encodeCodexModelSetting(
             model.id,
             selectedReasoningEffort,
-            model.fastMode?.supported === true,
-            model.fastMode?.defaultSelection ?? "standard",
+            model.serviceTiers?.offered.map(({ selection }) => selection) ??
+              [],
+            model.serviceTiers?.defaultSelection ?? "standard",
           ),
         }));
       } catch {
@@ -250,8 +257,10 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
       !catalogKnown ||
       (desiredModel !== undefined &&
         reasoningOptions.includes(settings.desired?.reasoningEffort ?? "") &&
-        (settings.desired?.serviceTier !== "fast" ||
-          desiredModel.fastMode?.supported === true));
+        codexModelOffersServiceTier(
+          desiredModel,
+          settings.desired?.serviceTier ?? "standard",
+        ));
     const catalogSupportsEffective =
       !catalogKnown ||
       settings.effective === null ||
@@ -259,8 +268,10 @@ export class CodexThreadPresentationProvider implements ThreadBackendPresentatio
         effectiveModel.supportedReasoningEfforts?.includes(
           settings.effective.reasoningEffort,
         ) === true &&
-        (settings.effective.serviceTier !== "fast" ||
-          effectiveModel.fastMode?.supported === true));
+        codexModelOffersServiceTier(
+          effectiveModel,
+          settings.effective.serviceTier ?? "standard",
+        ));
     const state = applicationState(
       settings,
       thread.backingState,
@@ -600,7 +611,7 @@ function fastModeFeaturePresentation(input: {
   | {
       readonly revision: number;
       readonly availability: "available" | "read_only";
-      readonly state: CodexFastModeStateV1;
+      readonly state: CodexFastModeStateV2;
       readonly capability: ReturnType<
         typeof compiledProviderFeatureRegistry.capability
       >;
@@ -609,79 +620,67 @@ function fastModeFeaturePresentation(input: {
       >;
     }
   | undefined {
-  if (
-    !input.settings.desired ||
-    input.desiredModel?.fastMode?.supported !== true
-  ) {
+  const offered = input.desiredModel?.serviceTiers?.offered;
+  if (!input.settings.desired || !offered?.length) {
     return undefined;
   }
   const desired = input.settings.desired.serviceTier;
   const revision = input.settings.revision;
+  const offeredState: CodexFastModeStateV2["offered"] = offered.map(
+    ({ selection, description }) => ({
+      selection,
+      ...(description ? { description } : {}),
+    }),
+  );
+  // Every offered speed other than the current one; Standard is always
+  // offered. The mutation gateway admits only these operations.
+  const selectableOperationIds = (
+    ["standard", ...offered.map(({ selection }) => selection)] as const
+  )
+    .filter((selection) => selection !== desired)
+    .map((selection) => CODEX_SPEED_ACTION_BY_SELECTION[selection]);
+  let availability: "available" | "read_only";
+  let state: CodexFastModeStateV2;
+  let unavailableReason: string | undefined;
   if (input.backingState === "unbound") {
-    const availability =
-      input.enabledAutomation === 0
-        ? ("available" as const)
-        : ("read_only" as const);
-    const state: CodexFastModeStateV1 = {
+    availability = input.enabledAutomation === 0 ? "available" : "read_only";
+    unavailableReason = "Disable the automation before changing Speed.";
+    state = {
       desired,
       effective: null,
       applicationState: "pending",
+      offered: offeredState,
     };
-    const capability = compiledProviderFeatureRegistry.capability(
-      CODEX_FAST_MODE_FEATURE_REF,
-      "codex_app_server",
-      {
-        revision,
-        availability,
-        ...(availability === "available"
-          ? {}
-          : {
-              unavailableReason: boundDisplayText(
-                "Disable the automation before changing Fast mode.",
-              ),
-            }),
-        allowedOperationIds:
-          availability === "available"
-            ? [desired === "fast" ? "disable" : "enable"]
-            : [],
-      },
+  } else {
+    if (input.backingState !== "bound") return undefined;
+    const projection = input.runtime?.projection(
+      input.scope,
+      input.applicationThreadId,
     );
-    return {
-      revision,
-      availability,
-      state,
-      capability,
-      stateEnvelope: compiledProviderFeatureRegistry.stateEnvelope({
-        ref: CODEX_FAST_MODE_FEATURE_REF,
-        backendKind: "codex_app_server",
-        revision,
-        providerState: state,
-      }),
+    if (!projection?.enabled) return undefined;
+    availability =
+      input.enabledAutomation === 0 && projection.availability === "available"
+        ? "available"
+        : "read_only";
+    unavailableReason =
+      input.enabledAutomation > 0
+        ? "Disable the automation before changing Speed."
+        : "Speed is temporarily unavailable while Codex reconnects.";
+    const effective = input.settings.effective?.serviceTier ?? null;
+    state = {
+      desired,
+      effective,
+      applicationState:
+        projection.availability !== "available" ||
+        input.settings.effectiveConfirmationState !== "confirmed" ||
+        input.settings.effective?.serviceTierClassification !== "recognized"
+          ? "unknown"
+          : desired === effective
+            ? "applied"
+            : "pending",
+      offered: offeredState,
     };
   }
-  if (input.backingState !== "bound") return undefined;
-  const projection = input.runtime?.projection(
-    input.scope,
-    input.applicationThreadId,
-  );
-  if (!projection?.enabled) return undefined;
-  const availability =
-    input.enabledAutomation === 0 && projection.availability === "available"
-      ? ("available" as const)
-      : ("read_only" as const);
-  const effective = input.settings.effective?.serviceTier ?? null;
-  const state: CodexFastModeStateV1 = {
-    desired,
-    effective,
-    applicationState:
-      projection.availability !== "available" ||
-      input.settings.effectiveConfirmationState !== "confirmed" ||
-      input.settings.effective?.serviceTierClassification !== "recognized"
-        ? "unknown"
-        : desired === effective
-          ? "applied"
-          : "pending",
-  };
   const capability = compiledProviderFeatureRegistry.capability(
     CODEX_FAST_MODE_FEATURE_REF,
     "codex_app_server",
@@ -690,17 +689,9 @@ function fastModeFeaturePresentation(input: {
       availability,
       ...(availability === "available"
         ? {}
-        : {
-            unavailableReason: boundDisplayText(
-              input.enabledAutomation > 0
-                ? "Disable the automation before changing Fast mode."
-                : "Fast mode is temporarily unavailable while Codex reconnects.",
-            ),
-          }),
+        : { unavailableReason: boundDisplayText(unavailableReason) }),
       allowedOperationIds:
-        availability === "available"
-          ? [desired === "fast" ? "disable" : "enable"]
-          : [],
+        availability === "available" ? selectableOperationIds : [],
     },
   );
   return {
@@ -739,16 +730,19 @@ function modelSettingValue(
   modelId: string | undefined,
   reasoningEffort: string | undefined,
   descriptor: BackendModelDescriptor | undefined,
-  selectedServiceTier: "standard" | "fast" | undefined,
+  selectedServiceTier: CodexServiceTierSelection | undefined,
 ): string | null {
   if (!modelId || !reasoningEffort) return null;
   try {
     return encodeCodexModelSetting(
       modelId,
       reasoningEffort,
-      descriptor?.fastMode?.supported === true ||
-        selectedServiceTier === "fast",
-      descriptor?.fastMode?.defaultSelection ?? "standard",
+      CODEX_ACCELERATED_SERVICE_TIERS.filter(
+        (selection) =>
+          selection === selectedServiceTier ||
+          codexModelOffersServiceTier(descriptor, selection),
+      ),
+      descriptor?.serviceTiers?.defaultSelection ?? "standard",
     );
   } catch {
     return null;

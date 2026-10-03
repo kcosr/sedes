@@ -1222,24 +1222,43 @@ describe("CodexConversationBackendDriver", () => {
     ).resolves.toEqual(expect.objectContaining({ models: expect.any(Array) }));
   });
 
-  it("normalizes only Fast from the Codex 0.160 service-tier catalog", async () => {
+  it("normalizes Fast and Ultrafast from the Codex 0.160 service-tier catalog", async () => {
     const harness = new RpcHarness();
     harness.enqueue("model/list", {
       data: [
         nativeModel({
+          // Native order does not decide Sedes order.
           serviceTiers: [
-            {
-              id: "priority",
-              name: "Fast",
-              description: " Faster responses with higher usage. ",
-            },
             {
               id: "ultrafast",
               name: "Ultrafast",
               description: "The fastest available responses.",
             },
+            {
+              id: "priority",
+              name: "Fast",
+              description: " Faster responses with higher usage. ",
+            },
+          ],
+          defaultServiceTier: "ultrafast",
+        }),
+        nativeModel({
+          id: "gpt-5.6-mini",
+          model: "gpt-5.6-mini",
+          displayName: "GPT-5.6 Mini",
+          isDefault: false,
+          serviceTiers: [
+            { id: "priority", name: "Fast", description: "  " },
           ],
           defaultServiceTier: "priority",
+        }),
+        nativeModel({
+          id: "gpt-5.6-nano",
+          model: "gpt-5.6-nano",
+          displayName: "GPT-5.6 Nano",
+          isDefault: false,
+          serviceTiers: [],
+          defaultServiceTier: null,
         }),
       ],
       nextCursor: null,
@@ -1256,13 +1275,63 @@ describe("CodexConversationBackendDriver", () => {
         inputModalities: ["text"],
         supportedReasoningEfforts: ["low", "high"],
         defaultReasoningEffort: "low",
-        fastMode: {
-          supported: true,
-          defaultSelection: "fast",
-          description: "Faster responses with higher usage.",
+        serviceTiers: {
+          offered: [
+            {
+              selection: "fast",
+              description: "Faster responses with higher usage.",
+            },
+            {
+              selection: "ultrafast",
+              description: "The fastest available responses.",
+            },
+          ],
+          defaultSelection: "ultrafast",
         },
       },
+      {
+        provider: connection.id,
+        id: "gpt-5.6-mini",
+        label: "GPT-5.6 Mini",
+        inputModalities: ["text"],
+        supportedReasoningEfforts: ["low", "high"],
+        defaultReasoningEffort: "low",
+        serviceTiers: {
+          offered: [{ selection: "fast" }],
+          defaultSelection: "fast",
+        },
+      },
+      {
+        provider: connection.id,
+        id: "gpt-5.6-nano",
+        label: "GPT-5.6 Nano",
+        inputModalities: ["text"],
+        supportedReasoningEfforts: ["low", "high"],
+        defaultReasoningEffort: "low",
+      },
     ]);
+  });
+
+  it("bounds catalog speed descriptions to the Speed state limit", async () => {
+    const harness = new RpcHarness();
+    harness.enqueue("model/list", {
+      data: [
+        nativeModel({
+          serviceTiers: [
+            { id: "ultrafast", name: "Ultrafast", description: "é".repeat(400) },
+          ],
+          defaultServiceTier: null,
+        }),
+      ],
+      nextCursor: null,
+    });
+
+    const [model] = (await driver(harness).catalog({ scope, workspace }))
+      .models;
+    const description = model?.serviceTiers?.offered[0]?.description ?? "";
+    expect(Buffer.byteLength(description, "utf8")).toBeLessThanOrEqual(240);
+    expect(description.length).toBeGreaterThan(100);
+    expect(model?.serviceTiers?.defaultSelection).toBe("standard");
   });
 
   it("rejects duplicate and unknown catalog service tiers", async () => {
@@ -1319,10 +1388,10 @@ describe("CodexConversationBackendDriver", () => {
     ).resolves.toMatchObject({
       models: [
         expect.objectContaining({
-          fastMode: expect.objectContaining({
-            supported: true,
+          serviceTiers: {
+            offered: [{ selection: "fast", description: "Fast" }],
             defaultSelection: "standard",
-          }),
+          },
         }),
       ],
     });
@@ -9215,6 +9284,118 @@ describe("CodexConversationHandle", () => {
     ).toMatchObject({ serviceTier: "priority" });
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
+  });
+
+  it("replays a durable Ultrafast tier and submits it only while the catalog offers it", async () => {
+    const fastModeFeature = {
+      name: "fast_mode",
+      stage: "stable",
+      displayName: "Fast mode",
+      description: null,
+      announcement: null,
+      enabled: true,
+      defaultEnabled: false,
+    };
+    const ultrafastSettings = executionSettingsTuple({
+      serviceTier: "ultrafast",
+    });
+    const establishUltrafast = async () => {
+      const harness = new RpcHarness();
+      const settings = executionSettingsProvider({
+        desiredSettings: () => ultrafastSettings,
+        freezeOperationSnapshot: () => ({ settings: ultrafastSettings }),
+      });
+      const handle = await attachIdle(
+        harness,
+        driver(
+          harness,
+          connection,
+          new CodexConversationOwnershipRegistry(),
+          { type: "catalog" },
+          settings,
+        ),
+      );
+      harness.enqueue("thread/read", { thread: nativeThread() });
+      harness.enqueue("thread/resume", resumeResult());
+      harness.enqueue("experimentalFeature/list", {
+        data: [fastModeFeature],
+        nextCursor: null,
+      });
+      harness.enqueue("thread/settings/update", {});
+      await handle.establishProjection({
+        signal: new AbortController().signal,
+      });
+      return { harness, handle };
+    };
+    const submitInput = (id: string) => ({
+      applicationOperationId: `${id}-submit`,
+      source: { kind: "user" } as const,
+      mutationId: `${id}-mutation`,
+      reconciliationToken: `${id}-token`,
+      taskContexts: [],
+      contextExcerpts: [],
+      attachments: [],
+      text: "continue very quickly",
+    });
+
+    const offered = await establishUltrafast();
+    expect(
+      offered.harness.calls.find(({ method }) => method === "thread/resume")
+        ?.params,
+    ).toMatchObject({ serviceTier: "ultrafast" });
+    expect(
+      offered.harness.calls.find(
+        ({ method }) => method === "thread/settings/update",
+      )?.params,
+    ).toEqual({ threadId: "thread-1", serviceTier: "ultrafast" });
+    offered.harness.enqueue("model/list", {
+      data: [
+        nativeModel({
+          serviceTiers: [
+            { id: "priority", name: "Fast", description: "Fast" },
+            { id: "ultrafast", name: "Ultrafast", description: "Fastest" },
+          ],
+        }),
+      ],
+      nextCursor: null,
+    });
+    offered.harness.enqueue("turn/start", {
+      turn: {
+        ...nativeTurn(1),
+        items: [],
+        itemsView: "notLoaded",
+        status: "inProgress",
+        completedAt: null,
+      },
+    });
+    await offered.handle.submit(submitInput("ultrafast"));
+    expect(
+      offered.harness.calls.find(({ method }) => method === "turn/start")
+        ?.params,
+    ).toMatchObject({ serviceTier: "ultrafast" });
+    offered.harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await offered.handle.close();
+
+    const withdrawn = await establishUltrafast();
+    withdrawn.harness.enqueue("model/list", {
+      data: [
+        nativeModel({
+          serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
+        }),
+      ],
+      nextCursor: null,
+    });
+    await expect(
+      withdrawn.handle.submit(submitInput("withdrawn")),
+    ).rejects.toMatchObject({
+      backendCode: "codex_execution_settings_catalog_rejected",
+      crossedSubmissionBoundary: false,
+    });
+    expect(
+      withdrawn.harness.calls.some(({ method }) => method === "turn/start"),
+    ).toBe(false);
+    withdrawn.harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await withdrawn.handle.close();
   });
 
   it("does not replay a durable Fast tier when the loaded thread disables fast_mode", async () => {

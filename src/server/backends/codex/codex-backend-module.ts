@@ -50,6 +50,7 @@ import type {
 import {
   CodexThreadExecutionSettingsRepository,
   type CodexExecutionSettingsTuple,
+  type CodexServiceTierSelection,
 } from "./codex-thread-execution-settings-repository.js";
 import { codexForkSettingsEligibility } from "./codex-fork-settings-eligibility.js";
 import {
@@ -1050,7 +1051,7 @@ function sameExecutionSettings(
   left: {
     readonly model: string;
     readonly reasoningEffort: string;
-    readonly serviceTier: "standard" | "fast" | null;
+    readonly serviceTier: CodexServiceTierSelection | null;
     readonly serviceTierClassification: "recognized" | "external_custom";
     readonly sandboxMode: string | null;
     readonly sandboxClassification: "recognized" | "external_custom";
@@ -1064,7 +1065,7 @@ function sameExecutionSettings(
   right: {
     readonly model: string;
     readonly reasoningEffort: string;
-    readonly serviceTier: "standard" | "fast" | null;
+    readonly serviceTier: CodexServiceTierSelection | null;
     readonly serviceTierClassification: "recognized" | "external_custom";
     readonly sandboxMode: string | null;
     readonly sandboxClassification: "recognized" | "external_custom";

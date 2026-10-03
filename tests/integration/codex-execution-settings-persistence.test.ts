@@ -108,7 +108,7 @@ function recognizedEffective(
   settings: Readonly<{
     model: string;
     reasoningEffort: string;
-    serviceTier: "standard" | "fast";
+    serviceTier: "standard" | "fast" | "ultrafast";
     sandboxMode: "read-only" | "workspace-write" | "danger-full-access";
     networkAccess: "disabled" | "enabled";
     approvalPolicy: "untrusted" | "on-request" | "never";
