@@ -675,13 +675,18 @@ describe("PanelLayoutStore shared panel sizes", () => {
     const store = createStore();
     store.openPanel("workspace-files", { availableWidth: 1_400 });
     const filesStack = parentSplit(store, "workspace-files").split.children[1];
-    store.openPanel("tasks", { edge: "bottom", targetNodeId: filesStack.id });
+    store.openTerminalTab("terminal-1", { edge: "bottom", targetNodeId: filesStack.id });
     const root = store.getSnapshot().tree as SplitNode;
+    const column = root.children[1] as SplitNode;
+    expect(column.orientation).toBe("column");
+    expect(parentSplit(store, "workspace-files").split).toBe(column);
     store.resizeSplit(root.id, [0.4, 0.6]);
 
-    // Collapsed Tasks leaves Files alone on the right, standing in for the column.
-    store.collapsePanel("tasks");
-    store.restorePanel("tasks");
+    // Collapsed Terminals leaves Files alone on the right, standing in for
+    // the column, and Files' own shared width must not resize the column.
+    store.collapsePanel("terminals");
+    expect((store.getSnapshot().tree as SplitNode).sizes[1]).toBeCloseTo(0.6);
+    store.restorePanel("terminals");
     expect((store.getSnapshot().tree as SplitNode).sizes[1]).toBeCloseTo(0.6);
   });
 
@@ -756,6 +761,17 @@ describe("PanelLayoutStore shared Tasks and Workpads arrangement", () => {
     // Chat returns inside them, and Workpads keeps its own edge.
     root.openPanel("chat");
     expect(rowOrder(root)).toEqual(["chat", "workpads", "tasks"]);
+  });
+
+  it("does not republish a layout of only Tasks or Workpads on a thread switch", () => {
+    const root = createStore();
+    root.openPanel("tasks");
+    root.closePanel("chat");
+    const alone = root.getSnapshot();
+    expect(root.forThread("thread-1").getSnapshot()).toBe(alone);
+    root.openPanel("workpads");
+    const pair = root.getSnapshot();
+    expect(root.forThread("thread-1").getSnapshot()).toBe(pair);
   });
 
   it("takes the first restored layout's order, even with Files outside it", () => {

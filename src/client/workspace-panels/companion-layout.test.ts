@@ -141,6 +141,29 @@ describe("arrangeCompanions", () => {
     ]);
   });
 
+  it("keeps unplaced companions where they are, so arranging again changes nothing", () => {
+    let tree = open(defaultPanelLayout, workpads, "right");
+    tree = open(tree, tasks, "right");
+    expect(arrangeCompanions(tree, [], options)).toBe(tree);
+    // A layout that needs a rebuild reaches a fixed point after one.
+    const tabbed = open(open(defaultPanelLayout, files, "right"), tasks, "right", {
+      targetNodeId: "stack-workspace-files",
+      mode: "tab",
+    });
+    const withWorkpads = open(tabbed, workpads, "right");
+    const once = arrangeCompanions(withWorkpads, [], options);
+    expect(once).not.toBe(withWorkpads);
+    expect(arrangeCompanions(once, [], options)).toBe(once);
+  });
+
+  it("leaves a lone companion at the center unchanged", () => {
+    const alone = open(null, tasks, "right");
+    expect(arrangeCompanions(alone, [], options)).toBe(alone);
+    expect(
+      arrangeCompanions(alone, [{ kind: "tasks", edge: "left" }], options),
+    ).toBe(alone);
+  });
+
   it("leaves a layout of only companions unchanged whatever the innermost edge", () => {
     const companions = open(open(null, workpads, "right"), tasks, "right");
     expect(

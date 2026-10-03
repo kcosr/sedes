@@ -95,6 +95,12 @@ function walkCompanions(
     if (other === undefined) break;
     node = node.children[other === 1 ? 0 : 1];
   }
+  // A companion alone at the center fills it: it has no edge of its own.
+  const center = node ? loneCompanion(node) : undefined;
+  if (center) {
+    arrangement.push({ kind: center.kind as CompanionKind, edge: "right" });
+    node = null;
+  }
   const inside =
     node !== null &&
     panelInstances(node).some((panel) => isCompanionKind(panel.kind));
@@ -130,6 +136,14 @@ export function recordCompanionArrangement(
     previous?.find(({ kind }) => kind === innermost.kind)?.edge ??
     preferredEdge(innermost.kind);
   return [...arrangement.slice(0, -1), { kind: innermost.kind, edge }];
+}
+
+function orderIn(
+  arrangement: CompanionArrangement | undefined,
+  kind: CompanionKind,
+): number {
+  const index = arrangement?.findIndex((placement) => placement.kind === kind);
+  return index === undefined || index < 0 ? Number.MAX_SAFE_INTEGER : index;
 }
 
 function onlyCompanions(tree: PanelLayoutTree): boolean {
@@ -200,15 +214,26 @@ export function arrangeCompanions(
   if (tree === null || present.length === 0) return tree;
   const kinds = new Set(present.map((panel) => panel.kind));
   const placed = arrangement.filter((placement) => kinds.has(placement.kind));
-  const unplaced = present
-    .filter((panel) => !placed.some((placement) => placement.kind === panel.kind))
-    .map((panel) => ({
-      kind: panel.kind as CompanionKind,
-      edge: options.preferredEdge(panel.kind as CompanionKind),
-    }));
+  // Companions the arrangement does not place keep their current order and
+  // edges, so arranging again leaves them where the last arrangement put them.
+  const current = walkCompanions(tree, true);
+  const unplacedKinds = present
+    .map((panel) => panel.kind as CompanionKind)
+    .filter((kind) => !placed.some((placement) => placement.kind === kind))
+    .sort(
+      (left, right) =>
+        orderIn(current, left) - orderIn(current, right) ||
+        COMPANION_KINDS.indexOf(left) - COMPANION_KINDS.indexOf(right),
+    );
+  const unplaced = unplacedKinds.map((kind) => ({
+    kind,
+    edge:
+      current?.find((placement) => placement.kind === kind)?.edge ??
+      options.preferredEdge(kind),
+  }));
   const target = [...unplaced, ...placed];
-  const current = readCompanionArrangement(tree);
-  if (current && sameArrangement(current, target, onlyCompanions(tree)))
+  const arranged = readCompanionArrangement(tree);
+  if (arranged && sameArrangement(arranged, target, onlyCompanions(tree)))
     return tree;
 
   // A lone companion keeps its stack and split IDs and its share; both leave
