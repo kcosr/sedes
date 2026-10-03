@@ -139,7 +139,8 @@ public class NativeVoiceE2eTest {
                 if (scenario.equals("retarget")) {
                     String second = required(args, "secondThreadId");
                     await(() -> runtime.snapshot().optString("phase").equals("listening"), 45000, "recognition before retarget");
-                    click("[aria-label=\"Change recording target\"]"); clickText(args.getString("secondThreadTitle", second));
+                    click("[aria-label=\"Change recording target\"]");
+                    clickTextIn("[role=\"dialog\"] [role=\"list\"][aria-label=\"Voice threads\"]", args.getString("secondThreadTitle", second));
                     await(() -> second.equals(runtime.snapshot().optJSONObject("active").optString("recognitionThreadId")), 10000, "retarget applied");
                     screenshot("retargeted");
                 }
@@ -173,7 +174,12 @@ public class NativeVoiceE2eTest {
                     js("(()=>{history.pushState({},''," + JSONObject.quote("/threads/" + thread) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
                 }
             }
-            if (scenario.equals("background")) instrumentation.startActivitySync(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            if (scenario.equals("background")) {
+                // MainActivity is singleTask: resume the existing instance instead of waiting for a new launch.
+                instrumentation.runOnMainSync(() -> context.startActivity(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
+                await(() -> runtime.snapshot().optJSONObject("foreground").optBoolean("visible"), 15000, "native foreground visibility after return");
+                waitJs("document.visibilityState === 'visible'", 15000);
+            }
             waitJs("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(draft), 15000);
             screenshot("settled");
             assertTrue("Capture did not traverse the deterministic audio source", supplied.get() > 0);
@@ -266,8 +272,12 @@ public class NativeVoiceE2eTest {
         assertEquals("true", js("(()=>{const e=document.querySelector(" + JSONObject.quote(selector) + ");if(!e||e.disabled)return false;e.click();return true})()"));
     }
     private void clickText(String text) throws Exception {
-        waitJs("Array.from(document.querySelectorAll('button')).some(x=>x.textContent.trim()===" + JSONObject.quote(text) + "&&!x.disabled)", 15000);
-        assertEquals("true", js("(()=>{const e=Array.from(document.querySelectorAll('button')).find(x=>x.textContent.trim()===" + JSONObject.quote(text) + ");e.click();return true})()"));
+        clickTextIn("body", text);
+    }
+    private void clickTextIn(String scopeSelector, String text) throws Exception {
+        String buttons = "Array.from(document.querySelector(" + JSONObject.quote(scopeSelector) + ")?.querySelectorAll('button') ?? [])";
+        waitJs(buttons + ".some(x=>x.textContent.trim()===" + JSONObject.quote(text) + "&&!x.disabled)", 15000);
+        assertEquals("true", js("(()=>{const e=" + buttons + ".find(x=>x.textContent.trim()===" + JSONObject.quote(text) + "&&!x.disabled);if(!e)return false;e.click();return true})()"));
     }
     private void input(String selector, String value) throws Exception {
         assertEquals("true", js("(()=>{const e=document.querySelector(" + JSONObject.quote(selector) + ");if(!e)return false;const p=e.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(p,'value').set.call(e," + JSONObject.quote(value) + ");e.dispatchEvent(new Event('input',{bubbles:true}));return true})()"));
