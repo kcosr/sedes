@@ -116,6 +116,7 @@ public class NativeVoiceE2eTest {
             inputByLabel("Adapter URL", adapter); click("[aria-label=\"Save Adapter URL\"]");
             await(() -> adapter.equals(runtime.snapshot().optJSONObject("settings").optString("adapterUrl")), 15000, "adapter URL saved");
             selectByLabel("Audio mode", mode);
+            await(() -> mode.equals(runtime.snapshot().optJSONObject("settings").optString("audioMode")), 15000, "audio mode " + mode + " saved");
             await(() -> runtime.snapshot().optBoolean("ready"), 45000, "native adapter handshake");
             waitJs("document.querySelector('[aria-label=\"Voice controls\"]') !== null", 15000);
             screenshot("voice-enabled");
@@ -202,6 +203,11 @@ public class NativeVoiceE2eTest {
                     "state", diagnosticState(runtime.snapshot()), "captureChunks", supplied.get(),
                     "inputAttempts", inputAttempts.get(), "receiptReads", receiptReads.get(),
                     "mutationIds", new JSONArray(mutationIds), "screenshots", new JSONArray(screenshots));
+                try { NativeVoiceJson.put(diagnostic, "ui", diagnosticUiState()); }
+                catch (Exception | AssertionError uiFailure) {
+                    NativeVoiceJson.put(diagnostic, "ui", NativeVoiceJson.object("available", false));
+                    failure.addSuppressed(uiFailure);
+                }
                 Bundle resultBundle = new Bundle(); resultBundle.putString("voiceFailure", diagnostic.toString());
                 instrumentation.sendStatus(0, resultBundle);
             } catch (Exception | AssertionError diagnosticFailure) { failure.addSuppressed(diagnosticFailure); }
@@ -217,6 +223,13 @@ public class NativeVoiceE2eTest {
             stopped.await(10, TimeUnit.SECONDS); NativeVoiceAudio.setTestSource(null); NativeVoiceHttp.setTestTransport(null);
             instrumentation.runOnMainSync(activity::finish);
         }
+    }
+    private JSONObject diagnosticUiState() throws Exception {
+        return new JSONObject(js("(()=>{const l=Array.from(document.querySelectorAll('label')).find(x=>x.textContent.trim()==='Audio mode');"
+            + "const e=l?document.getElementById(l.htmlFor):null;const present=e instanceof HTMLSelectElement;"
+            + "return {available:true,audioMode:{present,disabled:present?e.matches(':disabled'):null,"
+            + "value:present&&['off','manual','response'].includes(e.value)?e.value:null},"
+            + "alertCount:document.querySelectorAll('[role=alert]').length}})()"));
     }
     private static JSONObject diagnosticState(JSONObject state) {
         JSONObject result = select(state, "connectionGeneration", "stateRevision", "settingsRevision", "originClientId", "phase", "ready", "readiness", "queue", "actions");
@@ -289,7 +302,14 @@ public class NativeVoiceE2eTest {
         assertEquals("true", js("(()=>{const l=Array.from(document.querySelectorAll('label')).find(x=>x.textContent.trim()===" + JSONObject.quote(label) + ");const e=document.getElementById(l.htmlFor);Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e," + JSONObject.quote(value) + ");e.dispatchEvent(new Event('input',{bubbles:true}));return true})()"));
     }
     private void selectByLabel(String label, String value) throws Exception {
-        assertEquals("true", js("(()=>{const l=Array.from(document.querySelectorAll('label')).find(x=>x.textContent.trim()===" + JSONObject.quote(label) + ");const e=document.getElementById(l.htmlFor);e.value=" + JSONObject.quote(value) + ";e.dispatchEvent(new Event('change',{bubbles:true}));return true})()"));
+        String lookup = "const l=Array.from(document.querySelectorAll('label')).find(x=>x.textContent.trim()===" + JSONObject.quote(label)
+            + ");const e=l?document.getElementById(l.htmlFor):null;const o=e instanceof HTMLSelectElement?Array.from(e.options).find(x=>x.value==="
+            + JSONObject.quote(value) + "):null;";
+        String enabled = "e instanceof HTMLSelectElement&&!e.matches(':disabled')&&o&&!o.disabled&&!o.closest('optgroup[disabled]')";
+        waitJs("(()=>{" + lookup + "return Boolean(" + enabled + ")})()", 15000);
+        // Recheck in the same JavaScript turn as the action; a preceding save may still own the controls.
+        assertEquals("true", js("(()=>{" + lookup + "if(!(" + enabled + "))return false;e.value=" + JSONObject.quote(value)
+            + ";e.dispatchEvent(new Event('change',{bubbles:true}));return true})()"));
     }
     private static void notificationAction(Context context, String title) throws Exception {
         long deadline = SystemClock.elapsedRealtime() + 10000;

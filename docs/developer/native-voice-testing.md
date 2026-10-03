@@ -72,8 +72,13 @@ and adapter loss after recognition. Those orchestration checks substitute only
 cue playback to control drain callbacks; a separate AudioTrack check plays all
 three real cues. Additional AudioTrack checks cover 20/140 ms speech with zero
 pre-roll, a short final tail after underrun, and cancellation of a stalled tail
-followed by a new short stream. Cue feedback adds one bounded 15-second timeout case to the
-native smoke lane.
+followed by a new short stream. The cancellation fixture holds one real
+AudioTrack before its first start, verifies a full buffer and blocked priming,
+then checks Stop and normal replacement playback. A DEBUG-only, one-shot hook
+holds that track; a played-then-paused track can still consume frames while the
+mixer completes its pause transition. Cue feedback adds one bounded 15-second
+timeout case to the native smoke lane. UI setup waits for enabled controls and
+the saved native audio mode before checking adapter readiness.
 
 Server/adapter checks verify capability negotiation before HTTP media calls,
 actual PCM bytes and formats, multipart WAV recognition, cancellation during

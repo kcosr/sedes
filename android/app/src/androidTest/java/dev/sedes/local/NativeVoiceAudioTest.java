@@ -132,18 +132,20 @@ public class NativeVoiceAudioTest {
         NativeVoiceAudio audio = new NativeVoiceAudio(context, probe);
         try {
             audio.configure(NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("startupPreRollMs", 0)));
+            CountDownLatch primingBlocked = audio.holdNextPlaybackForTest();
             audio.begin("cancelled-tail");
-            audio.pcm("cancelled-tail", 24000, new byte[24000]);
-            AudioTrack track = awaitTrack(audio);
-            awaitPlayedFrames(track, 12000);
-            track.pause();
             audio.pcm("cancelled-tail", 24000, new byte[24000 * 2 / 50]);
+            AudioTrack track = awaitTrack(audio);
             File oldSpool = audio.spoolForTest(); assertNotNull(oldSpool);
             audio.end("cancelled-tail");
-            // The paused sink cannot consume this tail or finish a full-buffer prime.
-            SystemClock.sleep(100);
+            assertTrue("Held AudioTrack never blocked drain priming", primingBlocked.await(5, TimeUnit.SECONDS));
+            assertEquals(AudioTrack.PLAYSTATE_STOPPED, track.getPlayState());
+            assertEquals(0L, track.getPlaybackHeadPosition() & 0xffffffffL);
+            assertEquals("Held AudioTrack buffer was not full", 0,
+                track.write(new byte[2], 0, 2, AudioTrack.WRITE_NON_BLOCKING));
             assertTrue(probe.completed.isEmpty()); assertNull(probe.failure.get());
             audio.stop(); assertFalse(oldSpool.exists());
+            assertEquals(AudioTrack.STATE_UNINITIALIZED, track.getState());
             audio.begin("replacement-short-pcm");
             audio.pcm("replacement-short-pcm", 24000, new byte[24000 * 2 / 50]);
             File nextSpool = audio.spoolForTest(); assertNotNull(nextSpool);
@@ -151,7 +153,7 @@ public class NativeVoiceAudioTest {
             audio.end("replacement-short-pcm");
             probe.await("replacement-short-pcm");
             assertFalse(nextSpool.exists()); assertNull(audio.spoolForTest());
-            assertNull("Cancelled stream produced a late callback", probe.completed.poll(250, TimeUnit.MILLISECONDS));
+            assertTrue("Cancelled stream produced a late callback", probe.completed.isEmpty());
         } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
     }
     @Test public void fastLongSpeechUsesBoundedDiskAndStopRemovesOnlyItsSpool() throws Exception {

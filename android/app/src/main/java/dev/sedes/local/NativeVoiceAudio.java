@@ -18,6 +18,7 @@ import androidx.core.content.ContextCompat;
 import java.io.File;
 import java.io.RandomAccessFile;
 import java.util.Arrays;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.json.JSONArray;
@@ -56,6 +57,7 @@ final class NativeVoiceAudio {
     private final ExecutorService playback = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private AudioTrack track;
+    private CountDownLatch nextPlaybackHoldForTest, playbackHoldForTest;
     private AudioRecord recorder;
     private AudioFocusRequest focus;
     private long generation;
@@ -178,6 +180,11 @@ final class NativeVoiceAudio {
     long pendingPcmBytes() { synchronized (lock) { return spoolWritten - spoolRead; } }
     File spoolForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return spool; } }
     AudioTrack trackForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return track; } }
+    // Hold one real track before play(); signal only when its full buffer blocks drain priming.
+    CountDownLatch holdNextPlaybackForTest() {
+        if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable");
+        synchronized (lock) { nextPlaybackHoldForTest = new CountDownLatch(1); return nextPlaybackHoldForTest; }
+    }
     private long primeDrain(long current, long deadline) throws InterruptedException {
         AudioTrack output; long target;
         synchronized (lock) {
@@ -199,7 +206,12 @@ final class NativeVoiceAudio {
             if (android.os.SystemClock.elapsedRealtime() >= deadline) throw new IllegalStateException("playback_drain_timeout");
             int count = output.write(silence, 0, (int) Math.min(silence.length, remaining), AudioTrack.WRITE_NON_BLOCKING);
             if (count < 0) throw new IllegalStateException("pcm_write_failed");
-            if (count == 0) Thread.sleep(10);
+            if (count == 0) {
+                if (BuildConfig.DEBUG) synchronized (lock) {
+                    if (current == generation && track == output && playbackHoldForTest != null) playbackHoldForTest.countDown();
+                }
+                Thread.sleep(10);
+            }
             else remaining -= count;
         }
         return target;
@@ -281,7 +293,10 @@ final class NativeVoiceAudio {
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT).setSampleRate(sampleRate).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
             .setBufferSizeInBytes(Math.max(minimum, sampleRate / 5 * 2)).setTransferMode(AudioTrack.MODE_STREAM).build();
         if (track.getState() != AudioTrack.STATE_INITIALIZED) throw new IllegalStateException("playback_unavailable");
-        rate = sampleRate; frames = 0; track.play();
+        rate = sampleRate; frames = 0;
+        playbackHoldForTest = BuildConfig.DEBUG ? nextPlaybackHoldForTest : null;
+        nextPlaybackHoldForTest = null;
+        if (playbackHoldForTest == null) track.play();
     }
     private void write(long current, byte[] bytes, int length) {
         int offset = 0;
@@ -342,6 +357,7 @@ final class NativeVoiceAudio {
     }
     private void releaseTrack() {
         if (track != null) { try { track.pause(); track.flush(); track.release(); } catch (Exception ignored) {} track = null; }
+        playbackHoldForTest = null;
         frames = 0; rate = 0;
     }
     private void failCurrent(long current, String id, String code) {
