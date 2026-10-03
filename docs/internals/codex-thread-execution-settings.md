@@ -1,10 +1,11 @@
-# Codex execution settings, Fast mode, and Goal
+# Codex execution settings, Speed, and Goal
 
 Sedes keeps a complete, durable execution tuple for each Codex thread. The
 tuple is the server-owned intent for the next create, fork, or turn; it is not
 derived from browser state or mutable Codex global configuration.
 
-Fast mode is one axis of that tuple. Goal is a separate provider-owned thread
+Speed (the Codex service tier) is one axis of that tuple. Goal is a separate
+provider-owned thread
 feature with its own lifecycle. Both are projected through versioned provider
 features and fail closed when the current Codex generation cannot prove their
 state.
@@ -19,7 +20,7 @@ defaults, see the [Codex operator guide](../operator/backends/codex.md) and
 | Concern | Authority | Durable state | Mutation boundary |
 | --- | --- | --- | --- |
 | Model and reasoning | Installation policy plus thread selection | Desired tuple and operation snapshot | Quiet thread |
-| Fast mode | Live catalog, installation policy, and thread selection | `serviceTier` in the desired tuple | Quiet thread |
+| Speed | Live catalog, installation policy, and thread selection | `serviceTier` in the desired tuple | Quiet thread |
 | Sandbox, network, approvals | Installation execution-policy ceiling plus thread selection | Desired tuple and operation snapshot | Quiet thread |
 | Effective settings | Complete, generation-fenced Codex observation | Latest classified observation | Provider attach or notification |
 | Goal | Bound native Codex thread | Provider state; Sedes mutation receipt | May run with active or queued work |
@@ -37,7 +38,7 @@ A complete tuple contains:
 | --- | --- | --- |
 | Model | One admitted live native model ID | Must satisfy the backend model policy. |
 | Reasoning effort | One effort advertised for the model | Policy matchers may constrain model and effort together. |
-| Service tier | `standard`, `fast` | `fast` also requires reviewed live-catalog support. |
+| Service tier | `standard`, `fast`, `ultrafast` | `fast` and `ultrafast` each require the model's live catalog to advertise that tier. |
 | Sandbox | `read-only`, `workspace-write`, `danger-full-access` | Target defaults and thread selections must satisfy installation policy. |
 | Network | `disabled`, `enabled` | `danger-full-access` requires `enabled`. |
 | Approval policy | `untrusted`, `on-request`, `never` | Determines when Codex requests approval. |
@@ -83,10 +84,12 @@ choices unavailable; it does not silently replace them.
 New drafts combine target defaults with the policy-filtered live catalog.
 Sedes does not fabricate configured-but-unavailable models or substitute a
 different model or effort when a default is rejected. Changing models
-preserves Fast only when the replacement advertises the reviewed Fast tier;
-otherwise the service tier is durably clamped to Standard in the same change.
+preserves Fast or Ultrafast only when the replacement advertises that same
+tier; otherwise the service tier is durably clamped to Standard in the same
+change. Sedes never steps Ultrafast down to Fast, because that would change
+usage without a choice.
 
-Settings and Fast controls are read-only while a turn or queued input is
+Settings and Speed controls are read-only while a turn or queued input is
 active, while mutation recovery is unresolved, or while an enabled automation
 owns the thread configuration. This quiet-thread gate is separate from the
 immutable-snapshot rule: even if desired state changes after an operation has
@@ -175,15 +178,32 @@ TUI-originated turn. Failure to converge fences the terminal rather than
 creating a second settings contract. See [Managed Codex
 TUI](codex-managed-tui.md#settings-convergence).
 
-## Fast mode
+## Speed
 
-Fast is the provider feature `codex.fast_mode@1`. The normalized contract has
-only Standard and Fast; reviewed native tier identifiers remain private to the
-Codex backend.
+Speed is the provider feature `codex.fast_mode@2`. The normalized contract has
+Standard, Fast, and Ultrafast; the native identifiers (`default`, `priority`,
+and `ultrafast`) remain private to the Codex backend. Standard is always sent
+explicitly as `default`, so a catalog default never overrides it.
 
-An unbound Codex draft advertises Fast only when:
+The account-scoped live catalog is the only availability authority. Codex
+fetches `model/list` for the signed-in provider and auth identity, and each
+model lists its tiers in `serviceTiers`. Sedes projects `priority` as Fast and
+`ultrafast` as Ultrafast, in that order, with each tier's bounded catalog
+description. Any other native tier ID, or a duplicate, fails the catalog
+closed. Ultrafast has no separate Codex feature flag: Codex gates both tiers
+behind `fast_mode`. Sedes caches the catalog for each daemon generation, so a
+tier newly granted to the account appears after the next Codex daemon restart.
 
-- its selected live-catalog model explicitly advertises the reviewed tier;
+The feature state carries `desired`, `effective`, `applicationState`, and
+`offered`, the non-empty list of accelerated speeds the desired model
+advertises. Its three operations are `set_standard`, `set_fast`, and
+`set_ultrafast`. The capability allows every offered speed except the current
+one, and the mutation gateway admits only those operations, so the handler
+never needs its own catalog lookup.
+
+An unbound Codex draft advertises Speed only when:
+
+- its selected live-catalog model advertises at least one accelerated tier;
 - installation policy admits the model and effort; and
 - the desired seven-axis tuple is complete.
 
@@ -191,16 +211,23 @@ The draft choice is durable intent. There is no native provider mutation before
 first submission; the frozen create snapshot carries the tier through
 `thread/start`.
 
-After binding, Fast additionally requires authoritative thread-scoped feature
-support for the current runtime generation. A transient discovery failure may
-leave a known control visible but read-only. A definitive disabled observation
-withdraws the capability and reconciles both app-server and managed-TUI state
-to Standard. Null, duplicate, unknown, or custom native tiers fail closed.
+After binding, Speed additionally requires authoritative thread-scoped
+`fast_mode` support for the current runtime generation. A transient discovery
+failure may leave a known control visible but read-only. A definitive disabled
+observation withdraws the capability and reconciles both app-server and
+managed-TUI state to Standard. Null, unknown, or custom native tiers fail
+closed. Every create and turn rechecks that the frozen tier is still offered
+for the model; a tier the catalog no longer advertises is rejected before
+submission rather than silently omitted by Codex. A fork instead resolves the
+child to Standard, as described under forks below.
 
-Fast changes use revision-fenced, durable provider-feature receipts. Desired
+Speed changes use revision-fenced, durable provider-feature receipts. Desired
 state is updated atomically before any runtime synchronization, accepted
 replays do not repeat the mutation, and a request fingerprint prevents reuse
 of a mutation ID for different input.
+
+The composer shows a one-click toggle when the model offers one accelerated
+speed, and a Standard, Fast, and Ultrafast menu when it offers two or more.
 
 Pi, Claude, and Grok do not consume this feature contract. Their model,
 reasoning, and permission behavior remains backend-private.
@@ -254,7 +281,7 @@ Automations may use any complete Codex tuple available to a manual turn. Sedes
 does not narrow sandbox, network, or approval values for automation. An
 attended approval policy can therefore leave an automated turn waiting for the
 principal. The immutable snapshot is revalidated again at dispatch. An enabled
-automation makes interactive execution-setting and Fast controls read-only to
+automation makes interactive execution-setting and Speed controls read-only to
 prevent configuration races.
 
 Saved Agents can carry the complete tuple, subject to the destination target's
@@ -268,8 +295,8 @@ confirmed by the current daemon generation and still admitted by policy. The
 same private resolver supplies both capability projection and child
 initialization, and the live catalog is rechecked immediately before the
 native call. A policy or generation race therefore fails before child
-creation. The child inherits the confirmed tuple; Fast resolves to Standard if
-the child model cannot use it. Custom or unconfirmed settings yield a bounded
+creation. The child inherits the confirmed tuple; Fast or Ultrafast resolves
+to Standard if the child model does not offer that tier. Custom or unconfirmed settings yield a bounded
 unavailable reason rather than fallback defaults.
 
 ## Change checklist and verification
@@ -282,7 +309,8 @@ Any change to these contracts must audit:
 - desired/effective revisions, per-axis classification, and daemon generation;
 - imported, custom, partial, stale, and generation-loss observations;
 - immutable snapshot replay and post-commit synchronization;
-- Fast capability discovery, model changes, and Standard reconciliation;
+- Speed capability discovery, catalog tiers, model changes, and Standard
+  reconciliation;
 - Goal bounds, state/action matrix, Stop interaction, receipts, reread
   recovery, and notification coalescing;
 - active-turn, queued-input, automation, archive, and recovery gates; and

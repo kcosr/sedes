@@ -29,7 +29,7 @@ and execution environment can prove all launch requirements:
   namespace as that endpoint. For a local target this is main Sedes through its
   execution-environment channel. For an SSH or outbound target it is the
   persistent sidecar, whose runtime channel must have negotiated the
-  `codex_managed_tui@1` `tui.control` and `tui.execute` operations; the sidecar
+  `codex_managed_tui@2` `tui.control` and `tui.execute` operations; the sidecar
   advertises that capability only when its optional native PTY binding loaded;
 - the command reports a stable release at or above the supported `0.160.0`
   floor; and
@@ -297,7 +297,7 @@ connection loss require a fresh admission and synchronized repaint.
 
 ## Settings convergence
 
-The desired tuple is documented in [Codex execution settings, Fast mode, and
+The desired tuple is documented in [Codex execution settings, Speed, and
 Goal](codex-thread-execution-settings.md). The durable binding supplies the
 workspace; neither the browser nor terminal selects an alternate root.
 

@@ -220,7 +220,7 @@ The current Codex driver supports:
 - snapshots of local images Codex views, where Files can read them;
 - nonblocking follow-up questions in the Questions panel; and
 - provider features `codex.execution@1`,
-  `codex.fast_mode@1`, `codex.goal@1`, and `codex.tui@1` where eligible.
+  `codex.fast_mode@2`, `codex.goal@1`, and `codex.tui@1` where eligible.
 
 When Codex temporarily recovers model-provider authentication during a turn,
 Sedes shows a warning notice followed by a success notice for that thread.
@@ -257,9 +257,12 @@ when a new batch opens. Imported history does not create a backlog of pending
 questions. If structured questions exceed Sedes's bounds, ordinary bounded
 assistant text remains visible.
 
-Fast mode is the closed service-tier feature. Codex 0.153 may also advertise
-its separate native Ultrafast tier; Sedes recognizes that catalog metadata but
-does not offer or map Ultrafast to Fast. Goal stores one bounded objective and
+Speed is the closed service-tier feature: Standard, Fast, and Ultrafast. A
+model offers Fast or Ultrafast only when the Codex catalog for the signed-in
+account advertises that tier, and Codex's `fast_mode` feature gates both.
+Sedes reads the catalog once per Codex daemon generation, so restart the
+daemon (or let the next Codex upgrade restart it) to pick up a tier newly
+granted to the account. Goal stores one bounded objective and
 projects provider-observed lifecycle status; its create, pause, resume, and
 clear actions are capability- and revision-checked. Neither is inferred from
 model names or free-form provider text.

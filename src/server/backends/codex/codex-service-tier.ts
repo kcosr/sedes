@@ -22,12 +22,6 @@ export const CODEX_ACCELERATED_SERVICE_TIERS = Object.freeze([
 export type CodexAcceleratedServiceTier =
   (typeof CODEX_ACCELERATED_SERVICE_TIERS)[number];
 
-export function isCodexAcceleratedServiceTier(
-  selection: CodexServiceTierSelection,
-): selection is CodexAcceleratedServiceTier {
-  return selection !== "standard";
-}
-
 const NATIVE_BY_SELECTION: Readonly<Record<CodexServiceTierSelection, string>> =
   Object.freeze({
     standard: CODEX_NATIVE_STANDARD_SERVICE_TIER,

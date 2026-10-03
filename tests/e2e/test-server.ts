@@ -1590,11 +1590,18 @@ function safeE2eInteractionResponse(
   });
 }
 
+/** The default fixture model, offering only the Fast service tier. */
+const E2E_CODEX_DEFAULT_MODEL = "gpt-5.6-codex";
+/** A second fixture model offering Fast and Ultrafast, for the Speed menu. */
+const E2E_CODEX_ULTRAFAST_MODEL = "gpt-5.6-spark";
+
 class CodexE2eRpcFixture {
   readonly client: CodexSharedClientFacade;
   readonly serverRequests = new CodexServerRequestRouter();
   readonly #threads = new Map<string, CodexThread>();
   readonly #serviceTierByThread = new Map<string, string | null>();
+  // Like Codex, a turn's model override persists on the thread.
+  readonly #modelByThread = new Map<string, string>();
   #readyClient: CodexReadyClientGeneration;
   #inboundSequence = 0;
   #turnOrdinal = 0;
@@ -1608,6 +1615,11 @@ class CodexE2eRpcFixture {
   }> = [];
   readonly #threadStarts: Array<{
     readonly generation: number;
+    readonly serviceTier: string | null;
+  }> = [];
+  readonly #turnStarts: Array<{
+    readonly generation: number;
+    readonly model: string | null;
     readonly serviceTier: string | null;
   }> = [];
   readonly #retirements: Array<{
@@ -1912,6 +1924,9 @@ class CodexE2eRpcFixture {
       ),
       threadStarts: Object.freeze(
         this.#threadStarts.map((request) => Object.freeze({ ...request })),
+      ),
+      turnStarts: Object.freeze(
+        this.#turnStarts.map((request) => Object.freeze({ ...request })),
       ),
       createFaultArmed: this.#failNextCreateWithUnknownOutcome,
       submitFaultArmed: this.#failNextSubmitWithUnknownOutcome,
@@ -2768,6 +2783,42 @@ class CodexE2eRpcFixture {
             defaultServiceTier: null,
             isDefault: true,
           },
+          {
+            id: E2E_CODEX_ULTRAFAST_MODEL,
+            model: E2E_CODEX_ULTRAFAST_MODEL,
+            upgrade: null,
+            upgradeInfo: null,
+            availabilityNux: null,
+            displayName: "GPT-5.6 Spark",
+            description: "Low-latency Codex browser fixture model",
+            hidden: false,
+            supportedReasoningEfforts: [
+              {
+                reasoningEffort: "low",
+                description: "Low reasoning",
+              },
+            ],
+            defaultReasoningEffort: "low",
+            inputModalities: ["text"],
+            supportsPersonality: false,
+            multiAgentVersion: null,
+            additionalSpeedTiers: [],
+            serviceTiers: [
+              {
+                id: "priority",
+                name: "Fast",
+                description: "About 1.5x speed with higher usage",
+              },
+              {
+                id: "ultrafast",
+                name: "Ultrafast",
+                description:
+                  "The fastest available responses for latency-sensitive work.",
+              },
+            ],
+            defaultServiceTier: null,
+            isDefault: false,
+          },
         ],
         nextCursor: null,
       };
@@ -2839,6 +2890,10 @@ class CodexE2eRpcFixture {
       const ordinal = ++this.#createOrdinal;
       const cwd = encoded.cwd;
       const threadSource = encoded.threadSource;
+      const model =
+        typeof encoded.model === "string"
+          ? encoded.model
+          : E2E_CODEX_DEFAULT_MODEL;
       this.#threadStarts.push({
         generation,
         serviceTier:
@@ -2868,7 +2923,7 @@ class CodexE2eRpcFixture {
         projectId: null,
         historyMode: "paginated",
         modelProvider: "openai",
-        model: "gpt-5.6-codex",
+        model,
         reasoningEffort: "low",
         createdAt: 1_700_010_000 + ordinal,
         updatedAt: 1_700_010_000 + ordinal,
@@ -2890,6 +2945,7 @@ class CodexE2eRpcFixture {
         thread.id,
         typeof encoded.serviceTier === "string" ? encoded.serviceTier : null,
       );
+      this.#modelByThread.set(thread.id, model);
       this.#notify(generation, "thread/started", { thread });
       if (this.#failNextCreateWithUnknownOutcome) {
         this.#failNextCreateWithUnknownOutcome = false;
@@ -2902,7 +2958,7 @@ class CodexE2eRpcFixture {
       }
       result = {
         thread,
-        model: "gpt-5.6-codex",
+        model,
         modelProvider: "openai",
         serviceTier: this.#serviceTierByThread.get(thread.id) ?? null,
         cwd,
@@ -2949,7 +3005,7 @@ class CodexE2eRpcFixture {
           : null;
         result = {
           thread: paginated ? { ...thread, turns: [] } : thread,
-          model: "gpt-5.6-codex",
+          model: this.#modelByThread.get(thread.id) ?? E2E_CODEX_DEFAULT_MODEL,
           modelProvider: "openai",
           serviceTier: this.#serviceTierByThread.get(thread.id) ?? null,
           cwd: thread.cwd,
@@ -2982,6 +3038,11 @@ class CodexE2eRpcFixture {
         const serviceTier =
           typeof encoded.serviceTier === "string" ? encoded.serviceTier : null;
         this.#serviceTierByThread.set(thread.id, serviceTier);
+        if (typeof encoded.model === "string") {
+          this.#modelByThread.set(thread.id, encoded.model);
+        }
+        const model =
+          this.#modelByThread.get(thread.id) ?? E2E_CODEX_DEFAULT_MODEL;
         this.#schedule(0, () =>
           this.#notify(generation, "thread/settings/updated", {
             threadId: thread.id,
@@ -2991,7 +3052,7 @@ class CodexE2eRpcFixture {
               approvalsReviewer: "user",
               sandboxPolicy: { type: "readOnly", networkAccess: false },
               activePermissionProfile: { id: ":read-only", extends: null },
-              model: "gpt-5.6-codex",
+              model,
               modelProvider: "openai",
               serviceTier,
               effort: "low",
@@ -2999,7 +3060,7 @@ class CodexE2eRpcFixture {
               collaborationMode: {
                 mode: "default",
                 settings: {
-                  model: "gpt-5.6-codex",
+                  model,
                   reasoning_effort: "low",
                   developer_instructions: null,
                 },
@@ -3023,6 +3084,17 @@ class CodexE2eRpcFixture {
             generation,
             method: "turn/start",
           });
+        }
+        this.#turnStarts.push({
+          generation,
+          model: typeof encoded.model === "string" ? encoded.model : null,
+          serviceTier:
+            typeof encoded.serviceTier === "string"
+              ? encoded.serviceTier
+              : null,
+        });
+        if (typeof encoded.model === "string") {
+          this.#modelByThread.set(thread.id, encoded.model);
         }
         const input = Array.isArray(encoded.input) ? encoded.input : [];
         const textInput = input.find(

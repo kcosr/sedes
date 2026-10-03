@@ -4,6 +4,17 @@
 
 ### Breaking Changes
 
+- Codex Speed is provider feature `codex.fast_mode@2`, which replaces the
+  Fast mode enable/disable actions with `set_standard`, `set_fast`, and
+  `set_ultrafast`. Clients that only know `codex.fast_mode@1` hide the control
+  until they are upgraded.
+  (PR pending)
+
+- The managed Codex TUI uses sidecar capability `codex_managed_tui@2`, which
+  accepts the Ultrafast tier. Rebuild and upgrade execution sidecars with the
+  server; an older sidecar is rejected at connection.
+  (PR pending)
+
 - Browser and packaged clients require client protocol 136, which gives every
   Task a `backlog` field. Upgrade clients together with the server.
   ([#39](https://github.com/kcosr/sedes/pull/39))
@@ -177,6 +188,14 @@
 
 ### Added
 
+- Codex threads can use **Ultrafast** speed when the account's Codex model
+  catalog offers it. When a model offers both Fast and Ultrafast, the
+  composer's lightning button opens a **Speed** menu, and a rocket marks
+  Ultrafast; a model with only Fast keeps the one-click toggle. Saved Agents
+  offer every speed the model has. A new tier appears after the Codex daemon
+  restarts. Migration 129 widens the stored service-tier values.
+  (PR pending)
+
 - Agents can delete completed Tasks at the expected revision with
   `task.delete` (`sedes_task_delete`). The tool description limits use to
   the user's request.
@@ -348,6 +367,11 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- Codex Fast mode is now called **Speed** in the composer, docs, and saved
+  Agent settings. Changing to a model that doesn't offer the selected speed
+  returns the thread to Standard; Ultrafast never steps down to Fast.
+  (PR pending)
 
 - Tasks View options no longer have a Show group: Completed is always the
   collapsed section at the end of the list. Sorting orders Tasks within each

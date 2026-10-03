@@ -610,12 +610,13 @@ rules. Unproven desired settings are not presented as provider-effective. Fork
 eligibility requires a complete allowed tuple for the child. See
 [Codex execution settings](../codex-thread-execution-settings.md).
 
-Fast mode is the closed service-tier feature. Codex 0.153 catalog metadata may
-also advertise the distinct native `ultrafast` tier; Sedes validates that
-reviewed identifier but does not expose or map it to Fast. Goal stores one
-bounded objective and projects provider-observed lifecycle status. Create,
-pause, resume, and clear are capability- and revision-checked. Neither feature
-is inferred from model names or provider text.
+Speed is the closed service-tier feature: Standard, Fast (native `priority`),
+and Ultrafast (native `ultrafast`). Each model offers only the tiers its
+account-scoped catalog advertises, and any other native tier ID fails the
+catalog closed. Goal stores one bounded objective and projects
+provider-observed lifecycle status. Create, pause, resume, and clear are
+capability- and revision-checked. Neither feature is inferred from model names
+or provider text.
 
 The thread menu's **New with same settings** action snapshots all seven
 desired axes—model, reasoning effort, service tier, sandbox, network, approval

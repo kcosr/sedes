@@ -4460,17 +4460,17 @@ describe("Composer delivery guards", () => {
             presentationSlots: ["thread_details"],
           },
           {
-            ref: { featureId: "codex.fast_mode", schemaVersion: 1 },
+            ref: { featureId: "codex.fast_mode", schemaVersion: 2 },
             revision: 5,
-            label: { text: "Fast mode" },
+            label: { text: "Speed" },
             description: {
-              text: "Fast mode: about 1.5x speed, higher usage",
+              text: "Faster speeds respond sooner and use more of your plan's usage",
             },
             availability: "available",
             operations: [
               {
-                actionId: "enable",
-                label: { text: "Enable" },
+                actionId: "set_fast",
+                label: { text: "Use Fast speed" },
                 effects: {
                   application: "write",
                   modelUsage: "none",
@@ -4498,7 +4498,7 @@ describe("Composer delivery guards", () => {
           },
         },
         {
-          ref: { featureId: "codex.fast_mode", schemaVersion: 1 },
+          ref: { featureId: "codex.fast_mode", schemaVersion: 2 },
           revision: 5,
           state: {
             kind: "object",
@@ -4508,6 +4508,20 @@ describe("Composer delivery guards", () => {
               {
                 key: { text: "applicationState" },
                 value: { text: "applied" },
+              },
+              {
+                key: { text: "offered" },
+                value: {
+                  kind: "array",
+                  values: [
+                    {
+                      kind: "object",
+                      entries: [
+                        { key: { text: "selection" }, value: { text: "fast" } },
+                      ],
+                    },
+                  ],
+                },
               },
             ],
           },
@@ -4535,13 +4549,13 @@ describe("Composer delivery guards", () => {
     const meter = sendGroup!.querySelector(".context-usage-meter");
     expect(meter).not.toBeNull();
     expect(sendGroup!.contains(indicator)).toBe(true);
-    const fastMode = screen.getByRole("button", { name: "Fast mode, off" });
+    const fastMode = screen.getByRole("button", { name: "Fast speed, off" });
     expect(sendGroup!.contains(fastMode)).toBe(true);
     expect(
       indicator.compareDocumentPosition(meter!) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    // Feature registry order is Goal, Fast mode, then the meter.
+    // Feature registry order is Goal, Speed, then the meter.
     const goalSlot = indicator.closest(".provider-feature-composer-slot");
     const fastModeSlot = fastMode.closest(".provider-feature-composer-slot");
     expect(goalSlot?.nextElementSibling).toBe(fastModeSlot);

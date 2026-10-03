@@ -120,6 +120,11 @@ function CodexSpeedComposerControl({
   if (state.offered.length === 1) {
     const offered = state.offered[0]!;
     const target: SpeedSelection = accelerated ? "standard" : offered.selection;
+    // The selected speed when on, even one the catalog no longer offers.
+    const shown: AcceleratedSpeed =
+      state.desired === "fast" || state.desired === "ultrafast"
+        ? state.desired
+        : offered.selection;
     const unavailable = inert || operationFor(target) === undefined;
     const tooltip =
       unavailableReason ??
@@ -133,7 +138,7 @@ function CodexSpeedComposerControl({
           className="codex-fast-mode-toggle"
           data-application-state={state.applicationState}
           data-accelerated={accelerated}
-          aria-label={toggleLabel(state, offered.selection, pending)}
+          aria-label={toggleLabel(state, shown, pending)}
           aria-pressed={accelerated}
           aria-disabled={unavailable}
           aria-busy={pending || undefined}
@@ -141,12 +146,7 @@ function CodexSpeedComposerControl({
             if (!unavailable) choose(target);
           }}
         >
-          <SpeedIcon
-            selection={
-              accelerated && state.desired ? state.desired : offered.selection
-            }
-            emphasized={accelerated}
-          />
+          <SpeedIcon selection={shown} emphasized={accelerated} />
         </button>
       </SpeedTooltip>
     );
@@ -314,12 +314,12 @@ function applicationSuffix(state: SpeedState, pending: boolean): string {
 
 function toggleLabel(
   state: SpeedState,
-  offered: AcceleratedSpeed,
+  shown: AcceleratedSpeed,
   pending: boolean,
 ): string {
   if (state.desired === null) return "Speed, unavailable";
   const selection = state.desired === "standard" ? "off" : "on";
-  return `${SPEED_LABELS[offered]} speed, ${selection}${applicationSuffix(state, pending)}`;
+  return `${SPEED_LABELS[shown]} speed, ${selection}${applicationSuffix(state, pending)}`;
 }
 
 function menuLabel(state: SpeedState, pending: boolean): string {
