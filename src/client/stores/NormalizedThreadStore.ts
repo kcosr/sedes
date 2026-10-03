@@ -28,6 +28,15 @@ export type NormalizedThreadApplyResult =
   | { readonly kind: "ignored" }
   | { readonly kind: "resnapshot_required"; readonly reason: string };
 
+type QueueProjection = {
+  readonly threadRevision: number;
+  readonly queue: NormalizedThreadSnapshot["queue"];
+};
+
+type StreamApplicationProjection = QueueProjection & {
+  readonly draft: NormalizedDraft;
+};
+
 type TransportCursor = {
   readonly generation: string;
   readonly sequence: number;
@@ -64,9 +73,19 @@ export class NormalizedThreadStore {
   #capabilityThreadRevision = 0;
   #capabilityRunState?: NormalizedThreadSnapshot["runState"];
   #checkpointHandshake = false;
+  // Validate ordered SSE against its own queue/draft baseline. HTTP receipts
+  // can advance the rendered fields while earlier events are still in flight.
+  #streamApplication?: StreamApplicationProjection;
+  // Snapshot summary revisions can include capabilities published ahead of
+  // their queue. Only queue/application events establish an exact queue revision.
+  #streamQueueRevision = 0;
+  #streamQueueRevisionExact = false;
+  #queueReceipt?: QueueProjection;
+  #draftReceipt?: NormalizedDraft;
   // HTTP receipts may be newer than a connection's published watermark.
-  // Retain only freshness evidence; checkpoints still replace all view data.
+  // Checkpoints discard receipt view overlays but retain freshness evidence.
   #receiptThreadRevision?: number;
+  #receiptDraftRevision?: number;
   #receiptNeedsConfirmation = false;
   readonly #resolvedInteractionReceipts = new Set<string>();
   readonly #listeners = new Set<() => void>();
@@ -103,6 +122,7 @@ export class NormalizedThreadStore {
       this.#capabilityRunState !== snapshot.runState &&
       !this.#receiptNeedsConfirmation &&
       snapshot.thread.threadRevision >= (this.#receiptThreadRevision ?? 0) &&
+      snapshot.draft.revision >= (this.#receiptDraftRevision ?? 0) &&
       !snapshot.interactions.some(({ id }) => this.#resolvedInteractionReceipts.has(id));
   }
 
@@ -116,6 +136,9 @@ export class NormalizedThreadStore {
     this.#replayCursor = undefined;
     this.#recovery = "replacement_required";
     this.#snapshotBytes = 0;
+    this.#streamApplication = undefined;
+    this.#streamQueueRevision = 0;
+    this.#streamQueueRevisionExact = false;
     this.#checkpointHandshake = false;
     this.#clearReceiptFences();
     this.#replaceState({ authoritative: false, notices: [] });
@@ -197,7 +220,12 @@ export class NormalizedThreadStore {
         this.#receiptThreadRevision ?? 0,
         input.threadRevision,
       );
-      return this.#setSnapshot({ ...snapshot, draft: input.draft });
+      this.#draftReceipt = input.draft;
+      this.#receiptDraftRevision = Math.max(
+        this.#receiptDraftRevision ?? 0,
+        input.draft.revision,
+      );
+      return this.#publishSnapshot({ ...snapshot, draft: input.draft });
     }
     if (
       input.draft &&
@@ -210,14 +238,25 @@ export class NormalizedThreadStore {
       this.#receiptThreadRevision ?? 0,
       input.threadRevision,
     );
-    return this.#setSnapshot({
+    this.#queueReceipt = {
+      threadRevision: input.threadRevision,
+      queue: [...input.queue],
+    };
+    if (input.draft && input.draft.revision > snapshot.draft.revision) {
+      this.#draftReceipt = input.draft;
+      this.#receiptDraftRevision = Math.max(
+        this.#receiptDraftRevision ?? 0,
+        input.draft.revision,
+      );
+    }
+    return this.#publishSnapshot({
       ...snapshot,
       thread: {
         ...snapshot.thread,
         threadRevision: input.threadRevision,
         queuedInputCount: input.queue.length,
       },
-      queue: [...input.queue],
+      queue: this.#queueReceipt.queue,
       draft:
         input.draft && input.draft.revision > snapshot.draft.revision
           ? input.draft
@@ -252,7 +291,7 @@ export class NormalizedThreadStore {
       return this.#invalidate("interaction_receipt_limit_exceeded");
     }
     this.#resolvedInteractionReceipts.add(interactionId);
-    return this.#setSnapshot({
+    return this.#publishSnapshot({
       ...snapshot,
       interactions: snapshot.interactions.filter(
         ({ id }) => id !== interactionId,
@@ -276,7 +315,8 @@ export class NormalizedThreadStore {
       if (envelope.event.generation !== this.#state.generation) {
         this.#clearReceiptFences();
       }
-      this.#confirmReceiptProjection(envelope.event.snapshot);
+      this.#confirmReceiptProjection(envelope.event.snapshot, true);
+      this.#replaceStreamApplication(envelope.event.snapshot);
       this.#transport = cursor;
       this.#replayCursor = envelope.eventId;
       this.#recovery = this.#checkpointHandshake ? "catching_up" : "current";
@@ -313,12 +353,12 @@ export class NormalizedThreadStore {
         this.#resolvedInteractionReceipts.delete(event.interactionId);
       } else if (event.type === "application_state_changed") {
         this.#confirmReceiptProjection(event.state);
+      } else if (event.type === "draft_changed") {
+        this.#confirmReceiptDraftRevision(event.draft.revision);
       } else if (
         event.type === "queue_changed" &&
-        (result.kind === "applied" ||
-          (event.threadRevision ===
-            this.#state.snapshot!.thread.threadRevision &&
-            sameValue(event.items, this.#state.snapshot!.queue)))
+        event.threadRevision === this.#streamQueueRevision &&
+        sameValue(event.items, this.#streamApplication!.queue)
       ) {
         this.#confirmReceiptRevision(event.threadRevision);
       }
@@ -365,7 +405,8 @@ export class NormalizedThreadStore {
     if (checkpoint.projectionGeneration !== this.#state.generation) {
       this.#clearReceiptFences();
     }
-    this.#confirmReceiptProjection(checkpoint.snapshot);
+    this.#confirmReceiptProjection(checkpoint.snapshot, true);
+    this.#replaceStreamApplication(checkpoint.snapshot);
     this.#transport = cursor;
     this.#replayCursor = checkpoint.eventId;
     this.#recovery = "catching_up";
@@ -426,7 +467,20 @@ export class NormalizedThreadStore {
     envelope: ThreadEventEnvelope,
   ): NormalizedThreadApplyResult {
     const event = envelope.event;
-    const snapshot = this.#state.snapshot!;
+    const visible = this.#state.snapshot!;
+    const stream = this.#streamApplication!;
+    const snapshot = this.#queueReceipt || this.#draftReceipt
+      ? {
+          ...visible,
+          thread: {
+            ...visible.thread,
+            threadRevision: stream.threadRevision,
+            queuedInputCount: stream.queue.length,
+          },
+          queue: stream.queue,
+          draft: stream.draft,
+        }
+      : visible;
     switch (event.type) {
       case "history_prepend": {
         if (historyPageAlreadyApplied(snapshot, event.page)) {
@@ -503,24 +557,43 @@ export class NormalizedThreadStore {
           ...snapshot,
           backgroundActivity: event.activity,
         });
-      case "queue_changed":
-        if (event.threadRevision < snapshot.thread.threadRevision) {
+      case "queue_changed": {
+        if (event.threadRevision < this.#streamQueueRevision) {
           return { kind: "ignored" };
         }
-        if (event.threadRevision === snapshot.thread.threadRevision) {
-          return sameValue(snapshot.queue, event.items)
-            ? { kind: "ignored" }
-            : this.#invalidate("queue_revision_conflict");
+        if (
+          event.threadRevision === this.#streamQueueRevision &&
+          !sameValue(snapshot.queue, event.items)
+        ) {
+          return this.#invalidate("queue_revision_conflict");
         }
-        return this.#setSnapshot({
+        const conflict = this.#confirmQueueReceipt(
+          event.threadRevision,
+          event.items,
+        );
+        if (conflict) return this.#invalidate(conflict);
+        const visibleUnchanged =
+          event.threadRevision <= visible.thread.threadRevision &&
+          (this.#queueReceipt !== undefined ||
+            sameValue(visible.queue, event.items));
+        this.#streamQueueRevision = event.threadRevision;
+        this.#streamQueueRevisionExact = true;
+        const result = this.#setSnapshot({
           ...snapshot,
           thread: {
             ...snapshot.thread,
-            threadRevision: event.threadRevision,
+            threadRevision: Math.max(
+              snapshot.thread.threadRevision,
+              event.threadRevision,
+            ),
             queuedInputCount: event.items.length,
           },
           queue: event.items,
         });
+        return result.kind === "applied" && visibleUnchanged
+          ? { kind: "ignored" }
+          : result;
+      }
       case "capabilities_changed": {
         if (event.threadRevision < this.#capabilityThreadRevision) {
           return this.#invalidate("thread_revision_regressed");
@@ -581,11 +654,19 @@ export class NormalizedThreadStore {
           return this.#invalidate("thread_derived_state_conflict");
         }
         return this.#setSnapshot({ ...snapshot, thread: event.thread });
-      case "draft_changed":
-        if (event.draft.revision < snapshot.draft.revision) {
-          return this.#invalidate("draft_revision_regressed");
+      case "draft_changed": {
+        const revision = revisionResult(snapshot.draft, event.draft);
+        if (revision) {
+          return this.#invalidate(
+            revision === "entity_revision_regressed"
+              ? "draft_revision_regressed"
+              : "draft_revision_conflict",
+          );
         }
+        const conflict = this.#confirmDraftReceipt(event.draft);
+        if (conflict) return this.#invalidate(conflict);
         return this.#setSnapshot({ ...snapshot, draft: event.draft });
+      }
       case "stashes_changed":
         return this.#setSnapshot({ ...snapshot, stashes: event.stashes });
       case "settings_changed":
@@ -638,6 +719,21 @@ export class NormalizedThreadStore {
           event.state,
         );
         if (revision) return this.#invalidate(revision);
+        if (
+          this.#streamQueueRevisionExact &&
+          event.state.thread.threadRevision === this.#streamQueueRevision &&
+          !sameValue(event.state.queue, snapshot.queue)
+        ) {
+          return this.#invalidate("queue_revision_conflict");
+        }
+        const receiptConflict =
+          this.#confirmQueueReceipt(
+            event.state.thread.threadRevision,
+            event.state.queue,
+          ) ?? this.#confirmDraftReceipt(event.state.draft);
+        if (receiptConflict) return this.#invalidate(receiptConflict);
+        this.#streamQueueRevision = event.state.thread.threadRevision;
+        this.#streamQueueRevisionExact = true;
         this.#capabilityThreadRevision = event.state.thread.threadRevision;
         this.#capabilityRunState = event.state.capabilities.runState;
         return this.#setSnapshot({
@@ -760,10 +856,84 @@ export class NormalizedThreadStore {
     );
   }
 
+  #replaceStreamApplication(snapshot: NormalizedThreadSnapshot): void {
+    this.#streamQueueRevision = snapshot.thread.threadRevision;
+    this.#streamQueueRevisionExact = false;
+    this.#streamApplication = {
+      threadRevision: snapshot.thread.threadRevision,
+      queue: snapshot.queue,
+      draft: snapshot.draft,
+    };
+    this.#queueReceipt = undefined;
+    this.#draftReceipt = undefined;
+  }
+
+  #confirmQueueReceipt(
+    threadRevision: number,
+    queue: readonly QueuedInputSummary[],
+  ): string | undefined {
+    const receipt = this.#queueReceipt;
+    if (!receipt || threadRevision < receipt.threadRevision) return;
+    if (
+      threadRevision === receipt.threadRevision &&
+      !sameValue(queue, receipt.queue)
+    ) {
+      return "queue_revision_conflict";
+    }
+    this.#queueReceipt = undefined;
+  }
+
+  #confirmDraftReceipt(draft: NormalizedDraft): string | undefined {
+    const receipt = this.#draftReceipt;
+    if (!receipt || draft.revision < receipt.revision) return;
+    if (draft.revision === receipt.revision && !sameValue(draft, receipt)) {
+      return "draft_revision_conflict";
+    }
+    this.#draftReceipt = undefined;
+  }
+
   #setSnapshot(
     snapshot: NormalizedThreadSnapshot,
     limitReason = "snapshot_window_limit_exceeded",
     knownSerializedBytes?: number,
+  ): NormalizedThreadApplyResult {
+    const receipt = this.#queueReceipt;
+    const projected = receipt || this.#draftReceipt
+      ? {
+          ...snapshot,
+          ...(receipt
+            ? {
+                thread: {
+                  ...snapshot.thread,
+                  threadRevision: Math.max(
+                    snapshot.thread.threadRevision,
+                    receipt.threadRevision,
+                  ),
+                  queuedInputCount: receipt.queue.length,
+                },
+                queue: receipt.queue,
+              }
+            : {}),
+          draft: this.#draftReceipt ?? snapshot.draft,
+        }
+      : snapshot;
+    return this.#publishSnapshot(
+      projected,
+      limitReason,
+      knownSerializedBytes,
+      {
+        threadRevision: snapshot.thread.threadRevision,
+        queue: snapshot.queue,
+        draft: snapshot.draft,
+      },
+    );
+  }
+
+  #publishSnapshot(
+    snapshot: NormalizedThreadSnapshot,
+    limitReason = "snapshot_window_limit_exceeded",
+    knownSerializedBytes?: number,
+    streamApplication?: StreamApplicationProjection,
   ): NormalizedThreadApplyResult {
     let snapshotBytes = knownSerializedBytes;
     if (snapshotBytes === undefined) {
@@ -776,6 +946,7 @@ export class NormalizedThreadStore {
       return this.#invalidate(limitReason);
     }
     this.#snapshotBytes = snapshotBytes;
+    if (streamApplication) this.#streamApplication = streamApplication;
     this.#replaceState({
       ...this.#state,
       snapshot,
@@ -802,6 +973,7 @@ export class NormalizedThreadStore {
       this.#capabilityRunState === snapshot.runState &&
       !this.#receiptNeedsConfirmation &&
       snapshot.thread.threadRevision >= (this.#receiptThreadRevision ?? 0) &&
+      snapshot.draft.revision >= (this.#receiptDraftRevision ?? 0) &&
       !snapshot.interactions.some(({ id }) =>
         this.#resolvedInteractionReceipts.has(id),
       )
@@ -814,17 +986,37 @@ export class NormalizedThreadStore {
       revision >= this.#receiptThreadRevision
     ) {
       this.#receiptThreadRevision = undefined;
-      this.#receiptNeedsConfirmation = false;
+      if (this.#receiptDraftRevision === undefined) {
+        this.#receiptNeedsConfirmation = false;
+      }
+    }
+  }
+
+  #confirmReceiptDraftRevision(revision: number): void {
+    if (
+      this.#receiptDraftRevision !== undefined &&
+      revision >= this.#receiptDraftRevision
+    ) {
+      this.#receiptDraftRevision = undefined;
+      if (this.#receiptThreadRevision === undefined) {
+        this.#receiptNeedsConfirmation = false;
+      }
     }
   }
 
   #confirmReceiptProjection(
-    snapshot: Pick<NormalizedThreadSnapshot, "thread" | "interactions">,
+    snapshot: Pick<NormalizedThreadSnapshot, "thread" | "draft" | "interactions">,
+    replacement = false,
   ): void {
-    if (snapshot.thread.threadRevision < (this.#receiptThreadRevision ?? 0)) {
+    if (
+      replacement &&
+      (snapshot.thread.threadRevision < (this.#receiptThreadRevision ?? 0) ||
+        snapshot.draft.revision < (this.#receiptDraftRevision ?? 0))
+    ) {
       this.#receiptNeedsConfirmation = true;
     }
     this.#confirmReceiptRevision(snapshot.thread.threadRevision);
+    this.#confirmReceiptDraftRevision(snapshot.draft.revision);
     const open = new Set(snapshot.interactions.map(({ id }) => id));
     for (const id of this.#resolvedInteractionReceipts) {
       if (!open.has(id)) this.#resolvedInteractionReceipts.delete(id);
@@ -832,7 +1024,10 @@ export class NormalizedThreadStore {
   }
 
   #clearReceiptFences(): void {
+    this.#queueReceipt = undefined;
+    this.#draftReceipt = undefined;
     this.#receiptThreadRevision = undefined;
+    this.#receiptDraftRevision = undefined;
     this.#receiptNeedsConfirmation = false;
     this.#resolvedInteractionReceipts.clear();
   }

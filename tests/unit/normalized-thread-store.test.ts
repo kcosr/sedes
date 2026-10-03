@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { NormalizedThreadStore } from "../../src/client/stores/NormalizedThreadStore.js";
-import type {
-  ConversationItem,
-  NormalizedThreadSnapshot,
-  ThreadEventEnvelope,
-  ThreadCheckpoint,
+import {
+  queuedInputSummarySchema,
+  type ConversationItem,
+  type NormalizedThreadSnapshot,
+  type ThreadEventEnvelope,
+  type ThreadCheckpoint,
 } from "../../src/shared/index.js";
 import {
   MAXIMUM_NORMALIZED_SNAPSHOT_OR_PAGE_BYTES,
@@ -239,6 +240,26 @@ function applicationState(
   };
 }
 
+function queuedInput(
+  id: string,
+  sequence: number,
+  isHead: boolean,
+): NormalizedThreadSnapshot["queue"][number] {
+  return queuedInputSummarySchema.parse({
+    id,
+    deliveryOperationId: `delivery-${id}`,
+    resolvedDeliveryMode: "queue",
+    sequence,
+    origin: "user",
+    isHead,
+    state: "pending",
+    preview: { text: `Queued ${id}` },
+    attachmentCount: 0,
+    taskCount: 0,
+    createdAt: "2026-07-30T15:00:00.000Z",
+  });
+}
+
 describe("NormalizedThreadStore", () => {
   it("applies accounting invalidations without rebuilding transcript state and rejects stale generations", () => {
     const store=new NormalizedThreadStore();
@@ -468,6 +489,133 @@ describe("NormalizedThreadStore", () => {
     expect(store.state.snapshot?.draft.text).toBe("receipt draft");
   });
 
+  it("accepts queue catchup at a checkpoint revision already advanced by capabilities", () => {
+    const store = new NormalizedThreadStore();
+    const base = snapshot();
+    const original = {
+      ...base,
+      thread: { ...base.thread, threadRevision: 22, queuedInputCount: 2 },
+      queue: [queuedInput("removed", 1, true), queuedInput("retained", 2, false)],
+    };
+    store.apply(envelope(1, {
+      type: "snapshot", generation: "projection-1", snapshot: original,
+    }));
+    const checkpointSnapshot = {
+      ...original,
+      thread: { ...original.thread, threadRevision: 23 },
+    };
+    expect(store.applyCheckpoint({
+      eventId: `${hub}.10`,
+      projectionGeneration: "projection-1",
+      snapshot: checkpointSnapshot,
+      notices: [],
+      capabilityThreadRevision: 23,
+      capabilityRunState: "running",
+    })).toEqual({ kind: "applied" });
+    const remaining = [queuedInput("retained", 2, true)];
+    expect(store.apply(envelope(11, {
+      type: "application_state_changed", generation: "projection-1",
+      state: {
+        ...applicationState(checkpointSnapshot),
+        thread: { ...checkpointSnapshot.thread, queuedInputCount: 1 },
+        queue: remaining,
+      },
+    }))).toEqual({ kind: "applied" });
+    expect(store.state.snapshot?.queue).toEqual(remaining);
+    expect(store.state.authoritative).toBe(false);
+    store.confirmReplayCaughtUp();
+    expect(store.state.authoritative).toBe(true);
+  });
+
+  it("does not lower restored-draft freshness when an older receipt arrives between checkpoints", () => {
+    const store = new NormalizedThreadStore();
+    const original = snapshot();
+    store.apply(envelope(1, {
+      type: "snapshot", generation: "projection-1", snapshot: original,
+    }));
+    const restored = { ...original.draft, revision: 6, text: "Newest restored draft" };
+    store.applyQueueMutationProjection({
+      generation: "projection-1", threadRevision: 23, queue: [], draft: restored,
+    });
+    const checkpoint: ThreadCheckpoint = {
+      eventId: `${hub}.10`,
+      projectionGeneration: "projection-1",
+      snapshot: {
+        ...original,
+        thread: { ...original.thread, threadRevision: 21 },
+        draft: { ...original.draft, revision: 4, text: "Older checkpoint draft" },
+      },
+      notices: [],
+      capabilityThreadRevision: 21,
+      capabilityRunState: "running",
+    };
+    store.applyCheckpoint(checkpoint);
+    const olderReceiptDraft = { ...original.draft, revision: 5, text: "Older receipt draft" };
+    expect(store.applyQueueMutationProjection({
+      generation: "projection-1", threadRevision: 22, queue: [], draft: olderReceiptDraft,
+    })).toEqual({ kind: "applied" });
+    store.applyCheckpoint({
+      ...checkpoint,
+      eventId: `${hub}.11`,
+      snapshot: {
+        ...original,
+        thread: { ...original.thread, threadRevision: 23 },
+        draft: olderReceiptDraft,
+      },
+      capabilityThreadRevision: 23,
+    });
+    store.confirmReplayCaughtUp();
+    expect(store.state.snapshot?.draft).toEqual(olderReceiptDraft);
+    expect(store.state.authoritative).toBe(false);
+    expect(store.apply(envelope(12, {
+      type: "draft_changed", generation: "projection-1", draft: restored,
+    }))).toEqual({ kind: "applied" });
+    expect(store.state.authoritative).toBe(true);
+    expect(store.state.snapshot?.draft).toEqual(restored);
+  });
+
+  it("retains restored-draft freshness across a checkpoint after its queue receipt is confirmed", () => {
+    const store = new NormalizedThreadStore();
+    const base = snapshot();
+    const original = {
+      ...base,
+      thread: { ...base.thread, threadRevision: 21 },
+      draft: { ...base.draft, revision: 4 },
+    };
+    store.apply(envelope(1, {
+      type: "snapshot", generation: "projection-1", snapshot: original,
+    }));
+    const restored = { ...original.draft, revision: 6, text: "Restored queued input" };
+    store.applyQueueMutationProjection({
+      generation: "projection-1", threadRevision: 23, queue: [], draft: restored,
+    });
+    store.apply(envelope(2, {
+      type: "queue_changed", generation: "projection-1", threadRevision: 23, items: [],
+    }));
+    const checkpointSnapshot = {
+      ...original,
+      thread: { ...original.thread, threadRevision: 23 },
+      draft: { ...original.draft, revision: 5, text: "Before restore" },
+    };
+    expect(store.applyCheckpoint({
+      eventId: `${hub}.10`,
+      projectionGeneration: "projection-1",
+      snapshot: checkpointSnapshot,
+      notices: [],
+      capabilityThreadRevision: 23,
+      capabilityRunState: "running",
+    })).toEqual({ kind: "applied" });
+    store.confirmReplayCaughtUp();
+    expect(store.state.snapshot?.draft).toEqual(checkpointSnapshot.draft);
+    expect(store.state.authoritative).toBe(false);
+
+    expect(store.apply(envelope(11, {
+      type: "draft_changed", generation: "projection-1", draft: restored,
+    }))).toEqual({ kind: "applied" });
+    expect(store.state.authoritative).toBe(true);
+    expect(store.state.snapshot?.draft).toEqual(restored);
+  });
+
   it.each(["receipt-first", "checkpoint-first"])("does not reopen HTTP-resolved interactions through a checkpoint (%s)", (order) => {
     const store = new NormalizedThreadStore();
     const original = snapshot();
@@ -525,6 +673,7 @@ describe("NormalizedThreadStore", () => {
     }));
     store.applyQueueMutationProjection({
       generation: "projection-1", threadRevision: 9, queue: [],
+      draft: { ...snapshot().draft, revision: 9, text: "Restored in old generation" },
     });
     store.applyCheckpoint({
       eventId: `${hub}.10`,
@@ -536,6 +685,28 @@ describe("NormalizedThreadStore", () => {
     });
     store.confirmReplayCaughtUp();
     expect(store.state.authoritative).toBe(true);
+    expect(store.state.snapshot?.draft).toEqual(snapshot().draft);
+  });
+
+  it("clears restored-draft freshness when the projection is reset", () => {
+    const store = new NormalizedThreadStore();
+    const original = snapshot();
+    store.apply(envelope(1, {
+      type: "snapshot", generation: "projection-1", snapshot: original,
+    }));
+    store.applyQueueMutationProjection({
+      generation: "projection-1", threadRevision: 23, queue: [],
+      draft: { ...original.draft, revision: 6, text: "Restored before reset" },
+    });
+    store.apply(envelope(2, {
+      type: "queue_changed", generation: "projection-1", threadRevision: 23, items: [],
+    }));
+    store.resetProjection();
+    store.apply(envelope(1, {
+      type: "snapshot", generation: "projection-1", snapshot: original,
+    }));
+    expect(store.state.authoritative).toBe(true);
+    expect(store.state.snapshot?.draft).toEqual(original.draft);
   });
 
   it("bounds unconfirmed interaction receipts and permits a fresh replacement", () => {
@@ -2144,6 +2315,308 @@ describe("NormalizedThreadStore", () => {
       reason: "draft_revision_conflict",
     });
   });
+
+  it("merges delayed application metadata after two newer queue receipts without reviving deleted inputs", () => {
+    const store = new NormalizedThreadStore();
+    const base = snapshot();
+    const initial = {
+      ...base,
+      thread: { ...base.thread, threadRevision: 21, queuedInputCount: 3 },
+      queue: [
+        queuedInput("alpha", 1, true),
+        queuedInput("bravo", 2, false),
+        queuedInput("charlie", 3, false),
+      ],
+    };
+    store.apply(envelope(1, {
+      type: "snapshot", generation: "projection-1", snapshot: initial,
+    }));
+    const queue22 = [queuedInput("bravo", 2, true), initial.queue[2]!];
+    const queue23 = [queuedInput("charlie", 3, true)];
+    for (const [threadRevision, queue] of [
+      [22, queue22],
+      [23, queue23],
+    ] as const) {
+      expect(store.applyQueueMutationProjection({
+        generation: "projection-1", threadRevision, queue,
+      })).toEqual({ kind: "applied" });
+    }
+    expect(store.apply(envelope(2, {
+      type: "queue_changed", generation: "projection-1",
+      threadRevision: 22, items: queue22,
+    }))).toEqual({ kind: "ignored" });
+
+    const state22 = {
+      ...applicationState(initial),
+      thread: {
+        ...initial.thread,
+        threadRevision: 22,
+        queuedInputCount: 2,
+        inventoryRevision: 1,
+        title: { text: "Updated while cancelling" },
+      },
+      workspace: { ...initial.workspace, label: { text: "Renamed workspace" } },
+      settings: { ...initial.settings, revision: 1 },
+      agentTools: { ...initial.agentTools, revision: 1, enabled: true },
+      capabilities: { ...initial.capabilities, revision: "cap-2" },
+      queue: queue22,
+    };
+    expect(store.apply(envelope(3, {
+      type: "application_state_changed", generation: "projection-1", state: state22,
+    }))).toEqual({ kind: "applied" });
+    expect(store.state.authoritative).toBe(true);
+    expect(store.state.snapshot).toMatchObject({
+      thread: {
+        threadRevision: 23,
+        queuedInputCount: 1,
+        inventoryRevision: 1,
+        title: state22.thread.title,
+      },
+      workspace: state22.workspace,
+      settings: state22.settings,
+      agentTools: state22.agentTools,
+      capabilities: state22.capabilities,
+      queue: queue23,
+    });
+    expect(store.replayCursor).toBe(`${hub}.3`);
+    expect(store.snapshotSerializedBytes).toBe(serializedUtf8Bytes(store.state.snapshot));
+
+    expect(store.apply(envelope(4, {
+      type: "queue_changed", generation: "projection-1",
+      threadRevision: 23, items: queue23,
+    }))).toEqual({ kind: "ignored" });
+    expect(store.apply(envelope(5, {
+      type: "application_state_changed", generation: "projection-1",
+      state: {
+        ...state22,
+        thread: { ...state22.thread, threadRevision: 23, queuedInputCount: 1 },
+        queue: queue23,
+      },
+    }))).toEqual({ kind: "applied" });
+    expect(store.state.authoritative).toBe(true);
+    expect(store.state.snapshot?.queue).toEqual(queue23);
+    expect(store.state.snapshot?.settings).toEqual(state22.settings);
+  });
+
+  it("retains a restored draft through delayed application and draft events after the queue receipt is confirmed", () => {
+    const store = new NormalizedThreadStore();
+    const base = snapshot();
+    const initial = {
+      ...base,
+      thread: { ...base.thread, threadRevision: 21, queuedInputCount: 1 },
+      draft: { ...base.draft, revision: 4, text: "Before restore" },
+      queue: [queuedInput("restore", 1, true)],
+    };
+    store.apply(envelope(1, {
+      type: "snapshot", generation: "projection-1", snapshot: initial,
+    }));
+    const restored = { ...initial.draft, revision: 6, text: "Restored queued input" };
+    store.applyQueueMutationProjection({
+      generation: "projection-1", threadRevision: 23, queue: [], draft: restored,
+    });
+    const olderDraft = { ...initial.draft, revision: 5, text: "Before restore completed" };
+    const state22 = {
+      ...applicationState(initial),
+      thread: { ...initial.thread, threadRevision: 22 },
+      draft: olderDraft,
+    };
+    expect(store.apply(envelope(2, {
+      type: "application_state_changed", generation: "projection-1", state: state22,
+    }))).toEqual({ kind: "applied" });
+    expect(store.state.snapshot?.draft).toEqual(restored);
+    expect(store.state.snapshot?.queue).toEqual([]);
+
+    store.apply(envelope(3, {
+      type: "queue_changed", generation: "projection-1", threadRevision: 23, items: [],
+    }));
+    expect(store.apply(envelope(4, {
+      type: "draft_changed", generation: "projection-1", draft: olderDraft,
+    })).kind).not.toBe("resnapshot_required");
+    expect(store.state.snapshot?.draft).toEqual(restored);
+    expect(store.state.authoritative).toBe(true);
+
+    expect(store.apply(envelope(5, {
+      type: "draft_changed", generation: "projection-1", draft: restored,
+    })).kind).not.toBe("resnapshot_required");
+    expect(store.apply(envelope(6, {
+      type: "application_state_changed", generation: "projection-1",
+      state: {
+        ...state22,
+        thread: { ...state22.thread, threadRevision: 23, queuedInputCount: 0 },
+        draft: restored,
+        queue: [],
+      },
+    }))).toEqual({ kind: "applied" });
+    const edited = { ...restored, revision: 7, text: "Edited after restore" };
+    expect(store.apply(envelope(7, {
+      type: "draft_changed", generation: "projection-1", draft: edited,
+    }))).toEqual({ kind: "applied" });
+    expect(store.state.authoritative).toBe(true);
+    expect(store.state.snapshot?.draft).toEqual(edited);
+    expect(store.snapshotSerializedBytes).toBe(serializedUtf8Bytes(store.state.snapshot));
+  });
+
+  it.each(["thread_changed", "application_state_changed"] as const)(
+    "rejects actual %s revision regression while a newer queue receipt is outstanding",
+    (type) => {
+      const store = new NormalizedThreadStore();
+      const base = snapshot();
+      const initial = { ...base, thread: { ...base.thread, threadRevision: 20 } };
+      store.apply(envelope(1, {
+        type: "snapshot", generation: "projection-1", snapshot: initial,
+      }));
+      store.applyQueueMutationProjection({
+        generation: "projection-1", threadRevision: 25, queue: [],
+      });
+      const update = (sequence: number, threadRevision: number) => {
+        const thread = { ...initial.thread, threadRevision };
+        return store.apply(envelope(sequence, type === "thread_changed"
+          ? { type, generation: "projection-1", thread }
+          : {
+              type, generation: "projection-1",
+              state: { ...applicationState(initial), thread },
+            }));
+      };
+      expect(update(2, 22)).toEqual({ kind: "applied" });
+      expect(store.state.snapshot?.thread.threadRevision).toBe(25);
+      expect(update(3, 21)).toEqual({
+        kind: "resnapshot_required", reason: "thread_revision_regressed",
+      });
+      expect(store.state.authoritative).toBe(false);
+    },
+  );
+
+  it.each(["draft_changed", "application_state_changed"] as const)(
+    "rejects actual %s draft regression while a newer restored draft receipt is outstanding",
+    (type) => {
+      const store = new NormalizedThreadStore();
+      const base = snapshot();
+      const initial = {
+        ...base,
+        thread: { ...base.thread, threadRevision: 20 },
+        draft: { ...base.draft, revision: 2 },
+      };
+      store.apply(envelope(1, {
+        type: "snapshot", generation: "projection-1", snapshot: initial,
+      }));
+      store.applyQueueMutationProjection({
+        generation: "projection-1", threadRevision: 25, queue: [],
+        draft: { ...initial.draft, revision: 6, text: "Restored" },
+      });
+      const update = (sequence: number, draftRevision: number) => {
+        const draft = { ...initial.draft, revision: draftRevision };
+        return store.apply(envelope(sequence, type === "draft_changed"
+          ? { type, generation: "projection-1", draft }
+          : {
+              type, generation: "projection-1",
+              state: {
+                ...applicationState(initial),
+                thread: { ...initial.thread, threadRevision: 20 + sequence },
+                draft,
+              },
+            }));
+      };
+      expect(update(2, 4).kind).not.toBe("resnapshot_required");
+      expect(store.state.snapshot?.draft.revision).toBe(6);
+      expect(update(3, 3)).toEqual({
+        kind: "resnapshot_required", reason: "draft_revision_regressed",
+      });
+      expect(store.state.authoritative).toBe(false);
+    },
+  );
+
+  it("confirms a queue receipt after capabilities reach its revision and still rejects a contradictory stream queue", () => {
+    const store = new NormalizedThreadStore();
+    const base = snapshot();
+    const initial = {
+      ...base,
+      thread: { ...base.thread, threadRevision: 21, queuedInputCount: 2 },
+      queue: [queuedInput("removed", 1, true), queuedInput("retained", 2, false)],
+    };
+    store.apply(envelope(1, {
+      type: "snapshot", generation: "projection-1", snapshot: initial,
+    }));
+    const remaining = [queuedInput("retained", 2, true)];
+    store.applyQueueMutationProjection({
+      generation: "projection-1", threadRevision: 23, queue: remaining,
+    });
+    expect(store.apply(envelope(2, {
+      type: "capabilities_changed", generation: "projection-1", threadRevision: 23,
+      capabilities: initial.capabilities, providerFeatures: initial.providerFeatures,
+    }))).toEqual({ kind: "applied" });
+    expect(store.state.snapshot?.queue).toEqual(remaining);
+    expect(store.apply(envelope(3, {
+      type: "queue_changed", generation: "projection-1", threadRevision: 23, items: remaining,
+    }))).toEqual({ kind: "ignored" });
+    expect(store.state.authoritative).toBe(true);
+    expect(store.state.snapshot?.queue).toEqual(remaining);
+    expect(store.apply(envelope(4, {
+      type: "application_state_changed", generation: "projection-1",
+      state: {
+        ...applicationState(initial),
+        thread: { ...initial.thread, threadRevision: 23, queuedInputCount: 0 },
+        queue: [],
+      },
+    }))).toEqual({ kind: "resnapshot_required", reason: "queue_revision_conflict" });
+  });
+
+  it.each(["queue_changed", "application_state_changed"] as const)(
+    "rejects %s contradicting a queue receipt at the same revision",
+    (type) => {
+      const store = new NormalizedThreadStore();
+      const initial = snapshot();
+      store.apply(envelope(1, {
+        type: "snapshot", generation: "projection-1", snapshot: initial,
+      }));
+      store.applyQueueMutationProjection({
+        generation: "projection-1", threadRevision: 23,
+        queue: [queuedInput("retained", 1, true)],
+      });
+      store.apply(envelope(2, {
+        type: "capabilities_changed", generation: "projection-1", threadRevision: 23,
+        capabilities: initial.capabilities, providerFeatures: initial.providerFeatures,
+      }));
+      expect(store.apply(envelope(3, type === "queue_changed"
+        ? { type, generation: "projection-1", threadRevision: 23, items: [] }
+        : {
+            type, generation: "projection-1",
+            state: {
+              ...applicationState(initial),
+              thread: { ...initial.thread, threadRevision: 23 },
+            },
+          }))).toEqual({
+        kind: "resnapshot_required", reason: "queue_revision_conflict",
+      });
+    },
+  );
+
+  it.each(["draft_changed", "application_state_changed"] as const)(
+    "rejects %s contradicting a restored draft receipt at the same revision",
+    (type) => {
+      const store = new NormalizedThreadStore();
+      const initial = snapshot();
+      store.apply(envelope(1, {
+        type: "snapshot", generation: "projection-1", snapshot: initial,
+      }));
+      store.applyQueueMutationProjection({
+        generation: "projection-1", threadRevision: 23, queue: [],
+        draft: { ...initial.draft, revision: 6, text: "Restored" },
+      });
+      const contradictoryDraft = { ...initial.draft, revision: 6, text: "Conflicting" };
+      expect(store.apply(envelope(2, type === "draft_changed"
+        ? { type, generation: "projection-1", draft: contradictoryDraft }
+        : {
+            type, generation: "projection-1",
+            state: {
+              ...applicationState(initial),
+              thread: { ...initial.thread, threadRevision: 23 },
+              draft: contradictoryDraft,
+            },
+          }))).toEqual({
+        kind: "resnapshot_required", reason: "draft_revision_conflict",
+      });
+    },
+  );
 
   it("rejects a contradictory queue receipt at the same thread revision", () => {
     const store = new NormalizedThreadStore();

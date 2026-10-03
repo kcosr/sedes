@@ -666,6 +666,10 @@
 
 ### Fixed
 
+- Deleting or restoring queued inputs no longer causes an unnecessary thread
+  reconnect when the HTTP response arrives before older stream updates,
+  keeping subsequent queue controls responsive. (PR pending)
+
 - Claude worker cleanup now accepts process groups containing only exited
   processes, avoiding shared-worker shutdowns that disconnect unrelated
   conversations. Rebuild and upgrade local workers and remote sidecars. (#42)
