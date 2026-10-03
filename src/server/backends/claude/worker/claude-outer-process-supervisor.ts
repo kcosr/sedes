@@ -1,5 +1,5 @@
 import { cleanUpOwnedProcessTrees, OwnedProcessTree } from "../../../runtime/owned-process-tree.js";
-import { readProcessEntrySync, readProcessTable } from "../../../runtime/process-table.js";
+import { readProcessEntrySync, readProcessTable, readProcessTableSync } from "../../../runtime/process-table.js";
 import type { ClaudeWorkerSupervisionMessage } from "./claude-worker-supervision-ipc.js";
 
 /** Outer status proving an abnormal worker generation left no Claude groups. */
@@ -47,8 +47,30 @@ export class ClaudeOuterProcessSupervisor {
       }
       this.#processGroups.set(message.processGroupId, live ? new OwnedProcessTree(leader) : undefined);
     } else if (message.type === "process_group_unregistered") {
-      if (!this.#processGroups.has(message.processGroupId) || groupExists(message.processGroupId)) {
+      if (!this.#processGroups.has(message.processGroupId)) {
         throw new Error("claude_runtime_worker_process_group_unregistration_invalid");
+      }
+      const tree = this.#processGroups.get(message.processGroupId);
+      if (tree) {
+        // Match the inner owner's cleanup proof: zombies may keep a group
+        // addressable but cannot execute. Check the entire owned tree so an
+        // observed descendant in another group cannot be forgotten either.
+        // Keep this synchronous to preserve supervision IPC message ordering.
+        const table = readProcessTableSync();
+        tree.observe(table);
+        if (tree.remains(table)) {
+          throw new Error("claude_runtime_worker_process_group_unregistration_invalid");
+        }
+      } else if (groupExists(message.processGroupId)) {
+        // A stopped gate can die before its identity is recorded. It cannot
+        // exec or spawn descendants before registration is acknowledged, but
+        // its zombie may still keep this group addressable. Require positive
+        // exited-only evidence; an invisible addressable group remains unknown.
+        const members = [...readProcessTableSync().values()]
+          .filter((entry) => entry.processGroupId === message.processGroupId);
+        if (members.length === 0 || members.some((entry) => !entry.exited)) {
+          throw new Error("claude_runtime_worker_process_group_unregistration_invalid");
+        }
       }
       this.#processGroups.delete(message.processGroupId);
     }

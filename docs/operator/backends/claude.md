@@ -192,6 +192,12 @@ provider history and backend configuration remain intact. Carrier loss or a main
 server restart preserves sidecar-hosted queries and running work. Remote eviction
 requires sidecar runtime protocol 8.
 
+The inner worker and outer supervisor use the same process-tree completion
+check during cleanup. Exited processes awaiting reaping do not count as running
+work; live descendants, unknown process groups, and failed process-table reads
+still block cleanup. Rebuild local workers and upgrade remote sidecars to apply
+this fix; no database or protocol migration is required.
+
 One principal/backend runtime owns the SDK queries admitted by Sedes's shared
 conversation-runtime budget for that execution environment. A live Sedes
 thread has at most one warm query, and closing a handle does not delete the

@@ -1,3 +1,4 @@
+import { attachmentDiagnostic } from "../../diagnostics/attachment-diagnostics.js";
 import type { EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
 import { RetainedRuntimeLifecycle } from "../retained-runtime-lifecycle.js";
 import { normalizedAbsolutePath } from "../../../shared/absolute-path.js";
@@ -143,7 +144,16 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
   async probe(input: ClaudeRuntimeProbeInput): Promise<ClaudeRuntimeProbeResult> {
     this.#assertRuntimeIdentity(input);
     assertEmptyEnvironment(input.environment);
-    return await this.#observe(async () => await (await this.#client()).probe(input));
+    const started = performance.now();
+    attachmentDiagnostic("claude_worker_probe_started", { ...this.#scope, pid: process.pid, carrierGeneration: this.#generation });
+    try {
+      const result = await this.#observe(async () => await (await this.#client()).probe(input));
+      attachmentDiagnostic("claude_worker_probe_completed", { ...this.#scope, pid: process.pid, carrierGeneration: this.#generation, durationMs: performance.now() - started });
+      return result;
+    } catch (error) {
+      attachmentDiagnostic("claude_worker_probe_failed", { ...this.#scope, pid: process.pid, carrierGeneration: this.#generation, durationMs: performance.now() - started }, error);
+      throw error;
+    }
   }
 
   createSession(options: ClaudeRuntimeSessionOptions): ClaudeOwnedRuntimeSession {
@@ -286,6 +296,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
         startupEnvironmentVariables: this.#startupEnvironmentVariables,
         initializationTimeoutMs: this.#initializationTimeoutMs,
         closed: transport.closed,
+        diagnosticScope: { ...this.#scope, carrierGeneration },
       });
       peer.start();
       const hello = await peer.call(controlHelloOperation, {
@@ -303,12 +314,12 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
         carrierGeneration, stream, transport, peer, client,
       });
       this.#current = owned;
+      attachmentDiagnostic("claude_worker_generation_started", { ...this.#scope, pid: process.pid, carrierGeneration });
       void stream.closed.then(
-        (closure) =>
-          this.#generationEnded(
-            owned,
-            managedWorkerClosureError(closure),
-          ),
+        (closure) => {
+          attachmentDiagnostic("claude_worker_process_closed", { ...this.#scope, pid: process.pid, carrierGeneration, reason: closure.reason, exitCode: closure.exitCode, signal: closure.signal }, closure.cause);
+          this.#generationEnded(owned, managedWorkerClosureError(closure));
+        },
         (error) => this.#generationEnded(owned, error),
       );
       return owned;
@@ -333,6 +344,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
   #generationEnded(owned: OwnedGeneration, error?: unknown): void {
     if (this.#current !== owned) return;
     this.#current = undefined;
+    attachmentDiagnostic("claude_worker_generation_ended", { ...this.#scope, pid: process.pid, carrierGeneration: owned.carrierGeneration }, error);
     owned.client.close(error ?? new Error("claude_managed_runtime_generation_ended"));
     if (isCleanupProofFailure(error)) this.#retirementFailure ??= error;
     if (this.#retirementFailure === undefined) this.#releaseDirectory();
@@ -341,6 +353,7 @@ export class ClaudeManagedRuntimeOwner implements ClaudeOwnedRuntimeClient {
   }
 
   async #retire(owned: OwnedGeneration, reason: string): Promise<void> {
+    attachmentDiagnostic("claude_worker_retire_requested", { ...this.#scope, pid: process.pid, carrierGeneration: owned.carrierGeneration, reason, requestedClose: true });
     owned.client.close(new Error(reason));
     try {
       await owned.peer.close(reason);

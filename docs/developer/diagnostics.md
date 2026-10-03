@@ -84,7 +84,8 @@ are:
   environment/backend IDs, generation/controller epoch, and local attachment
   IDs where available; attachment IDs are not authentication nonces. Errors
   retain only bounded recognized classes and machine codes, never stacks,
-  arbitrary messages, payloads, native thread IDs, or credentials. Sidecar
+  arbitrary messages, payloads, or credentials. Claude lifecycle records alone
+  admit UUID-validated native session IDs for correlation with saved bindings. Sidecar
   records distinguish a requested close from a byte-stream exit (including
   process exit code/signal when the carrier provides them), frame/protocol
   closure, and heartbeat failure. Heartbeat failures and slow successful
@@ -162,12 +163,53 @@ are refused. The asynchronous pending-write buffer is capped at 64 KiB and each
 record at 8 KiB; overload drops diagnostic records instead of delaying provider
 work. Graceful shutdown allows up to 500 ms to flush optional logging. Each PID
 has its own bounded files. A persistent sidecar daemon starting with the opt-in
-keeps its own capture and those of the four most recent earlier daemon PIDs, and
-deletes older captures of PIDs that are no longer running; collect an incident's
+keeps its own capture and those of the four most recent earlier capture PIDs
+(daemons or workers), and deletes older captures of PIDs that are no longer running; collect an incident's
 files before several restarts. Main's operator-selected
 `SEDES_DEBUG_DELIVERY_FILE` captures are never deleted; remove old PID files
 there after collecting the incident. File-output failure does not affect
 application startup or recovery.
+
+### Claude worker lifecycle capture
+
+The existing main/sidecar delivery opt-in also reaches installation-owned
+workers. Claude's supervisor and inner worker create separate bounded
+`delivery-<pid>.jsonl` files beside the owner's diagnostic file (when a file
+sink is configured). They never share the owner's writer. Worker-internal
+records are file-only so they cannot exhaust the managed worker's stderr byte
+limit; without a configured file sink, only the parent-side records are captured. The remote sidecar
+opt-in must be enabled before launching the worker; already-running workers
+do not acquire new settings. Old-worker files use the same PID retention rules
+above. No additional flag, wire event, or database state is introduced.
+
+Look for `managed_worker_process_started`, `managed_worker_close_requested`,
+and `managed_worker_process_closed` to correlate backend/environment, carrier
+generation, actual worker PID, parent PID, exit code, and signal. These
+provider-neutral process records apply to every installation-owned worker;
+provider session interpretation remains backend-private.
+
+Claude adds `claude_worker_probe_started/completed/failed`,
+`claude_worker_generation_started/ended`, `claude_worker_retire_requested`,
+`claude_worker_fence_requested`, and `claude_worker_client_closed`. Individual
+failures emit `claude_worker_query_failed`, `claude_worker_session_failed`,
+and `claude_retained_session_failed` **before** generic failure normalization.
+Their `nativeSessionId` accepts only a UUID; correlate it with the saved Claude
+conversation binding. These records include only bounded error classes and
+machine codes, never raw provider messages, stacks, stderr, tool arguments,
+configuration, prompt contents, or credentials.
+
+`claude_worker_lifecycle` records from the supervisor/inner worker include
+stages `started`, `signal`, `carrier_closed`, `go_away`, `cleanup_failed`,
+`supervisor_failed`, `parent_ipc_failed`, `inner_exited`, `failed`, and `ended`. Follow the PID and
+generation chain to distinguish main detachment from a native query failure,
+worker cleanup failure, explicit fence, or process exit. A failed probe alone
+does not prove it caused the worker failure. Shutdown flush is bounded to
+500 ms; abrupt termination or a full diagnostic buffer can still lose records.
+
+The change is observational. It does not change detach, interrupt, cleanup,
+retirement, retry, or recovery behavior. Other backends retain their existing
+provider-specific diagnostics; only Claude consumes the new worker lifecycle
+capture settings.
 
 ### Bounded main CPU capture
 

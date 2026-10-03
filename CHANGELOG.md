@@ -196,6 +196,10 @@
   restarts. Migration 129 widens the stored service-tier values.
   (PR pending)
 
+- Opt-in Claude worker lifecycle diagnostics record process exits, cleanup and
+  fencing reasons, probe failures, and affected session UUIDs to diagnose
+  lost retained sessions across server restarts. (#41)
+
 - Agents can delete completed Tasks at the expected revision with
   `task.delete` (`sedes_task_delete`). The tool description limits use to
   the user's request.
@@ -696,6 +700,10 @@
 - Forking a Codex thread with Fast selected no longer fails before the fork
   is created.
   (PR pending)
+
+- Claude worker cleanup now accepts process groups containing only exited
+  processes, avoiding shared-worker shutdowns that disconnect unrelated
+  conversations. Rebuild and upgrade local workers and remote sidecars. (#42)
 
 - A Task added while the Pinned filter is on is created pinned instead of
   disappearing, and opening a Task that a filter hides no longer turns the
