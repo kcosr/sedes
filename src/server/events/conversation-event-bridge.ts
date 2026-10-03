@@ -153,6 +153,22 @@ export class ConversationEventBridge {
         // Failure observers cannot poison bridge settlement.
       }
     };
+    // A backend observation (for example a confirmed effective tuple) can
+    // advance the settings revision without an application mutation. Publish
+    // the composed settings through the application publication queue, and
+    // only while they remain newer than the published ones, so they never
+    // overtake an in-flight application capture or replace a newer one.
+    const publishNewerSettings = async (
+      generation: string,
+      settings: NormalizedThreadSnapshot["settings"],
+    ): Promise<void> => {
+      await input.hub.serializeApplicationPublication(() => {
+        if (!bindingValid || input.hub.projectionGeneration !== generation) return;
+        if (settings.revision > input.hub.snapshot!.settings.revision) {
+          input.hub.publish({ type: "settings_changed", generation, settings });
+        }
+      });
+    };
     const publishCurrentControls = async (generation: string): Promise<void> => {
       if (!bindingValid || input.hub.projectionGeneration !== generation) return;
       if (!input.captureAuthoritativeState) {
@@ -227,12 +243,6 @@ export class ConversationEventBridge {
             });
           }
         }
-        // A backend observation can advance the settings revision (for
-        // example a confirmed effective tuple) without an application
-        // mutation; publish it so the next setting change is not stale.
-        if (settings.revision > snapshot.settings.revision) {
-          input.hub.publish({ type: "settings_changed", generation, settings });
-        }
         input.hub.publish({
           type: "capabilities_changed",
           generation,
@@ -240,6 +250,9 @@ export class ConversationEventBridge {
           capabilities,
           providerFeatures,
         });
+        if (settings.revision > snapshot.settings.revision) {
+          await publishNewerSettings(generation, settings);
+        }
         return;
       }
     };

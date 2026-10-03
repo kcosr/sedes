@@ -9663,6 +9663,123 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it("withholds an accelerated tier it cannot confirm for the native model", async () => {
+    const fastModeFeature = {
+      name: "fast_mode",
+      stage: "stable",
+      displayName: "Fast mode",
+      description: null,
+      announcement: null,
+      enabled: true,
+      defaultEnabled: false,
+    };
+    const tiers = (...ids: string[]) =>
+      ids.map((id) => ({ id, name: id, description: id }));
+    const establish = async (input: {
+      readonly desired: () => CodexExecutionSettingsTuple;
+      readonly prepare: (harness: RpcHarness) => void;
+      readonly resumedModel?: string;
+    }) => {
+      const harness = new RpcHarness();
+      input.prepare(harness);
+      const resolveFastModeDisabled = vi.fn(() => ({
+        ...input.desired(),
+        serviceTier: "standard" as const,
+      }));
+      const handle = await attachIdle(
+        harness,
+        driver(
+          harness,
+          connection,
+          new CodexConversationOwnershipRegistry(),
+          { type: "catalog" },
+          executionSettingsProvider({
+            desiredSettings: () => input.desired(),
+            resolveFastModeDisabled,
+          }),
+        ),
+      );
+      harness.enqueue("thread/read", { thread: nativeThread() });
+      harness.enqueue("thread/resume", {
+        ...resumeResult(),
+        ...(input.resumedModel ? { model: input.resumedModel } : {}),
+      });
+      harness.enqueue("experimentalFeature/list", {
+        data: [fastModeFeature],
+        nextCursor: null,
+      });
+      harness.enqueue("thread/settings/update", {});
+      await handle.establishProjection({
+        signal: new AbortController().signal,
+      });
+      const writes = harness.calls
+        .filter(
+          ({ method }) =>
+            method === "thread/resume" || method === "thread/settings/update",
+        )
+        .map(({ method, params }) => [
+          method,
+          (params as { serviceTier?: string }).serviceTier,
+        ]);
+      harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      await handle.close();
+      return { writes, resolveFastModeDisabled };
+    };
+    const ultrafast = executionSettingsTuple({ serviceTier: "ultrafast" });
+
+    // A catalog read failure keeps the selection but writes no tier.
+    const unreadable = await establish({
+      desired: () => ultrafast,
+      prepare: (harness) =>
+        harness.enqueue("model/list", new Error("catalog unavailable")),
+    });
+    expect(unreadable.writes).toEqual([["thread/resume", undefined]]);
+    expect(unreadable.resolveFastModeDisabled).not.toHaveBeenCalled();
+
+    // Codex resumed another model that lacks the tier: keep intent, skip the
+    // replay onto that model.
+    const otherModel = await establish({
+      desired: () => ultrafast,
+      resumedModel: "gpt-5.6-mini",
+      prepare: (harness) => {
+        const catalog = {
+          data: [
+            nativeModel({ serviceTiers: tiers("priority", "ultrafast") }),
+            nativeModel({
+              id: "gpt-5.6-mini",
+              model: "gpt-5.6-mini",
+              displayName: "GPT-5.6 Mini",
+              isDefault: false,
+              serviceTiers: tiers("priority"),
+            }),
+          ],
+          nextCursor: null,
+        };
+        harness.enqueue("model/list", catalog, catalog, catalog);
+      },
+    });
+    expect(otherModel.writes).toEqual([["thread/resume", "ultrafast"]]);
+    expect(otherModel.resolveFastModeDisabled).not.toHaveBeenCalled();
+
+    // A newer selection made during the catalog read is checked again and
+    // is never clamped by the stale result.
+    let desired = ultrafast;
+    const superseded = await establish({
+      desired: () => desired,
+      prepare: (harness) => {
+        harness.defaultModelOverrides = { serviceTiers: tiers("priority") };
+        harness.after("model/list", () => {
+          desired = executionSettingsTuple({ serviceTier: "fast" });
+        });
+      },
+    });
+    expect(superseded.resolveFastModeDisabled).not.toHaveBeenCalled();
+    expect(superseded.writes).toEqual([
+      ["thread/resume", "priority"],
+      ["thread/settings/update", "priority"],
+    ]);
+  });
+
   it("resolves a withdrawn Ultrafast tier to Standard when fast_mode recovers", async () => {
     const harness = new RpcHarness();
     harness.defaultModelOverrides = {

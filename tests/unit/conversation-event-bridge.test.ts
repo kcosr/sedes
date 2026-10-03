@@ -854,38 +854,30 @@ describe("ConversationEventBridge", () => {
     });
   });
 
-  it("publishes a backend-advanced settings revision with the capability event", async () => {
+  it("publishes a backend-advanced settings revision behind in-flight application publications", async () => {
     const source = new Source();
     const hub = new ThreadEventHub();
     const listener = vi.fn();
     hub.subscribe(listener);
-    const settings = {
-      revision: 3,
+    const settingsAt = (revision: number) => ({
+      revision,
       values: [
         {
-          id: "model",
+          id: "model" as const,
           desiredValue: "model-a",
           effectiveValue: "model-a",
           applicationState: "effective" as const,
         },
       ],
-    };
-    const composeTargeted = vi
-      .fn()
-      .mockResolvedValueOnce({
-        threadRevision: 1,
-        capabilities: snapshot("generation-1").capabilities,
-        providerFeatures: [],
-        interactions: [],
-        settings,
-      })
-      .mockResolvedValueOnce({
-        threadRevision: 1,
-        capabilities: snapshot("generation-1").capabilities,
-        providerFeatures: [],
-        interactions: [],
-        settings: { revision: 2, values: [] },
-      });
+    });
+    let composedSettings = settingsAt(3);
+    const composeTargeted = vi.fn(async () => ({
+      threadRevision: 0,
+      capabilities: snapshot("generation-1").capabilities,
+      providerFeatures: [],
+      interactions: [],
+      settings: composedSettings,
+    }));
     const bridge = new ConversationEventBridge({
       ...targetedProjection,
       snapshot: async (_scope, _threadId, current) =>
@@ -909,27 +901,51 @@ describe("ConversationEventBridge", () => {
         capabilities: actorState("generation-1").backendCapabilities,
       },
     };
+
+    // An application publication captured revision 2 and is still composing
+    // when the backend confirms revision 3.
+    let releaseApplication!: () => void;
+    const applicationGate = new Promise<void>((resolve) => {
+      releaseApplication = resolve;
+    });
+    const {
+      orderedTurnIds: _orderedTurnIds,
+      turnsById: _turnsById,
+      itemsById: _itemsById,
+      forksByTurnId: _forksByTurnId,
+      history: _history,
+      runState: _runState,
+      usage: _usage,
+      ...application
+    } = snapshot("generation-1");
+    const applicationPublication = hub.serializeApplicationPublication(
+      async () => {
+        await applicationGate;
+        hub.publish({
+          type: "application_state_changed",
+          generation: "generation-1",
+          state: { ...application, settings: settingsAt(2) },
+        });
+      },
+    );
     source.emit(capabilitiesChanged);
-    // An older revision than the published one is never republished.
+    await vi.waitFor(() => expect(composeTargeted).toHaveBeenCalledTimes(1));
+    expect(hub.snapshot?.settings.revision).toBe(0);
+    releaseApplication();
+    await applicationPublication;
+
+    // A stale composition never republishes an older revision.
+    composedSettings = settingsAt(1);
     source.emit(capabilitiesChanged);
     await binding.release();
 
-    const events = listener.mock.calls
-      .map(([published]) => published.event)
-      .filter(({ type }) =>
-        type === "settings_changed" || type === "capabilities_changed",
+    const types = listener.mock.calls
+      .map(([published]) => published.event.type)
+      .filter((type) =>
+        ["settings_changed", "application_state_changed"].includes(type),
       );
-    expect(events.map(({ type }) => type)).toEqual([
-      "settings_changed",
-      "capabilities_changed",
-      "capabilities_changed",
-    ]);
-    expect(events[0]).toEqual({
-      type: "settings_changed",
-      generation: "generation-1",
-      settings,
-    });
-    expect(hub.snapshot?.settings).toEqual(settings);
+    expect(types).toEqual(["application_state_changed", "settings_changed"]);
+    expect(hub.snapshot?.settings).toEqual(settingsAt(3));
   });
 
   it("recomposes capabilities when queue revision advances during composition", async () => {

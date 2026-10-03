@@ -2501,34 +2501,71 @@ export class CodexConversationHandle implements ConversationHandle {
   /**
    * The account-scoped catalog decides whether an accelerated tier exists. A
    * durable Fast or Ultrafast selection the desired model no longer offers
-   * resolves to Standard, as a disabled `fast_mode` does, so Sedes never
-   * writes a tier Codex would silently omit. A catalog read failure keeps the
-   * selection; every turn still rechecks it before submission.
+   * resolves to Standard, as a disabled `fast_mode` does. The clamp applies
+   * only while the checked selection is still current; a selection changed
+   * during the catalog read is checked again. `writable` reports whether the
+   * resolved tier may be written natively for the desired model: a catalog
+   * read failure keeps the selection but withholds the write, and every turn
+   * still rechecks it before submission.
    */
-  async #resolveUnofferedServiceTier(
-    desired: CodexExecutionSettingsTuple | null,
-  ): Promise<CodexExecutionSettingsTuple | null> {
-    if (!desired || desired.serviceTier === "standard") return desired;
-    let offered: boolean;
-    try {
-      offered = await this.#serviceTierOffered(
-        desired.model,
-        desired.serviceTier,
+  async #resolveUnofferedServiceTier(): Promise<CodexServiceTierResolution> {
+    const current = () =>
+      this.#executionSettings.desiredSettings(
+        this.#scope(),
+        this.binding.applicationThreadId,
       );
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const checked = current();
+      if (!checked || checked.serviceTier === "standard") {
+        return { desired: checked, writable: true };
+      }
+      let offered: boolean;
+      try {
+        offered = await this.#serviceTierOffered(
+          checked.model,
+          checked.serviceTier,
+        );
+      } catch {
+        return { desired: checked, writable: false };
+      }
+      const latest = current();
+      if (!latest || !sameExecutionSettingsTuple(latest, checked)) continue;
+      if (offered) return { desired: latest, writable: true };
+      if (this.#closing || this.#closed) {
+        return { desired: latest, writable: false };
+      }
+      // Re-read and clamp run without an intervening await.
+      const resolved = this.#executionSettings.resolveFastModeDisabled(
+        this.#scope(),
+        {
+          applicationThreadId: this.binding.applicationThreadId,
+          now: this.#now(),
+        },
+      );
+      if (resolved && this.#managedTui) {
+        await this.#managedTui
+          .syncSettings(this.#scope(), this.binding.applicationThreadId, resolved)
+          .catch((error: unknown) => this.#reportError(error));
+      }
+      return { desired: resolved, writable: true };
+    }
+    return { desired: current(), writable: false };
+  }
+
+  /**
+   * Whether a tier may be written natively onto `model`, which can differ
+   * from the desired model when Codex resumed another one.
+   */
+  async #serviceTierWritableOn(
+    model: string,
+    serviceTier: CodexServiceTierSelection,
+  ): Promise<boolean> {
+    if (serviceTier === "standard") return true;
+    try {
+      return await this.#serviceTierOffered(model, serviceTier);
     } catch {
-      return desired;
+      return false;
     }
-    if (offered) return desired;
-    const resolved = this.#executionSettings.resolveFastModeDisabled(
-      this.#scope(),
-      { applicationThreadId: this.binding.applicationThreadId, now: this.#now() },
-    );
-    if (resolved && this.#managedTui) {
-      await this.#managedTui
-        .syncSettings(this.#scope(), this.binding.applicationThreadId, resolved)
-        .catch((error: unknown) => this.#reportError(error));
-    }
-    return resolved;
   }
 
   /** Replay only Sedes's durable tier; all other resume fields stay native. */
@@ -2693,13 +2730,16 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#reportError(error);
       }
     } else if (projection.enabled && projection.availability === "available") {
-      const desired = await this.#resolveUnofferedServiceTier(
-        this.#executionSettings.desiredSettings(
-          this.#scope(),
-          this.binding.applicationThreadId,
-        ),
-      );
-      if (desired) {
+      const resolution = await this.#resolveUnofferedServiceTier();
+      const desired = resolution.desired;
+      const nativeModel = this.#model?.id ?? desired?.model;
+      if (
+        desired &&
+        nativeModel !== undefined &&
+        (nativeModel === desired.model
+          ? resolution.writable
+          : await this.#serviceTierWritableOn(nativeModel, desired.serviceTier))
+      ) {
         try {
           await this.#fastModeSessions.syncServiceTier(
             this.#scope(),
@@ -2933,7 +2973,7 @@ export class CodexConversationHandle implements ConversationHandle {
         );
         let resumed;
         let requestedNativeResume = false;
-        let serviceTierResolved = false;
+        let serviceTierResolution: CodexServiceTierResolution | undefined;
         const controlObservationBeforeResume = this.#controlObservationRevision;
         try {
           resumed = await this.#client.persistentSessions?.reattachThread(
@@ -2969,12 +3009,9 @@ export class CodexConversationHandle implements ConversationHandle {
             // Restore the saved security selection for that reconstruction.
             // Codex ignores these overrides when another subscription retains
             // the live session, whose returned settings remain authoritative.
-            desiredBeforeResume = await this.#resolveUnofferedServiceTier(
-              this.#executionSettings.desiredSettings(
-                this.#scope(), this.binding.applicationThreadId,
-              ),
-            );
-            serviceTierResolved = true;
+            const resumeResolution = await this.#resolveUnofferedServiceTier();
+            desiredBeforeResume = resumeResolution.desired;
+            serviceTierResolution = resumeResolution;
             this.#assertEstablishmentMayContinue(signal);
             if (desiredBeforeResume) {
               try {
@@ -3008,7 +3045,7 @@ export class CodexConversationHandle implements ConversationHandle {
                       approvalsReviewer: resumePolicy.approvalsReviewer,
                     }
                   : {}),
-                ...(desiredBeforeResume
+                ...(desiredBeforeResume && serviceTierResolution?.writable
                   ? {
                       serviceTier: encodeCodexServiceTier(
                         desiredBeforeResume.serviceTier,
@@ -3241,15 +3278,30 @@ export class CodexConversationHandle implements ConversationHandle {
             await this.#recoverFastModeProjection(projection),
           shouldRecover: () => !this.#closing && !this.#closed,
         });
-        // A retained persistent session resumes without Sedes's resume
-        // overrides, so its tier is checked before the replay instead.
-        const retainedServiceTier =
-          fastModeProjection.unavailableReason === "feature_disabled"
-            ? await this.#reconcileDisabledFastMode(fastModeProjection)
-            : serviceTierResolved
-              ? desiredBeforeResume?.serviceTier
-              : (await this.#resolveUnofferedServiceTier(desiredBeforeResume))
-                  ?.serviceTier;
+        let retainedServiceTier: CodexServiceTierSelection | undefined;
+        if (fastModeProjection.unavailableReason === "feature_disabled") {
+          retainedServiceTier =
+            await this.#reconcileDisabledFastMode(fastModeProjection);
+        } else {
+          // A retained persistent session resumes without Sedes's resume
+          // overrides, so its tier is resolved before the replay instead.
+          const resolution =
+            serviceTierResolution ?? (await this.#resolveUnofferedServiceTier());
+          const desired = resolution.desired;
+          // The replay writes only the tier, onto whichever model Codex
+          // resumed; withhold a tier that model does not offer.
+          const resumedModel = settingsReceipt.settings.model;
+          retainedServiceTier =
+            desired &&
+            (resumedModel === desired.model
+              ? resolution.writable
+              : await this.#serviceTierWritableOn(
+                  resumedModel,
+                  desired.serviceTier,
+                ))
+              ? desired.serviceTier
+              : undefined;
+        }
         this.#assertEstablishmentMayContinue(signal);
         settingsReceipt = await this.#replayDesiredServiceTier(
           settingsReceipt,
@@ -7016,6 +7068,27 @@ function sameProjection(
     left?.revision === right?.revision &&
     left?.availability === right?.availability &&
     left?.unavailableReason === right?.unavailableReason
+  );
+}
+
+/** A desired tuple and whether its tier may be written natively now. */
+type CodexServiceTierResolution = {
+  readonly desired: CodexExecutionSettingsTuple | null;
+  readonly writable: boolean;
+};
+
+function sameExecutionSettingsTuple(
+  left: CodexExecutionSettingsTuple,
+  right: CodexExecutionSettingsTuple,
+): boolean {
+  return (
+    left.model === right.model &&
+    left.reasoningEffort === right.reasoningEffort &&
+    left.serviceTier === right.serviceTier &&
+    left.sandboxMode === right.sandboxMode &&
+    left.networkAccess === right.networkAccess &&
+    left.approvalPolicy === right.approvalPolicy &&
+    left.approvalReviewer === right.approvalReviewer
   );
 }
 

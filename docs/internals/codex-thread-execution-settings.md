@@ -220,9 +220,18 @@ closed. Every create and turn rechecks that the frozen tier is still offered
 for the model; a tier the catalog no longer advertises is rejected before
 submission rather than silently omitted by Codex. Resume, reattachment, and
 `fast_mode` recovery check the live catalog before writing a retained Fast or
-Ultrafast tier, and resolve a withdrawn tier to Standard as a disabled
-`fast_mode` does; a catalog read failure leaves the selection for the turn
-check. A fork admits the child's tier against the catalog before creation and
+Ultrafast tier:
+
+- A tier the desired model no longer offers resolves to Standard, as a
+  disabled `fast_mode` does. The clamp applies only while the checked
+  selection is still current; a selection changed during the catalog read is
+  checked again.
+- A catalog read failure keeps the selection but writes no accelerated tier
+  natively until a check succeeds; the turn check still applies.
+- The replay writes only the tier, onto whichever model Codex resumed. A tier
+  that model does not offer is withheld without changing the selection.
+
+A fork admits the child's tier against the catalog before creation and
 discovers its `fast_mode` support afterwards, as described under forks below.
 
 Speed changes use revision-fenced, durable provider-feature receipts. Desired
