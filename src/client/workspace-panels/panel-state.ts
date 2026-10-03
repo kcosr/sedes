@@ -42,7 +42,7 @@ import {
   COMPANION_KINDS,
   arrangeCompanions,
   isCompanionKind,
-  readCompanionArrangement,
+  recordCompanionArrangement,
   type CompanionArrangement,
   type CompanionPlacement,
 } from "./companion-layout.js";
@@ -281,8 +281,11 @@ export class PanelLayoutStore {
       options.threadId !== undefined &&
       this.#shared.companionArrangement === undefined
     ) {
-      const arrangement = readCompanionArrangement(this.#snapshot.tree);
-      if (arrangement) this.#setCompanionArrangement(arrangement);
+      const arrangement = this.#recordedArrangement(this.#snapshot.tree);
+      if (arrangement) {
+        this.#setCompanionArrangement(arrangement);
+        this.#conformLayout();
+      }
     }
     if (options.threadId) this.#shared.threadStores.set(options.threadId, this);
   }
@@ -872,6 +875,16 @@ export class PanelLayoutStore {
     if (tree !== this.#snapshot.tree) this.#publish({ tree });
   }
 
+  #recordedArrangement(
+    tree: PanelLayoutTree,
+  ): CompanionArrangement | undefined {
+    return recordCompanionArrangement(
+      tree,
+      this.#shared.companionArrangement,
+      (kind) => this.#preferredEdge(kind),
+    );
+  }
+
   #arrange(tree: PanelLayoutTree): PanelLayoutTree {
     const arrangement = this.#shared.companionArrangement;
     if (!arrangement) return tree;
@@ -1058,7 +1071,7 @@ export class PanelLayoutStore {
         : new SnapshotReadonlySet(input.collapsed);
     const requestedTree = "tree" in input ? input.tree! : this.#snapshot.tree;
     if (input.rememberCompanions) {
-      const arrangement = readCompanionArrangement(requestedTree);
+      const arrangement = this.#recordedArrangement(requestedTree);
       if (arrangement) this.#setCompanionArrangement(arrangement);
     }
     // Every layout keeps the shared companion arrangement around its own

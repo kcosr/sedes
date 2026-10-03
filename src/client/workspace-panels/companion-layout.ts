@@ -51,25 +51,49 @@ function sideEdge(split: SplitNode, index: 0 | 1): PanelPlacementEdge {
   return index === 0 ? "top" : "bottom";
 }
 
-/**
- * The companions wrapped around a layout, outermost first, or undefined when
- * a companion sits anywhere else, such as tabbed with another panel.
- */
-export function readCompanionArrangement(
+/** A lone Files or Terminals panel, which an older layout may wrap outside. */
+function loneOtherSidePanel(node: LayoutNode): boolean {
+  if (node.kind !== "tabs" || node.tabs.length !== 1) return false;
+  const { kind } = node.tabs[0]!;
+  return kind !== "chat" && !isCompanionKind(kind);
+}
+
+function walkCompanions(
   tree: PanelLayoutTree,
+  throughOtherPanels: boolean,
 ): CompanionArrangement | undefined {
   const arrangement: CompanionPlacement[] = [];
   let node: LayoutNode | null = tree;
   while (node?.kind === "split") {
+    const first = loneCompanion(node.children[0]);
     const second = loneCompanion(node.children[1]);
-    const first = second ? undefined : loneCompanion(node.children[0]);
+    if (first && second) {
+      // Nothing else is open: the second side counts as the outer one.
+      arrangement.push(
+        { kind: second.kind as CompanionKind, edge: sideEdge(node, 1) },
+        { kind: first.kind as CompanionKind, edge: sideEdge(node, 0) },
+      );
+      node = null;
+      break;
+    }
     const index = second ? 1 : first ? 0 : undefined;
-    if (index === undefined) break;
-    arrangement.push({
-      kind: (second ?? first)!.kind as CompanionKind,
-      edge: sideEdge(node, index),
-    });
-    node = node.children[index === 1 ? 0 : 1];
+    if (index !== undefined) {
+      arrangement.push({
+        kind: (second ?? first)!.kind as CompanionKind,
+        edge: sideEdge(node, index),
+      });
+      node = node.children[index === 1 ? 0 : 1];
+      continue;
+    }
+    const other = !throughOtherPanels
+      ? undefined
+      : loneOtherSidePanel(node.children[1])
+        ? 1
+        : loneOtherSidePanel(node.children[0])
+          ? 0
+          : undefined;
+    if (other === undefined) break;
+    node = node.children[other === 1 ? 0 : 1];
   }
   const inside =
     node !== null &&
@@ -77,16 +101,57 @@ export function readCompanionArrangement(
   return inside ? undefined : arrangement;
 }
 
+/**
+ * The companions wrapped around a layout, outermost first, or undefined when
+ * a companion sits anywhere else, such as tabbed with another panel.
+ */
+export function readCompanionArrangement(
+  tree: PanelLayoutTree,
+): CompanionArrangement | undefined {
+  return walkCompanions(tree, false);
+}
+
+/**
+ * The companions' order and edges in a layout, outermost first, stepping
+ * over a lone Files or Terminals panel wrapped outside them, as layouts
+ * saved before the companions were kept outermost may have. With nothing
+ * but companions open, the innermost one has no edge of its own, so it
+ * keeps `previous`'s edge, or its preferred one.
+ */
+export function recordCompanionArrangement(
+  tree: PanelLayoutTree,
+  previous: CompanionArrangement | undefined,
+  preferredEdge: (kind: CompanionKind) => PanelPlacementEdge,
+): CompanionArrangement | undefined {
+  const arrangement = walkCompanions(tree, true);
+  if (!arrangement?.length || !onlyCompanions(tree)) return arrangement;
+  const innermost = arrangement.at(-1)!;
+  const edge =
+    previous?.find(({ kind }) => kind === innermost.kind)?.edge ??
+    preferredEdge(innermost.kind);
+  return [...arrangement.slice(0, -1), { kind: innermost.kind, edge }];
+}
+
+function onlyCompanions(tree: PanelLayoutTree): boolean {
+  return panelInstances(tree).every((panel) => isCompanionKind(panel.kind));
+}
+
+/**
+ * Whether two arrangements match. With nothing but companions open, the
+ * innermost companion fills the rest of the stage, so its edge is moot.
+ */
 function sameArrangement(
   left: CompanionArrangement,
   right: CompanionArrangement,
+  innermostEdgeMoot: boolean,
 ): boolean {
   return (
     left.length === right.length &&
     left.every(
       (placement, index) =>
         placement.kind === right[index]!.kind &&
-        placement.edge === right[index]!.edge,
+        (placement.edge === right[index]!.edge ||
+          (innermostEdgeMoot && index === left.length - 1)),
     )
   );
 }
@@ -143,7 +208,8 @@ export function arrangeCompanions(
     }));
   const target = [...unplaced, ...placed];
   const current = readCompanionArrangement(tree);
-  if (current && sameArrangement(current, target)) return tree;
+  if (current && sameArrangement(current, target, onlyCompanions(tree)))
+    return tree;
 
   // A lone companion keeps its stack and split IDs and its share; both leave
   // the layout with it, so reusing them cannot collide.

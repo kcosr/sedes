@@ -14,9 +14,13 @@ import {
   usePanelLayout,
 } from "./panel-state.js";
 import {
+  defaultPanelLayout,
   findStackForPanel,
+  openPanel as openLayoutPanel,
   panelDockEdge,
   panelLayoutStorageKey,
+  serializePanelLayout,
+  type PanelLayoutTree,
   type LayoutNode,
   type SplitNode,
 } from "./layout-tree.js";
@@ -738,6 +742,48 @@ describe("PanelLayoutStore shared Tasks and Workpads arrangement", () => {
     root.openPanel("workpads", { edge: "left" });
     expect(rowOrder(root)).toEqual(["workpads", "tasks", "chat"]);
     expect(rowOrder(root.forThread("thread-2"))).toEqual(["workpads", "tasks", "chat"]);
+  });
+
+  it("docks within a layout of only Tasks and Workpads and keeps it steady", () => {
+    const root = createStore();
+    root.openPanel("tasks");
+    root.openPanel("workpads");
+    root.closePanel("chat");
+    root.dockPanel("tasks", "right");
+    expect(rowOrder(root)).toEqual(["workpads", "tasks"]);
+    const steady = root.getSnapshot().tree;
+    expect(root.forThread("thread-1").getSnapshot().tree).toBe(steady);
+    // Chat returns inside them, and Workpads keeps its own edge.
+    root.openPanel("chat");
+    expect(rowOrder(root)).toEqual(["chat", "workpads", "tasks"]);
+  });
+
+  it("takes the first restored layout's order, even with Files outside it", () => {
+    let saved: PanelLayoutTree = defaultPanelLayout;
+    let id = 0;
+    for (const panel of [
+      { panelInstanceId: "tasks", kind: "tasks" },
+      { panelInstanceId: "workpads", kind: "workpads" },
+      { panelInstanceId: "workspace-files", kind: "files" },
+    ] as const)
+      saved = openLayoutPanel(saved, panel, {
+        edge: "right",
+        splitId: `saved-split-${++id}`,
+        stackId: `saved-stack-${id}`,
+      });
+    const open = JSON.stringify({ version: 1, open: true, collapsed: false });
+    const { storage } = memoryStorage({
+      [panelLayoutStorageKey("thread-1")]: serializePanelLayout("thread-1", saved),
+      [TASKS_STATE_STORAGE_KEY]: open,
+      [WORKPADS_STATE_STORAGE_KEY]: open,
+      [WORKSPACE_FILES_STATE_STORAGE_KEY]: open,
+    });
+    // The app's unscoped root store records nothing; the first thread does.
+    const root = createStore(storage, null);
+    const order = ["chat", "workspace-files", "tasks", "workpads"];
+    expect(rowOrder(root.forThread("thread-1"))).toEqual(order);
+    expect(rowOrder(root.forThread("thread-2"))).toEqual(order);
+    expect(rowOrder(root.forThread("thread-1"))).toEqual(order);
   });
 
   it("opens Files and Terminals inside Tasks and Workpads", () => {

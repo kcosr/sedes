@@ -11,6 +11,7 @@ import {
 import {
   arrangeCompanions,
   readCompanionArrangement,
+  recordCompanionArrangement,
   type CompanionArrangement,
 } from "./companion-layout.js";
 
@@ -68,6 +69,39 @@ describe("readCompanionArrangement", () => {
   });
 });
 
+describe("recordCompanionArrangement", () => {
+  const preferredEdge = () => "right" as const;
+
+  it("reads the companions' order through Files wrapped outside them", () => {
+    let tree = open(defaultPanelLayout, tasks, "right");
+    tree = open(tree, workpads, "right");
+    tree = open(tree, files, "right");
+    expect(readCompanionArrangement(tree)).toBeUndefined();
+    expect(recordCompanionArrangement(tree, undefined, preferredEdge)).toEqual([
+      { kind: "workpads", edge: "right" },
+      { kind: "tasks", edge: "right" },
+    ]);
+  });
+
+  it("keeps the innermost edge when only companions are open", () => {
+    const companions = open(open(null, workpads, "right"), tasks, "right");
+    expect(readCompanionArrangement(companions)).toEqual([
+      { kind: "tasks", edge: "right" },
+      { kind: "workpads", edge: "left" },
+    ]);
+    expect(
+      recordCompanionArrangement(
+        companions,
+        [{ kind: "workpads", edge: "bottom" }],
+        preferredEdge,
+      ),
+    ).toEqual([
+      { kind: "tasks", edge: "right" },
+      { kind: "workpads", edge: "bottom" },
+    ]);
+  });
+});
+
 describe("arrangeCompanions", () => {
   const arrangement: CompanionArrangement = [
     { kind: "workpads", edge: "right" },
@@ -105,6 +139,20 @@ describe("arrangeCompanions", () => {
       { kind: "workpads", edge: "right" },
       { kind: "tasks", edge: "left" },
     ]);
+  });
+
+  it("leaves a layout of only companions unchanged whatever the innermost edge", () => {
+    const companions = open(open(null, workpads, "right"), tasks, "right");
+    expect(
+      arrangeCompanions(
+        companions,
+        [
+          { kind: "tasks", edge: "right" },
+          { kind: "workpads", edge: "bottom" },
+        ],
+        options,
+      ),
+    ).toBe(companions);
   });
 
   it("rebuilds two companions split against each other without losing either", () => {
