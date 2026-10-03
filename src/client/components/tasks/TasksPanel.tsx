@@ -399,6 +399,11 @@ export function TasksPanelContent({
     revealed.query === query
       ? revealed.taskId
       : undefined;
+  // Once they change, the exception is over for good: going back to the same
+  // search or options does not bring the task back.
+  useEffect(() => {
+    if (revealed !== null && revealedId === undefined) setRevealed(null);
+  }, [revealed, revealedId]);
   const {
     main: mainTasks,
     backlog: backlogSection,
@@ -1137,6 +1142,25 @@ export function TasksPanelContent({
 
   const emptyState = (() => {
     if (mainTasks.length > 0 || visibleCreating.length > 0) return null;
+    // Matches in a collapsed section are still matches: say where they are
+    // rather than offering to clear a search or filter that works.
+    if (
+      (searchFiltering || filtering) &&
+      (backlogSection.length > 0 || completedSection.length > 0)
+    ) {
+      return (
+        <EmptyState
+          variant="inline"
+          className="tasks-empty"
+          title="Nothing current matches."
+          description={
+            backlogSection.length > 0
+              ? "The matching tasks wait in the Backlog."
+              : "The matching tasks are completed."
+          }
+        />
+      );
+    }
     if (searchFiltering) {
       return (
         <EmptyState

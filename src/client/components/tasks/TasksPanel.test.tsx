@@ -1719,6 +1719,23 @@ describe("TasksPanel Backlog and Pin", () => {
     }
   });
 
+  it("says where matches are when only a collapsed section has them", async () => {
+    const user = userEvent.setup();
+    renderPanel(seededStore(BACKLOG));
+    await user.click(screen.getByRole("button", { name: "Search tasks" }));
+    await user.type(screen.getByRole("textbox", { name: "Search tasks" }), "cold");
+    expect(titles()).toEqual([]);
+    expect(screen.getByText("Nothing current matches.")).toBeInTheDocument();
+    expect(screen.getByText("The matching tasks wait in the Backlog.")).toBeInTheDocument();
+    expect(screen.queryByText(/^No tasks match/)).not.toBeInTheDocument();
+    expect(headings()).toEqual(["Backlog1"]);
+
+    await user.clear(screen.getByRole("textbox", { name: "Search tasks" }));
+    await user.type(screen.getByRole("textbox", { name: "Search tasks" }), "legacy flag");
+    expect(screen.getByText("The matching tasks are completed.")).toBeInTheDocument();
+    expect(headings()).toEqual(["Completed1"]);
+  });
+
   it("reveals a task hidden by filters or search without changing or saving them", async () => {
     const user = userEvent.setup();
     const store = seededStore(BACKLOG);
@@ -1748,6 +1765,10 @@ describe("TasksPanel Backlog and Pin", () => {
     await waitFor(() => expect(rowTitle("Add retry to the payment call")).toHaveAttribute("aria-expanded", "true"));
     expect(screen.getByRole("textbox", { name: "Search tasks" })).toHaveValue("audit");
     await user.type(screen.getByRole("textbox", { name: "Search tasks" }), "s");
+    expect(screen.queryByRole("button", { name: "Add retry to the payment call" })).not.toBeInTheDocument();
+    // Going back to the revealed search does not bring it back.
+    await user.keyboard("{Backspace}");
+    expect(screen.getByRole("textbox", { name: "Search tasks" })).toHaveValue("audit");
     expect(screen.queryByRole("button", { name: "Add retry to the payment call" })).not.toBeInTheDocument();
 
     // And changing the view.
