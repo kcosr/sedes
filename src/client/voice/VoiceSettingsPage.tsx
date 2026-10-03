@@ -20,7 +20,7 @@ const toggles = [
   ["onlyVoiceThread", "Only play from Voice thread", "Suppress automatic items for other threads. Choose a Voice thread first."],
   ["followComposerMode", "Follow composer's selected mode", "Use its Steer or Queue preference. Otherwise recognized input always queues while a thread is running."],
   ["recognizeStopCommand", "Recognize stop command", "Consume only “stop” and “stop listening” locally."],
-  ["recognitionCues", "Recognition cues", "Play a cue before recording."],
+  ["recognitionCues", "Recognition cues", "Play tones when recording starts and when recognition succeeds, fails, or is cancelled."],
   ["headsetControls", "Headset controls", "During an active voice session, start recording, skip speech or stop recording using the headset control."],
 ] as const;
 const numbers = [

@@ -14,6 +14,27 @@ import org.junit.Test;
 
 /** Hardware-path smoke checks; no deterministic input source is installed here. */
 public class NativeVoiceAudioTest {
+    @Test public void allRecognitionCuesDrainThroughAudioTrack() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(
+            new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        NativeVoiceAudio.setTestCuePlayer(null);
+        try {
+            for (NativeVoiceCue.Kind kind : NativeVoiceCue.Kind.values()) {
+                CountDownLatch drained = new CountDownLatch(1); AtomicReference<String> failure = new AtomicReference<>();
+                NativeVoiceAudio audio = new NativeVoiceAudio(context, new Listener() {
+                    @Override public void drained(String id) { drained.countDown(); }
+                    @Override public void failed(String id, String reason) { failure.set(reason); drained.countDown(); }
+                });
+                try {
+                    audio.configure(NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("startupPreRollMs", 0, "ttsGain", 0)));
+                    audio.cue("hardware-cue-" + kind, kind, 100);
+                    assertTrue("Cue did not drain: " + kind, drained.await(15, TimeUnit.SECONDS));
+                    assertNull(failure.get()); assertNull(audio.spoolForTest());
+                } finally { audio.stop(); }
+            }
+        } finally { InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
+    }
     @Test public void realAudioRecordStartsReadsAndStops() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         grant(context, "android.permission.RECORD_AUDIO");

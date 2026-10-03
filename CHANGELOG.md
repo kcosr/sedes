@@ -706,6 +706,10 @@
 
 ### Fixed
 
+- Android recognition now plays success and descending failure/cancellation
+  tones after capture stops, using the existing Recognition cues and Cue gain
+  settings. The start tone now matches Assistant's rising cue.
+
 - Android HTTPS and secure WebSocket connections trust user-installed
   certificate authorities, including private voice-adapter certificates,
   while retaining certificate and hostname validation.

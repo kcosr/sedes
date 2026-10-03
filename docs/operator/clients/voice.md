@@ -99,6 +99,14 @@ speech-start timeout, 60-second completion timeout, 1,200 ms end silence,
 512 ms startup pre-roll, cues enabled, and 100% speech/cue gains. Input devices,
 timing, cues, gain, and headset controls can be changed in Voice settings.
 
+**Recognition cues** plays a rising start tone, a single success tone for
+recognized speech, and a descending tone for failed or empty recognition,
+the spoken stop command, or an explicit Stop while recognizing. **Cue gain**
+controls all three independently of speech volume. Completion tones play after
+microphone capture stops. Success confirms recognition, not agent delivery;
+input recovery still reports any later delivery problem. Turning voice Off or
+switching connections cancels pending cues without another tone.
+
 One logical notice completes before another begins, including all speech
 chunks, audio drain, recognition, and admission. Long speech is split at safe
 boundaries using **Adapter text limit** (default 5,000 UTF-16 units); configure

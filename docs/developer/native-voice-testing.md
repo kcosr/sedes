@@ -65,6 +65,14 @@ the same npm command, for example `npm run test:voice -- -t 'Android response/cy
 
 ## Coverage and evidence
 
+JVM checks verify the rising start, single success, and descending failure cue
+PCM. Native runtime checks exercise final-result deduplication, cue failure and
+timeout, explicit Stop, Off/disconnect cancellation, frozen Queue/Steer choice,
+and adapter loss after recognition. Those orchestration checks substitute only
+cue playback to control drain callbacks; a separate AudioTrack check plays all
+three real cues. Cue feedback adds one bounded 15-second timeout case to the
+native smoke lane.
+
 Server/adapter checks verify capability negotiation before HTTP media calls,
 actual PCM bytes and formats, multipart WAV recognition, cancellation during
 ASR finalization, and new adapter identity after reconnect. Direct input

@@ -92,6 +92,135 @@ public class NativeVoiceRuntimeTest {
         assertExplicitSurvives(true);
     }
 
+    @Test public void recognitionResultPlaysOneCueBeforeAdmittingOnce() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            String request = f.recognizing(true);
+            f.result(request, true, "Recognized input");
+            Cue cue = f.cues.poll(10, TimeUnit.SECONDS); assertNotNull(cue);
+            assertEquals(NativeVoiceCue.Kind.SUCCESS, cue.kind); assertEquals(45, cue.gain);
+            assertEquals(0, f.inputAttempts.get());
+            f.result(request, true, "Duplicate input"); assertTrue(f.cues.isEmpty());
+            f.runtime.drained(cue.id); f.flush();
+            assertEquals(1, f.inputAttempts.get()); assertEquals("Recognized input", f.lastRequest.get().optString("text"));
+            f.runtime.drained(cue.id); f.result(request, true, "Late input");
+            assertEquals(1, f.inputAttempts.get()); assertTrue(f.cues.isEmpty());
+        }
+    }
+    @Test public void emptyFailedAndSpokenStopResultsUseDescendingCueWithoutInput() throws Exception {
+        for (String text : new String[] { "", "stop", "failed" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                String request = f.recognizing(true);
+                f.result(request, !text.equals("failed"), text);
+                Cue cue = f.cues.poll(10, TimeUnit.SECONDS); assertNotNull(cue);
+                assertEquals(NativeVoiceCue.Kind.FAILURE, cue.kind);
+                f.runtime.drained(cue.id); f.flush();
+                assertEquals(0, f.inputAttempts.get()); assertTrue(f.runtime.snapshot().isNull("active"));
+                assertEquals(0, f.store.journal(f.binding).length());
+            }
+        }
+    }
+    @Test public void disabledCuesAndCuePlaybackFailureDoNotLoseRecognizedInput() throws Exception {
+        for (boolean enabled : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.result(f.recognizing(enabled), true, "Keep this input");
+                if (enabled) {
+                    Cue cue = f.cues.poll(10, TimeUnit.SECONDS); assertNotNull(cue);
+                    f.runtime.failed(cue.id, "playback_failed"); f.flush();
+                    f.runtime.drained(cue.id); f.flush();
+                }
+                assertEquals(1, f.inputAttempts.get()); assertEquals("Keep this input", f.lastRequest.get().optString("text"));
+                assertTrue(f.cues.isEmpty());
+            }
+        }
+    }
+    @Test public void stopCueRejectsLateRecognitionAndVoiceOffCancelsPendingFeedback() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            String request = f.recognizing(true);
+            f.onOwner(() -> f.invoke("stopInteraction", new Class<?>[0]));
+            Cue cue = f.cues.poll(10, TimeUnit.SECONDS); assertNotNull(cue);
+            assertEquals(NativeVoiceCue.Kind.FAILURE, cue.kind);
+            f.result(request, true, "Must not send");
+            f.runtime.drained(cue.id); f.flush(); assertTrue(f.runtime.snapshot().isNull("active"));
+            assertEquals(0, f.inputAttempts.get()); assertTrue(f.cues.isEmpty());
+        }
+        try (Fixture f = new Fixture(false, false)) {
+            f.result(f.recognizing(true), true, "Cancelled during cue");
+            Cue cue = f.cues.poll(10, TimeUnit.SECONDS); assertNotNull(cue);
+            f.onOwner(() -> f.invoke("updateSettings", new Class<?>[] { JSONObject.class, boolean.class },
+                NativeVoiceJson.object("expectedRevision", 1, "patch", NativeVoiceJson.object("audioMode", "off")), true));
+            f.runtime.drained(cue.id); f.flush();
+            assertEquals(0, f.inputAttempts.get()); assertTrue(f.runtime.snapshot().isNull("active"));
+        }
+    }
+    @Test public void adapterFailureDuringCompletionCuePreservesTheFinalTranscript() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.result(f.recognizing(true), true, "Already recognized");
+            Cue cue = f.cues.poll(10, TimeUnit.SECONDS); assertNotNull(cue);
+            NativeVoiceAdapter adapter = (NativeVoiceAdapter) field(f.runtime, "adapter");
+            f.runtime.failed(adapter.generation(), "adapter_disconnected"); f.flush();
+            f.runtime.drained(cue.id); f.flush();
+            assertEquals(1, f.inputAttempts.get()); assertEquals("Already recognized", f.lastRequest.get().optString("text"));
+        }
+    }
+    @Test public void recognitionFailurePlaysDescendingCueAndDoesNotSubmit() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            String request = f.recognizing(true);
+            f.runtime.failed(request, "microphone_failed"); f.flush();
+            Cue cue = f.cues.poll(10, TimeUnit.SECONDS); assertNotNull(cue);
+            assertEquals(NativeVoiceCue.Kind.FAILURE, cue.kind);
+            f.result(request, true, "Too late");
+            f.runtime.drained(cue.id); f.flush();
+            assertEquals(0, f.inputAttempts.get()); assertTrue(f.runtime.snapshot().isNull("active"));
+        }
+    }
+    @Test public void deliveryModeFreezesBeforeFeedbackAndSurvivesAdapterLossDuringSteerLookup() throws Exception {
+        for (String selectedMode : new String[] { "queue", "steer" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                String request = f.recognizing(true);
+                f.onOwner(() -> {
+                    NativeVoiceSettings settings = (NativeVoiceSettings) field(f.runtime, "settings");
+                    set(f.runtime, "settings", settings.patch(settings.revision, NativeVoiceJson.object("followComposerMode", true)));
+                    set(f.runtime, "composerMode", selectedMode);
+                });
+                f.result(request, true, "Keep original delivery mode");
+                Cue cue = f.cues.poll(10, TimeUnit.SECONDS); assertNotNull(cue);
+                f.onOwner(() -> set(f.runtime, "composerMode", selectedMode.equals("queue") ? "steer" : "queue"));
+                f.runtime.drained(cue.id); f.flush();
+                if (selectedMode.equals("steer")) {
+                    NativeVoiceHttp.Result context = f.contexts.poll(10, TimeUnit.SECONDS); assertNotNull(context);
+                    NativeVoiceAdapter adapter = (NativeVoiceAdapter) field(f.runtime, "adapter");
+                    f.runtime.failed(adapter.generation(), "adapter_disconnected"); f.flush();
+                    context.done(200, NativeVoiceJson.object("threadId", f.target, "activityToken", "epoch",
+                        "authority", "current", "runState", "running", "automaticListenEligible", false,
+                        "steer", NativeVoiceJson.object("availability", "available", "target",
+                            NativeVoiceJson.object("kind", "turn", "turnId", "current-turn"))), null);
+                    f.flush();
+                }
+                assertEquals(1, f.inputAttempts.get()); assertTrue(f.contexts.isEmpty());
+                assertEquals(selectedMode, f.lastRequest.get().getJSONObject("runningPolicy").getString("mode"));
+                assertEquals("Keep original delivery mode", f.lastRequest.get().getString("text"));
+            }
+        }
+    }
+    @Test public void completionTimeoutContinuesOnceAndIgnoresLateDrain() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.result(f.recognizing(true), true, "Feedback never drained");
+            Cue cue = f.cues.poll(10, TimeUnit.SECONDS); assertNotNull(cue);
+            assertNotNull("Completion feedback stranded recognized input", f.inputs.poll(25, TimeUnit.SECONDS));
+            f.runtime.drained(cue.id); f.flush(); assertEquals(1, f.inputAttempts.get());
+        }
+    }
+    @Test public void disconnectCancelsPendingRecognitionFeedback() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.result(f.recognizing(true), true, "Old connection input");
+            Cue cue = f.cues.poll(10, TimeUnit.SECONDS); assertNotNull(cue);
+            f.onOwner(() -> f.invoke("disconnect", new Class<?>[] { boolean.class }, true));
+            f.runtime.drained(cue.id); f.flush();
+            assertEquals(0, f.inputAttempts.get()); assertTrue(f.runtime.snapshot().isNull("active"));
+            assertEquals(0, f.store.journal(f.binding).length());
+        }
+    }
+
     private void assertExplicitSurvives(boolean retargeted) throws Exception {
         try (Fixture f = new Fixture(retargeted, retargeted)) {
             NativeVoiceHttp.Result first = f.start(); f.policy(true, true);
@@ -113,6 +242,10 @@ public class NativeVoiceRuntimeTest {
     }
 
     private interface Action { void run() throws Exception; }
+    private static final class Cue {
+        final String id; final NativeVoiceCue.Kind kind; final int gain;
+        Cue(String id, NativeVoiceCue.Kind kind, int gain) { this.id = id; this.kind = kind; this.gain = gain; }
+    }
     private static final class Fixture implements AutoCloseable {
         private static final String IDENTITY = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
@@ -125,7 +258,8 @@ public class NativeVoiceRuntimeTest {
             "stage", "prepared", "cancelled", false, "createdAt", System.currentTimeMillis());
         final AtomicInteger inputAttempts = new AtomicInteger(), sessionReads = new AtomicInteger(), receiptReads = new AtomicInteger();
         final AtomicReference<JSONObject> lastRequest = new AtomicReference<>();
-        final BlockingQueue<NativeVoiceHttp.Result> inputs = new LinkedBlockingQueue<>(), sessions = new LinkedBlockingQueue<>();
+        final BlockingQueue<NativeVoiceHttp.Result> inputs = new LinkedBlockingQueue<>(), sessions = new LinkedBlockingQueue<>(), contexts = new LinkedBlockingQueue<>();
+        final BlockingQueue<Cue> cues = new LinkedBlockingQueue<>();
         final NativeVoiceRuntime runtime;
         final NativeVoiceStore store;
         final Handler owner;
@@ -138,6 +272,7 @@ public class NativeVoiceRuntimeTest {
                     if (method.equals("POST") && path.endsWith("/inputs")) {
                         inputAttempts.incrementAndGet(); lastRequest.set(NativeVoiceJson.copy(body)); inputs.add(result);
                     } else if (path.equals("/api/application/session")) { sessionReads.incrementAndGet(); sessions.add(result); }
+                    else if (path.endsWith("/input-context")) contexts.add(result);
                     else if (path.startsWith("/api/input-receipts/")) {
                         receiptReads.incrementAndGet(); result.done(200, NativeVoiceJson.object("status", "notObserved"), null);
                     } else throw new AssertionError("Unexpected native request: " + method + " " + path);
@@ -162,6 +297,26 @@ public class NativeVoiceRuntimeTest {
         NativeVoiceHttp.Result start() throws Exception {
             onOwner(() -> invoke("submit", new Class<?>[] { String.class, String.class, String.class, JSONObject.class, boolean.class }, binding, origin, null, entry, false));
             NativeVoiceHttp.Result result = inputs.poll(10, TimeUnit.SECONDS); assertNotNull(result); return result;
+        }
+        String recognizing(boolean cuesEnabled) throws Exception {
+            String request = UUID.randomUUID().toString();
+            NativeVoiceAudio.setTestCuePlayer((id, kind, gain) -> cues.add(new Cue(id, kind, gain)));
+            onOwner(() -> {
+                store.removeEntry(binding, mutation);
+                Object active = field(runtime, "active"); set(active, "admission", null); set(active, "sttId", request);
+                set(runtime, "originId", UUID.randomUUID().toString()); set(runtime, "sessionStarted", true);
+                set(runtime, "settings", NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object(
+                    "audioMode", "manual", "recognitionCues", cuesEnabled, "cueGain", 45)));
+                set(runtime, "phase", "recognizing"); set(field(runtime, "adapter"), "ready", true);
+                invoke("publish", new Class<?>[0]);
+            });
+            return request;
+        }
+        void result(String request, boolean success, String text) throws Exception {
+            NativeVoiceAdapter adapter = (NativeVoiceAdapter) field(runtime, "adapter");
+            runtime.event(adapter.generation(), NativeVoiceJson.object("type", "media_stt_result", "requestId", request,
+                "success", success, "text", text));
+            flush();
         }
         void policy(boolean enabled, boolean silenced) throws Exception {
             JSONObject delivery = new JSONObject();
@@ -188,7 +343,7 @@ public class NativeVoiceRuntimeTest {
         public void close() throws Exception {
             try { onOwner(() -> { set(runtime, "active", null); invoke("disconnect", new Class<?>[] { boolean.class }, false); }); }
             finally {
-                NativeVoiceHttp.setTestTransport(null); owner.getLooper().quitSafely();
+                NativeVoiceHttp.setTestTransport(null); NativeVoiceAudio.setTestCuePlayer(null); owner.getLooper().quitSafely();
                 StringBuilder name = new StringBuilder();
                 for (byte b : MessageDigest.getInstance("SHA-256").digest(binding.getBytes(StandardCharsets.UTF_8))) name.append(String.format("%02x", b & 255));
                 File directory = new File(new File(context.getNoBackupFilesDir(), "native-voice"), name.toString());

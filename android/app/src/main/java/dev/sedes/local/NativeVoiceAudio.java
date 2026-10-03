@@ -39,6 +39,12 @@ final class NativeVoiceAudio {
         if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable");
         testSource = source;
     }
+    interface TestCuePlayer { void play(String id, NativeVoiceCue.Kind kind, int percent); }
+    private static volatile TestCuePlayer testCuePlayer;
+    static void setTestCuePlayer(TestCuePlayer player) {
+        if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable");
+        testCuePlayer = player;
+    }
     static final long MAX_STREAM_DURATION_MS = 10 * 60 * 1000L;
     private static final long MAX_SPOOL_BYTES = 256 * 1024 * 1024L;
     private static final int SAMPLE_RATE = 16000, PUMP_BYTES = 64 * 1024, MAX_CAPTURE = 16 * 1024 * 1024;
@@ -169,15 +175,11 @@ final class NativeVoiceAudio {
     }
     long pendingPcmBytes() { synchronized (lock) { return spoolWritten - spoolRead; } }
     File spoolForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return spool; } }
-    void cue(String id, int percent) {
+    void cue(String id, NativeVoiceCue.Kind kind, int percent) {
+        TestCuePlayer fixture = BuildConfig.DEBUG ? testCuePlayer : null;
+        if (fixture != null) { stop(); fixture.play(id, kind, percent); return; }
         begin(id);
-        byte[] pcm = new byte[48000 * 2 / 8];
-        for (int i = 0; i < pcm.length / 2; i++) {
-            double envelope = Math.min(1d, Math.min(i / 400d, (pcm.length / 2 - i) / 600d));
-            short sample = (short) (Math.sin(2 * Math.PI * 660 * i / 48000) * 9000 * envelope * percent / 100d);
-            pcm[i * 2] = (byte) sample; pcm[i * 2 + 1] = (byte) (sample >> 8);
-        }
-        pcm(id, 48000, pcm, 1f); end(id);
+        pcm(id, NativeVoiceCue.SAMPLE_RATE, NativeVoiceCue.pcm(kind), percent / 100f); end(id);
     }
     void record(String id, String inputDeviceId) {
         stop();

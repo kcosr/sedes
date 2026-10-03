@@ -6,6 +6,13 @@ actions. `NativeVoiceRuntime` owns the state machine on one handler thread.
 it does not run a WebView. `NativeVoiceAdapter` connects directly to the media
 adapter, and `NativeVoiceHttp` owns authenticated Sedes requests and live SSE.
 
+Recognition cue PCM is generated locally. Each recognition consumes its final
+result once, stops capture, and retains its active slot until completion feedback
+drains. Cue callbacks are tied to that active item and a unique cue ID; cancellation
+invalidates them. Cue failure or a bounded drain timeout continues the recognized
+input path, while a late adapter result cannot replay feedback or input. No cue
+audio or metadata is submitted to the agent.
+
 See [Android voice](../operator/clients/voice.md) for setup, defaults, controls,
 and the isolated `test:voice` lane. Backend authors must also follow the
 [integration rules](backend-integration-contract-rules.md).
