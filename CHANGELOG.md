@@ -7,6 +7,7 @@
 - Codex persistent runtimes require protocol 3 to preserve settings updates
   that race a resume. Rebuild and upgrade execution sidecars with the server;
   older retained runtimes must be replaced before reattachment.
+  ([#38](https://github.com/kcosr/sedes/pull/38))
 
 - Browser and packaged clients require client protocol 135. Project summaries
   now include Task and Workpad counts. Upgrade clients together with the server.
@@ -623,6 +624,7 @@
   notifications also survive an in-flight resume response. Idle threads whose
   saved policy is no longer allowed open as history only until an allowed policy
   is selected, without starting a native session.
+  ([#38](https://github.com/kcosr/sedes/pull/38))
 
 - Slower conversation snapshots no longer overwrite newer completion attention,
   which could leave an unread dot stuck or restore it after acknowledgment.
