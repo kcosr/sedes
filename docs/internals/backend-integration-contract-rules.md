@@ -776,6 +776,12 @@ must propagate cancellation through provider acquisition and native startup.
 Cancel pending startup separately from normal management and lifecycle drain;
 shutdown must preserve the existing ordering for admitted lifecycle operations.
 
+Nested process owners must agree on cleanup proof before releasing ownership.
+Claude verifies unregistration against the same identity-aware process tree as
+its inner owner, including observed descendants and zombie-only groups; unknown
+registration, live work, and unreadable process state remain fail-closed. This
+is Claude-private supervision; Pi, Codex, Grok, and OpenCode are unchanged.
+
 Operator-gated worker diagnostics must capture original bounded machine failure
 codes before backend normalization discards them. Correlate worker generations
 and process IDs without logging commands, environment values, credentials,
