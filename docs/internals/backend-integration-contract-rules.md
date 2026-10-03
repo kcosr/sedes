@@ -776,6 +776,18 @@ must propagate cancellation through provider acquisition and native startup.
 Cancel pending startup separately from normal management and lifecycle drain;
 shutdown must preserve the existing ordering for admitted lifecycle operations.
 
+Operator-gated worker diagnostics must capture original bounded machine failure
+codes before backend normalization discards them. Correlate worker generations
+and process IDs without logging commands, environment values, credentials,
+provider stderr, or conversation content. A native session UUID is permitted
+only in an explicitly UUID-validated diagnostic field. Installation-owned
+worker launchers propagate only the effective operator diagnostics opt-in and
+separate per-PID file destinations; capture failure never changes cleanup or
+provider lifecycle semantics. Claude implements worker/session lifecycle
+capture. Shared managed-worker launch/exit records apply to all callers; Pi,
+Codex, Grok, and OpenCode retain their existing provider-specific behavior and
+introduce no new session diagnostics or capability changes here.
+
 Runtime diagnostics may declare the server-only `recoveryAction: "stop"` when
 proved cleanup is a prerequisite to another Connect/Start. The shared lifecycle
 gate consumes this normalized action without inspecting provider error codes;

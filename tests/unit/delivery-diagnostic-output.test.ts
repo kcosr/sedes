@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { configureDeliveryDiagnosticOutput, droppedDeliveryDiagnosticRecords, writeDeliveryDiagnostic } from "../../src/server/diagnostics/delivery-diagnostic-output.js";
+import { configureDeliveryDiagnosticOutput, deliveryDiagnosticWorkerEnvironment, droppedDeliveryDiagnosticRecords, writeDeliveryDiagnostic } from "../../src/server/diagnostics/delivery-diagnostic-output.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
@@ -85,4 +85,35 @@ it.skipIf(process.platform === "win32")("refuses a FIFO without blocking a files
   expect(result.stderr).toContain("diagnostic_file_unavailable");
   expect(result.stderr).not.toContain(f.actual);
   expect((await stat(f.actual)).isFIFO()).toBe(true);
+});
+
+
+it("propagates only the effective operator opt-in and gives workers separate PID files", async () => {
+  const f = await fixture();
+  vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+  const disabled = configureDeliveryDiagnosticOutput({ enabled: false, filePath: f.filePath });
+  cleanup.push(disabled);
+  expect(deliveryDiagnosticWorkerEnvironment()).toEqual({});
+  await disabled();
+  const close = configureDeliveryDiagnosticOutput({ enabled: true, filePath: f.filePath });
+  cleanup.push(close);
+  expect(deliveryDiagnosticWorkerEnvironment({ backendInstanceId: "claude-1", executionEnvironmentId: "env-1" })).toEqual({
+    SEDES_DEBUG_DELIVERY: "1", SEDES_DEBUG_DELIVERY_FILE: path.join(path.dirname(f.filePath), "delivery-{pid}.jsonl"),
+    SEDES_DIAGNOSTIC_BACKEND_ID: "claude-1", SEDES_DIAGNOSTIC_ENVIRONMENT_ID: "env-1",
+  });
+  expect(deliveryDiagnosticWorkerEnvironment({ backendInstanceId: "/private/value", executionEnvironmentId: "secret\nvalue" })).not.toHaveProperty("SEDES_DIAGNOSTIC_BACKEND_ID");
+  await close();
+  vi.unstubAllEnvs();
+  expect(deliveryDiagnosticWorkerEnvironment()).not.toHaveProperty("SEDES_DEBUG_DELIVERY_FILE");
+});
+
+
+it.skipIf(process.platform === "win32")("captures worker records without consuming the worker stderr limit", async () => {
+  const f = await fixture();
+  const close = configureDeliveryDiagnosticOutput({ enabled: true, filePath: f.filePath, mirrorToStderr: false });
+  cleanup.push(close);
+  writeDeliveryDiagnostic('[delivery-attachment] {"event":"claude_worker_lifecycle"}');
+  await close();
+  expect(await readFile(f.actual, "utf8")).toContain('"claude_worker_lifecycle"');
+  expect(f.stderr).not.toHaveBeenCalled();
 });

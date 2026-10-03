@@ -1,6 +1,7 @@
+import { configureDeliveryDiagnosticOutput } from "../../src/server/diagnostics/delivery-diagnostic-output.js";
 import { CLAUDE_RUNTIME_WORKER_MINIMUM_NODE_VERSION } from "../../src/server/backends/claude/worker/claude-runtime-host-support.js";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { build } from "esbuild";
@@ -88,6 +89,7 @@ describe("local managed Claude runtime", () => {
       scope: requestScope,
       executionEnvironmentId,
     });
+    const stopDiagnostics = configureDeliveryDiagnosticOutput({ enabled: selection === "explicit", filePath: path.join(root, "owner.jsonl") });
     const previousConfig = process.env.CLAUDE_CONFIG_DIR;
     const previousHome = process.env.HOME;
     process.env.HOME = root;
@@ -122,8 +124,20 @@ describe("local managed Claude runtime", () => {
       ).resolves.toEqual([]);
     } finally {
       await owner.close();
+      await stopDiagnostics();
       if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previousConfig;
       if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
     }
+    const files = (await readdir(root)).filter(name => /^delivery-\d+\.jsonl$/u.test(name));
+    if (selection === "explicit") {
+      expect(files).toHaveLength(2);
+      const records = (await Promise.all(files.map(file => readFile(path.join(root, file), "utf8"))))
+        .flatMap(text => text.trim().split("\n").map(line => JSON.parse(line.replace("[delivery-attachment] ", ""))));
+      expect(records).toContainEqual(expect.objectContaining({ event: "claude_worker_lifecycle", role: "supervise", stage: "started", backendInstanceId: "claude-local", executionEnvironmentId }));
+      expect(records).toContainEqual(expect.objectContaining({ event: "claude_worker_lifecycle", role: "internal", stage: "started" }));
+      expect(new Set(records.map(record => record.pid)).size).toBe(2);
+      expect(JSON.stringify(records)).not.toContain(configDirectory);
+      expect(JSON.stringify(records)).not.toMatch(/sessionNonce|parentToken/u);
+    } else expect(files).toEqual([]);
   }, 30_000);
 });

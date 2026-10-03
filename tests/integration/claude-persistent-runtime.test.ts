@@ -1393,6 +1393,23 @@ describe("Claude persistent runtime through framed replacement carriers", () => 
 
 
 describe("Claude rejected sends and retained query failure", () => {
+  it("captures the original scoped failure before retained-query normalization", async () => {
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const f = await fixture(); await f.attach();
+      const client = f.client(); const sessionId = randomUUID();
+      const session = client.createSession(sessionOptions(sessionId));
+      await session.start();
+      f.sessions[0]!.options.onFailure?.(new Error("claude_runtime_worker_child_cleanup_unproven", { cause: new Error("private provider message credential-secret") }));
+      const records = log.mock.calls.map(([line]) => JSON.parse(String(line).replace("[delivery-attachment] ", "")));
+      expect(records).toContainEqual(expect.objectContaining({ event: "claude_retained_session_failed", nativeSessionId: sessionId,
+        backendInstanceId: scope.backendInstanceId, executionEnvironmentId: scope.executionEnvironmentId,
+        errors: [{ name: "Error", code: "claude_runtime_worker_child_cleanup_unproven" }, { name: "Error" }] }));
+      expect(JSON.stringify(records)).not.toContain("credential-secret");
+    } finally { log.mockRestore(); vi.unstubAllEnvs(); }
+  });
+
   it.each(["failed", "closed"] as const)("proves an unseen input was not sent only after its complete owner journal is %s", async ended => {
     const f = await fixture(); const carrier = await f.attach();
     const client = f.client(); const sessionId = randomUUID();

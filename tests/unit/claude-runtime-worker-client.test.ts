@@ -13,7 +13,7 @@ import {
 const SESSION_ID = "11111111-1111-4111-8111-111111111111";
 const STARTUP_UUID = "22222222-2222-4222-8222-222222222222";
 
-afterEach(() => vi.useRealTimers());
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
   it("resolves startup secrets on the owner host before the sanitized worker initializes", async () => {
@@ -980,6 +980,8 @@ describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
   });
 
   it("does not send cleanup over a peer whose carrier already closed", async () => {
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const carrierClosed = deferred<void>();
     let queryId = "";
     const peer = fakePeer(async (operation, _signal, request) => {
@@ -1014,6 +1016,11 @@ describe("ClaudeRuntimeWorkerClient query-open cleanup", () => {
         ),
     ).toBe(false);
     expect(queryId).not.toBe("");
+    const records = log.mock.calls.map(([line]) => JSON.parse(String(line).replace("[delivery-attachment] ", "")));
+    expect(records).toContainEqual(expect.objectContaining({ event: "claude_worker_client_closed", sessionCount: 1 }));
+    expect(records).toContainEqual(expect.objectContaining({ event: "claude_worker_session_failed", nativeSessionId: SESSION_ID, errors: [{ name: "Error", code: "claude_runtime_worker_closed" }] }));
+    log.mockRestore();
+    vi.unstubAllEnvs();
   });
 });
 

@@ -583,7 +583,10 @@ export class ClaudePersistentRuntimeHost {
       onPermissionResponseDelivered: identity => this.#permissionDelivered(created, identity, true),
       onPermissionResponseDeliveryFailed: identity => this.#permissionDelivered(created, identity, false),
       onMessage: message => this.#message(created, message),
-      onFailure: () => this.#fail(created, "claude_persistent_query_failed"),
+      onFailure: (error) => {
+        attachmentDiagnostic("claude_retained_session_failed", { backendInstanceId: config.backendInstanceId, executionEnvironmentId: config.executionEnvironmentId, pid: process.pid, nativeSessionId: request.sessionId }, error);
+        this.#fail(created, "claude_persistent_query_failed");
+      },
     });
     created = { interruptOperations: new ClaudeInterruptOperations(), backgroundActivity: new ClaudeBackgroundActivity(), id: request.sessionId, cwd: request.cwd, authorityFingerprint: queryAuthorityFingerprint(request), runtime, starting: Promise.resolve(), events: new Map(), replay: new Map(), bytes: 0, replayBytes: 0, sequence: 0,
       journalMessageBytes: 0, journalMessageCount: 0, offeredThrough: 0,
