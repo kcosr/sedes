@@ -46,7 +46,11 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
     private NativeVoiceSettings settings = NativeVoiceSettings.defaults();
     private String profileId, origin, identity, binding, credential, csrf, originId;
     private String phase = "off", foregroundThread, foregroundTitle, composerMode = "queue";
-    private boolean foregroundVisible, nativeVisible, sessionStarted, policyKnown;
+    private boolean foregroundVisible, sessionStarted, policyKnown;
+    private volatile boolean nativeVisible;
+    private volatile String sessionStartId;
+    interface SessionStarter { void start(Intent intent); }
+    private SessionStarter testSessionStarter;
     private long connectionGeneration, stateRevision, policyGeneration = -1, streamGeneration;
     private JSONObject policy;
     private NativeVoiceRuntimeService service;
@@ -84,8 +88,19 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
     JSONObject snapshot() { return NativeVoiceJson.copy(state); }
     void observe(Observer observer) { observers.add(observer); handler.post(this::deliverPendingOpen); }
     void unobserve(Observer observer) { observers.remove(observer); }
+    void setTestSessionStarter(SessionStarter starter) {
+        if (!BuildConfig.DEBUG) throw new IllegalStateException("test_session_starter_unavailable");
+        testSessionStarter = starter;
+    }
     void nativeVisibility(boolean visible) {
-        handler.post(() -> { nativeVisible = visible; if (!visible) { foregroundVisible = false; foregroundThread = null; foregroundTitle = null; publish(); } });
+        boolean becameVisible = visible && !nativeVisible;
+        // Also gate the main-thread service launch immediately when Android pauses the activity.
+        nativeVisible = visible;
+        handler.post(() -> {
+            if (!visible) { foregroundVisible = false; foregroundThread = null; foregroundTitle = null; }
+            if (becameVisible && nativeVisible) resumeEnabledSession();
+            publish();
+        });
     }
     void command(String action, JSONObject args, boolean userInitiated, Reply reply) {
         command(action, args, userInitiated, state.optLong("connectionGeneration"), reply);
@@ -142,7 +157,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
                 identity = authenticatedIdentity;
                 binding = NativeVoiceStore.binding(profileId, origin, identity);
                 settings = store.settings(binding); originId = store.originId(binding); audio.configure(settings);
-                loadSession(generation, () -> { phase = "off"; publish(); recoverOutstanding(); reply.done(snapshot()); deliverPendingOpen(); },
+                loadSession(generation, () -> { phase = "off"; resumeEnabledSession(); publish(); recoverOutstanding(); reply.done(snapshot()); deliverPendingOpen(); },
                     code -> {
                         if (generation == connectionGeneration) { binding = null; identity = null; originId = null; csrf = null; phase = "error"; report(code); }
                         reply.failed(code, message(code));
@@ -199,33 +214,70 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         }
         publish(); emit("settingsChanged", snapshot()); drain();
     }
+    private void resumeEnabledSession() {
+        if (nativeVisible && binding != null && csrf != null && settings.active() && audio.hasPermission() &&
+            !settings.text("adapterUrl").isEmpty()) scheduleSessionStart();
+    }
     private void requestSessionStart() {
+        if (sessionStarted || sessionStartId != null) return;
         if (!nativeVisible) throw new IllegalStateException("resume_from_visible_app");
         if (!audio.hasPermission()) throw new IllegalStateException("microphone_permission_required");
         if (settings.text("adapterUrl").isEmpty()) throw new IllegalStateException("adapter_required");
+        scheduleSessionStart();
+    }
+    private void scheduleSessionStart() {
+        if (sessionStarted || sessionStartId != null) return;
+        errors.removeIf(error -> "foreground_start_rejected".equals(error.optString("code")));
+        final String startId = UUID.randomUUID().toString();
+        sessionStartId = startId;
         phase = "starting";
         final long generation = connectionGeneration;
         main.post(() -> {
-            if (snapshot().optLong("connectionGeneration") != generation) return;
-            try { ContextCompat.startForegroundService(context, new Intent(context, NativeVoiceRuntimeService.class).setAction(NativeVoiceRuntimeService.ACTION_START)
-                .putExtra("voiceGeneration", generation)); }
-            catch (Exception error) { handler.post(() -> { if (generation == connectionGeneration) { phase = "error"; report("foreground_start_rejected"); } }); }
+            if (!currentSessionStart(generation, startId)) return;
+            if (!nativeVisible) { deferSessionStart(generation, startId); return; }
+            Intent intent = new Intent(context, NativeVoiceRuntimeService.class).setAction(NativeVoiceRuntimeService.ACTION_START)
+                .putExtra("voiceGeneration", generation).putExtra("voiceStartId", startId);
+            try {
+                if (BuildConfig.DEBUG && testSessionStarter != null) testSessionStarter.start(intent);
+                else ContextCompat.startForegroundService(context, intent);
+            } catch (Exception error) { startFailed(generation, startId); }
+        });
+        handler.postDelayed(() -> startFailed(generation, startId), 15000);
+    }
+    private boolean currentSessionStart(long generation, String startId) {
+        return startId != null && startId.equals(sessionStartId) && snapshot().optLong("connectionGeneration") == generation;
+    }
+    boolean acceptsSessionStart(long generation, String startId) {
+        return nativeVisible && currentSessionStart(generation, startId);
+    }
+    void deferSessionStart(long generation, String startId) {
+        handler.post(() -> {
+            if (!currentSessionStart(generation, startId)) return;
+            sessionStartId = null; phase = "off";
+            // Visibility may have returned while this callback waited for the owner.
+            resumeEnabledSession(); publish();
         });
     }
-    void attached(NativeVoiceRuntimeService service, long generation) {
+    void attached(NativeVoiceRuntimeService service, long generation, String startId) {
         handler.post(() -> {
-            if (generation != connectionGeneration) { main.post(service::finish); return; }
+            if (!currentSessionStart(generation, startId)) { main.post(() -> service.finishStart(generation, startId)); return; }
+            sessionStartId = null;
             this.service = service;
             if (binding == null || !settings.active() || !audio.hasPermission()) { stopSession(); publish(); return; }
             sessionStarted = true; phase = "starting"; connectAdapter(); connectEvents(); publish();
         });
     }
-    void startFailed(long generation) { handler.post(() -> { if (generation == connectionGeneration) { sessionStarted = false; phase = "error"; report("foreground_start_rejected"); } }); }
+    void startFailed(long generation, String startId) {
+        handler.post(() -> {
+            if (!currentSessionStart(generation, startId)) return;
+            sessionStartId = null; sessionStarted = false; phase = "error"; report("foreground_start_rejected");
+        });
+    }
     void detached(NativeVoiceRuntimeService service) {
         handler.post(() -> { if (this.service == service) { this.service = null; sessionStarted = false; cancelActive(false, "service_stopped"); adapter.close(); closeEvents(); phase = "off"; publish(); } });
     }
     private void stopSession() {
-        sessionStarted = false; adapter.close(); audio.stop(); closeEvents();
+        sessionStartId = null; sessionStarted = false; adapter.close(); audio.stop(); closeEvents();
         NativeVoiceRuntimeService old = service; service = null;
         if (old != null) main.post(old::finish);
     }
@@ -748,7 +800,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         if (!settings.active()) return "off";
         if (!audio.hasPermission()) return "permissionRequired";
         if (settings.text("adapterUrl").isEmpty()) return "adapterRequired";
-        if (!sessionStarted) return "needsResume";
+        if (!sessionStarted) return sessionStartId == null ? "needsResume" : "adapterConnecting";
         return adapter.ready() ? "ready" : "adapterConnecting";
     }
     private void publish() {
@@ -762,7 +814,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
             "readiness", readiness(), "foreground", NativeVoiceJson.object("visible", foregroundVisible, "threadId", foregroundThread, "threadTitle", foregroundTitle),
             "active", current, "queue", queue.state(), "actions", NativeVoiceJson.object("canStart", ready && active == null,
                 "canStop", active != null, "canSkip", active != null && (phase.equals("speaking") || phase.equals("synthesizing")),
-                "canRetarget", active != null && phase.equals("listening"), "canResume", binding != null && settings.active() && !sessionStarted),
+                "canRetarget", active != null && phase.equals("listening"), "canResume", binding != null && settings.active() && !sessionStarted && sessionStartId == null),
             "recovery", recoveryState(), "errors", NativeVoiceJson.array(errors));
         emit("stateChanged", snapshot());
         NativeVoiceRuntimeService currentService = service;

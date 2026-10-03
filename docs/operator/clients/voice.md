@@ -88,9 +88,13 @@ Grok has no steering. Spoken input never edits or clears the composer draft.
 The service notification provides Open thread, Skip, and Stop when applicable.
 Headset controls apply only during an active voice session. Android controls
 lock-screen visibility and any promoted presentation; these are not guaranteed.
-Starting or resuming the service requires an eligible foreground user action.
-Force-stop and arbitrary cold background starts are not supported. Return to
-Voice settings and use **Resume voice** when needed.
+Opening the app restores the saved Manual or Response mode after its Sedes
+connection is authenticated, provided microphone permission and an adapter URL
+are already available. This restores readiness; it does not start recording.
+An existing session continues when the app goes to the background. After a
+force-stop or process exit, open the app again to restore voice; it does not
+cold-start in the background. If Android rejects a service start, use
+**Resume voice** in Voice settings to retry.
 
 ## Audio, queue, and recovery
 

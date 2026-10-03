@@ -17,7 +17,7 @@ import android.widget.RemoteViews;
 import androidx.core.app.NotificationCompat;
 import org.json.JSONObject;
 
-/** Non-exported, user-started foreground owner. Saved mode never cold-starts a microphone. */
+/** Non-exported foreground owner, started only while the app is visible. */
 public final class NativeVoiceRuntimeService extends Service {
     static final String ACTION_START = "dev.sedes.local.voice.START";
     static final String ACTION_OPEN = "dev.sedes.local.voice.OPEN";
@@ -27,6 +27,8 @@ public final class NativeVoiceRuntimeService extends Service {
     private MediaSession mediaSession;
     private PowerManager.WakeLock wakeLock;
     private boolean foreground;
+    private long connectionGeneration;
+    private String sessionStartId;
     @Override public void onCreate() {
         super.onCreate(); runtime = NativeVoiceRuntime.get(this);
         if (Build.VERSION.SDK_INT >= 26) {
@@ -53,13 +55,21 @@ public final class NativeVoiceRuntimeService extends Service {
         PowerManager power = getSystemService(PowerManager.class);
         wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "sedes:voice"); wakeLock.setReferenceCounted(false);
     }
-    @Override public int onStartCommand(Intent intent, int flags, int startId) {
+    @Override public int onStartCommand(Intent intent, int flags, int serviceStartId) {
         if (intent == null) { finish(); return START_NOT_STICKY; }
         long expectedGeneration = intent.getLongExtra("voiceGeneration", -1);
+        String startId = intent.getStringExtra("voiceStartId");
         if (expectedGeneration != runtime.snapshot().optLong("connectionGeneration")) {
             if (!foreground) finish();
             return START_NOT_STICKY;
         }
+        if (ACTION_START.equals(intent.getAction()) && !runtime.acceptsSessionStart(expectedGeneration, startId)) {
+            runtime.deferSessionStart(expectedGeneration, startId);
+            if (!foreground) finish();
+            return START_NOT_STICKY;
+        }
+        // A notification from an ended session must not cold-start another session.
+        if (!ACTION_START.equals(intent.getAction()) && !foreground) { finish(); return START_NOT_STICKY; }
         try {
             if (!foreground) {
                 Notification notification = build(runtime.snapshot());
@@ -67,10 +77,13 @@ public final class NativeVoiceRuntimeService extends Service {
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
                 else if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
                 else startForeground(NOTIFICATION, notification);
-                foreground = true; runtime.attached(this, expectedGeneration);
+                foreground = true;
             }
-            if (!ACTION_START.equals(intent.getAction())) runtime.notificationAction(intent.getAction(), expectedGeneration);
-        } catch (SecurityException | IllegalStateException error) { runtime.startFailed(expectedGeneration); finish(); }
+            if (ACTION_START.equals(intent.getAction())) {
+                connectionGeneration = expectedGeneration; sessionStartId = startId;
+                runtime.attached(this, expectedGeneration, startId);
+            } else runtime.notificationAction(intent.getAction(), expectedGeneration);
+        } catch (SecurityException | IllegalStateException error) { runtime.startFailed(expectedGeneration, startId); finish(); }
         return START_NOT_STICKY;
     }
     void render(JSONObject state) {
@@ -164,6 +177,9 @@ public final class NativeVoiceRuntimeService extends Service {
         }
     }
     void finish() { if (foreground) { stopForeground(STOP_FOREGROUND_REMOVE); foreground = false; } stopSelf(); }
+    void finishStart(long generation, String startId) {
+        if (generation == connectionGeneration && startId != null && startId.equals(sessionStartId)) finish();
+    }
     @Override public void onDestroy() {
         if (mediaSession != null) { mediaSession.setActive(false); mediaSession.release(); }
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();

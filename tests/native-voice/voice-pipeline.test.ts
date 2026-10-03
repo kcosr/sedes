@@ -140,13 +140,14 @@ describe("native voice production pipeline with loopback providers", () => {
 
   it.skipIf(!androidSerial)("validates Android Keystore recovery, cancellation, and real AudioRecord/AudioTrack", async () => {
     const result = await adb(["shell", "am", "instrument", "-w", "-r", "-e", "class",
-      "dev.sedes.local.NativeVoiceStoreTest,dev.sedes.local.NativeVoiceRuntimeTest,dev.sedes.local.NativeVoiceAudioTest", "dev.sedes.local.test/androidx.test.runner.AndroidJUnitRunner"], 180_000);
+      "dev.sedes.local.NativeVoiceStoreTest,dev.sedes.local.NativeVoiceRuntimeTest,dev.sedes.local.NativeVoiceStartupTest,dev.sedes.local.NativeVoiceAudioTest", "dev.sedes.local.test/androidx.test.runner.AndroidJUnitRunner"], 180_000);
     await writeFile(path.join(artifactDirectory, "android-native-smoke.log"), result.stdout + result.stderr);
     expect(result.stdout).toContain("OK (");
     expect(result.stdout).not.toMatch(/FAILURES|INSTRUMENTATION_FAILED/u);
   });
 
   for (const [mode, scenario] of [["response", "cycle"], ["manual", "cycle"], ["response", "background"],
+    ["response", "startup"], ["manual", "startup"],
     ["response", "skip"], ["response", "stop"], ["response", "retarget"],
     ["response", "lost-ack"], ["response", "lost-send"], ["response", "cancel-uncertain"]] as const) {
     it.skipIf(!androidSerial)(`runs packaged Android ${mode}/${scenario} through the actual UI and media stack`, async () => {
@@ -170,9 +171,25 @@ describe("native voice production pipeline with loopback providers", () => {
       let instrumentationOutput = "";
       let scenarioFailed = false;
       try {
-        const result = await adb(["shell", "am", "instrument", "-w", "-r", "-e", "class", "dev.sedes.local.NativeVoiceE2eTest#nativeConversationCycle",
-          ...Object.entries(args).flatMap(([key, value]) => ["-e", key, shellArgument(value)]),
+        const run = (extra: Record<string, string> = {}) => adb([
+          "shell", "am", "instrument", "-w", "-r", "-e", "class", "dev.sedes.local.NativeVoiceE2eTest#nativeConversationCycle",
+          ...Object.entries({ ...args, ...extra }).flatMap(([key, value]) => ["-e", key, shellArgument(value)]),
           "dev.sedes.local.test/androidx.test.runner.AndroidJUnitRunner"], 330_000);
+        let restored: Record<string, string> = {};
+        if (scenario === "startup") {
+          const prepared = await run({ startupStage: "prepare" });
+          instrumentationOutput = prepared.stdout + prepared.stderr;
+          await writeFile(path.join(artifactDirectory, `android-${mode}-${scenario}-prepare.log`), instrumentationOutput);
+          expect(prepared.stdout).toContain("OK (");
+          expect(prepared.stdout).not.toMatch(/FAILURES|INSTRUMENTATION_FAILED/u);
+          const rawPrepared = /^INSTRUMENTATION_STATUS: voiceStartupPrepared=(.+)$/mu.exec(prepared.stdout)?.[1];
+          expect(rawPrepared).toBeDefined();
+          const saved = JSON.parse(rawPrepared!);
+          restored = { startupStage: "restore", savedSettingsRevision: String(saved.settingsRevision), savedOriginClientId: saved.originClientId };
+          await adb(["shell", "am", "force-stop", "dev.sedes.local"]);
+          instrumentationOutput = "";
+        }
+        const result = await run(restored);
         instrumentationOutput = result.stdout + result.stderr;
         await writeFile(path.join(artifactDirectory, `android-${mode}-${scenario}.log`), instrumentationOutput);
         expect(result.stdout).toContain("OK (");

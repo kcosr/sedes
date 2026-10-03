@@ -44,6 +44,9 @@ public class NativeVoiceE2eTest {
         Assume.assumeTrue("Requires the isolated native voice host harness", server != null && adapter != null && pairing != null);
         String thread = required(args, "threadId"), title = args.getString("threadTitle", "Voice fixture");
         String mode = args.getString("mode", "response"), scenario = args.getString("scenario", "cycle");
+        boolean prepareStartup = scenario.equals("startup") && "prepare".equals(args.getString("startupStage"));
+        boolean restoreStartup = scenario.equals("startup") && !prepareStartup;
+        boolean startupPrepared = false;
         runLabel = scenario + "-" + mode + "-" + System.currentTimeMillis();
         String initial = args.getString("initialText", "native voice fixture start"), draft = args.getString("draftText", "unsent draft preserved by voice");
         instrumentation = InstrumentationRegistry.getInstrumentation(); Context context = instrumentation.getTargetContext();
@@ -97,31 +100,51 @@ public class NativeVoiceE2eTest {
         });
         long began = SystemClock.elapsedRealtime();
         try {
-            waitJs("document.querySelector('#setting-sedes-name') !== null", 45000);
-            input("#setting-sedes-name", "Voice fixture " + System.currentTimeMillis()); input("#setting-sedes-server", server);
-            clickText("Add & connect"); waitJs("document.querySelector('#pairing-token') !== null", 45000);
-            input("#pairing-token", pairing); clickText("Pair connection");
-            await(() -> runtime.snapshot().optString("originClientId", "").length() > 0 && !runtime.snapshot().isNull("originClientId"), 45000, "native authenticated bootstrap");
-            waitJs("document.querySelector('button[aria-label=\"Open thread navigation\"], button[aria-label=\"Show sidebar\"], button[aria-label=\"Hide sidebar\"]') !== null", 30000);
-            assertEquals("Voice Off hides the bottom bar", "false", js("document.querySelector('[aria-label=\"Voice controls\"]') !== null"));
-            screenshot("voice-off");
-            if ("true".equals(js("document.querySelector('button[aria-label=\"Open thread navigation\"]') !== null"))) click("button[aria-label=\"Open thread navigation\"]");
-            else if ("true".equals(js("document.querySelector('button[aria-label=\"Show sidebar\"]') !== null"))) click("button[aria-label=\"Show sidebar\"]");
-            waitJs("document.querySelector('button[aria-label=\"Settings\"]') !== null", 15000);
-            click("button[aria-label=\"Settings\"]");
-            waitJs("document.querySelector('[data-testid=\"settings-page\"][data-page=\"voice\"]') !== null", 15000);
-            screenshot("settings-entry");
-            click("[data-testid=\"settings-view\"] [data-testid=\"settings-page\"][data-page=\"voice\"] a[data-slot=\"entity-row-main\"]");
-            waitJs("Array.from(document.querySelectorAll('label')).some(x=>x.textContent.trim()==='Adapter URL')", 15000);
-            inputByLabel("Adapter URL", adapter); click("[aria-label=\"Save Adapter URL\"]");
-            await(() -> adapter.equals(runtime.snapshot().optJSONObject("settings").optString("adapterUrl")), 15000, "adapter URL saved");
-            selectByLabel("Audio mode", mode);
-            await(() -> mode.equals(runtime.snapshot().optJSONObject("settings").optString("audioMode")), 15000, "audio mode " + mode + " saved");
+            if (!restoreStartup) {
+                waitJs("document.querySelector('#setting-sedes-name') !== null", 45000);
+                input("#setting-sedes-name", "Voice fixture " + System.currentTimeMillis()); input("#setting-sedes-server", server);
+                clickText("Add & connect"); waitJs("document.querySelector('#pairing-token') !== null", 45000);
+                input("#pairing-token", pairing); clickText("Pair connection");
+                await(() -> runtime.snapshot().optString("originClientId", "").length() > 0 && !runtime.snapshot().isNull("originClientId"), 45000, "native authenticated bootstrap");
+                waitJs("document.querySelector('button[aria-label=\"Open thread navigation\"], button[aria-label=\"Show sidebar\"], button[aria-label=\"Hide sidebar\"]') !== null", 30000);
+                assertEquals("Voice Off hides the bottom bar", "false", js("document.querySelector('[aria-label=\"Voice controls\"]') !== null"));
+                screenshot("voice-off");
+                if ("true".equals(js("document.querySelector('button[aria-label=\"Open thread navigation\"]') !== null"))) click("button[aria-label=\"Open thread navigation\"]");
+                else if ("true".equals(js("document.querySelector('button[aria-label=\"Show sidebar\"]') !== null"))) click("button[aria-label=\"Show sidebar\"]");
+                waitJs("document.querySelector('button[aria-label=\"Settings\"]') !== null", 15000);
+                click("button[aria-label=\"Settings\"]");
+                waitJs("document.querySelector('[data-testid=\"settings-page\"][data-page=\"voice\"]') !== null", 15000);
+                screenshot("settings-entry");
+                click("[data-testid=\"settings-view\"] [data-testid=\"settings-page\"][data-page=\"voice\"] a[data-slot=\"entity-row-main\"]");
+                waitJs("Array.from(document.querySelectorAll('label')).some(x=>x.textContent.trim()==='Adapter URL')", 15000);
+                inputByLabel("Adapter URL", adapter); click("[aria-label=\"Save Adapter URL\"]");
+                await(() -> adapter.equals(runtime.snapshot().optJSONObject("settings").optString("adapterUrl")), 15000, "adapter URL saved");
+                selectByLabel("Audio mode", mode);
+                await(() -> mode.equals(runtime.snapshot().optJSONObject("settings").optString("audioMode")), 15000, "audio mode " + mode + " saved");
+            } else {
+                await(() -> !runtime.snapshot().isNull("identity"), 45000, "restored authenticated profile");
+                assertEquals(mode, runtime.snapshot().getJSONObject("settings").getString("audioMode"));
+                assertEquals(Long.parseLong(required(args, "savedSettingsRevision")), runtime.snapshot().getLong("settingsRevision"));
+                assertEquals(required(args, "savedOriginClientId"), runtime.snapshot().getString("originClientId"));
+            }
             await(() -> runtime.snapshot().optBoolean("ready"), 45000, "native adapter handshake");
             waitJs("document.querySelector('[aria-label=\"Voice controls\"]') !== null", 15000);
             screenshot("voice-enabled");
             await(() -> runtime.snapshot().optString("phase").equals("idle"), 10000, "idle after handshake with an empty queue");
             assertTrue("Idle voice must offer explicit recording", runtime.snapshot().optJSONObject("actions").optBoolean("canStart"));
+            if (prepareStartup) {
+                JSONObject prepared = NativeVoiceJson.object("settingsRevision", runtime.snapshot().getLong("settingsRevision"),
+                    "originClientId", runtime.snapshot().getString("originClientId"));
+                Bundle status = new Bundle(); status.putString("voiceStartupPrepared", prepared.toString()); instrumentation.sendStatus(0, status);
+                startupPrepared = true;
+                return;
+            }
+            if (restoreStartup) {
+                assertEquals("Restoring readiness must not start recording", 0, supplied.get());
+                assertTrue(runtime.snapshot().isNull("active"));
+                assertFalse(runtime.snapshot().getJSONObject("actions").getBoolean("canResume"));
+                screenshot("startup-restored");
+            }
             // Route through the actual bundled application; all subsequent operations use its UI.
             js("(()=>{history.pushState({},''," + JSONObject.quote("/threads/" + thread) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
             waitJs("document.querySelector('[data-testid=\"composer\"] textarea:not(:disabled)') !== null", 45000);
@@ -222,7 +245,10 @@ public class NativeVoiceE2eTest {
             runtime.unobserve(observer);
             JSONObject snapshot = runtime.snapshot();
             CountDownLatch stopped = new CountDownLatch(1);
-            if (!snapshot.isNull("identity")) runtime.command("updateSettings", NativeVoiceJson.object("expectedRevision", snapshot.optLong("settingsRevision"),
+            if (startupPrepared) {
+                // Preserve only saved configuration; the host kills the process before the restore stage.
+                command("disconnect", new JSONObject()); stopped.countDown();
+            } else if (!snapshot.isNull("identity")) runtime.command("updateSettings", NativeVoiceJson.object("expectedRevision", snapshot.optLong("settingsRevision"),
                 "patch", NativeVoiceJson.object("audioMode", "off")), false, new NativeVoiceRuntime.Reply() {
                     public void done(JSONObject ignored) { stopped.countDown(); } public void failed(String code, String message) { stopped.countDown(); } });
             else stopped.countDown();

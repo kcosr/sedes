@@ -80,6 +80,15 @@ mixer completes its pause transition. Cue feedback adds one bounded 15-second
 timeout case to the native smoke lane. UI setup waits for enabled controls and
 the saved native audio mode before checking adapter readiness.
 
+Native startup checks restore real encrypted settings through the authenticated
+bootstrap and activity visibility paths. Only Android service dispatch is
+substituted, to test duplicate starts, missing prerequisites, pending-launch
+cancellation, profile changes, and stale failure callbacks deterministically.
+The Manual and Response startup scenarios also configure the actual app, stop
+its process, relaunch without changing settings, and run a full conversation
+cycle. They verify that readiness is restored without spontaneous recording
+and that the saved settings revision and client origin survive the restart.
+
 Server/adapter checks verify capability negotiation before HTTP media calls,
 actual PCM bytes and formats, multipart WAV recognition, cancellation during
 ASR finalization, and new adapter identity after reconnect. Direct input

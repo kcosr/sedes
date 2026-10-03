@@ -706,6 +706,10 @@
 
 ### Fixed
 
+- Android restores enabled voice when the app opens and its authenticated
+  connection is ready. Routine launches no longer require **Resume voice**;
+  microphone capture still follows explicit recording and Auto-listen controls.
+
 - Live progress notifications retain newly observed submission ownership even
   when the visible turn is unchanged, so eligible provisional replies can be
   spoken without waiting for a thread reload.

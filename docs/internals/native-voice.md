@@ -6,6 +6,17 @@ actions. `NativeVoiceRuntime` owns the state machine on one handler thread.
 it does not run a WebView. `NativeVoiceAdapter` connects directly to the media
 adapter, and `NativeVoiceHttp` owns authenticated Sedes requests and live SSE.
 
+The native owner restores a saved active mode when authenticated connection
+bootstrap completes while the app is visible, or when the activity becomes
+visible after bootstrap. It requires existing microphone permission and a
+configured adapter; startup does not request permission or capture audio.
+One pending service start is allowed at a time. Each launch carries its own
+identity and connection generation, with visibility rechecked before starting
+the foreground service. Off and disconnect invalidate pending launches; stale
+service callbacks cannot attach to a newer start. A rejected launch or a
+15-second service-attachment timeout leaves
+**Resume voice** available without retrying on duplicate visibility callbacks.
+
 Recognition cue PCM is generated locally. Each recognition consumes its final
 result once, stops capture, and retains its active slot until completion feedback
 drains. Cue callbacks are tied to that active item and a unique cue ID; cancellation
