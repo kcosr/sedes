@@ -213,7 +213,7 @@ describe("migration 060 principal agent-tool clients", () => {
     }
   });
 
-  it("enforces live, retained, and environment-entry bounds", () => {
+  it("enforces the live client bound", () => {
     const live = savedAgentDatabase();
     try {
       for (let index = 0; index < 64; index += 1) {
@@ -225,7 +225,9 @@ describe("migration 060 principal agent-tool clients", () => {
     } finally {
       live.database.close();
     }
+  });
 
+  it("enforces the retained client bound", () => {
     const retained = savedAgentDatabase();
     try {
       const insertRevoked = retained.database.prepare(
@@ -256,7 +258,9 @@ describe("migration 060 principal agent-tool clients", () => {
     } finally {
       retained.database.close();
     }
+  });
 
+  it("enforces the environment-entry bound", () => {
     const environments = savedAgentDatabase();
     try {
       const client = insertClient(environments.database, environments.scope);
