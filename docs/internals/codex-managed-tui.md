@@ -39,8 +39,11 @@ and execution environment can prove all launch requirements:
 The backend model policy must be `catalog`. Allowlist and denylist policies
 disable managed TUI because the interactive client can select and invoke a
 model before Sedes has a per-turn authorization hook. Immediately before every
-launch, Sedes checks the selected model and reasoning effort against an
-uncached live daemon catalog.
+launch, Sedes checks the selected model, reasoning effort, and speed against an
+uncached live daemon catalog: Fast or Ultrafast must be a tier the model still
+advertises. Synchronizing a Fast or Ultrafast selection into a running TUI
+repeats the speed check and fails the TUI, keeping the new settings, if the
+model no longer offers it.
 
 The TUI is intentionally unavailable for empty drafts, owned-stdio targets on
 every topology, runtimes whose sidecar did not negotiate the managed-TUI

@@ -576,6 +576,8 @@ type QueuedResponse =
 class RpcHarness {
   generation = 1;
   sequence = 0;
+  /** Overrides for the unqueued default `model/list` model. */
+  defaultModelOverrides: Readonly<Record<string, unknown>> = {};
   readonly calls: { method: string; params: unknown }[] = [];
   readonly requestOptions: {
     method: string;
@@ -766,7 +768,7 @@ class RpcHarness {
     if (queued instanceof Error) throw queued;
     if (queued === undefined && specification.method === "model/list") {
       return specification.decodeResult({
-        data: [nativeModel()],
+        data: [nativeModel(this.defaultModelOverrides)],
         nextCursor: null,
       });
     }
@@ -793,7 +795,7 @@ function executionSettingsProvider(
     overrides.resolveFastModeDisabled ??
     ((providerScope, input) => {
       const desired = desiredSettings(providerScope, input.applicationThreadId);
-      return desired?.serviceTier === "fast"
+      return desired && desired.serviceTier !== "standard"
         ? { ...desired, serviceTier: "standard" }
         : desired;
     });
@@ -4182,6 +4184,112 @@ describe("CodexConversationBackendDriver", () => {
           (params as { includeTurns?: boolean }).includeTurns === true,
       ),
     ).toEqual([]);
+  });
+
+  it("forks a child that inherits an offered Ultrafast speed before its runtime exists", async () => {
+    const harness = new RpcHarness();
+    const ultrafastSettings = executionSettingsTuple({
+      serviceTier: "ultrafast",
+    });
+    const resolveFastModeDisabled = vi.fn(() => ultrafastSettings);
+    const target = driver(
+      harness,
+      connection,
+      new CodexConversationOwnershipRegistry(),
+      { type: "catalog" },
+      executionSettingsProvider({
+        desiredSettings: () => ultrafastSettings,
+        freezeOperationSnapshot: () => ({ settings: ultrafastSettings }),
+        resolveFastModeDisabled,
+      }),
+    );
+    harness.enqueue("thread/read", { thread: paginatedThread() });
+    harness.enqueue("thread/turns/list", {
+      data: [notLoadedTurn(0)],
+      nextCursor: null,
+      backwardsCursor: "checkpoint-head",
+    });
+    harness.enqueue("thread/items/list", paginatedItems(0));
+    const checkpoint = await target.resolveBranchCheckpoint({
+      ...attachInput(),
+      selection: {
+        kind: "selected_completed_turn",
+        backendTurnId: codexBackendTurnId("thread-1", "turn-0"),
+        boundary: "completed_turn_inclusive",
+      },
+    });
+
+    harness.enqueue("thread/read", { thread: paginatedThread() });
+    harness.enqueue("thread/turns/list", {
+      data: [notLoadedTurn(0)],
+      nextCursor: null,
+      backwardsCursor: "checkpoint-head",
+    });
+    harness.enqueue("thread/items/list", paginatedItems(0));
+    const ultrafastCatalog = {
+      data: [
+        nativeModel({
+          serviceTiers: [
+            { id: "priority", name: "Fast", description: "Fast" },
+            { id: "ultrafast", name: "Ultrafast", description: "Fastest" },
+          ],
+        }),
+      ],
+      nextCursor: null,
+    };
+    harness.enqueue("model/list", ultrafastCatalog, ultrafastCatalog);
+    const forkMarker = codexForkCreationMarker({
+      toolProvenanceKey,
+      tenantId: scope.tenantId,
+      principalId: scope.principalId,
+      backendInstanceId: instance.id,
+      nativeThreadId: "thread-1",
+      correlationAncestorThreadIds: [],
+      applicationOperationId: "ultrafast-fork-operation",
+    });
+    harness.enqueue("thread/fork", {
+      ...resumeResult(
+        paginatedThread({
+          id: "ultrafast-child",
+          sessionId: "ultrafast-child-session",
+          forkedFromId: "thread-1",
+          threadSource: forkMarker,
+        }),
+      ),
+      serviceTier: "ultrafast",
+    });
+    harness.enqueue("experimentalFeature/list", {
+      data: [
+        {
+          name: "fast_mode",
+          stage: "stable",
+          displayName: "Fast mode",
+          description: null,
+          announcement: null,
+          enabled: true,
+          defaultEnabled: false,
+        },
+      ],
+      nextCursor: null,
+    });
+
+    await expect(
+      target.branchConversation({
+        scope,
+        childApplicationThreadId: "ultrafast-application-child",
+        applicationOperationId: "ultrafast-fork-operation",
+        source: { kind: "user" },
+        sourceBinding: binding(),
+        sourceOpaqueBindingDetail: attachInput().opaqueBindingDetail,
+        workspace,
+        sourceCheckpoint: checkpoint,
+        creationCorrelation: "ultrafast-fork-correlation",
+      }),
+    ).resolves.toMatchObject({ backendConversationId: "ultrafast-child" });
+    expect(
+      harness.calls.find(({ method }) => method === "thread/fork")?.params,
+    ).toMatchObject({ serviceTier: "ultrafast" });
+    expect(resolveFastModeDisabled).not.toHaveBeenCalled();
   });
 
   it.each(["interrupted", "inProgress"] as const)(
@@ -9196,6 +9304,9 @@ describe("CodexConversationHandle", () => {
 
   it("replays a durable Fast tier after resume when the loaded thread enables fast_mode", async () => {
     const harness = new RpcHarness();
+    harness.defaultModelOverrides = {
+      serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
+    };
     const observeEffective = vi.fn();
     const fastSettings = executionSettingsTuple({ serviceTier: "fast" });
     const settings = executionSettingsProvider({
@@ -9286,7 +9397,7 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
-  it("replays a durable Ultrafast tier and submits it only while the catalog offers it", async () => {
+  it("replays a durable Ultrafast tier only while the catalog offers it", async () => {
     const fastModeFeature = {
       name: "fast_mode",
       stage: "stable",
@@ -9299,11 +9410,23 @@ describe("CodexConversationHandle", () => {
     const ultrafastSettings = executionSettingsTuple({
       serviceTier: "ultrafast",
     });
-    const establishUltrafast = async () => {
+    const establishUltrafast = async (serviceTierIds: readonly string[]) => {
       const harness = new RpcHarness();
+      harness.defaultModelOverrides = {
+        serviceTiers: serviceTierIds.map((id) => ({
+          id,
+          name: id,
+          description: id,
+        })),
+      };
+      const resolveFastModeDisabled = vi.fn(() => ({
+        ...ultrafastSettings,
+        serviceTier: "standard" as const,
+      }));
       const settings = executionSettingsProvider({
         desiredSettings: () => ultrafastSettings,
         freezeOperationSnapshot: () => ({ settings: ultrafastSettings }),
+        resolveFastModeDisabled,
       });
       const handle = await attachIdle(
         harness,
@@ -9325,7 +9448,7 @@ describe("CodexConversationHandle", () => {
       await handle.establishProjection({
         signal: new AbortController().signal,
       });
-      return { harness, handle };
+      return { harness, handle, resolveFastModeDisabled };
     };
     const submitInput = (id: string) => ({
       applicationOperationId: `${id}-submit`,
@@ -9337,28 +9460,20 @@ describe("CodexConversationHandle", () => {
       attachments: [],
       text: "continue very quickly",
     });
+    const nativeTiers = (harness: RpcHarness) =>
+      harness.calls
+        .filter(
+          ({ method }) =>
+            method === "thread/resume" ||
+            method === "thread/settings/update" ||
+            method === "turn/start",
+        )
+        .map(({ method, params }) => [
+          method,
+          (params as { serviceTier?: string }).serviceTier,
+        ]);
 
-    const offered = await establishUltrafast();
-    expect(
-      offered.harness.calls.find(({ method }) => method === "thread/resume")
-        ?.params,
-    ).toMatchObject({ serviceTier: "ultrafast" });
-    expect(
-      offered.harness.calls.find(
-        ({ method }) => method === "thread/settings/update",
-      )?.params,
-    ).toEqual({ threadId: "thread-1", serviceTier: "ultrafast" });
-    offered.harness.enqueue("model/list", {
-      data: [
-        nativeModel({
-          serviceTiers: [
-            { id: "priority", name: "Fast", description: "Fast" },
-            { id: "ultrafast", name: "Ultrafast", description: "Fastest" },
-          ],
-        }),
-      ],
-      nextCursor: null,
-    });
+    const offered = await establishUltrafast(["priority", "ultrafast"]);
     offered.harness.enqueue("turn/start", {
       turn: {
         ...nativeTurn(1),
@@ -9369,22 +9484,22 @@ describe("CodexConversationHandle", () => {
       },
     });
     await offered.handle.submit(submitInput("ultrafast"));
-    expect(
-      offered.harness.calls.find(({ method }) => method === "turn/start")
-        ?.params,
-    ).toMatchObject({ serviceTier: "ultrafast" });
+    expect(nativeTiers(offered.harness)).toEqual([
+      ["thread/resume", "ultrafast"],
+      ["thread/settings/update", "ultrafast"],
+      ["turn/start", "ultrafast"],
+    ]);
+    expect(offered.resolveFastModeDisabled).not.toHaveBeenCalled();
     offered.harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await offered.handle.close();
 
-    const withdrawn = await establishUltrafast();
-    withdrawn.harness.enqueue("model/list", {
-      data: [
-        nativeModel({
-          serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
-        }),
-      ],
-      nextCursor: null,
-    });
+    // A catalog that withdrew Ultrafast resolves the thread to Standard
+    // before resume, so no unsupported tier is ever written natively.
+    const withdrawn = await establishUltrafast(["priority"]);
+    expect(withdrawn.resolveFastModeDisabled).toHaveBeenCalled();
+    expect(nativeTiers(withdrawn.harness)).toEqual([
+      ["thread/resume", "default"],
+    ]);
     await expect(
       withdrawn.handle.submit(submitInput("withdrawn")),
     ).rejects.toMatchObject({
@@ -9400,6 +9515,9 @@ describe("CodexConversationHandle", () => {
 
   it("does not replay a durable Fast tier when the loaded thread disables fast_mode", async () => {
     const harness = new RpcHarness();
+    harness.defaultModelOverrides = {
+      serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
+    };
     const syncSettings = vi.fn(async () => undefined);
     const managedTui = {
       registry: { subscribeState: () => () => undefined },
@@ -9456,6 +9574,9 @@ describe("CodexConversationHandle", () => {
 
   it("converges app-server and managed-TUI tiers when recovery discovers fast_mode disabled", async () => {
     const harness = new RpcHarness();
+    harness.defaultModelOverrides = {
+      serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
+    };
     let desired = executionSettingsTuple({ serviceTier: "fast" });
     const resolveFastModeDisabled = vi.fn(() => {
       if (resolveFastModeDisabled.mock.calls.length === 1) {
@@ -9542,8 +9663,101 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
+  it("resolves a withdrawn Ultrafast tier to Standard when fast_mode recovers", async () => {
+    const harness = new RpcHarness();
+    harness.defaultModelOverrides = {
+      serviceTiers: [
+        { id: "priority", name: "Fast", description: "Fast" },
+        { id: "ultrafast", name: "Ultrafast", description: "Ultrafast" },
+      ],
+    };
+    let desired = executionSettingsTuple({ serviceTier: "ultrafast" });
+    const resolveFastModeDisabled = vi.fn(() => {
+      desired = { ...desired, serviceTier: "standard" };
+      return desired;
+    });
+    const syncSettings = vi.fn(async () => undefined);
+    const managedTui = {
+      registry: { subscribeState: () => () => undefined },
+      syncSettings,
+      releaseRuntime: vi.fn(async () => undefined),
+    } as unknown as CodexManagedTuiController;
+    const handle = await attachIdle(
+      harness,
+      driver(
+        harness,
+        connection,
+        new CodexConversationOwnershipRegistry(),
+        { type: "catalog" },
+        executionSettingsProvider({
+          desiredSettings: () => desired,
+          resolveFastModeDisabled,
+        }),
+        undefined,
+        managedTui,
+      ),
+    );
+    harness.enqueue("thread/read", { thread: nativeThread() });
+    harness.enqueue("thread/resume", {
+      ...resumeResult(),
+      serviceTier: "ultrafast",
+    });
+    // Feature discovery fails during establishment, leaving recovery pending.
+    await handle.establishProjection({
+      signal: new AbortController().signal,
+    });
+    expect(resolveFastModeDisabled).not.toHaveBeenCalled();
+
+    harness.defaultModelOverrides = {
+      serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
+    };
+    harness.enqueue("experimentalFeature/list", {
+      data: [
+        {
+          name: "fast_mode",
+          stage: "stable",
+          displayName: "Fast mode",
+          description: null,
+          announcement: null,
+          enabled: true,
+          defaultEnabled: true,
+        },
+      ],
+      nextCursor: null,
+    });
+    harness.enqueue("thread/settings/update", {});
+
+    await vi.waitFor(
+      () =>
+        expect(
+          harness.calls.find(
+            ({ method }) => method === "thread/settings/update",
+          )?.params,
+        ).toEqual({ threadId: "thread-1", serviceTier: "default" }),
+      { timeout: 1_000 },
+    );
+    expect(resolveFastModeDisabled).toHaveBeenCalledOnce();
+    expect(syncSettings).toHaveBeenCalledWith(
+      scope,
+      "application-profile-1",
+      expect.objectContaining({ serviceTier: "standard" }),
+    );
+    expect(
+      harness.calls.some(
+        ({ method, params }) =>
+          method === "thread/settings/update" &&
+          (params as { serviceTier?: string }).serviceTier === "ultrafast",
+      ),
+    ).toBe(false);
+    harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+    await handle.close();
+  });
+
   it("does not write Standard after disabled recovery is superseded by a newer Fast selection", async () => {
     const harness = new RpcHarness();
+    harness.defaultModelOverrides = {
+      serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
+    };
     let desired = executionSettingsTuple({ serviceTier: "fast" });
     let resolveStandardSync!: () => void;
     const standardSync = new Promise<void>((resolve) => {
@@ -9664,6 +9878,9 @@ describe("CodexConversationHandle", () => {
 
   it("does not write Standard when the handle closes during disabled recovery", async () => {
     const harness = new RpcHarness();
+    harness.defaultModelOverrides = {
+      serviceTiers: [{ id: "priority", name: "Fast", description: "Fast" }],
+    };
     let desired = executionSettingsTuple({ serviceTier: "fast" });
     let resolveSync!: () => void;
     const sync = new Promise<void>((resolve) => {

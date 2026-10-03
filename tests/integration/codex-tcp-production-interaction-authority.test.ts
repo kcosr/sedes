@@ -120,6 +120,8 @@ describe.sequential("production-composed TCP interaction authority", () => {
         validateExecutionSettings: async () => undefined,
         resolveImportedReasoningEffort: async (_model, observed) =>
           observed ?? "low",
+        serviceTierOffered: async (_model, serviceTier) =>
+          serviceTier === "standard",
         releaseOwnership,
       });
       handle.subscribe((event) => {

@@ -1262,6 +1262,21 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
             ? descriptor.defaultReasoningEffort
             : undefined;
         },
+        serviceTierOffered: async (model, serviceTier) => {
+          if (serviceTier === "standard") return true;
+          const models = await this.#modelCatalogFresh({
+            scope: input.scope,
+            workspace: input.workspace,
+          });
+          return codexModelOffersServiceTier(
+            models.find(
+              (candidate) =>
+                candidate.provider === this.connection.id &&
+                candidate.id === model,
+            ),
+            serviceTier,
+          );
+        },
         resolveModelInputModalities: async (model, fresh) => {
           const cached = resolvedModelInputModalities.get(model);
           if (!fresh && cached) return cached;
@@ -1660,11 +1675,12 @@ export class CodexConversationBackendDriver implements ConversationBackendDriver
         now: this.#nowMilliseconds(),
       });
     const executionSettings = executionSnapshot.settings;
+    // Like create, the child has no runtime yet: admit its tier against the
+    // catalog here and discover its `fast_mode` support after the fork.
     await this.#assertExecutionSettingsAvailable(
       input.scope,
       input.workspace,
       executionSettings,
-      input.childApplicationThreadId,
     );
     const providerPolicy = codexExecutionPolicy(executionSettings).thread;
     const cliEnvironment = await this.#acquireAgentToolCliEnvironment(

@@ -218,8 +218,12 @@ observation withdraws the capability and reconciles both app-server and
 managed-TUI state to Standard. Null, unknown, or custom native tiers fail
 closed. Every create and turn rechecks that the frozen tier is still offered
 for the model; a tier the catalog no longer advertises is rejected before
-submission rather than silently omitted by Codex. A fork instead resolves the
-child to Standard, as described under forks below.
+submission rather than silently omitted by Codex. Resume, reattachment, and
+`fast_mode` recovery check the live catalog before writing a retained Fast or
+Ultrafast tier, and resolve a withdrawn tier to Standard as a disabled
+`fast_mode` does; a catalog read failure leaves the selection for the turn
+check. A fork admits the child's tier against the catalog before creation and
+discovers its `fast_mode` support afterwards, as described under forks below.
 
 Speed changes use revision-fenced, durable provider-feature receipts. Desired
 state is updated atomically before any runtime synchronization, accepted

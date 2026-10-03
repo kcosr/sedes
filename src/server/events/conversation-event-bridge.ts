@@ -54,8 +54,9 @@ export interface ConversationEventBridgeProjection {
     state: ConversationActorSnapshotState,
   ): Promise<NormalizedThreadSnapshot>;
   /**
-   * Capability document and provider feature envelopes composed together
-   * from one targeted-state pass — capabilities_changed is the frequent
+   * Capability document, provider feature envelopes, and the settings
+   * snapshot composed together from one targeted-state pass —
+   * capabilities_changed is the frequent
    * backend-driven feature transition signal, so each normalized publication
    * carries both values and costs one authorization and one composition.
    */
@@ -68,6 +69,7 @@ export interface ConversationEventBridgeProjection {
     readonly capabilities: ThreadCapabilityDocument;
     readonly providerFeatures: NormalizedThreadSnapshot["providerFeatures"];
     readonly interactions: NormalizedThreadSnapshot["interactions"];
+    readonly settings: NormalizedThreadSnapshot["settings"];
   }>;
   forkSource(
     scope: RequestScope,
@@ -163,8 +165,13 @@ export class ConversationEventBridge {
       ) {
         const state = await input.captureAuthoritativeState();
         if (state.timeline.generation !== generation) return;
-        const { threadRevision, capabilities, providerFeatures, interactions } =
-          await this.#projection.capabilitiesAndProviderFeatures(
+        const {
+          threadRevision,
+          capabilities,
+          providerFeatures,
+          interactions,
+          settings,
+        } = await this.#projection.capabilitiesAndProviderFeatures(
             input.scope,
             input.applicationThreadId,
             state,
@@ -219,6 +226,12 @@ export class ConversationEventBridge {
               interaction,
             });
           }
+        }
+        // A backend observation can advance the settings revision (for
+        // example a confirmed effective tuple) without an application
+        // mutation; publish it so the next setting change is not stale.
+        if (settings.revision > snapshot.settings.revision) {
+          input.hub.publish({ type: "settings_changed", generation, settings });
         }
         input.hub.publish({
           type: "capabilities_changed",

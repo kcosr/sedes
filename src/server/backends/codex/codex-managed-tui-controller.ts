@@ -22,6 +22,7 @@ import {
   encodeCodexServiceTier,
   type CodexServiceTierSelection,
 } from "./codex-service-tier.js";
+import { assertCodexLiveModelSelection } from "./codex-live-model-selection.js";
 
 export type CodexManagedTuiHandleAuthority = Omit<
   CodexManagedTuiBindingAuthority,
@@ -422,6 +423,26 @@ export class CodexManagedTuiController implements ManagedTerminalResourceAuthori
         "The Codex connection changed before TUI settings could be synchronized.",
       );
       return;
+    }
+    if (settings.serviceTier !== "standard") {
+      // TUI turns bypass the Sedes turn gate; never hand a running TUI a
+      // speed the live catalog no longer offers for this model.
+      try {
+        await assertCodexLiveModelSelection({
+          client: this.#client,
+          expectedGeneration: authority.appServerGeneration,
+          model: settings.model,
+          reasoningEffort: settings.reasoningEffort,
+          serviceTier: settings.serviceTier,
+          signal: AbortSignal.timeout(30_000),
+        });
+      } catch {
+        await this.registry.fail(
+          authority,
+          "Sedes kept the new settings, but this model no longer offers the selected speed. Choose another speed and start a new TUI.",
+        );
+        return;
+      }
     }
     const policy = codexExecutionPolicy(settings).turn;
     try {

@@ -370,7 +370,9 @@
 
 - Codex Fast mode is now called **Speed** in the composer, docs, and saved
   Agent settings. Changing to a model that doesn't offer the selected speed
-  returns the thread to Standard; Ultrafast never steps down to Fast.
+  returns the thread to Standard, as does reconnecting after the account's
+  catalog stops offering it; Ultrafast never steps down to Fast. A managed
+  TUI won't start or keep running with a speed the model no longer offers.
   (PR pending)
 
 - Tasks View options no longer have a Show group: Completed is always the
@@ -685,6 +687,15 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Changing a thread setting right after Codex confirmed a Fast mode change
+  no longer fails with "The Codex thread or settings changed in another
+  client." Backend-confirmed settings revisions now reach open clients.
+  (PR pending)
+
+- Forking a Codex thread with Fast selected no longer fails before the fork
+  is created.
+  (PR pending)
 
 - A Task added while the Pinned filter is on is created pinned instead of
   disappearing, and opening a Task that a filter hides no longer turns the

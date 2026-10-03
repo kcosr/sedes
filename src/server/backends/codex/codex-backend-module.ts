@@ -469,7 +469,7 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
             return current;
           },
           validateModelSelection: async ({ authority, settings, signal }) => {
-            await assertCodexLiveModelSelection({ client: this.#supervisor.client, expectedGeneration: authority.appServerGeneration, model: settings.model, reasoningEffort: settings.reasoningEffort, signal });
+            await assertCodexLiveModelSelection({ client: this.#supervisor.client, expectedGeneration: authority.appServerGeneration, model: settings.model, reasoningEffort: settings.reasoningEffort, serviceTier: settings.serviceTier, signal });
           },
         }));
       } else {

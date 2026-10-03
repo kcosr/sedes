@@ -208,6 +208,7 @@ const targetedProjection = {
       capabilities: composed.capabilities,
       providerFeatures: composed.providerFeatures,
       interactions: composed.interactions,
+      settings: { revision: 0, values: [] },
     };
   },
   forkSource: async (
@@ -535,6 +536,7 @@ describe("ConversationEventBridge", () => {
         capabilities: snapshot("generation-2").capabilities,
         providerFeatures: [],
         interactions: [interaction],
+        settings: { revision: 0, values: [] },
       }),
       ancillary: async () => [],
     }, () => undefined);
@@ -814,6 +816,7 @@ describe("ConversationEventBridge", () => {
       capabilities: composed,
       providerFeatures: [],
       interactions: [],
+      settings: { revision: 0, values: [] },
     }));
     const bridge = new ConversationEventBridge({
       ...targetedProjection,
@@ -851,6 +854,84 @@ describe("ConversationEventBridge", () => {
     });
   });
 
+  it("publishes a backend-advanced settings revision with the capability event", async () => {
+    const source = new Source();
+    const hub = new ThreadEventHub();
+    const listener = vi.fn();
+    hub.subscribe(listener);
+    const settings = {
+      revision: 3,
+      values: [
+        {
+          id: "model",
+          desiredValue: "model-a",
+          effectiveValue: "model-a",
+          applicationState: "effective" as const,
+        },
+      ],
+    };
+    const composeTargeted = vi
+      .fn()
+      .mockResolvedValueOnce({
+        threadRevision: 1,
+        capabilities: snapshot("generation-1").capabilities,
+        providerFeatures: [],
+        interactions: [],
+        settings,
+      })
+      .mockResolvedValueOnce({
+        threadRevision: 1,
+        capabilities: snapshot("generation-1").capabilities,
+        providerFeatures: [],
+        interactions: [],
+        settings: { revision: 2, values: [] },
+      });
+    const bridge = new ConversationEventBridge({
+      ...targetedProjection,
+      snapshot: async (_scope, _threadId, current) =>
+        snapshot(current.timeline.generation),
+      capabilitiesAndProviderFeatures: composeTargeted,
+      ancillary: async () => [],
+    }, () => undefined);
+    const binding = bridge.bind({
+      scope,
+      applicationThreadId: "thread-1",
+      actor: source,
+      hub,
+      captureAuthoritativeState: async () => actorState("generation-1"),
+    });
+    await binding.ready;
+    const capabilitiesChanged = {
+      type: "backend_event" as const,
+      generation: "generation-1",
+      event: {
+        type: "capabilities_changed" as const,
+        capabilities: actorState("generation-1").backendCapabilities,
+      },
+    };
+    source.emit(capabilitiesChanged);
+    // An older revision than the published one is never republished.
+    source.emit(capabilitiesChanged);
+    await binding.release();
+
+    const events = listener.mock.calls
+      .map(([published]) => published.event)
+      .filter(({ type }) =>
+        type === "settings_changed" || type === "capabilities_changed",
+      );
+    expect(events.map(({ type }) => type)).toEqual([
+      "settings_changed",
+      "capabilities_changed",
+      "capabilities_changed",
+    ]);
+    expect(events[0]).toEqual({
+      type: "settings_changed",
+      generation: "generation-1",
+      settings,
+    });
+    expect(hub.snapshot?.settings).toEqual(settings);
+  });
+
   it("recomposes capabilities when queue revision advances during composition", async () => {
     const source = new Source();
     const hub = new ThreadEventHub();
@@ -879,6 +960,7 @@ describe("ConversationEventBridge", () => {
           capabilities: initial.capabilities,
           providerFeatures: [],
           interactions: [],
+          settings: { revision: 0, values: [] },
         };
       })
       .mockResolvedValue({
@@ -886,6 +968,7 @@ describe("ConversationEventBridge", () => {
         capabilities: recomposedCapabilities,
         providerFeatures: [],
         interactions: [],
+        settings: { revision: 0, values: [] },
       });
     const projectSnapshot = vi.fn().mockResolvedValue(initial);
     const bridge = new ConversationEventBridge({
@@ -972,6 +1055,7 @@ describe("ConversationEventBridge", () => {
       },
       providerFeatures: [goalEnvelope(2, "complete")],
       interactions: [],
+      settings: { revision: 0, values: [] },
     }));
     const bridge = new ConversationEventBridge({
       ...targetedProjection,
@@ -1052,6 +1136,7 @@ describe("ConversationEventBridge", () => {
       capabilities: baseSnapshot.capabilities,
       providerFeatures: [goalEnvelope],
       interactions: [],
+      settings: { revision: 0, values: [] },
     }));
     const bridge = new ConversationEventBridge({
       ...targetedProjection,
@@ -1092,6 +1177,7 @@ describe("ConversationEventBridge", () => {
       capabilities: snapshot("generation-2").capabilities,
       providerFeatures: [],
       interactions: [],
+      settings: { revision: 0, values: [] },
     }));
     const bridge = new ConversationEventBridge({
       ...targetedProjection,
@@ -1416,6 +1502,7 @@ describe("ConversationEventBridge", () => {
           capabilities: snapshot("generation-1").capabilities,
           providerFeatures: [],
           interactions: [interaction],
+          settings: { revision: 0, values: [] },
         };
       },
       ancillary: async () => [],

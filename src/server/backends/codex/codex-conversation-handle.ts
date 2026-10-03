@@ -343,6 +343,11 @@ export interface CodexConversationHandleInput {
     model: string,
     observedReasoningEffort: string | null,
   ) => Promise<string | undefined>;
+  /** Whether the live catalog offers this tier for the model; Standard always is. */
+  readonly serviceTierOffered: (
+    model: string,
+    serviceTier: CodexServiceTierSelection,
+  ) => Promise<boolean>;
   readonly resolveModelInputModalities?: (
     model: string,
     fresh: boolean,
@@ -399,6 +404,10 @@ export class CodexConversationHandle implements ConversationHandle {
     model: string,
     observedReasoningEffort: string | null,
   ) => Promise<string | undefined>;
+  readonly #serviceTierOffered: (
+    model: string,
+    serviceTier: CodexServiceTierSelection,
+  ) => Promise<boolean>;
   readonly #resolveModelInputModalities: (
     model: string,
     fresh: boolean,
@@ -590,6 +599,7 @@ export class CodexConversationHandle implements ConversationHandle {
     this.#assertModelPolicyAllowed =
       input.assertModelPolicyAllowed ?? (() => undefined);
     this.#resolveImportedReasoningEffort = input.resolveImportedReasoningEffort;
+    this.#serviceTierOffered = input.serviceTierOffered;
     this.#resolveModelInputModalities =
       input.resolveModelInputModalities ?? (async () => ["text"]);
     this.#goalSessions = input.goalSessions;
@@ -2488,6 +2498,39 @@ export class CodexConversationHandle implements ConversationHandle {
     }
   }
 
+  /**
+   * The account-scoped catalog decides whether an accelerated tier exists. A
+   * durable Fast or Ultrafast selection the desired model no longer offers
+   * resolves to Standard, as a disabled `fast_mode` does, so Sedes never
+   * writes a tier Codex would silently omit. A catalog read failure keeps the
+   * selection; every turn still rechecks it before submission.
+   */
+  async #resolveUnofferedServiceTier(
+    desired: CodexExecutionSettingsTuple | null,
+  ): Promise<CodexExecutionSettingsTuple | null> {
+    if (!desired || desired.serviceTier === "standard") return desired;
+    let offered: boolean;
+    try {
+      offered = await this.#serviceTierOffered(
+        desired.model,
+        desired.serviceTier,
+      );
+    } catch {
+      return desired;
+    }
+    if (offered) return desired;
+    const resolved = this.#executionSettings.resolveFastModeDisabled(
+      this.#scope(),
+      { applicationThreadId: this.binding.applicationThreadId, now: this.#now() },
+    );
+    if (resolved && this.#managedTui) {
+      await this.#managedTui
+        .syncSettings(this.#scope(), this.binding.applicationThreadId, resolved)
+        .catch((error: unknown) => this.#reportError(error));
+    }
+    return resolved;
+  }
+
   /** Replay only Sedes's durable tier; all other resume fields stay native. */
   async #replayDesiredServiceTier(
     observation: CodexSettingsObservationReceipt,
@@ -2650,9 +2693,11 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#reportError(error);
       }
     } else if (projection.enabled && projection.availability === "available") {
-      const desired = this.#executionSettings.desiredSettings(
-        this.#scope(),
-        this.binding.applicationThreadId,
+      const desired = await this.#resolveUnofferedServiceTier(
+        this.#executionSettings.desiredSettings(
+          this.#scope(),
+          this.binding.applicationThreadId,
+        ),
       );
       if (desired) {
         try {
@@ -2888,6 +2933,7 @@ export class CodexConversationHandle implements ConversationHandle {
         );
         let resumed;
         let requestedNativeResume = false;
+        let serviceTierResolved = false;
         const controlObservationBeforeResume = this.#controlObservationRevision;
         try {
           resumed = await this.#client.persistentSessions?.reattachThread(
@@ -2923,9 +2969,13 @@ export class CodexConversationHandle implements ConversationHandle {
             // Restore the saved security selection for that reconstruction.
             // Codex ignores these overrides when another subscription retains
             // the live session, whose returned settings remain authoritative.
-            desiredBeforeResume = this.#executionSettings.desiredSettings(
-              this.#scope(), this.binding.applicationThreadId,
+            desiredBeforeResume = await this.#resolveUnofferedServiceTier(
+              this.#executionSettings.desiredSettings(
+                this.#scope(), this.binding.applicationThreadId,
+              ),
             );
+            serviceTierResolved = true;
+            this.#assertEstablishmentMayContinue(signal);
             if (desiredBeforeResume) {
               try {
                 this.#executionSettings.assertExecutionPolicyAllowed(desiredBeforeResume);
@@ -3191,10 +3241,16 @@ export class CodexConversationHandle implements ConversationHandle {
             await this.#recoverFastModeProjection(projection),
           shouldRecover: () => !this.#closing && !this.#closed,
         });
+        // A retained persistent session resumes without Sedes's resume
+        // overrides, so its tier is checked before the replay instead.
         const retainedServiceTier =
           fastModeProjection.unavailableReason === "feature_disabled"
             ? await this.#reconcileDisabledFastMode(fastModeProjection)
-            : desiredBeforeResume?.serviceTier;
+            : serviceTierResolved
+              ? desiredBeforeResume?.serviceTier
+              : (await this.#resolveUnofferedServiceTier(desiredBeforeResume))
+                  ?.serviceTier;
+        this.#assertEstablishmentMayContinue(signal);
         settingsReceipt = await this.#replayDesiredServiceTier(
           settingsReceipt,
           retainedServiceTier,

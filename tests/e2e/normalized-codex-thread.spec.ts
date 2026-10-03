@@ -655,10 +655,11 @@ test.describe.serial("normalized Codex thread state", () => {
     await page.setViewportSize(desktopViewport);
 
     // A model without Ultrafast falls back to Standard for the next turn.
+    // Codex may confirm the Standard tier before the first assertion, so
+    // accept the label with or without its pending suffix.
     await chooseModel("GPT-5.6 Codex");
     const fallbackToggle = page.getByRole("button", {
-      name: "Fast speed, off, pending",
-      exact: true,
+      name: /^Fast speed, off(?:, pending)?$/,
     });
     await expect(fallbackToggle).toBeVisible();
     await expect(fallbackToggle).toHaveAttribute("aria-pressed", "false");
