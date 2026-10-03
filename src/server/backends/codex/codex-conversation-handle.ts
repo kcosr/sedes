@@ -2530,10 +2530,10 @@ export class CodexConversationHandle implements ConversationHandle {
       }
       const latest = current();
       if (!latest || !sameExecutionSettingsTuple(latest, checked)) continue;
-      if (offered) return { desired: latest, writable: true };
       if (this.#closing || this.#closed) {
         return { desired: latest, writable: false };
       }
+      if (offered) return { desired: latest, writable: true };
       // Re-read and clamp run without an intervening await.
       const resolved = this.#executionSettings.resolveFastModeDisabled(
         this.#scope(),
@@ -2553,18 +2553,19 @@ export class CodexConversationHandle implements ConversationHandle {
   }
 
   /**
-   * Whether a tier may be written natively onto `model`, which can differ
-   * from the desired model when Codex resumed another one.
+   * Whether the live catalog offers a tier on `model`, which can differ from
+   * the desired model when Codex resumed another one; `undefined` when the
+   * catalog could not be read.
    */
-  async #serviceTierWritableOn(
+  async #serviceTierOfferedOn(
     model: string,
     serviceTier: CodexServiceTierSelection,
-  ): Promise<boolean> {
+  ): Promise<boolean | undefined> {
     if (serviceTier === "standard") return true;
     try {
       return await this.#serviceTierOffered(model, serviceTier);
     } catch {
-      return false;
+      return undefined;
     }
   }
 
@@ -2730,16 +2731,33 @@ export class CodexConversationHandle implements ConversationHandle {
         this.#reportError(error);
       }
     } else if (projection.enabled && projection.availability === "available") {
-      const resolution = await this.#resolveUnofferedServiceTier();
-      const desired = resolution.desired;
-      const nativeModel = this.#model?.id ?? desired?.model;
-      if (
-        desired &&
-        nativeModel !== undefined &&
-        (nativeModel === desired.model
-          ? resolution.writable
-          : await this.#serviceTierWritableOn(nativeModel, desired.serviceTier))
-      ) {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const resolution = await this.#resolveUnofferedServiceTier();
+        const desired = resolution.desired;
+        if (!desired || this.#closing || this.#closed) break;
+        const nativeModel = this.#model?.id ?? desired.model;
+        const writable =
+          nativeModel === desired.model
+            ? resolution.writable
+            : (await this.#serviceTierOfferedOn(
+                nativeModel,
+                desired.serviceTier,
+              )) === true;
+        // Act only on a selection, native model, and handle that are still
+        // current after every catalog read; otherwise check again.
+        if (this.#closing || this.#closed) break;
+        const current = this.#executionSettings.desiredSettings(
+          this.#scope(),
+          this.binding.applicationThreadId,
+        );
+        if (
+          !current ||
+          !sameExecutionSettingsTuple(current, desired) ||
+          (this.#model?.id ?? current.model) !== nativeModel
+        ) {
+          continue;
+        }
+        if (!writable) break;
         try {
           await this.#fastModeSessions.syncServiceTier(
             this.#scope(),
@@ -2749,6 +2767,7 @@ export class CodexConversationHandle implements ConversationHandle {
         } catch (error) {
           this.#reportError(error);
         }
+        break;
       }
     }
     if (this.#establishedGeneration !== 0 && !this.#closing && !this.#closed) {
@@ -3278,10 +3297,15 @@ export class CodexConversationHandle implements ConversationHandle {
             await this.#recoverFastModeProjection(projection),
           shouldRecover: () => !this.#closing && !this.#closed,
         });
+        // The retained tier is durable intent and stays authoritative over
+        // the observed native tier during import; the replay tier is only the
+        // permission to write it natively now.
         let retainedServiceTier: CodexServiceTierSelection | undefined;
+        let replayServiceTier: CodexServiceTierSelection | undefined;
         if (fastModeProjection.unavailableReason === "feature_disabled") {
           retainedServiceTier =
             await this.#reconcileDisabledFastMode(fastModeProjection);
+          replayServiceTier = retainedServiceTier;
         } else {
           // A retained persistent session resumes without Sedes's resume
           // overrides, so its tier is resolved before the replay instead.
@@ -3289,23 +3313,30 @@ export class CodexConversationHandle implements ConversationHandle {
             serviceTierResolution ?? (await this.#resolveUnofferedServiceTier());
           const desired = resolution.desired;
           // The replay writes only the tier, onto whichever model Codex
-          // resumed; withhold a tier that model does not offer.
+          // resumed; withhold a tier that model does not offer. Importing
+          // another resumed model is a model change, so a tier that model
+          // does not offer is retained as Standard.
           const resumedModel = settingsReceipt.settings.model;
-          retainedServiceTier =
-            desired &&
-            (resumedModel === desired.model
-              ? resolution.writable
-              : await this.#serviceTierWritableOn(
+          const offeredOnResumedModel =
+            !desired || resumedModel === desired.model
+              ? resolution.writable || undefined
+              : await this.#serviceTierOfferedOn(
                   resumedModel,
                   desired.serviceTier,
-                ))
+                );
+          retainedServiceTier =
+            desired && offeredOnResumedModel === false
+              ? "standard"
+              : desired?.serviceTier;
+          replayServiceTier =
+            desired && offeredOnResumedModel === true
               ? desired.serviceTier
               : undefined;
         }
         this.#assertEstablishmentMayContinue(signal);
         settingsReceipt = await this.#replayDesiredServiceTier(
           settingsReceipt,
-          retainedServiceTier,
+          replayServiceTier,
           fastModeProjection.enabled &&
             fastModeProjection.availability === "available",
           signal,

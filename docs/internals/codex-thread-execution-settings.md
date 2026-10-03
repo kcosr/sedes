@@ -229,7 +229,12 @@ Ultrafast tier:
 - A catalog read failure keeps the selection but writes no accelerated tier
   natively until a check succeeds; the turn check still applies.
 - The replay writes only the tier, onto whichever model Codex resumed. A tier
-  that model does not offer is withheld without changing the selection.
+  that model does not offer is withheld. If establishment then imports that
+  resumed model as the selection, the import is a model change and keeps the
+  tier only when the model offers it; otherwise it imports Standard.
+- Recovery writes the tier only if the selection, the native model, and the
+  handle are all unchanged after its catalog reads; otherwise it checks again
+  or stops.
 
 A fork admits the child's tier against the catalog before creation and
 discovers its `fast_mode` support afterwards, as described under forks below.

@@ -465,6 +465,111 @@ describe("Codex execution settings persistence", () => {
     });
   });
 
+  it("upgrades persisted Fast settings and snapshots through migration 129 and admits Ultrafast", () => {
+    const target = fixture();
+    const repository = new CodexThreadExecutionSettingsRepository(target.database);
+    const fast = {
+      model: "gpt-5.6-codex",
+      reasoningEffort: "medium",
+      serviceTier: "fast",
+      ...workspacePolicy,
+    } as const;
+    let settings = repository.initialize(target.scope, {
+      applicationThreadId: target.threadId,
+      desired: fast,
+      now: 300,
+    });
+    const snapshot = repository.freezeOperationSnapshot(target.scope, {
+      applicationThreadId: target.threadId,
+      applicationOperationId: "pre-129-operation",
+      now: 301,
+    });
+    settings = repository.confirmEffective(target.scope, target.threadId, {
+      expectedRevision: settings.revision,
+      effective: recognizedEffective(fast),
+      daemonGeneration: 4,
+      now: 302,
+    });
+    expect(() => target.database.prepare(`
+      UPDATE codex_thread_execution_settings
+      SET desired_service_tier = 'ultrafast'
+    `).run()).toThrow(/CHECK constraint/i);
+
+    applyDatabaseMigrations(target.database, backendNormalizedMigrations);
+
+    expect(repository.find(target.scope, target.threadId)).toEqual(settings);
+    expect(
+      repository.findOperationSnapshot(
+        target.scope,
+        target.threadId,
+        "pre-129-operation",
+      ),
+    ).toEqual(snapshot);
+    const ultrafast = repository.updateDesired(target.scope, target.threadId, {
+      expectedRevision: settings.revision,
+      desired: { ...fast, serviceTier: "ultrafast" },
+      now: 303,
+    });
+    expect(ultrafast.desired?.serviceTier).toBe("ultrafast");
+    expect(repository.freezeOperationSnapshot(target.scope, {
+      applicationThreadId: target.threadId,
+      applicationOperationId: "post-129-operation",
+      now: 304,
+    }).settings.serviceTier).toBe("ultrafast");
+    expect(repository.confirmEffective(target.scope, target.threadId, {
+      expectedRevision: ultrafast.revision,
+      effective: recognizedEffective(ultrafast.desired!),
+      daemonGeneration: 5,
+      now: 305,
+    }).effective?.serviceTier).toBe("ultrafast");
+    expect(() => target.database.prepare(`
+      UPDATE codex_thread_execution_settings
+      SET desired_service_tier = 'priority'
+    `).run()).toThrow(/CHECK constraint/i);
+    expect(() => target.database.prepare(`
+      UPDATE codex_execution_settings_snapshots SET model = 'changed'
+    `).run()).toThrow(/immutable/i);
+    expect(() => target.database.prepare(`
+      DELETE FROM codex_execution_settings_snapshots
+    `).run()).toThrow(/immutable/i);
+    expect(target.database.pragma("foreign_key_check")).toEqual([]);
+  });
+
+  it("rolls the migration 129 tier rebuild back atomically when verification fails", () => {
+    const target = fixture();
+    applyDatabaseMigrations(
+      target.database,
+      backendNormalizedMigrations.filter(({ version }) => version < 129),
+    );
+    expect(() => applyDatabaseMigrations(
+      target.database,
+      backendNormalizedMigrations,
+      {
+        verifyBeforeCommit(_database, migration) {
+          if (migration.version === 129) {
+            throw new Error("injected migration 129 verification failure");
+          }
+        },
+      },
+    )).toThrow("injected migration 129 verification failure");
+    expect((target.database.prepare(
+      "SELECT max(version) AS version FROM schema_migrations",
+    ).get() as { readonly version: number }).version).toBe(128);
+    expect((target.database.prepare(`
+      SELECT sql FROM sqlite_master
+      WHERE type = 'table' AND name = 'codex_thread_execution_settings'
+    `).get() as { readonly sql: string }).sql).not.toContain("ultrafast");
+    expect(target.database.prepare(`
+      SELECT name FROM sqlite_master
+      WHERE type = 'trigger'
+        AND name LIKE 'codex_execution_settings_snapshots_immutable_%'
+      ORDER BY name
+    `).all()).toEqual([
+      { name: "codex_execution_settings_snapshots_immutable_delete" },
+      { name: "codex_execution_settings_snapshots_immutable_update" },
+    ]);
+  });
+
   it("persists owner-scoped desired/effective state and immutable operation snapshots", () => {
     const target = fixture();
     const repository = new CodexThreadExecutionSettingsRepository(target.database);
@@ -1073,6 +1178,61 @@ describe("Codex execution settings persistence", () => {
       effectiveDaemonGeneration: 8,
       effectiveConfirmationState: "confirmed",
       revision: 1,
+    });
+  });
+
+  it("keeps a retained Ultrafast selection when the resumed native tier is Standard", () => {
+    const target = fixture();
+    applyDatabaseMigrations(target.database, backendNormalizedMigrations);
+    const repository = new CodexThreadExecutionSettingsRepository(
+      target.database,
+    );
+    const desired = {
+      model: "gpt-5.6-codex",
+      reasoningEffort: "medium",
+      serviceTier: "ultrafast",
+      ...unrestrictedPolicy,
+    } as const;
+    repository.initialize(target.scope, {
+      applicationThreadId: target.threadId,
+      desired,
+      now: 380,
+    });
+    const adapter = new CodexExecutionSettingsRepositoryAdapter(
+      repository,
+      allExecutionPolicy,
+      catalogModelPolicy,
+    );
+
+    // Establishment withheld the native Ultrafast write (for example the
+    // catalog could not be read) and imports the resumed tuple with the
+    // retained tier rather than the observed one.
+    adapter.observeEffective(target.scope, {
+      applicationThreadId: target.threadId,
+      settings: {
+        model: "gpt-5.6-codex",
+        reasoningEffort: "medium",
+        serviceTier: "standard",
+        serviceTierClassification: "recognized",
+        sandboxMode: "danger-full-access",
+        sandboxClassification: "recognized",
+        networkAccess: "enabled",
+        networkClassification: "recognized",
+        approvalPolicy: "never",
+        approvalPolicyClassification: "recognized",
+        approvalReviewer: "user",
+        approvalReviewerClassification: "recognized",
+        policyObservation: "complete",
+      },
+      initializeDesired: desired,
+      confirmationGeneration: 8,
+      now: 381,
+    });
+
+    expect(repository.find(target.scope, target.threadId)).toMatchObject({
+      desired,
+      effective: { serviceTier: "standard" },
+      effectiveConfirmationState: "confirmed",
     });
   });
 

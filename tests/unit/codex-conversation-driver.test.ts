@@ -9686,6 +9686,7 @@ describe("CodexConversationHandle", () => {
         ...input.desired(),
         serviceTier: "standard" as const,
       }));
+      const observeEffective = vi.fn();
       const handle = await attachIdle(
         harness,
         driver(
@@ -9696,6 +9697,7 @@ describe("CodexConversationHandle", () => {
           executionSettingsProvider({
             desiredSettings: () => input.desired(),
             resolveFastModeDisabled,
+            observeEffective,
           }),
         ),
       );
@@ -9723,7 +9725,12 @@ describe("CodexConversationHandle", () => {
         ]);
       harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
       await handle.close();
-      return { writes, resolveFastModeDisabled };
+      // The tuple establishment adopts from the resumed native settings.
+      const imported = observeEffective.mock.calls
+        .map(([, observation]) => observation.initializeDesired)
+        .filter(Boolean)
+        .at(-1);
+      return { writes, resolveFastModeDisabled, imported };
     };
     const ultrafast = executionSettingsTuple({ serviceTier: "ultrafast" });
 
@@ -9735,6 +9742,10 @@ describe("CodexConversationHandle", () => {
     });
     expect(unreadable.writes).toEqual([["thread/resume", undefined]]);
     expect(unreadable.resolveFastModeDisabled).not.toHaveBeenCalled();
+    expect(unreadable.imported).toMatchObject({
+      model: "gpt-5.6",
+      serviceTier: "ultrafast",
+    });
 
     // Codex resumed another model that lacks the tier: keep intent, skip the
     // replay onto that model.
@@ -9760,6 +9771,12 @@ describe("CodexConversationHandle", () => {
     });
     expect(otherModel.writes).toEqual([["thread/resume", "ultrafast"]]);
     expect(otherModel.resolveFastModeDisabled).not.toHaveBeenCalled();
+    // Importing the resumed model is a model change: its missing tier is
+    // retained as Standard, never kept as Ultrafast.
+    expect(otherModel.imported).toMatchObject({
+      model: "gpt-5.6-mini",
+      serviceTier: "standard",
+    });
 
     // A newer selection made during the catalog read is checked again and
     // is never clamped by the stale result.
@@ -9868,6 +9885,127 @@ describe("CodexConversationHandle", () => {
     ).toBe(false);
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
+  });
+
+  it("abandons fast_mode recovery writes superseded during catalog reads", async () => {
+    const tiers = (...ids: string[]) =>
+      ids.map((id) => ({ id, name: id, description: id }));
+    const enabledFeature = {
+      data: [
+        {
+          name: "fast_mode",
+          stage: "stable",
+          displayName: "Fast mode",
+          description: null,
+          announcement: null,
+          enabled: true,
+          defaultEnabled: true,
+        },
+      ],
+      nextCursor: null,
+    };
+    const establishPendingRecovery = async (resumedModel: string) => {
+      const harness = new RpcHarness();
+      harness.defaultModelOverrides = {
+        serviceTiers: tiers("priority", "ultrafast"),
+      };
+      let desired = executionSettingsTuple({ serviceTier: "ultrafast" });
+      const handle = await attachIdle(
+        harness,
+        driver(
+          harness,
+          connection,
+          new CodexConversationOwnershipRegistry(),
+          { type: "catalog" },
+          executionSettingsProvider({ desiredSettings: () => desired }),
+        ),
+      );
+      harness.enqueue("thread/read", { thread: nativeThread() });
+      harness.enqueue("thread/resume", {
+        ...resumeResult(),
+        model: resumedModel,
+        serviceTier: "ultrafast",
+      });
+      // Feature discovery fails during establishment, leaving recovery pending.
+      await handle.establishProjection({
+        signal: new AbortController().signal,
+      });
+      const ultrafastWrites = () =>
+        harness.calls.filter(
+          ({ method, params }) =>
+            method === "thread/settings/update" &&
+            (params as { serviceTier?: string }).serviceTier === "ultrafast",
+        );
+      return {
+        harness,
+        handle,
+        ultrafastWrites,
+        select: (tuple: CodexExecutionSettingsTuple) => {
+          desired = tuple;
+        },
+      };
+    };
+
+    // The handle closes while recovery's catalog read is pending.
+    const closing = await establishPendingRecovery("gpt-5.6");
+    const settingsUpdatesBefore = closing.harness.calls.filter(
+      ({ method }) => method === "thread/settings/update",
+    ).length;
+    let closed!: Promise<void>;
+    closing.harness.after("model/list", () => {
+      closing.harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+      closed = closing.handle.close();
+    });
+    closing.harness.enqueue("experimentalFeature/list", enabledFeature);
+    await vi.waitFor(() => expect(closed).toBeDefined(), { timeout: 1_000 });
+    await closed;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(
+      closing.harness.calls.filter(
+        ({ method }) => method === "thread/settings/update",
+      ),
+    ).toHaveLength(settingsUpdatesBefore);
+
+    // Codex resumed another model, and the selection changes to Standard
+    // during the native-model lookup: the stale Ultrafast is never written.
+    const superseded = await establishPendingRecovery("gpt-5.6-mini");
+    const bothModels = {
+      data: [
+        nativeModel({ serviceTiers: tiers("priority", "ultrafast") }),
+        nativeModel({
+          id: "gpt-5.6-mini",
+          model: "gpt-5.6-mini",
+          displayName: "GPT-5.6 Mini",
+          isDefault: false,
+          serviceTiers: tiers("priority", "ultrafast"),
+        }),
+      ],
+      nextCursor: null,
+    };
+    // Recovery reads the desired model's catalog, then the native model's.
+    superseded.harness.enqueue("model/list", bothModels, bothModels);
+    superseded.harness.after("model/list", () => undefined);
+    superseded.harness.after("model/list", () =>
+      superseded.select(executionSettingsTuple({ serviceTier: "standard" })),
+    );
+    superseded.harness.enqueue("experimentalFeature/list", enabledFeature);
+    superseded.harness.enqueue("thread/settings/update", {});
+    await vi.waitFor(
+      () =>
+        expect(
+          superseded.harness.calls.filter(
+            ({ method, params }) =>
+              method === "thread/settings/update" &&
+              (params as { serviceTier?: string }).serviceTier === "default",
+          ),
+        ).toHaveLength(1),
+      { timeout: 1_000 },
+    );
+    expect(superseded.ultrafastWrites()).toEqual([]);
+    superseded.harness.enqueue("thread/unsubscribe", {
+      status: "unsubscribed",
+    });
+    await superseded.handle.close();
   });
 
   it("does not write Standard after disabled recovery is superseded by a newer Fast selection", async () => {
