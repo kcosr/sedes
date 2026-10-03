@@ -699,6 +699,7 @@ describe("task references", () => {
     title: "Current task title",
     details: "Current details",
     pinned: false,
+    backlog: false,
     files: [],
     completedAt: null,
     revision: 2,

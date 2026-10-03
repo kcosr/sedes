@@ -16,6 +16,7 @@ import {
   scopeKey,
   taskFileName,
   taskFileParent,
+  taskSections,
   viewFilters,
   viewUnavailableReason,
   type TasksContext,
@@ -30,6 +31,7 @@ function task(overrides: Partial<AssociatedTask> = {}): AssociatedTask {
     title: "Task",
     details: "",
     pinned: false,
+    backlog: false,
     files: [],
     completedAt: null,
     revision: 0,
@@ -136,34 +138,73 @@ describe("search, filters and order", () => {
     expect(matchesOnly(task({ pinned: true, files: ["/a"] }), options)).toBe(true);
     expect(matchesOnly(task({ pinned: true }), options)).toBe(false);
     expect(matchesOnly(task({ details: "   " }), { ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, onlyWithNotes: true })).toBe(false);
+    const backlogOnly = { ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, onlyBacklog: true };
+    expect(matchesOnly(task({ backlog: true }), backlogOnly)).toBe(true);
+    expect(matchesOnly(task(), backlogOnly)).toBe(false);
+    // Pinned and Backlog together: pinned backlog tasks only.
+    const both = { ...backlogOnly, onlyPinned: true };
+    expect(matchesOnly(task({ backlog: true, pinned: true }), both)).toBe(true);
+    expect(matchesOnly(task({ backlog: true }), both)).toBe(false);
+    expect(matchesOnly(task({ pinned: true }), both)).toBe(false);
     expect(viewFilters(TASKS_VIEW_OPTIONS_DEFAULTS.thread)).toEqual([]);
     // Sorting and search scope do not narrow the list.
     expect(viewFilters({ ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, sort: "title", searchNotes: true })).toEqual([]);
     expect(
-      viewFilters({ ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, show: "completed", onlyPinned: true, onlyWithNotes: true }),
+      viewFilters({ ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, onlyPinned: true, onlyBacklog: true, onlyWithNotes: true }),
     ).toEqual([
-      { key: "completed", label: "Completed", clear: { show: "open" } },
       { key: "pinned", label: "Pinned only", clear: { onlyPinned: false } },
+      { key: "backlog", label: "Backlog only", clear: { onlyBacklog: false } },
       { key: "notes", label: "With notes", clear: { onlyWithNotes: false } },
     ]);
   });
 
-  it("orders pinned first then newest, and never reorders on edit", () => {
-    const old = task({ id: "old", createdAt: "2026-08-01T00:00:00.000Z", updatedAt: "2026-08-09T00:00:00.000Z" });
-    const recent = task({ id: "recent", createdAt: "2026-08-05T00:00:00.000Z" });
-    const pinned = task({ id: "pinned", pinned: true, createdAt: "2026-07-01T00:00:00.000Z", title: "Alpha" });
+  it("puts pinned tasks first in every sort, and never reorders on edit", () => {
+    const old = task({ id: "old", createdAt: "2026-08-01T00:00:00.000Z", updatedAt: "2026-08-09T00:00:00.000Z", title: "Beta" });
+    const recent = task({ id: "recent", createdAt: "2026-08-05T00:00:00.000Z", title: "Gamma" });
+    const pinned = task({ id: "pinned", pinned: true, createdAt: "2026-07-01T00:00:00.000Z", title: "Zulu" });
     const ids = (sort: Parameters<typeof compareOpen>[0]) =>
       [old, recent, pinned].sort(compareOpen(sort)).map(({ id }) => id);
-    expect(ids("pinned-newest")).toEqual(["pinned", "recent", "old"]);
-    // Equal update times fall back to the id.
-    expect(ids("updated")).toEqual(["old", "pinned", "recent"]);
+    expect(ids("newest")).toEqual(["pinned", "recent", "old"]);
+    expect(ids("updated")).toEqual(["pinned", "old", "recent"]);
     expect(ids("title")).toEqual(["pinned", "old", "recent"]);
+    // Equal times fall back to the id.
+    expect([recent, task({ id: "a", createdAt: recent.createdAt })].sort(compareOpen("newest")).map(({ id }) => id)).toEqual(["a", "recent"]);
   });
 
-  it("orders completed tasks by completion, without lifting pinned ones", () => {
-    const first = task({ id: "first", pinned: true, completedAt: "2026-08-01T00:00:00.000Z" });
-    const last = task({ id: "last", completedAt: "2026-08-03T00:00:00.000Z" });
-    expect([first, last].sort(compareCompleted("pinned-newest")).map(({ id }) => id)).toEqual(["last", "first"]);
+  it("orders completed tasks by completion by default, else by the sort", () => {
+    const first = task({ id: "first", title: "Alpha", completedAt: "2026-08-01T00:00:00.000Z" });
+    const last = task({ id: "last", title: "Beta", completedAt: "2026-08-03T00:00:00.000Z" });
+    expect([first, last].sort(compareCompleted("newest")).map(({ id }) => id)).toEqual(["last", "first"]);
+    expect([last, first].sort(compareCompleted("title")).map(({ id }) => id)).toEqual(["first", "last"]);
+  });
+
+  it("splits a view into the list, Backlog and Completed, pinned first in each", () => {
+    const current = task({ id: "current", createdAt: "2026-08-05T00:00:00.000Z" });
+    const pinned = task({ id: "pinned", pinned: true, createdAt: "2026-08-01T00:00:00.000Z" });
+    const later = task({ id: "later", backlog: true, createdAt: "2026-08-04T00:00:00.000Z" });
+    const pinnedLater = task({ id: "pinned-later", backlog: true, pinned: true, createdAt: "2026-08-02T00:00:00.000Z" });
+    const done = task({ id: "done", completedAt: "2026-08-06T00:00:00.000Z" });
+    const all = [later, done, current, pinnedLater, pinned];
+    const ids = (options: Partial<typeof TASKS_VIEW_OPTIONS_DEFAULTS.thread>) => {
+      const merged = { ...TASKS_VIEW_OPTIONS_DEFAULTS.thread, ...options };
+      const sections = taskSections(all.filter((candidate) => matchesOnly(candidate, merged)), merged);
+      return {
+        main: sections.main.map(({ id }) => id),
+        backlog: sections.backlog.map(({ id }) => id),
+        completed: sections.completed.map(({ id }) => id),
+      };
+    };
+    expect(ids({})).toEqual({
+      main: ["pinned", "current"],
+      backlog: ["pinned-later", "later"],
+      completed: ["done"],
+    });
+    expect(ids({ sort: "title" }).backlog).toEqual(["pinned-later", "later"]);
+    // Only › Pinned narrows each section; no completed task is pinned.
+    expect(ids({ onlyPinned: true })).toEqual({ main: ["pinned"], backlog: ["pinned-later"], completed: [] });
+    // Only › Backlog: the backlog is the list, with no Backlog section.
+    expect(ids({ onlyBacklog: true })).toEqual({ main: ["pinned-later", "later"], backlog: [], completed: [] });
+    expect(ids({ onlyBacklog: true, onlyPinned: true })).toEqual({ main: ["pinned-later"], backlog: [], completed: [] });
   });
 });
 

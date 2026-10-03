@@ -42,6 +42,7 @@ interface Draft {
   readonly scope: string;
   readonly files: readonly string[];
   readonly pinned: boolean;
+  readonly backlog: boolean;
 }
 
 function draftOf(task: AssociatedTask): Draft {
@@ -51,6 +52,7 @@ function draftOf(task: AssociatedTask): Draft {
     scope: scopeKey(task.scope),
     files: task.files,
     pinned: task.pinned,
+    backlog: task.backlog,
   };
 }
 
@@ -90,10 +92,12 @@ function useContentMounted(): [(node: HTMLDivElement | null) => void, boolean] {
 }
 
 /**
- * Edits one task: title, notes, where it belongs, its files and its pin,
- * with Delete… on the footer's leading edge. Its state outlives `open`, so
- * an edit survives the Tasks surface being suspended (Settings) and comes
- * back when it is shown again. Unsaved changes are guarded on every way out.
+ * Edits one task: title, notes, where it belongs, its files, its pin and
+ * whether it is in the backlog, with Delete… on the footer's leading edge.
+ * A completed task is never pinned or in the backlog, so both switches are
+ * off and disabled for one. Its state outlives `open`, so an edit survives
+ * the Tasks surface being suspended (Settings) and comes back when it is
+ * shown again. Unsaved changes are guarded on every way out.
  *
  * When the surface Tasks is shown on changes under it (crossing the phone
  * breakpoint), the new surface mounts over the dialog and takes focus. The
@@ -158,6 +162,7 @@ export function TaskEditDialog({
       draft.details !== initial.details ||
       draft.scope !== initial.scope ||
       draft.pinned !== initial.pinned ||
+      draft.backlog !== initial.backlog ||
       !sameFiles(draft.files, initial.files) ||
       newFilePath.trim().length > 0);
 
@@ -197,11 +202,18 @@ export function TaskEditDialog({
     const files = addFile();
     if (!files) return;
     const scope = parseScopeKey(draft.scope);
+    // Completed since the edit began: the server would refuse either switch.
+    const placeable = task.completedAt === null;
     const changes = {
       ...(title !== initial.title ? { title } : {}),
       ...(draft.details !== initial.details ? { details: draft.details } : {}),
       ...(scope && draft.scope !== initial.scope ? { scope } : {}),
-      ...(draft.pinned !== initial.pinned ? { pinned: draft.pinned } : {}),
+      ...(placeable && draft.pinned !== initial.pinned
+        ? { pinned: draft.pinned }
+        : {}),
+      ...(placeable && draft.backlog !== initial.backlog
+        ? { backlog: draft.backlog }
+        : {}),
       ...(!sameFiles(files, initial.files) ? { files } : {}),
     };
     if (Object.keys(changes).length === 0) {
@@ -220,6 +232,7 @@ export function TaskEditDialog({
     }
   };
 
+  const completed = task !== undefined && task.completedAt !== null;
   const destination = draft ? parseScopeKey(draft.scope) : undefined;
   const destinationProject =
     destination?.kind === "project"
@@ -396,12 +409,32 @@ export function TaskEditDialog({
               </Field>
               <Field
                 label="Pinned"
-                description="Pinned tasks stay at the top."
+                description={
+                  completed
+                    ? "Reopen the task to pin it."
+                    : "Pinned tasks stay at the top."
+                }
                 orientation="horizontal"
               >
                 <Switch
-                  checked={draft.pinned}
+                  checked={!completed && draft.pinned}
+                  disabled={completed}
                   onCheckedChange={(pinned) => update({ pinned })}
+                />
+              </Field>
+              <Field
+                label="Backlog"
+                description={
+                  completed
+                    ? "Reopen the task to send it to the Backlog."
+                    : "Backlog tasks are open but not current work; they wait in the collapsed Backlog section."
+                }
+                orientation="horizontal"
+              >
+                <Switch
+                  checked={!completed && draft.backlog}
+                  disabled={completed}
+                  onCheckedChange={(backlog) => update({ backlog })}
                 />
               </Field>
             </DialogBody>

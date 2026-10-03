@@ -27,9 +27,11 @@
    One flex column: the header, search and toolbar never scroll; the list
    region is the only scroller, so a long detail can never squeeze the list
    or push the header away. Rows follow the density switch: 36px with a
-   32px completion target, 48px with 44px targets under touch density. */
+   32px completion target, 48px with 44px targets under touch density. A
+   row with a second line pads its two lines instead (6px, 8px on touch). */
 .tasks-content {
   --tasks-row-height: var(--control-lg);
+  --tasks-row-two-line-padding: var(--space-1-5);
   --tasks-check-target: var(--control-md);
   --tasks-check-icon: calc(var(--icon-md) + var(--space-0-5));
   --tasks-row-text: var(--text-ui);
@@ -49,6 +51,7 @@
 @media (max-width: 819px), (pointer: coarse) {
   .tasks-content {
     --tasks-row-height: calc(var(--control-touch) + var(--space-1));
+    --tasks-row-two-line-padding: var(--space-2);
     --tasks-check-target: var(--control-touch);
     --tasks-check-icon: var(--icon-lg);
     --tasks-row-text: var(--text-title);
@@ -100,6 +103,12 @@
 .tasks-header-button svg {
   width: var(--bar-icon);
   height: var(--bar-icon);
+}
+
+/* Only › Pinned from the header: pressed like an open menu's trigger. */
+.tasks-pinned-toggle[aria-pressed="true"] {
+  background: var(--muted);
+  color: var(--foreground);
 }
 
 /* View options narrow the list: a dot says so while the menu is closed. */
@@ -494,11 +503,14 @@
 }
 
 /* Lists that mix scopes without group headings put where a task belongs on
-   a quiet second line, so it never takes room from the title. */
+   a quiet second line, so it never takes room from the title. The two
+   lines get their own padding rather than sharing the one-line height. */
 .tasks-row-title[data-location] {
   display: flex;
   flex-direction: column;
   justify-content: center;
+  gap: var(--space-0-5);
+  padding-block: var(--tasks-row-two-line-padding);
 }
 
 .tasks-row-title-text {
@@ -530,6 +542,18 @@
   white-space: nowrap;
 }
 
+/* Under touch density the indicators end the second line, so the title
+   has the row's whole width. */
+.tasks-row-location > .tasks-row-meta {
+  margin-left: auto;
+  padding-left: var(--space-1);
+}
+
+.tasks-row-location > .tasks-row-meta svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
 /* Expanded, the title shows whole: it wraps, and the circle, indicators and
    ⋯ stay level with its first line. */
 .tasks-row[data-expanded] > .tasks-row-main {
@@ -552,7 +576,7 @@
   margin-top: calc((var(--tasks-row-height) - var(--tasks-check-target)) / 2);
 }
 
-.tasks-row[data-expanded] .tasks-row-meta {
+.tasks-row[data-expanded] > .tasks-row-main > .tasks-row-meta {
   height: var(--tasks-row-height);
 }
 
@@ -815,7 +839,7 @@ button.tasks-file-chip:hover {
 }
 
 /* ── All: collapsible groups (Global, each project, its threads), and the
-   Completed section at the end of every view. */
+   Backlog and Completed sections at the end of every view. */
 .tasks-group {
   display: flex;
   flex-direction: column;

@@ -472,6 +472,7 @@ function makeThreadTask({
     title: `Task ${id}`,
     details: "",
     pinned: false,
+    backlog: false,
     files: [],
     completedAt: completed ? "2026-08-25T20:00:00.000Z" : null,
     revision: 0,

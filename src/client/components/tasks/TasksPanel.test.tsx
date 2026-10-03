@@ -32,7 +32,10 @@ import {
 import {
   consumeReveal,
   getPendingReveal,
+  getTasksViewOptions,
   revealTask,
+  setTasksLastView,
+  setTasksViewOptions,
 } from "../../app/tasks-panel-store.js";
 import { TasksPanel, TasksPanelContent } from "./TasksPanel.js";
 import {
@@ -98,6 +101,7 @@ function makeTask(overrides: Partial<AssociatedTask> = {}): AssociatedTask {
     title: "Write docs",
     details: "",
     pinned: false,
+    backlog: false,
     files: [],
     completedAt: null,
     revision: 0,
@@ -149,8 +153,21 @@ function makeStore(
     getSnapshot: () => state,
     getTasks: () => state.snapshot.tasks,
     publish,
-    createTask: vi.fn(async (title: string, scope: Task["scope"], details?: string) =>
-      makeTask({ id: `created-${title}`, title, scope, details: details ?? "" }),
+    createTask: vi.fn(
+      async (
+        title: string,
+        scope: Task["scope"],
+        details?: string,
+        placement: { pinned?: boolean; backlog?: boolean } = {},
+      ) =>
+        makeTask({
+          id: `created-${title}`,
+          title,
+          scope,
+          details: details ?? "",
+          pinned: placement.pinned ?? false,
+          backlog: placement.backlog ?? false,
+        }),
     ),
     updateTask: vi.fn(async (task: Task, changes: Partial<Task>) => ({
       ...task,
@@ -398,6 +415,8 @@ const titles = () =>
     (node) => (node.querySelector(".tasks-row-title-text") ?? node).textContent,
   );
 const addInput = () => screen.getByRole("textbox", { name: "Add a task" });
+/** What a task added with no Pinned or Backlog filter on is created with. */
+const UNPLACED = { pinned: false, backlog: false };
 
 /**
  * Opens a desktop submenu by keyboard from its row (pointer moves between
@@ -448,7 +467,7 @@ describe("TasksPanel scope", () => {
     fireEvent.change(addInput(), { target: { value: "From All" } });
     fireEvent.keyDown(addInput(), { key: "Enter" });
     await vi.waitFor(() =>
-      expect(store.createTask).toHaveBeenCalledWith("From All", { kind: "global" }, undefined),
+      expect(store.createTask).toHaveBeenCalledWith("From All", { kind: "global" }, undefined, UNPLACED),
     );
 
     view.unmount();
@@ -653,6 +672,7 @@ describe("TasksPanel across a project's locations", () => {
         "Share with every checkout",
         { kind: "project", projectId: "project-1" },
         undefined,
+        UNPLACED,
       ),
     );
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
@@ -777,6 +797,7 @@ describe("TasksPanel add row", () => {
       "Profile the bundle",
       { kind: "thread", threadId: "thread-9" },
       "Measure before and after.\nTwice.",
+      UNPLACED,
     );
     expect(screen.queryByRole("textbox", { name: "New task notes" })).not.toBeInTheDocument();
     expect(addInput()).toHaveFocus();
@@ -805,7 +826,7 @@ describe("TasksPanel add row", () => {
       "Ship it",
       "Write the migration",
     ]);
-    expect(store.createTask).toHaveBeenCalledWith("Ship it", { kind: "thread", threadId: "thread-9" });
+    expect(store.createTask).toHaveBeenCalledWith("Ship it", { kind: "thread", threadId: "thread-9" }, undefined, UNPLACED);
   });
 
   it("keeps a single-line paste in the field", async () => {
@@ -934,11 +955,13 @@ describe("TasksPanel rows", () => {
       "Add to prompt",
       "Edit…E",
       "PinP",
+      "Send to BacklogB",
       "Move to",
       "Delete…",
     ]);
     // The key hints are visual; the names stay plain and the keys are exposed.
     expect(within(menu).getByRole("menuitem", { name: "Pin" })).toHaveAttribute("aria-keyshortcuts", "P");
+    expect(within(menu).getByRole("menuitem", { name: "Send to Backlog" })).toHaveAttribute("aria-keyshortcuts", "B");
     const moveMenu = await openSubmenu(user, menu, "Move to");
     expect(within(moveMenu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
       "This threadCurrent",
@@ -1294,17 +1317,39 @@ describe("TasksPanel view options and search", () => {
     const user = userEvent.setup();
     const store = seededStore([
       threadTask({ id: "t-zeta", title: "Zeta cleanup", createdAt: "2026-08-01T09:00:00.000Z", updatedAt: "2026-08-06T09:00:00.000Z" }),
+      threadTask({ id: "t-batch", title: "Batch the refunds", createdAt: "2026-08-01T08:00:00.000Z" }),
     ]);
     const view = renderPanel(store);
-    expect(titles()).toEqual(["Audit checkout error states", "Add retry to the payment call", "Zeta cleanup"]);
+    // Newest first, after the pinned task: pins are not a sort.
+    expect(titles()).toEqual([
+      "Audit checkout error states",
+      "Add retry to the payment call",
+      "Zeta cleanup",
+      "Batch the refunds",
+    ]);
 
     await user.click(screen.getByRole("button", { name: "View options" }));
+    expect(screen.getAllByRole("menuitemradio").map((item) => item.textContent)).toEqual([
+      "Newest",
+      "Recently updated",
+      "Title",
+    ]);
+    expect(screen.getByRole("menuitemradio", { name: "Newest" })).toBeChecked();
+    // Completed is always the collapsed section: there is no Show choice.
+    expect(screen.queryByRole("group", { name: "Show" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitemradio", { name: "Completed" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("menuitemradio", { name: "Title" }));
     // The menu stays open for several choices.
     expect(screen.getByRole("menu", { name: "View options" })).toBeInTheDocument();
-    expect(titles()).toEqual(["Add retry to the payment call", "Audit checkout error states", "Zeta cleanup"]);
+    // The pinned task stays first in every sort.
+    expect(titles()).toEqual([
+      "Audit checkout error states",
+      "Add retry to the payment call",
+      "Batch the refunds",
+      "Zeta cleanup",
+    ]);
     await user.click(screen.getByRole("menuitemradio", { name: "Recently updated" }));
-    expect(titles()[0]).toBe("Zeta cleanup");
+    expect(titles().slice(0, 2)).toEqual(["Audit checkout error states", "Zeta cleanup"]);
     await user.click(screen.getByRole("menuitemcheckbox", { name: "With notes" }));
     expect(titles()).toEqual(["Audit checkout error states"]);
     await user.keyboard("{Escape}");
@@ -1318,11 +1363,7 @@ describe("TasksPanel view options and search", () => {
     await user.click(segment("Thread"));
     expect(titles()).toEqual(["Audit checkout error states"]);
 
-    await user.click(screen.getByRole("button", { name: "View options" }));
-    await user.click(screen.getByRole("menuitemcheckbox", { name: "With notes" }));
-    await user.click(screen.getByRole("menuitemradio", { name: "Completed" }));
-    expect(titles()).toEqual(["Remove the legacy flag"]);
-    expect(screen.queryByRole("button", { name: /^Completed/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View options" })).toHaveAttribute("data-filtering", "true");
   });
 
   it("shows narrowing options as removable chips and counts what is listed", async () => {
@@ -1338,17 +1379,18 @@ describe("TasksPanel view options and search", () => {
 
     await user.click(screen.getByRole("button", { name: "View options" }));
     await user.click(screen.getByRole("menuitemcheckbox", { name: "Pinned" }));
-    await user.click(screen.getByRole("menuitemradio", { name: "Completed" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Backlog" }));
     await user.keyboard("{Escape}");
     expect(within(filters()!).getAllByRole("button").map((chip) => chip.textContent)).toEqual([
-      "Completed",
       "Pinned only",
+      "Backlog only",
     ]);
-    // Completed counts completed tasks; none of them is pinned.
-    expect(count()).toHaveTextContent("0 of 1");
-    expect(count()).toHaveAttribute("aria-label", "0 of 1 completed shown");
+    // No task here is both pinned and in the backlog.
+    expect(count()).toHaveTextContent("0 of 2");
+    expect(count()).toHaveAttribute("aria-label", "0 of 2 open shown");
+    expect(screen.getByText("No tasks match the view options.")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Remove filter: Completed" }));
+    await user.click(screen.getByRole("button", { name: "Remove filter: Backlog only" }));
     expect(titles()).toEqual(["Audit checkout error states"]);
     expect(count()).toHaveTextContent("1 of 2");
     // Focus moves to the chip that remains, then back to the scope.
@@ -1389,6 +1431,364 @@ describe("TasksPanel view options and search", () => {
     expect(screen.queryByRole("textbox", { name: "Search tasks" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Search tasks" })).toHaveFocus();
     expect(titles()).toHaveLength(2);
+  });
+});
+
+/** The thread's backlog: one pinned, one not. */
+const BACKLOG = [
+  threadTask({ id: "t-later", title: "Profile cold start", backlog: true, createdAt: "2026-08-05T10:00:00.000Z" }),
+  threadTask({ id: "t-later-pinned", title: "Rewrite the receipts", backlog: true, pinned: true, createdAt: "2026-07-30T10:00:00.000Z" }),
+];
+const headings = () =>
+  [...panel().querySelectorAll(".tasks-section-heading")].map((node) => node.textContent);
+const backlogHeading = () => screen.getByRole("button", { name: /^Backlog/ });
+
+describe("TasksPanel Backlog and Pin", () => {
+  it("keeps backlog tasks in a collapsed Backlog section before Completed, pinned first", async () => {
+    const user = userEvent.setup();
+    renderPanel(seededStore(BACKLOG));
+
+    expect(titles()).toEqual(["Audit checkout error states", "Add retry to the payment call"]);
+    expect(headings()).toEqual(["Backlog2", "Completed1"]);
+    expect(backlogHeading()).toHaveAttribute("aria-expanded", "false");
+    // Counts cover every open task, the backlog's included.
+    expect(segment("Thread")).toHaveAccessibleDescription("4 open");
+    expect(panel().querySelector(".tasks-title-count")).toHaveAttribute("aria-label", "4 open");
+
+    await user.click(backlogHeading());
+    expect(titles()).toEqual([
+      "Audit checkout error states",
+      "Add retry to the payment call",
+      "Rewrite the receipts",
+      "Profile cold start",
+    ]);
+    expect(within(screen.getByRole("list", { name: "Backlog tasks" })).getAllByRole("listitem")).toHaveLength(2);
+
+    // The headings take part in list navigation.
+    rowTitle("Add retry to the payment call").focus();
+    await user.keyboard("{ArrowDown}");
+    expect(backlogHeading()).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(rowTitle("Rewrite the receipts")).toHaveFocus();
+    await user.keyboard("{End}");
+    expect(screen.getByRole("button", { name: /^Completed/ })).toHaveFocus();
+    backlogHeading().focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(backlogHeading()).toHaveAttribute("aria-expanded", "false");
+
+    // Pinned tasks lead the Backlog in every sort.
+    await user.click(backlogHeading());
+    await user.click(screen.getByRole("button", { name: "View options" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "Title" }));
+    await user.keyboard("{Escape}");
+    expect(titles().slice(2)).toEqual(["Rewrite the receipts", "Profile cold start"]);
+  });
+
+  it("says when every open task is in the Backlog", () => {
+    act(() => navigate(threadPath("thread-9")));
+    renderPanel(makeStore(BACKLOG, { threads: THREADS, projects: PROJECTS, workspaces: WORKSPACES }));
+    expect(screen.getByText("Nothing current.")).toBeInTheDocument();
+    expect(screen.getByText("Every open task here waits in the Backlog.")).toBeInTheDocument();
+    expect(headings()).toEqual(["Backlog2"]);
+  });
+
+  it("makes the backlog the list under Only › Backlog, and adds to it", async () => {
+    const user = userEvent.setup();
+    const store = seededStore(BACKLOG);
+    renderPanel(store);
+
+    await user.click(screen.getByRole("button", { name: "View options" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Backlog" }));
+    await user.keyboard("{Escape}");
+    expect(titles()).toEqual(["Rewrite the receipts", "Profile cold start"]);
+    // No Backlog heading, and completed tasks are never in the backlog.
+    expect(headings()).toEqual([]);
+    expect(panel().querySelector(".tasks-title-count")).toHaveTextContent("2 of 4");
+
+    // A new task joins the backlog, so it does not vanish.
+    await user.click(addInput());
+    await user.keyboard("Measure the bundle{Enter}");
+    expect(store.createTask).toHaveBeenLastCalledWith(
+      "Measure the bundle",
+      { kind: "thread", threadId: "thread-9" },
+      undefined,
+      { pinned: false, backlog: true },
+    );
+
+    // In All the backlog groups by project like any main list.
+    await user.click(segment("All"));
+    await user.click(screen.getByRole("button", { name: "View options" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Backlog" }));
+    await user.keyboard("{Escape}");
+    expect(
+      [...panel().querySelectorAll(".tasks-group-heading")].map((node) => node.textContent),
+    ).toEqual(["acme-web2", "Checkout flow refactor2"]);
+    expect(headings()).toEqual([]);
+  });
+
+  it("narrows every section under Only › Pinned, and both filters to pinned backlog tasks", async () => {
+    const user = userEvent.setup();
+    const store = seededStore(BACKLOG);
+    renderPanel(store);
+
+    await user.click(screen.getByRole("button", { name: "View options" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Pinned" }));
+    await user.keyboard("{Escape}");
+    expect(titles()).toEqual(["Audit checkout error states"]);
+    // Completed tasks are never pinned, so Completed goes.
+    expect(headings()).toEqual(["Backlog1"]);
+    expect(panel().querySelector(".tasks-title-count")).toHaveTextContent("2 of 4");
+
+    await user.click(screen.getByRole("button", { name: "View options" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Backlog" }));
+    await user.keyboard("{Escape}");
+    expect(titles()).toEqual(["Rewrite the receipts"]);
+    expect(headings()).toEqual([]);
+
+    // Added and pasted tasks match both filters.
+    await user.click(addInput());
+    await user.keyboard("Ship the receipts{Enter}");
+    expect(store.createTask).toHaveBeenLastCalledWith(
+      "Ship the receipts",
+      { kind: "thread", threadId: "thread-9" },
+      undefined,
+      { pinned: true, backlog: true },
+    );
+    await user.paste("First\nSecond");
+    const dialog = screen.getByRole("dialog", { name: "Create 2 tasks?" });
+    await user.click(within(dialog).getByRole("button", { name: "Create 2 tasks" }));
+    await waitFor(() => expect(store.createTask).toHaveBeenLastCalledWith(
+      "First",
+      { kind: "thread", threadId: "thread-9" },
+      undefined,
+      { pinned: true, backlog: true },
+    ));
+  });
+
+  it("toggles Only › Pinned from the header, the same setting as the menu", async () => {
+    const user = userEvent.setup();
+    renderPanel(seededStore(BACKLOG));
+    const header = screen.getByRole("banner", { name: "Tasks panel header" });
+    const toggle = within(header).getByRole("button", { name: "Show only pinned tasks" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(toggle).toHaveAttribute("title", "Show only pinned tasks");
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(titles()).toEqual(["Audit checkout error states"]);
+    expect(getTasksViewOptions("thread").onlyPinned).toBe(true);
+    expect(screen.getByRole("button", { name: "Remove filter: Pinned only" })).toBeInTheDocument();
+    await user.click(within(header).getByRole("button", { name: "View options" }));
+    const pinned = screen.getByRole("menuitemcheckbox", { name: "Pinned" });
+    expect(pinned).toBeChecked();
+    await user.click(pinned);
+    await user.keyboard("{Escape}");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(titles()).toEqual(["Audit checkout error states", "Add retry to the payment call"]);
+    // The header count says when the list is narrowed.
+    await user.click(toggle);
+    expect(panel().querySelector(".tasks-title-count")).toHaveTextContent("2 of 4");
+  });
+
+  it("sends a task to the Backlog and takes it out from the menu and with B", async () => {
+    const user = userEvent.setup();
+    const store = seededStore(BACKLOG);
+    renderPanel(store);
+
+    await user.click(screen.getByRole("button", { name: 'Actions for "Add retry to the payment call"' }));
+    await user.click(screen.getByRole("menuitem", { name: "Send to Backlog" }));
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-retry" }),
+      { backlog: true },
+    );
+    await waitFor(() => expect(announced("Sent “Add retry to the payment call” to the Backlog.")).toBe(true));
+
+    await user.click(backlogHeading());
+    await user.click(screen.getByRole("button", { name: 'Actions for "Profile cold start"' }));
+    expect(
+      within(screen.getByRole("menu")).getAllByRole("menuitem").map((item) => item.textContent),
+    ).toContain("Take out of BacklogB");
+    await user.click(screen.getByRole("menuitem", { name: "Take out of Backlog" }));
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-later" }),
+      { backlog: false },
+    );
+
+    rowTitle("Rewrite the receipts").focus();
+    await user.keyboard("b");
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-later-pinned" }),
+      { backlog: false },
+    );
+    await user.keyboard("p");
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-later-pinned" }),
+      { pinned: false },
+    );
+  });
+
+  it("offers neither Pin nor Backlog for a completed task, and ignores P and B", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    renderPanel(store);
+
+    await user.click(screen.getByRole("button", { name: /^Completed/ }));
+    await user.click(screen.getByRole("button", { name: 'Actions for "Remove the legacy flag"' }));
+    expect(
+      within(screen.getByRole("menu")).getAllByRole("menuitem").map((item) => item.textContent),
+    ).toEqual(["Add to prompt", "Edit…E", "Move to", "Delete…"]);
+    await user.keyboard("{Escape}");
+
+    rowTitle("Remove the legacy flag").focus();
+    await user.keyboard("p");
+    await user.keyboard("b");
+    expect(store.updateTask).not.toHaveBeenCalled();
+  });
+
+  it("completes a pinned backlog task out of both, and reopens it into the list", async () => {
+    const user = userEvent.setup();
+    const store = seededStore(BACKLOG);
+    renderPanel(store);
+    await user.click(backlogHeading());
+
+    await user.click(screen.getByRole("checkbox", { name: 'Mark "Rewrite the receipts" as done' }));
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-later-pinned" }),
+      { completed: true },
+    );
+    // The server clears the pin and the backlog in the same change.
+    act(() =>
+      store.publish(
+        store.getTasks().map((task) =>
+          task.id === "t-later-pinned"
+            ? { ...task, completedAt: "2026-08-06T10:00:00.000Z", pinned: false, backlog: false, revision: 1 }
+            : task,
+        ),
+      ),
+    );
+    expect(headings()).toEqual(["Backlog1", "Completed2"]);
+    await user.click(screen.getByRole("button", { name: /^Completed/ }));
+    expect(within(rowOf("Rewrite the receipts")).queryByText(/pinned/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("checkbox", { name: 'Mark "Rewrite the receipts" as open' }));
+    act(() =>
+      store.publish(
+        store.getTasks().map((task) =>
+          task.id === "t-later-pinned" ? { ...task, completedAt: null, revision: 2 } : task,
+        ),
+      ),
+    );
+    // Back in the list, neither pinned nor in the backlog.
+    expect(titles().slice(0, 3)).toEqual([
+      "Audit checkout error states",
+      "Add retry to the payment call",
+      "Rewrite the receipts",
+    ]);
+    expect(headings()).toEqual(["Backlog1", "Completed1"]);
+  });
+
+  it("edits Pinned and Backlog independently, and neither for a completed task", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    renderPanel(store);
+
+    await user.click(rowTitle("Add retry to the payment call"));
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    let dialog = screen.getByRole("dialog", { name: "Edit task" });
+    const backlog = within(dialog).getByRole("switch", { name: "Backlog" });
+    expect(backlog).not.toBeChecked();
+    expect(backlog).toHaveAccessibleDescription(
+      "Backlog tasks are open but not current work; they wait in the collapsed Backlog section.",
+    );
+    await user.click(backlog);
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(store.updateTask).toHaveBeenLastCalledWith(
+      expect.objectContaining({ id: "t-retry" }),
+      { backlog: true },
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit task" })).not.toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: /^Completed/ }));
+    rowTitle("Remove the legacy flag").focus();
+    await user.keyboard("e");
+    dialog = screen.getByRole("dialog", { name: "Edit task" });
+    for (const name of ["Pinned", "Backlog"]) {
+      const control = within(dialog).getByRole("switch", { name });
+      expect(control).not.toBeChecked();
+      expect(control).toBeDisabled();
+    }
+  });
+
+  it("reveals a task hidden by filters or search without changing or saving them", async () => {
+    const user = userEvent.setup();
+    const store = seededStore(BACKLOG);
+    renderPanel(store);
+    await user.click(screen.getByRole("button", { name: "View options" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "With files" }));
+    await user.keyboard("{Escape}");
+    expect(titles()).toEqual(["Audit checkout error states"]);
+
+    // A backlog task opens in its expanded section.
+    act(() => revealTask("t-later"));
+    await waitFor(() => expect(rowTitle("Profile cold start")).toHaveAttribute("aria-expanded", "true"));
+    expect(backlogHeading()).toHaveAttribute("aria-expanded", "true");
+    expect(rowTitle("Profile cold start")).toHaveFocus();
+    expect(getTasksViewOptions("thread")).toMatchObject({ onlyWithFiles: true, onlyPinned: false });
+    expect(screen.getByRole("button", { name: "Remove filter: With files" })).toBeInTheDocument();
+
+    // Changing the filters ends the exception.
+    await user.click(screen.getByRole("button", { name: "Show only pinned tasks" }));
+    expect(screen.queryByRole("button", { name: "Profile cold start" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Show only pinned tasks" }));
+
+    // So does changing the search.
+    await user.click(screen.getByRole("button", { name: "Search tasks" }));
+    await user.type(screen.getByRole("textbox", { name: "Search tasks" }), "audit");
+    act(() => revealTask("t-retry"));
+    await waitFor(() => expect(rowTitle("Add retry to the payment call")).toHaveAttribute("aria-expanded", "true"));
+    expect(screen.getByRole("textbox", { name: "Search tasks" })).toHaveValue("audit");
+    await user.type(screen.getByRole("textbox", { name: "Search tasks" }), "s");
+    expect(screen.queryByRole("button", { name: "Add retry to the payment call" })).not.toBeInTheDocument();
+
+    // And changing the view.
+    await user.clear(screen.getByRole("textbox", { name: "Search tasks" }));
+    act(() => revealTask("t-retry"));
+    await waitFor(() => expect(rowTitle("Add retry to the payment call")).toBeInTheDocument());
+    await user.click(segment("Global"));
+    await user.click(segment("Thread"));
+    expect(screen.queryByRole("button", { name: "Add retry to the payment call" })).not.toBeInTheDocument();
+  });
+});
+
+describe("TasksPanel two-line rows", () => {
+  beforeEach(() => {
+    setTasksLastView("all");
+    setTasksViewOptions("all", { groupByProject: false });
+  });
+
+  it("keeps the indicators beside the title on desktop", () => {
+    renderPanel(seededStore());
+    const main = rowOf("Audit checkout error states").querySelector(".tasks-row-main")!;
+    expect(rowTitle("Audit checkout error states")).toHaveAttribute("data-location");
+    expect(main.querySelector(":scope > .tasks-row-meta")).toHaveTextContent("has notes, 1 file, pinned");
+    expect(main.querySelector(".tasks-row-location .tasks-row-meta")).toBeNull();
+  });
+
+  it("moves the indicators onto the second line on touch, still described", () => {
+    stubDensity(true);
+    renderPanel(seededStore());
+    const main = rowOf("Audit checkout error states").querySelector(".tasks-row-main")!;
+    expect(main.querySelector(":scope > .tasks-row-meta")).toBeNull();
+    expect(main.querySelector(".tasks-row-location .tasks-row-meta")).not.toBeNull();
+    // The second line is hidden from assistive technology; the row still
+    // says what the indicators show.
+    expect(
+      within(main as HTMLElement)
+        .getAllByText("has notes, 1 file, pinned")
+        .filter((node) => !node.closest('[aria-hidden="true"]')),
+    ).toHaveLength(1);
+    // A row without indicators says nothing extra.
+    expect(rowOf("Add retry to the payment call").querySelectorAll(".sr-only")).toHaveLength(1);
   });
 });
 
@@ -1494,7 +1894,7 @@ describe("TasksPanel reveal", () => {
     expect(rowTitle("Remove the legacy flag")).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("delivers a reveal requested before Tasks mounted and clears hiding filters", async () => {
+  it("delivers a reveal requested before Tasks mounted, keeping the filters that hide it", async () => {
     const user = userEvent.setup();
     const store = seededStore();
     const view = renderPanel(store);
@@ -1505,6 +1905,10 @@ describe("TasksPanel reveal", () => {
     revealTask("t-retry");
     renderPanel(store);
     await waitFor(() => expect(rowTitle("Add retry to the payment call")).toHaveAttribute("aria-expanded", "true"));
+    // Shown as an exception: the filter stays on, and stays saved.
+    expect(screen.getByRole("button", { name: "Remove filter: Pinned only" })).toBeInTheDocument();
+    expect(getTasksViewOptions("thread").onlyPinned).toBe(true);
+    expect(titles()).toEqual(["Audit checkout error states", "Add retry to the payment call"]);
   });
 });
 
@@ -1571,6 +1975,14 @@ describe("TasksPanel phone sheet", () => {
     expect(content.lastElementChild?.previousElementSibling).toHaveClass("tasks-add");
     expect(within(sheet).getByRole("button", { name: "Add task" })).toBeDisabled();
     expect(within(sheet).queryByRole("button", { name: "View options" })).not.toBeInTheDocument();
+    // Only › Pinned has its own header button beside Search.
+    const pinnedOnly = within(sheet).getByRole("button", { name: "Show only pinned tasks" });
+    expect(pinnedOnly.previousElementSibling).toBe(within(sheet).getByRole("button", { name: "Search tasks" }));
+    await user.click(pinnedOnly);
+    expect(pinnedOnly).toHaveAttribute("aria-pressed", "true");
+    expect(titles()).toEqual(["Audit checkout error states"]);
+    await user.click(pinnedOnly);
+    expect(titles()).toEqual(["Audit checkout error states", "Add retry to the payment call"]);
     // ⋯ is always shown on touch.
     expect(within(sheet).getByRole("button", { name: 'Actions for "Add retry to the payment call"' })).toBeInTheDocument();
 
@@ -1680,6 +2092,7 @@ describe("TasksPanelContent docked", () => {
     expect(within(header).getByText("Tasks")).toBeInTheDocument();
     expect(within(header).getByLabelText("2 open")).toBeInTheDocument();
     expect(within(header).getByRole("button", { name: "Search tasks" })).toBeInTheDocument();
+    expect(within(header).getByRole("button", { name: "Show only pinned tasks" })).toBeInTheDocument();
     expect(within(header).getByRole("button", { name: "View options" })).toBeInTheDocument();
     // One overflow menu: the panel's, carrying the Tasks items too.
     expect(within(header).queryByRole("button", { name: "Tasks panel options" })).not.toBeInTheDocument();
