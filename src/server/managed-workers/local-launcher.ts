@@ -1,3 +1,5 @@
+import { attachmentDiagnostic } from "../diagnostics/attachment-diagnostics.js";
+import { deliveryDiagnosticWorkerEnvironment } from "../diagnostics/delivery-diagnostic-output.js";
 import type { SidecarByteStream } from "../../internal/sidecar-protocol/contracts.js";
 import type {
   EnvironmentChannelScope,
@@ -49,28 +51,37 @@ export async function launchLocalManagedWorker(input: {
     {
       prepared,
       arguments: arguments_,
-      environment: sanitizedLocalWorkerEnvironment(
+      environment: { ...sanitizedLocalWorkerEnvironment(
         process.env,
         input.artifact.kind.inheritedEnvironmentNames ?? [],
-      ),
+      ), ...deliveryDiagnosticWorkerEnvironment(input.scope) },
       cleanup: input.cleanup ?? DEFAULT_CLEANUP,
     },
     input.signal,
   );
-  drainBoundedStderr(channel.stderr, () =>
-    channel.close("managed_worker_stderr_overflow"),
-  );
+  const identity = channel.identity.providerProcessIdentity;
+  const fields = { ...input.scope, carrierGeneration: input.identity.carrierGeneration, parentPid: process.pid,
+    pid: identity.type === "local_process_group" ? identity.processId : identity.supervisorProcessId };
+  attachmentDiagnostic("managed_worker_process_started", fields);
+  const close = (reason: string) => {
+    attachmentDiagnostic("managed_worker_close_requested", { ...fields, reason, requestedClose: true });
+    return channel.close(reason);
+  };
+  drainBoundedStderr(channel.stderr, () => close("managed_worker_stderr_overflow"));
   const stream: SidecarByteStream = {
     bytes: channel.stdout,
-    closed: channel.closed.then((closure) => ({
-      reason: closure.reason,
-      exitCode: closure.exitCode,
-      signal: closure.signal,
-      ...(closure.cause ? { cause: closure.cause } : {}),
-    })),
+    closed: channel.closed.then((closure) => {
+      attachmentDiagnostic("managed_worker_process_closed", { ...fields, reason: closure.reason, exitCode: closure.exitCode, signal: closure.signal }, closure.cause);
+      return {
+        reason: closure.reason,
+        exitCode: closure.exitCode,
+        signal: closure.signal,
+        ...(closure.cause ? { cause: closure.cause } : {}),
+      };
+    }),
     write: (bytes: Uint8Array, options?: { readonly signal?: AbortSignal }) =>
       channel.writeStdin(bytes, options),
-    close: (reason: string) => channel.close(reason),
+    close,
   };
   return Object.freeze(stream);
 }

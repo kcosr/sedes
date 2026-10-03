@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { attachmentDiagnostic } from "../../../diagnostics/attachment-diagnostics.js";
+import { configureDeliveryDiagnosticOutput } from "../../../diagnostics/delivery-diagnostic-output.js";
 import { supportsClaudeRuntimeHost } from "./claude-runtime-host-support.js";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -92,11 +94,23 @@ export async function runClaudeRuntimeWorker(
     throw new Error("claude_runtime_worker_artifact_digest_mismatch");
   }
 
-  if (input.mode === "supervise") {
-    await runOuterSupervisor(input, executablePath);
-    return;
+  // Worker stderr has a lifetime byte limit. Diagnostic capture must never
+  // consume that budget or cause a healthy provider generation to be killed.
+  const stopDiagnostics = configureDeliveryDiagnosticOutput({
+    enabled: Boolean(process.env.SEDES_DEBUG_DELIVERY && process.env.SEDES_DEBUG_DELIVERY_FILE),
+    mirrorToStderr: false,
+  });
+  workerDiagnostic(input, "started");
+  try {
+    if (input.mode === "supervise") await runOuterSupervisor(input, executablePath);
+    else await runInternalWorker(input, artifactSha256);
+  } catch (error) {
+    workerDiagnostic(input, "failed", error);
+    throw error;
+  } finally {
+    workerDiagnostic(input, "ended");
+    await Promise.race([stopDiagnostics(), new Promise<void>(resolve => { const timer = setTimeout(resolve, 500); timer.unref(); })]);
   }
-  await runInternalWorker(input, artifactSha256);
 }
 
 async function runInternalWorker(
@@ -114,6 +128,7 @@ async function runInternalWorker(
   const processGroupRegistrar = createClaudeProcessGroupRegistrar({
     token: input.parentToken,
     onFailure: (error) => {
+      workerDiagnostic(input, "parent_ipc_failed", error);
       ipcFailure = error;
       process.kill(process.pid, "SIGTERM");
     },
@@ -130,6 +145,7 @@ async function runInternalWorker(
   let cleanupFailure: unknown;
   let peer: SidecarProtocolPeer | undefined;
   const failForCleanup = (error: unknown) => {
+    workerDiagnostic(input, "cleanup_failed", error);
     cleanupFailure ??= error;
     void peer
       ?.close("claude_runtime_worker_child_cleanup_unproven")
@@ -187,6 +203,7 @@ async function runInternalWorker(
       },
     ],
     onGoAway: async () => {
+      workerDiagnostic(input, "go_away");
       await host.close();
       await supervisor.close();
     },
@@ -197,7 +214,8 @@ async function runInternalWorker(
     sessionNonce: input.sessionNonce,
     registry,
   });
-  const stop = () => {
+  const stop = (signal: NodeJS.Signals) => {
+    workerDiagnostic(input, "signal", undefined, { signal });
     void host
       .close()
       .then(() => supervisor.close())
@@ -261,6 +279,7 @@ async function runOuterSupervisor(
     settleReady = (error) => (error === undefined ? resolve() : reject(error));
   });
   const fail = (error: unknown) => {
+    workerDiagnostic(input, "supervisor_failed", error);
     if (failure === undefined) failure = error;
     if (!ready) settleReady(error);
     child.kill("SIGTERM");
@@ -339,7 +358,8 @@ async function runOuterSupervisor(
     killTimer = setTimeout(() => child.kill("SIGKILL"), 2_000);
     killTimer.unref?.();
   };
-  const stop = () => {
+  const stop = (signal: NodeJS.Signals) => {
+    workerDiagnostic(input, "signal", undefined, { signal });
     child.stdin!.end();
     child.kill("SIGTERM");
     scheduleKill();
@@ -347,6 +367,7 @@ async function runOuterSupervisor(
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
   const carrierClosed = () => {
+    if (!terminateTimer) workerDiagnostic(input, "carrier_closed");
     child.stdin!.end();
     if (terminateTimer) return;
     terminateTimer = setTimeout(() => {
@@ -364,6 +385,7 @@ async function runOuterSupervisor(
     child.stdout!.pipe(process.stdout, { end: false });
     proxied = true;
     const closure = await closurePromise;
+    workerDiagnostic(input, "inner_exited", undefined, { exitCode: closure.code, signal: closure.signal });
     await groups.close();
     const generationFailure =
       failure ??
@@ -530,4 +552,8 @@ function stdioByteStream(): SidecarByteStream {
 
 function boundedDiagnostic(value: string): string {
   return value.replace(/[\r\n\u0000-\u001f\u007f]/gu, "_").slice(0, 240);
+}
+
+function workerDiagnostic(input: WorkerArguments, stage: string, error?: unknown, fields: { signal?: string | null; exitCode?: number | null } = {}): void {
+  attachmentDiagnostic("claude_worker_lifecycle", { backendInstanceId: process.env.SEDES_DIAGNOSTIC_BACKEND_ID, executionEnvironmentId: process.env.SEDES_DIAGNOSTIC_ENVIRONMENT_ID, role: input.mode, stage, pid: process.pid, parentPid: process.ppid, carrierGeneration: input.carrierGeneration, ...fields }, error);
 }

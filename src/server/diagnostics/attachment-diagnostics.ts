@@ -1,8 +1,13 @@
 import { deliveryDiagnosticsEnabled, writeDeliveryDiagnostic } from "./delivery-diagnostic-output.js";
 
 /** Observational main/sidecar diagnostics. All callers supply identifiers or
- * code-owned tokens, never native thread IDs, request bodies, or configuration. */
+ * code-owned tokens, never request bodies or configuration. Native session
+ * identifiers are admitted only through the UUID-validated nativeSessionId. */
 export interface AttachmentDiagnosticFields {
+  readonly nativeSessionId?: string;
+  readonly pid?: number;
+  readonly parentPid?: number;
+  readonly sessionCount?: number;
   readonly backendInstanceId?: string;
   readonly executionEnvironmentId?: string;
   readonly generation?: number;
@@ -40,10 +45,10 @@ const names = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "Aggre
   "SidecarOperationError", "SidecarProtocolError", "SidecarProtocolDeliveryError", "SidecarFrameWriteError",
   "SidecarTransportCleanupError", "SidecarSessionCleanupError", "ZodError"]);
 const token = /^[a-zA-Z0-9][a-zA-Z0-9_./:-]{0,159}$/u;
-const machineCode = /^(?:(?:codex|claude|sidecar|ssh|execution|provider|transport|runtime)_[a-z0-9_]+|SQLITE_[A-Z_]+|ERR_[A-Z0-9_]+|E(?:CONNRESET|CONNREFUSED|PIPE|TIMEDOUT|NOENT|ACCES|IO|NOMEM|NOSPC))$/u;
+const machineCode = /^(?:(?:codex|claude|sidecar|ssh|execution|provider|transport|runtime|managed_worker)_[a-z0-9_]+|SQLITE_[A-Z_]+|ERR_[A-Z0-9_]+|E(?:CONNRESET|CONNREFUSED|PIPE|TIMEDOUT|NOENT|ACCES|IO|NOMEM|NOSPC))$/u;
 const closureReasons = new Set(["exit", "spawn_error", "stderr_overflow", "end", "closed", "lease_closed", "lease_rejected", "idle_release", "operator_restart", "supervisor_close", "connection_failed", "receipt_record", "receipt_acknowledge", "thread_evict"]);
 const textFields = ["backendInstanceId", "executionEnvironmentId", "attachmentId", "role", "requestId", "operationId", "method", "stage", "outcome", "transportKind", "reason", "signal"] as const;
-const numberFields = ["generation", "controllerEpoch", "carrierGeneration", "attachmentAttempt", "durationMs", "exitCode", "pendingOperationRequests", "pendingOperationSends", "inboundIdleMs", "outboundIdleMs", "outcomeCount", "pendingRequestCount", "queuedWriteBytes", "queuedWriteFrames", "activeWriteBytes", "frameBytes"] as const;
+const numberFields = ["pid", "parentPid", "sessionCount", "generation", "controllerEpoch", "carrierGeneration", "attachmentAttempt", "durationMs", "exitCode", "pendingOperationRequests", "pendingOperationSends", "inboundIdleMs", "outboundIdleMs", "outcomeCount", "pendingRequestCount", "queuedWriteBytes", "queuedWriteFrames", "activeWriteBytes", "frameBytes"] as const;
 
 /** Bounded classes/codes only; even arbitrary exception names/messages, paths,
  * stacks, custom properties and toJSON methods are never serialized. */
@@ -57,9 +62,10 @@ export function attachmentDiagnosticError(error: unknown): readonly { name: stri
       if (!(value instanceof Error)) { result.push({ name: "NonError" }); return; }
       const name = names.has(value.name) ? value.name : "Error";
       const propertyCode = (value as Error & { code?: unknown }).code;
-      const candidates = [propertyCode, value.message];
+      const backendCode = (value as Error & { backendCode?: unknown }).backendCode;
+      const candidates = [propertyCode, backendCode, value.message];
       const code = candidates.find(candidate => typeof candidate === "number" ? Number.isSafeInteger(candidate)
-        : typeof candidate === "string" && candidate.length <= 120 && machineCode.test(candidate));
+        : typeof candidate === "string" && candidate.length <= 120 && (machineCode.test(candidate) || closureReasons.has(candidate)));
       result.push({ name, ...(typeof code === "string" || typeof code === "number" ? { code } : {}) });
       if (value.cause !== undefined) visit(value.cause, depth + 1);
       if (value instanceof AggregateError && Array.isArray(value.errors)) {
@@ -75,6 +81,7 @@ export function attachmentDiagnostic(event: string, fields: AttachmentDiagnostic
   try {
     if (!deliveryDiagnosticsEnabled()) return;
     const record: Record<string, unknown> = { event: token.test(event) ? event : "invalid", timestamp: new Date().toISOString() };
+    if (fields.nativeSessionId !== undefined) record.nativeSessionId = typeof fields.nativeSessionId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(fields.nativeSessionId) ? fields.nativeSessionId : "redacted";
     for (const key of textFields) {
       const value = fields[key];
       if (value !== undefined) {

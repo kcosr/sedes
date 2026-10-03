@@ -1,3 +1,4 @@
+import { attachmentDiagnostic } from "../../../diagnostics/attachment-diagnostics.js";
 import type { EnvironmentVariableOverrides } from "../../../../shared/protocol/environment-variables.js";
 import { ClaudeHistoryPager } from "../claude-session-history.js";
 import { mergeResolvedEnvironment, type ResolvedEnvironmentVariables } from "../../../environment-variables/runtime-environment.js";
@@ -408,7 +409,8 @@ export class ClaudeRuntimeWorkerHost {
           payload,
         });
       },
-      onFailure: () => {
+      onFailure: (error) => {
+        attachmentDiagnostic("claude_worker_query_failed", { pid: process.pid, parentPid: process.ppid, nativeSessionId: request.sessionId }, error);
         if (this.#queries.get(queryId) !== query) return;
         void this.#retireQuery(query).catch(() => {
           // Unproven cleanup keeps the session reserved and is worker-fatal.

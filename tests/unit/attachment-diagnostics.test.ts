@@ -53,3 +53,25 @@ it("never throws when exception inspection or the log sink fails", () => {
   vi.spyOn(console, "error").mockImplementation(() => { throw new Error("logger failed"); });
   expect(() => attachmentDiagnostic("attachment_lost", {}, error)).not.toThrow();
 });
+
+
+it("admits only UUID session identifiers and bounded worker failure evidence", () => {
+  vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+  const log = vi.spyOn(console, "error").mockImplementation(() => {});
+  attachmentDiagnostic("claude_worker_session_failed", { nativeSessionId: "11111111-1111-4111-8111-111111111111", pid: 42, parentPid: 41, sessionCount: 2 }, new Error("managed_worker_stderr_overflow"));
+  const record = JSON.parse(String(log.mock.calls[0]![0]).replace("[delivery-attachment] ", ""));
+  expect(record).toMatchObject({ nativeSessionId: "11111111-1111-4111-8111-111111111111", pid: 42, parentPid: 41, sessionCount: 2, errors: [{ code: "managed_worker_stderr_overflow" }] });
+  attachmentDiagnostic("claude_worker_session_failed", { nativeSessionId: "/private/session-secret" });
+  expect(log.mock.calls[1]![0]).toContain('"nativeSessionId":"redacted"');
+  expect(log.mock.calls[1]![0]).not.toContain("session-secret");
+});
+
+
+it("retains normalized backend codes and exact transport closure tokens", () => {
+  expect(attachmentDiagnosticError(Object.assign(new Error("private provider description"), { name: "BackendError", backendCode: "claude_persistent_query_failed" })))
+    .toEqual([{ name: "BackendError", code: "claude_persistent_query_failed" }]);
+  expect(attachmentDiagnosticError(Object.assign(new Error("end"), { name: "SidecarProtocolDeliveryError" })))
+    .toEqual([{ name: "SidecarProtocolDeliveryError", code: "end" }]);
+  expect(attachmentDiagnosticError(Object.assign(new Error("private message"), { backendCode: "/private/credential" })))
+    .toEqual([{ name: "Error" }]);
+});

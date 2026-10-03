@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { PassThrough } from "node:stream";
 import {
@@ -20,6 +20,8 @@ import {
   registerClaudeRuntimeV3WorkerOperations,
   type ClaudeRuntimeV3WorkerHandlers,
 } from "../../src/server/backends/claude/worker/claude-runtime-v3.js";
+
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 const scope = Object.freeze({
   tenantId: "tenant-1",
@@ -130,6 +132,8 @@ describe("ClaudeManagedRuntimeOwner", () => {
   });
 
   it("replaces a failed generation when the outer status proves cleanup", async () => {
+    vi.stubEnv("SEDES_DEBUG_DELIVERY", "1");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const harness = runtimeHarness();
     const owner = harness.owner();
     await expect(listSessions(owner)).resolves.toEqual([]);
@@ -141,7 +145,12 @@ describe("ClaudeManagedRuntimeOwner", () => {
     await waitUntil(() => harness.backgroundErrors.length === 1);
     await expect(listSessions(owner)).resolves.toEqual([]);
     expect(harness.open).toHaveBeenCalledTimes(2);
+    const records = log.mock.calls.map(([line]) => JSON.parse(String(line).replace("[delivery-attachment] ", "")));
+    expect(records).toContainEqual(expect.objectContaining({ event: "claude_worker_process_closed", carrierGeneration: 1, exitCode: CLAUDE_RUNTIME_WORKER_CLEANUP_PROVEN_FAILURE_EXIT_CODE, signal: null }));
+    expect(records).toContainEqual(expect.objectContaining({ event: "claude_worker_generation_started", carrierGeneration: 2 }));
     await owner.close();
+    log.mockRestore();
+    vi.unstubAllEnvs();
   });
 
   it.each([true, false])("fences mixed default selectors only after launch and releases after cleanup (default first: %s)", async defaultFirst => {

@@ -1,3 +1,4 @@
+import { attachmentDiagnostic, type AttachmentDiagnosticFields } from "../../diagnostics/attachment-diagnostics.js";
 import { resolveEnvironmentVariables } from "../../environment-variables/runtime-environment.js";
 import type { EnvironmentVariableOverrides } from "../../../shared/protocol/environment-variables.js";
 import { randomUUID } from "node:crypto";
@@ -91,6 +92,7 @@ export class ClaudeRuntimeWorkerClient implements ClaudeOwnedRuntimeClient {
   readonly startupEnvironmentVariables?: EnvironmentVariableOverrides;
     readonly initializationTimeoutMs: number;
   };
+  readonly #diagnosticScope: Pick<AttachmentDiagnosticFields, "backendInstanceId" | "executionEnvironmentId" | "carrierGeneration">;
   #initializing: Promise<void> | undefined;
   #closed = false;
 
@@ -102,8 +104,10 @@ export class ClaudeRuntimeWorkerClient implements ClaudeOwnedRuntimeClient {
   readonly startupEnvironmentVariables?: EnvironmentVariableOverrides;
     readonly initializationTimeoutMs: number;
     readonly closed?: Promise<unknown>;
+    readonly diagnosticScope?: Pick<AttachmentDiagnosticFields, "backendInstanceId" | "executionEnvironmentId" | "carrierGeneration">;
   }) {
     this.#peer = input.peer;
+    this.#diagnosticScope = input.diagnosticScope ?? {};
     this.#runtimeInitialization = Object.freeze({
       executablePath: input.executablePath,
       configDirectory: input.configDirectory,
@@ -250,6 +254,7 @@ export class ClaudeRuntimeWorkerClient implements ClaudeOwnedRuntimeClient {
   close(error: unknown = new Error("claude_runtime_client_closed")): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.diagnostic("claude_worker_client_closed", { sessionCount: this.#sessions.size }, error);
     for (const unsubscribe of this.#unsubscribe) unsubscribe();
     for (const session of this.#sessions.values())
       session.workerFailed(error, { peerAvailable: false });
@@ -274,7 +279,12 @@ export class ClaudeRuntimeWorkerClient implements ClaudeOwnedRuntimeClient {
     if (this.#sessions.get(queryId) === session) this.#sessions.delete(queryId);
   }
 
+  diagnostic(event: string, fields: AttachmentDiagnosticFields, error?: unknown): void {
+    attachmentDiagnostic(event, { ...this.#diagnosticScope, pid: process.pid, ...fields }, error);
+  }
+
   fence(reason: string, error: unknown): void {
+    this.diagnostic("claude_worker_fence_requested", { reason, sessionCount: this.#sessions.size, requestedClose: true }, error);
     void this.#peer.close(reason).catch(() => undefined);
     this.close(error);
   }
@@ -612,6 +622,7 @@ class WorkerSession implements ClaudeOwnedRuntimeSession {
       return;
     }
     const initialized = this.#initialization !== undefined;
+    this.#client.diagnostic("claude_worker_session_failed", { nativeSessionId: this.#options.sessionId }, error);
     this.#closed = true;
     void this.#beginClosure("claude_runtime_query_failure_cleanup_unconfirmed");
     if (initialized) {

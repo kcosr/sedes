@@ -8,6 +8,20 @@ const MAX_RECORD_BYTES = 8 * 1024;
 let fileSink: BoundedDiagnosticFile | undefined;
 let operatorEnabled: boolean | undefined;
 let owner: object | undefined;
+let childFilePath: string | undefined;
+let mirrorToStderr = true;
+
+/** Only operator-controlled diagnostic settings cross into owned workers.
+ * Each PID writes its own bounded file; never inherit the parent writer path. */
+export function deliveryDiagnosticWorkerEnvironment(scope?: { readonly backendInstanceId: string; readonly executionEnvironmentId: string }): Readonly<Record<string, string>> {
+  if (!deliveryDiagnosticsEnabled()) return {};
+  const identity: Record<string, string> = {};
+  if (scope) {
+    if (/^[a-zA-Z0-9_-]{1,128}$/u.test(scope.backendInstanceId)) identity.SEDES_DIAGNOSTIC_BACKEND_ID = scope.backendInstanceId;
+    if (/^[a-zA-Z0-9_-]{1,128}$/u.test(scope.executionEnvironmentId)) identity.SEDES_DIAGNOSTIC_ENVIRONMENT_ID = scope.executionEnvironmentId;
+  }
+  return { ...identity, SEDES_DEBUG_DELIVERY: "1", ...(childFilePath ? { SEDES_DEBUG_DELIVERY_FILE: childFilePath } : {}) };
+}
 
 export function deliveryDiagnosticsEnabled(): boolean {
   return operatorEnabled ?? Boolean(process.env.SEDES_DEBUG_DELIVERY);
@@ -21,7 +35,7 @@ export function writeDeliveryDiagnostic(line: string): void {
   try {
     if (!deliveryDiagnosticsEnabled() || !/^\[delivery-(?:attachment|event-loop)\] /u.test(line) ||
       line.includes("\n") || line.includes("\r") || Buffer.byteLength(line) > MAX_RECORD_BYTES) return;
-    try { console.error(line); } catch { /* File capture remains independently usable. */ }
+    try { if (mirrorToStderr) console.error(line); } catch { /* File capture remains independently usable. */ }
     fileSink?.write(`${line}\n`);
   } catch { /* Diagnostics cannot affect application lifecycle. */ }
 }
@@ -29,21 +43,23 @@ export function writeDeliveryDiagnostic(line: string): void {
 /** Optional POSIX-only file output uses an operator-owned absolute path. The
  * literal {pid} expands to this PID so inherited environments do not share a
  * rotating file. At most one in-process sink is active. */
-export function configureDeliveryDiagnosticOutput(options: { readonly enabled?: boolean; readonly filePath?: string } = {}): () => Promise<void> {
+export function configureDeliveryDiagnosticOutput(options: { readonly enabled?: boolean; readonly filePath?: string; readonly mirrorToStderr?: boolean } = {}): () => Promise<void> {
   if (owner) return async () => {};
   const token = {};
   owner = token;
   try {
     operatorEnabled = options.enabled;
+    mirrorToStderr = options.mirrorToStderr ?? true;
     const requested = options.filePath ?? process.env.SEDES_DEBUG_DELIVERY_FILE;
+    childFilePath = requested && path.isAbsolute(requested) ? path.join(path.dirname(requested), "delivery-{pid}.jsonl") : undefined;
     const sink = deliveryDiagnosticsEnabled() && requested ? new BoundedDiagnosticFile(requested.replaceAll("{pid}", String(process.pid))) : undefined;
     fileSink = sink;
     return async () => {
-      if (owner === token) { owner = undefined; fileSink = undefined; operatorEnabled = undefined; }
+      if (owner === token) { owner = undefined; fileSink = undefined; operatorEnabled = undefined; childFilePath = undefined; mirrorToStderr = true; }
       await sink?.close();
     };
   } catch {
-    owner = undefined; fileSink = undefined; operatorEnabled = undefined;
+    owner = undefined; fileSink = undefined; operatorEnabled = undefined; childFilePath = undefined; mirrorToStderr = true;
     return async () => {};
   }
 }

@@ -21,6 +21,9 @@ const ALLOWED_REPOSITORY_SOURCES = new Set([
   // The native Stop journal uses the normalized BackendError value. This file
   // declares contracts/schema primitives, not application service authority.
   "src/server/backends/contracts.ts",
+  // Content-free, operator-gated lifecycle capture; no application authority.
+  "src/server/diagnostics/attachment-diagnostics.ts",
+  "src/server/diagnostics/delivery-diagnostic-output.ts",
   "src/server/environment-variables/runtime-environment.ts",
   "src/server/config/configuration-fingerprint.ts",
   "src/server/agent-tools/contracts/agent-tool-transport-limits.ts",
