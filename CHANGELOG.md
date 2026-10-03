@@ -179,7 +179,7 @@
 
 - Opt-in Claude worker lifecycle diagnostics record process exits, cleanup and
   fencing reasons, probe failures, and affected session UUIDs to diagnose
-  lost retained sessions across server restarts.
+  lost retained sessions across server restarts. (#41)
 
 - Agents can delete completed Tasks at the expected revision with
   `task.delete` (`sedes_task_delete`). The tool description limits use to
