@@ -28,6 +28,7 @@ import { ApiError } from "../api/ApiClient.js";
 import { Button } from "../components/ui/button.js";
 import { BackendBrandIcon } from "../components/brand-icons.js";
 import { TasksPanelToggle } from "../components/tasks/TasksPanelToggle.js";
+import { WorkbenchPanelToggle } from "../components/WorkbenchPanelToggle.js";
 import {
   usePublishTasksDock,
   useTasksHost,
@@ -1144,6 +1145,24 @@ function PanelLayoutReady({
     if (tasksPanel && tasksVisible) closePanel(tasksPanel, invoker);
     else openTasksPanel(true);
   };
+  const workpadsVisible =
+    workpadsPanel !== undefined &&
+    actuallyVisible(workpadsPanel.panelInstanceId);
+  const toggleWorkpadsPanel = (invoker?: HTMLElement) => {
+    if (workpadsPanel && workpadsVisible) {
+      closePanel(workpadsPanel, invoker);
+      return;
+    }
+    // Like Tasks, Workpads docks beside the current surfaces.
+    if (
+      store.openPanel("workpads", {
+        availableWidth: availableSize.width,
+        availableHeight: availableSize.height,
+        presentation: "split",
+      })
+    )
+      setMobilePanelId("workpads");
+  };
   usePublishTasksDock(
     tenants.has("tasks")
       ? {
@@ -1156,6 +1175,7 @@ function PanelLayoutReady({
             onDock: (edge) => store.dockPanel("tasks", edge),
             dockEdge: panelDockEdge(tree, "tasks"),
           },
+          ...(tint ? { environmentTintStyle: tint } : {}),
           open: ({ focus }) => openTasksPanel(focus),
           toggle: toggleTasksPanel,
           close: () => tasksPanel && closePanel(tasksPanel),
@@ -1606,6 +1626,13 @@ function PanelLayoutReady({
     );
     // Flex factors of at least 1 each, so a pane held at its minimum leaves
     // the other pane all the remaining space.
+    // The divider position the layout holds, without a drag preview.
+    const committed = resolveSplit(
+      split,
+      split.sizes,
+      row ? width : height,
+      panelMinimum,
+    ).sizes[0];
     const flex = Math.min(sizes[0], sizes[1]);
     const tracks = `minmax(${minimums[0]}px, ${sizes[0] / flex}fr) ${SPLIT_HANDLE_SIZE}px minmax(${minimums[1]}px, ${sizes[1] / flex}fr)`;
     const fractionOf = (value: number) => (free > 0 ? value / free : sizes[0]);
@@ -1635,17 +1662,19 @@ function PanelLayoutReady({
           testId="workspace-panel-resize-handle"
           onPreview={(value) => {
             const fraction = fractionOf(value);
-            setPreviewSizes((current) =>
-              new Map(current).set(split.id, [fraction, 1 - fraction]),
+            // Other side panels keep their shared sizes as the divider moves.
+            setPreviewSizes(
+              Math.abs(value - committed) < 0.5
+                ? new Map()
+                : store.previewSplitResize(split.id, [fraction, 1 - fraction]),
             );
           }}
           onCommit={(value) => {
             const fraction = fractionOf(value);
-            setPreviewSizes((current) => {
-              const next = new Map(current);
-              next.delete(split.id);
-              return next;
-            });
+            setPreviewSizes(new Map());
+            // A divider released where it was, which can differ from its
+            // fraction while minimums hold, must not resize every thread.
+            if (Math.abs(value - committed) < 0.5) return;
             store.resizeSplit(split.id, [fraction, 1 - fraction]);
           }}
         />
@@ -1721,22 +1750,35 @@ function PanelLayoutReady({
       >
         <SidebarNavTrigger />
         <div className="workspace-workbench-actions">
-          <TasksPanelToggle
-            open={desktop ? tasksVisible : (tasksHost?.sheetOpen ?? false)}
-            collapsed={desktop && tasksPanel !== undefined && !tasksVisible}
-            onToggle={(invoker) =>
-              desktop ? toggleTasksPanel(invoker) : tasksHost?.toggleSheet()
-            }
-            count={openThreadTaskCount}
-          />
+          <div className="workspace-workbench-toggles">
+            <TasksPanelToggle
+              open={desktop ? tasksVisible : (tasksHost?.sheetOpen ?? false)}
+              collapsed={desktop && tasksPanel !== undefined && !tasksVisible}
+              onToggle={(invoker) =>
+                desktop ? toggleTasksPanel(invoker) : tasksHost?.toggleSheet()
+              }
+              count={openThreadTaskCount}
+            />
+            {tenants.has("workpads") && (
+              <WorkbenchPanelToggle
+                title="Workpads"
+                icon={NotepadText}
+                open={workpadsVisible}
+                collapsed={desktop && workpadsPanel !== undefined && !workpadsVisible}
+                onToggle={toggleWorkpadsPanel}
+                className="workpads-panel-toggle"
+                testId="workpads-panel-toggle"
+              />
+            )}
+          </div>
           <div className="workspace-panel-open-menu">
             <div
               className="workspace-panel-open-icons"
               role="group"
               aria-label="Panel shortcuts"
             >
-              {/* The Tasks toggle beside this group stands for Tasks. */}
-              {panels.filter((panel) => panel.kind !== "tasks").map((panel) => (
+              {/* The Tasks and Workpads toggles beside this group stand for them. */}
+              {panels.filter((panel) => panel.kind !== "tasks" && panel.kind !== "workpads").map((panel) => (
                 <Button
                   key={panel.panelInstanceId}
                   variant="ghost"
@@ -1783,9 +1825,6 @@ function PanelLayoutReady({
                 {([
                   { id: "chat", title: "Chat", panel: chatPanel, icon: <MessageSquare size={16} />, available: true },
                   { id: "workspace-files", title: "Files", panel: filesPanel, icon: <Files size={16} />, available: tenants.has("workspace-files") },
-                  { id: "workpads", title: "Workpads", panel: workpadsPanel, icon: <NotepadText size={16} />, available: tenants.has("workpads") },
-                  // Phones show Tasks as a sheet from the toggle instead.
-                  { id: "tasks", title: "Tasks", panel: desktop ? tasksPanel : undefined, icon: <ListChecks size={16} />, available: desktop && tenants.has("tasks") },
                   { id: "terminals", title: "Terminals", panel: terminalsPanel, icon: <TerminalIcon size={16} />, available: true },
                 ]).filter(({ available, panel }) => available || panel).map(({ id, title, panel, icon }) => {
                   const status = panel ? statuses.get(panel.panelInstanceId) : undefined;

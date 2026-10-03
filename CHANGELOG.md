@@ -312,6 +312,35 @@
 
 ### Changed
 
+- Side panels keep one size in every thread. Resizing Files, Workpads, Tasks,
+  or Terminals resizes it in every thread's layout, and opening, collapsing,
+  or closing another panel leaves its width alone; Chat takes the remaining
+  space. Panels tabbed together or split against each other keep their
+  per-thread size. Layouts saved before the upgrade keep their sizes until you
+  open, dock, or resize the panel.
+  ([#37](https://github.com/kcosr/sedes/pull/37))
+
+- Workpads has its own button in the thread workbench bar, beside **Tasks**,
+  and behaves like it: select it to open, show, or close Workpads. Tasks and
+  Workpads no longer appear in the **Panels** menu or among the open-panel
+  shortcuts; the menu keeps Chat, Files, and Terminals.
+  ([#37](https://github.com/kcosr/sedes/pull/37))
+
+- The Tasks, Files, Workpads, and Terminals panel headers use the chat
+  header's smaller action icons, with the same hit areas.
+  ([#37](https://github.com/kcosr/sedes/pull/37))
+
+- The docked Tasks header shows the thread environment's color, like the other
+  panel headers.
+  ([#37](https://github.com/kcosr/sedes/pull/37))
+
+- Tasks and Workpads keep one place in every thread, so switching threads no
+  longer swaps them. They are the outer columns, on the edges and in the order
+  you last set by opening, closing, or docking either one; Chat, Files, and
+  Terminals arrange inside them per thread, so a bottom Terminals panel spans
+  only Chat and Files.
+  ([#37](https://github.com/kcosr/sedes/pull/37))
+
 - A project's Tasks and Workpads are shared by every location of the project,
   on every host. Tasks' **Project** view and Workpads' **Project** scope
   follow the current thread's project, adding a Task there never asks for a

@@ -2397,7 +2397,7 @@ textarea:disabled {
    to 16px unless they carry a size-* class, so the glyphs are set here. */
 .sidebar-nav-trigger,
 .notification-silence-button,
-.tasks-panel-toggle,
+.workbench-panel-toggle,
 .workspace-panel-open-icon,
 .workspace-panel-open-trigger,
 .thread-find-trigger,
@@ -2418,7 +2418,7 @@ textarea:disabled {
 
 .sidebar-nav-trigger svg,
 .notification-silence-button svg,
-.tasks-panel-toggle svg,
+.workbench-panel-toggle svg,
 .workspace-panel-open-icon svg,
 .thread-find-trigger svg,
 .thread-tools-shell > button svg,
@@ -2494,6 +2494,13 @@ textarea:disabled {
   min-width: 0;
   align-items: center;
   gap: 8px;
+}
+
+/* The panel toggles sit together, like the panels group's icons. */
+.workspace-workbench-toggles {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
 }
 
 .workspace-panel-open-menu {
@@ -4233,6 +4240,17 @@ textarea:disabled {
   }
 }
 
+/* The other panel headers (Tasks, Files, Workpads, Terminals) match the
+   chat header's quieter actions, with the same hit areas. */
+.workspace-panel-chrome > .workspace-panel-actions > button svg,
+.workspace-panel-chrome .tasks-header-button svg,
+.workspace-panel-chrome .workspace-files-toolbar-actions > button svg,
+.workspace-panel-chrome .terminal-panel-chrome-actions > button svg,
+.workspace-panel-chrome .terminal-tab-add svg {
+  width: calc(var(--bar-icon) - 2px);
+  height: calc(var(--bar-icon) - 2px);
+}
+
 .thread-heading {
   display: flex;
   min-width: 0;
@@ -4504,7 +4522,7 @@ textarea:disabled {
 }
 
 .thread-bookmarks-trigger,
-.tasks-panel-toggle {
+.workbench-panel-toggle {
   flex: 0 0 auto;
 }
 
@@ -4512,17 +4530,17 @@ textarea:disabled {
   color: var(--info);
 }
 
-/* With open tasks, the Tasks toggle widens to show their count beside the
-   icon (the badge carries the signal; the icon is not tinted). */
-.tasks-panel-toggle:has(> [data-slot="count-badge"]) {
+/* With a count, such as open tasks, a panel toggle widens to show it beside
+   the icon (the badge carries the signal; the icon is not tinted). */
+.workbench-panel-toggle:has(> [data-slot="count-badge"]) {
   width: auto;
   gap: var(--space-1);
   padding-inline: var(--space-1-5);
 }
 
-/* Docked Tasks open but off stage (collapsed, or to make room): the pressed
-   chip's outline without its fill. */
-.tasks-panel-toggle[data-state="collapsed"] {
+/* A docked panel open but off stage (collapsed, or to make room): the
+   pressed chip's outline without its fill. */
+.workbench-panel-toggle[data-state="collapsed"] {
   box-shadow: inset 0 0 0 1px var(--input);
 }
 

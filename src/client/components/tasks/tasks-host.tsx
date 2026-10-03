@@ -4,6 +4,7 @@ import {
   useLayoutEffect,
   useRef,
 } from "react";
+import type { EnvironmentTintStyle } from "../../app/environment-palette.js";
 import type { PanelChromeControls } from "../../workspace-panels/PanelChrome.js";
 import { StablePaneSlot } from "../../workspace-panels/StablePaneSlot.js";
 
@@ -30,6 +31,8 @@ export interface TasksDock {
    * panel header itself, so it shows these in its `PanelChrome`.
    */
   readonly controls: PanelChromeControls;
+  /** The thread environment's tint, as the other panel headers show it. */
+  readonly environmentTintStyle?: EnvironmentTintStyle;
   /** Adds the panel to the layout or reveals it there. */
   open(options: { readonly focus: boolean }): void;
   /** Closes the panel when it is on stage, otherwise opens or reveals it. */
@@ -57,8 +60,9 @@ export function useTasksHost(): TasksHost | undefined {
 
 /**
  * Publishes the thread workspace's Tasks panel to the host. Only the
- * presence, visibility and dock edge are compared; the callbacks always run
- * the latest render's, so frequent layout renders do not re-render Tasks.
+ * presence, visibility, dock edge and header tint are compared; the
+ * callbacks always run the latest render's, so frequent layout renders do
+ * not re-render Tasks.
  */
 export function usePublishTasksDock(dock: TasksDock | undefined): void {
   const publish = useTasksHost()?.publishDock;
@@ -69,6 +73,10 @@ export function usePublishTasksDock(dock: TasksDock | undefined): void {
   const visible = dock?.visible ?? false;
   const active = dock?.controls.active;
   const dockEdge = dock?.controls.dockEdge;
+  // A tint is rebuilt each render, so it is compared by value.
+  const tint = dock?.environmentTintStyle
+    ? JSON.stringify(dock.environmentTintStyle)
+    : undefined;
   useLayoutEffect(() => {
     if (!publish) return;
     if (!defined) {
@@ -85,11 +93,14 @@ export function usePublishTasksDock(dock: TasksDock | undefined): void {
         onClose: (invoker) => latest.current?.controls.onClose(invoker),
         onDock: (edge) => latest.current?.controls.onDock(edge),
       },
+      ...(tint === undefined
+        ? {}
+        : { environmentTintStyle: JSON.parse(tint) as EnvironmentTintStyle }),
       open: (options) => latest.current?.open(options),
       toggle: (invoker) => latest.current?.toggle(invoker),
       close: () => latest.current?.close(),
     });
-  }, [publish, defined, present, visible, active, dockEdge]);
+  }, [publish, defined, present, visible, active, dockEdge, tint]);
   useLayoutEffect(() => () => publish?.(undefined), [publish]);
 }
 

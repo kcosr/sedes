@@ -124,6 +124,10 @@ function Workspace({ spy }: { readonly spy: DockSpy }): React.JSX.Element {
       },
       onDock: vi.fn(),
     },
+    environmentTintStyle: {
+      "--environment-hue": 210,
+      "--environment-chroma": 0.08,
+    },
     open: (options) => {
       spy.open(options);
       setPresent(true);
@@ -332,7 +336,11 @@ describe("Tasks host in a thread workspace", () => {
     expect(surface).toHaveAttribute("data-presentation", "panel");
     // One header: the content's panel chrome, with collapse, dock and close.
     expect(surface.querySelectorAll("header")).toHaveLength(1);
-    expect(surface.querySelector(".workspace-panel-chrome")).not.toBeNull();
+    const header = surface.querySelector<HTMLElement>(".workspace-panel-chrome");
+    expect(header).not.toBeNull();
+    // Like the other panel headers, it carries the thread environment's tint.
+    expect(header).toHaveAttribute("data-environment-tint", "true");
+    expect(header!.style.getPropertyValue("--environment-hue")).toBe("210");
     fireEvent.click(within(surface).getByRole("button", { name: "Collapse Tasks panel" }));
     expect(spy.onCollapse).toHaveBeenCalledTimes(1);
     expect(within(surface).getByRole("button", { name: "Tasks panel actions" })).toBeInTheDocument();

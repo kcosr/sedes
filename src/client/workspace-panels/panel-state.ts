@@ -25,19 +25,42 @@ import {
 import type { WorkspacePanelTenantRegistry } from "./registry.js";
 import type { PanelPresentation } from "./panel-presentation.js";
 import { projectPanelLayout } from "./layout-presentation.js";
+import {
+  MAX_PANEL_SHARE,
+  MIN_PANEL_SHARE,
+  SIDE_PANEL_KINDS,
+  edgeAxis,
+  fitPanelSizes,
+  measurePanelSizes,
+  splitSizes,
+  withPanelSizes,
+  type MeasuredPanelSize,
+  type PanelSize,
+  type SidePanelKind,
+} from "./panel-sizes.js";
+import {
+  COMPANION_KINDS,
+  arrangeCompanions,
+  isCompanionKind,
+  recordCompanionArrangement,
+  type CompanionArrangement,
+  type CompanionKind,
+  type CompanionPlacement,
+} from "./companion-layout.js";
 
-export const PANEL_SIZE_STORAGE_KEY = "sedes-panel-instance-sizes@4";
+export const PANEL_SIZE_STORAGE_KEY = "sedes-panel-instance-sizes@5";
 export const WORKSPACE_FILES_STATE_STORAGE_KEY =
   "sedes-workspace-files-panel-state@1";
 export const WORKPADS_STATE_STORAGE_KEY = "sedes-workpads-panel-state@1";
 export const TASKS_STATE_STORAGE_KEY = "sedes-tasks-panel-state@1";
+export const COMPANION_LAYOUT_STORAGE_KEY = "sedes-panel-companions@1";
 
 /**
- * Singletons whose membership and collapse belong to this browser client
- * across every thread layout; only their placement is thread-local. Tasks
- * follows the current chat, so a thread switch keeps it docked.
+ * Singletons whose membership, collapse, and arrangement belong to this
+ * browser client across every thread layout (see companion-layout.ts). Tasks
+ * follows the current chat, so a thread switch keeps it docked in place.
  */
-const SHARED_PANEL_KINDS = ["workpads", "tasks"] as const;
+const SHARED_PANEL_KINDS = COMPANION_KINDS;
 type SharedPanelKind = (typeof SHARED_PANEL_KINDS)[number];
 const SHARED_PANEL_STORAGE_KEYS: Readonly<Record<SharedPanelKind, string>> = {
   workpads: WORKPADS_STATE_STORAGE_KEY,
@@ -53,16 +76,10 @@ const CLOSED_SHARED_PANEL: SharedPanelVisibility = Object.freeze({
   open: false,
   collapsed: false,
 });
-const PANEL_SIZE_STORAGE_VERSION = 4 as const;
+const PANEL_SIZE_STORAGE_VERSION = 5 as const;
 const PANEL_COLLAPSED_STORAGE_VERSION = 4 as const;
 export function panelCollapsedStorageKey(threadId: string): string {
   return `sedes-thread-panel-instance-collapsed@4:${encodeURIComponent(threadId)}`;
-}
-const MIN_RETAINED_PANEL_FRACTION = 0.05;
-const MAX_RETAINED_PANEL_FRACTION = 0.95;
-
-interface RetainedPanelSize {
-  readonly fraction: number;
 }
 
 export interface PanelFocusRequest {
@@ -119,6 +136,10 @@ interface SharedPanelState {
   readonly workspaceDirty: Map<string, Map<string, Set<string>>>;
   readonly threadStores: Map<string, PanelLayoutStore>;
   readonly sharedPanels: Map<SharedPanelKind, SharedPanelVisibility>;
+  /** Side panel sizes, shared by every thread layout (see panel-sizes.ts). */
+  readonly panelSizes: Map<SidePanelKind, PanelSize>;
+  /** Tasks and Workpads placement, shared by every thread layout. */
+  companionArrangement?: CompanionArrangement;
   workspaceFilesState?: SharedPanelVisibility;
 }
 
@@ -205,7 +226,6 @@ export class PanelLayoutStore {
   readonly #createProducerId: () => string;
   readonly #threadId: string;
   readonly #shared: SharedPanelState;
-  readonly #retainedPanelSizes: Map<PanelKind, RetainedPanelSize>;
   readonly #listeners = new Set<() => void>();
   readonly #intents = new Map<PanelInstanceId, unknown>();
   #focusSequence = 0;
@@ -235,28 +255,39 @@ export class PanelLayoutStore {
             CLOSED_SHARED_PANEL,
         ]),
       ),
+      panelSizes: readPanelSizes(this.#storage),
+      companionArrangement: readCompanionArrangementState(this.#storage),
     };
     let stored: string | null = null;
-    let storedSizes: string | null = null;
     let storedCollapsed: string | null = null;
     try {
       stored =
         this.#storage?.getItem(panelLayoutStorageKey(this.#threadId)) ?? null;
-      storedSizes = this.#storage?.getItem(PANEL_SIZE_STORAGE_KEY) ?? null;
       storedCollapsed =
         this.#storage?.getItem(panelCollapsedStorageKey(this.#threadId)) ??
         null;
     } catch {
       // Denied storage must not prevent the workbench from loading.
     }
-    this.#retainedPanelSizes = deserializeRetainedPanelSizes(storedSizes);
     const tree = deserializePanelLayout(this.#threadId, stored);
+    const collapsed = deserializeCollapsedPanels(storedCollapsed, tree);
     this.#snapshot = {
-      tree,
-      collapsed: deserializeCollapsedPanels(storedCollapsed, tree),
+      tree: fitPanelSizes(this.#arrange(tree), collapsed, this.#shared.panelSizes),
+      collapsed,
       revision: 0,
     };
     this.#reconcileSharedPanels();
+    // Before any arrangement is shared, the first thread layout sets it.
+    if (
+      options.threadId !== undefined &&
+      this.#shared.companionArrangement === undefined
+    ) {
+      const arrangement = this.#recordedArrangement(this.#snapshot.tree);
+      if (arrangement) {
+        this.#setCompanionArrangement(arrangement);
+        this.#conformLayout();
+      }
+    }
     if (options.threadId) this.#shared.threadStores.set(options.threadId, this);
   }
 
@@ -275,6 +306,7 @@ export class PanelLayoutStore {
     if (existing) {
       existing.#reconcileWorkspaceFiles();
       existing.#reconcileSharedPanels();
+      existing.#conformLayout();
       return existing;
     }
     const store = new PanelLayoutStore(this.registry, {
@@ -364,6 +396,7 @@ export class PanelLayoutStore {
       focusRequest: this.#requestFocus("chat"),
       persistTree: true,
       persistCollapsed: true,
+      rememberCompanions: true,
     });
     if (hadWorkspaceFiles) {
       this.#setWorkspaceFilesState({ open: false, collapsed: false });
@@ -511,10 +544,11 @@ export class PanelLayoutStore {
 
   openPanelInstance(panel: PanelInstance, input: PanelOpenInput = {}): boolean {
     if (this.hasPanel(panel.panelInstanceId)) return false;
+    const edge = input.edge ?? this.#preferredEdge(panel.kind);
     const tree = openLayoutPanel(this.#snapshot.tree, panel, {
-      edge: input.edge ?? this.#preferredEdge(panel.kind),
+      edge,
       preferredPanelFraction:
-        this.#retainedPanelSizes.get(panel.kind)?.fraction ??
+        this.#sharedPanelSize(panel.kind, edge) ??
         this.#preferredFraction(panel.kind, input),
       splitId: this.#createId("split"),
       stackId: this.#createId("stack"),
@@ -539,7 +573,9 @@ export class PanelLayoutStore {
               input.focusTerminalId,
             ),
       persistTree: true,
+      rememberCompanions: isCompanionKind(panel.kind) ? panel.kind : undefined,
     });
+    this.#rememberFirstPanelSize(panel.kind);
     return true;
   }
 
@@ -675,7 +711,6 @@ export class PanelLayoutStore {
   closePanel(panelInstanceId: string): boolean {
     const panel = this.panel(panelInstanceId);
     if (!panel) return false;
-    this.#rememberPanelSize(panelInstanceId, panel.kind);
     const tree = closeLayoutPanel(this.#snapshot.tree, panelInstanceId);
     const collapsed = new Set(this.#snapshot.collapsed);
     collapsed.delete(panelInstanceId);
@@ -692,6 +727,7 @@ export class PanelLayoutStore {
           ? undefined
           : this.#snapshot.focusRequest,
       persistTree: true,
+      rememberCompanions: isCompanionKind(panel.kind),
       persistCollapsed: this.#snapshot.collapsed.has(panelInstanceId),
     });
     if (panel.kind === "files") {
@@ -707,15 +743,35 @@ export class PanelLayoutStore {
       stackId: this.#createId("stack"),
     });
     if (tree === this.#snapshot.tree) return false;
+    const kind = this.panel(panelInstanceId)!.kind;
+    this.#publish({
+      tree,
+      persistTree: true,
+      rememberCompanions: isCompanionKind(kind) ? kind : undefined,
+    });
+    this.#rememberFirstPanelSize(kind);
+    return true;
+  }
+
+  /**
+   * Resizing a split remembers the size of the side panel beside the divider
+   * for every thread. The other side panels keep theirs, so Chat takes up the
+   * difference.
+   */
+  resizeSplit(splitId: string, sizes: readonly number[]): boolean {
+    const { tree, resized } = this.#resizedLayout(splitId, sizes);
+    if (tree === this.#snapshot.tree) return false;
+    this.#rememberPanelSizes(resized, { replace: true });
     this.#publish({ tree, persistTree: true });
     return true;
   }
 
-  resizeSplit(splitId: string, sizes: readonly number[]): boolean {
-    const tree = resizeLayoutSplit(this.#snapshot.tree, splitId, sizes);
-    if (tree === this.#snapshot.tree) return false;
-    this.#publish({ tree, persistTree: true });
-    return true;
+  /** Every split's sizes once `resizeSplit` commits, for a divider preview. */
+  previewSplitResize(
+    splitId: string,
+    sizes: readonly number[],
+  ): ReadonlyMap<string, readonly [number, number]> {
+    return splitSizes(this.#resizedLayout(splitId, sizes).tree);
   }
 
   setWorkspaceTenantDirty(
@@ -802,23 +858,108 @@ export class PanelLayoutStore {
     });
   }
 
-  #rememberPanelSize(panelInstanceId: PanelInstanceId, kind: PanelKind): void {
-    const fraction = panelFractionInParent(
-      this.#snapshot.tree,
-      panelInstanceId,
+  #sharedPanelSize(
+    kind: PanelKind,
+    edge: PanelPlacementEdge,
+  ): number | undefined {
+    if (kind === "chat") return undefined;
+    return this.#shared.panelSizes.get(kind)?.[edgeAxis(edge)];
+  }
+
+  /** Applies the shared companion arrangement and panel sizes. */
+  #conformLayout(): void {
+    const tree = fitPanelSizes(
+      this.#arrange(this.#snapshot.tree),
+      this.#snapshot.collapsed,
+      this.#shared.panelSizes,
     );
-    if (
-      fraction === undefined ||
-      fraction < MIN_RETAINED_PANEL_FRACTION ||
-      fraction > MAX_RETAINED_PANEL_FRACTION
-    )
+    if (tree !== this.#snapshot.tree) this.#publish({ tree });
+  }
+
+  #recordedArrangement(
+    tree: PanelLayoutTree,
+    outermost?: CompanionKind,
+  ): CompanionArrangement | undefined {
+    return recordCompanionArrangement(
+      tree,
+      this.#shared.companionArrangement,
+      (kind) => this.#preferredEdge(kind),
+      outermost,
+    );
+  }
+
+  #arrange(tree: PanelLayoutTree): PanelLayoutTree {
+    const arrangement = this.#shared.companionArrangement;
+    if (!arrangement) return tree;
+    return arrangeCompanions(tree, arrangement, {
+      createId: (kind) => this.#createId(kind),
+      preferredEdge: (kind) => this.#preferredEdge(kind),
+    });
+  }
+
+  #setCompanionArrangement(arrangement: CompanionArrangement): void {
+    const current = this.#shared.companionArrangement;
+    if (current && JSON.stringify(current) === JSON.stringify(arrangement))
       return;
-    this.#retainedPanelSizes.set(kind, { fraction });
+    this.#shared.companionArrangement = arrangement;
     try {
       this.#storage?.setItem(
-        PANEL_SIZE_STORAGE_KEY,
-        serializeRetainedPanelSizes(this.#retainedPanelSizes),
+        COMPANION_LAYOUT_STORAGE_KEY,
+        JSON.stringify({ version: 1, arrangement }),
       );
+    } catch {
+      // Persistence is best effort.
+    }
+  }
+
+  #resizedLayout(
+    splitId: string,
+    sizes: readonly number[],
+  ): {
+    readonly tree: PanelLayoutTree;
+    readonly resized: readonly MeasuredPanelSize[];
+  } {
+    const { collapsed } = this.#snapshot;
+    const tree = resizeLayoutSplit(this.#snapshot.tree, splitId, sizes);
+    const resized = measurePanelSizes(tree, collapsed).filter(
+      (size) => size.splitId === splitId,
+    );
+    return {
+      tree: fitPanelSizes(
+        tree,
+        collapsed,
+        withPanelSizes(this.#shared.panelSizes, resized),
+      ),
+      resized,
+    };
+  }
+
+  /** The size a side panel first opens or docks at carries to other threads. */
+  #rememberFirstPanelSize(kind: PanelKind): void {
+    this.#rememberPanelSizes(
+      measurePanelSizes(this.#snapshot.tree, this.#snapshot.collapsed).filter(
+        (size) => size.kind === kind,
+      ),
+      { replace: false },
+    );
+  }
+
+  #rememberPanelSizes(
+    measured: readonly MeasuredPanelSize[],
+    options: { readonly replace: boolean },
+  ): void {
+    const sizes = this.#shared.panelSizes;
+    let changed = false;
+    for (const { kind, axis, share } of measured) {
+      const current = sizes.get(kind)?.[axis];
+      if (current === share || (!options.replace && current !== undefined))
+        continue;
+      sizes.set(kind, { ...sizes.get(kind), [axis]: share });
+      changed = true;
+    }
+    if (!changed) return;
+    try {
+      this.#storage?.setItem(PANEL_SIZE_STORAGE_KEY, serializePanelSizes(sizes));
     } catch {
       // Persistence is best effort.
     }
@@ -855,7 +996,10 @@ export class PanelLayoutStore {
       if (state.open && !panel) {
         tree = openLayoutPanel(tree, { panelInstanceId: kind, kind }, {
           edge: this.#preferredEdge(kind),
-          preferredPanelFraction: this.#retainedPanelSizes.get(kind)?.fraction,
+          preferredPanelFraction: this.#sharedPanelSize(
+            kind,
+            this.#preferredEdge(kind),
+          ),
           splitId: this.#createId("split"),
           stackId: this.#createId("stack"),
         });
@@ -891,8 +1035,10 @@ export class PanelLayoutStore {
         { panelInstanceId: "workspace-files", kind: "files" },
         {
           edge: this.#preferredEdge("files"),
-          preferredPanelFraction:
-            this.#retainedPanelSizes.get("files")?.fraction,
+          preferredPanelFraction: this.#sharedPanelSize(
+            "files",
+            this.#preferredEdge("files"),
+          ),
           splitId: this.#createId("split"),
           stackId: this.#createId("stack"),
         },
@@ -916,15 +1062,34 @@ export class PanelLayoutStore {
     readonly focusRequest?: PanelFocusRequest;
     readonly persistTree?: boolean;
     readonly persistCollapsed?: boolean;
+    /**
+     * The user arranged Tasks or Workpads: share this layout's arrangement.
+     * A companion kind names the one just opened or docked, which is outermost.
+     */
+    readonly rememberCompanions?: boolean | CompanionKind;
   }): void {
     const previousShared = new Map(
       SHARED_PANEL_KINDS.map((kind) => [kind, this.#sharedVisibility(kind)]),
     );
-    const tree = "tree" in input ? input.tree! : this.#snapshot.tree;
     const collapsed =
       input.collapsed === undefined
         ? this.#snapshot.collapsed
         : new SnapshotReadonlySet(input.collapsed);
+    const requestedTree = "tree" in input ? input.tree! : this.#snapshot.tree;
+    if (input.rememberCompanions) {
+      const arrangement = this.#recordedArrangement(
+        requestedTree,
+        input.rememberCompanions === true ? undefined : input.rememberCompanions,
+      );
+      if (arrangement) this.#setCompanionArrangement(arrangement);
+    }
+    // Every layout keeps the shared companion arrangement around its own
+    // panels, so opening Files or a terminal lands inside Tasks and Workpads.
+    const tree = fitPanelSizes(
+      this.#arrange(requestedTree),
+      collapsed,
+      this.#shared.panelSizes,
+    );
     const focusRequest =
       "focusRequest" in input
         ? input.focusRequest
@@ -945,8 +1110,8 @@ export class PanelLayoutStore {
       ...(focusRequest ? { focusRequest } : {}),
       revision: this.#snapshot.revision + 1,
     };
-    // Layout placement stays thread-local; Workpads and Tasks membership and
-    // collapse belong to this browser client's panel state, across threads.
+    // Workpads and Tasks membership and collapse belong to this browser
+    // client's panel state, across threads, as does their arrangement.
     if (input.persistTree || input.persistCollapsed) {
       for (const kind of SHARED_PANEL_KINDS) {
         const previous = previousShared.get(kind)!;
@@ -1040,22 +1205,6 @@ function tenantIdForKind(kind: "files" | "workpads" | "tasks"): string {
   return kind === "files" ? "workspace-files" : kind;
 }
 
-function panelFractionInParent(
-  tree: PanelLayoutTree,
-  panelInstanceId: string,
-): number | undefined {
-  if (!tree || tree.kind === "tabs") return undefined;
-  for (const index of [0, 1] as const) {
-    if (findPanel(tree.children[index], panelInstanceId)) {
-      return (
-        panelFractionInParent(tree.children[index], panelInstanceId) ??
-        tree.sizes[index]
-      );
-    }
-  }
-  return undefined;
-}
-
 function deserializeCollapsedPanels(
   serialized: string | null,
   tree: PanelLayoutTree,
@@ -1093,12 +1242,49 @@ function serializeCollapsedPanels(
   });
 }
 
-function deserializeRetainedPanelSizes(
-  serialized: string | null,
-): Map<PanelKind, RetainedPanelSize> {
-  const retained = new Map<PanelKind, RetainedPanelSize>();
-  if (serialized === null) return retained;
+const PLACEMENT_EDGES = ["left", "right", "top", "bottom"] as const;
+
+function readCompanionArrangementState(
+  storage: PanelLayoutStorage | undefined,
+): CompanionArrangement | undefined {
   try {
+    const serialized = storage?.getItem(COMPANION_LAYOUT_STORAGE_KEY);
+    if (!serialized) return undefined;
+    const parsed: unknown = JSON.parse(serialized);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      (parsed as Record<string, unknown>).version !== 1 ||
+      !Array.isArray((parsed as Record<string, unknown>).arrangement)
+    )
+      return undefined;
+    const arrangement: CompanionPlacement[] = [];
+    for (const entry of (parsed as { arrangement: unknown[] }).arrangement) {
+      const { kind, edge } = (entry ?? {}) as Record<string, unknown>;
+      if (
+        !(COMPANION_KINDS as readonly unknown[]).includes(kind) ||
+        !(PLACEMENT_EDGES as readonly unknown[]).includes(edge) ||
+        arrangement.some((placement) => placement.kind === kind)
+      )
+        return undefined;
+      arrangement.push({
+        kind: kind as CompanionPlacement["kind"],
+        edge: edge as PanelPlacementEdge,
+      });
+    }
+    return arrangement;
+  } catch {
+    return undefined;
+  }
+}
+
+function readPanelSizes(
+  storage: PanelLayoutStorage | undefined,
+): Map<SidePanelKind, PanelSize> {
+  const sizes = new Map<SidePanelKind, PanelSize>();
+  try {
+    const serialized = storage?.getItem(PANEL_SIZE_STORAGE_KEY);
+    if (!serialized) return sizes;
     const parsed: unknown = JSON.parse(serialized);
     if (
       typeof parsed !== "object" ||
@@ -1106,29 +1292,36 @@ function deserializeRetainedPanelSizes(
       Array.isArray(parsed) ||
       (parsed as Record<string, unknown>).version !== PANEL_SIZE_STORAGE_VERSION
     )
-      return retained;
-    const sizes = (parsed as Record<string, unknown>).sizes;
-    if (typeof sizes !== "object" || sizes === null || Array.isArray(sizes))
-      return retained;
-    for (const kind of ["chat", "files", "workpads", "tasks", "terminals"] as const) {
-      const raw = (sizes as Record<string, unknown>)[kind];
+      return sizes;
+    const stored = (parsed as Record<string, unknown>).sizes;
+    if (typeof stored !== "object" || stored === null || Array.isArray(stored))
+      return sizes;
+    for (const kind of SIDE_PANEL_KINDS) {
+      const raw = (stored as Record<string, unknown>)[kind];
       if (typeof raw !== "object" || raw === null || Array.isArray(raw))
         continue;
-      const fraction = (raw as Record<string, unknown>).fraction;
-      if (
-        typeof fraction === "number" &&
-        Number.isFinite(fraction) &&
-        fraction >= MIN_RETAINED_PANEL_FRACTION &&
-        fraction <= MAX_RETAINED_PANEL_FRACTION
-      )
-        retained.set(kind, { fraction });
+      const size: { width?: number; height?: number } = {};
+      for (const axis of ["width", "height"] as const) {
+        const share = (raw as Record<string, unknown>)[axis];
+        if (
+          typeof share === "number" &&
+          Number.isFinite(share) &&
+          share >= MIN_PANEL_SHARE &&
+          share <= MAX_PANEL_SHARE
+        )
+          size[axis] = share;
+      }
+      if (size.width !== undefined || size.height !== undefined)
+        sizes.set(kind, size);
     }
-  } catch {}
-  return retained;
+  } catch {
+    // Denied or malformed storage starts without shared sizes.
+  }
+  return sizes;
 }
 
-function serializeRetainedPanelSizes(
-  sizes: ReadonlyMap<PanelKind, RetainedPanelSize>,
+function serializePanelSizes(
+  sizes: ReadonlyMap<SidePanelKind, PanelSize>,
 ): string {
   return JSON.stringify({
     version: PANEL_SIZE_STORAGE_VERSION,

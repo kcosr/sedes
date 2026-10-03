@@ -4,6 +4,7 @@ import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { terminalProducerIdSchema } from "../../shared/index.js";
 import {
+  COMPANION_LAYOUT_STORAGE_KEY,
   PANEL_SIZE_STORAGE_KEY,
   PanelLayoutStore,
   TASKS_STATE_STORAGE_KEY,
@@ -13,10 +14,18 @@ import {
   usePanelLayout,
 } from "./panel-state.js";
 import {
+  defaultPanelLayout,
+  findStackForPanel,
+  openPanel as openLayoutPanel,
   panelDockEdge,
   panelLayoutStorageKey,
+  serializePanelLayout,
+  type PanelLayoutTree,
+  type LayoutNode,
   type SplitNode,
 } from "./layout-tree.js";
+import { projectPanelLayout } from "./layout-presentation.js";
+import { splitSizes } from "./panel-sizes.js";
 import {
   WorkspacePanelTenantRegistry,
   type WorkspacePanelTenant,
@@ -51,7 +60,10 @@ function memoryStorage(initial: Readonly<Record<string, string>> = {}) {
   };
 }
 
-function createStore(storage = memoryStorage().storage) {
+function createStore(
+  storage = memoryStorage().storage,
+  threadId: string | null = "thread-1",
+) {
   let sequence = 0;
   let producerSequence = 0;
   return new PanelLayoutStore(
@@ -74,7 +86,7 @@ function createStore(storage = memoryStorage().storage) {
       },
     ]),
     {
-      threadId: "thread-1",
+      ...(threadId === null ? {} : { threadId }),
       storage,
       createId: (kind) => `${kind}-${++sequence}`,
       createProducerId: () =>
@@ -182,7 +194,7 @@ describe("PanelLayoutStore panel instances", () => {
     });
     reloaded.closePanel("tasks");
     expect(JSON.parse(values.get(PANEL_SIZE_STORAGE_KEY)!).sizes.tasks).toEqual({
-      fraction: 0.3,
+      width: 0.3,
     });
     const reopened = createStore(storage);
     expect(reopened.hasPanel("tasks")).toBe(false);
@@ -201,9 +213,9 @@ describe("PanelLayoutStore panel instances", () => {
     expect(root.forThread("thread-1").isCollapsed("tasks")).toBe(true);
     root.restorePanel("tasks");
     expect(root.forThread("thread-2").isVisible("tasks")).toBe(true);
-    // Placement stays thread-local: docking one layout leaves the other.
+    // Placement is shared too: docking in one layout docks it in every one.
     second.dockPanel("tasks", "left");
-    expect(panelDockEdge(root.forThread("thread-1").getSnapshot().tree, "tasks")).toBe("right");
+    expect(panelDockEdge(root.forThread("thread-1").getSnapshot().tree, "tasks")).toBe("left");
     second.closePanel("tasks");
     expect(root.forThread("thread-1").hasPanel("tasks")).toBe(false);
     expect(root.forThread("never-visited").hasPanel("tasks")).toBe(false);
@@ -470,13 +482,14 @@ describe("PanelLayoutStore v4 persistence", () => {
       WORKSPACE_FILES_STATE_STORAGE_KEY,
       WORKPADS_STATE_STORAGE_KEY,
       TASKS_STATE_STORAGE_KEY,
-      panelLayoutStorageKey("thread-1"),
       PANEL_SIZE_STORAGE_KEY,
+      COMPANION_LAYOUT_STORAGE_KEY,
+      panelLayoutStorageKey("thread-1"),
       panelCollapsedStorageKey("thread-1"),
     ]);
   });
 
-  it("retains panel-kind size after closing a split leaf", () => {
+  it("remembers a resized side panel's share of the stage", () => {
     const { storage, values } = memoryStorage();
     const first = createStore(storage);
     first.openPanel("workspace-files", { availableWidth: 1_200, focus: false });
@@ -484,8 +497,8 @@ describe("PanelLayoutStore v4 persistence", () => {
     first.resizeSplit(root.id, [0.55, 0.45]);
     first.closePanel("workspace-files");
     expect(JSON.parse(values.get(PANEL_SIZE_STORAGE_KEY)!)).toEqual({
-      version: 4,
-      sizes: { files: { fraction: 0.45 } },
+      version: 5,
+      sizes: { files: { width: 0.45 } },
     });
   });
 
@@ -501,6 +514,330 @@ describe("PanelLayoutStore v4 persistence", () => {
     const store = createStore(storage);
     expect(() => store.openPanel("workspace-files")).not.toThrow();
     expect(store.hasPanel("workspace-files")).toBe(true);
+  });
+});
+
+/** A panel's share of the rendered stage width or height. */
+function stageShare(
+  store: PanelLayoutStore,
+  panelInstanceId: string,
+  axis: "width" | "height" = "width",
+): number | undefined {
+  const { tree, collapsed } = store.getSnapshot();
+  const visit = (node: LayoutNode, share: number): number | undefined => {
+    if (node.kind === "tabs")
+      return node.tabs.some((tab) => tab.panelInstanceId === panelInstanceId)
+        ? share
+        : undefined;
+    const along = (node.orientation === "row") === (axis === "width");
+    return (
+      visit(node.children[0], along ? share * node.sizes[0] : share) ??
+      visit(node.children[1], along ? share * node.sizes[1] : share)
+    );
+  };
+  const projected = projectPanelLayout(tree, collapsed);
+  return projected ? visit(projected, 1) : undefined;
+}
+
+/** The split holding a panel's own stack, and which side it is on. */
+function parentSplit(
+  store: PanelLayoutStore,
+  panelInstanceId: string,
+): { readonly split: SplitNode; readonly index: 0 | 1 } {
+  const visit = (
+    node: LayoutNode,
+  ): { readonly split: SplitNode; readonly index: 0 | 1 } | undefined => {
+    if (node.kind === "tabs") return undefined;
+    for (const index of [0, 1] as const) {
+      const child = node.children[index];
+      if (
+        child.kind === "tabs" &&
+        child.tabs.some((tab) => tab.panelInstanceId === panelInstanceId)
+      )
+        return { split: node, index };
+    }
+    return visit(node.children[0]) ?? visit(node.children[1]);
+  };
+  const tree = store.getSnapshot().tree;
+  const found = tree ? visit(tree) : undefined;
+  if (!found) throw new Error(`${panelInstanceId} has no parent split`);
+  return found;
+}
+
+function resizePanel(
+  store: PanelLayoutStore,
+  panelInstanceId: string,
+  fraction: number,
+): void {
+  const { split, index } = parentSplit(store, panelInstanceId);
+  store.resizeSplit(
+    split.id,
+    index === 0 ? [fraction, 1 - fraction] : [1 - fraction, fraction],
+  );
+}
+
+describe("PanelLayoutStore shared panel sizes", () => {
+  it("shows a resized Tasks panel at the same width in every thread and after reload", () => {
+    const { storage, values } = memoryStorage();
+    const root = createStore(storage);
+    root.openPanel("tasks", { availableWidth: 1_000 });
+    const cached = root.forThread("thread-2");
+    expect(stageShare(cached, "tasks")).toBeCloseTo(0.35);
+
+    resizePanel(root, "tasks", 0.4);
+    expect(stageShare(root.forThread("thread-2"), "tasks")).toBeCloseTo(0.4);
+    expect(stageShare(root.forThread("never-visited"), "tasks")).toBeCloseTo(0.4);
+    expect(
+      stageShare(createStore(storage).forThread("thread-3"), "tasks"),
+    ).toBeCloseTo(0.4);
+    expect(JSON.parse(values.get(PANEL_SIZE_STORAGE_KEY)!)).toEqual({
+      version: 5,
+      sizes: { tasks: { width: 0.4 } },
+    });
+  });
+
+  it("keeps side panel widths in every thread's layout", () => {
+    const root = createStore();
+    root.openPanel("workspace-files", { availableWidth: 1_400 });
+    root.openPanel("tasks", { availableWidth: 1_400 });
+    const files = 360 / 1_400;
+    const tasks = 380 / 1_400;
+    expect(stageShare(root, "workspace-files")).toBeCloseTo(files);
+    expect(stageShare(root, "tasks")).toBeCloseTo(tasks);
+
+    const second = root.forThread("thread-2");
+    expect(stageShare(second, "workspace-files")).toBeCloseTo(files);
+    expect(stageShare(second, "tasks")).toBeCloseTo(tasks);
+
+    // Tasks is the outer column, so its divider takes it straight to 40%.
+    resizePanel(second, "tasks", 0.4);
+    expect(stageShare(second, "tasks")).toBeCloseTo(0.4);
+    expect(stageShare(second, "workspace-files")).toBeCloseTo(files);
+    const first = root.forThread("thread-1");
+    expect(stageShare(first, "tasks")).toBeCloseTo(0.4);
+    expect(stageShare(first, "workspace-files")).toBeCloseTo(files);
+  });
+
+  it("lets Chat take up a resize while other side panels keep their width", () => {
+    const store = createStore();
+    // Tasks opens last, so its divider is the outer split around Chat and Files.
+    store.openPanel("workspace-files", { availableWidth: 1_400 });
+    store.openPanel("tasks", { availableWidth: 1_400 });
+    const files = 360 / 1_400;
+    const { split } = parentSplit(store, "tasks");
+    const preview = store.previewSplitResize(split.id, [0.6, 0.4]);
+
+    resizePanel(store, "tasks", 0.4);
+    expect(stageShare(store, "tasks")).toBeCloseTo(0.4);
+    expect(stageShare(store, "workspace-files")).toBeCloseTo(files);
+    expect(preview).toEqual(splitSizes(store.getSnapshot().tree));
+  });
+
+  it("remembers sizes only from panels the user opens, docks, or resizes", () => {
+    const { storage, values } = memoryStorage();
+    const legacy = createStore(storage);
+    legacy.openPanel("tasks");
+    resizePanel(legacy, "tasks", 0.45);
+    // A layout saved before sizes were shared has no shared size yet.
+    values.delete(PANEL_SIZE_STORAGE_KEY);
+
+    // The app's unscoped root store reopens Tasks at the default size.
+    const root = createStore(storage, null);
+    expect(stageShare(root, "tasks")).toBeCloseTo(0.3);
+    expect(values.has(PANEL_SIZE_STORAGE_KEY)).toBe(false);
+    expect(stageShare(root.forThread("thread-1"), "tasks")).toBeCloseTo(0.45);
+  });
+
+  it("keeps a panel's width when a neighbouring panel collapses, restores, or closes", () => {
+    const store = createStore();
+    store.openPanel("workspace-files", { availableWidth: 1_400 });
+    store.openPanel("tasks", { availableWidth: 1_400 });
+    const files = 360 / 1_400;
+
+    store.collapsePanel("tasks");
+    expect(stageShare(store, "workspace-files")).toBeCloseTo(files);
+    store.restorePanel("tasks");
+    expect(stageShare(store, "workspace-files")).toBeCloseTo(files);
+    store.closePanel("tasks");
+    expect(stageShare(store, "workspace-files")).toBeCloseTo(files);
+  });
+
+  it("shares the Terminals height across thread layouts", () => {
+    const root = createStore();
+    root.openTerminalTab("terminal-1");
+    resizePanel(root, "terminals", 0.45);
+    const second = root.forThread("thread-2");
+    second.openTerminalTab("terminal-2");
+    expect(stageShare(second, "terminals", "height")).toBeCloseTo(0.45);
+  });
+
+  it("keeps a column of side panels at its thread-local width through collapse and restore", () => {
+    const store = createStore();
+    store.openPanel("workspace-files", { availableWidth: 1_400 });
+    const filesStack = parentSplit(store, "workspace-files").split.children[1];
+    store.openTerminalTab("terminal-1", { edge: "bottom", targetNodeId: filesStack.id });
+    const root = store.getSnapshot().tree as SplitNode;
+    const column = root.children[1] as SplitNode;
+    expect(column.orientation).toBe("column");
+    expect(parentSplit(store, "workspace-files").split).toBe(column);
+    store.resizeSplit(root.id, [0.4, 0.6]);
+
+    // Collapsed Terminals leaves Files alone on the right, standing in for
+    // the column, and Files' own shared width must not resize the column.
+    store.collapsePanel("terminals");
+    expect((store.getSnapshot().tree as SplitNode).sizes[1]).toBeCloseTo(0.6);
+    store.restorePanel("terminals");
+    expect((store.getSnapshot().tree as SplitNode).sizes[1]).toBeCloseTo(0.6);
+  });
+
+  it("leaves tabbed side panels at their thread-local size", () => {
+    const { storage, values } = memoryStorage();
+    const root = createStore(storage);
+    root.openPanel("workspace-files", { availableWidth: 1_400 });
+    const filesStack = parentSplit(root, "workspace-files").split.children[1];
+    root.openTerminalTab("terminal-1", { mode: "tab", targetNodeId: filesStack.id });
+    const remembered = values.get(PANEL_SIZE_STORAGE_KEY);
+
+    resizePanel(root, "workspace-files", 0.5);
+    expect(values.get(PANEL_SIZE_STORAGE_KEY)).toBe(remembered);
+    const reopened = root.forThread("thread-2").forThread("thread-1");
+    expect(stageShare(reopened, "workspace-files")).toBeCloseTo(0.5);
+  });
+});
+
+/** Panel instance IDs left to right across the rendered row splits. */
+function rowOrder(store: PanelLayoutStore): string[] {
+  const visit = (node: LayoutNode): string[] =>
+    node.kind === "tabs"
+      ? [node.activePanelInstanceId]
+      : node.orientation === "row"
+        ? [...visit(node.children[0]), ...visit(node.children[1])]
+        : visit(node.children[0]);
+  const tree = store.getSnapshot().tree;
+  return tree ? visit(tree) : [];
+}
+
+describe("PanelLayoutStore shared Tasks and Workpads arrangement", () => {
+  it("shows Tasks and Workpads in the same order in every thread", () => {
+    const { storage } = memoryStorage();
+    const root = createStore(storage);
+    // Opened Tasks first, then Workpads: Workpads is the outer column.
+    root.openPanel("tasks");
+    root.openPanel("workpads");
+    expect(rowOrder(root)).toEqual(["chat", "tasks", "workpads"]);
+    // A new layout adds them in its own order, then takes the shared one.
+    expect(rowOrder(root.forThread("thread-2"))).toEqual(["chat", "tasks", "workpads"]);
+    expect(rowOrder(createStore(storage).forThread("thread-3"))).toEqual([
+      "chat",
+      "tasks",
+      "workpads",
+    ]);
+  });
+
+  it("takes the arrangement last set up in any thread", () => {
+    const root = createStore();
+    root.openPanel("tasks");
+    root.openPanel("workpads");
+    const second = root.forThread("thread-2");
+    second.dockPanel("tasks", "left");
+    expect(rowOrder(second)).toEqual(["tasks", "chat", "workpads"]);
+    expect(rowOrder(root.forThread("thread-1"))).toEqual(["tasks", "chat", "workpads"]);
+    // Closing and reopening puts the panel outermost on its edge.
+    root.closePanel("workpads");
+    root.openPanel("workpads", { edge: "left" });
+    expect(rowOrder(root)).toEqual(["workpads", "tasks", "chat"]);
+    expect(rowOrder(root.forThread("thread-2"))).toEqual(["workpads", "tasks", "chat"]);
+  });
+
+  it("docks within a layout of only Tasks and Workpads and keeps it steady", () => {
+    const root = createStore();
+    root.openPanel("tasks");
+    root.openPanel("workpads");
+    root.closePanel("chat");
+    root.dockPanel("tasks", "right");
+    expect(rowOrder(root)).toEqual(["workpads", "tasks"]);
+    const steady = root.getSnapshot().tree;
+    expect(root.forThread("thread-1").getSnapshot().tree).toBe(steady);
+    // Chat returns inside them, and Workpads keeps its own edge.
+    root.openPanel("chat");
+    expect(rowOrder(root)).toEqual(["chat", "workpads", "tasks"]);
+  });
+
+  it("keeps a left outer companion steady when Chat closes", () => {
+    const root = createStore();
+    root.openPanel("tasks");
+    root.openPanel("workpads", { edge: "left" });
+    root.closePanel("chat");
+    expect(rowOrder(root)).toEqual(["workpads", "tasks"]);
+    const steady = root.getSnapshot();
+    expect(root.forThread("thread-1").getSnapshot()).toBe(steady);
+  });
+
+  it.each(["left", "right", "top", "bottom"] as const)(
+    "keeps Tasks docked %s in a layout of only companions, and after Chat returns",
+    (edge) => {
+      const root = createStore();
+      root.openPanel("tasks");
+      root.openPanel("workpads");
+      root.closePanel("chat");
+      root.dockPanel("tasks", edge);
+      const docked = root.getSnapshot();
+      expect(root.forThread("thread-1").getSnapshot()).toBe(docked);
+      root.openPanel("chat");
+      expect(panelDockEdge(root.getSnapshot().tree, "tasks")).toBe(edge);
+      expect(panelDockEdge(root.forThread("thread-2").getSnapshot().tree, "tasks")).toBe(edge);
+    },
+  );
+
+  it("does not republish a layout of only Tasks or Workpads on a thread switch", () => {
+    const root = createStore();
+    root.openPanel("tasks");
+    root.closePanel("chat");
+    const alone = root.getSnapshot();
+    expect(root.forThread("thread-1").getSnapshot()).toBe(alone);
+    root.openPanel("workpads");
+    const pair = root.getSnapshot();
+    expect(root.forThread("thread-1").getSnapshot()).toBe(pair);
+  });
+
+  it("takes the first restored layout's order, even with Files outside it", () => {
+    let saved: PanelLayoutTree = defaultPanelLayout;
+    let id = 0;
+    for (const panel of [
+      { panelInstanceId: "tasks", kind: "tasks" },
+      { panelInstanceId: "workpads", kind: "workpads" },
+      { panelInstanceId: "workspace-files", kind: "files" },
+    ] as const)
+      saved = openLayoutPanel(saved, panel, {
+        edge: "right",
+        splitId: `saved-split-${++id}`,
+        stackId: `saved-stack-${id}`,
+      });
+    const open = JSON.stringify({ version: 1, open: true, collapsed: false });
+    const { storage } = memoryStorage({
+      [panelLayoutStorageKey("thread-1")]: serializePanelLayout("thread-1", saved),
+      [TASKS_STATE_STORAGE_KEY]: open,
+      [WORKPADS_STATE_STORAGE_KEY]: open,
+      [WORKSPACE_FILES_STATE_STORAGE_KEY]: open,
+    });
+    // The app's unscoped root store records nothing; the first thread does.
+    const root = createStore(storage, null);
+    const order = ["chat", "workspace-files", "tasks", "workpads"];
+    expect(rowOrder(root.forThread("thread-1"))).toEqual(order);
+    expect(rowOrder(root.forThread("thread-2"))).toEqual(order);
+    expect(rowOrder(root.forThread("thread-1"))).toEqual(order);
+  });
+
+  it("opens Files and Terminals inside Tasks and Workpads", () => {
+    const root = createStore();
+    root.openPanel("tasks");
+    root.openPanel("workspace-files");
+    root.openTerminalTab("terminal-1");
+    expect(rowOrder(root)).toEqual(["chat", "workspace-files", "tasks"]);
+    // Tasks keeps the stage's full height; the Terminals sit under the rest.
+    const tree = root.getSnapshot().tree as SplitNode;
+    expect(panelDockEdge(tree, "tasks")).toBe("right");
+    expect(findStackForPanel(tree.children[0], "terminals")).toBeDefined();
   });
 });
 

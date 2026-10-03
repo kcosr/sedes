@@ -500,24 +500,26 @@ describe("PanelLayout singleton surfaces", () => {
   });
 
   it("keeps a fixed panel list and marks collapsed panels open", async () => {
-    const store = setup({ extraTenants: [{ ...filesTenant(), id: "workpads", title: "Workpads", scope: "thread" }] });
+    const store = setup({ extraTenants: [tasksTenant, { ...filesTenant(), id: "workpads", title: "Workpads", scope: "thread" }] });
     act(() => {
       store.openPanel("workpads");
-      store.openPanel("workspace-files");
+      store.openPanel("workspace-files", { focus: false });
       store.dockPanel("workspace-files", "left");
-      store.collapsePanel("workpads");
+      store.collapsePanel("workspace-files");
     });
     await openPanelsMenu();
     const entries = screen.getAllByRole("menuitem").filter(item => item.hasAttribute("data-panel-open"));
-    expect(entries.map(item => item.textContent?.split(" —")[0])).toEqual(["Chat", "Files", "WorkpadsCollapsed", "Terminals"]);
-    expect(entries.map(item => item.getAttribute("aria-description"))).toEqual(["Open", "Open", "Open", "Closed"]);
-    expect(entries.map(item => Boolean(item.querySelector(".lucide-check")))).toEqual([true, true, true, false]);
+    // Tasks and Workpads have their own toggles beside the menu.
+    expect(entries.map(item => item.textContent?.split(" —")[0])).toEqual(["Chat", "Files", "Terminals"]);
+    expect(entries.map(item => item.getAttribute("data-collapsed"))).toEqual(["false", "true", "false"]);
+    expect(entries.map(item => item.getAttribute("aria-description"))).toEqual(["Open", "Open", "Closed"]);
+    expect(entries.map(item => Boolean(item.querySelector(".lucide-check")))).toEqual([true, true, false]);
     // An open panel takes the checked row's look: weight 500 and a trailing check.
-    expect(entries.map(item => item.getAttribute("data-state"))).toEqual(["checked", "checked", "checked", "unchecked"]);
+    expect(entries.map(item => item.getAttribute("data-state"))).toEqual(["checked", "checked", "unchecked"]);
     expect(entries[0]).toHaveClass("data-[state=checked]:font-medium");
-    expect(entries[3]).not.toHaveAttribute("data-disabled");
-    fireEvent.click(entries[2]!);
-    expect(store.isCollapsed("workpads")).toBe(false);
+    expect(entries[2]).not.toHaveAttribute("data-disabled");
+    fireEvent.click(entries[1]!);
+    expect(store.isCollapsed("workspace-files")).toBe(false);
   });
 
   it("keeps Files expanded across thread switches and reload after restoring from Panels", async () => {
@@ -544,13 +546,15 @@ describe("PanelLayout singleton surfaces", () => {
     const store = setup({ extraTenants: [{ ...filesTenant(), id: "workpads", title: "Workpads", scope: "thread" }] });
     act(() => store.closePanel("chat"));
     expect(screen.getByTestId("workspace-panel-empty")).toBeInTheDocument();
-    for (const [title, id] of [["Chat", "chat"], ["Files", "workspace-files"], ["Workpads", "workpads"]]) {
+    for (const [title, id] of [["Chat", "chat"], ["Files", "workspace-files"]]) {
       await openPanelsMenu();
       const item = screen.getByRole("menuitem", { name: title });
       expect(item).toHaveAttribute("aria-description", "Closed");
       fireEvent.click(item);
       await waitFor(() => expect(store.isVisible(id!)).toBe(true));
     }
+    fireEvent.click(screen.getByTestId("workpads-panel-toggle"));
+    await waitFor(() => expect(store.isVisible("workpads")).toBe(true));
   });
 
   it("reopens an existing terminal from the panel list without creating a shell", async () => {
@@ -640,7 +644,7 @@ describe("PanelLayout singleton surfaces", () => {
     expect(createTerminal).toHaveBeenCalledTimes(1);
   });
 
-  it.each([false, true])("focuses Workpads content from the panels menu (mobile: %s)", async (narrow) => {
+  it.each([false, true])("focuses Workpads content from its toggle (mobile: %s)", async (narrow) => {
     mobile = narrow;
     const store = setup({ extraTenants: [{
       ...filesTenant(),
@@ -649,8 +653,7 @@ describe("PanelLayout singleton surfaces", () => {
       scope: "thread",
       render: () => <input aria-label="Workpad draft" />,
     }] });
-    await openPanelsMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Workpads" }));
+    fireEvent.click(screen.getByTestId("workpads-panel-toggle"));
     const draft = await screen.findByRole("textbox", { name: "Workpad draft" });
     const target = narrow
       ? screen.getByRole("region", { name: "Workpads panel content" })
@@ -666,6 +669,31 @@ describe("PanelLayout singleton surfaces", () => {
     }
   });
 
+  it("toggles Workpads from the workbench bar beside Tasks, outside the shortcut group", () => {
+    const store = setup({ extraTenants: [tasksTenant, { ...filesTenant(), id: "workpads", title: "Workpads", scope: "global" }] });
+    const bar = within(screen.getByTestId("workspace-workbench-bar"));
+    const toggle = bar.getByTestId("workpads-panel-toggle");
+    expect(toggle.previousElementSibling).toBe(bar.getByTestId("tasks-panel-toggle"));
+    expect(toggle).toHaveAccessibleName("Open Workpads panel");
+
+    fireEvent.click(toggle);
+    expect(store.isVisible("workpads")).toBe(true);
+    expect(toggle).toHaveAccessibleName("Close Workpads panel");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(
+      within(bar.getByRole("group", { name: "Panel shortcuts" })).queryByRole("button", { name: "Open Workpads panel" }),
+    ).toBeNull();
+
+    act(() => { store.collapsePanel("workpads"); });
+    expect(toggle).toHaveAccessibleName("Show collapsed Workpads panel");
+    fireEvent.click(toggle);
+    expect(store.isVisible("workpads")).toBe(true);
+
+    fireEvent.click(toggle);
+    expect(store.hasPanel("workpads")).toBe(false);
+    expect(toggle).toHaveAccessibleName("Open Workpads panel");
+  });
+
   it("hosts Workpads through docking and collapse without losing dirty text", async () => {
     const unmounted = vi.fn();
     function WorkpadFixture({ context }: { context: Parameters<WorkspacePanelTenant["render"]>[0] }) {
@@ -674,8 +702,7 @@ describe("PanelLayout singleton surfaces", () => {
       return <input aria-label="Workpad draft" value={text} onChange={event => { setText(event.target.value); context.host.setDirty(true); }} />;
     }
     const store = setup({ extraTenants: [{ ...filesTenant(), id: "workpads", title: "Workpads", scope: "thread", render: context => <WorkpadFixture context={context} /> }] });
-    await openPanelsMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Workpads(?: —|$)/ }));
+    fireEvent.click(screen.getByTestId("workpads-panel-toggle"));
     const draft = await screen.findByRole("textbox", { name: "Workpad draft" });
     fireEvent.change(draft, { target: { value: "Keep this draft" } });
     act(() => { store.dockPanel("workpads", "bottom"); });
@@ -686,7 +713,7 @@ describe("PanelLayout singleton surfaces", () => {
     expect(await screen.findByRole("textbox", { name: "Workpad draft" })).toBe(draft);
     expect(draft).toHaveValue("Keep this draft");
     expect(unmounted).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Close Workpads panel" }));
+    fireEvent.click(within(screen.getByRole("region", { name: "Workpads panel" })).getByRole("button", { name: "Close Workpads panel" }));
     expect(await screen.findByRole("dialog", { name: "Discard unsaved changes?" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(draft).toHaveValue("Keep this draft");
@@ -707,7 +734,7 @@ describe("PanelLayout singleton surfaces", () => {
     fireEvent.change(draft, { target: { value: "Retain this across workspaces" } });
     store.rerenderWorkspace("workspace-2");
     expect(screen.getByRole("textbox", { name: "Workpad draft" })).toBe(draft);
-    fireEvent.click(screen.getByRole("button", { name: "Close Workpads panel" }));
+    fireEvent.click(within(screen.getByRole("region", { name: "Workpads panel" })).getByRole("button", { name: "Close Workpads panel" }));
     const closeDialog = await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
     fireEvent.click(within(closeDialog).getByRole("button", { name: "Keep editing" }));
     expect(draft).toHaveValue("Retain this across workspaces");
@@ -931,8 +958,7 @@ describe("PanelLayout singleton surfaces", () => {
       ...filesTenant(), id: "workpads", title: "Workpads", scope: "thread",
       render: (context) => <WorkpadFixture context={context} />,
     }] });
-    await openPanelsMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Workpads(?: —|$)/ }));
+    fireEvent.click(screen.getByTestId("workpads-panel-toggle"));
     const draft = await screen.findByRole("textbox", { name: "Workpad draft" });
     fireEvent.change(draft, { target: { value: "Unsynced draft" } });
     const tree = store.getSnapshot().tree;
@@ -2879,12 +2905,12 @@ describe("PanelLayout Tasks tenant", () => {
     expect(store.isVisible("chat")).toBe(true);
   });
 
-  it("lists Tasks in the Panels menu but not among the panel shortcuts", async () => {
+  it("keeps Tasks out of the Panels menu and the panel shortcuts", async () => {
     const store = setup({ extraTenants: [tasksTenant] });
     await openPanelsMenu();
-    const row = screen.getByRole("menuitem", { name: /^Tasks/ });
-    expect(row).toHaveAttribute("aria-description", "Closed");
-    fireEvent.click(row);
+    expect(screen.queryByRole("menuitem", { name: /^Tasks/ })).toBeNull();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    fireEvent.click(tasksToggle());
     expect(store.isVisible("tasks")).toBe(true);
     expect(
       screen.queryByRole("button", { name: "Open Tasks panel" }),
@@ -3026,7 +3052,37 @@ describe("PanelLayout panel minimums", () => {
       (split) => split.querySelector<HTMLElement>(':scope > [role="separator"]')!,
     );
 
-  it("keeps Chat and Tasks at their minimums when a wide panel takes the rest", () => {
+  it("keeps Chat and Files at their minimums when a wide Tasks takes the rest", () => {
+    measureStage(1_185);
+    const store = setup({ extraTenants: [tasksTenant] });
+    fireEvent.click(tasksToggle());
+    act(() => {
+      store.openPanel("workspace-files", { availableWidth: 1_185, focus: false });
+    });
+    // Files opens inside Tasks, which stays the outer column.
+    const root = store.getSnapshot().tree as SplitNode;
+    expect(panelDockEdge(root, "tasks")).toBe("right");
+    act(() => {
+      store.resizeSplit(root.id, [0.2, 0.8]);
+    });
+
+    // Chat beside Files needs 360 + 5 + 280: the root holds that, not 20%.
+    expect(splits()[0]!.style.gridTemplateColumns).toMatch(
+      /^minmax\(645px, [\d.]+fr\) 5px minmax\(300px, [\d.]+fr\)$/,
+    );
+    expect(handles()[0]).toHaveAttribute("aria-valuenow", "645");
+    expect(handles()[0]).toHaveAttribute("aria-valuemin", "645");
+    expect(handles()[0]).toHaveAttribute("aria-valuemax", "880");
+    expect(splits()[1]!.style.gridTemplateColumns).toMatch(
+      /^minmax\(360px, [\d.]+fr\) 5px minmax\(280px, [\d.]+fr\)$/,
+    );
+    // The nested divider moves within its own split's 645px, not the stage.
+    expect(handles()[1]).toHaveAttribute("aria-valuemin", "360");
+    expect(handles()[1]).toHaveAttribute("aria-valuemax", "360");
+    expect(store.isVisible("workspace-files")).toBe(true);
+  });
+
+  it("does not resize when a divider is released where it was", () => {
     measureStage(1_185);
     const store = setup({ extraTenants: [tasksTenant] });
     fireEvent.click(tasksToggle());
@@ -3037,21 +3093,34 @@ describe("PanelLayout panel minimums", () => {
     act(() => {
       store.resizeSplit(root.id, [0.2, 0.8]);
     });
-
-    // Chat beside Tasks needs 360 + 5 + 300: the root holds that, not 20%.
-    expect(splits()[0]!.style.gridTemplateColumns).toMatch(
-      /^minmax\(665px, [\d.]+fr\) 5px minmax\(280px, [\d.]+fr\)$/,
+    const resized = store.getSnapshot().tree;
+    const capture = {
+      hasPointerCapture: vi.fn(() => true),
+      setPointerCapture: vi.fn(),
+      releasePointerCapture: vi.fn(),
+    };
+    const prototype = HTMLElement.prototype as unknown as Record<string, unknown>;
+    const originals = Object.keys(capture).map(
+      (key) => [key, Object.getOwnPropertyDescriptor(prototype, key)] as const,
     );
-    expect(handles()[0]).toHaveAttribute("aria-valuenow", "665");
-    expect(handles()[0]).toHaveAttribute("aria-valuemin", "665");
-    expect(handles()[0]).toHaveAttribute("aria-valuemax", "900");
-    expect(splits()[1]!.style.gridTemplateColumns).toMatch(
-      /^minmax\(360px, [\d.]+fr\) 5px minmax\(300px, [\d.]+fr\)$/,
-    );
-    // The nested divider moves within its own split's 665px, not the stage.
-    expect(handles()[1]).toHaveAttribute("aria-valuemin", "360");
-    expect(handles()[1]).toHaveAttribute("aria-valuemax", "360");
-    expect(store.isVisible("workspace-files")).toBe(true);
+    Object.assign(prototype, capture);
+    try {
+      // Chat and Files' minimums hold this divider at 645px, not at its 20%.
+      expect(handles()[0]).toHaveAttribute("aria-valuenow", "645");
+      fireEvent.pointerDown(handles()[0]!, {
+        button: 0,
+        isPrimary: true,
+        pointerId: 1,
+        clientX: 645,
+      });
+      fireEvent.pointerUp(handles()[0]!, { pointerId: 1, clientX: 645 });
+    } finally {
+      for (const [key, descriptor] of originals) {
+        if (descriptor) Object.defineProperty(prototype, key, descriptor);
+        else delete prototype[key];
+      }
+    }
+    expect(store.getSnapshot().tree).toBe(resized);
   });
 
   it("collapses the least recently used side panel when an arriving panel cannot fit", () => {
