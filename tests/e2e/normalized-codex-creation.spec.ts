@@ -113,7 +113,7 @@ test.describe.serial("normalized Codex creation surfaces", () => {
     await expect(page).toHaveURL(/\/threads\/[0-9a-f-]+$/);
 
     const fastOff = page.getByRole("button", {
-      name: "Fast mode, off, pending",
+      name: "Fast speed, off, pending",
     });
     await expect(fastOff).toBeVisible();
     const selected = page.waitForResponse(
@@ -123,14 +123,18 @@ test.describe.serial("normalized Codex creation surfaces", () => {
         response.ok(),
     );
     await fastOff.click();
-    await selected;
+    expect((await selected).request().postDataJSON().operation).toMatchObject({
+      feature: { featureId: "codex.fast_mode", schemaVersion: 2 },
+      actionId: "set_fast",
+      arguments: null,
+    });
     await expect(
-      page.getByRole("button", { name: "Fast mode, on, pending" }),
+      page.getByRole("button", { name: "Fast speed, on, pending" }),
     ).toBeVisible();
 
     await page.reload();
     await expect(
-      page.getByRole("button", { name: "Fast mode, on, pending" }),
+      page.getByRole("button", { name: "Fast speed, on, pending" }),
     ).toBeVisible();
 
     const composer = page.getByRole("textbox", { name: /Message/ });
@@ -140,7 +144,7 @@ test.describe.serial("normalized Codex creation surfaces", () => {
         response.url().endsWith("/draft") &&
         response.ok(),
     );
-    await composer.fill("Start this Codex thread in Fast mode");
+    await composer.fill("Start this Codex thread at Fast speed");
     await draftSaved;
     const submitted = page.waitForResponse(
       (response) =>

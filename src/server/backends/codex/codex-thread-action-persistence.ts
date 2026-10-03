@@ -15,7 +15,11 @@ import {
   type CodexExecutionPolicySelection,
 } from "./codex-execution-policy.js";
 import { CODEX_EXECUTION_FEATURE_REF } from "./codex-execution-feature.js";
-import { CODEX_FAST_MODE_FEATURE_REF } from "./codex-fast-mode-feature.js";
+import {
+  CODEX_FAST_MODE_FEATURE_REF,
+  codexSpeedSelectionForAction,
+} from "./codex-fast-mode-feature.js";
+import type { CodexServiceTierSelection } from "./codex-service-tier.js";
 import {
   CODEX_GOAL_FEATURE_REF,
   boundedCodexGoalReceiptResult,
@@ -85,7 +89,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
         syncServiceTier(
           scope: RequestScope,
           applicationThreadId: string,
-          serviceTier: "standard" | "fast",
+          serviceTier: CodexServiceTierSelection,
         ): Promise<void>;
       }
     | undefined;
@@ -125,7 +129,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
       syncServiceTier(
         scope: RequestScope,
         applicationThreadId: string,
-        serviceTier: "standard" | "fast",
+        serviceTier: CodexServiceTierSelection,
       ): Promise<void>;
     };
   }) {
@@ -464,19 +468,18 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
       readonly now: number;
     },
   ): Promise<{ readonly applicationOperationId: string }> {
-    if (
-      (input.operation.actionId !== "enable" &&
-        input.operation.actionId !== "disable") ||
-      input.operation.arguments !== null
-    ) {
+    // The gateway admits only operations the current capability allows, and
+    // the presentation allows only speeds the desired model's catalog offers.
+    const desiredServiceTier = codexSpeedSelectionForAction(
+      input.operation.actionId,
+    );
+    if (!desiredServiceTier || input.operation.arguments !== null) {
       throw new DomainError(
         "invalid_transition",
-        "The Codex Fast mode action is invalid.",
+        "The Codex Speed action is invalid.",
       );
     }
     this.#assertNoEnabledAutomation(scope, applicationThreadId);
-    const desiredServiceTier =
-      input.operation.actionId === "enable" ? "fast" : "standard";
     const requestFingerprint = fingerprint([
       applicationThreadId,
       input.expectedThreadRevision,
@@ -494,7 +497,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
       ) {
         throw new DomainError(
           "conflict",
-          "The Codex thread or Fast mode selection changed in another client.",
+          "The Codex thread or Speed selection changed in another client.",
         );
       }
       const receipt = this.#featureMutations.prepare(scope, {
@@ -515,7 +518,7 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
       if (receipt.state !== "prepared") {
         throw new DomainError(
           "conflict",
-          "The Fast mode mutation requires recovery.",
+          "The Speed mutation requires recovery.",
         );
       }
       this.#settings.updateDesired(scope, applicationThreadId, {
@@ -954,13 +957,16 @@ export class CodexThreadActionPersistence implements ThreadActionPersistenceProv
                 }),
                 model: model.modelId,
                 reasoningEffort: model.defaultReasoningEffort,
-                serviceTier:
-                  current.desired?.serviceTier === "fast" &&
-                  model.supportsFastMode
-                    ? "fast"
-                    : current.desired
-                      ? "standard"
-                      : model.defaultServiceTier,
+                // A retained speed survives only when the new model offers
+                // it; otherwise Standard, never a quieter cost change.
+                serviceTier: current.desired
+                  ? current.desired.serviceTier !== "standard" &&
+                    model.offeredServiceTiers.includes(
+                      current.desired.serviceTier,
+                    )
+                    ? current.desired.serviceTier
+                    : "standard"
+                  : model.defaultServiceTier,
               };
             })()
           : { ...current.desired!, reasoningEffort: settingValue };

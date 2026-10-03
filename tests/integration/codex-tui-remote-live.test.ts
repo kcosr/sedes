@@ -285,6 +285,8 @@ describe.runIf(tmuxAvailable)("Codex TUI remote live compatibility", () => {
         validateExecutionSettings: async () => undefined,
         resolveImportedReasoningEffort: async (_model, observed) =>
           observed ?? "low",
+        serviceTierOffered: async (_model, serviceTier) =>
+          serviceTier === "standard",
         releaseOwnership: () => undefined,
       });
       sedesActor = new ConversationActor({
@@ -349,6 +351,7 @@ describe.runIf(tmuxAvailable)("Codex TUI remote live compatibility", () => {
             runState: state.timeline.runState },
           providerFeatures: [],
           interactions: [],
+          settings: { revision: 0, values: [] },
         }),
         forkSource: async () => normalizedFixtureSnapshot("unused").forkSource,
         ancillary: async () => [],
@@ -1707,6 +1710,8 @@ async function startNormalizedLiveProjection(input: {
     validateExecutionSettings: async () => undefined,
     resolveImportedReasoningEffort: async (_model, observed) =>
       observed ?? "low",
+    serviceTierOffered: async (_model, serviceTier) =>
+      serviceTier === "standard",
     releaseOwnership: () => undefined,
   });
   const actor = new ConversationActor({
@@ -1767,6 +1772,7 @@ async function startNormalizedLiveProjection(input: {
         runState: state.timeline.runState },
       providerFeatures: [],
       interactions: [],
+      settings: { revision: 0, values: [] },
     }),
     forkSource: async () => normalizedFixtureSnapshot("unused").forkSource,
     ancillary: async () => [],

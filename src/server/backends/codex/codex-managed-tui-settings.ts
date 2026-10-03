@@ -40,6 +40,7 @@ export async function prepareCodexManagedTuiThreadSettings(input: {
     expectedGeneration: authority.appServerGeneration,
     model: settings.model,
     reasoningEffort: settings.reasoningEffort,
+    serviceTier: settings.serviceTier,
     signal,
   });
   assertCurrent();

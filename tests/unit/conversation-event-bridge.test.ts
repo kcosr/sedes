@@ -208,6 +208,7 @@ const targetedProjection = {
       capabilities: composed.capabilities,
       providerFeatures: composed.providerFeatures,
       interactions: composed.interactions,
+      settings: { revision: 0, values: [] },
     };
   },
   forkSource: async (
@@ -535,6 +536,7 @@ describe("ConversationEventBridge", () => {
         capabilities: snapshot("generation-2").capabilities,
         providerFeatures: [],
         interactions: [interaction],
+        settings: { revision: 0, values: [] },
       }),
       ancillary: async () => [],
     }, () => undefined);
@@ -814,6 +816,7 @@ describe("ConversationEventBridge", () => {
       capabilities: composed,
       providerFeatures: [],
       interactions: [],
+      settings: { revision: 0, values: [] },
     }));
     const bridge = new ConversationEventBridge({
       ...targetedProjection,
@@ -851,6 +854,100 @@ describe("ConversationEventBridge", () => {
     });
   });
 
+  it("publishes a backend-advanced settings revision behind in-flight application publications", async () => {
+    const source = new Source();
+    const hub = new ThreadEventHub();
+    const listener = vi.fn();
+    hub.subscribe(listener);
+    const settingsAt = (revision: number) => ({
+      revision,
+      values: [
+        {
+          id: "model" as const,
+          desiredValue: "model-a",
+          effectiveValue: "model-a",
+          applicationState: "effective" as const,
+        },
+      ],
+    });
+    let composedSettings = settingsAt(3);
+    const composeTargeted = vi.fn(async () => ({
+      threadRevision: 0,
+      capabilities: snapshot("generation-1").capabilities,
+      providerFeatures: [],
+      interactions: [],
+      settings: composedSettings,
+    }));
+    const bridge = new ConversationEventBridge({
+      ...targetedProjection,
+      snapshot: async (_scope, _threadId, current) =>
+        snapshot(current.timeline.generation),
+      capabilitiesAndProviderFeatures: composeTargeted,
+      ancillary: async () => [],
+    }, () => undefined);
+    const binding = bridge.bind({
+      scope,
+      applicationThreadId: "thread-1",
+      actor: source,
+      hub,
+      captureAuthoritativeState: async () => actorState("generation-1"),
+    });
+    await binding.ready;
+    const capabilitiesChanged = {
+      type: "backend_event" as const,
+      generation: "generation-1",
+      event: {
+        type: "capabilities_changed" as const,
+        capabilities: actorState("generation-1").backendCapabilities,
+      },
+    };
+
+    // An application publication captured revision 2 and is still composing
+    // when the backend confirms revision 3.
+    let releaseApplication!: () => void;
+    const applicationGate = new Promise<void>((resolve) => {
+      releaseApplication = resolve;
+    });
+    const {
+      orderedTurnIds: _orderedTurnIds,
+      turnsById: _turnsById,
+      itemsById: _itemsById,
+      forksByTurnId: _forksByTurnId,
+      history: _history,
+      runState: _runState,
+      usage: _usage,
+      ...application
+    } = snapshot("generation-1");
+    const applicationPublication = hub.serializeApplicationPublication(
+      async () => {
+        await applicationGate;
+        hub.publish({
+          type: "application_state_changed",
+          generation: "generation-1",
+          state: { ...application, settings: settingsAt(2) },
+        });
+      },
+    );
+    source.emit(capabilitiesChanged);
+    await vi.waitFor(() => expect(composeTargeted).toHaveBeenCalledTimes(1));
+    expect(hub.snapshot?.settings.revision).toBe(0);
+    releaseApplication();
+    await applicationPublication;
+
+    // A stale composition never republishes an older revision.
+    composedSettings = settingsAt(1);
+    source.emit(capabilitiesChanged);
+    await binding.release();
+
+    const types = listener.mock.calls
+      .map(([published]) => published.event.type)
+      .filter((type) =>
+        ["settings_changed", "application_state_changed"].includes(type),
+      );
+    expect(types).toEqual(["application_state_changed", "settings_changed"]);
+    expect(hub.snapshot?.settings).toEqual(settingsAt(3));
+  });
+
   it("recomposes capabilities when queue revision advances during composition", async () => {
     const source = new Source();
     const hub = new ThreadEventHub();
@@ -879,6 +976,7 @@ describe("ConversationEventBridge", () => {
           capabilities: initial.capabilities,
           providerFeatures: [],
           interactions: [],
+          settings: { revision: 0, values: [] },
         };
       })
       .mockResolvedValue({
@@ -886,6 +984,7 @@ describe("ConversationEventBridge", () => {
         capabilities: recomposedCapabilities,
         providerFeatures: [],
         interactions: [],
+        settings: { revision: 0, values: [] },
       });
     const projectSnapshot = vi.fn().mockResolvedValue(initial);
     const bridge = new ConversationEventBridge({
@@ -972,6 +1071,7 @@ describe("ConversationEventBridge", () => {
       },
       providerFeatures: [goalEnvelope(2, "complete")],
       interactions: [],
+      settings: { revision: 0, values: [] },
     }));
     const bridge = new ConversationEventBridge({
       ...targetedProjection,
@@ -1052,6 +1152,7 @@ describe("ConversationEventBridge", () => {
       capabilities: baseSnapshot.capabilities,
       providerFeatures: [goalEnvelope],
       interactions: [],
+      settings: { revision: 0, values: [] },
     }));
     const bridge = new ConversationEventBridge({
       ...targetedProjection,
@@ -1092,6 +1193,7 @@ describe("ConversationEventBridge", () => {
       capabilities: snapshot("generation-2").capabilities,
       providerFeatures: [],
       interactions: [],
+      settings: { revision: 0, values: [] },
     }));
     const bridge = new ConversationEventBridge({
       ...targetedProjection,
@@ -1416,6 +1518,7 @@ describe("ConversationEventBridge", () => {
           capabilities: snapshot("generation-1").capabilities,
           providerFeatures: [],
           interactions: [interaction],
+          settings: { revision: 0, values: [] },
         };
       },
       ancillary: async () => [],

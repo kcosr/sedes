@@ -69,6 +69,7 @@ export class ThreadEventPresentation implements ConversationEventBridgeProjectio
     readonly capabilities: NormalizedThreadSnapshot["capabilities"];
     readonly providerFeatures: NormalizedThreadSnapshot["providerFeatures"];
     readonly interactions: NormalizedThreadSnapshot["interactions"];
+    readonly settings: NormalizedThreadSnapshot["settings"];
   }> {
     return this.application.capabilitiesAndProviderFeaturesFromActorCapture(
       scope,

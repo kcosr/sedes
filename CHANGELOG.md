@@ -4,6 +4,17 @@
 
 ### Breaking Changes
 
+- Codex Speed is provider feature `codex.fast_mode@2`, which replaces the
+  Fast mode enable/disable actions with `set_standard`, `set_fast`, and
+  `set_ultrafast`. Clients that only know `codex.fast_mode@1` hide the control
+  until they are upgraded.
+  ([#44](https://github.com/kcosr/sedes/pull/44))
+
+- The managed Codex TUI uses sidecar capability `codex_managed_tui@2`, which
+  accepts the Ultrafast tier. Rebuild and upgrade execution sidecars with the
+  server; an older sidecar is rejected at connection.
+  ([#44](https://github.com/kcosr/sedes/pull/44))
+
 - Browser and packaged clients require client protocol 136, which gives every
   Task a `backlog` field. Upgrade clients together with the server.
   ([#39](https://github.com/kcosr/sedes/pull/39))
@@ -176,6 +187,14 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Codex threads can use **Ultrafast** speed when the account's Codex model
+  catalog offers it. When a model offers both Fast and Ultrafast, the
+  composer's lightning button opens a **Speed** menu, and a rocket marks
+  Ultrafast; a model with only Fast keeps the one-click toggle. Saved Agents
+  offer every speed the model has. A new tier appears after the Codex daemon
+  restarts. Migration 129 widens the stored service-tier values.
+  ([#44](https://github.com/kcosr/sedes/pull/44))
 
 - Opt-in Claude worker lifecycle diagnostics record process exits, cleanup and
   fencing reasons, probe failures, and affected session UUIDs to diagnose
@@ -352,6 +371,13 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- Codex Fast mode is now called **Speed** in the composer, docs, and saved
+  Agent settings. Changing to a model that doesn't offer the selected speed
+  returns the thread to Standard, as does reconnecting after the account's
+  catalog stops offering it; Ultrafast never steps down to Fast. A managed
+  TUI won't start or keep running with a speed the model no longer offers.
+  ([#44](https://github.com/kcosr/sedes/pull/44))
 
 - Tasks View options no longer have a Show group: Completed is always the
   collapsed section at the end of the list. Sorting orders Tasks within each
@@ -665,6 +691,15 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Changing a thread setting right after Codex confirmed a Fast mode change
+  no longer fails with "The Codex thread or settings changed in another
+  client." Backend-confirmed settings revisions now reach open clients.
+  ([#44](https://github.com/kcosr/sedes/pull/44))
+
+- Forking a Codex thread with Fast selected no longer fails before the fork
+  is created.
+  ([#44](https://github.com/kcosr/sedes/pull/44))
 
 - Deleting or restoring queued inputs no longer causes an unnecessary thread
   reconnect when the HTTP response arrives before older stream updates,

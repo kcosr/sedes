@@ -50,6 +50,7 @@ import type {
 import {
   CodexThreadExecutionSettingsRepository,
   type CodexExecutionSettingsTuple,
+  type CodexServiceTierSelection,
 } from "./codex-thread-execution-settings-repository.js";
 import { codexForkSettingsEligibility } from "./codex-fork-settings-eligibility.js";
 import {
@@ -468,7 +469,7 @@ class CodexBackendModuleRuntime implements BackendModuleRuntime {
             return current;
           },
           validateModelSelection: async ({ authority, settings, signal }) => {
-            await assertCodexLiveModelSelection({ client: this.#supervisor.client, expectedGeneration: authority.appServerGeneration, model: settings.model, reasoningEffort: settings.reasoningEffort, signal });
+            await assertCodexLiveModelSelection({ client: this.#supervisor.client, expectedGeneration: authority.appServerGeneration, model: settings.model, reasoningEffort: settings.reasoningEffort, serviceTier: settings.serviceTier, signal });
           },
         }));
       } else {
@@ -1050,7 +1051,7 @@ function sameExecutionSettings(
   left: {
     readonly model: string;
     readonly reasoningEffort: string;
-    readonly serviceTier: "standard" | "fast" | null;
+    readonly serviceTier: CodexServiceTierSelection | null;
     readonly serviceTierClassification: "recognized" | "external_custom";
     readonly sandboxMode: string | null;
     readonly sandboxClassification: "recognized" | "external_custom";
@@ -1064,7 +1065,7 @@ function sameExecutionSettings(
   right: {
     readonly model: string;
     readonly reasoningEffort: string;
-    readonly serviceTier: "standard" | "fast" | null;
+    readonly serviceTier: CodexServiceTierSelection | null;
     readonly serviceTierClassification: "recognized" | "external_custom";
     readonly sandboxMode: string | null;
     readonly sandboxClassification: "recognized" | "external_custom";

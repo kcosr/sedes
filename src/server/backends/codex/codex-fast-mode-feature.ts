@@ -2,7 +2,11 @@ import { z } from "zod";
 import type { BoundedValue } from "../../../shared/protocol/payload.js";
 import { boundValue } from "../../conversations/payload-policy.js";
 import type { ProviderFeatureModule } from "../../provider-features/contracts.js";
-import { codexServiceTierSelectionSchema } from "./codex-service-tier.js";
+import {
+  CODEX_ACCELERATED_SERVICE_TIERS,
+  codexServiceTierSelectionSchema,
+  type CodexServiceTierSelection,
+} from "./codex-service-tier.js";
 
 export {
   codexServiceTierSelectionSchema,
@@ -11,21 +15,73 @@ export {
 
 export const CODEX_FAST_MODE_FEATURE_REF = Object.freeze({
   featureId: "codex.fast_mode",
-  schemaVersion: 1,
+  schemaVersion: 2,
 } as const);
 
-export const codexFastModeStateV1Schema = z
+export const CODEX_SPEED_TIER_DESCRIPTION_MAXIMUM_LENGTH = 240;
+
+/**
+ * `offered` lists the accelerated tiers the desired model advertises, in
+ * Sedes order. Standard is always offered. Descriptions are bounded catalog
+ * text.
+ */
+export const codexFastModeStateV2Schema = z
   .object({
     desired: codexServiceTierSelectionSchema.nullable(),
     effective: codexServiceTierSelectionSchema.nullable(),
     applicationState: z.enum(["applied", "pending", "unknown"]),
+    offered: z
+      .array(
+        z
+          .object({
+            selection: z.enum(CODEX_ACCELERATED_SERVICE_TIERS),
+            description: z
+              .string()
+              .min(1)
+              .max(CODEX_SPEED_TIER_DESCRIPTION_MAXIMUM_LENGTH)
+              .optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(CODEX_ACCELERATED_SERVICE_TIERS.length)
+      .refine(
+        (offered) =>
+          offered.every(
+            ({ selection }, index) =>
+              index === 0 ||
+              CODEX_ACCELERATED_SERVICE_TIERS.indexOf(
+                offered[index - 1]!.selection,
+              ) < CODEX_ACCELERATED_SERVICE_TIERS.indexOf(selection),
+          ),
+        "Offered speeds must be unique and in Sedes order.",
+      ),
   })
   .strict();
-export type CodexFastModeStateV1 = z.infer<typeof codexFastModeStateV1Schema>;
+export type CodexFastModeStateV2 = z.infer<typeof codexFastModeStateV2Schema>;
+
+export const CODEX_SPEED_ACTION_BY_SELECTION = Object.freeze({
+  standard: "set_standard",
+  fast: "set_fast",
+  ultrafast: "set_ultrafast",
+} as const satisfies Record<CodexServiceTierSelection, string>);
+export type CodexSpeedActionId =
+  (typeof CODEX_SPEED_ACTION_BY_SELECTION)[CodexServiceTierSelection];
+
+export function codexSpeedSelectionForAction(
+  actionId: string,
+): CodexServiceTierSelection | undefined {
+  return (
+    Object.entries(CODEX_SPEED_ACTION_BY_SELECTION) as [
+      CodexServiceTierSelection,
+      string,
+    ][]
+  ).find(([, candidate]) => candidate === actionId)?.[0];
+}
 
 const emptyArgumentsSchema = z.null();
 
-function operation(actionId: "enable" | "disable", label: string) {
+function operation(actionId: CodexSpeedActionId, label: string) {
   return {
     actionId,
     label: { text: label },
@@ -44,17 +100,18 @@ export const codexFastModeFeatureModule = Object.freeze({
   ref: CODEX_FAST_MODE_FEATURE_REF,
   backendKind: "codex_app_server",
   kind: "stateful",
-  label: { text: "Fast mode" },
+  label: { text: "Speed" },
   description: {
-    text: "Fast mode: about 1.5x speed, higher usage",
+    text: "Faster speeds respond sooner and use more of your plan's usage",
   },
   presentationSlots: ["composer_action"],
-  stateSchema: codexFastModeStateV1Schema,
-  projectState(state: CodexFastModeStateV1): BoundedValue {
+  stateSchema: codexFastModeStateV2Schema,
+  projectState(state: CodexFastModeStateV2): BoundedValue {
     return boundValue(state);
   },
   operations: [
-    operation("enable", "Enable Fast mode"),
-    operation("disable", "Use Standard mode"),
+    operation("set_standard", "Use Standard speed"),
+    operation("set_fast", "Use Fast speed"),
+    operation("set_ultrafast", "Use Ultrafast speed"),
   ],
-} as const satisfies ProviderFeatureModule<CodexFastModeStateV1>);
+} as const satisfies ProviderFeatureModule<CodexFastModeStateV2>);

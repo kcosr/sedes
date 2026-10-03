@@ -22,7 +22,7 @@ import { verifyCodexRuntimeVersion, type VerifiedCodexRuntimeVersion } from "../
 import { codexServiceTierSelectionSchema } from "../codex-service-tier.js";
 import { codexTuiStateV1Schema, type CodexTuiStateV1 } from "../codex-tui-feature.js";
 
-const capability = { capabilityId: "codex_managed_tui", majorVersion: 1 } as const;
+const capability = { capabilityId: "codex_managed_tui", majorVersion: 2 } as const;
 const id = z.string().min(1).max(256);
 const generation = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const scopeSchema = z.strictObject({ tenantId: id, principalId: id });

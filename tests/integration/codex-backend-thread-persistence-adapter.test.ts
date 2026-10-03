@@ -499,7 +499,10 @@ describe("Codex backend thread persistence adapter", () => {
           supportedReasoningEfforts: ["medium", "high"],
           defaultReasoningEffort: "medium",
           inputModalities: ["text"],
-          fastMode: { supported: true, defaultSelection: "standard" },
+          serviceTiers: {
+            offered: [{ selection: "fast" }],
+            defaultSelection: "standard",
+          },
         },
       ],
       commands: [],
@@ -823,8 +826,8 @@ describe("Codex backend thread persistence adapter", () => {
             supportedReasoningEfforts: ["low"],
             defaultReasoningEffort: "low",
             inputModalities: ["text"],
-            fastMode: {
-              supported: true,
+            serviceTiers: {
+              offered: [{ selection: "fast" }],
               defaultSelection: "fast",
             },
           },

@@ -1,5 +1,9 @@
 import type { CodexSharedClientFacade } from "./codex-client-facade.js";
 import {
+  encodeCodexServiceTier,
+  type CodexServiceTierSelection,
+} from "./codex-service-tier.js";
+import {
   CODEX_C2_MAX_CATALOG_ITEMS,
   codexModelListMethod,
 } from "./codex-c2-protocol.js";
@@ -14,17 +18,24 @@ export interface CodexLiveModelSelection {
 }
 
 /**
- * Rechecks one exact model/effort tuple against the uncached live daemon
+ * Rechecks one exact model/effort/speed tuple against the uncached live daemon
  * catalog. Managed TUI launch uses this immediately before preparing the
  * process endpoint so a stale presentation catalog cannot authorize a spawn.
+ * A TUI-originated turn bypasses Sedes's turn gate, so an accelerated speed
+ * must be one the model still advertises.
  */
 export async function assertCodexLiveModelSelection(input: {
   readonly client: CodexSharedClientFacade;
   readonly expectedGeneration: number;
   readonly model: string;
   readonly reasoningEffort: string;
+  readonly serviceTier: CodexServiceTierSelection;
   readonly signal: AbortSignal;
 }): Promise<CodexLiveModelSelection> {
+  const nativeServiceTier =
+    input.serviceTier === "standard"
+      ? undefined
+      : encodeCodexServiceTier(input.serviceTier);
   const cursors = new Set<string>();
   let cursor: string | undefined;
   let itemCount = 0;
@@ -53,7 +64,9 @@ export async function assertCodexLiveModelSelection(input: {
         candidate.inputModalities.includes("text") &&
         candidate.supportedReasoningEfforts.some(
           ({ reasoningEffort }) => reasoningEffort === input.reasoningEffort,
-        ),
+        ) &&
+        (nativeServiceTier === undefined ||
+          candidate.serviceTiers.some(({ id }) => id === nativeServiceTier)),
     );
     if (selected) {
       assertGeneration(

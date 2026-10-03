@@ -293,7 +293,8 @@ See the [Pi operator guide](../operator/backends/pi.md).
 Codex exposes the broadest execution-policy surface:
 
 - model and reasoning effort;
-- service tier, including **Fast mode** when available;
+- service tier, shown as **Speed**: Standard, and Fast or Ultrafast when the
+  model offers them;
 - sandbox mode;
 - network access;
 - approval policy and reviewer;
@@ -334,11 +335,19 @@ messages and reloads. Archiving a session with unanswered questions asks for
 confirmation and preserves them for when you unarchive. Sent answers appear as
 **Question answered** entries in the transcript.
 
-### Fast mode
+### Speed
 
-Fast mode is a service-tier choice. Availability comes from the active runtime
-and installation policy; Sedes does not infer it from a model name. Change it
-with the other desired next-turn settings.
+Speed is a service-tier choice: Standard, Fast, or Ultrafast. Faster speeds
+respond sooner and use more of your plan's usage. Availability comes from the
+Codex model catalog for your account, the active runtime, and installation
+policy; Sedes does not infer it from a model name. Change it with the other
+desired next-turn settings.
+
+When the model offers one faster speed, the composer's lightning button turns
+it on and off. When it offers both Fast and Ultrafast, the button opens a Speed
+menu; the button shows a filled lightning bolt for Fast and a rocket for
+Ultrafast. Switching to a model that doesn't offer the selected speed returns
+the thread to Standard.
 
 ### Goal
 

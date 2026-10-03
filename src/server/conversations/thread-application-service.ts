@@ -502,6 +502,7 @@ export class ThreadApplicationService {
     readonly capabilities: NormalizedThreadSnapshot["capabilities"];
     readonly providerFeatures: NormalizedThreadSnapshot["providerFeatures"];
     readonly interactions: NormalizedThreadSnapshot["interactions"];
+    readonly settings: NormalizedThreadSnapshot["settings"];
   }> {
     const inventory = await this.#authorize(scope, applicationThreadId);
     if (inventory.thread.backingState !== "bound") {
@@ -518,6 +519,7 @@ export class ThreadApplicationService {
       capabilities: composed.capabilities,
       providerFeatures: [...composed.presentation.providerFeatureStates],
       interactions: composed.interactions,
+      settings: composed.presentation.settings,
     };
   }
 

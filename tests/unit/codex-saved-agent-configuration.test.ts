@@ -41,7 +41,10 @@ const catalog = {
       inputModalities: ["text"],
       supportedReasoningEfforts: ["low", "high"],
       defaultReasoningEffort: "low",
-      fastMode: { supported: true, defaultSelection: "fast" },
+      serviceTiers: {
+        offered: [{ selection: "fast" }],
+        defaultSelection: "fast",
+      },
     },
   ],
   commands: [],
@@ -218,6 +221,67 @@ describe("Codex SavedAgent configuration", () => {
         overrides: [{ id: "model", value: "gpt-fast" }],
       }),
     ).toThrow(/model is unavailable/i);
+  });
+
+  it("offers and resolves Ultrafast only for models whose catalog offers it", () => {
+    const ultrafastCatalog: BackendCatalog = {
+      ...catalog,
+      models: [
+        ...catalog.models,
+        {
+          provider: connection.id,
+          id: "gpt-ultra",
+          label: "GPT Ultra",
+          inputModalities: ["text"],
+          supportedReasoningEfforts: ["low"],
+          defaultReasoningEffort: "low",
+          serviceTiers: {
+            offered: [
+              { selection: "fast" },
+              { selection: "ultrafast", description: "Fastest" },
+            ],
+            defaultSelection: "standard",
+          },
+        },
+      ],
+    };
+    const resolved = subject().resolve({
+      connection,
+      catalog: ultrafastCatalog,
+      overrides: [
+        { id: "model", value: "gpt-ultra" },
+        { id: "service_tier", value: "ultrafast" },
+      ],
+    });
+    expect(resolved.settings).toMatchObject({
+      model: "gpt-ultra",
+      serviceTier: "ultrafast",
+    });
+    expect(
+      resolved.fields.find(({ id }) => id === "service_tier"),
+    ).toMatchObject({
+      label: "Speed",
+      defaultValue: "standard",
+      resolvedValue: "ultrafast",
+      options: [
+        expect.objectContaining({ value: "standard", label: "Standard" }),
+        expect.objectContaining({ value: "fast", label: "Fast" }),
+        expect.objectContaining({ value: "ultrafast", label: "Ultrafast" }),
+      ],
+    });
+    expect(() =>
+      subject().resolve({
+        connection,
+        catalog: ultrafastCatalog,
+        overrides: [
+          { id: "model", value: "gpt-fast" },
+          { id: "service_tier", value: "ultrafast" },
+        ],
+      }),
+    ).toThrow(/service tier is unavailable/i);
+    expect(() =>
+      subject().validateOverrides([{ id: "service_tier", value: "priority" }]),
+    ).toThrow(/overrides are invalid/i);
   });
 
   it("rejects service-tier and full execution-policy incompatibilities", () => {

@@ -91,22 +91,62 @@ function fakeProcess() {
 function readyClient(
   input: {
     readonly request?: (...arguments_: readonly unknown[]) => Promise<unknown>;
+    readonly requestWithReceipt?: (
+      ...arguments_: readonly unknown[]
+    ) => Promise<unknown>;
     readonly generation?: number;
   } = {},
 ) {
   const generation = input.generation ?? 7;
   const request = vi.fn(input.request ?? (async () => ({})));
+  const requestWithReceipt = vi.fn(input.requestWithReceipt);
   const client = new CodexSharedClientFacade({
     current: () => ({
       generation,
       request: request as never,
-      requestWithReceipt: vi.fn() as never,
+      requestWithReceipt: requestWithReceipt as never,
     }),
     latestGeneration: () => generation,
     retireGeneration: async () => undefined,
   });
   client.updateLifecycle({ state: "ready", generation });
-  return { client, request };
+  return { client, request, requestWithReceipt };
+}
+
+/** A live `model/list` page whose one model advertises `serviceTiers`. */
+function liveCatalog(serviceTiers: readonly string[]) {
+  return async () => ({
+    generation: 7,
+    inboundSequence: 1,
+    result: {
+      data: [
+        {
+          id: "gpt-5.6-luna",
+          model: "gpt-5.6-luna",
+          upgrade: null,
+          availabilityNux: null,
+          displayName: "gpt-5.6-luna",
+          description: "Test model",
+          hidden: false,
+          supportedReasoningEfforts: [
+            { reasoningEffort: "high", description: "high" },
+          ],
+          defaultReasoningEffort: "high",
+          inputModalities: ["text"],
+          supportsPersonality: false,
+          additionalSpeedTiers: [],
+          serviceTiers: serviceTiers.map((id) => ({
+            id,
+            name: id,
+            description: id,
+          })),
+          defaultServiceTier: null,
+          isDefault: false,
+        },
+      ],
+      nextCursor: null,
+    },
+  });
 }
 
 function handleAuthority() {
@@ -811,7 +851,9 @@ describe("CodexManagedTuiRegistry", () => {
   });
 
   it("synchronizes the full desired settings tuple only for a running generation", async () => {
-    const { client, request } = readyClient();
+    const { client, request } = readyClient({
+      requestWithReceipt: liveCatalog(["priority"]),
+    });
     const controller = new CodexManagedTuiController({ client });
     controller.configure({ launch: async () => fakeProcess().process });
     await controller.perform(handleAuthority(), "start");
@@ -853,6 +895,44 @@ describe("CodexManagedTuiRegistry", () => {
     expect(
       controller.presentation(authority.scope, authority.applicationThreadId),
     ).toMatchObject({ state: { lifecycle: "running" } });
+    await controller.close();
+  });
+
+  it("fails a running TUI instead of applying a speed the live catalog withdrew", async () => {
+    const { client, request } = readyClient({
+      requestWithReceipt: liveCatalog(["priority"]),
+    });
+    const fake = fakeProcess();
+    const controller = new CodexManagedTuiController({ client });
+    controller.configure({ launch: async () => fake.process });
+    await controller.perform(handleAuthority(), "start");
+
+    await controller.syncSettings(
+      authority.scope,
+      authority.applicationThreadId,
+      {
+        sandboxMode: "read-only",
+        networkAccess: "disabled",
+        approvalPolicy: "never",
+        approvalReviewer: "user",
+        model: "gpt-5.6-luna",
+        reasoningEffort: "high",
+        serviceTier: "ultrafast",
+      },
+    );
+
+    expect(request).not.toHaveBeenCalled();
+    expect(fake.close).toHaveBeenCalledWith("codex_tui_failed");
+    expect(
+      controller.presentation(authority.scope, authority.applicationThreadId),
+    ).toMatchObject({
+      state: {
+        lifecycle: "failed",
+        diagnostic: {
+          text: expect.stringContaining("no longer offers the selected speed"),
+        },
+      },
+    });
     await controller.close();
   });
 
@@ -910,7 +990,7 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
   });
 
   function settingsFixture(mode: "ready" | "no_op" | "failed" | "stale" | "stale_read" | "mismatch" | "missing" | "replaced" | "superseded" | "invalid",
-    catalogSelection: { model: string; upgrade: string | null } = { model: settings.model, upgrade: null }) {
+    catalogSelection: { model: string; upgrade: string | null; serviceTiers?: readonly string[] } = { model: settings.model, upgrade: null }) {
     const selectedSettings = { ...settings, model: catalogSelection.model };
     const fixture = launcherChannels();
     const updateStarted = deferred<void>();
@@ -944,7 +1024,8 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       if (method.method === "model/list") return {
         generation: 7, inboundSequence: ++sequence,
         result: { data: [{ id: selectedSettings.model, upgrade: catalogSelection.upgrade, hidden: false, inputModalities: ["text"],
-          supportedReasoningEfforts: [{ reasoningEffort: settings.reasoningEffort }] }], nextCursor: null },
+          supportedReasoningEfforts: [{ reasoningEffort: settings.reasoningEffort }],
+          serviceTiers: (catalogSelection.serviceTiers ?? ["priority"]).map(id => ({ id, name: id, description: id })) }], nextCursor: null },
       };
       if (method.method === "thread/resume") {
         readStarted.resolve();
@@ -1054,6 +1135,14 @@ describe("EnvironmentCodexManagedTuiLauncher", () => {
       expect(fixture.prepareManagedProcessEndpoint).not.toHaveBeenCalled();
       expect(fixture.openOwnedPty).not.toHaveBeenCalled();
     } finally { vi.useRealTimers(); }
+  });
+
+  it("never prepares or opens a PTY for a speed the live model does not offer", async () => {
+    const fixture = settingsFixture("ready", { model: settings.model, upgrade: null, serviceTiers: [] });
+    await expect(fixture.launch()).rejects.toThrow("codex_tui_live_model_selection_unavailable");
+    expect(fixture.requestWithReceipt.mock.calls.map(([method]) => method.method)).toEqual(["model/list"]);
+    expect(fixture.prepareManagedProcessEndpoint).not.toHaveBeenCalled();
+    expect(fixture.openOwnedPty).not.toHaveBeenCalled();
   });
 
   it("supports only unrestricted catalog model policy", () => {
@@ -1517,6 +1606,7 @@ describe("assertCodexLiveModelSelection", () => {
         expectedGeneration: 7,
         model: "gpt-5.6-luna",
         reasoningEffort: "high",
+        serviceTier: "standard",
         signal: new AbortController().signal,
       }),
     ).resolves.toEqual({ upgrade });
@@ -1540,9 +1630,65 @@ describe("assertCodexLiveModelSelection", () => {
     });
     client.updateLifecycle({ state: "ready", generation: 7 });
     await expect(assertCodexLiveModelSelection({
-      client, expectedGeneration: 7, model: "gpt-6-sol", reasoningEffort: "high",
+      client, expectedGeneration: 7, model: "gpt-6-sol", reasoningEffort: "high", serviceTier: "standard",
       signal: new AbortController().signal,
     })).rejects.toThrow("codex_tui_live_model_upgrade_invalid");
+  });
+
+  it("admits an accelerated speed only when the live model advertises it", async () => {
+    const offered = (serviceTiers: readonly string[]) => {
+      const client = new CodexSharedClientFacade({
+        current: () => ({
+          generation: 7,
+          request: vi.fn() as never,
+          requestWithReceipt: vi.fn(async () => ({
+            generation: 7,
+            inboundSequence: 1,
+            result: {
+              data: [
+                {
+                  ...model("gpt-5.6-luna", ["high"]),
+                  serviceTiers: serviceTiers.map((id) => ({
+                    id,
+                    name: id,
+                    description: id,
+                  })),
+                },
+              ],
+              nextCursor: null,
+            },
+          })) as never,
+        }),
+        latestGeneration: () => 7,
+        retireGeneration: async () => undefined,
+      });
+      client.updateLifecycle({ state: "ready", generation: 7 });
+      return (serviceTier: "standard" | "fast" | "ultrafast") =>
+        assertCodexLiveModelSelection({
+          client,
+          expectedGeneration: 7,
+          model: "gpt-5.6-luna",
+          reasoningEffort: "high",
+          serviceTier,
+          signal: new AbortController().signal,
+        });
+    };
+
+    await expect(offered(["priority"])("standard")).resolves.toEqual({
+      upgrade: null,
+    });
+    await expect(offered(["priority"])("fast")).resolves.toEqual({
+      upgrade: null,
+    });
+    await expect(offered(["priority"])("ultrafast")).rejects.toThrow(
+      "codex_tui_live_model_selection_unavailable",
+    );
+    await expect(
+      offered(["priority", "ultrafast"])("ultrafast"),
+    ).resolves.toEqual({ upgrade: null });
+    await expect(offered([])("fast")).rejects.toThrow(
+      "codex_tui_live_model_selection_unavailable",
+    );
   });
 
   it("rejects a response from a stale daemon generation", async () => {
@@ -1569,6 +1715,7 @@ describe("assertCodexLiveModelSelection", () => {
         expectedGeneration: 7,
         model: "gpt-5.6-luna",
         reasoningEffort: "high",
+        serviceTier: "standard",
         signal: new AbortController().signal,
       }),
     ).rejects.toThrow("codex_tui_live_model_catalog_generation_changed");

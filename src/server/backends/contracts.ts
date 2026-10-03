@@ -99,13 +99,17 @@ export interface BackendModelDescriptor {
   /** Present only when the provider advertises reasoning choices. */
   readonly defaultReasoningEffort?: string;
   /**
-   * Server-only normalized Fast metadata. Native service-tier identifiers do
-   * not cross this backend contract.
+   * Server-only normalized speed metadata. Present only when the provider
+   * advertises at least one accelerated tier; Standard is always implied.
+   * `offered` is non-empty, unique, and in Sedes order (Fast, Ultrafast).
+   * Native service-tier identifiers do not cross this backend contract.
    */
-  readonly fastMode?: {
-    readonly supported: true;
-    readonly defaultSelection: "standard" | "fast";
-    readonly description?: string;
+  readonly serviceTiers?: {
+    readonly offered: readonly {
+      readonly selection: "fast" | "ultrafast";
+      readonly description?: string;
+    }[];
+    readonly defaultSelection: "standard" | "fast" | "ultrafast";
   };
 }
 

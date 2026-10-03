@@ -27,7 +27,7 @@ state, and backups.
 | Backend             | Provider runtime                                            | Execution environments                                                                          | Core controls                               | Notable supported features                                                                                                             |
 | ------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | [Pi SDK](pi.md)         | SDK embedded in the Sedes process                           | Local; SSH workspace operations and optional remote skill discovery through the managed sidecar | Submit, Steer, Queue, Stop, rename, compact | Tool-access modes, skills, usage and cost, selected-turn forks, optional local Bubblewrap workspaces                                   |
-| [Codex](codex.md)   | Owned local app-server or an external app-server connection | Linux/macOS local; persistent-sidecar runtime over SSH or outbound                                                                    | Submit, Steer, Queue, Stop, rename, compact | Execution settings, approvals, questionnaires, Fast mode, Goal, selected-turn and latest-provider-snapshot forks, eligible managed TUI |
+| [Codex](codex.md)   | Owned local app-server or an external app-server connection | Linux/macOS local; persistent-sidecar runtime over SSH or outbound                                                                    | Submit, Steer, Queue, Stop, rename, compact | Execution settings, approvals, questionnaires, Speed (Fast/Ultrafast), Goal, selected-turn and latest-provider-snapshot forks, eligible managed TUI |
 | [Claude](claude.md) | Managed Claude Agent SDK worker plus Claude Code            | Linux/macOS local; persistent-sidecar runtime over SSH or outbound                                        | Submit, Steer, Queue, Stop, rename                 | Permission modes, prompts, native questions, skills, usage, background-work status, selected-completed-turn forks, native image input                                         |
 | [Grok](grok.md)     | Sedes-owned Grok ACP process                                | Local Linux x64 or macOS arm64/x64                                                              | Submit, Queue, Stop, rename                 | Plans, tool and collaboration rendering, file/image input, completed `ImageGen` and `ImageEdit` artifacts                              |
 | [OpenCode v2](opencode.md) | Owned resident daemon or external HTTP/SSE server | Local, SSH or outbound Linux host; same host account | Submit, Steer, Queue, Stop, rename | Native history, reviewed model/effort selection, approvals/forms, observed background work |
@@ -138,7 +138,8 @@ topology named.
 - Choose **Pi SDK** for the richest native tool-access controls, local workspace
   isolation, or a host-local provider runtime operating on an SSH workspace.
 - Choose **Codex** for explicit sandbox/network/approval settings, structured
-  questions, Goal or Fast mode, or an externally operated local/SSH app-server.
+  questions, Goal or Fast/Ultrafast speed, or an externally operated local/SSH
+  app-server.
 - Choose **Claude** for Claude Code's authenticated local, SSH, or outbound environment,
   permission modes, native skills, and image-capable prompts.
 - Choose **Grok** for a local Grok Build installation and the reviewed

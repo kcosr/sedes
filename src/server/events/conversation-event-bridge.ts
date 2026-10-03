@@ -54,8 +54,9 @@ export interface ConversationEventBridgeProjection {
     state: ConversationActorSnapshotState,
   ): Promise<NormalizedThreadSnapshot>;
   /**
-   * Capability document and provider feature envelopes composed together
-   * from one targeted-state pass — capabilities_changed is the frequent
+   * Capability document, provider feature envelopes, and the settings
+   * snapshot composed together from one targeted-state pass —
+   * capabilities_changed is the frequent
    * backend-driven feature transition signal, so each normalized publication
    * carries both values and costs one authorization and one composition.
    */
@@ -68,6 +69,7 @@ export interface ConversationEventBridgeProjection {
     readonly capabilities: ThreadCapabilityDocument;
     readonly providerFeatures: NormalizedThreadSnapshot["providerFeatures"];
     readonly interactions: NormalizedThreadSnapshot["interactions"];
+    readonly settings: NormalizedThreadSnapshot["settings"];
   }>;
   forkSource(
     scope: RequestScope,
@@ -151,6 +153,22 @@ export class ConversationEventBridge {
         // Failure observers cannot poison bridge settlement.
       }
     };
+    // A backend observation (for example a confirmed effective tuple) can
+    // advance the settings revision without an application mutation. Publish
+    // the composed settings through the application publication queue, and
+    // only while they remain newer than the published ones, so they never
+    // overtake an in-flight application capture or replace a newer one.
+    const publishNewerSettings = async (
+      generation: string,
+      settings: NormalizedThreadSnapshot["settings"],
+    ): Promise<void> => {
+      await input.hub.serializeApplicationPublication(() => {
+        if (!bindingValid || input.hub.projectionGeneration !== generation) return;
+        if (settings.revision > input.hub.snapshot!.settings.revision) {
+          input.hub.publish({ type: "settings_changed", generation, settings });
+        }
+      });
+    };
     const publishCurrentControls = async (generation: string): Promise<void> => {
       if (!bindingValid || input.hub.projectionGeneration !== generation) return;
       if (!input.captureAuthoritativeState) {
@@ -163,8 +181,13 @@ export class ConversationEventBridge {
       ) {
         const state = await input.captureAuthoritativeState();
         if (state.timeline.generation !== generation) return;
-        const { threadRevision, capabilities, providerFeatures, interactions } =
-          await this.#projection.capabilitiesAndProviderFeatures(
+        const {
+          threadRevision,
+          capabilities,
+          providerFeatures,
+          interactions,
+          settings,
+        } = await this.#projection.capabilitiesAndProviderFeatures(
             input.scope,
             input.applicationThreadId,
             state,
@@ -227,6 +250,9 @@ export class ConversationEventBridge {
           capabilities,
           providerFeatures,
         });
+        if (settings.revision > snapshot.settings.revision) {
+          await publishNewerSettings(generation, settings);
+        }
         return;
       }
     };
