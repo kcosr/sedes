@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { NativeVoiceStore } from "./NativeVoiceStore.js";
@@ -22,8 +23,16 @@ async function renderPage(state: NativeVoiceState | Error, setup?: (fake: Return
   await act(async () => { await store.initialize(); });
   return { fake, store, view };
 }
+const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+beforeEach(() => {
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
+  Object.assign(HTMLElement.prototype, { scrollIntoView: vi.fn() });
+});
 afterEach(() => {
   cleanup();
+  if (scrollIntoViewDescriptor) Object.defineProperty(HTMLElement.prototype, "scrollIntoView", scrollIntoViewDescriptor);
+  else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+  vi.unstubAllGlobals();
   localStorage.clear();
   act(() => { window.dispatchEvent(new StorageEvent("storage", { key: null })); });
 });
@@ -138,7 +147,9 @@ describe("voice settings page", () => {
       speech: { credentialConfigured: false, catalogStatus: "ready", error: null,
         catalog: { source: "server", sttModels: ["custom-stt"], ttsModels: ["custom-tts"], voices: ["local-voice"], speed: { min: 0.5, max: 2 }, formats: ["pcm"] } } });
     const { fake, store } = await renderPage(native, fake => fake.plugin.updateSettings.mockResolvedValue(native));
-    fireEvent.change(screen.getByRole("combobox", { name: "Recognition model" }), { target: { value: "my-new-model" } });
+    fireEvent.click(screen.getByRole("combobox", { name: "Recognition model" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Enter custom ID…" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Recognition model" }), { target: { value: "my-new-model" } });
     fireEvent.click(screen.getByRole("button", { name: "Save Recognition model" }));
     await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { sttModel: "my-new-model" } }));
     await waitFor(() => expect(screen.getByRole("spinbutton", { name: "Speech speed" })).toBeEnabled());
@@ -147,8 +158,70 @@ describe("voice settings page", () => {
     expect(screen.getByText("Enter a number from 0.5 to 2.")).toBeInTheDocument();
     expect(fake.plugin.updateSettings).toHaveBeenCalledTimes(1);
     act(() => fake.emit("stateChanged", { ...native, stateRevision: 2, speech: { ...native.speech, catalogStatus: "error", catalog: null, error: "Discovery failed." } }));
-    expect(screen.getByRole("textbox", { name: "Speech model" })).toHaveValue("custom-tts");
+    expect(screen.getByRole("combobox", { name: "Speech model" })).toHaveTextContent("custom-tts");
     expect(screen.getByText("Discovery failed.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("combobox", { name: "Speech model" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Enter custom ID…" }));
+    expect(screen.getByRole("textbox", { name: "Speech model" })).toHaveValue("custom-tts");
+    store.dispose();
+  });
+  it("opens discovered voices in a touch sheet, searches without changing the setting, and saves the chosen voice", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
+    let native = voiceSnapshot({ settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://speech.test/v1", ttsModel: "kokoro-local", ttsVoice: "af_heart" }),
+      speech: { credentialConfigured: true, catalogStatus: "ready", error: null,
+        catalog: { source: "server", sttModels: ["parakeet-local"], ttsModels: ["kokoro-local"], voices: ["af_heart", "af_sky"], speed: { min: 0.5, max: 2 }, formats: ["pcm"] } } });
+    const { fake, store } = await renderPage(native, fake => {
+      fake.plugin.getState.mockImplementation(async () => native);
+      fake.plugin.updateSettings.mockImplementation(async (input?: { patch: Partial<NativeVoiceState["settings"]> }) => {
+        if (!input) throw new Error("Missing settings update");
+        native = { ...native, stateRevision: 2, settingsRevision: 1, settings: { ...native.settings, ...input.patch } };
+        return native;
+      });
+    });
+    expect(document.querySelector("datalist, input[list]")).toBeNull();
+    const trigger = screen.getByRole("combobox", { name: "Speech voice" });
+    await user.pointer([{ keys: "[TouchA>]", target: trigger }, { keys: "[/TouchA]", target: trigger }]);
+    const dialog = screen.getByRole("dialog", { name: "Choose speech voice" });
+    const search = within(dialog).getByRole("combobox", { name: "Search speech voice options" });
+    expect(search).not.toHaveFocus();
+    expect(dialog).toHaveAttribute("data-layout", "sheet");
+    expect(within(dialog).getByRole("option", { name: "af_heart" })).toHaveAttribute("aria-selected", "true");
+    await user.type(search, "sky");
+    expect(within(dialog).queryByRole("option", { name: "af_heart" })).toBeNull();
+    expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("option", { name: "af_sky" }));
+    await waitFor(() => expect(trigger).toHaveTextContent("af_sky"));
+    expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { ttsVoice: "af_sky" } });
+    expect(screen.queryByRole("dialog", { name: "Choose speech voice" })).toBeNull();
+    store.dispose();
+  });
+  it.each([false, true])("cancels custom entry without saving and keeps a failed custom save editable (touch=%s)", async touch => {
+    const user = userEvent.setup();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: touch }));
+    const { fake, store } = await renderPage(voiceSnapshot());
+    await user.click(screen.getByRole("combobox", { name: "Speech model" }));
+    await user.click(screen.getByRole("option", { name: "Enter custom ID…" }));
+    const input = screen.getByRole("textbox", { name: "Speech model" });
+    await waitFor(() => expect(input).toHaveFocus());
+    await user.clear(input);
+    await user.keyboard("{Enter}");
+    expect(input).toHaveAccessibleDescription("Enter an ID.");
+    expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
+    await user.type(input, "custom-model");
+    await user.click(screen.getByRole("button", { name: "Cancel custom speech model" }));
+    expect(screen.getByRole("combobox", { name: "Speech model" })).toHaveTextContent("gpt-4o-mini-tts");
+    expect(screen.getByRole("combobox", { name: "Speech model" })).toHaveFocus();
+    expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("combobox", { name: "Speech model" }));
+    await user.click(screen.getByRole("option", { name: "Enter custom ID…" }));
+    expect(screen.getByRole("textbox", { name: "Speech model" })).toHaveValue("gpt-4o-mini-tts");
+    fake.plugin.updateSettings.mockRejectedValue(new Error("Could not save model."));
+    await user.clear(screen.getByRole("textbox", { name: "Speech model" }));
+    await user.type(screen.getByRole("textbox", { name: "Speech model" }), "custom-model");
+    await user.click(screen.getByRole("button", { name: "Save Speech model" }));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Speech model" })).toHaveAccessibleDescription("Could not save model."));
+    expect(screen.getByRole("textbox", { name: "Speech model" })).toHaveValue("custom-model");
     store.dispose();
   });
   it("tells microphones with the same product name apart", async () => {

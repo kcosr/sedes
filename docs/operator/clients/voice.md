@@ -45,6 +45,12 @@ speech server publishes its available models, voices, and controls through its
 capability endpoint. A failed catalog lookup is reported; it does not fabricate
 supported models or settings.
 
+After configuring the endpoint and credential, choose **Discover speech options**.
+Recognition model, Speech model, and Speech voice open searchable pickers; choosing
+an option saves it immediately. On touch screens the options open in a scrollable
+sheet. Choose **Enter custom ID…** to type an ID, then **Save**; **Cancel** leaves
+the saved choice unchanged. Voice choices follow the selected speech model.
+
 Speech credentials are stored only on this Android device, encrypted with an
 Android Keystore-protected key and excluded from backups. The credential dialog
 can save, test, or remove a key without returning it to the WebView. Each key is

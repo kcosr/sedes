@@ -729,6 +729,9 @@
 
 ### Fixed
 
+- Android speech model and voice choices now use searchable app pickers with
+  a custom-ID option, avoiding native autocomplete popups over the voice bar.
+
 - Native voice recognition that captures audio but returns no transcript
   (`empty_transcript`) now re-arms and listens again instead of reporting a
   recognition error, matching the Assistant client. Stop, Off, adapter changes,

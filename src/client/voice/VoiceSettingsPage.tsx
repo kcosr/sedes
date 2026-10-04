@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { useApplicationStore } from "../stores/ApplicationClientStore.js";
 import { SettingsPage } from "../components/settings/SettingsPage.js";
@@ -9,6 +9,8 @@ import { Callout } from "../components/ui/callout.js";
 import { useFieldControl } from "../components/ui/control.js";
 import { Input } from "../components/ui/input.js";
 import { NativeSelect } from "../components/ui/native-select.js";
+import { SearchableSelect } from "../components/ui/searchable-select.js";
+import { useTouchDensity } from "../app/use-touch-density.js";
 import { useVoiceState } from "./VoiceProvider.js";
 import { recentVoiceErrors, type NativeVoiceStore } from "./NativeVoiceStore.js";
 import { nativeThreadTitle, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
@@ -138,24 +140,67 @@ function SpeechProviderSettings({ store, native, pending }: { store: NativeVoice
       }}>{speech.catalogStatus === "loading" ? "Discovering speech options…" : "Discover speech options"}</Button>
       {speech.catalogStatus === "error" ? <p role="status">{speech.error ?? "Could not discover speech options."}</p> : null}
     </div>
-    <p className="text-sm text-muted-foreground">{settings.speechProvider === "openai" ? "Model suggestions reflect your account. Voice and speed suggestions come from maintained OpenAI model information. You can enter another model ID." :
-      "Discover the models and voices advertised by your server, or enter its documented IDs."}</p>
-    <VoiceTextSetting label="Recognition model" value={settings.sttModel} disabled={pending} suggestions={catalog?.sttModels} onSave={sttModel => update({ sttModel })} />
-    <VoiceTextSetting label="Speech model" value={settings.ttsModel} disabled={pending} suggestions={catalog?.ttsModels} onSave={ttsModel => update({ ttsModel })} />
-    <VoiceTextSetting label="Speech voice" value={settings.ttsVoice} disabled={pending} suggestions={catalog?.voices} onSave={ttsVoice => update({ ttsVoice })} />
+    <p className="text-sm text-muted-foreground">{settings.speechProvider === "openai" ? "Model choices reflect your account. Voice and speed choices come from maintained OpenAI model information. Choose Enter custom ID… to use another ID." :
+      "Discover and choose the models and voices advertised by your server, or choose Enter custom ID… to use a documented ID."}</p>
+    <VoiceChoiceSetting label="Recognition model" value={settings.sttModel} disabled={pending} options={catalog?.sttModels} onSave={sttModel => update({ sttModel })} />
+    <VoiceChoiceSetting label="Speech model" value={settings.ttsModel} disabled={pending} options={catalog?.ttsModels} onSave={ttsModel => update({ ttsModel })} />
+    <VoiceChoiceSetting label="Speech voice" value={settings.ttsVoice} disabled={pending} options={catalog?.voices} onSave={ttsVoice => update({ ttsVoice })} />
     <VoiceTextSetting label="Speech speed" value={String(settings.ttsSpeed)} disabled={pending} min={Math.max(0.25, speed?.min ?? 0.25)} max={Math.min(4, speed?.max ?? 4)} step={0.05}
       description={speed ? "Supported speed range for the selected speech model." : "Support for this model has not been verified. 1 is normal speed."} onSave={ttsSpeed => update({ ttsSpeed: Number(ttsSpeed) })} />
     {catalog && !catalog.formats.includes("pcm") ? <p className="text-sm text-muted-foreground">PCM output support has not been confirmed for this model. Voice playback requires PCM audio.</p> : null}
   </SettingsSection>;
 }
 
-function VoiceTextSetting({ label, description, value, disabled, onSave, min, max, step = 1, type = "text", suggestions }: {
+function VoiceChoiceSetting({ label, value, disabled, options = [], onSave }: {
+  label: string; value: string; disabled: boolean; options?: string[] | undefined; onSave: (value: string) => Promise<void>;
+}) {
+  const touch = useTouchDensity();
+  const controlId = useId();
+  const customWasOpen = useRef(false);
+  const [custom, setCustom] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const [error, setError] = useState<string>();
+  useEffect(() => { setDraft(value); setError(undefined); setCustom(false); }, [value]);
+  useEffect(() => {
+    if (!custom && customWasOpen.current) document.getElementById(controlId)?.focus();
+    customWasOpen.current = custom;
+  }, [custom, controlId]);
+  const save = async (next: string) => {
+    const id = next.trim();
+    if (!id) { setError("Enter an ID."); return; }
+    try { if (id !== value) await onSave(id); setError(undefined); setCustom(false); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Could not save."); }
+  };
+  // Prefix IDs so the custom-entry action cannot collide with a provider's model or voice ID.
+  const choices = options.map(option => ({ value: `id:${option}`, label: option }));
+  if (value && !options.includes(value)) choices.unshift({ value: `id:${value}`, label: value });
+  return <SettingsField id={controlId} label={label} error={error}>
+    {custom ? <div className="flex min-w-0 flex-wrap gap-2">
+      <Input className="min-w-0 flex-1" value={draft} disabled={disabled} autoComplete="off" autoFocus
+        onChange={event => setDraft(event.target.value)} onKeyDown={event => {
+          if (event.nativeEvent.isComposing) return;
+          if (event.key === "Enter") { event.preventDefault(); void save(draft); }
+          if (event.key === "Escape") { event.preventDefault(); setDraft(value); setError(undefined); setCustom(false); }
+        }} />
+      <Button variant="outline" aria-label={`Save ${label}`} disabled={disabled || !draft.trim()} onClick={() => void save(draft)}>Save</Button>
+      <Button variant="ghost" aria-label={`Cancel custom ${label.toLowerCase()}`} disabled={disabled}
+        onClick={() => { setDraft(value); setError(undefined); setCustom(false); }}>Cancel</Button>
+    </div> : <SearchableSelect label={label} searchLabel={`Search ${label.toLowerCase()} options`} emptyLabel="No matching options"
+      value={`id:${value}`} placeholder={`Choose ${label.toLowerCase()}`} options={[...choices, { value: "custom", label: "Enter custom ID…", pinned: true }]}
+      presentation={touch ? "dialog" : "popover"} disabled={disabled} onValueChange={next => {
+        setError(undefined);
+        if (next === "custom") { setDraft(value); setCustom(true); }
+        else void save(next.slice(3));
+      }} />}
+  </SettingsField>;
+}
+
+function VoiceTextSetting({ label, description, value, disabled, onSave, min, max, step = 1, type = "text" }: {
   label: string; description?: string; value: string; disabled: boolean; onSave: (value: string) => Promise<void>; min?: number; max?: number;
-  step?: number; type?: "text" | "url"; suggestions?: string[] | undefined;
+  step?: number; type?: "text" | "url";
 }) {
   const [draft, setDraft] = useState(value);
   const [error, setError] = useState<string>();
-  const listId = useId();
   useEffect(() => { setDraft(value); setError(undefined); }, [value]);
   const save = async () => {
     if (min !== undefined && (draft.trim() === "" || !Number.isFinite(Number(draft)) || (step === 1 && !/^\d+$/.test(draft)) || Number(draft) < min || Number(draft) > max!)) {
@@ -165,8 +210,7 @@ function VoiceTextSetting({ label, description, value, disabled, onSave, min, ma
   };
   return <SettingsField label={label} description={description} error={error}>
     <div className="flex min-w-0 gap-2"><Input value={draft} disabled={disabled} type={min === undefined ? type : "number"} min={min} max={max} step={min === undefined ? undefined : step}
-      list={suggestions?.length ? listId : undefined} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); void save(); } }} />
-      {suggestions?.length ? <datalist id={listId}>{suggestions.map(option => <option key={option} value={option} />)}</datalist> : null}
+      onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); void save(); } }} />
       <Button variant="outline" aria-label={`Save ${label}`} disabled={disabled || draft === value} onClick={() => void save()}>Save</Button></div>
   </SettingsField>;
 }
