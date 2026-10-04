@@ -46,6 +46,7 @@ import {
 } from "../app/thread-load-diagnostics.js";
 import type { PanelChromeControls } from "../workspace-panels/PanelChrome.js";
 import { useTaskDrag } from "../tasks/task-drag.js";
+import { useNativeVoice } from "../voice/VoiceProvider.js";
 
 const CONNECTING_BANNER_DELAY_MS = 5_000;
 
@@ -72,6 +73,7 @@ export function ThreadView({
     [registry, threadId],
   );
   const state = useThreadStore(store);
+  const voice = useNativeVoice();
   const desktopChatAutofocus = useChatAutofocus();
   const taskDrag = useTaskDrag();
   const focusAtThreadOpen = useRef(
@@ -112,11 +114,21 @@ export function ThreadView({
         : 0,
     });
   }, [taskDropActive]);
-  // Seek-on-submit signal from the composer to the transcript. A ref (not
-  // state): arming it must not re-render, and the transcript consumes it
-  // imperatively when the sent message shows up.
+  // Typed and local voice Sends share one exact-operation seek request.
   const seekRequest = useRef<TranscriptSeekRequest | null>(null);
   const transcript = useRef<TranscriptHandle>(null);
+  const seekAfterSend = useCallback((operationId: string) => {
+    if (!getSeekOnSubmit()) return;
+    seekRequest.current = { requestedAt: Date.now(), operationId };
+    // The transcript may already contain this operation when a native receipt arrives.
+    transcript.current?.seekPendingSend();
+  }, []);
+  useEffect(() => {
+    if (!voice || !visible || focusTurnId !== undefined) return;
+    return voice.subscribeInputSubmitted(event => {
+      if (event.threadId === threadId && document.visibilityState !== "hidden") seekAfterSend(event.operationId);
+    });
+  }, [voice, visible, focusTurnId, threadId, seekAfterSend]);
   const [historyPresentation, setHistoryPresentation] =
     useState<TranscriptHistoryPresentation>({ entries: [] });
   const lastLoadCommitAttemptId = useRef<string | undefined>(undefined);
@@ -703,14 +715,7 @@ export function ThreadView({
                   focusTurnId === undefined
                 }
                 autoFocus={shouldAutofocusChat}
-                onImmediateSend={(operationId) => {
-                  if (getSeekOnSubmit()) {
-                    seekRequest.current = {
-                      requestedAt: Date.now(),
-                      operationId,
-                    };
-                  }
-                }}
+                onImmediateSend={seekAfterSend}
               />
             ) : undefined
           }

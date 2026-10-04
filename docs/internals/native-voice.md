@@ -247,6 +247,19 @@ message until an exact delivery-operation match or authoritative retained
 state resolves it. Queue, Steer, attributed inputs, and failed or uncertain
 deliveries retain their existing presentation and controls.
 
+Local **Seek on send** uses a separate transient `inputSubmitted` bridge event.
+Only a current, uncancelled ordinary Submit from the active interaction may
+emit it while its target is the visible foreground thread. The event carries
+the receipt's exact operation/thread IDs and the native binding/generation;
+it contains no message content and is neither journaled nor replayed. Native
+rechecks visibility and ownership before dispatch, and the WebView rejects
+stale, duplicate, unhydrated, or foreign events. Hidden Chat, targeted history,
+late receipt recovery, and submissions from another device do not trigger a
+seek. Typed Send and this local event share the same animation and pinning
+path, including when the user item appeared before the receipt. Routine
+sending states stay internal; an incomplete preview or unresolved delivery
+can still carry its required indication.
+
 A first send to an unbound thread requires interactive presentation and the
 thread's required first-submission settings, as the composer does. If the
 thread revision changes between that validation and the commit, readiness and

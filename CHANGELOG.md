@@ -712,7 +712,8 @@
 ### Fixed
 
 - Idle voice submissions appear as ordinary chat messages while delivery
-  completes, without briefly flashing a pending-input bar or changing the draft.
+  completes, honor **Seek on send**, and preserve the typed draft. Routine
+  delivery labels stay hidden, matching typed Send.
 
 - Claude availability probes wait for complete process output, avoiding
   intermittent false unavailable errors.

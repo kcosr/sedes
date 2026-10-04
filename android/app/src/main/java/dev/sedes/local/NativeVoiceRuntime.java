@@ -14,6 +14,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.HashSet;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -58,6 +59,8 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
     private boolean foregroundVisible, sessionStarted, policyKnown, streamFailureReported;
     private int adapterFailures, streamFailures;
     private volatile boolean nativeVisible;
+    /** Invalidates a queued local UI event even if navigation or visibility changes back before dispatch. */
+    private volatile Object inputSubmissionContext = new Object();
     private volatile String sessionStartId;
     interface SessionStarter { void start(Intent intent); }
     private SessionStarter testSessionStarter;
@@ -74,7 +77,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         String targetId, targetTitle, ttsId, sttId, cueId;
         String completionCueId;
         Runnable afterCompletionCue;
-        boolean automatic, followUp, waitingAfterSkip, stopped, recognitionFinalized;
+        boolean automatic, followUp, waitingAfterSkip, stopped, recognitionFinalized, submissionNotified;
         final NativeVoiceQueue.Item notification;
         final List<String> chunks;
         int chunk;
@@ -107,6 +110,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
     }
     void nativeVisibility(boolean visible) {
         boolean becameVisible = visible && !nativeVisible;
+        if (visible != nativeVisible) inputSubmissionContext = new Object();
         // Also gate the main-thread service launch immediately when Android pauses the activity.
         nativeVisible = visible;
         handler.post(() -> {
@@ -193,6 +197,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         }));
     }
     private void connectionFailed(String code, Reply reply) {
+        inputSubmissionContext = new Object();
         binding = null; identity = null; originId = null; csrf = null; phase = "error"; report(code);
         if (reply != null) reply.failed(code, message(code));
     }
@@ -217,6 +222,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         }));
     }
     private void disconnect(boolean cancelIntended) {
+        inputSubmissionContext = new Object();
         // Cancellation intent covers every journaled input, including the active admission.
         if (cancelIntended) cancelOutstanding(false);
         cancelActive(false, "connection_changed");
@@ -333,8 +339,11 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         String thread = NativeVoiceJson.nullableString(args, "threadId", 512), title = NativeVoiceJson.nullableString(args, "threadTitle", 512);
         String mode = args.has("composerMode") ? NativeVoiceJson.string(args, "composerMode", 16) : null;
         if (mode != null && !mode.equals("queue") && !mode.equals("steer")) throw new NativeVoiceJson.InvalidFieldException("composerMode");
-        foregroundVisible = visible && nativeVisible;
-        foregroundThread = foregroundVisible ? thread : null;
+        boolean nextVisible = visible && nativeVisible;
+        String nextThread = nextVisible ? thread : null;
+        if (foregroundVisible != nextVisible || !Objects.equals(foregroundThread, nextThread)) inputSubmissionContext = new Object();
+        foregroundVisible = nextVisible;
+        foregroundThread = nextThread;
         foregroundTitle = foregroundVisible ? title : null;
         if (mode != null) composerMode = mode;
     }
@@ -732,7 +741,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         int status, JSONObject value) throws Exception {
         String key = ownerBinding + "\n" + id;
         JSONObject remaining = entry(ownerBinding, id); if (remaining == null) return;
-        if (status >= 200 && status < 300 && receiptMatches(value, remaining)) { accepted(ownerBinding, id, value); return; }
+        if (status >= 200 && status < 300 && receiptMatches(value, remaining)) { accepted(ownerBinding, id, value, generation); return; }
         JSONObject error = value == null ? null : value.optJSONObject("error");
         boolean csrfRejected = status == 403 && error != null && error.optString("code").equals("csrf_token_invalid");
         boolean cancelled = remaining.optBoolean("cancelled") || cancelledAdmissions.contains(key);
@@ -793,9 +802,10 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         return entry.optString("mutationId").equals(receipt.optString("mutationId")) && entry.optString("threadId").equals(receipt.optString("threadId"));
     }
     private void forget(String key) { Recovery recovery = recoveries.remove(key); if (recovery != null && recovery.call != null) recovery.call.cancel(); }
-    private void accepted(String ownerBinding, String id, JSONObject receipt) throws Exception {
+    private void accepted(String ownerBinding, String id, JSONObject receipt, long generation) throws Exception {
         // A found receipt, including queued or submitting, is the definitive admission. Dispatch then belongs to the thread.
         String key = ownerBinding + "\n" + id;
+        inputSubmitted(ownerBinding, id, receipt, generation);
         removeEntry(ownerBinding, id); cancelledAdmissions.remove(key); forget(key);
         if (ownerBinding.equals(binding)) {
             if (activeAdmission(id)) finishItem(active);
@@ -804,6 +814,31 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
             if (status.equals("failed") || status.equals("recovery_required") || status.equals("cancelled"))
                 report("input_" + status, receipt.has("diagnostic") ? receipt.optString("diagnostic") : null);
         }
+    }
+    /** A current local Send may move its visible transcript; journal recovery and other devices never do. */
+    private void inputSubmitted(String ownerBinding, String id, JSONObject receipt, long generation) {
+        final Object submittedContext = inputSubmissionContext;
+        final String threadId = receipt.optString("threadId"), status = receipt.optString("status");
+        if (generation != connectionGeneration || !ownerBinding.equals(binding) || !activeAdmission(id) ||
+            active.stopped || active.submissionNotified || active.admission.optBoolean("cancelled") ||
+            cancelledAdmissions.contains(ownerBinding + "\n" + id) || !nativeVisible || !foregroundVisible ||
+            !threadId.equals(foregroundThread) || !receipt.optString("admittedMode").equals("submit") ||
+            !(status.equals("queued") || status.equals("submitting") || status.equals("accepted"))) return;
+        active.submissionNotified = true;
+        final JSONObject event = NativeVoiceJson.object("profileId", profileId, "serverOrigin", origin, "identity", identity,
+            "connectionGeneration", generation, "threadId", threadId, "operationId", receipt.optString("operationId"));
+        // Capture recipients now: a WebView opened after admission must not receive this transient event.
+        final List<Observer> recipients = new ArrayList<>(observers);
+        main.post(() -> {
+            JSONObject current = state, foreground = current.optJSONObject("foreground");
+            if (submittedContext != inputSubmissionContext || !nativeVisible ||
+                current.optLong("connectionGeneration", -1) != generation ||
+                !event.optString("profileId").equals(current.optString("profileId")) ||
+                !event.optString("serverOrigin").equals(current.optString("serverOrigin")) ||
+                !event.optString("identity").equals(current.optString("identity")) || foreground == null ||
+                !foreground.optBoolean("visible") || !threadId.equals(foreground.optString("threadId"))) return;
+            for (Observer observer : recipients) if (observers.contains(observer)) observer.event("inputSubmitted", event);
+        });
     }
     private void rejected(String ownerBinding, String id, String diagnostic, boolean notify) throws Exception {
         String key = ownerBinding + "\n" + id;
@@ -879,7 +914,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
                         try { lookup = NativeVoiceProtocol.receiptLookup(value); }
                         catch (IllegalArgumentException error) { lookup = null; }
                     }
-                    if ("found".equals(lookup) && receiptMatches(value.optJSONObject("receipt"), current)) { accepted(ownerBinding, id, value.optJSONObject("receipt")); return; }
+                    if ("found".equals(lookup) && receiptMatches(value.optJSONObject("receipt"), current)) { accepted(ownerBinding, id, value.optJSONObject("receipt"), generation); return; }
                     if (allowSubmit && "notObserved".equals(lookup) && !current.optBoolean("cancelled")) submit(ownerBinding, ownerOrigin, ownerCredential, current, false);
                     else uncertain(ownerBinding, id, diagnostic, recovery);
                 } catch (Exception error) { report("voice_storage_unavailable"); }

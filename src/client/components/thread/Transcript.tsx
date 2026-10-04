@@ -81,6 +81,8 @@ export type TranscriptHandle = {
   readonly beginHistoryScrub: () => string | undefined;
   readonly seekHistoryItem: (itemId: string) => void;
   readonly seekAdjacentHistoryItem: (direction: "previous" | "next") => void;
+  /** Seek an armed send now, or leave it queued until its exact row appears. */
+  readonly seekPendingSend: () => void;
   /**
    * Seeks a turn that is already rendered in the ordinary transcript.
    * Returns false when the caller must fall back to targeted history lookup.
@@ -856,19 +858,6 @@ export function Transcript({
     return true;
   };
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      beginHistoryScrub: () => {
-        return yieldSeekToReader("history_scrub") ?? syncHistoryRailActive();
-      },
-      seekHistoryItem: scrollToHistoryItem,
-      seekAdjacentHistoryItem,
-      seekTurn: seekLoadedTurn,
-    }),
-    [scrollToHistoryItem, seekAdjacentHistoryItem, seekLoadedTurn],
-  );
-
   useEffect(() => {
     if (focusTurnId) setLocallySelectedTurnId(undefined);
   }, [focusTurnId, store]);
@@ -1192,6 +1181,15 @@ export function Transcript({
   }, [chatViewVisible]);
 
   useLayoutEffect(() => {
+    if (chatViewVisible && focusTurnId === undefined) return;
+    if (seekRequest) seekRequest.current = null;
+    if (seekBeginFrame.current !== undefined) {
+      cancelAnimationFrame(seekBeginFrame.current);
+      seekBeginFrame.current = undefined;
+    }
+  }, [chatViewVisible, focusTurnId, seekRequest]);
+
+  useLayoutEffect(() => {
     if (!smoothStreaming) {
       const followerWasActive = liveEdgeFollowOwned.current;
       cancelLiveEdgeFollow();
@@ -1240,7 +1238,11 @@ export function Transcript({
     }
     seekBeginFrame.current = requestAnimationFrame(() => {
       seekBeginFrame.current = undefined;
-      if (viewport.current !== element) return;
+      if (
+        viewport.current !== element ||
+        !chatViewVisibleRef.current ||
+        focusTurnIdRef.current !== undefined
+      ) return;
       const target = findSeekTarget(element, targetIdentity);
       if (!target) {
         traceSeek("seek_target_missing");
@@ -1270,6 +1272,10 @@ export function Transcript({
     { readonly itemId: string; readonly operationId: string } | undefined => {
     const request = seekRequest?.current;
     if (!request || !seekRequest) return undefined;
+    if (!chatViewVisibleRef.current || focusTurnIdRef.current !== undefined) {
+      seekRequest.current = null;
+      return undefined;
+    }
     if (Date.now() - request.requestedAt > seekRequestTtlMilliseconds) {
       traceSeek("seek_request_expired");
       seekRequest.current = null;
@@ -1295,6 +1301,23 @@ export function Transcript({
     traceSeek("seek_request_consumed");
     return { itemId, operationId: request.operationId };
   };
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      beginHistoryScrub: () => {
+        return yieldSeekToReader("history_scrub") ?? syncHistoryRailActive();
+      },
+      seekHistoryItem: scrollToHistoryItem,
+      seekAdjacentHistoryItem,
+      seekTurn: seekLoadedTurn,
+      seekPendingSend: () => {
+        const target = takeSeekTarget();
+        if (target) beginSeek(target);
+      },
+    }),
+    [scrollToHistoryItem, seekAdjacentHistoryItem, seekLoadedTurn, takeSeekTarget, beginSeek],
+  );
 
   useLayoutEffect(
     () =>
@@ -2393,6 +2416,29 @@ const TranscriptUserMessage = memo(function TranscriptUserMessage({
     serverSubmission &&
     !serverSubmission.content &&
     serverSubmission.preview.truncation !== undefined;
+  const submissionNotices: string[] = [];
+  if (serverSubmission?.phase === "unconfirmed") {
+    submissionNotices.push("Delivery unconfirmed");
+  }
+  if (serverSubmission && !serverSubmission.content) {
+    if (
+      truncated ||
+      serverSubmission.attachmentCount > 0 ||
+      serverSubmission.taskCount > 0
+    ) {
+      submissionNotices.push("Message preview");
+    }
+    if (serverSubmission.attachmentCount > 0) {
+      submissionNotices.push(
+        `${serverSubmission.attachmentCount} ${serverSubmission.attachmentCount === 1 ? "attachment" : "attachments"}`,
+      );
+    }
+    if (serverSubmission.taskCount > 0) {
+      submissionNotices.push(
+        `${serverSubmission.taskCount} ${serverSubmission.taskCount === 1 ? "task" : "tasks"}`,
+      );
+    }
+  }
   return (
     <div
       className="conversation-item"
@@ -2422,33 +2468,13 @@ const TranscriptUserMessage = memo(function TranscriptUserMessage({
               }
             : {})}
         />
-        {serverSubmission && (
+        {submissionNotices.length > 0 && (
           <div
             className="mt-1 text-right text-xs text-muted-foreground"
-            data-submission-phase={serverSubmission.phase}
+            data-submission-phase={serverSubmission?.phase}
             role="status"
           >
-            {serverSubmission.phase === "accepted"
-              ? "Sent"
-              : serverSubmission.phase === "confirming"
-                ? "Checking delivery…"
-                : serverSubmission.phase === "unconfirmed"
-                  ? "Delivery unconfirmed"
-                  : "Sending…"}
-            {truncated && " · Message preview"}
-            {!serverSubmission.content &&
-              serverSubmission.attachmentCount > 0 && (
-                <>
-                  {" · "}{serverSubmission.attachmentCount}{" "}
-                  {serverSubmission.attachmentCount === 1 ? "attachment" : "attachments"}
-                </>
-              )}
-            {!serverSubmission.content && serverSubmission.taskCount > 0 && (
-              <>
-                {" · "}{serverSubmission.taskCount}{" "}
-                {serverSubmission.taskCount === 1 ? "task" : "tasks"}
-              </>
-            )}
+            {submissionNotices.join(" · ")}
           </div>
         )}
         {bookmarkTurnId &&

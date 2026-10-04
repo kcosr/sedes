@@ -3,6 +3,7 @@ package dev.sedes.local;
 import static org.junit.Assert.*;
 import android.content.Context;
 import android.os.Handler;
+import android.os.Looper;
 import androidx.test.platform.app.InstrumentationRegistry;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -67,6 +68,131 @@ public class NativeVoiceRuntimeTest {
         }
         try { parse.invoke(null, new JSONObject()); fail("Accepted missing generation"); }
         catch (java.lang.reflect.InvocationTargetException expected) { assertTrue(expected.getCause() instanceof IllegalArgumentException); }
+    }
+
+    @Test public void ordinaryForegroundAdmissionEmitsExactTransientOperationOnce() throws Exception {
+        for (String status : new String[] { "queued", "submitting", "accepted" }) {
+            try (Fixture f = new Fixture(status.equals("accepted"), false)) {
+                f.foreground(f.target);
+                long generation = f.runtime.snapshot().getLong("connectionGeneration");
+                JSONObject receipt = f.submissionReceipt("submit", status);
+                assertNotEquals(f.mutation, receipt.getString("operationId"));
+                NativeVoiceHttp.Result reply = f.start();
+                reply.done(200, receipt, null); f.flushEvents();
+                assertEquals(1, f.submissions.size());
+                JSONObject event = f.submissions.remove();
+                assertEquals(6, event.length());
+                assertEquals(f.profile, event.getString("profileId"));
+                assertEquals(f.origin, event.getString("serverOrigin"));
+                assertEquals(Fixture.IDENTITY, event.getString("identity"));
+                assertEquals(generation, event.getLong("connectionGeneration"));
+                assertEquals(f.target, event.getString("threadId"));
+                assertEquals(receipt.getString("operationId"), event.getString("operationId"));
+                assertEquals(0, f.store.journal(f.binding).length());
+                assertTrue(f.runtime.snapshot().isNull("active"));
+                reply.done(200, receipt, null);
+                assertNull(f.command("getState", new JSONObject()));
+                f.onOwner(() -> f.invoke("recoverOutstanding", new Class<?>[0]));
+                f.flushEvents(); assertTrue("Neither duplicate callbacks nor snapshots replay a submission", f.submissions.isEmpty());
+            }
+        }
+    }
+
+    @Test public void admissionDoesNotSignalQueueSteerOrTerminalDispatchFailure() throws Exception {
+        String[][] outcomes = { { "queue", "queued" }, { "steer", "accepted" },
+            { "submit", "failed" }, { "submit", "recovery_required" }, { "submit", "cancelled" } };
+        for (String[] outcome : outcomes) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.foreground(f.target);
+                f.start().done(200, f.submissionReceipt(outcome[0], outcome[1]), null); f.flushEvents();
+                assertTrue(outcome[0] + ":" + outcome[1], f.submissions.isEmpty());
+                assertEquals(0, f.store.journal(f.binding).length());
+            }
+        }
+    }
+
+    @Test public void admissionRequiresCurrentUncancelledForegroundOwnership() throws Exception {
+        for (String change : new String[] { "native_hidden", "web_hidden", "other_thread", "generation", "binding", "cancelled" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.foreground(f.target);
+                NativeVoiceHttp.Result reply = f.start();
+                switch (change) {
+                    case "native_hidden": f.runtime.nativeVisibility(false); break;
+                    case "web_hidden": assertNull(f.command("setForegroundContext", NativeVoiceJson.object("visible", false))); break;
+                    case "other_thread": f.foreground(UUID.randomUUID().toString()); break;
+                    case "generation": f.onOwner(() -> {
+                        set(f.runtime, "connectionGeneration", f.runtime.snapshot().getLong("connectionGeneration") + 1);
+                        f.invoke("publish", new Class<?>[0]);
+                    }); break;
+                    case "binding": f.onOwner(() -> set(f.runtime, "binding", f.binding + "-other")); break;
+                    case "cancelled": assertNull(f.command("stopCurrentInteraction", new JSONObject())); break;
+                    default: throw new AssertionError(change);
+                }
+                reply.done(200, f.submissionReceipt("submit", "accepted"), null); f.flushEvents();
+                assertTrue(change, f.submissions.isEmpty());
+            }
+        }
+    }
+
+    @Test public void receiptLookupSignalsOnlyWhileTheOriginalInteractionIsStillActive() throws Exception {
+        for (boolean immediatelyFound : new boolean[] { true, false }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.foreground(f.target);
+                JSONObject receipt = f.submissionReceipt("submit", "accepted");
+                if (immediatelyFound) f.receiptResponse.set(NativeVoiceJson.object("status", "found", "receipt", receipt));
+                f.start().done(503, null, null); f.flushEvents();
+                assertTrue(f.runtime.snapshot().isNull("active"));
+                if (!immediatelyFound) {
+                    assertTrue(f.submissions.isEmpty());
+                    f.receiptResponse.set(NativeVoiceJson.object("status", "found", "receipt", receipt));
+                    f.onOwner(() -> f.invoke("recoverOutstanding", new Class<?>[0]));
+                    f.flushEvents();
+                }
+                assertEquals(immediatelyFound ? 1 : 0, f.submissions.size());
+                assertEquals("Recovery reads never resend input", 1, f.inputAttempts.get());
+                assertEquals(0, f.store.journal(f.binding).length());
+            }
+        }
+    }
+
+    @Test public void pendingSubmissionEventExpiresWhenForegroundOwnershipChanges() throws Exception {
+        for (String change : new String[] { "visibility_round_trip", "thread_round_trip", "connection" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.foreground(f.target);
+                NativeVoiceHttp.Result reply = f.start();
+                try (MainBlock ignored = new MainBlock()) {
+                    reply.done(200, f.submissionReceipt("submit", "accepted"), null); f.flush();
+                    assertTrue(f.runtime.snapshot().isNull("active"));
+                    switch (change) {
+                        case "visibility_round_trip": f.runtime.nativeVisibility(false); f.foreground(f.target); break;
+                        case "thread_round_trip": f.foreground(UUID.randomUUID().toString()); f.foreground(f.target); break;
+                        case "connection": f.onOwner(() -> f.invoke("disconnect", new Class<?>[] { boolean.class }, false)); break;
+                        default: throw new AssertionError(change);
+                    }
+                }
+                f.flushEvents(); assertTrue(change, f.submissions.isEmpty());
+            }
+        }
+    }
+
+    @Test public void pendingSubmissionEventDoesNotReplayToAReplacementWebViewObserver() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.foreground(f.target);
+            NativeVoiceHttp.Result reply = f.start();
+            BlockingQueue<JSONObject> replacementEvents = new LinkedBlockingQueue<>();
+            NativeVoiceRuntime.Observer replacement = (name, value) -> { if (name.equals("inputSubmitted")) replacementEvents.add(value); };
+            try {
+                try (MainBlock ignored = new MainBlock()) {
+                    reply.done(200, f.submissionReceipt("submit", "accepted"), null); f.flush();
+                    f.runtime.unobserve(f.submissionObserver);
+                    f.runtime.observe(replacement);
+                }
+                f.flushEvents();
+                assertTrue(f.submissions.isEmpty()); assertTrue(replacementEvents.isEmpty());
+                assertNull(f.command("getState", new JSONObject()));
+                f.flushEvents(); assertTrue(replacementEvents.isEmpty());
+            } finally { f.runtime.unobserve(replacement); }
+        }
     }
 
     @Test public void silencePreservesSubmittedAutomaticAdmissionAndSameIdentityCsrfRetry() throws Exception {
@@ -502,6 +628,20 @@ public class NativeVoiceRuntimeTest {
         final String id; final NativeVoiceCue.Kind kind; final int gain;
         Cue(String id, NativeVoiceCue.Kind kind, int gain) { this.id = id; this.kind = kind; this.gain = gain; }
     }
+    /** Deterministically changes ownership after admission but before its queued UI callback can run. */
+    private static final class MainBlock implements AutoCloseable {
+        final CountDownLatch release = new CountDownLatch(1);
+        MainBlock() throws Exception {
+            CountDownLatch entered = new CountDownLatch(1);
+            new Handler(Looper.getMainLooper()).post(() -> {
+                entered.countDown();
+                try { release.await(10, TimeUnit.SECONDS); }
+                catch (InterruptedException error) { Thread.currentThread().interrupt(); }
+            });
+            assertTrue(entered.await(10, TimeUnit.SECONDS));
+        }
+        public void close() { release.countDown(); }
+    }
     private static final class Fixture implements AutoCloseable {
         private static final String IDENTITY = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         final Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
@@ -514,8 +654,13 @@ public class NativeVoiceRuntimeTest {
             "stage", "prepared", "cancelled", false, "createdAt", System.currentTimeMillis());
         final AtomicInteger inputAttempts = new AtomicInteger(), sessionReads = new AtomicInteger(), receiptReads = new AtomicInteger();
         final AtomicReference<JSONObject> lastRequest = new AtomicReference<>();
+        final AtomicReference<JSONObject> receiptResponse = new AtomicReference<>(NativeVoiceJson.object("status", "notObserved"));
         final BlockingQueue<NativeVoiceHttp.Result> inputs = new LinkedBlockingQueue<>(), sessions = new LinkedBlockingQueue<>(), contexts = new LinkedBlockingQueue<>();
         final BlockingQueue<Cue> cues = new LinkedBlockingQueue<>();
+        final BlockingQueue<JSONObject> submissions = new LinkedBlockingQueue<>();
+        final NativeVoiceRuntime.Observer submissionObserver = (name, value) -> {
+            if (name.equals("inputSubmitted")) submissions.add(NativeVoiceJson.copy(value));
+        };
         final NativeVoiceRuntime runtime;
         final NativeVoiceStore store;
         final Handler owner;
@@ -530,7 +675,7 @@ public class NativeVoiceRuntimeTest {
                     } else if (path.equals("/api/application/session")) { sessionReads.incrementAndGet(); sessions.add(result); }
                     else if (path.endsWith("/input-context")) contexts.add(result);
                     else if (path.startsWith("/api/input-receipts/")) {
-                        receiptReads.incrementAndGet(); result.done(200, NativeVoiceJson.object("status", "notObserved"), null);
+                        receiptReads.incrementAndGet(); result.done(200, NativeVoiceJson.copy(receiptResponse.get()), null);
                     } else throw new AssertionError("Unexpected native request: " + method + " " + path);
                     return true;
                 }
@@ -549,6 +694,11 @@ public class NativeVoiceRuntimeTest {
                 }
                 set(active, "admission", entry); set(runtime, "phase", "submitting"); store.saveEntry(binding, entry);
             });
+            runtime.observe(submissionObserver);
+        }
+        void foreground(String threadId) throws Exception {
+            runtime.nativeVisibility(true);
+            assertNull(command("setForegroundContext", NativeVoiceJson.object("visible", true, "threadId", threadId)));
         }
         NativeVoiceHttp.Result start() throws Exception {
             onOwner(() -> invoke("submit", new Class<?>[] { String.class, String.class, String.class, JSONObject.class, boolean.class }, binding, origin, null, entry, false));
@@ -589,6 +739,11 @@ public class NativeVoiceRuntimeTest {
             return NativeVoiceJson.object("mutationId", mutation, "threadId", target, "operationId", UUID.randomUUID().toString(),
                 "admittedMode", "queue", "currentMode", "queue", "status", status);
         }
+        JSONObject submissionReceipt(String mode, String status) {
+            JSONObject result = receipt(status);
+            NativeVoiceJson.put(result, "admittedMode", mode); NativeVoiceJson.put(result, "currentMode", mode);
+            return result;
+        }
         String command(String action, JSONObject args) throws Exception {
             CountDownLatch done = new CountDownLatch(1); AtomicReference<String> error = new AtomicReference<>();
             runtime.command(action, args, true, new NativeVoiceRuntime.Reply() {
@@ -612,6 +767,10 @@ public class NativeVoiceRuntimeTest {
             assertTrue(runtime.snapshot().getJSONArray("recovery").getJSONObject(0).getBoolean("cancelled"));
         }
         void flush() throws Exception { onOwner(() -> {}); onOwner(() -> {}); }
+        void flushEvents() throws Exception {
+            flush(); InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {});
+            flush(); InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {});
+        }
         void onOwner(Action action) throws Exception {
             CountDownLatch done = new CountDownLatch(1); AtomicReference<Throwable> error = new AtomicReference<>();
             owner.post(() -> { try { action.run(); } catch (Throwable failure) { error.set(failure); } finally { done.countDown(); } });
@@ -622,6 +781,7 @@ public class NativeVoiceRuntimeTest {
             Method method = NativeVoiceRuntime.class.getDeclaredMethod(name, types); method.setAccessible(true); method.invoke(runtime, args);
         }
         public void close() throws Exception {
+            runtime.unobserve(submissionObserver);
             try { onOwner(() -> { set(runtime, "active", null); invoke("disconnect", new Class<?>[] { boolean.class }, false); }); }
             finally {
                 NativeVoiceHttp.setTestTransport(null); NativeVoiceAudio.setTestCuePlayer(null); owner.getLooper().quitSafely();

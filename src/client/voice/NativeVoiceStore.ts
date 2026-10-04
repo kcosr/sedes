@@ -1,5 +1,5 @@
 import type { PluginListenerHandle } from "@capacitor/core";
-import { nativeVoiceStateSchema, type NativeVoiceCommandContext, type NativeVoicePlugin, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
+import { nativeVoiceInputSubmittedSchema, nativeVoiceStateSchema, type NativeVoiceCommandContext, type NativeVoiceInputSubmitted, type NativeVoicePlugin, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
 
 type NativeVoiceError = NativeVoiceState["errors"][number];
 export interface VoiceClientState {
@@ -21,6 +21,8 @@ const PROGRESS_PHASES = new Set<NativeVoiceState["phase"]>(["starting", "synthes
 export class NativeVoiceStore {
   #state: VoiceClientState = { loading: true, pending: false };
   #listeners = new Set<() => void>();
+  #inputSubmittedListeners = new Set<(event: NativeVoiceInputSubmitted) => void>();
+  #seenSubmissions = new Set<string>();
   #handles: PluginListenerHandle[] = [];
   #disposed = false;
   #listening = false;
@@ -34,6 +36,11 @@ export class NativeVoiceStore {
   constructor(readonly plugin: NativeVoicePlugin, readonly connection: { profileId: string; serverOrigin: string; identity: string }, readonly openThread: (threadId: string) => void) {}
   getSnapshot = (): VoiceClientState => this.#state;
   subscribe = (listener: () => void): (() => void) => { this.#listeners.add(listener); return () => { this.#listeners.delete(listener); }; };
+  /** Live UI intent only: new subscribers do not receive earlier submissions. */
+  subscribeInputSubmitted = (listener: (event: NativeVoiceInputSubmitted) => void): (() => void) => {
+    this.#inputSubmittedListeners.add(listener);
+    return () => { this.#inputSubmittedListeners.delete(listener); };
+  };
   get disposed(): boolean { return this.#disposed; }
   commandContext(): NativeVoiceCommandContext {
     const current = this.#state.native;
@@ -57,6 +64,18 @@ export class NativeVoiceStore {
             event.identity !== this.connection.identity || event.connectionGeneration < this.#generation) return;
           if (this.#connected) this.openThread(event.threadId);
           else this.#pendingOpenThread = event.threadId;
+        }),
+        this.plugin.addListener("inputSubmitted", raw => {
+          const parsed = nativeVoiceInputSubmittedSchema.safeParse(raw);
+          if (!parsed.success || this.#disposed || !this.#connected || !this.#state.native ||
+              (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
+          const event = parsed.data;
+          if (event.profileId !== this.connection.profileId || event.serverOrigin !== this.connection.serverOrigin ||
+              event.identity !== this.connection.identity || event.connectionGeneration !== this.#generation ||
+              this.#seenSubmissions.has(event.operationId)) return;
+          this.#seenSubmissions.add(event.operationId);
+          if (this.#seenSubmissions.size > 128) this.#seenSubmissions.delete(this.#seenSubmissions.values().next().value!);
+          for (const listener of this.#inputSubmittedListeners) listener(event);
         }),
       ]);
       const handles = results.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
@@ -156,6 +175,8 @@ export class NativeVoiceStore {
     for (const handle of this.#handles) void handle.remove();
     this.#handles = [];
     this.#listeners.clear();
+    this.#inputSubmittedListeners.clear();
+    this.#seenSubmissions.clear();
     // Native owns the session beyond this WebView's lifetime.
   }
   #accept(raw: NativeVoiceState): void {
@@ -163,6 +184,7 @@ export class NativeVoiceStore {
     const state = nativeVoiceStateSchema.parse(raw);
     if (state.connectionGeneration < this.#generation ||
       (state.connectionGeneration === this.#generation && state.stateRevision < this.#revision)) return;
+    if (state.connectionGeneration !== this.#generation) this.#seenSubmissions.clear();
     this.#generation = state.connectionGeneration;
     this.#revision = state.stateRevision;
     if (state.profileId !== this.connection.profileId || state.serverOrigin !== this.connection.serverOrigin || state.identity !== this.connection.identity) {

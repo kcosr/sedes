@@ -31,6 +31,12 @@ export const nativeVoiceStateSchema = z.strictObject({
   errors: z.array(z.strictObject({ code: z.string(), message: z.string() })),
 });
 export type NativeVoiceState = z.infer<typeof nativeVoiceStateSchema>;
+/** A live local Submit receipt; never retained or replayed with native state. */
+export const nativeVoiceInputSubmittedSchema = z.strictObject({
+  profileId: z.string().min(1), serverOrigin: z.url(), identity: z.string().regex(/^[a-f0-9]{64}$/u),
+  connectionGeneration: z.number().int().nonnegative(), threadId: z.uuid(), operationId: z.uuid(),
+});
+export type NativeVoiceInputSubmitted = z.infer<typeof nativeVoiceInputSubmittedSchema>;
 export type NativeVoiceCommandContext = { expectedConnectionGeneration: number };
 export interface NativeVoicePlugin {
   setConnection(input: { profileId: string; serverOrigin: string; identity: string }): Promise<NativeVoiceState>;
@@ -50,6 +56,7 @@ export interface NativeVoicePlugin {
     profileId: string | null; serverOrigin: string | null; identity: string | null }) => void): Promise<PluginListenerHandle>;
   addListener(event: "openThread", listener: (event: { threadId: string; profileId: string; serverOrigin: string;
     identity: string; connectionGeneration: number }) => void): Promise<PluginListenerHandle>;
+  addListener(event: "inputSubmitted", listener: (event: NativeVoiceInputSubmitted) => void): Promise<PluginListenerHandle>;
 }
 export const nativeVoice = registerPlugin<NativeVoicePlugin>("NativeVoice");
 export function hasNativeVoice(): boolean {

@@ -212,6 +212,18 @@ describe("native voice production pipeline with loopback providers", () => {
           audioSource: "deterministic-pcm", audioSink: "AudioTrack" });
         if (mode === "response" && scenario !== "stop") expect(evidence.speechPlayback).toBe(true);
         expect(evidence.journalOutstanding).toBe(0);
+        if (scenario === "cycle") {
+          expect(evidence.inputUi).toMatchObject({ rowCount: 1, provisional: false, routineLabelCount: 0,
+            seekEnabled: mode === "manual", submitted: { threadId } });
+          expect(evidence.inputUi.operationId).toBe(evidence.inputUi.submitted.operationId);
+          expect(evidence.inputUi.operationId).toMatch(/^[0-9a-f-]{36}$/u);
+          expect(evidence.inputUi.text).toContain(text);
+          expect(evidence.inputUi.viewportHeight).toBeGreaterThan(0);
+          if (mode === "manual") {
+            expect(evidence.inputUi.spacerHeight).toBeGreaterThan(0);
+            expect(Math.abs(evidence.inputUi.targetInset - 16)).toBeLessThanOrEqual(3);
+          } else expect(evidence.inputUi.spacerHeight).toBe(0);
+        }
         // The device polled Sedes for the autosaved draft; confirm it is still the unsent composer text.
         expect((await app.thread(threadId)).draft.text).toBe(args.draftText);
         const submissions = () => app.model.requests.slice(before).filter(request => request.lastRole === "user" && request.lastText === text);

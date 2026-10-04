@@ -353,10 +353,11 @@ matching provider history arrives. During that interval it is not searchable,
 bookmarkable, forkable, or eligible for context capture.
 
 An idle voice submission also appears as a normal chat message once Sedes
-admits it. It leaves any typed draft intact. Its sending status remains visible
-until the matching message arrives; a short preview can appear while the full
-text loads. Voice input admitted as Queue or Steer still uses the pending-input
-rows, as do failed or uncertain deliveries that need attention.
+admits it. It leaves any typed draft intact and honors **Seek on send** on the
+device where you spoke. Routine sending labels stay hidden for both typed and
+spoken messages; a marked preview can appear while the full text loads.
+Voice input admitted as Queue or Steer still uses the pending-input rows, as do
+failed or uncertain deliveries that need attention.
 
 ### Work with queued input
 

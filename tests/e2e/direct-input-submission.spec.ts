@@ -105,6 +105,7 @@ test("idle direct input becomes one complete transcript message while active que
   await expect(message).toHaveCount(1);
   await expect(message).toHaveAttribute("data-client-provisional", "true");
   await expect(message).toContainText(spokenText);
+  await expect(message.locator("[data-submission-phase]")).toHaveCount(0);
   await expect(composer).toHaveValue(retainedDraft);
   await expect(strip).toHaveCount(0);
   await expect.poll(async () => {
@@ -121,6 +122,7 @@ test("idle direct input becomes one complete transcript message while active que
   await expect(message).toHaveCount(1);
   await expect(message).toHaveAttribute("data-client-provisional", "true");
   await expect(message).toContainText(spokenText);
+  await expect(message.locator("[data-submission-phase]")).toHaveCount(0);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "direct-input-pending-desktop.png");
   await page.setViewportSize({ width: 390, height: 844 });
