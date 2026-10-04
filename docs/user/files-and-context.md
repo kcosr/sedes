@@ -32,14 +32,21 @@ link or a file linked from a Task makes Files visible automatically. That
 opening follows the device's **Opening panels** preference; Shift-click
 temporarily uses the opposite presentation without changing the preference.
 
-The tree honors configured roots and Git ignore information when available.
-Git is optional for ordinary browsing, but required for Changes.
+The folder button in the Files header opens the file browser over the
+document. Its root tabs switch between the project root and attached folders.
+The browser highlights the open file; choosing a file opens it and closes the
+browser. If you close the browser while no file is open, choose **Open file
+browser** to bring it back.
+
+The tree lists each root's files straight from the filesystem. Browse doesn't
+run Git, so it shows no Git status and lists ignored files too. Git is optional
+for ordinary browsing, but required for Changes.
 
 When Primary belongs to a Git repository, the thread header offers a searchable
 worktree selector. Sedes asks that exact local or SSH environment for Git's
 registered worktrees; it does not scan sibling directories. Selecting one
 stores the thread's preferred worktree on the server. The preference follows
-the thread across clients, and Files Browse, Files Compare, and relative file
+the thread across clients, and Files Browse, Files Changes, and relative file
 links in chat use that checkout. Selecting Primary clears the preference.
 Files retains its root tabs for the effective project root and explicitly
 attached supplemental directories; it has no separate worktree selector.
@@ -80,7 +87,7 @@ Sedes can:
 - read and edit existing UTF-8 text files;
 - render Markdown previews;
 - preview recognized raster images;
-- show supported file metadata and Git status; and
+- show supported file metadata; and
 - download an opened regular file as its exact saved bytes.
 
 Text reads and saves are bounded to 16 MiB. Larger text is reported as
@@ -113,9 +120,9 @@ Git after saving.
 A project with Files support can attach up to eight additional directories.
 Use this for related documentation, a neighboring repository, or another
 allowed source tree that should be browsable beside the primary project.
-You can also attach a repository beneath Primary. Select its root tab and
-open **Compare** to diff that repository, even when Primary itself is not a
-Git repository.
+You can also attach a repository beneath Primary. Open the file browser,
+select the repository's root tab, and choose **Changes** to diff that
+repository, even when Primary itself is not a Git repository.
 
 The directory must be allowed on the same execution environment. Attachments
 cannot equal Primary or overlap another supplemental root. They may contain
@@ -153,20 +160,26 @@ comparison; apply edited source settings with **Compare**.
 
 A persistent, resizable changed-file navigator accompanies the continuous diff
 on wider panels. Filter filenames, expand directory groups, select a file, or
-use previous/next controls in each file header. The file count sits beside the
-filter. **View** contains unified/split and line-wrapping preferences. The Files
+use previous/next controls in each file header. The navigator, the diff, and
+previous/next share one order: top-level files first, then each directory's
+files before its subdirectories. The file count sits beside the filter.
+**View** contains unified/split and line-wrapping preferences. The Files
 titlebar refresh button refreshes whichever mode is active. Scrolling updates the selected file and loads
 nearby diffs automatically. Binary, oversized, and failed files retain a
 navigation position; failed reads offer Retry. Narrow panels use a file drawer
 and unified diffs, restoring your chosen split layout when widened.
 
-**Open file** switches to Browse at the current file. Returning to Changes
-keeps your reading position. Navigation preferences and semantic file/line
-anchors are retained locally for the server, principal, workspace, root, and
-repository. Reloading obtains fresh comparison handles. If the comparison
-changed, Sedes returns to the file header with an explanation; missing
-revisions require selecting endpoints again. Browser storage restrictions can
-limit retention to memory.
+**Open file** switches to Browse at the line you were reading: the top of your
+line selection in that file or, while you're reading that file, the line at the
+top of the diff; otherwise the file opens at its top. A line that exists only
+in the old version maps to the nearest line of the current file. Returning to
+Changes keeps your reading position. Files reopens in the mode you last chose;
+changing roots never switches between Browse and Changes. Navigation
+preferences and semantic file/line anchors are retained locally for the server,
+principal, workspace, root, and repository. Reloading obtains fresh comparison
+handles. If the comparison changed, Sedes returns to the file header with an
+explanation; missing revisions require selecting endpoints again. Browser
+storage restrictions can limit retention to memory.
 
 Open **Review** to start a review and keep comments and reviewed flags. During
 a review, its toolbar button shows reviewed-file progress. **Comments** opens

@@ -46,6 +46,15 @@ the tree. Tree loading begins only when the browser requests it. Saving uses
 the revision captured at read time, and a conflict preserves the client draft
 until an explicit resolution action.
 
+The Pierre tree reports only selection changes, so the panel keeps the tree's
+selection on the active Browse document (or clears it when the active document
+is in another root) and reveals it, without focus, when the browser opens.
+Choosing any other file is therefore always a change that opens it; choosing
+the active file is a no-op. Only a single-file selection opens a document:
+selections made with Ctrl, Cmd, or Shift, and selection changes the panel makes
+itself, never do. When Browse has no open document and the browser is closed,
+the body shows an empty state that reopens it.
+
 ## Root ownership and directory discovery
 
 The stable project directory associated with the workspace is its **Primary**
@@ -299,6 +308,10 @@ The user-facing **Changes** mode is retained beside Browse inside Files.
 Both modes share the effective root; open Browse documents and unsaved edits
 remain mounted during mode changes. Open file from a diff explicitly selects
 its current new path in Browse; deleted content does not open another file.
+It passes the reading line through the same source-line seek as file-link
+intents: the top of a line selection in that file, else the viewport anchor
+when it is in that file. Old-side lines map through the patch hunks to the
+nearest new-side line; without a line, the file opens at its top.
 
 A single compact toolbar opens comparison settings, display preferences, and
 review actions in popovers without displacing the diff. Active review progress
@@ -308,6 +321,13 @@ a scope-bound refresh callback with the Files titlebar while mounted. Refresh
 and saved reading positions use the applied semantic endpoints; unapplied
 picker edits are applied only through Compare. Popovers close when the view
 is hidden.
+
+The client sorts changed files into one canonical order: top-level files
+first, then directories compared segment by segment (so `a/` precedes `a/b/`
+and `a-b/`, and a directory's own files precede its subdirectories), then file
+names, case-insensitively and numerically. The navigator, the CodeView
+document, previous/next, prefetch, restore priority, and patch-cache eviction
+all use it; the server's path order only drives pagination.
 
 The changed-file navigator is grouped, virtualized, resizable, and independent
 of patch availability. Actual panel width determines whether it is a persistent
@@ -338,14 +358,18 @@ persisted key and server-resolved tenant/principal, never from a credential.
 It is combined with the server origin. Bounded versioned records scope mode,
 endpoint intent, repository identity, file/line/side anchors, up to 32 per-file
 return locations, filter, directory expansion, navigator width, display
-preferences, and selected review by workspace/root. Writes debounce and flush
-on mode transitions, panel hiding, and page hiding. Runtime handles, patches,
-and full file contents are not persisted. Invalid/obsolete records are
-rejected; storage denial retains bounded memory state. Restoration obtains
-fresh handles, resolves semantic endpoints, prioritizes the target file, and
-uses exact line anchors only for an unchanged fingerprint. Changed comparisons
-return to the file header with a notice. Missing revisions require explicit
-reselection.
+preferences, and selected review by workspace/root. The stored mode is the
+last one the user explicitly chose for the workspace: every record write
+carries it, and the workspace's newest record restores it once when Files
+mounts or changes workspace. Activating another root never changes the mode,
+and a hidden comparison saving navigation for a browsed root doesn't mark it as
+Changes. Writes debounce and flush on mode transitions, panel hiding, and page
+hiding. Runtime handles, patches, and full file contents are not persisted.
+Invalid/obsolete records are rejected; storage denial retains bounded memory
+state. Restoration obtains fresh handles, resolves semantic endpoints,
+prioritizes the target file, and uses exact line anchors only for an unchanged
+fingerprint. Changed comparisons return to the file header with a notice.
+Missing revisions require explicit reselection.
 
 Changes is read-only against Git and the filesystem. It never stages files,
 writes the worktree, creates commits, or rewrites refs. Unsaved Browse drafts
