@@ -406,6 +406,15 @@
 
 ### Changed
 
+- Code looks the same in Files diffs, the Files viewer, chat file-change diffs,
+  and chat code blocks: one quieter syntax palette, pale added and deleted line
+  tints with +/− markers, denser 18px lines, and file cards with single-band
+  hunk separators in Changes. Changes shows **Unified**/**Split**, **Wrap**, and
+  "File N of M" in its toolbar instead of the **View** menu, gives file headers
+  compact icon actions, and restyles the changed-file list; the Browse tree
+  matches it. Touch screens get larger file-header, tab-close, mode-switch,
+  and list targets. `@pierre/diffs` is upgraded to 1.5.1.
+
 - Android voice settings and quick controls provide searchable speech choices,
   a default recording thread with optional pinning, and an independent automatic
   playback filter. Off, Manual, and Response modes control the voice session.
@@ -735,6 +744,9 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- The expand arrows between hunks in Files Changes can be reached with the
+  keyboard, have names for screen readers, and expand with Enter or Space.
 
 - Android voice startup and Resume recover the current activity and thread
   context after configuration changes. Silent recordings end locally without
