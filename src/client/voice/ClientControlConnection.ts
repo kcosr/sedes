@@ -9,11 +9,12 @@ import { subscribeRoute } from "../app/router.js";
 /** One browser application connection. Reconnection drops pending actions and gets a fresh generation. */
 export class ClientControlConnection {
   registration: RegisteredClient | undefined;
+  #resumeToken: string | undefined;
   readonly #abort = new AbortController();
   readonly #deferred = new Map<string, { command: ClientCommand; location: string }>();
   readonly #unsubscribeRoute: () => void;
   readonly #visibilityChanged = () => { if (document.visibilityState === "hidden") this.#deferred.clear(); };
-  constructor(readonly endpoint: SedesServerEndpoint, readonly navigate: (threadId: string) => void) {
+  constructor(readonly endpoint: SedesServerEndpoint, readonly navigate: (threadId: string) => void, readonly replaced: () => void = () => {}) {
     this.#unsubscribeRoute = subscribeRoute(() => this.#deferred.clear());
     document.addEventListener("visibilitychange", this.#visibilityChanged);
   }
@@ -37,14 +38,17 @@ export class ClientControlConnection {
             method: "POST", signal, headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken,
               ...(this.registration ? { "X-Sedes-Client": this.registration.connectionToken } : {}) }, body: JSON.stringify(body),
           });
-          if (response.status === 409) { this.close(); throw new Error("client_connection_replaced"); }
+          if (response.status === 409) { this.close(); this.replaced(); throw new Error("client_connection_replaced"); }
+          if (path === "/api/client-registration" && response.status === 404) this.#resumeToken = undefined;
           if (!response.ok) throw new Error("client_connection_unavailable");
           return response.json();
         };
         this.registration = registeredClientSchema.parse(await request("/api/client-registration", {
           platform: window.location.protocol === "capacitor-electron:" ? "electron" : "browser",
+          ...(this.#resumeToken ? { resumeToken: this.#resumeToken } : {}),
           capabilities: { navigate: true, voice: false, voiceSettings: false }, state: this.state(),
         }));
+        this.#resumeToken = this.registration.resumeToken;
         let acknowledgements: Array<{ id: string; result: ClientActionResult }> = [];
         while (!signal.aborted) {
           const result = clientPollResultSchema.parse(await request("/api/client-controls/poll", { state: this.state(), acknowledgements }));

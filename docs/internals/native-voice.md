@@ -76,6 +76,11 @@ A server registration supplies the shared native/WebView client ID. Paired
 registrations use the authenticated management-client ID; authentication-off
 registrations receive temporary server IDs. Browser and Electron windows use
 the same registration API. There is no independently generated playback UUID.
+An in-memory server resume secret preserves the ID across reconnects within
+five minutes. Each successful reconnect refreshes the session and resumes enabled
+voice/recovery work; a temporary control-channel outage clears deferred actions
+without cancelling active capture or playback. Replaced paired windows stop
+reclaiming the connection automatically and expose an explicit reconnect action.
 `X-Sedes-Client` carries an opaque connection token, checked against authenticated
 scope and paired identity before the server stamps input attribution. The token
 is a connection fence, not a replacement for authentication. Native and browser

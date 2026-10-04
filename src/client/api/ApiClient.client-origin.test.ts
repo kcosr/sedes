@@ -19,7 +19,7 @@ describe("ApiClient registered client connection", () => {
       tokens.push(new Headers(init?.headers).get("X-Sedes-Client"));
       return Response.json({ error: { code: "thread_revision_conflict", message: "The thread changed.", retryable: false } }, { status: 409 });
     }));
-    let origin: RegisteredClient | undefined;
+    let origin: Pick<RegisteredClient, "clientId" | "connectionToken"> | undefined;
     const readOrigin = vi.fn(() => origin);
     const client = new ApiClient(undefined, undefined, readOrigin);
     const deliver = { kind: "deliver", mode: "submit", mutationId, expectedThreadRevision: 1, expectedDraftRevision: 1 } as const;

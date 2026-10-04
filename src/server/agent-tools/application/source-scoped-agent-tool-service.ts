@@ -141,10 +141,12 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
       const admitted = this.#admit(input, source);
       let clientTurn: TrustedClientTurn | undefined;
       if (input.request.toolId.startsWith("client.")) {
+        if (!this.clientControls) throw this.#unavailable();
+        // Admission binds the normalized turn before any asynchronous provider
+        // check. A later turn can invalidate this call, never become its source.
+        clientTurn = this.clientControls.capture(source.scope, source.sourceThreadId);
         sourceAuthority = await input.accessDecisionAuthority?.acquire(input.signal);
         if (sourceAuthority && !sourceAuthority.isCurrent()) throw this.#unavailable();
-        if (!this.clientControls) throw this.#unavailable();
-        clientTurn = this.clientControls.capture(source.scope, source.sourceThreadId);
       }
       const needsApproval = admitted.policy.accessBoundary === "thread"
         ? !isWithinSourceThread(admitted.resolved, source.sourceThreadId,
@@ -271,7 +273,9 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
               ? "unavailable"
               : "internal_error",
           message:
-            error.code === "runtime_unavailable"
+            input.request.toolId.startsWith("client.")
+              ? "The originating turn is no longer available for client controls."
+              : error.code === "runtime_unavailable"
               ? "The thread cannot accept another approval request right now."
               : "The access approval request could not be completed.",
           retryable: error.code === "runtime_unavailable" && error.retryable,

@@ -501,11 +501,11 @@ export class ApiClient {
   #appliedSessionSequence = 0;
   #sessionPromise?: Promise<NormalizedApplicationSession>;
 
-  readonly #clientOrigin: () => RegisteredClient | undefined;
+  readonly #clientOrigin: () => Pick<RegisteredClient, "clientId" | "connectionToken"> | undefined;
 
   /** `clientOrigin` is read at each delivery, so an origin that arrives or changes later never requires a new client. */
   constructor(endpoint: SedesServerEndpoint = sameOriginSedesServer, credentialOverride?: string | null,
-    clientOrigin: () => RegisteredClient | undefined = () => undefined) {
+    clientOrigin: () => Pick<RegisteredClient, "clientId" | "connectionToken"> | undefined = () => undefined) {
     this.#endpoint = endpoint;
     this.#credentialOverride = credentialOverride;
     this.#clientOrigin = clientOrigin;

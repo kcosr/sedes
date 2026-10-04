@@ -3474,9 +3474,13 @@ or full document bodies.
 
 Client-facing agent actions must use the canonical `client.*` tools and normalized
 active-turn authority on every backend. Capture the initiating client from the
-first normalized user input before approval waits; later Steer input cannot
-transfer it. A provider current-input lease must also fence client controls,
-even within an unrestricted environment policy. Unbound, replaced, terminal, or
+first normalized user input at invocation admission, before asynchronous checks
+or approval waits; later Steer input cannot transfer it. OpenCode's additional
+provider current-input lease also fences client controls, even within an
+unrestricted environment policy. Pi, Codex, Claude, and Grok use the shared
+normalized turn/owner-generation checks and existing invocation cancellation.
+Thread-scoped CLI/MCP source references do not prove an issuing turn before
+Sedes receives the invocation. Unbound, replaced, terminal, or
 unavailable source authority cannot silently become another active turn.
 
 The server derives input attribution from a principal-scoped client registration;

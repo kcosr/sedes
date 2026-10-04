@@ -284,10 +284,14 @@ Pi, Codex, Claude, Grok, and OpenCode through their supported native and CLI
 surfaces. Standalone Tool clients cannot invoke them. Their group and individual
 controls use the existing agent-tool policy UI.
 
-The source facade captures the active normalized turn and starting client before
-approval or execution. Later Steer input does not retarget it. The provider's
-current-input lease is checked even when no environment approval is needed.
-Unavailable or replaced turn authority fails closed. Omit `clientId` for the
+The source facade captures the active normalized turn and starting client at
+Sedes invocation admission, before any asynchronous check, approval, or execution.
+Later Steer input does not retarget it. OpenCode additionally supplies a provider
+current-input lease, checked even without an environment approval. Pi, Codex,
+Claude, and Grok use normalized turn/owner-generation revalidation and their
+existing invocation cancellation. CLI/MCP source references identify a thread;
+they do not carry a historical issuing turn before Sedes receives the request.
+Unavailable or replaced admitted turn authority fails closed. Omit `clientId` for the
 current device. List clients or specify another `clientId` only for an explicit
 user request; never select another online device as a fallback.
 Discovery returns `defaultClientId` separately from its live client list, so an
@@ -296,8 +300,14 @@ offline starting client cannot be mistaken for another connected recipient.
 The registry, command acknowledgements, and completion correlations are
 principal scoped, transient, and bounded. A paired client retains its authenticated
 ID; an anonymous registration receives a temporary ID without pairing. Connection
-replacement invalidates pending commands. Silent registrations expire after
-45 seconds. Actions expire after two minutes and are never persisted for replay.
+replacement invalidates pending commands. A server-issued resume secret keeps
+the same identity across reconnects within five minutes; old connection tokens
+are fenced. Windows sharing a paired credential have one active recipient:
+the newest registration wins, and replaced windows offer an explicit reconnect
+instead of repeatedly replacing each other. Silent registrations expire after
+45 seconds. Deferred actions wait for their exact turn for at most 24 hours,
+then receive a separate one-hour playback deadline at settlement. Commands are
+never persisted for replay. An unacknowledged write reports an uncertain outcome.
 
 Settings reads identify the client and return capabilities, readiness, and a
 revision. Updates require `expectedRevision` and `patch.voice`, limited to

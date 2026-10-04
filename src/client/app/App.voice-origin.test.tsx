@@ -99,7 +99,7 @@ describe("application client origin", () => {
   });
   it("uses the server registration for a browser connection without a stored advisory origin", async () => {
     voice.available = false;
-    const registration = { clientId: VOICE_ORIGIN_ID, connectionToken: "a".repeat(43) };
+    const registration = { clientId: VOICE_ORIGIN_ID, connectionToken: "a".repeat(43), resumeToken: "b".repeat(43) };
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path.endsWith("/api/application/session")) return new Response(JSON.stringify({ csrfToken: "csrf-test" }));

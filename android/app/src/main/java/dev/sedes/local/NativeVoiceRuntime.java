@@ -212,7 +212,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             } catch (Exception error) { connectionFailed("voice_storage_unavailable", reply); return; }
             loadSession(generation, () -> {
                 phase = "off"; refreshSpeechCatalog(true);
-                clientControls.connect(origin, credential, csrf, () -> { resumeEnabledSession(); recoverOutstanding(); deliverPendingOpen(); });
+                clientControls.connect(origin, credential);
                 publish(); reply.done(snapshot());
             },
                 code -> {
@@ -230,10 +230,19 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             "voiceReady", canListen(), "interactionActive", active != null),
             "settings", NativeVoiceJson.object("revision", settings.revision, "voice", voice));
     }
-    public void clientRegistered(String clientId, String token) { originId = clientId; clientConnectionToken = token; publish(); }
+    public void clientRegistered(String clientId, String token) {
+        originId = clientId; clientConnectionToken = token; publish();
+        resumeEnabledSession(); recoverOutstanding(); deliverPendingOpen();
+    }
+    public String clientCsrf() { return csrf; }
+    public void refreshClientSession(Runnable ready, Runnable retry) {
+        final long generation = connectionGeneration;
+        loadSession(generation, ready, code -> { if (generation == connectionGeneration) retry.run(); });
+    }
+    public void clientAuthenticationLost() { authenticationLost(401, connectionGeneration); }
+    public void clientReplaced() { report("client_connection_replaced"); }
     public void clientDisconnected() {
-        originId = null; clientConnectionToken = null; clientActions.clear();
-        if (active != null && !speechIndependent(active)) cancelActive(true, "connection_changed");
+        clientConnectionToken = null; clientActions.clear();
         publish();
     }
     private JSONObject clientResult(String status, String reason) {
@@ -254,17 +263,18 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 JSONObject patch = NativeVoiceJson.copy(NativeVoiceJson.requiredObject(command, "patch"));
                 NativeVoiceJson.keys(patch, CLIENT_VOICE_FIELDS);
                 if (patch.has("voiceThreadId")) NativeVoiceJson.put(patch, "voiceThreadTitle",
-                    patch.isNull("voiceThreadId") ? null : command.optString("threadTitle", null));
+                    patch.isNull("voiceThreadId") ? null : NativeVoiceJson.nullableString(command, "threadTitle", 512));
                 long before = settings.revision;
                 try { updateSettings(NativeVoiceJson.object("expectedRevision", NativeVoiceJson.integer(command, "expectedRevision", 0, Long.MAX_VALUE), "patch", patch), true); }
                 catch (Exception error) {
                     // Settings persist before permission/foreground/setup gates. Report what actually happened.
+                    if (settings.revision != before) { publish(); emit("settingsChanged", snapshot()); }
                     return clientResult(settings.revision != before ? "applied" : "failed", code(error));
                 }
                 return clientResult("applied", sessionStartId != null ? "voice_starting" : null);
             }
             if (action.equals("turn_settled")) {
-                if (!clientActions.settle(id, command.optString("replyEventId", null))) return clientResult("noop", "superseded");
+                if (!clientActions.settle(id, NativeVoiceJson.nullableString(command, "replyEventId", 128), expires)) return clientResult("noop", "superseded");
                 applyClientActions(); return clientResult("accepted", "waiting_for_playback_drain");
             }
             if (!action.equals("end_interaction") && !action.equals("switch_thread")) throw new IllegalArgumentException("invalid_client_action");
@@ -275,7 +285,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             }
             clientActions.stage(command, inputSubmissionContext, System.currentTimeMillis());
             if (active != null && clientSuppressesFollowup(active.notification)) active.followUp = false;
-            handler.postDelayed(() -> clientActions.expire(System.currentTimeMillis()), Math.min(120000, Math.max(0, expires - System.currentTimeMillis())));
+            handler.postDelayed(() -> clientActions.expire(System.currentTimeMillis()), Math.max(0, expires - System.currentTimeMillis()));
             return clientResult("accepted", action.equals("switch_thread") && command.optBoolean("listen") && !settings.active()
                 ? "navigation_accepted_voice_off" : "after_turn_completion_and_playback");
         } catch (Exception error) { return clientResult("failed", code(error)); }
@@ -311,7 +321,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                         if (!nativeVisible || generation != connectionGeneration || !Objects.equals(token, clientConnectionToken)) return;
                         if (!canListen() || active != null) { report("voice_not_ready"); return; }
                         // Exact one-shot target; neither autoListen nor the pinned default redirects it.
-                        active = new Active(target, command.optString("threadTitle", null)); validateTarget(active, false);
+                        active = new Active(target, NativeVoiceJson.nullableString(command, "threadTitle", 512)); validateTarget(active, false);
                     });
                 });
             }));
@@ -1312,11 +1322,11 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         return result;
     }
     private boolean canListen() {
-        return sessionStarted && speechReady() && binding != null && csrf != null && originId != null && settings.active() && audio.hasPermission();
+        return sessionStarted && speechReady() && binding != null && csrf != null && clientConnectionToken != null && settings.active() && audio.hasPermission();
     }
     private String readiness() {
         if (profileId == null) return "disconnected";
-        if (binding == null || csrf == null || originId == null) return phase.equals("error") ? "error" : "connecting";
+        if (binding == null || csrf == null || clientConnectionToken == null) return phase.equals("error") ? "error" : "connecting";
         if (!settings.active()) return "off";
         if (!audio.hasPermission()) return "permissionRequired";
         if (!speechReady()) return "speechConfigurationRequired";
@@ -1382,6 +1392,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             case "voice_not_listening": return "Voice is not recording.";
             case "voice_not_speaking": return "Voice is not speaking.";
             case "connection_changed": return "The Sedes connection changed before the voice action finished.";
+            case "client_connection_replaced": return "Client controls moved to another window. Retry the voice connection to use this device.";
             case "authentication_required": return "Pair this Sedes connection before using voice.";
             case "connection_unavailable": return "Sedes could not be reached for voice. Check the connection, then retry.";
             case "session_unavailable": return "Sedes did not start a voice session. Retry the voice connection.";

@@ -27,7 +27,8 @@ missing speech configuration; the result reports any local step still needed.
 An end-interaction or thread switch waits until the reply finishes playing.
 Switching can request one listen even with Auto-listen disabled, but it does not
 turn voice on or change the default/pin. Manual actions, a closed or replaced
-connection, or two minutes without completion supersede pending actions. Navigation
+connection supersede pending actions. Actions have a 24-hour turn-completion
+limit and a separate one-hour reply-playback limit after completion. Navigation
 requires the app to remain in the foreground. Browser and Electron clients support
 navigation and report voice controls as unavailable.
 

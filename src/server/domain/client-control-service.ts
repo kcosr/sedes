@@ -9,14 +9,16 @@ import type { RequestScope } from "../identity/identity-provider.js";
 import { DomainError } from "./errors.js";
 
 type Registration = {
+  session: ClientSession;
   scope: RequestScope; clientId: string; name: string; paired: boolean;
   platform: z.infer<typeof registerClientSchema>["platform"];
   capabilities: z.infer<typeof registerClientSchema>["capabilities"];
   token: string; state: ClientState; seen: number; commands: ClientCommand[];
   wake?: () => void;
-  pending: Map<string, { command: ClientCommand; resolve: (result: ClientActionResult) => void }>;
+  pending: Map<string, { command: ClientCommand; resolve: (result?: ClientActionResult) => void }>;
   deferred: Map<string, ClientCommand>;
 };
+type ClientSession = { scope: RequestScope; clientId: string; paired: boolean; token: string; seen: number; replaced: boolean };
 const scopeKey = (scope: RequestScope) => JSON.stringify([scope.tenantId, scope.principalId]);
 const sameScope = (a: RequestScope, b: RequestScope) => scopeKey(a) === scopeKey(b);
 const turnKey = (threadId: string, turnId: string) => JSON.stringify([threadId, turnId]);
@@ -26,6 +28,7 @@ const MAX_CLIENTS = 128;
 /** Principal-owned live registrations. Tokens fence connection replacement; commands are never persisted or replayed. */
 export class ClientControlService {
   readonly #clients = new Map<string, Registration>();
+  readonly #sessions = new Map<string, ClientSession>();
   readonly #replaced = new Map<string, number>();
   readonly #notifications = new Map<string, Promise<string | undefined>>();
   readonly #timer: ReturnType<typeof setInterval>;
@@ -36,19 +39,34 @@ export class ClientControlService {
 
   register(scope: RequestScope, authenticated: AuthenticationClient | undefined, input: z.infer<typeof registerClientSchema>) {
     this.#prune();
-    const clientId = authenticated?.id ?? randomUUID();
+    let session = input.resumeToken ? this.#sessions.get(input.resumeToken) : undefined;
+    if (input.resumeToken && (!session || !sameScope(session.scope, scope) || session.paired !== !!authenticated || authenticated && session.clientId !== authenticated.id)) {
+      throw new DomainError("not_found", "This client session expired. Register a new session.");
+    }
+    if (session?.replaced) throw new DomainError("conflict", "This client session was replaced by another application window.");
+    if (!session) {
+      if (this.#sessions.size >= 256) throw new DomainError("conflict", "Too many client sessions.");
+      session = { scope: { ...scope }, clientId: authenticated?.id ?? randomUUID(), paired: !!authenticated,
+        token: randomBytes(32).toString("base64url"), seen: this.now(), replaced: false };
+      this.#sessions.set(session.token, session);
+    }
+    const clientId = session.clientId;
     for (const client of this.#clients.values()) {
-      if (sameScope(client.scope, scope) && client.clientId === clientId) { this.#replaced.set(client.token, this.now()); this.#remove(client); }
+      if (sameScope(client.scope, scope) && client.clientId === clientId) {
+        if (client.session !== session) client.session.replaced = true;
+        this.#replaced.set(client.token, this.now()); this.#remove(client);
+      }
     }
     if (this.#clients.size >= MAX_CLIENTS) throw new DomainError("conflict", "Too many connected clients.");
     const token = randomBytes(32).toString("base64url");
     this.#clients.set(token, {
-      scope: { ...scope }, clientId, token, paired: !!authenticated,
+      scope: { ...scope }, session, clientId, token, paired: !!authenticated,
       name: authenticated?.name ?? `Anonymous ${input.platform}`,
       platform: input.platform, capabilities: { ...input.capabilities }, state: input.state,
       seen: this.now(), commands: [], pending: new Map(), deferred: new Map(),
     });
-    return { clientId, connectionToken: token };
+    session.seen = this.now();
+    return { clientId, connectionToken: token, resumeToken: session.token };
   }
 
   authenticate(scope: RequestScope, token: string | undefined, authenticatedId: string | undefined) {
@@ -67,7 +85,7 @@ export class ClientControlService {
     input: z.infer<typeof clientPollRequestSchema>, signal: AbortSignal) {
     const client = this.authenticate(scope, token, authenticatedId);
     if (client.wake) throw new DomainError("conflict", "This client already has an active connection.");
-    client.seen = this.now(); client.state = input.state;
+    client.seen = this.now(); client.session.seen = client.seen; client.state = input.state;
     for (const ack of input.acknowledgements) {
       const pending = client.pending.get(ack.id);
       if (!pending) continue;
@@ -85,8 +103,12 @@ export class ClientControlService {
       signal.addEventListener("abort", done, { once: true });
       if (signal.aborted) done();
     });
-    if (this.#clients.get(client.token) !== client) throw unavailable();
+    if (this.#clients.get(client.token) !== client) {
+      if (this.#replaced.has(client.token)) throw new DomainError("conflict", "This client connection was replaced by another application window.");
+      throw unavailable();
+    }
     client.seen = this.now();
+    client.session.seen = client.seen;
     // A disconnected waiter cannot consume work intended for its next live poll.
     if (signal.aborted) return { commands: [] };
     return { commands: client.commands.splice(0, 64).filter(command => command.expiresAt > this.now()) };
@@ -111,9 +133,10 @@ export class ClientControlService {
 
   async request(client: Registration, input: Omit<ClientCommand, "id" | "expiresAt">, signal: AbortSignal) {
     if (this.#clients.get(client.token) !== client) throw unavailable();
-    if (client.pending.size >= 32 || client.commands.length >= 64) throw new DomainError("conflict", "The client is busy.");
+    if (client.pending.size + client.deferred.size >= 32 || client.commands.length >= 64) throw new DomainError("conflict", "The client is busy.");
     signal.throwIfAborted();
-    const command: ClientCommand = { ...input, id: randomUUID(), expiresAt: this.now() + 120_000 };
+    const deferred = input.action === "end_interaction" || input.action === "switch_thread";
+    const command: ClientCommand = { ...input, id: randomUUID(), expiresAt: this.now() + (deferred ? 86_400_000 : 120_000) };
     const result = await new Promise<ClientActionResult>((resolve, reject) => {
       const timer = setTimeout(() => done(undefined), 25_000);
       const abort = () => done(undefined);
@@ -121,7 +144,8 @@ export class ClientControlService {
         clearTimeout(timer); signal.removeEventListener("abort", abort); client.pending.delete(command.id);
         if (!result) {
           client.commands = client.commands.filter(queued => queued.id !== command.id);
-          reject(new DomainError("runtime_unavailable", "The client did not acknowledge the request; its outcome is unknown."));
+          reject(new DomainError(input.action === "settings.get" ? "runtime_unavailable" : "operation_outcome_uncertain",
+            "The client did not acknowledge the request; its outcome is unknown."));
         } else resolve(result);
       };
       client.pending.set(command.id, { command, resolve: done });
@@ -146,18 +170,19 @@ export class ClientControlService {
       const deferred = client.deferred.get(key);
       client.deferred.delete(key);
       if (!deferred || deferred.expiresAt <= this.now() || outcome !== "completed") continue;
-      client.commands.push({ ...deferred, action: "turn_settled", replyEventId: replyEventId ?? null });
+      client.commands.push({ ...deferred, action: "turn_settled", replyEventId: replyEventId ?? null, expiresAt: this.now() + 3_600_000 });
       client.wake?.();
     }
   }
 
-  close() { clearInterval(this.#timer); for (const client of this.#clients.values()) this.#remove(client); }
+  close() { clearInterval(this.#timer); for (const client of this.#clients.values()) this.#remove(client); this.#sessions.clear(); }
   #remove(client: Registration) {
     this.#clients.delete(client.token); client.wake?.();
-    for (const pending of client.pending.values()) pending.resolve({ status: "failed", reason: "connection_changed", state: client.state });
+    for (const pending of client.pending.values()) pending.resolve();
     client.pending.clear(); client.deferred.clear(); client.commands = [];
   }
   #prune() {
+    for (const [token, session] of this.#sessions) if (session.seen + 300_000 < this.now()) this.#sessions.delete(token);
     for (const [token, replacedAt] of this.#replaced) if (replacedAt + 300_000 < this.now()) this.#replaced.delete(token);
     while (this.#replaced.size > 1024) this.#replaced.delete(this.#replaced.keys().next().value!);
     for (const client of this.#clients.values()) {

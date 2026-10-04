@@ -24,12 +24,14 @@ export const clientStateSchema = z.strictObject({
   settings: clientSettingsSnapshotSchema.nullable(),
 });
 export const registerClientSchema = z.strictObject({
+  resumeToken: z.string().min(32).max(128).optional(),
   platform: z.enum(["browser", "electron", "android"]),
   capabilities: clientCapabilitiesSchema,
   state: clientStateSchema,
 });
 export const registeredClientSchema = z.strictObject({
   clientId: z.string().uuid(), connectionToken: z.string().min(32).max(128),
+  resumeToken: z.string().min(32).max(128),
 });
 export type RegisteredClient = z.infer<typeof registeredClientSchema>;
 export const clientActionResultSchema = z.strictObject({

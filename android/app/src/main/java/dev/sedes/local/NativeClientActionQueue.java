@@ -27,10 +27,11 @@ final class NativeClientActionQueue {
         if (pending.size() >= 32) throw new IllegalStateException("client_busy");
         pending.put(command.optString("id"), new Action(command, navigationContext));
     }
-    boolean settle(String id, String replyEventId) {
+    boolean settle(String id, String replyEventId, long expiresAt) {
         Action action = pending.get(id);
         if (action == null) return false;
-        action.settled = true; action.replyEventId = replyEventId; return true;
+        action.settled = true; action.replyEventId = replyEventId;
+        NativeVoiceJson.put(action.command, "expiresAt", expiresAt); return true;
     }
     void drained(String id) {
         drained.add(id);

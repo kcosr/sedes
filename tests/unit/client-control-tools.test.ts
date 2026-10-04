@@ -45,7 +45,7 @@ function fixture(backendKind: BackendKind = "pi", adapter: AgentToolAdapter = "c
   { requestApplicationDecision: approve }, controls);
   const invoke = (toolId = "client.settings.get", input = {}) => gate.invoke({ source, adapter,
     request: { toolId, schemaVersion: 1, requestId: randomUUID(), input }, signal: new AbortController().signal,
-    accessDecisionAuthority: { acquire } });
+    ...(backendKind === "opencode" ? { accessDecisionAuthority: { acquire } } : {}) });
   return { invoke, clients, starting, other, request, approve, acquire, release, canonical,
     changeTurn: () => { turn = "another-turn"; }, changeOwner: () => { owner = "another-owner"; }, loseAuthority: () => { current = false; } };
 }
@@ -62,15 +62,26 @@ describe("canonical client controls", () => {
   it.each([
     ["pi", "pi_sdk"], ["codex_app_server", "mcp"], ["claude_agent_sdk", "mcp"], ["grok_build", "cli"], ["opencode", "mcp"],
     ["pi", "cli"], ["codex_app_server", "cli"], ["claude_agent_sdk", "cli"], ["opencode", "cli"],
-  ] as const)("captures the starting client through %s/%s and checks provider input authority", async (backend, adapter) => {
+  ] as const)("captures the admitted turn through %s/%s with that backend's authority disposition", async (backend, adapter) => {
     const current = fixture(backend, adapter);
     await current.invoke();
     expect(current.request.mock.calls[0]?.[0].clientId).toBe(current.starting.clientId);
     expect(current.request.mock.calls[0]?.[1]).toMatchObject({ sourceThreadId, sourceTurnId: "turn", action: "settings.get" });
-    expect(current.acquire).toHaveBeenCalledOnce(); expect(current.release).toHaveBeenCalledOnce();
+    expect(current.acquire).toHaveBeenCalledTimes(backend === "opencode" ? 1 : 0);
+    expect(current.release).toHaveBeenCalledTimes(backend === "opencode" ? 1 : 0);
     await current.invoke("client.settings.get", { clientId: current.other.clientId });
     expect(current.request.mock.calls[1]?.[0].clientId).toBe(current.other.clientId);
     expect(current.approve).not.toHaveBeenCalled();
+  });
+
+  it("captures before an asynchronous provider lease and rejects a turn replaced during that check", async () => {
+    const current = fixture("opencode", "mcp");
+    current.acquire.mockImplementation(async () => {
+      current.changeTurn();
+      return { signal: new AbortController().signal, isCurrent: () => true, release: current.release };
+    });
+    await expect(current.invoke()).rejects.toBeDefined();
+    expect(current.request).not.toHaveBeenCalled();
   });
 
   it.each(["changeTurn", "changeOwner", "loseAuthority"] as const)("rejects %s during destination approval rather than retargeting", async change => {
