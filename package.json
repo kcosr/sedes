@@ -136,7 +136,7 @@
     "@opencode/client": "2.0.18",
     "@opencode/protocol": "2.0.18",
     "@opencode/schema": "2.0.18",
-    "@pierre/diffs": "1.3.4",
+    "@pierre/diffs": "1.5.1",
     "@pierre/trees": "1.0.0-beta.6",
     "@radix-ui/react-collapsible": "1.1.20",
     "@radix-ui/react-dialog": "1.1.23",

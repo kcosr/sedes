@@ -302,8 +302,10 @@ export function WorkspaceCompareView({
   const prefetchRef = useRef<(index: number) => void>(() => undefined);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
-  const codeViewRef =
-    useRef<CodeViewHandle<WorkspaceCompareReviewAnnotation> | null>(null);
+  const codeViewRef = useRef<CodeViewHandle<
+    WorkspaceCompareReviewAnnotation,
+    undefined
+  > | null>(null);
   const activeComparisonRef = useRef<
     WorkspaceDiffComparisonDescriptor | undefined
   >(undefined);
@@ -1205,7 +1207,10 @@ export function WorkspaceCompareView({
                   name: workspaceCompareFilePath(file),
                   contents: "",
                   lang: "text" as const,
-                  cacheKey: `status:${comparison?.fingerprint}:${file.fileId}`,
+                  // One key per placeholder state: Pierre treats an equal key
+                  // as the same file object and fails a re-render that swaps
+                  // in a new one.
+                  cacheKey: `status:${comparison?.fingerprint}:${file.fileId}:${load?.status ?? "pending"}`,
                 },
                 version: load?.status === "loading" ? 1 : load ? 2 : 0,
               },
@@ -1524,7 +1529,10 @@ export function WorkspaceCompareView({
       top: number,
       viewer: NonNullable<
         ReturnType<
-          CodeViewHandle<WorkspaceCompareReviewAnnotation>["getInstance"]
+          CodeViewHandle<
+            WorkspaceCompareReviewAnnotation,
+            undefined
+          >["getInstance"]
         >
       >,
     ) => {

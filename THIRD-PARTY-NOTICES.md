@@ -686,7 +686,7 @@ Packages listed: 607.
 - Shipped by: sedes, @sedes/server-runtime
 - License text: license text not included in package; see repository
 
-### @pierre/diffs 1.3.4
+### @pierre/diffs 1.5.1
 
 - License: apache-2.0
 - URL: not declared in package metadata
@@ -5816,7 +5816,7 @@ Apache License
 
 ### License text 2f09b31fcc47
 
-Applies to: @pierre/diffs 1.3.4, @pierre/theme 2.0.0, @pierre/theming 1.0.0, @pierre/theming 1.0.1, @pierre/trees 1.0.0-beta.6.
+Applies to: @pierre/diffs 1.5.1, @pierre/theme 2.0.0, @pierre/theming 1.0.0, @pierre/theming 1.0.1, @pierre/trees 1.0.0-beta.6.
 
 ```text
 Apache License

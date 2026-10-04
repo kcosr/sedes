@@ -38,7 +38,11 @@ vi.mock("@pierre/diffs/react", async () => {
 
 vi.mock("@pierre/diffs/edit", () => ({
   Editor: class MockEditor {
-    constructor(readonly options: unknown) {}
+    constructor(
+      readonly type: unknown,
+      readonly options: unknown,
+      readonly editStateKey: unknown,
+    ) {}
   },
 }));
 
@@ -343,10 +347,12 @@ describe("PierreFileViewer edit adapter", () => {
     expect(secondItem.file.cacheKey).not.toBe(firstItem.file.cacheKey);
 
     const publish = secondCodeView.onItemEditChange as (
+      event: { file: { contents: string } },
       item: unknown,
-      file: { contents: string },
     ) => void;
-    publish({}, { contents: "" });
+    publish({ file: { contents: "two" } }, {});
+    expect(onChange).not.toHaveBeenCalled();
+    publish({ file: { contents: "" } }, {});
     expect(onChange).toHaveBeenCalledWith("");
 
     view.rerender(

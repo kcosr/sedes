@@ -34,7 +34,7 @@ const resizeObservers: Array<{
 vi.mock("@pierre/diffs/react", () => ({
   CodeView: React.forwardRef(function MockCodeView(
     props: Record<string, unknown>,
-    ref: React.ForwardedRef<CodeViewHandle<unknown>>,
+    ref: React.ForwardedRef<CodeViewHandle<unknown, undefined>>,
   ) {
     capturedCodeViewProps = props;
     useImperativeHandle(
@@ -43,7 +43,7 @@ vi.mock("@pierre/diffs/react", () => ({
         ({
           scrollTo,
           getInstance: () => viewportViewer,
-        }) as unknown as CodeViewHandle<unknown>,
+        }) as unknown as CodeViewHandle<unknown, undefined>,
     );
     const items = props.items as readonly { id: string; type: string }[];
     const renderHeader = props.renderCustomHeader as
@@ -424,6 +424,15 @@ describe("WorkspaceCompareView", () => {
 
     await screen.findByText("Diff unavailable");
     await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(1));
+    // Each placeholder state needs its own Pierre cache key: an equal key
+    // with a new file object fails Pierre's virtualized re-render.
+    const placeholder = (
+      capturedCodeViewProps?.items as readonly {
+        id: string;
+        file?: { cacheKey?: string };
+      }[]
+    ).find((item) => item.id === "file-1");
+    expect(placeholder?.file?.cacheKey).toMatch(/:unavailable$/);
     await act(async () => {
       await Promise.resolve();
     });
