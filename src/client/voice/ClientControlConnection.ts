@@ -4,17 +4,26 @@ import {
 } from "../../shared/protocol/client-controls.js";
 import { authenticatedFetch } from "../authentication/auth-transport.js";
 import type { SedesServerEndpoint } from "../app/server-endpoint.js";
+import { subscribeRoute } from "../app/router.js";
 
 /** One browser application connection. Reconnection drops pending actions and gets a fresh generation. */
 export class ClientControlConnection {
   registration: RegisteredClient | undefined;
   readonly #abort = new AbortController();
   readonly #deferred = new Map<string, { command: ClientCommand; location: string }>();
-  constructor(readonly endpoint: SedesServerEndpoint, readonly navigate: (threadId: string) => void) {}
+  readonly #unsubscribeRoute: () => void;
+  readonly #visibilityChanged = () => { if (document.visibilityState === "hidden") this.#deferred.clear(); };
+  constructor(readonly endpoint: SedesServerEndpoint, readonly navigate: (threadId: string) => void) {
+    this.#unsubscribeRoute = subscribeRoute(() => this.#deferred.clear());
+    document.addEventListener("visibilitychange", this.#visibilityChanged);
+  }
   state(): ClientState {
     return { runtime: { foreground: document.visibilityState !== "hidden", voiceReady: false, interactionActive: false }, settings: null };
   }
-  close() { this.#abort.abort(); this.registration = undefined; this.#deferred.clear(); }
+  close() {
+    this.#abort.abort(); this.registration = undefined; this.#deferred.clear(); this.#unsubscribeRoute();
+    document.removeEventListener("visibilitychange", this.#visibilityChanged);
+  }
   async run() {
     const signal = this.#abort.signal;
     while (!signal.aborted) {
@@ -52,12 +61,17 @@ export class ClientControlConnection {
   }
   execute(command: ClientCommand): ClientActionResult {
     const result = (status: ClientActionResult["status"], reason?: string): ClientActionResult => ({ status, ...(reason ? { reason } : {}), state: this.state() });
+    for (const [id, pending] of this.#deferred) if (pending.command.expiresAt <= Date.now()) this.#deferred.delete(id);
     if (command.expiresAt <= Date.now()) return result("noop", "expired");
     if (command.action === "settings.get") return result("applied");
     if (command.action === "settings.update") return result("noop", "voice_settings_unsupported");
     if (command.action === "end_interaction") return result("noop", "no_active_voice_interaction");
     if (command.action === "switch_thread") {
       if (!this.state().runtime.foreground) return result("noop", "client_in_background");
+      for (const [id, pending] of this.#deferred) {
+        if (pending.command.sourceThreadId === command.sourceThreadId && pending.command.sourceTurnId === command.sourceTurnId) this.#deferred.delete(id);
+      }
+      if (this.#deferred.size >= 32) return result("failed", "client_busy");
       this.#deferred.set(command.id, { command, location: window.location.href });
       return result("accepted", command.listen ? "navigation_accepted_voice_unsupported" : "after_turn_completion");
     }

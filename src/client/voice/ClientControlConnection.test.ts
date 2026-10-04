@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ClientControlConnection } from "./ClientControlConnection.js";
 import type { ClientCommand } from "../../shared/protocol/client-controls.js";
+import { navigate as navigateRoute } from "../app/router.js";
 
 const command = (patch: Partial<ClientCommand> = {}): ClientCommand => ({ id: "action", action: "switch_thread", sourceThreadId: "source",
   sourceTurnId: "turn", threadId: "target", listen: false, expiresAt: Date.now() + 120000, ...patch });
@@ -35,5 +36,19 @@ describe("browser client controls", () => {
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     expect(client.execute(command())).toMatchObject({ status: "noop", reason: "client_in_background" });
     vi.restoreAllMocks(); client.close();
+  });
+  it("does not revive a deferred switch after navigating away and back or returning from the background", () => {
+    const navigate = vi.fn(); const client = new ClientControlConnection({ baseUrl: null }, navigate);
+    navigateRoute("/threads/source");
+    client.execute(command());
+    navigateRoute("/threads/other"); navigateRoute("/threads/source");
+    expect(client.execute(command({ action: "turn_settled" }))).toMatchObject({ status: "noop", reason: "superseded" });
+    client.execute(command());
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    visibility.mockReturnValue("visible"); document.dispatchEvent(new Event("visibilitychange"));
+    expect(client.execute(command({ action: "turn_settled" }))).toMatchObject({ status: "noop", reason: "superseded" });
+    expect(navigate).not.toHaveBeenCalled();
+    visibility.mockRestore(); client.close(); navigateRoute("/");
   });
 });
