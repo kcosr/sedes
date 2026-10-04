@@ -174,10 +174,11 @@ sleeping for a fixed time. In each recovery
 scenario, the first failed reconciliation releases the active slot and leaves
 one uncertain input with recording available. A lost reply is then found by
 automatic reconciliation without Resume. A lost send is read automatically but
-resent only through **Resume input**. A cancelled input stays read-only after
-leaving and re-entering its binding, completes a read-only reconciliation
-there without a second POST, and is resolved with Discard. Recovery assertions
-count real model admissions and the native HTTP attempts.
+resent only through **Resume input**, which the device reaches from the voice
+card's **Voice** sheet through **All voice settings**. A cancelled input stays
+read-only after leaving and re-entering its binding, completes a read-only
+reconciliation there without a second POST, and is resolved with Discard.
+Recovery assertions count real model admissions and the native HTTP attempts.
 
 Each scenario reports a `voiceResult` of observed values; the host makes the
 assertions. `audioSink` is `AudioTrack` only if a playing runtime-owned track's
@@ -231,14 +232,18 @@ qualify progress. The conversation actor tests
 report a replacement snapshot as pending authority and its failure as loss.
 The OpenCode voice harness cannot establish those other backend paths.
 
-Client tests cover the voice bar appearing only for a connected, enabled
-session, bridge-safe thread titles, retarget labels, error persistence, the
-Voice settings connecting and retry states, Discard and Resume, Resume using
-refreshed native settings, recent error listing and clearing, and microphone
-labels. App tests check that the application renders before voice connects,
-keeps one API client while the origin changes, sends no WebView-generated
-origin on Android, saves a server switch before disconnecting voice, and
-removes a credential at logout even when the voice bridge fails.
+Client tests cover the voice card appearing only for a connected, enabled
+session, or dimmed while Off when the device-local **Show voice bar when off**
+preference is on; the card's thread-title rule, phase labels, and Cancel while
+listening; bridge-safe thread titles, retarget labels, error persistence, and
+Retry; the quick sheet's mode changes, adapter URL gate, Resume, switches,
+Voice thread, and settings link; the preference's per-binding storage and
+storage failure; the Voice settings connecting and retry states, Discard and
+Resume, Resume using refreshed native settings, recent error listing and
+clearing, and microphone labels. App tests check that the application renders
+before voice connects, keeps one API client while the origin changes, sends no
+WebView-generated origin on Android, saves a server switch before disconnecting
+voice, and removes a credential at logout even when the voice bridge fails.
 
 Report each lane independently. An emulator boot failure, skipped Android
 cases, or an unavailable OS audio device is not a passed device test. Physical

@@ -538,7 +538,9 @@ terminal**.
 The Android app's **Voice** page configures
 [Android voice](../operator/clients/voice.md) for the selected server
 connection. Its settings are saved on this device for
-that connection and Sedes user.
+that connection and Sedes user. Tapping the voice card opens a **Voice** sheet
+with Audio mode, Auto-listen, Voice thread, and Follow composer mode; its **All
+voice settings** row opens this page.
 
 While voice connects, the page shows **Connecting voice to this server…**. If
 voice cannot connect, it shows the error and **Retry voice connection**; the app
@@ -550,6 +552,9 @@ app does not wait for voice.
   line below reports what voice still needs, such as microphone permission, an
   adapter URL, or the voice adapter or Sedes notification connection. When
   notifications are unavailable, explicit recording still works.
+- **Show voice bar when off** keeps a dimmed voice card under the composer
+  while Audio mode is Off, so its Voice sheet can turn voice back on. By
+  default Off hides the card. The switch changes only what the app shows.
 - **Voice thread** is the target for explicit recording when no thread is
   visible. Untitled threads appear as **Untitled thread**.
 - **Microphone input** lists Android's inputs. Inputs that share a name add

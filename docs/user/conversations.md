@@ -12,18 +12,29 @@ running, queued, completed, and forked work.
 ## Speak to a thread on Android
 
 After configuring [Android voice](../operator/clients/voice.md), use the
-microphone control in the voice bar at the bottom of the app to send spoken
-text. The bar appears once voice is connected and set to Manual or Response. If
-voice cannot connect, **Settings → Voice** shows the problem and a retry
-button; the rest of the app keeps working. The microphone targets the visible
-thread, then your pinned Voice thread, or asks you to choose one. Voice sends a
-separate message and preserves the unsent composer draft. It can also make the
-first send to an empty thread.
+microphone on the voice card under the composer to send spoken text. The card
+appears once voice is connected and set to Manual or Response. If voice cannot
+connect, **Settings → Voice** shows the problem and a retry button; the rest of
+the app keeps working. The microphone targets the visible thread, then your
+pinned Voice thread, or asks you to choose one. Voice sends a separate message
+and preserves the unsent composer draft. It can also make the first send to an
+empty thread.
 
-The recording chip shows the target's title, or **Untitled thread**. Select
-the chip to change that target before recognition finishes; navigating to
-another thread alone does not redirect a recording. Once recognition finishes,
-its target and delivery policy stay fixed through any connection recovery.
+The card names a thread only when voice is speaking from, or recording to, a
+thread other than the one on screen, using its title or **Untitled thread**.
+When the visible thread cannot take a recording, or no thread is on screen,
+the idle card names your Voice thread or shows **Choose a thread**. If voice
+needs to resume, the card offers **Resume**. Otherwise the first line is the
+status, such as **Ready to
+record**, **Speaking**, or **Listening**, and the second adds the mode and
+Auto-listen, the speech queue, or **This thread**.
+
+While listening, tap the card to change the recording target before
+recognition finishes; navigating to another thread alone does not redirect a
+recording. Once recognition finishes, its target and delivery policy stay fixed
+through any connection recovery. At other times, tapping the card opens the
+**Voice** sheet with **Audio mode**, **Auto-listen**, **Voice thread**,
+**Follow composer mode**, and **All voice settings**.
 
 Spoken input queues while a thread is running. Enable **Follow composer's
 selected mode** to use the client's Queue/Steer preference instead. When
@@ -41,10 +52,14 @@ never types an answer into an approval or question form.
 
 **Skip** ends the current speech and retains an eligible follow-up recording.
 **Stop** cancels the current voice interaction without stopping the agent;
-other queued notices may continue. **Off** clears the voice queue. The
-notification silence bell suppresses automatic voice and script delivery,
-while explicit recording remains available. The bar shows the latest voice
-error until your next voice action or the next interaction.
+other queued notices may continue. While voice is recording or recognizing,
+Stop becomes **Cancel**, which discards the recording unsent. **Off** clears
+the voice queue and hides the card unless **Show voice bar when off** is on in
+**Settings → Voice**; then a dimmed card stays, and tapping it opens the Voice
+sheet to turn voice back on. The notification silence bell suppresses
+automatic voice and script delivery, while explicit recording remains
+available. The card shows the latest voice error until your next voice action
+or the next interaction.
 
 If Sedes rejects a spoken message, voice reports that it was not delivered. If
 voice cannot tell whether a message arrived, or Sedes asks it to try again

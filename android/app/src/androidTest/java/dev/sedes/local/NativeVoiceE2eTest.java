@@ -234,7 +234,8 @@ public class NativeVoiceE2eTest {
                         int reads = receiptReads.get();
                         await(() -> receiptReads.get() > reads, 15000, "automatic read-only reconciliation");
                         assertEquals(1, inputAttempts.get());
-                        click("[aria-label=\"Voice settings\"]"); clickText("Resume input");
+                        // Settings → Voice is reached through the voice card's quick sheet.
+                        click("[aria-label=\"Open voice controls\"]"); clickText("All voice settings"); clickText("Resume input");
                     }
                 }
                 await(() -> runtime.snapshot().optJSONArray("recovery").length() == 0 && !runtime.snapshot().optString("phase").equals("submitting"), 45000, "definitive input receipt");

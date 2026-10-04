@@ -80,13 +80,13 @@ Readiness follows the server's current conversation owner even when no thread
 view is open. Reading readiness does not start or reconnect a conversation.
 
 Explicit recording uses the visible foreground thread, then the pinned
-**Voice thread**, then a picker. It can target a running thread. The active
-recording chip allows an explicit target change before recognition finishes.
-Ordinary navigation does not change an active target. **Only play from Voice
-thread** filters automatic playback; it does not change the recording target.
-**Ignore voice started on other devices** filters progress and completion from
-another initiating client. Steering an existing turn does not take over its
-origin.
+**Voice thread**, then a picker. It can target a running thread. While voice is
+listening, tapping the voice card changes the target before recognition
+finishes. Ordinary navigation does not change an active target. **Only play
+from Voice thread** filters automatic playback; it does not change the
+recording target. **Ignore voice started on other devices** filters progress
+and completion from another initiating client. Steering an existing turn does
+not take over its origin.
 
 By default, recognized input queues behind a running turn. **Follow composer's
 selected mode** instead captures the client-wide Queue/Steer preference when
@@ -96,17 +96,36 @@ queues. Backend support remains explicit: Codex and Pi use a turn target,
 Claude and OpenCode a conversation target, and Grok has no steering. Spoken
 input never edits or clears the composer draft.
 
-The bottom voice bar appears only while voice is connected and set to Manual or
-Response. It shows the recording target, phase, and the latest voice error
-until your next voice action, a reconnect, voice becoming ready, or the next
-interaction starting.
+The voice card under the composer appears while voice is connected and set to
+Manual or Response. Wherever no composer is shown, including read-only threads
+and pages without a thread, it sits on its own with a top margin and divider.
+A state tile and two lines show the phase and target; the card names a thread
+only when the target is not the thread on screen. When an idle card cannot
+record into the visible thread, it names the Voice thread a recording would
+use, or asks you to choose one. The card shows the latest voice error until
+your next voice action, a reconnect, voice becoming ready, or the next
+interaction starting. When the voice session needs to resume, for example
+after Android refuses to start it, the card reads **Voice needs to resume** and
+offers **Resume**, which works like **Resume voice** in Settings. A failed
+connection hides the card; **Settings → Voice** then shows the error and
+**Retry voice connection**.
+
+Tapping the card opens the **Voice** sheet, except while listening. The sheet
+has **Audio mode**, **Auto-listen**, **Voice thread**, **Follow composer mode**,
+and **All voice settings**, which opens **Settings → Voice**. Its status line
+reports readiness or the latest error, and it offers **Resume voice** when a
+session needs it.
 
 - **Skip** ends current speech and retains an eligible listen afterward.
 - **Stop** cancels the current interaction and its automatic listen. It leaves
-  other queued notices in place.
-- **Off** clears queued audio, stops voice, and hides the bottom voice bar and
-  service notification. Open **Settings → Voice** and select Manual or Response
-  to enable voice again.
+  other queued notices in place. While the microphone is preparing, listening,
+  or recognizing, Stop becomes **Cancel** and discards the recording unsent.
+- **Off** clears queued audio, stops voice, and hides the service notification.
+  It hides the voice card too, unless **Show voice bar when off** is on in
+  **Settings → Voice**; then the card stays dimmed with its microphone disabled
+  and still opens the Voice sheet. That choice is saved only on this device.
+  Select Manual or Response in the Voice sheet or **Settings → Voice** to
+  enable voice again. The sheet offers them once an adapter URL is saved.
 - The navigation **Silence notifications** bell cancels automatic voice work
   and silences scripts across clients. Explicit recording remains available.
 - With **Recognize stop command**, only the complete utterances “stop” and
@@ -127,7 +146,8 @@ are already available. This restores readiness; it does not start recording.
 An existing session continues when the app goes to the background. After a
 force-stop or process exit, open the app again to restore voice; it does not
 cold-start in the background. If Android rejects a service start, use
-**Resume voice** in Voice settings to retry.
+**Resume** on the voice card, or **Resume voice** in the Voice sheet or Voice
+settings, to retry.
 
 ## Audio, queue, and recovery
 
