@@ -52,8 +52,9 @@ is in another root) and reveals it, without focus, when the browser opens.
 Choosing any other file is therefore always a change that opens it; choosing
 the active file is a no-op. Only a single-file selection opens a document:
 selections made with Ctrl, Cmd, or Shift, and selection changes the panel makes
-itself, never do. When Browse has no open document and the browser is closed,
-the body shows an empty state that reopens it.
+itself, never do, and a modifier selection returns to the active document once
+Pierre finishes handling it. When Browse has no open document and the browser
+is closed, the body shows an empty state that reopens it.
 
 ## Root ownership and directory discovery
 

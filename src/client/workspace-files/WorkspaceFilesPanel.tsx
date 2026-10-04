@@ -4279,8 +4279,25 @@ function RootFileTree({
       event.ctrlKey || event.metaKey || event.shiftKey;
   };
   const selectRef = useRef<(paths: readonly string[]) => void>(() => undefined);
+  const activePathRef = useRef(activePath);
+  activePathRef.current = activePath;
+  const syncSelection = () => {
+    syncingSelectionRef.current = true;
+    try {
+      selectOnlyTreeFile(modelRef.current, activePathRef.current);
+    } finally {
+      syncingSelectionRef.current = false;
+    }
+  };
   selectRef.current = (selected) => {
-    if (syncingSelectionRef.current || modifiedSelectionRef.current) return;
+    if (syncingSelectionRef.current) return;
+    if (modifiedSelectionRef.current) {
+      // Files has no use for multi-selection. Return to the open document
+      // once Pierre finishes the interaction, or a later plain click on a
+      // file this left selected would change nothing and open nothing.
+      queueMicrotask(syncSelection);
+      return;
+    }
     const [path] = selected;
     if (selected.length === 1 && path && !path.endsWith("/"))
       onOpen({ rootId, path });
@@ -4324,14 +4341,8 @@ function RootFileTree({
       syncingSelectionRef.current = false;
     }
   }, [paths]);
-  useEffect(() => {
-    syncingSelectionRef.current = true;
-    try {
-      selectOnlyTreeFile(model, activePath);
-    } finally {
-      syncingSelectionRef.current = false;
-    }
-  }, [activePath, model, paths]);
+  // syncSelection reads these through refs.
+  useEffect(() => syncSelection(), [activePath, model, paths]);
   useEffect(() => {
     // A hidden tree has no viewport to scroll, so reveal when it is shown.
     if (visible && activePath !== undefined)

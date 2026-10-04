@@ -234,4 +234,25 @@ describe("WorkspaceFilesPanel with the real file tree", () => {
     await expectOpenDocument("c.ts");
     expect(openTabNames()).toEqual(["a.ts", "c.ts"]);
   });
+
+  it("opens the file a modifier selection left selected on a plain click", async () => {
+    renderPanel();
+    fireEvent.click(await findTreeRow("a.ts"));
+    await expectOpenDocument("a.ts");
+
+    openTree();
+    fireEvent.click(await findTreeRow("c.ts"), { ctrlKey: true });
+    await settle();
+    fireEvent.click(await findTreeRow("a.ts"), { ctrlKey: true });
+    await settle();
+    expect(openTabNames()).toEqual(["a.ts"]);
+    // The selection returns to the open document after a modifier change.
+    expect(treeRow("a.ts")).toHaveAttribute("aria-selected", "true");
+    expect(treeRow("c.ts")).toHaveAttribute("aria-selected", "false");
+
+    // c.ts was the only selection Pierre held; choosing it must still open it.
+    fireEvent.click(await findTreeRow("c.ts"));
+    await expectOpenDocument("c.ts");
+    expect(openTabNames()).toEqual(["a.ts", "c.ts"]);
+  });
 });
