@@ -67,6 +67,7 @@ public class NativeVoiceStartupTest {
                 else {
                     assertTrue(f.starts.isEmpty());
                     assertEquals("speechConfigurationRequired", f.runtime.snapshot().getString("readiness"));
+                    assertFalse(f.runtime.snapshot().getJSONObject("actions").getBoolean("canResume"));
                 }
             }
         }

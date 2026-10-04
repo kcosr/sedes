@@ -259,7 +259,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
         if (!previous.speechConfigurationEquals(next)) configureSpeech(
             !previous.text("speechProvider").equals(next.text("speechProvider")) ||
                 !previous.text("speechEndpoint").equals(next.text("speechEndpoint")), catalogConfigurationChanged(previous, next));
-        else if (captureSettingsChanged(previous, next) && active != null && !speechIndependent(active))
+        else if (captureSettingsChanged(previous, next) && active != null && !speechIndependent(active) &&
+            (active.sttId != null || phase.equals("validating") || phase.equals("arming") || phase.equals("listening") || phase.equals("recognizing")))
             cancelActive(true, "capture_settings_changed");
         if (!next.active()) {
             cancelOutstanding(true); cancelActive(true, "voice_off"); queue.clear("voice_off"); stopSession(); phase = "off";
@@ -762,6 +763,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
         long before = item.capturePolicy.samples();
         try { end = item.capturePolicy.accept(pcm); }
         catch (IllegalArgumentException error) { failActive("microphone_format_unavailable"); return; }
+        if (end == NativeVoiceCapturePolicy.End.NO_SPEECH) { finishNoSpeech(item); return; }
         int accepted = (int) (item.capturePolicy.samples() - before) * 2;
         if (accepted > 0 && !item.transcription.append(accepted == pcm.length ? pcm : Arrays.copyOf(pcm, accepted))) return;
         // Transport reports its bounded, sanitized failure once when append refuses audio.
@@ -772,9 +774,15 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
         commitCapture(active);
     }); }
     private void commitCapture(Active item) {
+        if (item.capturePolicy == null) { failActive("recognition_failed"); return; }
+        if (!item.capturePolicy.sawSpeech()) { finishNoSpeech(item); return; }
         audio.stop(); phase = "recognizing"; item.capturePolicy = null; publish();
         if (item.transcription == null) { failActive("recognition_failed"); return; }
         item.transcription.commit();
+    }
+    private void finishNoSpeech(Active item) {
+        stopRecognition(item);
+        recognitionCompletionCue(item, false, false, () -> finishItem(item));
     }
     public void failed(String requestId, String reason) { handler.post(() -> {
         Active item = active;
@@ -1184,7 +1192,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
             "readiness", readiness, "foreground", NativeVoiceJson.object("visible", foregroundVisible, "threadId", foregroundThread, "threadTitle", foregroundTitle),
             "active", current, "queue", queue.state(), "actions", NativeVoiceJson.object("canStart", canListen() && active == null,
                 "canStop", active != null, "canSkip", active != null && (phase.equals("speaking") || phase.equals("synthesizing")),
-                "canRetarget", active != null && phase.equals("listening"), "canResume", binding != null && settings.active() && !sessionStarted && sessionStartId == null),
+                "canRetarget", active != null && phase.equals("listening"), "canResume", binding != null && settings.active() && speechReady() && !sessionStarted && sessionStartId == null),
             "recovery", recoveryState(), "errors", NativeVoiceJson.array(errors));
         // Unchanged state is not republished: no bridge event, notification update or media session churn per PCM chunk.
         String fingerprint = next.toString();

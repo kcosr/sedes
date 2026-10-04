@@ -190,8 +190,10 @@ speech-start timeout, 60-second maximum recording after speech starts,
 timing, cues, gain, and headset controls can be changed in Voice settings.
 Microphones that share a product name are labelled with their input type and,
 if still identical, a number. Android detects speech and trailing silence
-locally while uploading audio. It commits that audio when capture ends, then
-waits for the final transcript. Each recording has a separate connection;
+locally while uploading audio. After speech is detected, it commits that audio
+when capture ends and waits for the final transcript. If no speech is detected
+before the start timeout, it cancels the uncommitted recording, plays the
+failure tone, and ends that listening attempt. Each recording has a separate connection;
 failed recordings are not automatically replayed.
 
 Startup pre-roll warms the output only after audio has been idle. Voice holds
@@ -211,9 +213,11 @@ controls all three independently of speech volume. Completion tones play after
 microphone capture stops. Success confirms recognition, not agent delivery;
 input recovery still reports any later delivery problem. Turning voice Off or
 switching connections cancels pending cues without another tone.
-If captured audio returns no transcript, voice plays the failure tone and
-listens again. Stop, Off, a provider change, or another app taking audio focus
-cancels that pending retry.
+If speech was detected but the provider returns a blank transcript, voice plays
+the failure tone and listens again. This can repeat while speech is detected
+but no transcript is returned. Stop, Off, a provider change, or another app
+taking audio focus cancels that pending retry. A new attempt that reaches its
+no-speech timeout ends without retrying.
 
 One logical notice completes before another begins, including all speech
 chunks, audio drain, recognition, and admission. Long speech is split at safe

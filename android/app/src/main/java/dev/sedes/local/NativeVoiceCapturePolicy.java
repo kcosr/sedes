@@ -43,4 +43,5 @@ final class NativeVoiceCapturePolicy {
         return end;
     }
     long samples() { return samples; }
+    boolean sawSpeech() { return firstSpeech >= 0; }
 }

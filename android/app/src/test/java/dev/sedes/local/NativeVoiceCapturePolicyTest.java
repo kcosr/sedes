@@ -9,6 +9,7 @@ public class NativeVoiceCapturePolicyTest {
         NativeVoiceCapturePolicy policy = policy(1000, 5000, 500);
         for (int i = 0; i < 9; i++) assertEquals(NativeVoiceCapturePolicy.End.CONTINUE, policy.accept(frame(0)));
         assertEquals(NativeVoiceCapturePolicy.End.NO_SPEECH, policy.accept(frame(0)));
+        assertFalse(policy.sawSpeech());
         assertEquals(24000, policy.samples());
         assertEquals(NativeVoiceCapturePolicy.End.NO_SPEECH, policy.accept(frame(1000)));
         assertEquals("A terminal recording never consumes later capture", 24000, policy.samples());
@@ -17,10 +18,12 @@ public class NativeVoiceCapturePolicyTest {
         for (int amplitude : new int[] { 393, -393 }) {
             NativeVoiceCapturePolicy policy = policy(100, 5000, 100);
             assertEquals(NativeVoiceCapturePolicy.End.NO_SPEECH, policy.accept(frame(amplitude)));
+            assertFalse(policy.sawSpeech());
         }
         for (int amplitude : new int[] { 394, -394, Short.MIN_VALUE, Short.MAX_VALUE }) {
             NativeVoiceCapturePolicy policy = policy(100, 5000, 100);
             assertEquals(NativeVoiceCapturePolicy.End.CONTINUE, policy.accept(frame(amplitude)));
+            assertTrue(policy.sawSpeech());
             assertEquals(NativeVoiceCapturePolicy.End.SILENCE, policy.accept(frame(0)));
         }
     }

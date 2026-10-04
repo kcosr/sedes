@@ -29,10 +29,12 @@ Recognition cue PCM is generated locally. Each recognition consumes its final
 result once, stops capture, and retains its active slot until completion feedback
 drains. Cue callbacks are tied to that active item and a unique cue ID; cancellation
 invalidates them. Cue failure or a bounded drain timeout continues the recognized
-input path, while a late provider result cannot replay feedback or input. An
-uncancelled `empty_transcript` failure re-arms the same item after its failure
-cue; that pending retry remains dependent on the original provider and current
-voice policy. External focus loss cancels it without re-arming. No cue audio
+input path, while a late provider result cannot replay feedback or input. A
+blank final transcript after locally detected speech re-arms the same item
+after its failure cue; that pending retry remains dependent on the original
+provider and current voice policy. A no-speech timeout cancels without commit
+and ends the item after the failure cue, with no retry. External focus loss
+cancels a pending retry without re-arming. No cue audio
 or metadata is submitted to the agent.
 
 See [Android voice](../operator/clients/voice.md) for setup, defaults, controls,
@@ -384,7 +386,10 @@ Android streams Base64 PCM through `input_audio_buffer.append` while
 `NativeVoiceCapturePolicy` evaluates fixed 100 ms frames. Its normalized RMS
 threshold is 0.012. Sample counts measure waiting for speech, maximum recording
 after speech begins, and trailing silence; a separate watchdog bounds a stalled
-microphone. Ending capture stops the microphone and commits once. A separate
+microphone. Ending capture after detected speech stops the microphone and
+commits once. Without detected speech, the runtime cancels the uncommitted
+session and ends the item; it does not request a transcript of that silence.
+A separate
 recognition result timeout bounds processing after commit. The committed item
 ID identifies the final transcription event. Optional deltas do not submit
 partial input, and reconnecting never replays recorded audio.

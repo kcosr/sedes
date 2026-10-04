@@ -204,7 +204,8 @@
 
 - Android voice can connect directly to OpenAI or a local OpenAI-Compatible
   Speech Server, with model and voice discovery, native encrypted credential
-  storage, and local silence detection while recording.
+  storage, and local silence detection while recording. A no-speech timeout
+  ends the listening attempt without committing it for transcription.
 
 - Android native voice supports spoken notifications, explicit and automatic
   recording, thread targeting, background controls, and recoverable input
