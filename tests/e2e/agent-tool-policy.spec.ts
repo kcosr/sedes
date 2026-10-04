@@ -520,6 +520,7 @@ test.describe.serial("agent tool policy", () => {
     }
     await expect.poll(() => groups.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
     await expect(groups.getByRole("button", { name: "Automations", exact: true })).toBeInViewport();
+    await capture(page, testInfo, "agent-tools-mobile-groups-scrolled.png");
     await touch.send("Emulation.setTouchEmulationEnabled", { enabled: false });
     await touch.detach();
     await settings.getByRole("button", { name: "Automations" }).click();
