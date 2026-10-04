@@ -82,7 +82,8 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
           <DefaultThreadRow choice={defaultThread} locked={locked} onClick={() => { if (!state.pending) setPicker(true); }} />
           <SwitchRow icon={<Pin aria-hidden="true" />} label="Pin default voice thread" description="Record here from any thread"
             checked={settings.pinDefaultVoiceThread} locked={locked} onCheckedChange={pinDefaultVoiceThread => update({ pinDefaultVoiceThread })} />
-          <SwitchRow icon={<ListFilter aria-hidden="true" />} label="Only play from default voice thread" description="Limit automatic playback to this thread"
+          <SwitchRow icon={<ListFilter aria-hidden="true" />} label="Only play from default voice thread"
+            description={settings.voiceThreadId ? "Limit automatic playback to this thread" : "Choose a default thread first"}
             checked={settings.onlyVoiceThread} locked={locked} onCheckedChange={onlyVoiceThread => update({ onlyVoiceThread })} />
           <Separator className="mx-3 my-1 data-[orientation=horizontal]:w-auto" />
           <SettingsRow onOpenChange={onOpenChange} />

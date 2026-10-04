@@ -744,6 +744,11 @@
 
 - Android voice enable and Resume recheck the current activity's visibility,
   allowing a stale visibility state to recover without restarting the app.
+  The client also restores the visible thread for headset and notification
+  controls after voice resumes.
+
+- Voice settings and quick controls explain when the playback filter needs a
+  default voice thread before automatic speech can play.
 
 - Android voice waits for its app connection to finish before offering Resume
   or starting a session after an early mode change.

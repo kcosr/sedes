@@ -122,7 +122,7 @@ describe("voice quick sheet", () => {
     expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
     store.dispose();
   });
-  it("changes quick switches from their rows, including playback filtering before a default thread is chosen", async () => {
+  it("explains the missing default before and after enabling playback filtering", async () => {
     const { fake, store, sheet } = await renderSheet(ready());
     fireEvent.click(within(sheet).getByRole("switch", { name: "Auto-listen" }));
     await waitFor(() => expect(within(sheet).getByRole("switch", { name: "Auto-listen" })).not.toBeChecked());
@@ -131,8 +131,10 @@ describe("voice quick sheet", () => {
     await waitFor(() => expect(within(sheet).getByRole("switch", { name: "Follow composer mode" })).toBeChecked());
     await waitFor(() => expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).not.toHaveAttribute("aria-disabled"));
     expect(within(sheet).getByRole("button", { name: "Default voice thread" })).toHaveAccessibleDescription("Choose thread");
-    fireEvent.click(within(sheet).getByText("Limit automatic playback to this thread"));
+    expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Choose a default thread first");
+    fireEvent.click(within(sheet).getByText("Choose a default thread first"));
     await waitFor(() => expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).toBeChecked());
+    expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Choose a default thread first");
     expect(patches(fake)).toEqual([{ autoListen: false }, { followComposerMode: true }, { onlyVoiceThread: true }]);
     store.dispose();
   });

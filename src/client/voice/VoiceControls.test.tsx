@@ -510,6 +510,83 @@ describe("voice controls card", () => {
 });
 
 describe("voice controls card lifecycle", () => {
+  it("restores the current foreground after Resume without a visibility event and bounds retries while the Activity is paused", async () => {
+    let native = ready({ settings: voiceSettings({ audioMode: "response", voiceThreadId: "untitled", pinDefaultVoiceThread: false }) });
+    let activityVisible = true;
+    voice.fake.plugin.setConnection.mockResolvedValue(native);
+    voice.fake.plugin.getState.mockImplementation(async () => native);
+    vi.mocked(voice.fake.asPlugin.setForegroundContext).mockImplementation(async context => {
+      if (activityVisible) {
+        native = { ...native, stateRevision: native.stateRevision + 1,
+          foreground: { visible: context.visible, threadId: context.threadId ?? null, threadTitle: context.threadTitle ?? null } };
+        voice.fake.emit("stateChanged", native);
+      }
+      return native;
+    });
+    vi.mocked(voice.fake.asPlugin.updateSettings).mockImplementation(async ({ patch }) => {
+      // The explicit user action reconciles Android visibility, but native still has no foreground thread.
+      activityVisible = true;
+      native = { ...native, stateRevision: native.stateRevision + 1, settingsRevision: native.settingsRevision + 1,
+        settings: { ...native.settings, ...patch }, phase: "starting", readiness: "starting", actions: { ...idleActions, canStart: false } };
+      return native;
+    });
+    navigate(threadPath("named"), { replace: true });
+    renderControls();
+    await waitFor(() => expect(native.foreground).toEqual({ visible: true, threadId: "named", threadTitle: "Release review" }));
+    expect(voice.fake.plugin.setForegroundContext).toHaveBeenCalledTimes(1);
+    expect(document.visibilityState).toBe("visible");
+
+    // Android clears its context while the WebView still reports visible. The bounded retry is rejected.
+    activityVisible = false;
+    native = { ...native, stateRevision: native.stateRevision + 1, phase: "off", ready: false, readiness: "needsResume",
+      foreground: { visible: false, threadId: null, threadTitle: null }, actions: { ...idleActions, canStart: false, canResume: true } };
+    act(() => voice.fake.emit("stateChanged", native));
+    await waitFor(() => expect(voice.fake.plugin.setForegroundContext).toHaveBeenCalledTimes(2));
+    for (let index = 0; index < 3; index++) {
+      native = { ...native, stateRevision: native.stateRevision + 1 };
+      act(() => voice.fake.emit("stateChanged", native));
+    }
+    expect(voice.fake.plugin.setForegroundContext).toHaveBeenCalledTimes(2);
+    expect(native.foreground.visible).toBe(false);
+
+    // Recovery uses the newest route, even if it changed while Android rejected foreground updates.
+    act(() => navigate(threadPath("long")));
+    await waitFor(() => expect(voice.fake.plugin.setForegroundContext).toHaveBeenCalledTimes(3));
+    expect(native.foreground.threadId).toBeNull();
+    fireEvent.click(within(card()).getByRole("button", { name: "Resume voice" }));
+    await waitFor(() => expect(native.foreground).toEqual({ visible: true, threadId: "long", threadTitle: "L".repeat(512) }));
+    expect(voice.fake.plugin.setForegroundContext).toHaveBeenCalledTimes(4);
+    expect(voice.fake.plugin.setForegroundContext).toHaveBeenLastCalledWith({ expectedConnectionGeneration: 1, visible: true,
+      threadId: "long", threadTitle: "L".repeat(512), composerMode: "steer" });
+    // This is the foreground contract native headset/notification Start uses when the recording pin is off.
+    expect(native.settings.pinDefaultVoiceThread).toBe(false);
+    expect(native.settings.voiceThreadId).toBe("untitled");
+    expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
+
+    native = { ...native, stateRevision: native.stateRevision + 1, phase: "idle", ready: true, readiness: "ready", actions: idleActions };
+    act(() => voice.fake.emit("stateChanged", native));
+    await waitFor(() => expect(voice.fake.plugin.setForegroundContext).toHaveBeenCalledTimes(5));
+    native = { ...native, connectionGeneration: 2, stateRevision: 1, foreground: { visible: false, threadId: null, threadTitle: null } };
+    act(() => voice.fake.emit("stateChanged", native));
+    await waitFor(() => expect(voice.fake.plugin.setForegroundContext).toHaveBeenCalledTimes(6));
+    expect(voice.fake.plugin.setForegroundContext).toHaveBeenLastCalledWith({ expectedConnectionGeneration: 2, visible: true,
+      threadId: "long", threadTitle: "L".repeat(512), composerMode: "steer" });
+  });
+  it("resends foreground after a successful mode write even when native readiness stays unchanged", async () => {
+    const native = ready({ foreground: { visible: false, threadId: null, threadTitle: null } });
+    voice.fake.plugin.setConnection.mockResolvedValue(native);
+    voice.fake.plugin.getState.mockResolvedValue(native);
+    voice.fake.plugin.updateSettings.mockResolvedValue({ ...native, stateRevision: 2, settingsRevision: 1,
+      settings: { ...native.settings, audioMode: "manual" } });
+    navigate(threadPath("named"), { replace: true });
+    renderControls();
+    fireEvent.click(await screen.findByRole("button", { name: "Open voice controls" }));
+    expect(voice.fake.plugin.setForegroundContext).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "Voice" })).getByRole("radio", { name: "Manual" }));
+    await waitFor(() => expect(voice.fake.plugin.setForegroundContext).toHaveBeenCalledTimes(2));
+    expect(voice.fake.plugin.setForegroundContext).toHaveBeenLastCalledWith({ expectedConnectionGeneration: 1, visible: true,
+      threadId: "named", threadTitle: "Release review", composerMode: "steer" });
+  });
   it("does not reopen the sheet or the picker by itself after voice reconnects", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(ready());
     renderControls();

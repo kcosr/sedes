@@ -123,8 +123,9 @@ voice is listening, the target chip on the voice card changes the target before
 recognition finishes. Pickers list the visible thread first as **This thread**;
 when choosing a default, the saved thread comes first as **Current default
 voice thread**. Ordinary navigation does not change an active target. **Only play
-from default voice thread** filters automatic playback; it does not change the
-recording target. **Ignore voice started on other devices** filters progress
+from default voice thread** filters automatic playback; choose a default first,
+or automatic speech stays silent. It does not change the recording target.
+**Ignore voice started on other devices** filters progress
 and completion from another initiating client. Steering an existing turn does
 not take over its origin.
 
@@ -193,10 +194,10 @@ voice** when a session needs it.
 - With **Recognize stop command**, only the complete utterances “stop” and
   “stop listening” are consumed locally. “Stop the server” is ordinary input.
 
-Tapping the service notification opens the thread of the current interaction,
-otherwise the visible thread or the default voice thread. Its actions are
-**Stop** during an interaction, **Start** when recording can begin and a visible
-thread or default voice thread is available, a mode button labelled **Manual** or **Response**
+Tapping the service notification opens the thread of the current interaction.
+While idle, it uses the default thread when pinned; otherwise it uses the visible
+thread, then the default. Its actions are **Stop** during an interaction,
+**Start** when recording can begin and that target is available, a mode button labelled **Manual** or **Response**
 that switches to the other mode, and **Rearm on** or **Rearm off**, which
 toggles Auto-listen. While speech plays, the expanded notification shows Stop,
 Skip, the mode button, and Rearm.

@@ -36,6 +36,10 @@ With permissions already granted, an explicit enable or Resume rechecks the
 current activity on the main thread before dispatch. Only a resumed, nonfinishing
 activity is visible; paused, stopped, and destroyed activities clear the cached
 visibility gate. A stale connection generation is rejected before this check.
+The client resends its current foreground thread and composer mode after settings
+writes and readiness changes, including Resume without a document visibility
+event. Foreground replies change neither trigger, so a paused activity cannot
+cause a retry loop.
 
 Recognition cue PCM is generated locally. Each recognition consumes its final
 result once, stops capture, and retains its active slot until completion feedback

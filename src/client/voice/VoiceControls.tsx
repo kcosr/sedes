@@ -34,6 +34,9 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const statusId = useId();
   const threadId = route.name === "thread" ? route.threadId : null;
   const threadTitle = nativeThreadTitle(threads.find(thread => thread.id === threadId)?.title.text ?? "");
+  // Native visibility reconciliation can clear the foreground without a document visibility event.
+  // A successful settings write (including Resume) or session readiness change re-sends the current context.
+  // Foreground replies change neither dependency, so a paused Activity rejecting visible=true cannot loop.
   useEffect(() => {
     const expectedConnectionGeneration = state.native?.connectionGeneration;
     if (expectedConnectionGeneration === undefined) return;
@@ -45,7 +48,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
     publish();
     document.addEventListener("visibilitychange", publish);
     return () => { alive = false; document.removeEventListener("visibilitychange", publish); };
-  }, [store, threadId, threadTitle, composerMode, state.native?.connectionGeneration]);
+  }, [store, threadId, threadTitle, composerMode, state.native?.connectionGeneration, state.native?.settingsRevision, state.native?.readiness]);
   const native = state.native;
   // A lost connection closes the sheet and picker, so neither reopens by itself when voice reconnects.
   if (!native && (sheet || picker)) { setSheet(false); setPicker(null); }

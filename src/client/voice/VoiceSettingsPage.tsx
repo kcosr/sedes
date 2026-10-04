@@ -83,7 +83,9 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
         <div className="flex flex-wrap gap-2"><VoiceThreadButton disabled={state.pending} onClick={() => setPicker(true)}>{voiceThreadLabel}</VoiceThreadButton>
           {settings.voiceThreadId ? <Button variant="ghost" disabled={state.pending} onClick={() => update({ voiceThreadId: null, voiceThreadTitle: null })}>Clear</Button> : null}</div>
       </SettingsField>
-      {toggles.map(([key, label, description]) => <SwitchField key={key} label={label} description={description} checked={settings[key]} disabled={state.pending}
+      {toggles.map(([key, label, description]) => <SwitchField key={key} label={label}
+        description={key === "onlyVoiceThread" && !settings.voiceThreadId ? "Choose a default voice thread first; automatic playback stays silent until then." : description}
+        checked={settings[key]} disabled={state.pending}
         onCheckedChange={value => update({ [key]: value })} />)}
     </SettingsSection>
     <SettingsSection title="Audio and timing" card>

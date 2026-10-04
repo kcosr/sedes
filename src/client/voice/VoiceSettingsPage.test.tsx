@@ -135,6 +135,7 @@ describe("voice settings page", () => {
   });
   it("labels the default voice thread control with its choice and saves bridge-safe titles", async () => {
     const { fake, store } = await renderPage(voiceSnapshot());
+    expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Choose a default voice thread first; automatic playback stays silent until then.");
     fireEvent.click(screen.getByRole("button", { name: "Default voice thread Choose thread" }));
     expect(await screen.findByRole("dialog", { name: "Choose default voice thread" })).toBeInTheDocument();
     const list = await screen.findByRole("list", { name: "Voice threads" });
@@ -149,6 +150,7 @@ describe("voice settings page", () => {
     expect(fake.plugin.updateSettings.mock.lastCall).toEqual([{ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { voiceThreadId: "untitled", voiceThreadTitle: null } }]);
     act(() => fake.emit("settingsChanged", voiceSnapshot({ stateRevision: 3, settingsRevision: 2, settings: voiceSettings({ voiceThreadId: "untitled", voiceThreadTitle: null }) })));
     expect(screen.getByRole("button", { name: "Default voice thread Untitled thread" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Limit automatic playback to the default voice thread above.");
     // The saved default voice thread leads the picker under its label; the rest keep their order without a duplicate.
     fireEvent.click(screen.getByRole("button", { name: "Default voice thread Untitled thread" }));
     const pinned = await screen.findByRole("list", { name: "Voice threads" });
@@ -167,6 +169,7 @@ describe("voice settings page", () => {
     await waitFor(() => expect(pin).toBeChecked());
     expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { pinDefaultVoiceThread: true } });
     expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toBeChecked();
+    expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Choose a default voice thread first; automatic playback stays silent until then.");
     store.dispose();
   });
   it("opens credential management with only a connection fence and never creates a web password field", async () => {
