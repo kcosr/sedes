@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { notificationSettingsSchema, voiceNotificationSchema } from "../../src/shared/protocol/notification.js";
 import { directInputReceiptSchema, threadInputContextSchema } from "../../src/shared/protocol/thread-input.js";
-import { registeredClientSchema } from "../../src/shared/protocol/client-controls.js";
+import { clientPollResultSchema, registeredClientSchema } from "../../src/shared/protocol/client-controls.js";
 import { startOpenAiSpeechFixture, waitForSpeech } from "../support/openai-speech-fixture.js";
 import { OpenCodeProductionFixture } from "../support/opencode-production-fixture.js";
 
@@ -149,6 +149,53 @@ describe("native voice production pipeline with loopback providers", () => {
       const overParser = { ...input, mutationId: randomUUID(), text: "\u0001".repeat(90_000) };
       expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", overParser, clientHeaders)).status).toBe(413);
       expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", escaped, clientHeaders)).status).toBe(200);
+    } finally { await feed.close(); }
+  });
+
+  it("routes a real native client tool to the submitting registration and settles it with the published reply", async () => {
+    const threadId = await app.createThread("Client control source");
+    const destination = await app.createThread("Client control destination");
+    const policy = (await app.thread(threadId)).agentTools;
+    await app.json(`/api/threads/${threadId}/operations`, "POST", {
+      kind: "set_agent_tool_policy", mutationId: randomUUID(), expectedPolicyRevision: policy.revision,
+      enabled: true, enabledToolIds: ["client.switch_thread"], accessBoundary: "environment",
+      presentation: { surface: "native", mode: "progressive" },
+    });
+    await app.send(threadId, "Discover client controls");
+    await app.waitFor(async () => app.model.requests.some(request => request.lastText === "Discover client controls"));
+    await app.waitFor(async () => JSON.stringify((await app.thread(threadId)).itemsById).includes("Fixture response"));
+    await app.waitFor(async () => (await app.thread(threadId)).runState === "idle");
+    const nativeTool = app.model.requests.flatMap(request => request.toolNames).find(name => name.endsWith("_sedes_act"));
+    expect(nativeTool).toBeDefined();
+    const state = { runtime: { foreground: true, voiceReady: false, interactionActive: false }, settings: null };
+    const registration = registeredClientSchema.parse(await app.json("/api/client-registration", "POST", {
+      platform: "browser", capabilities: { navigate: true, voice: false, voiceSettings: false }, state,
+    }));
+    const clientHeaders = { "X-Sedes-Client": registration.connectionToken };
+    const feed = await voiceFeed(app);
+    try {
+      await waitForSpeech(() => feed.frames.find(frame => frame.event === "notification_policy"));
+      const marker = "Switch this client after the reply";
+      app.model.callToolNextStream(marker, nativeTool!, { toolId: "client.switch_thread", schemaVersion: 1,
+        input: { threadId: destination, listen: false } });
+      const receipt = directInputReceiptSchema.parse(await app.json(`/api/threads/${threadId}/inputs`, "POST", {
+        mutationId: randomUUID(), text: marker, runningPolicy: { mode: "queue" },
+      }, clientHeaders));
+      expect(["accepted", "queued", "submitting"]).toContain(receipt.status);
+      const delivery = clientPollResultSchema.parse(await app.json("/api/client-controls/poll", "POST", { state, acknowledgements: [] }, clientHeaders));
+      expect(delivery.commands).toHaveLength(1);
+      const command = delivery.commands[0]!;
+      expect(command).toMatchObject({ action: "switch_thread", sourceThreadId: threadId, threadId: destination, listen: false });
+      expect(feed.frames.some(frame => frame.event === "notification" && frame.value.payload?.turn?.id === command.sourceTurnId)).toBe(false);
+      const settlement = clientPollResultSchema.parse(await app.json("/api/client-controls/poll", "POST", {
+        state, acknowledgements: [{ id: command.id, result: { status: "accepted", reason: "after_turn_completion", state } }],
+      }, clientHeaders));
+      expect(settlement.commands).toHaveLength(1);
+      const reply = voiceNotificationSchema.parse((await waitForSpeech(() => feed.frames.find(frame =>
+        frame.event === "notification" && frame.value.payload?.turn?.id === command.sourceTurnId))).value);
+      expect(settlement.commands[0]).toMatchObject({ ...command, action: "turn_settled", replyEventId: reply.sourceEventId });
+      expect(reply.origin).toEqual({ clientId: registration.clientId });
+      await app.waitFor(async () => (await app.thread(threadId)).runState === "idle");
     } finally { await feed.close(); }
   });
 
