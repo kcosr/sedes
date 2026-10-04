@@ -19,15 +19,16 @@
 /* Under a rendered composer the dock continues the composer-wrap's band; the
    composer-wrap's bottom padding (safe area included) is the gap above the
    card. Settings keeps the inactive workspace mounted and a collapsed chat
-   stays parked, so only a composer in the active workspace's layout counts. */
-.application-view:has(> .application-workspace[data-active="true"] .composer-wrap:not(.workspace-panel-parking *)) + .voice-dock {
+   stays parked, so only a composer in the active workspace's layout counts.
+   The open mobile drawer covers the composer, so the card stands alone. */
+.application-view:not([data-drawer-open]):has(> .application-workspace[data-active="true"] .composer-wrap:not(.workspace-panel-parking *)) + .voice-dock {
   padding-top: 0;
   padding-bottom: 8px;
   border-top: 0;
 }
 
 /* A TUI composer's band is the terminal background. */
-.application-view:has(> .application-workspace[data-active="true"] .composer-wrap.tui-dock:not(.workspace-panel-parking *)) + .voice-dock {
+.application-view:not([data-drawer-open]):has(> .application-workspace[data-active="true"] .composer-wrap.tui-dock:not(.workspace-panel-parking *)) + .voice-dock {
   background: var(--terminal-background);
 }
 
@@ -51,33 +52,42 @@
   border-color: var(--destructive-border);
 }
 
-/* The body: one button (tile, two lines, chevron) at the card's full
-   height. It opens the quick sheet, or retargets while listening. */
+/* The body: tile and two lines at the card's full height. When the card
+   names a thread other than the visible one, a button stretched over it
+   opens that thread; the retarget chip sits above that button. */
 .voice-card-body {
+  position: relative;
   display: flex;
   min-width: 0;
   flex: 1 1 auto;
   align-self: stretch;
   align-items: center;
   gap: var(--space-3);
-  padding: 0 var(--space-1) 0 7px;
-  border-radius: calc(var(--radius-lg) - 1px) 0 0 calc(var(--radius-lg) - 1px);
-  text-align: left;
+  padding-left: 7px;
 }
 
-.voice-card-body:focus-visible {
+.voice-card-open {
+  position: absolute;
+  z-index: var(--z-sticky);
+  inset: 0;
+  border-radius: calc(var(--radius-lg) - 1px) 0 0 calc(var(--radius-lg) - 1px);
+}
+
+.voice-card-open:focus-visible {
   outline-offset: -2px;
 }
 
-.voice-card-body:active:not([aria-disabled="true"]) {
+.voice-card-open:active,
+.voice-card-caret:active {
   background: var(--accent-soft);
 }
 
 @media (hover: hover) {
-  .voice-card-body:hover:not([aria-disabled="true"]) {
+  .voice-card-open:hover {
     background: var(--accent-soft);
   }
 
+  .voice-card-caret:hover,
   .voice-card-button[data-variant="ghost"]:hover:not(:disabled) {
     background: var(--hover);
   }
@@ -250,28 +260,63 @@
   font-weight: var(--weight-regular);
 }
 
-/* Opens-the-sheet affordance at the end of the body. */
-.voice-card-more {
-  width: var(--icon-md);
-  height: var(--icon-md);
+/* The caret: the only way into the quick sheet, in every state. A 44px
+   target around the 16px glyph. */
+.voice-card-caret {
+  display: grid;
+  width: 44px;
+  height: 44px;
   flex: none;
+  place-items: center;
+  border-radius: 999px;
   color: var(--muted-foreground-2);
 }
 
-/* Listening: the target thread is a chip and the whole body retargets. */
+.voice-card-caret svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+
+/* Listening: line 2 carries the retarget chip ("This thread" or "Change
+   thread"). It shrinks before the phase word and keeps a 44px hit area. */
+.voice-card-sub[data-chip] {
+  display: flex;
+  align-items: center;
+  overflow: visible;
+}
+
+.voice-card-sub[data-chip] > :not(.voice-card-chip) {
+  flex: none;
+}
+
 .voice-card-chip {
+  position: relative;
+  z-index: calc(var(--z-sticky) + 1);
   display: inline-flex;
+  min-width: 0;
   max-width: 100%;
   height: 26px;
+  flex: 0 1 auto;
   align-items: center;
   gap: 5px;
   padding: 0 7px 0 8px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--card);
+  color: var(--foreground);
   font-size: var(--text-ui);
   font-weight: var(--weight-medium);
   line-height: 1;
+}
+
+.voice-card-chip::before {
+  position: absolute;
+  inset: -9px 0;
+  content: "";
+}
+
+.voice-card-chip:active:not([aria-disabled="true"]) {
+  background: var(--accent);
 }
 
 .voice-card-chip svg {
@@ -286,20 +331,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* Listening for another thread: the chip carries the title at line-1 size. */
-.voice-card-chip[data-size="lg"] {
-  height: 28px;
-  gap: 6px;
-  padding: 0 8px 0 9px;
-  font-size: var(--text-title);
-  letter-spacing: -0.005em;
-}
-
-.voice-card-chip[data-size="lg"] svg {
-  width: var(--icon-md);
-  height: var(--icon-md);
 }
 
 /* Actions: a 48px round primary and a 44px ghost Skip, 8px apart. */
@@ -354,9 +385,11 @@
   background: currentColor;
 }
 
+/* Resume: a labelled pill, kept compact so "Voice needs to resume" fits
+   beside it and the caret at phone width. */
 .voice-card-retry {
   gap: var(--space-1-5);
-  padding: 0 var(--space-4) 0 14px;
+  padding: 0 var(--space-3) 0 11px;
   font-size: var(--text-ui);
   font-weight: var(--weight-medium);
 }

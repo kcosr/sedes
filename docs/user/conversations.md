@@ -29,12 +29,14 @@ status, such as **Ready to
 record**, **Speaking**, or **Listening**, and the second adds the mode and
 Auto-listen, the speech queue, or **This thread**.
 
-While listening, tap the card to change the recording target before
-recognition finishes; navigating to another thread alone does not redirect a
-recording. Once recognition finishes, its target and delivery policy stay fixed
-through any connection recovery. At other times, tapping the card opens the
-**Voice** sheet with **Audio mode**, **Auto-listen**, **Voice thread**,
-**Follow composer mode**, and **All voice settings**.
+Tap a card that names another thread to open that thread. While listening,
+tap the target chip, **This thread** or **Change thread**, to change the
+recording target before recognition finishes; the picker lists the visible
+thread first. Navigating to another thread alone does not redirect a recording.
+Once recognition finishes, its target and delivery policy stay fixed through
+any connection recovery. The caret on the card opens the **Voice** sheet with
+**Audio mode**, **Auto-listen**, **Follow composer mode**, and **All voice
+settings**; choose the Voice thread in **Settings → Voice**.
 
 Spoken input queues while a thread is running. Enable **Follow composer's
 selected mode** to use the client's Queue/Steer preference instead. When
@@ -55,7 +57,7 @@ never types an answer into an approval or question form.
 other queued notices may continue. While voice is recording or recognizing,
 Stop becomes **Cancel**, which discards the recording unsent. **Off** clears
 the voice queue and hides the card unless **Show voice bar when off** is on in
-**Settings → Voice**; then a dimmed card stays, and tapping it opens the Voice
+**Settings → Voice**; then a dimmed card stays, and its caret opens the Voice
 sheet to turn voice back on. The notification silence bell suppresses
 automatic voice and script delivery, while explicit recording remains
 available. The card shows the latest voice error until your next voice action

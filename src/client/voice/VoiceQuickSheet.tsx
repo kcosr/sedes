@@ -1,7 +1,6 @@
 import "./voice-sheet.css";
-import { useId, useState, type ReactNode } from "react";
-import { ChevronRight, Ear, Merge, MessageSquare, Mic, MicOff, Settings2, Volume2 } from "lucide-react";
-import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
+import { useId, type ReactNode } from "react";
+import { ChevronRight, Ear, Merge, Mic, MicOff, Settings2, Volume2 } from "lucide-react";
 import { navigate, settingsPath } from "../app/router.js";
 import { Button } from "../components/ui/button.js";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
@@ -14,9 +13,8 @@ import { cn } from "../lib/utils.js";
 import { useVoiceState } from "./VoiceProvider.js";
 import type { NativeVoiceStore } from "./NativeVoiceStore.js";
 import { voiceReadiness } from "./VoiceSettingsPage.js";
-import { VoiceThreadPicker } from "./VoiceThreadPicker.js";
 import { canEnableVoice, resumeVoice } from "./voice-session.js";
-import { nativeThreadTitle, type NativeVoiceSettings } from "./native-voice-plugin.js";
+import type { NativeVoiceSettings } from "./native-voice-plugin.js";
 
 const modes = [
   ["off", "Off", MicOff, "pauses voice. Pick Manual or Response to resume."],
@@ -31,18 +29,16 @@ const lockedClass = "aria-disabled:cursor-not-allowed aria-disabled:opacity-(--d
 /** With the card gone (Off while the bar is hidden), closing returns focus to the view the card sat under; not the composer, whose focus raises the keyboard. */
 const viewFocus = () => Array.from(document.querySelectorAll<HTMLElement>(".application-workspace, .settings-content")).find(element => !element.closest("[inert], [hidden]"));
 
-/** Quick voice settings from the voice bar. Every write goes through the store, as in Settings → Voice. */
-export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
+/** Quick voice settings from the voice card's caret. Every write goes through the store, as in Settings → Voice; the Voice thread is chosen there. */
+export function VoiceQuickSheet({ store, open, onOpenChange }: {
   store: NativeVoiceStore;
-  threads: readonly NormalizedApplicationThreadSummary[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
   const state = useVoiceState(store);
-  const [picker, setPicker] = useState(false);
   const native = state.native;
   const settings = native?.settings;
-  // A pending write locks controls with aria-disabled, not disabled: a disabled control drops focus to the page, and a closing picker could not return to its row.
+  // A pending write locks controls with aria-disabled, not disabled: a disabled control drops focus to the page.
   const locked = state.pending || undefined;
   const update = (patch: Partial<NativeVoiceSettings>) => { if (!state.pending) void store.update(patch).catch(() => undefined); };
   const [status, tone] = state.error ? [state.error, "warning"] : !native ? [state.loading ? "Connecting voice to this server…" : "Voice could not connect to this server.", "warning"]
@@ -50,8 +46,6 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
   const mode = settings ? modes.find(([value]) => value === settings.audioMode)! : undefined;
   // Enabling voice requires both the speech destination and its native credential.
   const blocked = settings?.audioMode === "off" && !canEnableVoice(settings, native?.speech.credentialConfigured === true);
-  const threadLabel = settings?.voiceThreadTitle ?? (settings?.voiceThreadId
-    ? threads.find(thread => thread.id === settings.voiceThreadId)?.title.text.trim() || "Untitled thread" : "Choose a thread");
   return <Dialog open={open} onOpenChange={onOpenChange}>
     <DialogContent layout="sheet" className="voice-sheet" fallbackFocus={viewFocus}>
       <DialogHeader>
@@ -75,16 +69,12 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
         <div className="-mx-3 -mt-2 flex flex-col">
           <SwitchRow icon={<Ear aria-hidden="true" />} label="Auto-listen" description="Eligible notifications reopen the mic"
             checked={settings.autoListen} locked={locked} onCheckedChange={autoListen => update({ autoListen })} />
-          <DescribedRow icon={<MessageSquare aria-hidden="true" />} label="Voice thread" description={threadLabel} locked={locked}
-            onClick={() => { if (!state.pending) setPicker(true); }} />
           <SwitchRow icon={<Merge aria-hidden="true" />} label="Follow composer mode" description="Use its Steer or Queue choice"
             checked={settings.followComposerMode} locked={locked} onCheckedChange={followComposerMode => update({ followComposerMode })} />
           <Separator className="mx-3 my-1 data-[orientation=horizontal]:w-auto" />
           <SettingsRow onOpenChange={onOpenChange} />
         </div>
       </> : <div className="-mx-3 -mt-2 flex flex-col"><SettingsRow onOpenChange={onOpenChange} /></div>}
-      <VoiceThreadPicker threads={threads} open={picker} onOpenChange={setPicker} layer="over-dialog"
-        onSelect={thread => update({ voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) })} />
     </DialogContent>
   </Dialog>;
 }
@@ -98,14 +88,6 @@ function SwitchRow({ icon, label, description, checked, locked, onCheckedChange 
     {icon}<RowText id={id} label={label} description={description} />
     <Switch className={lockedClass} checked={checked} aria-disabled={locked} onCheckedChange={onCheckedChange} aria-labelledby={`${id}-label`} aria-describedby={`${id}-description`} />
   </label>;
-}
-/** A row that opens a picker: named by its label, described by its current value. */
-function DescribedRow({ icon, label, description, locked, onClick }: { icon: ReactNode; label: string; description: string; locked?: true; onClick: () => void }) {
-  const id = useId();
-  return <button type="button" className={cn(rowClass, lockedClass)} aria-haspopup="dialog" aria-labelledby={`${id}-label`} aria-describedby={`${id}-description`}
-    aria-disabled={locked} onClick={onClick}>
-    {icon}<RowText id={id} label={label} description={description} /><ChevronRight className={trailClass} aria-hidden="true" />
-  </button>;
 }
 function RowText({ id, label, description }: { id: string; label: string; description: string }) {
   return <span className="flex min-w-0 flex-1 flex-col gap-0.5">

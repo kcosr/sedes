@@ -173,6 +173,14 @@ voice authority diagnostics. Inspect active and settled screenshots. Cleanup
 stops owned processes, removes owned adb reverse rules, and force-stops the
 test app; the caller owns the emulator lifecycle.
 
+Client tests cover the voice card across application screens and above the
+mobile drawer, its thread-title and phase labels, caret-only sheet opening,
+body taps opening its thread, the retarget chip, and current-thread-first
+pickers. The quick sheet covers mode changes with the speech credential gate,
+Resume, switches, and its Settings link. The saved Voice thread remains in
+Settings. Other coverage includes per-binding visibility preferences, recent
+errors, microphone labels, provider discovery, and the native credential bridge.
+
 ## Verification handoff
 
 Run the normal typecheck, unit/integration suite, build, browser E2E, Android
