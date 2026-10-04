@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useId, useState, type ReactNode } from "react";
 import { AudioLines, ChevronsUpDown, ChevronUp, LoaderCircle, MessageSquare, Mic, MicOff, RotateCcw, SkipForward, TriangleAlert } from "lucide-react";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
-import { navigate, settingsPath, threadPath, useRoute } from "../app/router.js";
+import { navigate, settingsPath, useRoute } from "../app/router.js";
+import { configuredPanelPresentation, openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 import { useComposerDeliveryMode } from "../app/composer-delivery-mode.js";
 import { useNativeVoice, useVoiceState } from "./VoiceProvider.js";
 import type { NativeVoiceStore } from "./NativeVoiceStore.js";
@@ -130,7 +131,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
     {!off || showWhenOff ? <div className="voice-dock">
       <div className="voice-card" role="group" aria-label="Voice controls" data-tone={recording ? "destructive" : undefined} data-off={off ? "" : undefined}>
         <div className="voice-card-body">
-          {opens ? <button type="button" className="voice-card-open" aria-label={`Open thread: ${cardTitle ?? "Untitled thread"}`} onClick={() => navigate(threadPath(cardThread))} /> : null}
+          {opens ? <button type="button" className="voice-card-open" aria-label={`Open thread: ${cardTitle ?? "Untitled thread"}`} onClick={() => openThreadRoute(cardThread, configuredPanelPresentation())} /> : null}
           <span className="voice-card-tile" data-tone={tone}>{tile}</span>
           <span className="voice-card-text">{renderLine(line1, "voice-card-title", chip)}{renderLine(line2, "voice-card-sub", chip)}</span>
         </div>

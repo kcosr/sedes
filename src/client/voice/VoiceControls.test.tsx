@@ -18,6 +18,7 @@ vi.mock("./native-voice-plugin.js", async (importOriginal) => ({
 import { useNativeVoice, VoiceProvider } from "./VoiceProvider.js";
 import { VoiceControls } from "./VoiceControls.js";
 import { useShowVoiceBarWhenOff } from "./voice-bar-preference.js";
+import { installThreadPanelOpenRequestListener } from "../workspace-panels/thread-panel-navigation.js";
 
 type Active = NonNullable<NativeVoiceState["active"]>;
 const longTitle = "L".repeat(600);
@@ -164,7 +165,12 @@ describe("voice controls card", () => {
     voice.fake.plugin.setConnection.mockResolvedValue(speaking({ threadId: "named", threadTitle: "Release review", eventKind: "turn.completed" }));
     navigate(threadPath("long"), { replace: true });
     renderControls();
+    // Opening goes through the shell's panel request, so a closed or collapsed Chat panel opens too.
+    const requests: string[] = [];
+    const stop = installThreadPanelOpenRequestListener(window, request => requests.push(request.threadId));
     fireEvent.click(await screen.findByRole("button", { name: "Open thread: Release review" }));
+    stop();
+    expect(requests).toEqual(["named"]);
     expect(window.location.pathname).toBe(threadPath("named"));
     // Now that thread is on screen, the body is plain text again.
     await waitFor(() => expect(lines()).toEqual(["Speaking", "This thread"]));
