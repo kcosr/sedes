@@ -84,7 +84,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
           {settings.voiceThreadId ? <Button variant="ghost" disabled={state.pending} onClick={() => update({ voiceThreadId: null, voiceThreadTitle: null })}>Clear</Button> : null}</div>
       </SettingsField>
       {toggles.map(([key, label, description]) => <SwitchField key={key} label={label}
-        description={key === "onlyVoiceThread" && !settings.voiceThreadId ? "Choose a default voice thread first; automatic playback stays silent until then." : description}
+        description={key === "onlyVoiceThread" && !settings.voiceThreadId ? "Requires a default voice thread." : description}
         checked={settings[key]} disabled={state.pending}
         onCheckedChange={value => update({ [key]: value })} />)}
     </SettingsSection>
