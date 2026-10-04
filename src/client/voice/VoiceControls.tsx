@@ -119,7 +119,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   // Settings → Voice announces readiness and errors itself; there the card's regions stay quiet.
   const quiet = route.name === "settings" && route.page === "voice";
   const alerting = message !== undefined && !quiet;
-  const threadDescription = "thread" in line1 ? line1.thread.replace(/\.$/u, "") : undefined;
+  const threadDescription = !busy && "thread" in line1 ? line1.thread.replace(/\.$/u, "") : undefined;
   const describedBy = [threadDescription !== undefined ? `${statusId}-thread` : undefined, statusId, alerting ? `${statusId}-alert` : undefined].filter(Boolean).join(" ");
   // The body opens the card's thread unless it is already on screen.
   const opens = cardThread !== undefined && cardThread !== threadId;
@@ -149,10 +149,10 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
             title={cancels ? "Cancel" : "Stop"} disabled={state.pending} onClick={() => act(() => store.plugin.stopCurrentInteraction(store.commandContext()))}>
             <span className="voice-card-stop" aria-hidden="true" /></button> : null}
         </div>
-        {/* Describe the thread without announcing navigation or title changes; only the state and errors are live. */}
+        {/* Idle navigation stays quiet; active target changes remain live so retargeting is confirmed. */}
         {threadDescription !== undefined ? <span id={`${statusId}-thread`} className="sr-only">{threadDescription}.</span> : null}
         <span id={statusId} className="sr-only" role="status" aria-live={quiet ? "off" : undefined}>
-          {[line1, line2].filter(line => !("thread" in line)).map(line => lineText(line, alerting).replace(/\.$/u, "")).filter(Boolean).join(". ")}</span>
+          {[line1, line2].filter(line => busy || !("thread" in line)).map(line => lineText(line, alerting).replace(/\.$/u, "")).filter(Boolean).join(". ")}</span>
         {alerting ? <span id={`${statusId}-alert`} className="sr-only" role="alert">{message}</span> : null}
       </div>
     </div> : null}

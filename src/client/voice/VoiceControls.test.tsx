@@ -130,7 +130,7 @@ describe("voice controls card", () => {
     expect(status).toHaveTextContent(/^Ready · Response · Auto-listen on$/u);
     expect(within(card()).getByRole("button", { name: "Open voice controls" })).toHaveAccessibleDescription("Renamed review. Ready · Response · Auto-listen on");
     act(() => voice.fake.emit("stateChanged", { ...listening({ recognitionThreadId: "long", recognitionThreadTitle: "Renamed review" }), stateRevision: 2 }));
-    expect(status).toHaveTextContent(/^Listening$/u);
+    expect(status).toHaveTextContent(/^Renamed review\. Listening$/u);
   });
   it("names the saved Voice thread when no thread is visible, or asks for one", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(ready({ settings: voiceSettings({ audioMode: "response", voiceThreadId: "named", voiceThreadTitle: null }) }));
@@ -308,7 +308,7 @@ describe("voice controls card", () => {
     expect(chip).toHaveTextContent(/^Change$/u);
     expect(buttons()).toEqual(["Change recording target: Release review", "Open voice controls", "Cancel voice recording"]);
     expect(card()).not.toHaveTextContent("This thread");
-    expect(within(card()).getByRole("status")).toHaveTextContent(/^Listening$/u);
+    expect(within(card()).getByRole("status")).toHaveTextContent(/^Release review\. Listening$/u);
     expect(card().querySelector(".voice-card-tile")).toHaveAttribute("data-tone", "destructive");
     fireEvent.click(chip);
     // The visible thread leads the picker as This thread; the rest keep their order without a duplicate.
@@ -448,6 +448,7 @@ describe("voice controls card lifecycle", () => {
     await act(async () => { settle({ ...listening({ recognitionThreadId: "untitled" }), stateRevision: 2 }); });
     expect(lines()).toEqual(["Untitled thread", "Listening · Change"]);
     expect(screen.getByRole("button", { name: "Change recording target: Untitled thread" })).toBe(chip);
+    expect(within(card()).getByRole("status")).toHaveTextContent(/^Untitled thread\. Listening$/u);
     expect(chip).not.toHaveAttribute("aria-disabled");
     expect(chip).toHaveFocus();
   });
