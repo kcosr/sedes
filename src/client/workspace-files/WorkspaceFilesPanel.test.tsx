@@ -18,6 +18,7 @@ import {
 } from "../../shared/index.js";
 import type { WorkspacePanelContext } from "../workspace-panels/registry.js";
 import type { WorkspaceFilesApi } from "./WorkspaceFilesPanel.js";
+import type { WorkspaceCompareNavigation } from "./workspace-compare-navigation.js";
 
 let selectPaths: (paths: readonly string[]) => void = () => undefined;
 let fileTreeUnsafeCss: string | undefined;
@@ -480,6 +481,33 @@ function setupContext(
     subscribeWorkspaceFiles,
     closeWorkspaceFiles,
   };
+}
+
+function twoFileRoots(supplementalRootId: never) {
+  return vi.fn(async () => ({
+    roots: [
+      {
+        kind: "primary" as const,
+        rootId: "primary" as const,
+        displayLabel: "Workspace",
+        displayPath: { text: "/workspace" },
+        sortOrder: 0,
+        revision: 0,
+        availability: "available" as const,
+        watchable: true,
+      },
+      {
+        kind: "supplemental" as const,
+        rootId: supplementalRootId,
+        displayLabel: "Agent context",
+        displayPath: { text: "/agent-context" },
+        sortOrder: 1,
+        revision: 3,
+        availability: "available" as const,
+        watchable: true,
+      },
+    ],
+  }));
 }
 
 function fileBrowser(): HTMLElement {
@@ -1071,6 +1099,99 @@ describe("WorkspaceFilesPanel", () => {
       { repositoryId: "repository-1", pageSize: 200 },
       controller.signal,
     );
+  });
+
+  it("never switches into Changes when another root becomes active", async () => {
+    const scope = "root-activation-keeps-mode";
+    const supplementalRootId = "context-root" as never;
+    // The newest record restores the mode; an older root's Changes record
+    // must not take over when that root becomes active.
+    workspaceCompareStorage.set(scope, "workspace-1", supplementalRootId, { mode: "compare" });
+    workspaceCompareStorage.set(scope, "workspace-1", "primary", { mode: "browse" });
+    const api = setupApi({
+      listWorkspaceFileRoots: twoFileRoots(supplementalRootId),
+    });
+    const { context } = setupContext();
+    render(
+      <NavigationScopeContext.Provider value={scope}>
+        <WorkspaceFilesPanel context={context} api={api} />
+      </NavigationScopeContext.Provider>,
+    );
+    await waitForListing(api);
+    const browse = screen.getByRole("tab", { name: "Browse" });
+    const changes = screen.getByRole("tab", { name: "Changes" });
+    expect(browse).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Agent context" }));
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Agent context" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      ),
+    );
+    expect(browse).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByTestId("compare-view")).not.toBeInTheDocument();
+
+    // A chosen Changes mode survives root changes the same way.
+    fireEvent.click(changes);
+    fireEvent.click(screen.getByRole("tab", { name: "Workspace" }));
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Workspace" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      ),
+    );
+    expect(changes).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("saves a hidden comparison's navigation under the chosen mode", async () => {
+    const scope = "hidden-comparison-mode";
+    const supplementalRootId = "context-root" as never;
+    const api = setupApi({
+      listWorkspaceFileRoots: twoFileRoots(supplementalRootId),
+    });
+    const { context } = setupContext();
+    const panel = (
+      <NavigationScopeContext.Provider value={scope}>
+        <WorkspaceFilesPanel context={context} api={api} />
+      </NavigationScopeContext.Provider>
+    );
+    const view = render(panel);
+    await waitForListing(api);
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Browse" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Agent context" }));
+    await waitFor(() =>
+      expect(latestCompareProps?.rootId).toBe(supplementalRootId),
+    );
+    const navigation: WorkspaceCompareNavigation = {
+      repository: { repositoryKey: "context-repo", displayName: "context" },
+      base: { kind: "index" },
+      head: { kind: "working_tree" },
+      mode: "direct",
+      filter: "",
+      navigatorWidth: 260,
+      collapsedDirectories: [],
+      preferences: { diffStyle: "split", overflow: "scroll" },
+    };
+    act(() =>
+      (latestCompareProps?.onNavigationChange as (
+        value: WorkspaceCompareNavigation,
+      ) => void)(navigation),
+    );
+    view.unmount();
+    expect(
+      workspaceCompareStorage.get(scope, "workspace-1", supplementalRootId),
+    ).toEqual({ mode: "browse", navigation });
+
+    // The browsed root is the newest record, and it reopens in Browse.
+    render(panel);
+    await waitForListing(api);
+    expect(screen.getByRole("tab", { name: "Browse" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.queryByTestId("compare-view")).not.toBeInTheDocument();
   });
 
   it("stages exact Compare line context through the active workspace composer", async () => {

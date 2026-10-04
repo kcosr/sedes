@@ -387,6 +387,9 @@ export function WorkspaceFilesPanel({
     [compareRefreshScope],
   );
   const [mode, setMode] = useState<WorkspaceFilesMode>("browse");
+  // The mode the user last chose for this workspace. Every saved record
+  // carries it, so the newest record restores it; only selectMode changes it.
+  const savedModeRef = useRef<WorkspaceFilesMode>("browse");
   const [compareOpened, setCompareOpened] = useState(false);
   const [activeComparison, setActiveComparison] =
     useState<WorkspaceDiffComparisonDescriptor>();
@@ -2140,7 +2143,7 @@ export function WorkspaceFilesPanel({
   useEffect(() => {
     if (!activeCompareReviewId || loadedReviewContextRef.current !== compareReviewContextKeyRef.current) return;
     const saved = workspaceCompareStorage.get(navigationScope, workspaceId, activeRootId);
-    workspaceCompareStorage.set(navigationScope, workspaceId, activeRootId, { ...saved, mode: modeRef.current, selectedReviewId: activeCompareReviewId });
+    workspaceCompareStorage.set(navigationScope, workspaceId, activeRootId, { ...saved, mode: savedModeRef.current, selectedReviewId: activeCompareReviewId });
   }, [activeCompareReviewId, navigationScope, workspaceId, activeRootId]);
 
   useEffect(() => {
@@ -2769,6 +2772,7 @@ export function WorkspaceFilesPanel({
   );
 
   const selectMode = useCallback((next: WorkspaceFilesMode) => {
+    savedModeRef.current = next;
     const previous = workspaceCompareStorage.get(navigationScope, workspaceId, activeRootId);
     workspaceCompareStorage.set(navigationScope, workspaceId, activeRootId, { ...previous, mode: next });
     setMode(next);
@@ -2779,13 +2783,16 @@ export function WorkspaceFilesPanel({
     if (tabsRef.current.files.length === 0) setTreeOpen(true);
   }, [navigationScope, workspaceId, activeRootId]);
 
+  // Restore the mode once per workspace. Activating another root never
+  // changes it.
   useEffect(() => {
-    const saved = workspaceCompareStorage.get(navigationScope, workspaceId, activeRootId);
-    if (!fileOpenIntentRef.current && saved?.mode === "compare") {
+    const saved = savedWorkspaceFilesMode(navigationScope, workspaceId);
+    savedModeRef.current = saved ?? "browse";
+    if (!fileOpenIntentRef.current && saved === "compare") {
       setMode("compare");
       setCompareOpened(true);
     }
-  }, [navigationScope, workspaceId, activeRootId]);
+  }, [navigationScope, workspaceId]);
   const navigationPendingRef = useRef<{ scope: string | undefined; workspaceId: string | undefined; rootId: string; navigation: WorkspaceCompareNavigation } | undefined>(undefined);
   const navigationTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const flushCompareNavigation = useCallback(() => {
@@ -2794,7 +2801,10 @@ export function WorkspaceFilesPanel({
     if (!pending) return;
     navigationPendingRef.current = undefined;
     const previous = workspaceCompareStorage.get(pending.scope, pending.workspaceId, pending.rootId);
-    workspaceCompareStorage.set(pending.scope, pending.workspaceId, pending.rootId, { ...previous, mode: previous?.mode ?? "compare", navigation: pending.navigation });
+    // A hidden comparison saves navigation for every root it visits, so the
+    // record takes the chosen mode rather than claiming Changes. Scope changes
+    // flush before the next workspace restores its mode.
+    workspaceCompareStorage.set(pending.scope, pending.workspaceId, pending.rootId, { ...previous, mode: savedModeRef.current, navigation: pending.navigation });
   }, []);
   useEffect(() => {
     const hide = () => { if (document.visibilityState === "hidden") flushCompareNavigation(); };
@@ -4569,6 +4579,15 @@ function sameTabs(a: OpenTabsState, b: OpenTabsState): boolean {
     sameWorkspaceFileAddress(a.active, b.active) &&
     sameAddressList(a.files, b.files)
   );
+}
+function savedWorkspaceFilesMode(
+  scope: string | undefined,
+  workspaceId: string | undefined,
+): WorkspaceFilesMode | undefined {
+  const rootId = workspaceCompareStorage.latest(scope, workspaceId);
+  return rootId === undefined
+    ? undefined
+    : workspaceCompareStorage.get(scope, workspaceId, rootId)?.mode;
 }
 function readPendingUiRestorePresentation(
   pending: ReturnType<WorkspaceFilesUiStateCache["get"]>,
