@@ -128,6 +128,14 @@ test.describe.serial("workspace files compare", () => {
     await git("add", "branch-only.ts");
     await git("commit", "-m", "Add branch navigation example");
     await git("checkout", "main");
+    // A change in the middle of a long file, so its diff has expandable context.
+    const longLines = Array.from({ length: 40 }, (_, index) => `export const line${index + 1} = ${index + 1};`);
+    const longPath = path.join(alphaWorkspace, "src", "long.ts");
+    await writeFile(longPath, `${longLines.join("\n")}\n`);
+    await git("add", "src/long.ts");
+    await git("commit", "-m", "Add long expansion example");
+    longLines[19] = "export const line20 = 2020;";
+    await writeFile(longPath, `${longLines.join("\n")}\n`);
     await writeFile(path.join(alphaWorkspace, "preview.bin"), Buffer.from([0, 1, 2, 3]));
   });
 
@@ -242,20 +250,22 @@ test.describe.serial("workspace files compare", () => {
       "button.workspace-compare-reviewed",
     );
     await expect(markReviewed).toBeVisible({ timeout: 20_000 });
-    await expect(markReviewed).toHaveText("Mark reviewed");
+    await expect(markReviewed).toHaveAccessibleName("Mark reviewed");
+    await expect(markReviewed).toHaveAttribute("aria-pressed", "false");
     await markReviewed.click();
-    await expect(markReviewed).toHaveText("Reviewed");
+    await expect(markReviewed).toHaveAccessibleName("Reviewed");
+    await expect(markReviewed).toHaveAttribute("aria-pressed", "true");
     // Collapsing Chat gives Files the full reading width and exposes the persistent navigator.
     await page.getByRole("button", { name: "Collapse Chat panel" }).click();
     const navigator = compareSurface.getByRole("complementary", { name: "Changed files" });
     await expect(navigator).toBeVisible();
-    const viewToggle = compareSurface.getByRole("button", { name: "Diff view options", exact: true });
-    const viewOptions = page.getByRole("menu", { name: "Diff view options", exact: true });
-    await viewToggle.click();
-    // The view options show their state: a radio pair and a checkbox row.
-    await expect(viewOptions.getByRole("menuitemcheckbox", { name: "Wrap lines", exact: true })).toHaveAttribute("aria-checked", "false");
-    await viewOptions.getByRole("menuitemradio", { name: "Split", exact: true }).click();
-    await expect(viewOptions).toBeHidden();
+    // The view controls show their state in the toolbar: a layout pair and a wrap toggle.
+    const layout = compareSurface.getByRole("radiogroup", { name: "Diff layout", exact: true });
+    const wrapLines = compareSurface.getByRole("button", { name: "Wrap lines", exact: true });
+    await expect(wrapLines).toHaveAttribute("aria-pressed", "false");
+    await layout.getByRole("radio", { name: "Split", exact: true }).click();
+    await expect(layout.getByRole("radio", { name: "Split", exact: true })).toHaveAttribute("aria-checked", "true");
+    await expect(compareSurface.getByText(/^File \d+ of \d+$/u)).toBeVisible();
     await navigator.getByRole("textbox", { name: "Filter changed files" }).fill("status");
     await navigator.getByRole("treeitem").filter({ hasText: "status.ts" }).click();
     const changedFileFilter = navigator.getByRole("textbox", { name: "Filter changed files" });
@@ -269,6 +279,15 @@ test.describe.serial("workspace files compare", () => {
       return { filterLength: entry?.navigation?.filter.length, filePath: entry?.navigation?.file?.newPath };
     })).toEqual({ filterLength: 1024, filePath: "src/status.ts" });
     await navigator.getByRole("textbox", { name: "Filter changed files" }).fill("");
+    // Pierre's hunk expand controls are focusable, named and operable from the keyboard.
+    await navigator.getByRole("treeitem").filter({ hasText: "long.ts" }).click();
+    const longFile = compareSurface.locator("diffs-container").filter({ hasText: "src/long.ts" }).first();
+    const expandUp = longFile.getByRole("button", { name: "Expand up", exact: true }).first();
+    await expect(expandUp).toHaveAttribute("tabindex", "0");
+    await expect(longFile.getByText("export const line1 = 1;", { exact: true })).toHaveCount(0);
+    await expandUp.focus();
+    await page.keyboard.press("Enter");
+    await expect(longFile.getByText("line1 = 1;").first()).toBeVisible();
     const assertCompactToolbar = async () => {
       const toolbar = await compareSurface.locator(".workspace-compare-toolbar").boundingBox();
       const workspace = await compareSurface.locator(".workspace-compare-workspace").boundingBox();
@@ -321,13 +340,10 @@ test.describe.serial("workspace files compare", () => {
     await page.keyboard.press("Escape");
     await expect(settings).toBeHidden();
     await page.setViewportSize({ width: 390, height: 844 });
-    await viewToggle.click();
-    const narrowSplit = viewOptions.getByRole("menuitemradio", { name: /^Split/ });
+    const narrowSplit = layout.getByRole("radio", { name: "Split", exact: true });
     await expect(narrowSplit).toBeDisabled();
-    await expect(narrowSplit).toContainText("Too narrow");
-    await expect(viewOptions.getByRole("menuitemradio", { name: "Unified", exact: true })).toHaveAttribute("aria-checked", "true");
-    await page.keyboard.press("Escape");
-    await expect(viewOptions).toBeHidden();
+    await expect(narrowSplit).toHaveAttribute("title", "Split view is unavailable at this width");
+    await expect(layout.getByRole("radio", { name: "Unified", exact: true })).toHaveAttribute("aria-checked", "true");
     await expect(settingsToggle).toHaveAttribute("aria-expanded", "false");
     await assertCompactToolbar();
     await compareSurface.getByRole("button", { name: "Changed files", exact: true }).click();
@@ -349,10 +365,7 @@ test.describe.serial("workspace files compare", () => {
     await page.getByRole("tab", { name: "Browse" }).click();
     await expect(editor(panel)).toContainText("export const answer = 99;");
     await page.getByRole("tab", { name: "Changes", exact: true }).click();
-    await viewToggle.click();
-    await expect(viewOptions.getByRole("menuitemradio", { name: "Split", exact: true })).toHaveAttribute("aria-checked", "true");
-    await page.keyboard.press("Escape");
-    await expect(viewOptions).toBeHidden();
+    await expect(layout.getByRole("radio", { name: "Split", exact: true })).toHaveAttribute("aria-checked", "true");
     // Review the feature branch from its common ancestor with main.
     if (await settingsToggle.getAttribute("aria-expanded") !== "true") await settingsToggle.click();
     await settings.getByRole("button", { name: "Branches", exact: true }).click();

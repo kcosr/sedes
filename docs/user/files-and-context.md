@@ -162,8 +162,10 @@ A persistent, resizable changed-file navigator accompanies the continuous diff
 on wider panels. Filter filenames, expand directory groups, select a file, or
 use previous/next controls in each file header. The navigator, the diff, and
 previous/next share one order: top-level files first, then each directory's
-files before its subdirectories. The file count sits beside the filter.
-**View** contains unified/split and line-wrapping preferences. The Files
+files before its subdirectories. The file count sits beside the filter. The
+toolbar shows your position (**File 3 of 34**), a **Unified**/**Split** switch,
+and **Wrap** for long lines. The expand arrows between hunks also work from the
+keyboard with Enter or Space. The Files
 titlebar refresh button refreshes whichever mode is active. Scrolling updates the selected file and loads
 nearby diffs automatically. Binary, oversized, and failed files retain a
 navigation position; failed reads offer Retry. Narrow panels use a file drawer

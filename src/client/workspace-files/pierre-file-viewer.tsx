@@ -13,18 +13,23 @@ import type {
   FileContents,
   SelectedLineRange,
 } from "@pierre/diffs";
-import { Editor, type EditorOptions } from "@pierre/diffs/edit";
+import { Editor, type EditorOptions, type EditorType } from "@pierre/diffs/edit";
 import {
   CodeView,
   EditProvider,
   type CodeViewHandle,
-  type CreateEditor,
+  type EditorFactory,
 } from "@pierre/diffs/react";
 import {
   getResolvedAppearance,
   subscribeResolvedAppearance,
 } from "../app/appearance.js";
 import { boundedPierreLanguage } from "./pierre-language.js";
+import {
+  SEDES_DIFF_LINE_HEIGHT,
+  SEDES_DIFF_THEMES,
+  SEDES_PIERRE_UNSAFE_CSS,
+} from "../components/diff/diff-theme.js";
 import {
   captureFileLineSelection,
   type CapturedFileLineSelection,
@@ -76,7 +81,9 @@ export function PierreFileViewer({
   >();
   const [copyConfirmation, setCopyConfirmation] = useState<string>();
   const [seekNotice, setSeekNotice] = useState<string>();
-  const codeViewRef = useRef<CodeViewHandle<undefined> | null>(null);
+  const codeViewRef = useRef<CodeViewHandle<undefined, undefined> | null>(
+    null,
+  );
   const surfaceRef = useRef<HTMLDivElement>(null);
   const handledSeekSequenceRef = useRef<number | undefined>(undefined);
 
@@ -134,6 +141,8 @@ export function PierreFileViewer({
 
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
+  const contentRef = useRef(content);
+  contentRef.current = content;
   const emittedContentRef = useRef<string | undefined>(undefined);
   const controlledItemRef = useRef({
     path: "",
@@ -187,7 +196,7 @@ export function PierreFileViewer({
     },
     [content, editing, onAttachSelection],
   );
-  const items = useMemo<readonly CodeViewItem[]>(() => {
+  const items = useMemo<readonly CodeViewItem<undefined>[]>(() => {
     const file: FileContents = {
       name: path,
       contents: content,
@@ -208,7 +217,11 @@ export function PierreFileViewer({
     () => ({
       disableFileHeader: true,
       overflow: "scroll" as const,
+      theme: SEDES_DIFF_THEMES,
       themeType,
+      unsafeCSS: SEDES_PIERRE_UNSAFE_CSS,
+      // Rows are positioned from this, not measured: match the CSS.
+      itemMetrics: { lineHeight: SEDES_DIFF_LINE_HEIGHT },
       stickyHeaders: false,
       enableLineSelection: !editing && onAttachSelection !== undefined,
       onLineSelected: handleLineSelected,
@@ -226,15 +239,20 @@ export function PierreFileViewer({
       <EditProvider createEditor={createPierreEditor}>
         <CodeView
           ref={codeViewRef}
-          className="workspace-files-code-view"
+          className="workspace-files-code-view sedes-diff-surface"
           items={items}
           options={options}
           editorOptions={PIERRE_EDITOR_OPTIONS}
           selectedLines={selectedLines}
           onSelectedLinesChange={setSelectedLines}
-          onItemEditChange={(_item, file) => {
-            emittedContentRef.current = file.contents;
-            onChangeRef.current(file.contents);
+          onItemEditChange={(event) => {
+            const next = event.file.contents;
+            // Pierre also reports external replacements (a new item version
+            // pushed while editing); forward only drafts that differ from the
+            // content Sedes already supplied.
+            if (next === contentRef.current) return;
+            emittedContentRef.current = next;
+            onChangeRef.current(next);
           }}
           style={{ height: "100%", overflow: "auto" }}
         />
@@ -338,9 +356,13 @@ function selectionFailureMessage(reason: string): string {
     : "That line selection cannot be attached.";
 }
 
-const createPierreEditor: CreateEditor<undefined> = (options) =>
-  new Editor(options);
+const createPierreEditor: EditorFactory<undefined, undefined> = (
+  editorType,
+  options,
+  editStateKey,
+) => new Editor(editorType, options, editStateKey);
 
-const PIERRE_EDITOR_OPTIONS: EditorOptions<undefined> = Object.freeze({
-  historyMaxEntries: 200,
-});
+const PIERRE_EDITOR_OPTIONS: EditorOptions<EditorType, undefined, undefined> =
+  Object.freeze({
+    historyMaxEntries: 200,
+  });

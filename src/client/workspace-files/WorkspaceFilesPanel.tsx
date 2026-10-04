@@ -101,6 +101,7 @@ import {
   type WorkspaceFileDocumentState,
 } from "./workspace-file-editor-state.js";
 import { TREE_TRUNCATION_CSS } from "./tree-truncation-css.js";
+import { useCoarsePointer } from "../app/use-coarse-pointer.js";
 import {
   collectExpandedDirectoryPaths,
   pruneWorkspaceFilesUiSnapshot,
@@ -473,6 +474,20 @@ export function WorkspaceFilesPanel({
     pendingUiRestoreRef.current?.expandedPathsByRoot ?? {},
   );
   const treeControllersRef = useRef(new Map<string, TreeController>());
+  // @pierre/trees reads its row height once, so the tree remounts (its key)
+  // when the pointer becomes coarse or fine. In that render, before the old
+  // tree unmounts, carry its live expansion into the remounted one.
+  const treeCoarsePointer = useCoarsePointer();
+  const treeCoarsePointerRef = useRef(treeCoarsePointer);
+  if (treeCoarsePointerRef.current !== treeCoarsePointer) {
+    treeCoarsePointerRef.current = treeCoarsePointer;
+    for (const [rootId, controller] of treeControllersRef.current) {
+      expandedPathsByRootRef.current = {
+        ...expandedPathsByRootRef.current,
+        [rootId]: controller.getExpandedPaths(),
+      };
+    }
+  }
   const treeToggleRef = useRef<HTMLButtonElement | null>(null);
   const treePanelRef = useRef<HTMLElement | null>(null);
   const filesBodyRef = useRef<HTMLDivElement | null>(null);
@@ -3331,7 +3346,7 @@ export function WorkspaceFilesPanel({
                   />
                 ) : (
                   <RootFileTree
-                    key={`${selectedRoot.rootId}:${selectedListing.fullTreeLoaded}`}
+                    key={`${selectedRoot.rootId}:${selectedListing.fullTreeLoaded}:${treeCoarsePointer ? "touch" : "fine"}`}
                     rootId={selectedRoot.rootId}
                     paths={selectedListing.paths}
                     searchEnabled={selectedListing.fullTreeLoaded}
@@ -4302,9 +4317,12 @@ function RootFileTree({
     if (selected.length === 1 && path && !path.endsWith("/"))
       onOpen({ rootId, path });
   };
+  // The Changes list's row height (WorkspaceChangedFileNavigator.tsx).
+  const coarsePointer = useCoarsePointer();
   const { model } = useFileTree({
     paths: [],
     density: "compact",
+    itemHeight: coarsePointer ? 40 : 26,
     initialExpansion: 0,
     search: searchEnabled,
     searchBlurBehavior: "retain",

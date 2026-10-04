@@ -314,8 +314,9 @@ intents: the top of a line selection in that file, else the viewport anchor
 when it is in that file. Old-side lines map through the patch hunks to the
 nearest new-side line; without a line, the file opens at its top.
 
-A single compact toolbar opens comparison settings, display preferences, and
-review actions in popovers without displacing the diff. Active review progress
+A single compact toolbar opens comparison settings and review actions in
+popovers without displacing the diff; the file position, unified/split switch,
+and wrap toggle sit in the toolbar itself. Active review progress
 appears on the Review button. Counts sit beside the navigator filter, and
 previous/next file actions sit in diff file headers. The comparison registers
 a scope-bound refresh callback with the Files titlebar while mounted. Refresh
@@ -336,10 +337,22 @@ sidebar or a drawer and whether split diffs fit. Preferred split/unified and
 wrap/scroll settings remain separate from their effective narrow presentation.
 The existing Pierre CodeView renders a continuous document. Unloaded and
 terminal states use collapsed non-selectable file items with explicit status
-headers, never fabricated patches. Nearby files load through a bounded queue;
+headers, never fabricated patches; each status gets its own Pierre cache key. Nearby files load through a bounded queue;
 large comparisons retain a bounded patch cache and preserve semantic anchors
 while distant patches are evicted. Hidden panels stop prefetching. Metadata
 pagination remains separate from patch loading.
+
+Every Pierre surface (Changes, the Browse viewer, and chat file-change diffs)
+shares one look. `components/diff/diff-theme.ts` registers a light/dark
+CSS-variables syntax theme over the `--syntax-*` palette that chat Markdown
+code blocks also use, `.sedes-diff-surface` sets Pierre's `--diffs-*` variables
+from Sedes tokens, and `components/diff/pierre-unsafe.css` holds the few
+overrides that depend on Pierre's internal markup. A virtualized CodeView
+places rows from its item metrics rather than measuring them, so the line,
+file-header, and hunk-separator heights in those metrics must match the CSS,
+including the larger coarse-pointer sizes. Pierre renders hunk expand controls
+without names or keyboard access; the Changes view names them, puts them in
+the tab order, and activates them with Enter or Space.
 
 Repository discovery returns a stable `repositoryKey`. Revision catalogs contain
 local/remote branches, tags, and recent commits with messages and commit dates. The current branch

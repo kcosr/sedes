@@ -423,6 +423,14 @@
   the system monospace font. Terminal panes and the TUI wait briefly for the
   font before measuring cells, and their rows can be slightly taller than with
   the previous fallback font.
+- Code looks the same in Files diffs, the Files viewer, chat file-change diffs,
+  and chat code blocks: one quieter syntax palette, pale added and deleted line
+  tints with +/− markers, denser 18px lines, and file cards with single-band
+  hunk separators in Changes. Changes shows **Unified**/**Split**, **Wrap**, and
+  "File N of M" in its toolbar instead of the **View** menu, gives file headers
+  compact icon actions, and restyles the changed-file list; the Browse tree
+  matches it. Touch screens get larger file-header, tab-close, mode-switch,
+  and list targets. `@pierre/diffs` is upgraded to 1.5.1.
 
 - `thread.status@3` and `thread.list@6` expose read-only thread pin state.
   ([#50](https://github.com/kcosr/sedes/pull/50))
@@ -771,6 +779,8 @@
   file when it is the first one open.
 - Closing the Files browser with no file open shows an **Open file browser**
   prompt instead of a blank panel.
+- The expand arrows between hunks in Files Changes can be reached with the
+  keyboard, have names for screen readers, and expand with Enter or Space.
 
 - Agent tool groups scroll horizontally on narrow screens, keeping the rightmost
   groups reachable by touch.

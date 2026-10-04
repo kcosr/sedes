@@ -17,11 +17,11 @@ import type {
   FileDiffMetadata,
   SelectedLineRange,
 } from "@pierre/diffs";
-import { parsePatchFiles, DEFAULT_CODE_VIEW_FILE_METRICS } from "@pierre/diffs";
+import { parsePatchFiles } from "@pierre/diffs";
 import { CodeView, type CodeViewHandle } from "@pierre/diffs/react";
 import {
-  Check,
   Circle,
+  CircleCheck,
   FileText,
   ArrowUp,
   ArrowDown,
@@ -71,6 +71,15 @@ import {
 } from "../context-excerpts/PierreSelectionAction.js";
 import { boundedPierreLanguage } from "./pierre-language.js";
 import {
+  SEDES_DIFF_LINE_HEIGHT,
+  SEDES_DIFF_SEPARATOR_HEIGHT,
+  SEDES_DIFF_THEMES,
+  SEDES_DIFF_TOUCH_SEPARATOR_HEIGHT,
+  SEDES_PIERRE_UNSAFE_CSS,
+} from "../components/diff/diff-theme.js";
+import { usePierreExpandControls } from "../components/diff/pierre-expand-controls.js";
+import { useCoarsePointer } from "../app/use-coarse-pointer.js";
+import {
   DEFAULT_WORKSPACE_COMPARE_PREFERENCES,
   defaultWorkspaceCompareSelections,
   effectiveWorkspaceComparePreferences,
@@ -82,17 +91,6 @@ import {
   type WorkspaceComparePreferences,
 } from "./workspace-compare-state.js";
 import { Button } from "../components/ui/button.js";
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuValue,
-  DropdownMenuTrigger,
-} from "../components/ui/dropdown-menu.js";
 import { Field } from "../components/ui/field.js";
 import {
   Popover,
@@ -106,6 +104,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select.js";
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from "../components/ui/segmented-control.js";
 import { WorkspaceRevisionPicker } from "./WorkspaceRevisionPicker.js";
 import { WorkspaceChangedFileNavigator } from "./WorkspaceChangedFileNavigator.js";
 import { sortWorkspaceChangedFiles } from "./workspace-compare-file-order.js";
@@ -118,6 +120,11 @@ import {
 import "./workspace-compare.css";
 
 const INITIAL_DIFF_BATCH_SIZE = 8;
+/** File header heights (workspace-compare.css); Pierre lays headers out from them. */
+const FILE_HEADER_HEIGHT = 34;
+const TOUCH_FILE_HEADER_HEIGHT = 44;
+/** Space between file cards. */
+const FILE_GAP = 12;
 const MAX_PATCH_REQUESTS = 3;
 const MAX_QUEUED_PATCH_REQUESTS = 12;
 const MAX_PATCH_CACHE_BYTES = 32 * 1024 * 1024;
@@ -305,8 +312,10 @@ export function WorkspaceCompareView({
   const prefetchRef = useRef<(index: number) => void>(() => undefined);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
-  const codeViewRef =
-    useRef<CodeViewHandle<WorkspaceCompareReviewAnnotation> | null>(null);
+  const codeViewRef = useRef<CodeViewHandle<
+    WorkspaceCompareReviewAnnotation,
+    undefined
+  > | null>(null);
   const activeComparisonRef = useRef<
     WorkspaceDiffComparisonDescriptor | undefined
   >(undefined);
@@ -368,7 +377,13 @@ export function WorkspaceCompareView({
   const [surfaceWidth, setSurfaceWidth] = useState(0);
   const [surfaceHeight, setSurfaceHeight] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [viewOptionsOpen, setViewOptionsOpen] = useState(false);
+  const coarsePointer = useCoarsePointer();
+  const fileHeaderHeight = coarsePointer
+    ? TOUCH_FILE_HEADER_HEIGHT
+    : FILE_HEADER_HEIGHT;
+  const fileHeaderHeightRef = useRef(fileHeaderHeight);
+  fileHeaderHeightRef.current = fileHeaderHeight;
+  const expandControls = usePierreExpandControls(scrollContainerRef);
   const [repositories, setRepositories] = useState<
     readonly WorkspaceDiffRepositoryDescriptor[]
   >([]);
@@ -418,7 +433,6 @@ export function WorkspaceCompareView({
   useEffect(() => {
     if (visible) return;
     setSettingsOpen(false);
-    setViewOptionsOpen(false);
     setNavigatorOpen(false);
     setPendingSelection(undefined);
     setSelectedLines(null);
@@ -1190,6 +1204,10 @@ export function WorkspaceCompareView({
     preferences,
     !splitFeasible,
   );
+  const currentFileIndex = Math.max(
+    0,
+    changedFiles.findIndex((file) => file.fileId === currentFileId),
+  );
 
   const annotationsByFile = useMemo(
     () => groupAnnotations(annotations, changedFiles),
@@ -1212,7 +1230,10 @@ export function WorkspaceCompareView({
                   name: workspaceCompareFilePath(file),
                   contents: "",
                   lang: "text" as const,
-                  cacheKey: `status:${comparison?.fingerprint}:${file.fileId}`,
+                  // One key per placeholder state: Pierre treats an equal key
+                  // as the same file object and fails a re-render that swaps
+                  // in a new one.
+                  cacheKey: `status:${comparison?.fingerprint}:${file.fileId}:${load?.status ?? "pending"}`,
                 },
                 version: load?.status === "loading" ? 1 : load ? 2 : 0,
               },
@@ -1557,7 +1578,10 @@ export function WorkspaceCompareView({
       top: number,
       viewer: NonNullable<
         ReturnType<
-          CodeViewHandle<WorkspaceCompareReviewAnnotation>["getInstance"]
+          CodeViewHandle<
+            WorkspaceCompareReviewAnnotation,
+            undefined
+          >["getInstance"]
         >
       >,
     ) => {
@@ -1574,7 +1598,7 @@ export function WorkspaceCompareView({
       );
       if (!file) return;
       const itemTop = viewer.getTopForItem(current.id) ?? top;
-      const stickyOffset = DEFAULT_CODE_VIEW_FILE_METRICS.diffHeaderHeight;
+      const stickyOffset = fileHeaderHeightRef.current;
       const anchor =
         itemTop < top
           ? current.instance.getNumericScrollAnchor(
@@ -1721,6 +1745,7 @@ export function WorkspaceCompareView({
       className="workspace-compare"
       ref={surfaceRef}
       aria-label="Compare workspace files"
+      onKeyDown={expandControls.onKeyDown}
     >
       <div className="workspace-compare-toolbar">
         {narrow && (
@@ -1932,66 +1957,71 @@ export function WorkspaceCompareView({
             </div>
           </PopoverContent>
         </Popover>
-        <DropdownMenu
-          open={visible && viewOptionsOpen}
-          onOpenChange={setViewOptionsOpen}
-        >
-          <DropdownMenuTrigger asChild>
-            <button
-              type="button"
-              className="workspace-compare-toolbar-button"
-              aria-label="Diff view options"
+        {comparison && changedFiles.length > 1 && (
+          <span
+            className="workspace-compare-position"
+            title={`File ${currentFileIndex + 1} of ${changedFiles.length}`}
+          >
+            <span className="workspace-compare-position-full">
+              File <b>{currentFileIndex + 1}</b> of {changedFiles.length}
+            </span>
+            <span className="workspace-compare-position-short">
+              <b>{currentFileIndex + 1}</b>/{changedFiles.length}
+            </span>
+          </span>
+        )}
+        <div className="workspace-compare-view-controls">
+          <SegmentedControl
+            size="sm"
+            aria-label="Diff layout"
+            className="workspace-compare-layout"
+            value={effectivePreferences.diffStyle}
+            onValueChange={(value) =>
+              setPreferences((current) => ({
+                ...current,
+                diffStyle: value as WorkspaceComparePreferences["diffStyle"],
+              }))
+            }
+          >
+            <SegmentedControlItem
+              value="unified"
+              aria-label="Unified"
+              title="Unified"
             >
-              View
-              <ChevronDown aria-hidden="true" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="min-w-48">
-            <DropdownMenuLabel>Layout</DropdownMenuLabel>
-            <DropdownMenuRadioGroup
-              value={effectivePreferences.diffStyle}
-              onValueChange={(value) =>
-                setPreferences((current) => ({
-                  ...current,
-                  diffStyle: value as WorkspaceComparePreferences["diffStyle"],
-                }))
+              <Rows2 aria-hidden="true" />
+              <span className="workspace-compare-control-label">Unified</span>
+            </SegmentedControlItem>
+            <SegmentedControlItem
+              value="split"
+              aria-label="Split"
+              disabled={!splitFeasible}
+              title={
+                splitFeasible
+                  ? "Split"
+                  : "Split view is unavailable at this width"
               }
             >
-              <DropdownMenuRadioItem value="unified">
-                <Rows2 aria-hidden="true" />
-                Unified
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem
-                value="split"
-                disabled={!splitFeasible}
-                title={
-                  splitFeasible
-                    ? undefined
-                    : "Split view is unavailable at this width"
-                }
-              >
-                <Columns2 aria-hidden="true" />
-                Split
-                {!splitFeasible && (
-                  <DropdownMenuValue>Too narrow</DropdownMenuValue>
-                )}
-              </DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuCheckboxItem
-              checked={effectivePreferences.overflow === "wrap"}
-              onCheckedChange={(checked) =>
-                setPreferences((current) => ({
-                  ...current,
-                  overflow: checked ? "wrap" : "scroll",
-                }))
-              }
-            >
-              <WrapText aria-hidden="true" />
-              Wrap lines
-            </DropdownMenuCheckboxItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+              <Columns2 aria-hidden="true" />
+              <span className="workspace-compare-control-label">Split</span>
+            </SegmentedControlItem>
+          </SegmentedControl>
+          <button
+            type="button"
+            className="workspace-compare-toolbar-button workspace-compare-wrap-toggle"
+            aria-label="Wrap lines"
+            aria-pressed={effectivePreferences.overflow === "wrap"}
+            title="Wrap long lines"
+            onClick={() =>
+              setPreferences((current) => ({
+                ...current,
+                overflow: current.overflow === "wrap" ? "scroll" : "wrap",
+              }))
+            }
+          >
+            <WrapText aria-hidden="true" />
+            <span className="workspace-compare-control-label">Wrap</span>
+          </button>
+        </div>
         {filesTruncated && (
           <span
             className="workspace-compare-truncation"
@@ -2152,6 +2182,9 @@ export function WorkspaceCompareView({
                           : load?.status === "loading"
                             ? "Loading diff…"
                             : "Diff loads as you scroll";
+                const path = workspaceCompareFilePath(file);
+                const slash = path.lastIndexOf("/");
+                const reviewed = reviewedFileIds.has(file.fileId);
                 return (
                   <div
                     className={
@@ -2160,17 +2193,25 @@ export function WorkspaceCompareView({
                         : "workspace-compare-status-card"
                     }
                   >
-                    <strong
+                    <span
+                      className="workspace-compare-file-name"
                       title={
                         file.oldPath &&
                         file.newPath &&
                         file.oldPath !== file.newPath
                           ? `${file.oldPath} → ${file.newPath}`
-                          : workspaceCompareFilePath(file)
+                          : path
                       }
                     >
-                      {workspaceCompareFilePath(file)}
-                    </strong>
+                      <bdi>
+                        {slash >= 0 && (
+                          <span className="workspace-compare-file-dir">
+                            {path.slice(0, slash + 1)}
+                          </span>
+                        )}
+                        {path.slice(slash + 1)}
+                      </bdi>
+                    </span>
                     {item.type === "diff" && <FileStats file={file} />}
                     {item.type !== "diff" && (
                       <span
@@ -2194,118 +2235,124 @@ export function WorkspaceCompareView({
                         </span>
                       </span>
                     )}
-                    {file.newPath && onOpenFile && (
-                      <button
-                        type="button"
-                        className="workspace-compare-header-action"
-                        aria-label="Open file"
-                        title="Open file"
-                        onClick={() =>
-                          onOpenFile(file.newPath!, readingLine(file))
-                        }
-                      >
-                        <span className="workspace-compare-header-action-icon">
-                          <FileText aria-hidden="true" />
-                        </span>
-                        <span className="workspace-compare-header-action-label">
-                          Open file
-                        </span>
-                      </button>
-                    )}
-                    {onReviewedChange && load && load.status !== "loading" && (
-                      <button
-                        type="button"
-                        className={`workspace-compare-header-action workspace-compare-reviewed ${reviewedFileIds.has(file.fileId) ? "is-reviewed" : ""}`}
-                        aria-label={
-                          reviewedFileIds.has(file.fileId)
-                            ? "Reviewed"
-                            : "Mark reviewed"
-                        }
-                        title={
-                          reviewedFileIds.has(file.fileId)
-                            ? "Reviewed"
-                            : "Mark reviewed"
-                        }
-                        aria-pressed={reviewedFileIds.has(file.fileId)}
-                        onClick={() =>
-                          onReviewedChange(
-                            file.fileId,
-                            !reviewedFileIds.has(file.fileId),
-                          )
-                        }
-                      >
-                        <span className="workspace-compare-header-action-icon">
-                          {reviewedFileIds.has(file.fileId) ? (
-                            <Check aria-hidden="true" />
-                          ) : (
-                            <Circle aria-hidden="true" />
-                          )}
-                        </span>
-                        <span className="workspace-compare-header-action-label">
-                          {reviewedFileIds.has(file.fileId)
-                            ? "Reviewed"
-                            : "Mark reviewed"}
-                        </span>
-                      </button>
-                    )}
-                    <div
-                      className="workspace-compare-file-navigation"
-                      aria-label="File navigation"
-                    >
-                      <button
-                        type="button"
-                        aria-label={`Previous changed file before ${workspaceCompareFilePath(file)}`}
-                        title="Previous changed file"
-                        disabled={fileIndex <= 0}
-                        onClick={() =>
-                          void navigateToFile(changedFiles[fileIndex - 1]!)
-                        }
-                      >
-                        <ArrowUp aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Next changed file after ${workspaceCompareFilePath(file)}`}
-                        title="Next changed file"
-                        disabled={fileIndex >= changedFiles.length - 1}
-                        onClick={() =>
-                          void navigateToFile(changedFiles[fileIndex + 1]!)
-                        }
-                      >
-                        <ArrowDown aria-hidden="true" />
-                      </button>
-                    </div>
-                    {(load?.status === "unavailable" ||
-                      load?.status === "invalid") && (
-                      <button
-                        type="button"
-                        className="workspace-compare-header-action"
-                        aria-label="Retry"
-                        title="Retry diff"
-                        onClick={() =>
-                          void ensurePatch(file, {
-                            force: true,
-                            priority: true,
-                          })
-                        }
-                      >
-                        <span className="workspace-compare-header-action-icon">
+                    <span className="workspace-compare-file-actions">
+                      {(load?.status === "unavailable" ||
+                        load?.status === "invalid") && (
+                        <button
+                          type="button"
+                          className="workspace-compare-header-action"
+                          aria-label="Retry"
+                          title="Retry diff"
+                          onClick={() =>
+                            void ensurePatch(file, {
+                              force: true,
+                              priority: true,
+                            })
+                          }
+                        >
                           <RotateCw aria-hidden="true" />
-                        </span>
-                        <span className="workspace-compare-header-action-label">
-                          Retry
-                        </span>
-                      </button>
-                    )}
+                        </button>
+                      )}
+                      {file.newPath && onOpenFile && (
+                        <button
+                          type="button"
+                          className="workspace-compare-header-action"
+                          aria-label="Open file"
+                          title="Open file"
+                          onClick={() =>
+                            onOpenFile(file.newPath!, readingLine(file))
+                          }
+                        >
+                          <FileText aria-hidden="true" />
+                        </button>
+                      )}
+                      {onReviewedChange &&
+                        load &&
+                        load.status !== "loading" && (
+                          <button
+                            type="button"
+                            className={`workspace-compare-header-action workspace-compare-reviewed ${reviewed ? "is-reviewed" : ""}`}
+                            aria-label={reviewed ? "Reviewed" : "Mark reviewed"}
+                            title={
+                              reviewed
+                                ? "Reviewed — select to mark unreviewed"
+                                : "Mark reviewed"
+                            }
+                            aria-pressed={reviewed}
+                            onClick={() =>
+                              onReviewedChange(file.fileId, !reviewed)
+                            }
+                          >
+                            {reviewed ? (
+                              <CircleCheck aria-hidden="true" />
+                            ) : (
+                              <Circle aria-hidden="true" />
+                            )}
+                          </button>
+                        )}
+                      <span
+                        className="workspace-compare-file-navigation"
+                        role="group"
+                        aria-label="File navigation"
+                      >
+                        <button
+                          type="button"
+                          className="workspace-compare-header-action"
+                          aria-label={`Previous changed file before ${path}`}
+                          title="Previous changed file"
+                          disabled={fileIndex <= 0}
+                          onClick={() =>
+                            void navigateToFile(changedFiles[fileIndex - 1]!)
+                          }
+                        >
+                          <ArrowUp aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          className="workspace-compare-header-action"
+                          aria-label={`Next changed file after ${path}`}
+                          title="Next changed file"
+                          disabled={fileIndex >= changedFiles.length - 1}
+                          onClick={() =>
+                            void navigateToFile(changedFiles[fileIndex + 1]!)
+                          }
+                        >
+                          <ArrowDown aria-hidden="true" />
+                        </button>
+                      </span>
+                    </span>
                   </div>
                 );
               }}
-              className="workspace-compare-code-view"
+              className={`workspace-compare-code-view sedes-diff-surface${narrow ? " is-compact" : ""}`}
               items={items}
               options={{
+                theme: SEDES_DIFF_THEMES,
                 themeType,
+                unsafeCSS: SEDES_PIERRE_UNSAFE_CSS,
                 diffStyle: effectivePreferences.diffStyle,
                 overflow: effectivePreferences.overflow,
+                diffIndicators: "classic",
+                lineDiffType: "word-alt",
+                hunkSeparators: "line-info-basic",
+                // Pierre positions rows, headers and separators from these
+                // instead of measuring them: keep them equal to the CSS.
+                itemMetrics: {
+                  lineHeight: SEDES_DIFF_LINE_HEIGHT,
+                  diffHeaderHeight: fileHeaderHeight,
+                  hunkSeparatorHeight: coarsePointer
+                    ? SEDES_DIFF_TOUCH_SEPARATOR_HEIGHT
+                    : SEDES_DIFF_SEPARATOR_HEIGHT,
+                },
+                // Narrow panels run files edge to edge.
+                layout: narrow
+                  ? { paddingTop: 0, paddingBottom: FILE_GAP, gap: FILE_GAP }
+                  : {
+                      paddingTop: FILE_GAP,
+                      paddingBottom: 2 * FILE_GAP,
+                      gap: FILE_GAP,
+                    },
+                onPostRender: expandControls.onPostRender,
                 stickyHeaders: true,
                 enableLineSelection: true,
                 enableGutterUtility: onCreateAnnotation !== undefined,
@@ -2448,21 +2495,30 @@ function workspaceCompareSelectionFailureMessage(
   }[reason];
 }
 
+/** Line counts without the zero side: a new file reads "+21", not "+21 −0". */
 function FileStats({
   file,
 }: {
   readonly file: WorkspaceDiffChangedFileSummary;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   if (file.binary)
     return <span className="workspace-compare-stats">Binary</span>;
+  const additions = file.additions ?? 0;
+  const deletions = file.deletions ?? 0;
+  if (additions === 0 && deletions === 0) return null;
+  const description = [
+    additions > 0 ? `${additions} added` : undefined,
+    deletions > 0 ? `${deletions} deleted` : undefined,
+  ]
+    .filter(Boolean)
+    .join(", ");
   return (
     <span className="workspace-compare-stats">
-      {file.additions !== undefined && (
-        <span className="is-addition">+{file.additions}</span>
-      )}
-      {file.deletions !== undefined && (
-        <span className="is-deletion">−{file.deletions}</span>
-      )}
+      <span aria-hidden="true">
+        {additions > 0 && <span className="is-addition">+{additions}</span>}
+        {deletions > 0 && <span className="is-deletion">−{deletions}</span>}
+      </span>
+      <span className="sr-only">{`${description} ${additions + deletions === 1 ? "line" : "lines"}`}</span>
     </span>
   );
 }

@@ -1,0 +1,91 @@
+/* Injected into every Pierre shadow root through the `unsafeCSS` option
+   (imported ?inline by diff-theme.ts; Pierre puts it in its `unsafe` cascade
+   layer, after `base`). It depends on @pierre/diffs 1.5.x internal data
+   attributes, so it stays small and in this one file: anything a --diffs-*
+   variable can do lives in .sedes-diff-surface (styles.css). Heights here must
+   match the item metrics in diff-theme.ts. App tokens inherit into the shadow
+   root. */
+
+/* Hunk separators: one 24px band across gutter and code (Pierre: 32px), with
+   the expand arrows small and side by side instead of two stacked halves.
+   Coarse pointers set --sedes-diff-touch: a 40px band and 40px arrows. */
+[data-separator="line-info-basic"] {
+  height: var(--sedes-diff-touch, 24px);
+}
+[data-separator="line-info-basic"] [data-separator-wrapper] {
+  background-color: var(--sedes-diff-muted);
+}
+[data-separator="line-info-basic"][data-expand-index] [data-separator-wrapper] {
+  grid-template-columns: max(100%, var(--sedes-diff-touch, 0px)) auto;
+}
+[data-separator="line-info-basic"] [data-separator-wrapper][data-separator-multi-button] {
+  grid-template-rows: 100%;
+  grid-template-columns:
+    max(50%, var(--sedes-diff-touch, 0px))
+    max(50%, var(--sedes-diff-touch, 0px))
+    auto;
+}
+[data-separator="line-info-basic"] [data-separator-multi-button] [data-expand-button] {
+  grid-column: auto;
+}
+[data-separator="line-info-basic"] [data-separator-multi-button] [data-separator-content] {
+  grid-area: 1 / 3;
+}
+[data-separator="line-info-basic"] [data-expand-button] {
+  border: 0;
+  background: none;
+  color: var(--muted-foreground-2);
+}
+[data-separator="line-info-basic"] [data-expand-button]:hover {
+  color: var(--foreground);
+  background-color: color-mix(in oklab, var(--foreground) 7%, transparent);
+}
+[data-expand-button] [data-icon] {
+  width: var(--icon-xs);
+  height: var(--icon-xs);
+}
+/* Focusable and named by pierre-expand-controls.ts (Pierre renders bare
+   divs); the ring stays inside the band. */
+[data-expand-button]:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+  border-radius: calc(var(--radius-inline) - 2px);
+}
+[data-unmodified-lines] {
+  font-size: var(--text-label);
+}
+/* The separator after the last hunk ends every file with "More unchanged
+   context may be available": the chevron alone says it. */
+[data-separator="line-info-basic"][data-separator-last] [data-separator-content] {
+  display: none;
+}
+
+/* "No newline at end of file" is a note, not a changed line: no +/− mark,
+   and its text lines up with the code. */
+[data-indicators="classic"] [data-no-newline] {
+  padding-inline-start: 2ch;
+}
+[data-indicators="classic"] [data-no-newline]::before {
+  content: none;
+}
+
+/* Split: a hairline between the sides (Pierre draws it in the background). */
+[data-diff-type="split"] [data-deletions],
+[data-diff-type="split"][data-overflow="wrap"] [data-deletions] [data-content] {
+  border-right-color: var(--border);
+}
+
+/* The gutter's "comment on this line" button: a quiet outlined square that
+   fills only on hover. */
+[data-utility-button] {
+  background-color: var(--sedes-diff-bg);
+  color: var(--muted-foreground);
+  box-shadow: 0 0 0 1px var(--border);
+  border-radius: calc(var(--radius-inline) - 2px);
+  transform: scale(0.86);
+}
+[data-utility-button]:hover {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow: none;
+}

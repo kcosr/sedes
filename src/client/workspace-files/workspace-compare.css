@@ -38,6 +38,13 @@
   outline: 2px solid var(--ring);
   outline-offset: 1px;
 }
+@media (pointer: coarse) {
+  .workspace-files-mode-switcher button {
+    height: var(--control-lg);
+    padding: 0 var(--space-2-5);
+    font-size: var(--text-meta);
+  }
+}
 .workspace-files-tabs[hidden],
 .workspace-files-viewer[hidden],
 .workspace-files-compare-surface[hidden] {
@@ -134,11 +141,14 @@
   width: 15px;
   height: 15px;
 }
-.workspace-compare-stats {
-  display: flex;
+.workspace-compare-stats,
+.workspace-compare-stats > [aria-hidden="true"] {
+  display: inline-flex;
+  flex: none;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   color: var(--muted-foreground-2);
+  font-variant-numeric: tabular-nums;
 }
 .workspace-compare-navigator-search {
   display: flex;
@@ -173,32 +183,41 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* The change kind as a coloured letter. */
+.workspace-compare-change {
+  flex: none;
+  width: 10px;
+  color: var(--muted-foreground-2);
   font-family: var(--font-mono);
   font-feature-settings: var(--font-mono-features);
-  font-size: 12px;
+  font-size: var(--text-micro);
+  font-weight: var(--weight-medium);
+  text-align: center;
 }
-.workspace-compare-change {
-  display: grid;
-  width: 20px;
-  height: 20px;
-  place-items: center;
-  border-radius: 50%;
-  color: var(--muted-foreground);
-  background: var(--accent);
-  font-size: 10px;
-  font-weight: 700;
+.workspace-compare-change.is-added {
+  color: color-mix(in oklab, var(--success) 80%, var(--muted-foreground-2));
 }
-.workspace-compare-change.is-added,
+.workspace-compare-change.is-deleted {
+  color: color-mix(in oklab, var(--destructive) 80%, var(--muted-foreground-2));
+}
+.workspace-compare-change.is-modified,
+.workspace-compare-change.is-type_changed {
+  color: color-mix(in oklab, var(--warning) 80%, var(--muted-foreground-2));
+}
+.workspace-compare-change.is-renamed,
+.workspace-compare-change.is-copied {
+  color: color-mix(in oklab, var(--info) 80%, var(--muted-foreground-2));
+}
 .workspace-compare-stats .is-addition,
 .workspace-compare-reviewed-icon {
   color: var(--success);
 }
-.workspace-compare-change.is-deleted,
 .workspace-compare-stats .is-deletion {
   color: var(--destructive);
 }
 .workspace-compare-stats {
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 .workspace-compare-body {
   position: relative;
@@ -211,10 +230,6 @@
   min-height: 0;
   flex: 1;
   overscroll-behavior: contain;
-  --diffs-font-size: 12px;
-  --diffs-line-height: 1.65;
-  --diffs-font-family: var(--font-mono);
-  --diffs-font-features: var(--font-mono-features);
 }
 .workspace-compare-state {
   display: grid;
@@ -238,24 +253,14 @@
     transform: rotate(360deg);
   }
 }
-.workspace-compare-reviewed,
 .workspace-compare-annotation button {
   border: 0;
   color: var(--muted-foreground);
   background: transparent;
   cursor: pointer;
 }
-.workspace-compare-reviewed {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 6px;
-  border-radius: var(--radius-inline);
-  font-size: 10px;
-}
-.workspace-compare-reviewed.is-reviewed {
+.workspace-compare .workspace-compare-reviewed.is-reviewed {
   color: var(--success);
-  background: color-mix(in oklch, var(--success) 10%, transparent);
 }
 .workspace-compare-annotation {
   margin: 6px 10px;
@@ -313,7 +318,8 @@
   height: 100%;
   min-height: 0;
   background: var(--card);
-  font-size: 11px;
+  font-family: var(--font-sans);
+  font-size: var(--text-meta);
 }
 .workspace-compare-sidebar-resize {
   position: absolute;
@@ -335,65 +341,92 @@
   overflow: auto;
   outline-offset: -2px;
 }
+/* Rows: the heights are the virtualizer's row height
+   (WorkspaceChangedFileNavigator.tsx). */
 .workspace-compare-tree-file,
 .workspace-compare-directory {
   position: absolute;
-  left: 0;
-  right: 0;
-  height: 32px;
+  left: 6px;
+  right: 6px;
+  height: 26px;
   display: flex;
-  gap: 6px;
+  gap: 7px;
   align-items: center;
   padding: 0 8px;
+  border-radius: var(--radius-inline);
   cursor: pointer;
   white-space: nowrap;
 }
+/* Directory headings: small, muted, truncated from the left so the deepest
+   folder stays visible. */
 .workspace-compare-directory {
-  color: var(--muted-foreground);
+  gap: 4px;
+  padding-left: 2px;
+  color: var(--muted-foreground-2);
   font-family: var(--font-mono);
   font-feature-settings: var(--font-mono-features);
-  font-size: 11px;
+  font-size: var(--text-label);
 }
 .workspace-compare-directory span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
 }
 .workspace-compare-directory svg {
-  width: 13px;
-  height: 13px;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
   flex: none;
 }
-.workspace-compare-tree-file {
-  padding-left: 18px;
-  border-left: 2px solid transparent;
-}
-.workspace-compare-tree-file:hover,
 .workspace-compare-directory:hover {
-  background: var(--accent);
+  color: var(--muted-foreground);
+}
+.workspace-compare-tree-file {
+  color: var(--muted-foreground);
+}
+.workspace-compare-tree-file:hover {
+  background: var(--hover);
+  color: var(--foreground);
 }
 .workspace-compare-tree-file[aria-selected="true"] {
-  background: var(--accent);
-  border-left-color: var(--primary);
+  background: var(--info-soft);
+  color: var(--foreground);
 }
 .workspace-compare-tree-file .workspace-compare-file-path {
   flex: 1;
   min-width: 0;
-  font-size: 11px;
-}
-.workspace-compare-tree-file .workspace-compare-change {
-  width: 16px;
-  height: 18px;
-  background: transparent;
-  flex: none;
 }
 .workspace-compare-tree-file svg {
-  width: 13px;
-  height: 13px;
+  width: var(--icon-xs);
+  height: var(--icon-xs);
   flex: none;
 }
 .workspace-compare-tree-file .workspace-compare-stats {
   gap: 4px;
-  font-size: 10px;
+  font-size: var(--text-micro);
+}
+.workspace-compare-comment-count {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted-foreground-2);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+}
+.workspace-compare .workspace-compare-comment-count svg {
+  width: 11px;
+  height: 11px;
+}
+@media (pointer: coarse) {
+  .workspace-compare-tree-file,
+  .workspace-compare-directory {
+    height: 40px;
+  }
+  .workspace-compare-tree-file {
+    font-size: var(--text-ui);
+  }
 }
 .workspace-compare-sidebar-footer {
   padding: 7px 10px;
@@ -417,31 +450,93 @@
   inset: 0;
   background: rgb(0 0 0 / 0.3);
 }
+/* Each file is a card. Narrow panels run files edge to edge. */
+.workspace-compare-code-view:not(.is-compact) {
+  padding: 0 var(--space-4);
+}
+.workspace-compare-code-view diffs-container {
+  border-radius: var(--radius-ctl);
+  box-shadow: 0 0 0 1px var(--border);
+  overflow: clip;
+}
+.workspace-compare-code-view.is-compact diffs-container {
+  border-radius: 0;
+}
+/* The file header, slotted into Pierre's sticky header. Its height is the
+   diffHeaderHeight item metric (WorkspaceCompareView.tsx). */
 .workspace-compare-file-header,
 .workspace-compare-status-card {
   display: flex;
   align-items: center;
-  gap: 12px;
-  height: 44px;
+  gap: var(--space-2);
+  height: 34px;
   width: 100%;
-  padding: 10px 12px;
-  background: var(--card);
+  padding: 0 var(--space-1) 0 var(--space-3);
+  background: var(--sedes-diff-bg);
   border-bottom: 1px solid var(--border-soft);
-  font: 11px var(--font-mono);
-  font-feature-settings: var(--font-mono-features);
-  color: var(--muted-foreground);
-}
-.workspace-compare-file-header strong,
-.workspace-compare-status-card strong {
   color: var(--foreground);
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-family: var(--font-sans);
+  font-size: var(--text-meta);
   white-space: nowrap;
 }
-.workspace-compare-file-header button,
-.workspace-compare-status-card button {
-  color: var(--primary);
+.workspace-compare-status-card {
+  border-bottom-color: transparent;
+}
+/* The path truncates from the left, so the file name stays visible. */
+.workspace-compare-file-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  font-weight: var(--weight-semibold);
+}
+.workspace-compare-file-dir {
+  color: var(--muted-foreground);
+  font-weight: var(--weight-regular);
+}
+.workspace-compare-file-actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-0-5);
+  margin-left: auto;
+}
+.workspace-compare-header-action {
+  display: inline-grid;
+  width: var(--control-xs);
+  height: var(--control-xs);
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-inline);
+  background: transparent;
+  color: var(--muted-foreground-2);
   cursor: pointer;
+}
+.workspace-compare .workspace-compare-header-action svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+.workspace-compare-header-action:hover:enabled {
+  background: var(--hover);
+  color: var(--foreground);
+}
+.workspace-compare-header-action:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+@media (pointer: coarse) {
+  .workspace-compare-file-header,
+  .workspace-compare-status-card {
+    height: 44px;
+  }
+  .workspace-compare-header-action {
+    width: calc(var(--control-touch) - 4px);
+    height: calc(var(--control-touch) - 4px);
+  }
 }
 .workspace-compare-restore-notice {
   display: flex;
@@ -452,84 +547,48 @@
   color: var(--muted-foreground);
   font-size: 11px;
 }
-.workspace-compare-reviewed,
-.workspace-compare-annotation button {
-  border: 0;
-  color: var(--muted-foreground);
-  background: transparent;
-  cursor: pointer;
-}
 .workspace-compare-tree:focus-visible [data-focused="true"] {
   outline: 1px solid var(--ring);
   outline-offset: -2px;
 }
-.workspace-compare-file-header strong,
-.workspace-compare-status-card strong {
-  min-width: 0;
-  flex: 1;
-}
-
 .workspace-compare-status-label {
+  min-width: 0;
   max-width: 40%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.workspace-compare-file-header button,
-.workspace-compare-status-card button {
-  white-space: nowrap;
-  flex: none;
-  font-size: 10px;
+  color: var(--muted-foreground-2);
 }
 .workspace-compare-body {
   container-type: inline-size;
   container-name: workspace-diff-content;
 }
-.workspace-compare-header-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-}
-.workspace-compare-header-action-icon,
 .workspace-compare-status-short {
   display: none;
-}
-.workspace-compare-reviewed.is-reviewed .workspace-compare-header-action-icon {
-  display: inline-flex;
 }
 @container workspace-diff-content (max-width:620px) {
   .workspace-compare-file-header,
   .workspace-compare-status-card {
     gap: 6px;
-    padding-inline: 8px;
+    padding-left: 8px;
   }
-  .workspace-compare-file-header strong,
-  .workspace-compare-status-card strong {
-    flex: 1 1 0;
+  .workspace-compare-file-name {
     min-width: 60px;
   }
-  .workspace-compare-header-action {
-    width: 28px;
-    height: 28px;
-    padding: 0;
-  }
-  .workspace-compare-header-action-label,
   .workspace-compare-status-full {
     display: none;
   }
-  .workspace-compare-header-action-icon,
   .workspace-compare-status-short {
-    display: inline-flex;
+    display: inline;
   }
   .workspace-compare-status-label {
     max-width: 72px;
     flex: 0 1 auto;
-    font-size: 10px;
+    font-size: var(--text-micro);
   }
   .workspace-compare-file-header .workspace-compare-stats {
     gap: 4px;
-    font-size: 10px;
+    font-size: var(--text-micro);
   }
 }
 .workspace-compare-toolbar {
@@ -592,7 +651,67 @@
   display: flex;
   align-items: center;
   flex: none;
+}
+/* "File 3 of 34": where the reader is. */
+.workspace-compare-position {
+  flex: none;
+  padding: 0 var(--space-1);
+  color: var(--muted-foreground-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.workspace-compare-position b {
+  color: var(--muted-foreground);
+  font-weight: var(--weight-semibold);
+}
+.workspace-compare-position-short {
+  display: none;
+}
+.workspace-compare-view-controls {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
   margin-left: auto;
+}
+.workspace-compare .workspace-compare-layout svg,
+.workspace-compare .workspace-compare-wrap-toggle svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+.workspace-compare-wrap-toggle {
+  height: var(--control-sm);
+  min-height: 0;
+  padding: 0 var(--space-2);
+}
+.workspace-compare-wrap-toggle[aria-pressed="true"] {
+  color: var(--foreground);
+  background: var(--selected);
+}
+/* A narrow panel keeps the controls and drops their words. */
+@container workspace-compare (max-width: 560px) {
+  .workspace-compare-control-label,
+  .workspace-compare-position-full {
+    display: none;
+  }
+  .workspace-compare-position-short {
+    display: inline;
+  }
+  .workspace-compare-layout [data-slot="segmented-control-item"] {
+    padding: 0 var(--space-2);
+  }
+}
+@media (pointer: coarse) {
+  .workspace-compare-toolbar {
+    height: var(--control-touch);
+    min-height: var(--control-touch);
+  }
+  .workspace-compare-layout,
+  .workspace-compare-wrap-toggle,
+  .workspace-compare-toolbar-button,
+  .workspace-compare-source-trigger {
+    height: var(--control-lg);
+  }
 }
 /* Comparison settings: a form popover of primitive controls. */
 .workspace-compare-settings-popover {
@@ -646,18 +765,9 @@
   display: inline-flex;
   flex: none;
   gap: 0;
-}
-.workspace-compare-file-navigation button {
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 28px;
-  padding: 0;
-  background: transparent;
-  color: var(--muted-foreground);
-}
-.workspace-compare-file-navigation button:hover:enabled {
-  background: var(--accent);
+  margin-left: var(--space-0-5);
+  padding-left: var(--space-0-5);
+  border-left: 1px solid var(--border-soft);
 }
 .workspace-compare-truncation {
   flex: none;
