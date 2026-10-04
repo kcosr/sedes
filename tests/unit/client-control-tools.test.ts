@@ -51,6 +51,13 @@ function fixture(backendKind: BackendKind = "pi", adapter: AgentToolAdapter = "c
 }
 
 describe("canonical client controls", () => {
+  it("identifies the turn's starting client in discovery without selecting another connected client", async () => {
+    const current = fixture();
+    const result = await current.invoke("client.list");
+    expect(result.output).toMatchObject({ defaultClientId: current.starting.clientId,
+      clients: [{ clientId: current.starting.clientId }, { clientId: current.other.clientId }] });
+    expect(current.request).not.toHaveBeenCalled();
+  });
   it.each([
     ["pi", "pi_sdk"], ["codex_app_server", "mcp"], ["claude_agent_sdk", "mcp"], ["grok_build", "cli"], ["opencode", "mcp"],
     ["pi", "cli"], ["codex_app_server", "cli"], ["claude_agent_sdk", "cli"], ["opencode", "cli"],

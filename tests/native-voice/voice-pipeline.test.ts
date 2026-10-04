@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { notificationSettingsSchema, voiceNotificationSchema } from "../../src/shared/protocol/notification.js";
 import { directInputReceiptSchema, threadInputContextSchema } from "../../src/shared/protocol/thread-input.js";
+import { registeredClientSchema } from "../../src/shared/protocol/client-controls.js";
 import { startOpenAiSpeechFixture, waitForSpeech } from "../support/openai-speech-fixture.js";
 import { OpenCodeProductionFixture } from "../support/opencode-production-fixture.js";
 
@@ -107,20 +108,25 @@ describe("native voice production pipeline with loopback providers", () => {
     const feed = await voiceFeed(app);
     try {
       await waitForSpeech(() => feed.frames.find(frame => frame.event === "notification_policy"));
-      const input = { mutationId: randomUUID(), text: "First spoken production fixture input", origin: { clientId: randomUUID() }, runningPolicy: { mode: "queue" } };
-      const receipt = directInputReceiptSchema.parse(await app.json(`/api/threads/${threadId}/inputs`, "POST", input));
+      const registration = registeredClientSchema.parse(await app.json("/api/client-registration", "POST", {
+        platform: "browser", capabilities: { navigate: true, voice: false, voiceSettings: false },
+        state: { runtime: { foreground: true, voiceReady: false, interactionActive: false }, settings: null },
+      }));
+      const clientHeaders = { "X-Sedes-Client": registration.connectionToken };
+      const input = { mutationId: randomUUID(), text: "First spoken production fixture input", runningPolicy: { mode: "queue" } };
+      const receipt = directInputReceiptSchema.parse(await app.json(`/api/threads/${threadId}/inputs`, "POST", input, clientHeaders));
       expect(receipt, JSON.stringify(receipt)).toMatchObject({ mutationId: input.mutationId, threadId, admittedMode: "submit", status: "accepted" });
       const frame = await waitForSpeech(() => feed.frames.find(frame => frame.event === "notification" && frame.value.payload?.thread?.id === threadId));
       const notification = voiceNotificationSchema.parse(frame.value);
       expect(frame.id).toBeUndefined();
-      expect(notification).toMatchObject({ voice: "speakThenListen", origin: input.origin, payload: { event: "turn.completed" } });
+      expect(notification).toMatchObject({ voice: "speakThenListen", origin: { clientId: registration.clientId }, payload: { event: "turn.completed" } });
       expect(notification.recognitionTarget?.threadId).toBe(threadId);
       const context = threadInputContextSchema.parse(await app.json(`/api/threads/${threadId}/input-context`));
       expect(context).toMatchObject({ authority: "current", automaticListenEligible: true, activityToken: notification.recognitionTarget?.activityToken });
       expect((await app.thread(threadId)).draft).toEqual(savedDraft);
-      expect(directInputReceiptSchema.parse(await app.json(`/api/threads/${threadId}/inputs`, "POST", input))).toEqual(receipt);
+      expect(directInputReceiptSchema.parse(await app.json(`/api/threads/${threadId}/inputs`, "POST", input, clientHeaders))).toEqual(receipt);
       expect(await app.json(`/api/input-receipts/${input.mutationId}`)).toEqual({ status: "found", receipt });
-      expect((await app.request(`/api/threads/${otherThreadId}/inputs`, "POST", input)).status).toBe(409);
+      expect((await app.request(`/api/threads/${otherThreadId}/inputs`, "POST", input, clientHeaders)).status).toBe(409);
       expect(app.model.requests.filter(request => request.lastRole === "user" && request.lastText === input.text)).toHaveLength(1);
       const reconnected = await voiceFeed(app);
       try {
@@ -139,10 +145,10 @@ describe("native voice production pipeline with loopback providers", () => {
       const escaped = { ...input, mutationId: randomUUID(), text: "\u0001".repeat(50_000) };
       expect(JSON.stringify(escaped).length).toBeGreaterThan(256 * 1024);
       const oversizedText = { ...input, mutationId: randomUUID(), text: "é".repeat(32_769) };
-      expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", oversizedText)).status).toBe(400);
+      expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", oversizedText, clientHeaders)).status).toBe(400);
       const overParser = { ...input, mutationId: randomUUID(), text: "\u0001".repeat(90_000) };
-      expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", overParser)).status).toBe(413);
-      expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", escaped)).status).toBe(200);
+      expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", overParser, clientHeaders)).status).toBe(413);
+      expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", escaped, clientHeaders)).status).toBe(200);
     } finally { await feed.close(); }
   });
 

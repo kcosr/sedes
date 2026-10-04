@@ -290,6 +290,8 @@ current-input lease is checked even when no environment approval is needed.
 Unavailable or replaced turn authority fails closed. Omit `clientId` for the
 current device. List clients or specify another `clientId` only for an explicit
 user request; never select another online device as a fallback.
+Discovery returns `defaultClientId` separately from its live client list, so an
+offline starting client cannot be mistaken for another connected recipient.
 
 The registry, command acknowledgements, and completion correlations are
 principal scoped, transient, and bounded. A paired client retains its authenticated

@@ -56,7 +56,7 @@ export class ClientControlToolService {
       throw new DomainError("runtime_unavailable", "The originating turn changed.");
     }
     const input = raw as { clientId?: string; threadId?: string; listen?: boolean; expectedRevision?: number; patch?: { voice: unknown } };
-    if (id === "client.list") return { clients: this.clients.list(scope) };
+    if (id === "client.list") return { defaultClientId: turn.clientId ?? null, clients: this.clients.list(scope) };
     const target = this.clients.target(scope, input.clientId ?? turn.clientId);
     const action = id.slice("client.".length) as "settings.get" | "settings.update" | "switch_thread" | "end_interaction";
     const voicePatch = input.patch ? clientVoicePatchSchema.parse(input.patch.voice) : undefined;
@@ -88,7 +88,7 @@ export function createClientControlToolDefinitions(service?: ClientControlToolSe
     const name = `sedes_${id.replaceAll(".", "_")}`;
     return {
       ...manifest, inputSchema: schema(object(fields)),
-      outputSchema: schema(id === "client.list" ? object({ clients: Type.Array(client, { maxItems: 128 }) }) : result),
+      outputSchema: schema(id === "client.list" ? object({ defaultClientId: Type.Union([str(), Type.Null()]), clients: Type.Array(client, { maxItems: 128 }) }) : result),
       requiredCapabilities: [],
       execution: { form: "inline", adapterWaitCeilingMilliseconds: { pi_sdk: 30_000, mcp: 30_000, http: 30_000, cli: 30_000 },
         supportsCancellation: true, idempotency: "not_applicable", progress: "none", maximumInputBytes: 4096, maximumOutputBytes: 131072,
