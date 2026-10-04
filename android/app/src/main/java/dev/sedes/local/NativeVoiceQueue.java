@@ -153,7 +153,7 @@ final class NativeVoiceQueue {
         } else if (!settings.flag("readNotificationContext")) add(parts, payload.optString("message", ""));
         StringBuilder speech = new StringBuilder();
         for (String part : parts) { if (speech.length() > 0) speech.append('\n'); speech.append(part); }
-        return speech.toString();
+        return NativeSpeechText.prepare(speech.toString(), settings.flag("cleanSpeechText"));
     }
     private static void appendBounded(List<String> parts, JSONObject text) {
         if (text == null) return;

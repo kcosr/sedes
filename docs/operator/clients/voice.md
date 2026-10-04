@@ -92,9 +92,9 @@ bound to its profile, provider, and API endpoint. Switching providers or
 endpoints requires a credential for that destination. Removing the server
 profile removes its speech credentials too.
 
-Upgrading from the old adapter integration resets native voice settings with
-voice Off. Configure the new provider before enabling it again; the old adapter
-URL and settings contract are not supported.
+Upgrading from an earlier native voice settings format resets local settings with
+voice Off. Reconfigure the provider, endpoint, and models before enabling it again.
+Separately stored speech credentials remain on the device.
 
 The app opens without waiting for voice. While voice connects, **Settings →
 Voice** shows "Connecting voice to this server…". If voice cannot connect, the
@@ -129,6 +129,20 @@ emit progress only for completed live provisional assistant items. Hydrated
 history and text classified only at settlement do not produce progress. Grok
 and OpenCode do not advertise this live signal; their unclassified completion
 text remains available.
+
+## Speech text
+
+**Settings → Voice → Clean up formatting for speech** is on by default. It reads
+Markdown as text, including link labels and code contents, with pauses between
+paragraphs and list items. Tables use cell separators; task lists retain checked
+and unchecked status. Code symbols, ordinary punctuation, and literal HTML source
+are preserved. Hidden link destinations and code-fence language labels are omitted.
+
+Turn it off to send the original assembled text to the speech provider. The choice
+is local to this device's profile and user, applies to queued and future speech,
+and does not interrupt a reply already playing. Displayed conversations and
+stored transcripts are unchanged. A reply containing only formatting can still
+start an eligible follow-up listen without making a speech request.
 
 ## Targeting and controls
 

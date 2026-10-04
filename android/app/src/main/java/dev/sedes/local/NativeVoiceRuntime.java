@@ -1371,7 +1371,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             "recognitionThreadTitle", active.targetTitle, "automatic", active.automatic);
         String readiness = readiness();
         boolean ready = readiness.equals("ready");
-        JSONObject next = NativeVoiceJson.object("version", 4, "connectionGeneration", connectionGeneration,
+        JSONObject next = NativeVoiceJson.object("version", 5, "connectionGeneration", connectionGeneration,
             "profileId", profileId, "serverOrigin", origin, "identity", identity, "originClientId", originId, "clientConnectionToken", clientConnectionToken,
             "settingsRevision", settings.revision, "settings", settings.value, "phase", phase, "ready", ready,
             "speech", NativeVoiceJson.object("credentialConfigured", speechCredential != null, "catalogStatus", catalogStatus,

@@ -89,6 +89,32 @@ public class NativeVoiceQueueTest {
         queue.reconfigure(settings("response")); assertTrue(queue.bytes() > 0);
         queue.cancelFollowups(); queue.reconfigure(settings("response")); assertFalse(queue.take().followUp);
     }
+    @Test public void cleanupPrecedesChunkingAndPreservesTheOriginalNotification() {
+        String markdown = "# Answer\n\nRead [the long reference label][ref].\n\n```java\nfoo_bar = a * 2;\n```\n\n[ref]: https://example.test/hidden";
+        JSONObject source = envelope("formatted", "turn.completed", markdown, null);
+        NativeVoiceSettings clean = settings("response").patch(1, NativeVoiceJson.object("readNotificationContext", false));
+        NativeVoiceQueue.Item item = new NativeVoiceQueue.Item(source, clean);
+        String expected = "Answer\n\nRead the long reference label.\n\nfoo_bar = a * 2;";
+        assertEquals(expected, item.speech);
+        List<String> chunks = NativeVoiceQueue.chunks(item.speech, 16);
+        assertTrue(chunks.size() > 1); assertEquals(expected, String.join("", chunks));
+        assertEquals(markdown, item.envelope.optJSONObject("payload").optJSONObject("assistantResult").optJSONObject("final").optString("text"));
+        assertEquals(source.toString(), item.envelope.toString());
+        NativeVoiceSettings raw = clean.patch(2, NativeVoiceJson.object("cleanSpeechText", false));
+        NativeVoiceQueue queue = new NativeVoiceQueue(); queue.add(item);
+        queue.reconfigure(raw); NativeVoiceQueue.Item pending = queue.take();
+        assertEquals(markdown, pending.speech); assertEquals(expected, item.speech);
+        NativeVoiceQueue restored = new NativeVoiceQueue(); restored.add(pending); restored.reconfigure(clean);
+        assertEquals(expected, restored.take().speech);
+    }
+    @Test public void cleanedEmptyCompletionStillAllowsItsEligibleFollowup() {
+        NativeVoiceSettings clean = settings("response").patch(1, NativeVoiceJson.object("readNotificationContext", false));
+        NativeVoiceQueue.Item item = new NativeVoiceQueue.Item(envelope("empty", "turn.completed", "---", null), clean);
+        assertEquals("", item.speech); assertEquals(0, item.bytes); assertTrue(item.followUp);
+        assertTrue(NativeVoiceQueue.chunks(item.speech, 4096).isEmpty());
+        NativeVoiceQueue queue = new NativeVoiceQueue(); queue.add(item); queue.reconfigure(clean);
+        assertTrue(queue.take().followUp);
+    }
     // Server JSON.stringify text. Android org.json adds a byte per '/'; JVM org.json per "</" and U+2014.
     private static final String ESCAPED_PREFIX = "a/b </c> d\u2014e \\\"q\\\" \\\\ \\n\\t\\u0001 \u00e9\u0085 \u20ac\u2000\u2028\u2029 \ud83e\udda6 lone\\ud800 ";
     private static String payloadJson(String escapedText) {

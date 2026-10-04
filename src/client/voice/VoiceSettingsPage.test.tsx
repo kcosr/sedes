@@ -178,6 +178,17 @@ describe("voice settings page", () => {
     expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Requires a default voice thread.");
     store.dispose();
   });
+  it("saves speech cleanup on this device and reflects the native setting", async () => {
+    const native = voiceSnapshot();
+    const { fake, store } = await renderPage(native, fake => fake.plugin.updateSettings.mockResolvedValue({ ...native,
+      stateRevision: 2, settingsRevision: 1, settings: { ...native.settings, cleanSpeechText: false } }));
+    const toggle = screen.getByRole("switch", { name: "Clean up formatting for speech" });
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+    expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { cleanSpeechText: false } });
+    store.dispose();
+  });
   it("opens credential management with only a connection fence and never creates a web password field", async () => {
     const { fake, store } = await renderPage(voiceSnapshot());
     expect(screen.queryByLabelText("OpenAI API key")).toBeNull();
