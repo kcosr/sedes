@@ -716,10 +716,12 @@
   (`empty_transcript`) now re-arms and listens again instead of reporting a
   recognition error, matching the Assistant client. Stop, Off, adapter changes,
   and external audio interruptions cancel pending retries.
+  ([#47](https://github.com/kcosr/sedes/pull/47))
 - The Android keyboard's dictation microphone and other apps taking audio
   focus quietly stop the current voice interaction without flashing a red
   error. Already recognized text still submits if its success tone is
   interrupted; failure to acquire audio focus remains an error.
+  ([#47](https://github.com/kcosr/sedes/pull/47))
 
 - Idle voice submissions appear as ordinary chat messages while delivery
   completes, honor **Seek on send**, and preserve the typed draft. Routine
