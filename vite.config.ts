@@ -53,5 +53,9 @@ export default defineConfig({
   build: {
     outDir: "dist/client",
     emptyOutDir: false,
+    // The CSP admits fonts only from 'self' (no data:), so a small font
+    // subset must stay a bundled file instead of an inlined data: URL.
+    assetsInlineLimit: (filePath) =>
+      /\.woff2?$/u.test(filePath) ? false : undefined,
   },
 });

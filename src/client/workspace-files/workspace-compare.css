@@ -173,7 +173,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 12px;
 }
 .workspace-compare-change {
@@ -213,6 +214,7 @@
   --diffs-font-size: 12px;
   --diffs-line-height: 1.65;
   --diffs-font-family: var(--font-mono);
+  --diffs-font-features: var(--font-mono-features);
 }
 .workspace-compare-state {
   display: grid;
@@ -349,6 +351,7 @@
 .workspace-compare-directory {
   color: var(--muted-foreground);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 11px;
 }
 .workspace-compare-directory span {
@@ -425,6 +428,7 @@
   background: var(--card);
   border-bottom: 1px solid var(--border-soft);
   font: 11px var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   color: var(--muted-foreground);
 }
 .workspace-compare-file-header strong,

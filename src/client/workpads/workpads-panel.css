@@ -23,7 +23,7 @@
 .workpads-revision-details summary { cursor: pointer; }
 .workpads-revision-details blockquote { white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px 12px; border-left: 2px solid var(--border); margin: 8px 0 16px; color: var(--foreground); }
 .workpads-editor { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: auto; padding: 12px; gap: 12px; }
-.workpads-textarea { flex: 1; min-height: 240px; resize: none; font-family: var(--font-mono,monospace); font-size: 13px; line-height: 1.7; }
+.workpads-textarea { flex: 1; min-height: 240px; resize: none; font-family: var(--font-mono,monospace); font-feature-settings: var(--font-mono-features); font-size: 13px; line-height: 1.7; }
 .workpads-conflict { border: 1px solid var(--border); background: var(--muted); border-radius: var(--radius-ctl); padding: 10px; }
 .workpads-conflict p { margin: 0 0 8px; }
 .workpads-conflict pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow-y: auto; font-size: 12px; margin: 8px 0; }

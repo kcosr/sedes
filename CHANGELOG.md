@@ -406,6 +406,13 @@
 
 ### Changed
 
+- Code uses one bundled font, JetBrains Mono, with programming ligatures off:
+  chat code blocks and tool lines, the Files viewer and diffs, terminal panes,
+  and the Codex TUI look the same on every platform instead of falling back to
+  the system monospace font. Terminal panes and the TUI wait briefly for the
+  font before measuring cells, and their rows can be slightly taller than with
+  the previous fallback font.
+
 - Android voice settings and quick controls provide searchable speech choices,
   a default recording thread with optional pinning, and an independent automatic
   playback filter. Off, Manual, and Response modes control the voice session.

@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @import "@fontsource-variable/inter";
+/* The code font: the upright variable-weight faces only (no italic files). */
+@import "@fontsource-variable/jetbrains-mono";
 @import "./components/ui/overlay.css" layer(components);
 
 /* The app stamps data-theme on <html> explicitly, even in system mode
@@ -135,7 +137,14 @@
   --font-sans:
     "Inter Variable", Inter, ui-sans-serif, system-ui, -apple-system,
     BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  /* The bundled code font first, for the same code on every platform. Canvas
+     renderers keep the same list in src/client/code-font.ts. */
+  --font-mono:
+    "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", "DejaVu Sans Mono", monospace;
+  /* Code shows exactly what was typed: no programming ligatures. Set it
+     beside every `font-family: var(--font-mono)`. */
+  --font-mono-features: "liga" 0, "calt" 0;
 
   /* type ramp — role names; values are today's dominant steps */
   --text-micro: 10px; /* counts, tiny tags */
@@ -386,6 +395,8 @@
   --shadow-lg: var(--elevation-3);
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
+  /* Carries the ligature setting to `font-mono` and to preflight code/pre. */
+  --font-mono--font-feature-settings: var(--font-mono-features);
 }
 
 /* ───────────────────────────────────────────────────────────────────────
@@ -648,6 +659,7 @@ textarea:disabled {
   background: transparent;
   color: var(--accent-foreground);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 20px;
   font-weight: 600;
 }
@@ -2899,8 +2911,11 @@ textarea:disabled {
   width: 100%;
   height: 100%;
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   /* Keep full-file reading/editing at the same density as chat Pierre diffs. */
   --diffs-font-size: 12px;
+  --diffs-font-family: var(--font-mono);
+  --diffs-font-features: var(--font-mono-features);
 }
 
 .workspace-files-editor-shell,
@@ -3503,15 +3518,8 @@ textarea:disabled {
   padding: 7px 10px;
   background: var(--terminal-background);
   color: var(--terminal-foreground);
-  font:
-    13px/18px ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    Monaco,
-    Consolas,
-    "Liberation Mono",
-    "DejaVu Sans Mono",
-    monospace;
+  font: 13px/18px var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
 }
 
 .terminal-mobile-command-input::placeholder {
@@ -3559,9 +3567,8 @@ textarea:disabled {
   padding: 10px;
   overflow: auto;
   white-space: pre-wrap;
-  font:
-    12px/1.45 ui-monospace,
-    monospace;
+  font: 12px/1.45 var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
 }
 
 @media (max-width: 819px) {
@@ -4662,6 +4669,7 @@ textarea:disabled {
 
 .thread-find-option {
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 10.5px;
   font-weight: 650;
 }
@@ -6036,6 +6044,7 @@ textarea:disabled {
   background: color-mix(in oklch, var(--primary) 8%, transparent);
   color: var(--primary);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 11.5px;
 }
 
@@ -6105,6 +6114,7 @@ textarea:disabled {
 .context-excerpt-summary strong {
   color: var(--foreground);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 11.5px;
 }
 
@@ -6157,6 +6167,7 @@ textarea:disabled {
   border-radius: var(--radius-ctl);
   background: var(--background);
   font: 11.5px/1.5 var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   white-space: pre-wrap;
 }
 
@@ -6346,6 +6357,7 @@ textarea:disabled {
   border-radius: var(--radius-inline);
   background: var(--code);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 0.86em;
 }
 
@@ -6801,6 +6813,7 @@ button.activity-group-summary:hover {
   overflow: hidden;
   color: var(--muted-foreground);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -6872,6 +6885,7 @@ button.activity-group-summary:hover {
   border-radius: var(--radius-inline);
   background: var(--code);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 12px;
 }
 
@@ -6883,6 +6897,7 @@ button.activity-group-summary:hover {
   background: var(--code);
   color: var(--muted-foreground);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 12px;
   line-height: 1.65;
   white-space: pre-wrap;
@@ -6990,6 +7005,7 @@ button.activity-group-summary:hover {
   --diffs-font-size: 12px;
   --diffs-line-height: 1.65;
   --diffs-font-family: var(--font-mono);
+  --diffs-font-features: var(--font-mono-features);
 }
 
 .diff-empty-file {
@@ -6997,6 +7013,7 @@ button.activity-group-summary:hover {
   background: var(--code);
   color: var(--muted-foreground-2);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 12px;
 }
 
@@ -7006,6 +7023,7 @@ button.activity-group-summary:hover {
   overflow: hidden;
   background: var(--code);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 12px;
   line-height: 1.65;
   width: 100%;
@@ -7029,6 +7047,7 @@ button.activity-group-summary:hover {
   width: 100%;
   border-collapse: collapse;
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 12px;
   line-height: 1.65;
 }
@@ -7124,6 +7143,7 @@ tr.diff-hunk td {
   gap: 9px;
   padding: 8px 13px;
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 12.5px;
 }
 
@@ -7170,6 +7190,7 @@ tr.diff-hunk td {
 .structured-collection dt {
   color: var(--muted-foreground-2);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 12px;
 }
 
@@ -7183,6 +7204,7 @@ tr.diff-hunk td {
 .structured-string {
   color: var(--muted-foreground);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 12px;
   overflow-wrap: anywhere;
 }
@@ -7390,6 +7412,7 @@ tr.diff-hunk td {
   min-width: 0;
   overflow: hidden;
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -8267,6 +8290,7 @@ tr.diff-hunk td {
   background: color-mix(in oklch, var(--primary) 9%, transparent);
   color: var(--primary);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 12px;
 }
 
@@ -8490,6 +8514,7 @@ tr.diff-hunk td {
   margin: 0;
   overflow-wrap: anywhere;
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: var(--text-label);
 }
 
@@ -9222,6 +9247,7 @@ tr.diff-hunk td {
   background: var(--code);
   color: var(--muted-foreground);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 12px;
   line-height: 1.65;
   white-space: pre-wrap;
@@ -9510,6 +9536,7 @@ tr.diff-hunk td {
   border-radius: 6px;
   color: var(--muted-foreground-2);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 10px;
 }
 
@@ -10299,6 +10326,7 @@ tr.diff-hunk td {
   min-height: 92px;
   resize: vertical;
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -11687,6 +11715,7 @@ tr.diff-hunk td {
   background: var(--code);
   color: var(--foreground);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
 }
 
 .electron-connection-editor__error {
