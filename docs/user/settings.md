@@ -550,8 +550,13 @@ app does not wait for voice.
 - **Audio mode** chooses Off, Manual, or Response. **Enable voice** selects
   Response, and **Resume voice** restarts a stopped voice session. The status
   line below reports what voice still needs, such as microphone permission, an
-  adapter URL, or the voice adapter or Sedes notification connection. When
+  speech configuration and a key, or the Sedes notification connection. When
   notifications are unavailable, explicit recording still works.
+- **Speech provider** selects OpenAI or your OpenAI-Compatible Speech Server.
+  Configure its endpoint, transcription and speech models, voice, and speed.
+  The catalog offers available model and voice suggestions. Credentials are
+  entered in a native dialog and stored encrypted on this device for that
+  provider and endpoint; they are separate from the Sedes pairing credential.
 - **Show voice bar when off** keeps a dimmed voice card under the composer
   while Audio mode is Off, so its Voice sheet can turn voice back on. By
   default Off hides the card. The switch changes only what the app shows.

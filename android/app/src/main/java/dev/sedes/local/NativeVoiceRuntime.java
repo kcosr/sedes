@@ -6,10 +6,10 @@ import android.net.Uri;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
-import android.util.Base64;
 import androidx.core.content.ContextCompat;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,7 +26,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /** Single native owner of settings, transient voice work and durable input recovery. */
-final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoiceAudio.Listener {
+final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
     interface Reply { void done(JSONObject value); void failed(String code, String message); }
     interface Observer { void event(String name, JSONObject value); }
     /** Automatic read-only receipt lookups per uncertain input before waiting for session or stream re-establishment. */
@@ -45,7 +45,14 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
     private final Handler handler, main = new Handler(Looper.getMainLooper());
     private final NativeVoiceStore store;
     private final NativeVoiceHttp http = new NativeVoiceHttp();
-    private final NativeVoiceAdapter adapter;
+    private NativeSpeechTransport speech;
+    private String speechCredential;
+    private boolean speechCredentialError;
+    private String catalogStatus = "idle", catalogError;
+    private JSONObject speechCatalog;
+    private Call catalogCall, credentialTestCall;
+    private Reply catalogReply, credentialTestReply;
+    private long speechGeneration, catalogGeneration;
     private final NativeVoiceAudio audio;
     private final NativeVoiceQueue queue = new NativeVoiceQueue();
     private final CopyOnWriteArrayList<Observer> observers = new CopyOnWriteArrayList<>();
@@ -57,7 +64,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
     private String profileId, origin, identity, binding, credential, csrf, originId;
     private String phase = "off", foregroundThread, foregroundTitle, composerMode = "queue";
     private boolean foregroundVisible, sessionStarted, policyKnown, streamFailureReported;
-    private int adapterFailures, streamFailures;
+    private int streamFailures;
     private volatile boolean nativeVisible;
     /** Invalidates a queued local UI event even if navigation or visibility changes back before dispatch. */
     private volatile Object inputSubmissionContext = new Object();
@@ -79,7 +86,10 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         String completionCueId;
         boolean retryAfterCompletionCue;
         Runnable afterCompletionCue;
-        boolean automatic, followUp, waitingAfterSkip, stopped, recognitionFinalized, submissionNotified;
+        boolean automatic, followUp, stopped, recognitionFinalized, submissionNotified;
+        NativeSpeechTransport.Request speechRequest;
+        NativeSpeechTransport.Transcription transcription;
+        NativeVoiceCapturePolicy capturePolicy;
         final NativeVoiceQueue.Item notification;
         final List<String> chunks;
         int chunk;
@@ -100,7 +110,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
     private NativeVoiceRuntime(Context context) {
         this.context = context; store = new NativeVoiceStore(context);
         HandlerThread thread = new HandlerThread("sedes-native-voice"); thread.start(); handler = new Handler(thread.getLooper());
-        adapter = new NativeVoiceAdapter(this); audio = new NativeVoiceAudio(context, this);
+        audio = new NativeVoiceAudio(context, this);
         publish();
     }
     JSONObject snapshot() { return NativeVoiceJson.copy(state); }
@@ -133,6 +143,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
                     case "setConnection": setConnection(args, reply); return;
                     case "disconnect": NativeVoiceJson.keys(args); disconnect(true); break;
                     case "updateSettings": updateSettings(args, userInitiated); break;
+                    case "refreshSpeechCatalog": NativeVoiceJson.keys(args); refreshSpeechCatalog(reply); return;
                     case "setForegroundContext": foreground(args); break;
                     case "startManualListen": manual(args); break;
                     case "retargetActiveRecognition": retarget(args); break;
@@ -189,7 +200,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
                 final String owner = binding;
                 // Unreadable records are quarantined and reset rather than blocking voice for this binding.
                 settings = record(owner, () -> store.settings(owner)); originId = record(owner, () -> store.originId(owner));
-                audio.configure(settings);
+                audio.configure(settings); configureSpeech(true, true);
             } catch (Exception error) { connectionFailed("voice_storage_unavailable", reply); return; }
             loadSession(generation, () -> { phase = "off"; resumeEnabledSession(); publish(); recoverOutstanding(); reply.done(snapshot()); deliverPendingOpen(); },
                 code -> {
@@ -233,6 +244,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         queue.reset(); connectionGeneration++; stateRevision = 0;
         errors.clear();
         stopSession(); binding = null; identity = null; originId = null; csrf = null; credential = null;
+        invalidateSpeechMetadata(); speechCredential = null; speechCredentialError = false;
         profileId = null; origin = null; settings = NativeVoiceSettings.defaults(); phase = "off";
         policyGeneration = -1;
         foregroundVisible = false; foregroundThread = null; foregroundTitle = null;
@@ -244,6 +256,11 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         NativeVoiceSettings previous = settings;
         NativeVoiceSettings next = settings.patch(NativeVoiceJson.integer(args, "expectedRevision", 0, Long.MAX_VALUE), NativeVoiceJson.requiredObject(args, "patch"));
         store.settings(binding, next); settings = next; audio.configure(next);
+        if (!previous.speechConfigurationEquals(next)) configureSpeech(
+            !previous.text("speechProvider").equals(next.text("speechProvider")) ||
+                !previous.text("speechEndpoint").equals(next.text("speechEndpoint")), catalogConfigurationChanged(previous, next));
+        else if (captureSettingsChanged(previous, next) && active != null && !speechIndependent(active))
+            cancelActive(true, "capture_settings_changed");
         if (!next.active()) {
             cancelOutstanding(true); cancelActive(true, "voice_off"); queue.clear("voice_off"); stopSession(); phase = "off";
         } else {
@@ -254,25 +271,20 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
             if (!next.flag("autoListen") && active != null && active.automatic && !phase.equals("submitting") &&
                 (phase.equals("validating") || phase.equals("arming") || phase.equals("listening") || phase.equals("recognizing"))) cancelActive(true, "auto_listen_disabled");
             if (active != null && active.automatic && active.notification != null && !eligible(active.notification)) cancelActive(true, "voice_filter_changed");
-            if (!previous.text("adapterUrl").equals(next.text("adapterUrl"))) {
-                // Media work belongs to the old adapter; a final transcript or admitted input does not.
-                if (active != null && !adapterIndependent(active)) cancelActive(true, "adapter_changed");
-                adapter.close(); adapterFailures = 0; if (sessionStarted) connectAdapter();
-            }
             if (!sessionStarted && userInitiated) requestSessionStart();
         }
         publish(); emit("settingsChanged", snapshot()); drain();
     }
-    private static boolean adapterIndependent(Active item) { return item.recognitionFinalized || item.admission != null; }
+    private static boolean speechIndependent(Active item) { return item.recognitionFinalized || item.admission != null; }
     private void resumeEnabledSession() {
         if (nativeVisible && binding != null && csrf != null && settings.active() && audio.hasPermission() &&
-            !settings.text("adapterUrl").isEmpty()) scheduleSessionStart();
+            speechReady()) scheduleSessionStart();
     }
     private void requestSessionStart() {
         if (sessionStarted || sessionStartId != null) return;
         if (!nativeVisible) throw new IllegalStateException("resume_from_visible_app");
         if (!audio.hasPermission()) throw new IllegalStateException("microphone_permission_required");
-        if (settings.text("adapterUrl").isEmpty()) throw new IllegalStateException("adapter_required");
+        if (!speechReady()) throw new IllegalStateException("speech_configuration_required");
         scheduleSessionStart();
     }
     private void scheduleSessionStart() {
@@ -314,7 +326,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
             sessionStartId = null;
             this.service = service;
             if (binding == null || !settings.active() || !audio.hasPermission()) { stopSession(); publish(); return; }
-            sessionStarted = true; phase = "starting"; connectAdapter(); connectEvents(); publish();
+            sessionStarted = true; phase = "idle"; connectEvents(); drain(); publish();
             // Snapshots are published only on change; the new owner still needs its first controls and media session state.
             JSONObject snapshot = snapshot(); main.post(() -> service.render(snapshot));
         });
@@ -326,11 +338,11 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         });
     }
     void detached(NativeVoiceRuntimeService service) {
-        handler.post(() -> { if (this.service == service) { this.service = null; sessionStarted = false; cancelActive(false, "service_stopped"); adapter.close(); closeEvents(); phase = "off"; publish(); } });
+        handler.post(() -> { if (this.service == service) { this.service = null; sessionStarted = false; cancelActive(false, "service_stopped"); closeSpeech(); closeEvents(); phase = "off"; publish(); } });
     }
     private void stopSession() {
-        sessionStartId = null; sessionStarted = false; adapter.close(); audio.stop(); closeEvents();
-        adapterFailures = 0; streamFailures = 0; streamFailureReported = false;
+        sessionStartId = null; sessionStarted = false; closeSpeech(); audio.stop(); closeEvents();
+        streamFailures = 0; streamFailureReported = false;
         NativeVoiceRuntimeService old = service; service = null;
         if (old != null) main.post(old::finish);
     }
@@ -349,11 +361,114 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         foregroundTitle = foregroundVisible ? title : null;
         if (mode != null) composerMode = mode;
     }
-    private void connectAdapter() {
-        if (!sessionStarted || settings.text("adapterUrl").isEmpty()) return;
-        adapter.connect(settings.text("adapterUrl"));
-        long generation = adapter.generation();
-        handler.postDelayed(() -> { if (sessionStarted && generation == adapter.generation() && !adapter.ready()) failed(generation, "adapter_handshake_timeout"); }, 20000);
+    private void closeSpeech() {
+        if (speech != null) speech.close();
+        speech = null;
+    }
+    private void configureSpeech(boolean reloadCredential, boolean invalidateCatalog) {
+        if (active != null && !speechIndependent(active)) cancelActive(true, "speech_configuration_changed");
+        boolean refetch = invalidateCatalog && (catalogStatus.equals("ready") || catalogStatus.equals("loading"));
+        closeSpeech(); invalidateCredentialTest();
+        if (invalidateCatalog) invalidateSpeechCatalog();
+        if (reloadCredential) {
+            speechCredential = null; speechCredentialError = false;
+            if (profileId != null && !settings.text("speechEndpoint").isEmpty()) {
+                try { speechCredential = new SpeechCredentialStore(context).getCredential(profileId,
+                    settings.text("speechProvider"), settings.text("speechEndpoint")); }
+                catch (Exception error) { speechCredentialError = true; report("speech_credential_storage_unavailable"); }
+            }
+        }
+        if (refetch && speechCredential != null && !speechCredentialError && !settings.text("speechEndpoint").isEmpty()) {
+            refreshSpeechCatalog(new Reply() {
+                public void done(JSONObject value) {}
+                public void failed(String code, String message) {} // Discovery status already publishes the safe failure.
+            });
+        }
+    }
+    private void invalidateSpeechMetadata() {
+        invalidateCredentialTest(); invalidateSpeechCatalog();
+    }
+    private void invalidateCredentialTest() {
+        speechGeneration++;
+        if (credentialTestCall != null) credentialTestCall.cancel();
+        credentialTestCall = null;
+        if (credentialTestReply != null) credentialTestReply.failed("speech_configuration_changed", message("speech_configuration_changed"));
+        credentialTestReply = null;
+    }
+    private void invalidateSpeechCatalog() {
+        catalogGeneration++;
+        if (catalogCall != null) catalogCall.cancel();
+        catalogCall = null;
+        if (catalogReply != null) catalogReply.failed("speech_configuration_changed", message("speech_configuration_changed"));
+        catalogReply = null;
+        speechCatalog = null; catalogStatus = "idle"; catalogError = null;
+    }
+    static boolean catalogConfigurationChanged(NativeVoiceSettings previous, NativeVoiceSettings next) {
+        for (String key : new String[] { "speechProvider", "speechEndpoint", "ttsModel" })
+            if (!previous.text(key).equals(next.text(key))) return true;
+        return false;
+    }
+    /** Native dialog only: the bridge never accepts, returns or publishes provider secrets. */
+    void speechCredentialAction(long expectedGeneration, long expectedRevision, String action, String secret, Reply reply) {
+        handler.post(() -> {
+            try {
+                if (connectionGeneration != expectedGeneration) throw new IllegalStateException("connection_changed");
+                if (binding == null) throw new IllegalStateException("authentication_required");
+                if (settings.revision != expectedRevision) throw new IllegalStateException("settings_revision_conflict");
+                SpeechCredentialStore credentials = new SpeechCredentialStore(context);
+                switch (action) {
+                    case "save": credentials.setCredential(profileId, settings.text("speechProvider"), settings.text("speechEndpoint"), secret); break;
+                    case "remove": credentials.removeCredential(profileId, settings.text("speechProvider"), settings.text("speechEndpoint")); break;
+                    case "test":
+                        if (secret == null && speechCredentialError) throw new IllegalStateException("speech_credential_storage_unavailable");
+                        testSpeechCredential(secret == null ? speechCredential : secret, reply); return;
+                    default: throw new IllegalArgumentException("unknown_voice_action");
+                }
+                configureSpeech(true, true); resumeEnabledSession(); publish(); drain(); reply.done(snapshot());
+            } catch (Exception error) { String code = code(error); reply.failed(code, message(code)); }
+        });
+    }
+    private void testSpeechCredential(String secret, Reply reply) {
+        if (settings.text("speechEndpoint").isEmpty()) { reply.failed("speech_configuration_required", message("speech_configuration_required")); return; }
+        if (secret != null) SpeechCredentialStore.validateCredential(secret);
+        if (credentialTestCall != null) credentialTestCall.cancel();
+        if (credentialTestReply != null) credentialTestReply.failed("speech_test_replaced", message("speech_test_replaced"));
+        credentialTestReply = reply;
+        long generation = speechGeneration, revision = settings.revision;
+        credentialTestCall = NativeSpeechCatalog.test(settings, secret, (catalog, error) -> handler.post(() -> {
+            if (generation != speechGeneration || credentialTestReply != reply) return;
+            credentialTestReply = null; credentialTestCall = null;
+            if (revision != settings.revision) { reply.failed("settings_revision_conflict", message("settings_revision_conflict")); return; }
+            if (error != null) reply.failed(error, message(error)); else reply.done(snapshot());
+        }));
+    }
+    private void refreshSpeechCatalog(Reply reply) {
+        if (binding == null) { reply.failed("authentication_required", message("authentication_required")); return; }
+        if (speechCredentialError) { reply.failed("speech_credential_storage_unavailable", message("speech_credential_storage_unavailable")); return; }
+        if (settings.text("speechEndpoint").isEmpty()) { reply.failed("speech_configuration_required", message("speech_configuration_required")); return; }
+        if (catalogCall != null) catalogCall.cancel();
+        if (catalogReply != null) catalogReply.failed("speech_catalog_replaced", message("speech_catalog_replaced"));
+        catalogReply = reply; catalogStatus = "loading"; catalogError = null; publish();
+        long generation = catalogGeneration;
+        catalogCall = NativeSpeechCatalog.fetch(settings, speechCredential, (catalog, error) -> handler.post(() -> {
+            if (generation != catalogGeneration || catalogReply != reply) return;
+            catalogReply = null; catalogCall = null;
+            speechCatalog = catalog; catalogError = error; catalogStatus = error == null ? "ready" : "error";
+            publish();
+            if (error != null) reply.failed(error, message(error)); else reply.done(snapshot());
+        }));
+    }
+    private boolean speechReady() { return !speechCredentialError && settings.configured(speechCredential != null); }
+    private NativeSpeechTransport speechTransport() {
+        if (!speechReady()) throw new IllegalStateException("speech_configuration_required");
+        if (speech == null) speech = new NativeSpeechTransport(settings.speechConfig(speechCredential));
+        return speech;
+    }
+    private static boolean captureSettingsChanged(NativeVoiceSettings previous, NativeVoiceSettings next) {
+        for (String key : new String[] { "inputDeviceId", "recognitionStartTimeoutMs", "recognitionCompletionTimeoutMs",
+            "recognitionEndSilenceMs", "recognitionResultTimeoutMs" })
+            if (!Objects.equals(previous.value.opt(key), next.value.opt(key))) return true;
+        return false;
     }
     private void connectEvents() {
         if (!sessionStarted || binding == null) return;
@@ -422,14 +537,14 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
     private void cancelAutomatic(String reason) {
         queue.clear(reason);
         // A finalized transcript or already submitted message keeps its own admission semantics, as when settings change.
-        if (active != null && active.automatic && !adapterIndependent(active) && !phase.equals("submitting")) cancelActive(true, reason);
+        if (active != null && active.automatic && !speechIndependent(active) && !phase.equals("submitting")) cancelActive(true, reason);
     }
     private void drain() {
-        if (active != null || !sessionStarted || !adapter.ready() || binding == null) return;
+        if (active != null || !sessionStarted || !speechReady() || binding == null) return;
         NativeVoiceQueue.Item item;
         while ((item = queue.take()) != null) {
             if (!eligible(item)) { queue.drop("ineligible"); continue; }
-            active = new Active(item, settings.number("adapterTextLimit"));
+            active = new Active(item, settings.number("speechTextLimit"));
             if (active.chunks.isEmpty()) afterSpeech(active); else speakChunk(active);
             publish(); return;
         }
@@ -440,15 +555,21 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         // A chunk with nothing to speak is a no-op rather than a failure of the whole item.
         while (item.chunk < item.chunks.size() && blank(item.chunks.get(item.chunk))) item.chunk++;
         if (item.chunk >= item.chunks.size()) { afterSpeech(item); return; }
-        if (!adapter.ready()) { failActive("adapter_disconnected"); return; }
+        if (!speechReady()) { failActive("speech_configuration_required"); return; }
         item.ttsId = UUID.randomUUID().toString(); String request = item.ttsId;
         phase = "synthesizing"; item.lastAudioId = request; audio.begin(request); publish();
-        adapter.tts(request, item.chunks.get(item.chunk), status -> handler.post(() -> {
-            if (active != item || !request.equals(item.ttsId)) return;
-            // The adapter answers 400 only when its sanitizer leaves nothing to speak; that chunk is a no-op.
-            if (status == 400) { audio.stop(); item.ttsId = null; item.chunk++; speakChunk(item); }
-            else if (status < 200 || status >= 300) failActive("speech_request_rejected");
-        }));
+        item.speechRequest = speechTransport().speak(request, item.chunks.get(item.chunk), new NativeSpeechTransport.SpeechListener() {
+            public void started(String id) {}
+            public void pcm(String id, int sampleRate, byte[] bytes) { handler.post(() -> {
+                if (active != item || !id.equals(item.ttsId)) return;
+                audio.pcm(id, sampleRate, bytes);
+                if (!phase.equals("speaking")) { phase = "speaking"; publish(); }
+            }); }
+            public void completed(String id) { handler.post(() -> {
+                if (active == item && id.equals(item.ttsId)) { item.speechRequest = null; audio.end(id); }
+            }); }
+            public void failed(String id, NativeSpeechTransport.Failure failure) { speechFailed(id, failure.code); }
+        });
         handler.postDelayed(() -> { if (active == item && request.equals(item.ttsId)) failActive("speech_timeout"); }, NativeVoiceAudio.MAX_STREAM_DURATION_MS + 60000);
     }
     private void afterSpeech(Active item) {
@@ -481,7 +602,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
             }));
     }
     private void arm(Active item) {
-        if (active != item || !sessionStarted || !adapter.ready() || !audio.hasPermission()) { failActive("voice_not_ready"); return; }
+        if (active != item || !sessionStarted || !speechReady() || !audio.hasPermission()) { failActive("voice_not_ready"); return; }
         if (item.automatic && (!settings.flag("autoListen") || !eligible(item.notification))) { finishItem(item); return; }
         phase = "arming"; item.cueId = UUID.randomUUID().toString(); publish();
         String cue = item.cueId;
@@ -491,25 +612,37 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         } else capture(item);
     }
     private void capture(Active item) {
-        if (active != item || item.stopped || !sessionStarted || !adapter.ready()) return;
+        if (active != item || item.stopped || !sessionStarted || !speechReady()) return;
         if (item.automatic && (!settings.flag("autoListen") || !eligible(item.notification))) { finishItem(item); return; }
         item.cueId = null;
         // The cue is asynchronous. A newer server activity epoch during it must prevent recording.
         if (item.automatic) validateTarget(item, true, false); else beginCapture(item);
     }
     private void beginCapture(Active item) {
-        if (active != item || item.stopped || !sessionStarted || !adapter.ready()) return;
+        if (active != item || item.stopped || !sessionStarted || !speechReady()) return;
         if (item.automatic && (!settings.flag("autoListen") || !eligible(item.notification))) { finishItem(item); return; }
         item.sttId = UUID.randomUUID().toString(); phase = "arming";
-        item.lastAudioId = item.sttId; audio.record(item.sttId, settings.text("inputDeviceId")); publish();
         String id = item.sttId;
-        handler.postDelayed(() -> { if (active == item && id.equals(item.sttId) && (phase.equals("arming") || phase.equals("listening"))) failActive("recognition_capture_timeout"); },
-            (long) settings.number("recognitionStartTimeoutMs") + settings.number("recognitionCompletionTimeoutMs") + 5000);
+        item.capturePolicy = new NativeVoiceCapturePolicy(settings.number("recognitionStartTimeoutMs"),
+            settings.number("recognitionCompletionTimeoutMs"), settings.number("recognitionEndSilenceMs"));
+        item.transcription = speechTransport().transcribe(id, settings.number("recognitionResultTimeoutMs"),
+            new NativeSpeechTransport.TranscriptionListener() {
+                public void ready(String requestId) { handler.post(() -> {
+                    if (active != item || !requestId.equals(item.sttId) || !phase.equals("arming")) return;
+                    item.lastAudioId = requestId;
+                    audio.record(requestId, settings.text("inputDeviceId"));
+                }); }
+                public void completed(String requestId, String text) { transcriptionCompleted(requestId, text); }
+                public void failed(String requestId, NativeSpeechTransport.Failure failure) { speechFailed(requestId, failure.code); }
+            });
+        publish();
+        // Includes session configuration and Bluetooth routing; sample-clock endpointing starts with captured PCM.
+        handler.postDelayed(() -> { if (active == item && id.equals(item.sttId) && phase.equals("arming")) failActive("recognition_capture_timeout"); }, 30000);
     }
     private void manual(JSONObject args) {
         NativeVoiceJson.keys(args, "threadId", "threadTitle");
         String target = NativeVoiceJson.nullableString(args, "threadId", 512), title = NativeVoiceJson.nullableString(args, "threadTitle", 512);
-        if (!sessionStarted || !adapter.ready() || binding == null) throw new IllegalStateException("voice_not_ready");
+        if (!sessionStarted || !speechReady() || binding == null) throw new IllegalStateException("voice_not_ready");
         if (active != null) throw new IllegalStateException("voice_busy");
         if (target == null && foregroundVisible) { target = foregroundThread; title = foregroundTitle; }
         if (target == null) { target = settings.text("voiceThreadId"); title = settings.text("voiceThreadTitle"); }
@@ -526,43 +659,40 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
     }
     private void skip() {
         if (active == null || !(phase.equals("speaking") || phase.equals("synthesizing"))) throw new IllegalStateException("voice_not_speaking");
-        Active item = active; audio.stop(); item.chunk = item.chunks.size(); item.waitingAfterSkip = true; phase = "cancelling";
-        if (item.ttsId != null) adapter.stopTts(item.ttsId);
-        item.ttsId = null;
-        // A new socket guarantees release of the old per-client slot, including provider cleanup races.
-        connectAdapter(); publish();
+        Active item = active; audio.stop(); item.chunk = item.chunks.size();
+        if (item.speechRequest != null) item.speechRequest.cancel();
+        item.speechRequest = null; item.ttsId = null;
+        afterSpeech(item); publish();
     }
     private void cancelActive(boolean cancelAdmission, String reason) {
         Active old = active; if (old == null) return;
         if (old.notification != null) queue.completed(old.id);
         old.stopped = true; active = null; audio.stop();
         if (old.admission != null && cancelAdmission) cancelEntry(binding, old.admission.optString("mutationId"), true);
-        // Reconnecting releases a live socket's per-client media slot. A failed adapter reconnects only through its backoff.
-        boolean release = (old.ttsId != null || old.sttId != null) && sessionStarted && adapter.ready();
-        if (old.ttsId != null) adapter.stopTts(old.ttsId);
-        if (old.sttId != null) adapter.cancelStt(old.sttId);
-        if (release) connectAdapter();
+        if (old.speechRequest != null) old.speechRequest.cancel();
+        if (old.transcription != null) old.transcription.cancel();
+        old.speechRequest = null; old.transcription = null;
         phase = sessionStarted ? "idle" : "off";
         publish();
     }
     private void finishItem(Active item) { if (active == item) { if (item.notification != null) queue.completed(item.id); active = null; audio.stop(); phase = sessionStarted ? "idle" : "off"; publish(); drain(); } }
-    private void stopRecognition(Active item, boolean reconnect) {
-        String request = item.sttId;
+    private void stopRecognition(Active item) {
         item.sttId = null;
         audio.stop();
-        if (request != null) { adapter.cancelStt(request); if (reconnect && sessionStarted && adapter.ready()) connectAdapter(); }
+        if (item.transcription != null) item.transcription.cancel();
+        item.transcription = null; item.capturePolicy = null;
     }
     private void stopInteraction() {
         Active item = active;
         if (item != null && item.sttId != null) {
-            stopRecognition(item, true);
+            stopRecognition(item);
             recognitionCompletionCue(item, false, false, () -> { cancelActive(true, "stopped"); drain(); });
         } else { cancelActive(true, "stopped"); drain(); }
     }
     private void failActive(String code) {
         Active item = active;
         if (item != null && item.sttId != null) {
-            stopRecognition(item, true);
+            stopRecognition(item);
             recognitionCompletionCue(item, false, false, () -> { cancelActive(false, code); report(code); drain(); });
         } else { cancelActive(false, code); report(code); drain(); }
     }
@@ -585,72 +715,31 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         item.completionCueId = null; item.afterCompletionCue = null; item.retryAfterCompletionCue = false;
         audio.stop(); done.run();
     }
-    public void ready(long generation) { handler.post(() -> {
-        if (generation != adapter.generation() || !sessionStarted) return;
-        adapterFailures = 0;
-        if (active != null && active.waitingAfterSkip) { active.waitingAfterSkip = false; afterSpeech(active); }
-        else drain(); publish();
-    }); }
-    public void failed(long generation, String code) { handler.post(() -> {
-        if (generation != adapter.generation() || !sessionStarted) return;
-        adapter.close();
-        boolean announce = adapterFailures++ == 0;
+    private void speechFailed(String requestId, String code) { handler.post(() -> {
         Active item = active;
-        if (item != null && adapterIndependent(item)) {
-            // A final transcript or admitted input no longer depends on the adapter connection.
-            if (announce) report(code);
-        } else if (item != null && item.sttId != null) {
-            stopRecognition(item, false);
-            recognitionCompletionCue(item, false, false, () -> { cancelActive(false, code); report(code); drain(); });
-        } else {
-            if (item != null) cancelActive(false, code);
-            // Repeated failures while reconnecting are reported once per streak; readiness shows the ongoing state.
-            if (item != null || announce) report(code);
+        if (item == null) return;
+        if (requestId.equals(item.ttsId)) {
+            if (code.equals("empty_pcm_stream")) skipEmptySpeech(item); else failActive(code);
         }
-        // This is the only reconnect after a failure: cancellation above does not reconnect a closed adapter.
-        long current = adapter.generation();
-        handler.postDelayed(() -> { if (sessionStarted && adapter.generation() == current) connectAdapter(); }, backoff(adapterFailures));
-        publish();
+        else if (requestId.equals(item.sttId)) failActive(code);
     }); }
-    public void event(long generation, JSONObject event) { handler.post(() -> {
-        if (generation != adapter.generation() || active == null) return;
-        Active item = active; String type = event.optString("type"), request = event.optString("requestId");
-        if (request.equals(item.ttsId)) {
-            if (type.equals("media_tts_audio_chunk")) {
-                if (!event.optString("encoding").equals("pcm_s16le")) { failActive("unsupported_pcm_encoding"); return; }
-                try {
-                    audio.pcm(request, event.optInt("sampleRate"), Base64.decode(event.optString("chunkBase64"), Base64.DEFAULT));
-                    if (!phase.equals("speaking")) { phase = "speaking"; publish(); }
-                }
-                catch (Exception error) { failActive("invalid_pcm"); }
-            } else if (type.equals("media_tts_end")) {
-                if (event.optString("status").equals("completed")) audio.end(request); else failActive("speech_failed");
-            }
-        } else if (request.equals(item.sttId)) {
-            if (type.equals("media_stt_stopped") || type.equals("media_stt_started")) {
-                audio.stop(); phase = "recognizing"; publish();
-                String currentRequest = item.sttId;
-                handler.postDelayed(() -> { if (active == item && currentRequest.equals(item.sttId)) failActive("recognition_result_timeout"); }, settings.number("recognitionCompletionTimeoutMs"));
-            }
-            else if (type.equals("media_stt_result")) {
-                audio.stop(); item.sttId = null;
-                String text = event.optString("text", "");
-                boolean success = event.optBoolean("success");
-                boolean retryEmptyTranscript = shouldRetryEmptyTranscript(success, event.optBoolean("canceled"), event.optString("error", ""));
-                boolean usable = success && !blank(text) &&
-                    !(settings.flag("recognizeStopCommand") && NativeVoiceQueue.isStopCommand(text));
-                // Only usable text survives adapter changes; feedback alone cannot preserve a pending retry.
-                item.recognitionFinalized = usable;
-                boolean steer = settings.flag("followComposerMode") && composerMode.equals("steer");
-                recognitionCompletionCue(item, usable, retryEmptyTranscript, () -> {
-                    if (retryEmptyTranscript) arm(item);
-                    else if (!success) failActive("recognition_failed");
-                    else if (!usable) finishItem(item);
-                    else finalizeRecognition(item, text, steer);
-                });
-            }
-        }
+    private void transcriptionCompleted(String requestId, String text) { handler.post(() -> {
+        if (active == null || !requestId.equals(active.sttId)) return;
+        completeRecognition(active, text, blank(text));
     }); }
+    private void completeRecognition(Active item, String text, boolean retryEmptyTranscript) {
+        stopRecognition(item);
+        boolean usable = !blank(text) &&
+            !(settings.flag("recognizeStopCommand") && NativeVoiceQueue.isStopCommand(text));
+        // Final text is independent of subsequent provider/credential changes and feedback playback.
+        item.recognitionFinalized = usable;
+        boolean steer = settings.flag("followComposerMode") && composerMode.equals("steer");
+        recognitionCompletionCue(item, usable, retryEmptyTranscript, () -> {
+            if (retryEmptyTranscript) arm(item);
+            else if (!usable) finishItem(item);
+            else finalizeRecognition(item, text, steer);
+        });
+    }
     public void drained(String requestId) { handler.post(() -> {
         if (active == null) return;
         if (requestId.equals(active.completionCueId)) finishCompletionCue(active, requestId);
@@ -658,26 +747,35 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         else if (requestId.equals(active.ttsId)) { active.ttsId = null; active.chunk++; speakChunk(active); }
     }); }
     public void captureStarted(String requestId) { handler.post(() -> {
-        if (active == null || !requestId.equals(active.sttId)) return;
-        boolean sent = adapter.send(NativeVoiceJson.object("type", "media_stt_start", "requestId", requestId, "sampleRate", 16000,
-            "channels", 1, "encoding", "pcm_s16le", "startTimeoutMs", settings.number("recognitionStartTimeoutMs"),
-            "completionTimeoutMs", settings.number("recognitionCompletionTimeoutMs"), "endSilenceMs", settings.number("recognitionEndSilenceMs")));
-        if (!sent) { failActive("adapter_disconnected"); return; }
+        if (active == null || !requestId.equals(active.sttId) || !phase.equals("arming")) return;
         phase = "listening"; publish();
         Active item = active;
-        handler.postDelayed(() -> { if (active == item && requestId.equals(item.sttId)) failActive("recognition_timeout"); },
-            (long) settings.number("recognitionStartTimeoutMs") + settings.number("recognitionCompletionTimeoutMs") * 2 + 10000);
+        // A stalled microphone still has a wall-clock safety bound, independent of the PCM endpointing clock.
+        handler.postDelayed(() -> { if (active == item && requestId.equals(item.sttId) && phase.equals("listening")) failActive("recognition_capture_timeout"); },
+            (long) settings.number("recognitionStartTimeoutMs") + settings.number("recognitionCompletionTimeoutMs") + 5000);
     }); }
     public void captured(String requestId, byte[] pcm) { handler.post(() -> {
-        if (active == null || !requestId.equals(active.sttId) || !phase.equals("listening")) return;
-        // A refused send on a replaced or lost socket is a disconnect, not local transport overflow.
-        if (!adapter.send(NativeVoiceJson.object("type", "media_stt_chunk", "requestId", requestId,
-            "chunkBase64", Base64.encodeToString(pcm, Base64.NO_WRAP)))) failActive(adapter.ready() ? "recognition_transport_overflow" : "adapter_disconnected");
+        Active item = active;
+        if (item == null || !requestId.equals(item.sttId) || !phase.equals("listening")) return;
+        if (item.transcription == null || item.capturePolicy == null) { failActive("recognition_failed"); return; }
+        NativeVoiceCapturePolicy.End end;
+        long before = item.capturePolicy.samples();
+        try { end = item.capturePolicy.accept(pcm); }
+        catch (IllegalArgumentException error) { failActive("microphone_format_unavailable"); return; }
+        int accepted = (int) (item.capturePolicy.samples() - before) * 2;
+        if (accepted > 0 && !item.transcription.append(accepted == pcm.length ? pcm : Arrays.copyOf(pcm, accepted))) return;
+        // Transport reports its bounded, sanitized failure once when append refuses audio.
+        if (end != NativeVoiceCapturePolicy.End.CONTINUE) commitCapture(item);
     }); }
     public void captureEnded(String requestId) { handler.post(() -> {
         if (active == null || !requestId.equals(active.sttId) || !phase.equals("listening")) return;
-        adapter.send(NativeVoiceJson.object("type", "media_stt_end", "requestId", requestId)); phase = "recognizing"; publish();
+        commitCapture(active);
     }); }
+    private void commitCapture(Active item) {
+        audio.stop(); phase = "recognizing"; item.capturePolicy = null; publish();
+        if (item.transcription == null) { failActive("recognition_failed"); return; }
+        item.transcription.commit();
+    }
     public void failed(String requestId, String reason) { handler.post(() -> {
         Active item = active;
         if (item == null) return;
@@ -687,7 +785,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
                 finishCompletionCue(item, requestId);
             } else if (requestId.equals(item.completionCueId) || requestId.equals(item.ttsId) ||
                        requestId.equals(item.sttId) || requestId.equals(item.cueId) ||
-                       (requestId.equals(item.lastAudioId) && !adapterIndependent(item))) {
+                       (requestId.equals(item.lastAudioId) && !speechIndependent(item))) {
                 // Keyboard dictation and other external interruptions stop this item without re-arming or an error.
                 cancelActive(false, reason); drain();
             }
@@ -695,9 +793,13 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         }
         if (requestId.equals(item.completionCueId)) { finishCompletionCue(item, requestId); return; }
         // A chunk that produced no audio is a no-op; continue with the next chunk or the item's follow-up.
-        if (requestId.equals(item.ttsId) && reason.equals("empty_pcm_stream")) { item.ttsId = null; item.chunk++; speakChunk(item); return; }
+        if (requestId.equals(item.ttsId) && reason.equals("empty_pcm_stream")) { skipEmptySpeech(item); return; }
         if (requestId.equals(item.ttsId) || requestId.equals(item.sttId) || requestId.equals(item.cueId)) failActive(reason);
     }); }
+    private void skipEmptySpeech(Active item) {
+        if (item.speechRequest != null) item.speechRequest.cancel();
+        item.speechRequest = null; item.ttsId = null; audio.stop(); item.chunk++; speakChunk(item);
+    }
     private void finalizeRecognition(Active item, String text, boolean steer) {
         if (active != item) return;
         if (NativeVoiceJson.bytes(text) > 65536) { failActive("recognized_text_too_large"); return; }
@@ -1024,9 +1126,15 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         if (profile == null || !profile.matches("[A-Za-z0-9._:-]{1,160}")) throw new IllegalArgumentException("credential_profile_invalid");
         CountDownLatch done = new CountDownLatch(1); AtomicReference<Exception> failure = new AtomicReference<>();
         handler.post(() -> {
-            try { if (profile.equals(profileId)) disconnect(true); store.removeProfile(profile); }
-            catch (Exception error) { failure.set(error); }
-            finally { done.countDown(); }
+            try {
+                try { if (profile.equals(profileId)) disconnect(true); store.removeProfile(profile); }
+                catch (Exception error) { failure.set(error); }
+                // Also runs after a timed-out caller: earlier queued credential saves cannot outlive this owner cleanup.
+                try { new SpeechCredentialStore(context).removeProfileCredentials(profile); }
+                catch (Exception error) {
+                    if (failure.get() == null) failure.set(error); else failure.get().addSuppressed(error);
+                }
+            } finally { done.countDown(); }
         });
         if (!done.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("voice_disconnect_timeout");
         if (failure.get() != null) throw failure.get();
@@ -1049,16 +1157,15 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         return result;
     }
     private boolean canListen() {
-        return sessionStarted && adapter.ready() && binding != null && csrf != null && settings.active() && audio.hasPermission();
+        return sessionStarted && speechReady() && binding != null && csrf != null && settings.active() && audio.hasPermission();
     }
     private String readiness() {
         if (profileId == null) return "disconnected";
         if (binding == null || csrf == null) return phase.equals("error") ? "error" : "connecting";
         if (!settings.active()) return "off";
         if (!audio.hasPermission()) return "permissionRequired";
-        if (settings.text("adapterUrl").isEmpty()) return "adapterRequired";
-        if (!sessionStarted) return sessionStartId == null ? "needsResume" : "adapterConnecting";
-        if (!adapter.ready()) return "adapterConnecting";
+        if (!speechReady()) return "speechConfigurationRequired";
+        if (!sessionStarted) return sessionStartId == null ? "needsResume" : "starting";
         // Notifications require a live stream with known policy; explicit recording does not.
         if (!policyKnown) return streamFailures == 0 ? "notificationsConnecting" : "notificationsUnavailable";
         return "ready";
@@ -1069,9 +1176,11 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
             "recognitionThreadTitle", active.targetTitle, "automatic", active.automatic);
         String readiness = readiness();
         boolean ready = readiness.equals("ready");
-        JSONObject next = NativeVoiceJson.object("version", 1, "connectionGeneration", connectionGeneration,
+        JSONObject next = NativeVoiceJson.object("version", 2, "connectionGeneration", connectionGeneration,
             "profileId", profileId, "serverOrigin", origin, "identity", identity, "originClientId", originId,
             "settingsRevision", settings.revision, "settings", settings.value, "phase", phase, "ready", ready,
+            "speech", NativeVoiceJson.object("credentialConfigured", speechCredential != null, "catalogStatus", catalogStatus,
+                "catalog", speechCatalog, "error", catalogError == null ? null : message(catalogError)),
             "readiness", readiness, "foreground", NativeVoiceJson.object("visible", foregroundVisible, "threadId", foregroundThread, "threadTitle", foregroundTitle),
             "active", current, "queue", queue.state(), "actions", NativeVoiceJson.object("canStart", canListen() && active == null,
                 "canStop", active != null, "canSkip", active != null && (phase.equals("speaking") || phase.equals("synthesizing")),
@@ -1110,13 +1219,6 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
     }
     /** Bounded exponential reconnect and reconciliation delay: 2 s doubling to at most 60 s. */
     static long backoff(int failures) { return Math.min(60000L, 2000L << Math.min(5, Math.max(0, failures - 1))); }
-    /**
-     * A recognition that captured audio but returned no text is a missing reply, not a failure: re-arm and listen
-     * again, matching the Assistant client. Canceled recognition and other failures still surface to the user.
-     */
-    static boolean shouldRetryEmptyTranscript(boolean success, boolean canceled, String error) {
-        return !success && !canceled && "empty_transcript".equals(error);
-    }
     static String message(String code) {
         switch (code) {
             case "voice_target_required": return "Choose a thread for voice input.";
@@ -1137,7 +1239,13 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
             case "connection_identity_changed": return "The Sedes identity changed. Refresh the connection before using voice.";
             case "settings_revision_conflict": return "Voice settings changed. Refresh and try again.";
             case "microphone_permission_required": return "Allow microphone access from the visible app.";
-            case "adapter_required": return "Set the voice adapter URL before enabling voice.";
+            case "speech_configuration_required": return "Choose a speech endpoint, models and voice, and add the required credential.";
+            case "speech_configuration_changed": return "Speech settings changed before this action finished.";
+            case "speech_credential_storage_unavailable": return "This device's secure speech credential storage could not be read.";
+            case "speech_test_replaced": case "speech_catalog_replaced": return "A newer speech settings check replaced this one.";
+            case "speech_discovery_unavailable": return "The speech service could not be reached for model discovery.";
+            case "speech_discovery_invalid": return "The speech service returned an unreadable model catalog.";
+            case "speech_discovery_cancelled": return "Speech model discovery was cancelled.";
             case "client_protocol_mismatch": return "Update Sedes and this Android app to matching versions.";
             case "notification_stream_rejected": return "Sedes rejected the voice notification stream. Voice keeps retrying; recording remains available.";
             case "notification_policy_unavailable": return "Sedes did not send notification policy. Voice keeps retrying; recording remains available.";
@@ -1148,27 +1256,32 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
             case "input_failed": return "Sedes received the input but could not deliver it to the agent.";
             case "input_recovery_required": return "Sedes received the input, but its delivery requires recovery in the thread.";
             case "input_cancelled": return "The received input was cancelled in Sedes.";
-            case "adapter_disconnected": return "The voice adapter disconnected. Voice reconnects automatically.";
-            case "adapter_handshake_timeout": return "The voice adapter did not respond. Voice keeps retrying.";
-            case "adapter_protocol_error": return "The voice adapter sent a message this app could not read.";
-            case "adapter_message_too_large": return "The voice adapter sent an audio message larger than 8 MiB.";
-            case "speech_request_rejected": return "The voice adapter rejected the speech request.";
-            case "speech_failed": return "The voice adapter could not synthesize speech.";
+            case "speech_authentication_failed": case "recognition_authentication_failed": return "The speech service rejected its credential. Check the credential in Voice settings.";
+            case "speech_rate_limited": case "recognition_rate_limited": return "The speech service is rate limited. Try again shortly.";
+            case "speech_quota_exceeded": case "recognition_quota_exceeded": return "The speech service account has no available quota. Update its billing or credits before retrying.";
+            case "speech_http_error": case "recognition_http_error": return "The speech service rejected the request. Check its models and configuration.";
+            case "speech_network_error": case "recognition_network_error": case "recognition_disconnected": return "The speech service connection was interrupted. Try again.";
+            case "recognition_handshake_timeout": return "The speech service did not configure recognition in time.";
+            case "recognition_protocol_error": case "recognition_unexpected_binary": return "The speech service sent a recognition message this app could not read.";
+            case "recognition_message_limit": return "The speech service sent a recognition message larger than the allowed limit.";
+            case "recognition_provider_error": return "The speech service could not transcribe this recording.";
+            case "speech_invalid_content_type": return "The speech service returned an unsupported audio format.";
             case "speech_timeout": return "Speech did not finish in time.";
-            case "speech_duration_limit": return "This speech request exceeded the ten-minute audio limit. Reduce the adapter text limit to split it into smaller requests.";
+            case "speech_duration_limit": return "This speech request exceeded the ten-minute audio limit. Reduce the speech text limit to split it into smaller requests.";
             case "speech_storage_limit": return "This speech request exceeded the bounded audio storage limit.";
             case "speech_storage_unavailable": return "Speech could not be buffered in this device's private cache.";
             case "audio_focus_unavailable": return "Another app is using audio. Voice could not take audio focus.";
-            case "empty_pcm_stream": return "The voice adapter returned no audio.";
+            case "empty_pcm_stream": return "The speech service returned no audio.";
             case "playback_drain_timeout": return "Speech audio did not finish playing in time.";
-            case "invalid_pcm": case "unsupported_pcm_encoding": return "The voice adapter sent audio this app cannot play.";
+            case "invalid_pcm": return "The speech service sent audio this app cannot play.";
             case "microphone_device_unavailable": return "The selected microphone is unavailable. Choose another input in Voice settings.";
             case "microphone_route_failed": return "Android could not route recording to the selected microphone.";
+            case "microphone_format_unavailable": return "The selected microphone could not record 24 kHz mono audio.";
             case "microphone_limit_reached": return "The recording reached its maximum length.";
             case "recognition_failed": return "Speech could not be recognized.";
             case "recognition_timeout": case "recognition_capture_timeout": case "recognition_result_timeout": return "Speech recognition did not finish in time.";
             case "recognition_cue_timeout": return "The recognition start cue did not finish playing.";
-            case "recognition_transport_overflow": return "Recorded audio could not be sent to the voice adapter fast enough.";
+            case "recognition_transport_overflow": return "Recorded audio could not be sent to the speech service fast enough.";
             case "recognized_text_too_large": return "The recognized text exceeds the input size limit.";
             case "resume_from_visible_app": case "foreground_start_rejected": return "Resume voice from the visible app.";
             case "target_unavailable": return "The selected thread is unavailable for voice input.";

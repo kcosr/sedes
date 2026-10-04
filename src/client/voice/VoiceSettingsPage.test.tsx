@@ -57,11 +57,11 @@ describe("voice settings page", () => {
     await waitFor(() => expect(fake.plugin.resumeInput).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, mutationId: resumed }));
     store.dispose();
   });
-  it("enables voice in Response only once an adapter URL is saved", async () => {
-    const { fake, store } = await renderPage(voiceSnapshot());
+  it("enables voice in Response only once the speech configuration is complete", async () => {
+    const { fake, store } = await renderPage(voiceSnapshot({ settings: voiceSettings({ sttModel: "" }) }));
     expect(screen.getByRole("button", { name: "Enable voice" })).toBeDisabled();
-    act(() => fake.emit("settingsChanged", voiceSnapshot({ stateRevision: 2, settingsRevision: 1, settings: voiceSettings({ adapterUrl: "https://voice.test" }) })));
-    fake.plugin.getState.mockResolvedValue(voiceSnapshot({ stateRevision: 2, settingsRevision: 1, settings: voiceSettings({ adapterUrl: "https://voice.test" }) }));
+    act(() => fake.emit("settingsChanged", voiceSnapshot({ stateRevision: 2, settingsRevision: 1, settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://voice.test/v1" }), speech: { credentialConfigured: true, catalogStatus: "idle", catalog: null, error: null } })));
+    fake.plugin.getState.mockResolvedValue(voiceSnapshot({ stateRevision: 2, settingsRevision: 1, settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://voice.test/v1" }), speech: { credentialConfigured: true, catalogStatus: "idle", catalog: null, error: null } }));
     fireEvent.click(screen.getByRole("button", { name: "Enable voice" }));
     await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 1, patch: { audioMode: "response" } }));
     store.dispose();
@@ -78,8 +78,8 @@ describe("voice settings page", () => {
     store.dispose();
   });
   it("resumes voice with the refreshed native audio mode rather than the rendered one", async () => {
-    const { fake, store } = await renderPage(voiceSnapshot({ settings: voiceSettings({ audioMode: "response", adapterUrl: "https://voice.test" }), actions: { ...actions, canResume: true } }));
-    fake.plugin.getState.mockResolvedValue(voiceSnapshot({ stateRevision: 2, settingsRevision: 4, settings: voiceSettings({ audioMode: "manual", adapterUrl: "https://voice.test" }), actions: { ...actions, canResume: true } }));
+    const { fake, store } = await renderPage(voiceSnapshot({ settings: voiceSettings({ audioMode: "response", speechProvider: "server", speechEndpoint: "https://voice.test/v1" }), actions: { ...actions, canResume: true } }));
+    fake.plugin.getState.mockResolvedValue(voiceSnapshot({ stateRevision: 2, settingsRevision: 4, settings: voiceSettings({ audioMode: "manual", speechProvider: "server", speechEndpoint: "https://voice.test/v1" }), actions: { ...actions, canResume: true } }));
     fireEvent.click(screen.getByRole("button", { name: "Resume voice" }));
     await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 4, patch: { audioMode: "manual" } }));
     store.dispose();
@@ -111,6 +111,39 @@ describe("voice settings page", () => {
     expect(fake.plugin.updateSettings.mock.lastCall).toEqual([{ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { voiceThreadId: "untitled", voiceThreadTitle: null } }]);
     act(() => fake.emit("settingsChanged", voiceSnapshot({ stateRevision: 3, settingsRevision: 2, settings: voiceSettings({ voiceThreadId: "untitled", voiceThreadTitle: null }) })));
     expect(screen.getByRole("button", { name: "Voice thread Untitled thread" })).toBeInTheDocument();
+    store.dispose();
+  });
+  it("opens credential management with only a connection fence and never creates a web password field", async () => {
+    const { fake, store } = await renderPage(voiceSnapshot());
+    expect(screen.queryByLabelText("OpenAI API key")).toBeNull();
+    expect(document.querySelector('input[type="password"]')).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Manage speech credential" }));
+    await waitFor(() => expect(fake.plugin.openSpeechCredentialDialog).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1 }));
+    store.dispose();
+  });
+  it("switches providers with an explicit endpoint and model reset", async () => {
+    const { fake, store } = await renderPage(voiceSnapshot());
+    fireEvent.change(screen.getByRole("combobox", { name: "Provider" }), { target: { value: "server" } });
+    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0,
+      patch: { speechProvider: "server", speechEndpoint: "", sttModel: "", ttsModel: "", ttsVoice: "", ttsSpeed: 1 } }));
+    store.dispose();
+  });
+  it("keeps model IDs editable when catalog discovery fails and validates advertised speed limits", async () => {
+    const native = voiceSnapshot({ settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://speech.test/v1", ttsModel: "custom-tts" }),
+      speech: { credentialConfigured: false, catalogStatus: "ready", error: null,
+        catalog: { source: "server", sttModels: ["custom-stt"], ttsModels: ["custom-tts"], voices: ["local-voice"], speed: { min: 0.5, max: 2 }, formats: ["pcm"] } } });
+    const { fake, store } = await renderPage(native, fake => fake.plugin.updateSettings.mockResolvedValue(native));
+    fireEvent.change(screen.getByRole("combobox", { name: "Recognition model" }), { target: { value: "my-new-model" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Recognition model" }));
+    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { sttModel: "my-new-model" } }));
+    await waitFor(() => expect(screen.getByRole("spinbutton", { name: "Speech speed" })).toBeEnabled());
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Speech speed" }), { target: { value: "3" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Speech speed" }));
+    expect(screen.getByText("Enter a number from 0.5 to 2.")).toBeInTheDocument();
+    expect(fake.plugin.updateSettings).toHaveBeenCalledTimes(1);
+    act(() => fake.emit("stateChanged", { ...native, stateRevision: 2, speech: { ...native.speech, catalogStatus: "error", catalog: null, error: "Discovery failed." } }));
+    expect(screen.getByRole("textbox", { name: "Speech model" })).toHaveValue("custom-tts");
+    expect(screen.getByText("Discovery failed.")).toBeInTheDocument();
     store.dispose();
   });
   it("tells microphones with the same product name apart", async () => {

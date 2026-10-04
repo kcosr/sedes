@@ -22,6 +22,7 @@ import java.util.concurrent.ConcurrentHashMap;
 })
 public final class NativeVoicePlugin extends Plugin {
     private NativeVoiceRuntime runtime;
+    private NativeSpeechCredentialDialog credentialDialog;
     private final ConcurrentHashMap<String, Long> permissionGenerations = new ConcurrentHashMap<>();
     private final NativeVoiceRuntime.Observer observer = (event, value) -> {
         try { notifyListeners(event, new JSObject(value.toString()), event.equals("openThread")); }
@@ -29,7 +30,7 @@ public final class NativeVoicePlugin extends Plugin {
     };
     @Override public void load() { runtime = NativeVoiceRuntime.get(getContext()); runtime.observe(observer); }
     // MainActivity owns resume/pause/stop visibility; the permission callback below is the only other visibility source.
-    @Override protected void handleOnDestroy() { permissionGenerations.clear(); runtime.nativeVisibility(false); runtime.unobserve(observer); }
+    @Override protected void handleOnDestroy() { permissionGenerations.clear(); if (credentialDialog != null) { credentialDialog.dismiss(); credentialDialog = null; } runtime.nativeVisibility(false); runtime.unobserve(observer); }
     @PluginMethod public void setConnection(PluginCall call) { run("setConnection", call, false); }
     @PluginMethod public void disconnect(PluginCall call) { run("disconnect", call, false); }
     @PluginMethod public void getState(PluginCall call) { run("getState", call, false); }
@@ -40,6 +41,35 @@ public final class NativeVoicePlugin extends Plugin {
     @PluginMethod public void stopCurrentInteraction(PluginCall call) { run("stopCurrentInteraction", call, false); }
     @PluginMethod public void resumeInput(PluginCall call) { run("resumeInput", call, true); }
     @PluginMethod public void discardInput(PluginCall call) { run("discardInput", call, true); }
+    @PluginMethod public void refreshSpeechCatalog(PluginCall call) { run("refreshSpeechCatalog", call, false); }
+    @PluginMethod public void openSpeechCredentialDialog(PluginCall call) {
+        final long generation;
+        try {
+            NativeVoiceJson.keys(call.getData(), "expectedConnectionGeneration");
+            generation = expectedGeneration(call.getData());
+        } catch (IllegalArgumentException error) { rejectInvalidGeneration(call); return; }
+        getActivity().runOnUiThread(() -> {
+            JSONObject current = runtime.snapshot();
+            if (generation != current.optLong("connectionGeneration") || current.isNull("identity")) {
+                call.reject("The Sedes connection changed before the voice action arrived.", "connection_changed"); return;
+            }
+            if (credentialDialog != null) { call.reject("Close the open credential dialog first.", "credential_dialog_open"); return; }
+            final long revision = current.optLong("settingsRevision");
+            JSONObject settings = current.optJSONObject("settings"), speech = current.optJSONObject("speech");
+            credentialDialog = new NativeSpeechCredentialDialog(getActivity(), settings.optString("speechProvider"),
+                settings.optString("speechEndpoint"), speech != null && speech.optBoolean("credentialConfigured"),
+                (action, secret, reply) -> runtime.speechCredentialAction(generation, revision, action, secret, reply), () -> {
+                    credentialDialog = null;
+                    JSONObject latest = runtime.snapshot();
+                    if (generation != latest.optLong("connectionGeneration")) {
+                        call.reject("The Sedes connection changed while editing credentials.", "connection_changed"); return;
+                    }
+                    try { call.resolve(new JSObject(latest.toString())); }
+                    catch (Exception error) { call.reject("Voice returned an invalid state.", "voice_state_invalid"); }
+                });
+            credentialDialog.show();
+        });
+    }
     @PluginMethod public void updateSettings(PluginCall call) {
         final long generation;
         try {

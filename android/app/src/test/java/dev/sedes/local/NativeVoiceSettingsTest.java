@@ -6,9 +6,9 @@ import org.junit.Test;
 public class NativeVoiceSettingsTest {
     @Test public void startsOffAndPatchesByRevision() {
         NativeVoiceSettings defaults = NativeVoiceSettings.defaults();
-        assertEquals("off", defaults.mode()); assertEquals(5000, defaults.number("adapterTextLimit"));
-        NativeVoiceSettings next = defaults.patch(0, NativeVoiceJson.object("audioMode", "response", "adapterUrl", "https://EXAMPLE.com:443/"));
-        assertEquals(1, next.revision); assertEquals("https://example.com", next.text("adapterUrl"));
+        assertEquals("off", defaults.mode()); assertEquals(4096, defaults.number("speechTextLimit"));
+        NativeVoiceSettings next = defaults.patch(0, NativeVoiceJson.object("audioMode", "response", "speechProvider", "server", "speechEndpoint", "https://EXAMPLE.com:443/"));
+        assertEquals(1, next.revision); assertEquals("https://example.com", next.text("speechEndpoint"));
         assertThrows(IllegalStateException.class, () -> next.patch(0, NativeVoiceJson.object("autoListen", false)));
         assertEquals(next.value.toString(), NativeVoiceSettings.fromRecord(next.record()).value.toString());
     }
@@ -17,7 +17,7 @@ public class NativeVoiceSettingsTest {
         assertEquals(NativeVoiceSettings.RECORD_VERSION, record.optInt("version"));
         org.json.JSONObject newer = NativeVoiceJson.copy(record); NativeVoiceJson.put(newer, "version", NativeVoiceSettings.RECORD_VERSION + 1);
         assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(newer));
-        org.json.JSONObject missing = NativeVoiceJson.copy(record); missing.optJSONObject("settings").remove("headsetControls");
+        org.json.JSONObject missing = NativeVoiceJson.copy(record); missing.optJSONObject("settings").remove("recognitionResultTimeoutMs");
         assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(missing));
         org.json.JSONObject extra = NativeVoiceJson.copy(record); NativeVoiceJson.put(extra.optJSONObject("settings"), "removedField", true);
         assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(extra));
@@ -32,27 +32,50 @@ public class NativeVoiceSettingsTest {
             assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.origin(value));
         assertEquals("http://[::1]:4784", NativeVoiceSettings.origin("http://[::1]:4784/"));
     }
-    @Test public void adapterUrlsPreserveProxyPathsThroughSettingsAndPersistence() {
+    @Test public void speechEndpointsPreserveProxyPathsThroughSettingsAndPersistence() {
         String[][] urls = {
-            { "https://assistant/agent-voice-adapter", "https://assistant/agent-voice-adapter" },
-            { "HTTPS://ASSISTANT:443/agent-voice-adapter///", "https://assistant/agent-voice-adapter" },
+            { "https://assistant/speech/v1", "https://assistant/speech/v1" },
+            { "HTTPS://ASSISTANT:443/speech/v1///", "https://assistant/speech/v1" },
             { "http://[::1]:8080/Voice/adapter%20service/", "http://[::1]:8080/Voice/adapter%20service" },
             { "http://EXAMPLE.com:80/", "http://example.com" },
         };
         for (String[] url : urls) {
-            NativeVoiceSettings settings = NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("adapterUrl", url[0]));
-            assertEquals(url[1], settings.text("adapterUrl"));
-            assertEquals(url[1], NativeVoiceSettings.fromRecord(settings.record()).text("adapterUrl"));
-            assertEquals(url[1], NativeVoiceSettings.adapterBaseUrl(settings.text("adapterUrl")));
+            NativeVoiceSettings settings = NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("speechProvider", "server", "speechEndpoint", url[0]));
+            assertEquals(url[1], settings.text("speechEndpoint"));
+            assertEquals(url[1], NativeVoiceSettings.fromRecord(settings.record()).text("speechEndpoint"));
+            assertEquals(url[1], NativeVoiceSettings.speechBaseUrl(settings.text("speechEndpoint")));
         }
     }
-    @Test public void adapterUrlsRejectCredentialsQueriesFragmentsAndInvalidHttpUrls() {
+    @Test public void speechEndpointsRejectCredentialsQueriesFragmentsAndInvalidHttpUrls() {
         for (String url : new String[] { "https://user:pass@assistant/adapter", "https://assistant/adapter?token=x",
             "https://assistant/adapter#x", "wss://assistant/adapter", "ftp://assistant/adapter", "/adapter",
             "https:///adapter", "https://assistant:65536/adapter", "https://assistant/bad path" }) {
             IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
-                () -> NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("adapterUrl", url)));
-            assertEquals("invalid_adapterUrl", error.getMessage());
+                () -> NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("speechProvider", "server", "speechEndpoint", url)));
+            assertEquals("invalid_speechEndpoint", error.getMessage());
         }
     }
+    @Test public void separatesProviderPresetAndCredentialReadinessWithoutConstrainingAccountModelIds() {
+        NativeVoiceSettings settings = NativeVoiceSettings.defaults();
+        assertEquals("openai", settings.text("speechProvider"));
+        assertEquals("gpt-live-transcribe", settings.text("sttModel"));
+        assertFalse(settings.configured(false)); assertTrue(settings.configured(true));
+        assertThrows(IllegalArgumentException.class, () -> settings.patch(0, NativeVoiceJson.object("speechEndpoint", "https://proxy.test/v1")));
+        NativeVoiceSettings custom = settings.patch(0, NativeVoiceJson.object("speechProvider", "server", "speechEndpoint", "https://speech.test/v1",
+            "sttModel", "my-recognition-model", "ttsModel", "my-speech-model", "ttsVoice", "my-voice", "ttsSpeed", 1.25));
+        assertFalse(custom.configured(false)); assertTrue(custom.configured(true)); assertEquals(1.25, custom.decimal("ttsSpeed"), 0.001);
+        assertFalse(custom.patch(1, NativeVoiceJson.object("sttModel", "")).configured(true));
+        assertFalse(custom.patch(1, NativeVoiceJson.object("speechEndpoint", "")).configured(true));
+        assertThrows(IllegalArgumentException.class, () -> settings.patch(0, NativeVoiceJson.object("sttModel", "bad\nmodel\nid")));
+        assertThrows(IllegalArgumentException.class, () -> settings.patch(0, NativeVoiceJson.object("ttsSpeed", 0.24)));
+        assertThrows(IllegalArgumentException.class, () -> settings.patch(0, NativeVoiceJson.object("ttsSpeed", 4.01)));
+        assertThrows(IllegalArgumentException.class, () -> settings.patch(0, NativeVoiceJson.object("speechTextLimit", 4097)));
+        assertThrows(IllegalArgumentException.class, () -> settings.patch(0, NativeVoiceJson.object("recognitionResultTimeoutMs", 999)));
+    }
+    @Test public void oldAdapterContractIsRejectedInsteadOfAcceptedAsAnAlias() {
+        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("adapterUrl", "https://old.test")));
+        org.json.JSONObject record = NativeVoiceSettings.defaults().record(); NativeVoiceJson.put(record, "version", 1);
+        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(record));
+    }
+
 }

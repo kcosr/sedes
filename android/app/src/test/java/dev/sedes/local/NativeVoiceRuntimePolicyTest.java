@@ -8,7 +8,7 @@ public class NativeVoiceRuntimePolicyTest {
     @Test public void fieldValidationPreservesSchemaNamesWithoutExposingExceptionText() {
         assertEquals("invalid_threadTitle", NativeVoiceRuntime.code(new NativeVoiceJson.InvalidFieldException("threadTitle")));
         assertEquals("invalid_composerMode", NativeVoiceRuntime.code(new NativeVoiceJson.InvalidFieldException("composerMode")));
-        assertEquals("invalid_adapterUrl", NativeVoiceRuntime.code(new NativeVoiceJson.InvalidFieldException("adapterUrl", new Exception("private detail"))));
+        assertEquals("invalid_speechEndpoint", NativeVoiceRuntime.code(new NativeVoiceJson.InvalidFieldException("speechEndpoint", new Exception("private detail"))));
         assertEquals("connection_changed", NativeVoiceRuntime.code(new IllegalStateException("connection_changed")));
         for (Exception error : new Exception[] { new IllegalArgumentException("invalid_threadTitle"),
             new Exception("privateTitle"), new Exception("/private/path: permission denied"), new Exception(),
@@ -37,13 +37,17 @@ public class NativeVoiceRuntimePolicyTest {
         for (int failures = 0; failures < expected.length; failures++) assertEquals(expected[failures], NativeVoiceRuntime.backoff(failures));
         assertEquals(60000, NativeVoiceRuntime.backoff(Integer.MAX_VALUE));
     }
-    @Test public void emptyTranscriptRearmsButOtherRecognitionFailuresDoNot() {
-        assertTrue(NativeVoiceRuntime.shouldRetryEmptyTranscript(false, false, "empty_transcript"));
-        assertFalse("A canceled result never re-arms", NativeVoiceRuntime.shouldRetryEmptyTranscript(false, true, "empty_transcript"));
-        assertFalse("A successful result is not a retry", NativeVoiceRuntime.shouldRetryEmptyTranscript(true, false, "empty_transcript"));
-        assertFalse("No usable speech remains a surfaced failure", NativeVoiceRuntime.shouldRetryEmptyTranscript(false, false, "no_usable_speech"));
-        assertFalse(NativeVoiceRuntime.shouldRetryEmptyTranscript(false, false, ""));
-        assertFalse(NativeVoiceRuntime.shouldRetryEmptyTranscript(false, false, "Recognition timed out"));
+    @Test public void catalogOwnershipDependsOnAccountAndSelectedSpeechModel() {
+        NativeVoiceSettings current = NativeVoiceSettings.defaults();
+        for (org.json.JSONObject patch : new org.json.JSONObject[] {
+            NativeVoiceJson.object("ttsVoice", "alloy"), NativeVoiceJson.object("ttsSpeed", 1.5),
+            NativeVoiceJson.object("sttModel", "another-transcription-model") })
+            assertFalse(NativeVoiceRuntime.catalogConfigurationChanged(current, current.patch(0, patch)));
+        for (org.json.JSONObject patch : new org.json.JSONObject[] {
+            NativeVoiceJson.object("ttsModel", "another-speech-model"),
+            NativeVoiceJson.object("speechProvider", "server"),
+            NativeVoiceJson.object("speechProvider", "server", "speechEndpoint", "https://speech.example/v1") })
+            assertTrue(NativeVoiceRuntime.catalogConfigurationChanged(current, current.patch(0, patch)));
     }
     @Test public void connectionFailuresDistinguishPairingFromConnectivity() {
         assertEquals("authentication_required", NativeVoiceRuntime.connectionFailure(401));
@@ -57,8 +61,11 @@ public class NativeVoiceRuntimePolicyTest {
         for (String code : new String[] { "speech_timeout", "audio_focus_unavailable", "empty_pcm_stream", "playback_drain_timeout",
             "microphone_permission_required", "microphone_device_unavailable", "microphone_route_failed", "microphone_limit_reached",
             "input_rejected", "input_outcome_uncertain", "input_recovery_not_found", "voice_journal_capacity",
-            "notification_stream_rejected", "notification_policy_unavailable", "adapter_message_too_large" })
+            "notification_stream_rejected", "notification_policy_unavailable", "recognition_message_limit",
+            "speech_configuration_required", "speech_authentication_failed", "recognition_authentication_failed",
+            "speech_rate_limited", "speech_quota_exceeded", "recognition_quota_exceeded", "recognition_network_error", "microphone_format_unavailable" })
             assertSpecific(code);
+        assertFalse(NativeVoiceRuntime.message("speech_quota_exceeded").contains("Try again shortly"));
         assertTrue(NativeVoiceRuntime.message("microphone_start_failed").contains("microphone_start_failed"));
         assertTrue(NativeVoiceRuntime.message("playback_unavailable").contains("playback_unavailable"));
         assertTrue(NativeVoiceRuntime.message("some_future_code").contains("some_future_code"));

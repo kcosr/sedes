@@ -48,8 +48,8 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
   const [status, tone] = state.error ? [state.error, "warning"] : !native ? [state.loading ? "Connecting voice to this server…" : "Voice could not connect to this server.", "warning"]
     : native.settings.audioMode === "off" ? ["Voice off", "muted"] : native.ready ? ["Ready", "success"] : [voiceReadiness(native.readiness), "warning"];
   const mode = settings ? modes.find(([value]) => value === settings.audioMode)! : undefined;
-  // Turning voice on from Off needs a saved adapter URL, as Enable voice does in Settings.
-  const blocked = settings?.audioMode === "off" && !canEnableVoice(settings);
+  // Enabling voice requires both the speech destination and its native credential.
+  const blocked = settings?.audioMode === "off" && !canEnableVoice(settings, native?.speech.credentialConfigured === true);
   const threadLabel = settings?.voiceThreadTitle ?? (settings?.voiceThreadId
     ? threads.find(thread => thread.id === settings.voiceThreadId)?.title.text.trim() || "Untitled thread" : "Choose a thread");
   return <Dialog open={open} onOpenChange={onOpenChange}>
@@ -68,7 +68,7 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
               disabled={blocked && value !== "off"} aria-disabled={locked} data-autofocus={value === settings.audioMode ? "" : undefined}>
               <Icon className="size-(--icon-md)" aria-hidden="true" />{label}</SegmentedControlItem>)}
           </SegmentedControl>
-          <p className="voice-sheet-help"><strong>{mode[1]}</strong> {blocked ? "pauses voice. Save an adapter URL first." : mode[3]}</p>
+          <p className="voice-sheet-help"><strong>{mode[1]}</strong> {blocked ? "pauses voice. Set up speech in All voice settings first." : mode[3]}</p>
           {settings.audioMode !== "off" && native?.actions.canResume ? <Button className={cn("h-(--control-touch) w-full", lockedClass)} aria-disabled={locked}
             onClick={() => { if (!state.pending) void resumeVoice(store).catch(() => undefined); }}>Resume voice</Button> : null}
         </div>

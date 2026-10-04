@@ -1,7 +1,7 @@
 import { defineConfig } from "vitest/config";
 
-// Real adapter, real Sedes and optional packaged Android. Only external model,
-// ASR and TTS boundaries are deterministic loopback fixtures.
+// Real speech server, real Sedes and optional packaged Android. Only model
+// inference uses deterministic workers and a loopback model endpoint.
 export default defineConfig({
   test: {
     environment: "node",

@@ -8,28 +8,53 @@ controls. Browser and Electron clients do not show the Voice page.
 ## Configure a session
 
 1. Pair the Android app with Sedes as described in [Android](android.md).
-2. Run an `agent-voice-adapter` instance on a network the device can reach. Its
-   ASR and TTS providers are configured on that server. Sedes does not store
-   those provider keys. Use a trusted private endpoint; the adapter is separate
-   from Sedes and its address is not inferred from the Sedes connection.
-3. Open **Settings → Voice**, save the adapter's HTTP or HTTPS base URL, select
-   **Response**, and grant microphone access. Enable notifications for visible
+2. In **Settings → Voice**, choose **OpenAI** or **Own speech server**.
+   OpenAI uses its hosted API; the server option uses an HTTP or HTTPS
+   API base you supply, including `/v1`. The speech endpoint is separate from
+   Sedes and is not inferred from the Sedes connection.
+3. Enter the provider key or server token in the native credential dialog,
+   choose transcription and speech models and a voice, then save. Select
+   **Response** and grant microphone access. Enable notifications for visible
    service controls. **Enable voice** selects Response; the initial mode is Off.
 4. In **Settings → Notifications**, enable notifications and choose each event's
    Voice action. These are server-side settings for the current user; all Voice
    page settings are local to the Android profile and authenticated identity.
 
-For USB development, reverse the adapter's port as well as Sedes's port with
+For USB development, reverse the speech server's port as well as Sedes's port with
 `adb reverse tcp:PORT tcp:PORT`. No example private endpoint is built into Sedes.
-The adapter URL may include a reverse-proxy path, such as
-`https://voice.example/agent-voice-adapter`. HTTP media requests and the
-WebSocket connection stay under that path. Query strings, fragments, and
-embedded credentials are not accepted.
+The server API base may include a reverse-proxy path, such as
+`https://voice.example/speech/v1`. HTTP speech requests and the transcription
+WebSocket stay under that base. Query strings, fragments, and embedded
+credentials are not accepted.
 
-HTTPS adapters may use a private certificate authority installed in Android's
+Direct OpenAI access requires outbound TCP 443 to `api.openai.com`, including
+HTTPS requests to `/v1/models` and `/v1/audio/speech` and a secure WebSocket
+upgrade at `/v1/realtime?intent=transcription`. Proxies must allow that upgrade
+and the ongoing bidirectional connection. This implementation uses no UDP,
+WebRTC, STUN, or TURN media transport.
+
+HTTPS speech servers may use a private certificate authority installed in Android's
 user certificate store. That trust is app-wide: the app also accepts such a CA
 for its Sedes connections, which carry the paired credential. See
 [Android HTTPS connections](android.md#connect-through-a-private-https-boundary).
+
+The OpenAI preset starts with `gpt-live-transcribe`, `gpt-4o-mini-tts`, and
+`coral`. The model catalog supplies availability hints; you can enter another
+model ID. Known OpenAI models have maintained voice/control metadata. Your
+speech server publishes its available models, voices, and controls through its
+capability endpoint. A failed catalog lookup is reported; it does not fabricate
+supported models or settings.
+
+Speech credentials are stored only on this Android device, encrypted with an
+Android Keystore-protected key and excluded from backups. The credential dialog
+can save, test, or remove a key without returning it to the WebView. Each key is
+bound to its profile, provider, and API endpoint. Switching providers or
+endpoints requires a credential for that destination. Removing the server
+profile removes its speech credentials too.
+
+Upgrading from the old adapter integration resets native voice settings with
+voice Off. Configure the new provider before enabling it again; the old adapter
+URL and settings contract are not supported.
 
 The app opens without waiting for voice. While voice connects, **Settings →
 Voice** shows "Connecting voice to this server…". If voice cannot connect, the
@@ -40,8 +65,8 @@ before voice connects carry no client-origin metadata.
 
 The status line in the Voice settings **Voice session** section reports the
 first unmet requirement: the Sedes connection, voice Off, microphone
-permission, an adapter URL, a service start that needs **Resume voice**, the
-adapter connection, then the notification stream. **Connecting to Sedes
+permission, speech configuration and a credential, a service start that needs
+**Resume voice**, then the notification stream. **Connecting to Sedes
 notifications…** appears until the server sends notification policy. **Sedes
 notifications are unavailable. Explicit recording still works.** appears after
 a failed stream attempt; voice keeps retrying. **Voice is ready.** requires all
@@ -125,7 +150,7 @@ session needs it.
   **Settings → Voice**; then the card stays dimmed with its microphone disabled
   and still opens the Voice sheet. That choice is saved only on this device.
   Select Manual or Response in the Voice sheet or **Settings → Voice** to
-  enable voice again. The sheet offers them once an adapter URL is saved.
+  enable voice again. Configure the speech provider and credential first.
 - The navigation **Silence notifications** bell cancels automatic voice work
   and silences scripts across clients. Explicit recording remains available.
 - With **Recognize stop command**, only the complete utterances “stop” and
@@ -141,8 +166,8 @@ Skip, the mode button, and Rearm.
 Headset controls apply only during an active voice session. Android controls
 lock-screen visibility and any promoted presentation; these are not guaranteed.
 Opening the app restores the saved Manual or Response mode after its Sedes
-connection is authenticated, provided microphone permission and an adapter URL
-are already available. This restores readiness; it does not start recording.
+connection is authenticated, provided microphone permission and speech
+configuration are already available. This restores readiness; it does not start recording.
 An existing session continues when the app goes to the background. After a
 force-stop or process exit, open the app again to restore voice; it does not
 cold-start in the background. If Android rejects a service start, use
@@ -152,11 +177,15 @@ settings, to retry.
 ## Audio, queue, and recovery
 
 The default microphone is Android's current input. Defaults are a 30-second
-speech-start timeout, 60-second completion timeout, 1,200 ms end silence,
+speech-start timeout, 60-second maximum recording after speech starts,
+60-second recognition-result timeout, 1,200 ms end silence,
 512 ms startup pre-roll, cues enabled, and 100% speech/cue gains. Input devices,
 timing, cues, gain, and headset controls can be changed in Voice settings.
 Microphones that share a product name are labelled with their input type and,
-if still identical, a number.
+if still identical, a number. Android detects speech and trailing silence
+locally while uploading audio. It commits that audio when capture ends, then
+waits for the final transcript. Each recording has a separate connection;
+failed recordings are not automatically replayed.
 
 Startup pre-roll warms the output only after audio has been idle. Voice holds
 audio focus across consecutive speech, cues, and recording, so other media
@@ -176,20 +205,21 @@ microphone capture stops. Success confirms recognition, not agent delivery;
 input recovery still reports any later delivery problem. Turning voice Off or
 switching connections cancels pending cues without another tone.
 If captured audio returns no transcript, voice plays the failure tone and
-listens again. Stop, Off, an adapter change, or another app taking audio focus
+listens again. Stop, Off, a provider change, or another app taking audio focus
 cancels that pending retry.
 
 One logical notice completes before another begins, including all speech
 chunks, audio drain, recognition, and admission. Long speech is split at safe
-boundaries using **Adapter text limit** (default 5,000 UTF-16 units); configure
-that value no higher than the adapter's sanitizer limit. Context is spoken once.
-A chunk that the adapter's sanitizer leaves empty, or that produces no audio, is
-skipped and speech continues. Recognition starts after actual AudioTrack drain,
+boundaries using the speech text limit (default 4,096 UTF-16 units). A provider
+may also enforce a token limit, so reduce the text limit if a selected model
+rejects long input. Context is spoken once. Blank chunks or successful responses
+that produce no audio are skipped; provider errors remain visible.
+Recognition starts after actual AudioTrack drain,
 never between chunks.
 Incoming PCM uses a bounded private cache file so fast synthesis can run ahead
-of playback without retaining the whole recording in memory. Each adapter
+of playback without retaining the whole recording in memory. Each speech
 request is limited to ten minutes of audio and 256 MiB of cache data. If the
-duration limit is reached, reduce the adapter text limit to make smaller
+duration limit is reached, reduce the speech text limit to make smaller
 requests. Completed, stopped, and failed playback removes its cache file.
 
 The pending queue holds at most 64 items and 256 KiB of complete UTF-8 speech,
@@ -247,24 +277,34 @@ progress, and native-state synchronization. `android:verify`
 checks the exact permission/service allowlist, runs JVM tests, and builds app
 and instrumentation APKs.
 
-The optional full-system lane clones the pinned reference adapter into a
-temporary directory, installs its locked dependencies, and runs its real
-provider clients against loopback ASR/TTS fixtures. It also starts real Sedes
-and stock OpenCode with a loopback model fixture. It uses no live model keys.
+The host transport lane runs the Android Java transport against a real local
+speech server with deterministic speech workers. Set the repository path to a
+checkout containing the Realtime implementation, with its locked dependencies
+installed. It requires Python 3, `prlimit`, and ffmpeg, but no GPU or live keys.
 
 ```sh
 env -u NODE_ENV npm run android:verify
+env -u NODE_ENV \
+  SEDES_SPEECH_SERVER_REPOSITORY=/absolute/path/to/openai-speech-server \
+  OPENAI_SPEECH_FFMPEG=/absolute/path/to/ffmpeg npm run test:speech
+```
+
+The full-system lane also starts real Sedes and stock OpenCode with a loopback
+model fixture:
+
+```sh
 env -u NODE_ENV SEDES_RUN_REAL_OPENCODE=1 \
-  SEDES_VOICE_ADAPTER_REPOSITORY=/absolute/path/to/agent-voice-adapter \
+  SEDES_SPEECH_SERVER_REPOSITORY=/absolute/path/to/openai-speech-server \
+  OPENAI_SPEECH_FFMPEG=/absolute/path/to/ffmpeg \
   SEDES_VOICE_ANDROID_SERIAL=emulator-5580 npm run test:voice
 ```
 
 Use an explicitly selected disposable emulator: this command clears Sedes app
 data on that emulator between scenarios. `opencode2` must be available or set
 `SEDES_REAL_OPENCODE_EXECUTABLE`. Omit `SEDES_VOICE_ANDROID_SERIAL` to run only
-the server/adapter lane; Android cases are then reported as skipped. The harness
-owns isolated server state and ports, removes its reverse rules and adapter
-checkout, and writes logs under `test-results/voice-run-*`.
+the host lane; Android cases are then reported as skipped. The harness owns
+isolated server state and ports, removes its reverse rules, and writes logs
+under `test-results/voice-run-*`.
 
 The Android lane drives the actual bundled UI and AudioTrack. Deterministic
 microphone PCM replaces only the audio source for repeatability; a separate

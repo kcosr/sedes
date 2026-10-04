@@ -66,7 +66,7 @@ public class NativeVoiceStartupTest {
                 if (configured) assertTrue(f.accepted(f.start()));
                 else {
                     assertTrue(f.starts.isEmpty());
-                    assertEquals("adapterRequired", f.runtime.snapshot().getString("readiness"));
+                    assertEquals("speechConfigurationRequired", f.runtime.snapshot().getString("readiness"));
                 }
             }
         }
@@ -228,7 +228,9 @@ public class NativeVoiceStartupTest {
             Field field = NativeVoiceRuntime.class.getDeclaredField("handler"); field.setAccessible(true); owner = (Handler) field.get(runtime);
             store = new NativeVoiceStore(context);
             store.settings(NativeVoiceStore.binding(profile, origin, IDENTITY), NativeVoiceSettings.defaults().patch(0,
-                NativeVoiceJson.object("audioMode", mode, "adapterUrl", configured ? "http://127.0.0.1:65125" : "")));
+                NativeVoiceJson.object("audioMode", mode, "speechProvider", "server", "speechEndpoint", configured ? "http://127.0.0.1:65125/v1" : "",
+                    "sttModel", "parakeet-local", "ttsModel", "kokoro-local", "ttsVoice", "af_heart")));
+            if (configured) new SpeechCredentialStore(context).setCredential(profile, "server", "http://127.0.0.1:65125/v1", "fixture-startup-token");
             runtime.setTestSessionStarter(intent -> starts.add(intent));
             NativeVoiceHttp.setTestTransport(new NativeVoiceHttp.TestTransport() {
                 public boolean before(String method, String path, JSONObject body, NativeVoiceHttp.Result result) {
@@ -267,6 +269,7 @@ public class NativeVoiceStartupTest {
                 NativeVoiceHttp.setTestTransport(null); runtime.setTestSessionStarter(null); owner.getLooper().quitSafely();
                 for (String selected : new String[] { profile, otherProfile }) {
                     new ClientCredentialStore(context).removeProfileCredentials(selected);
+                    new SpeechCredentialStore(context).removeProfileCredentials(selected);
                     store.removeProfile(selected);
                     assertFalse(store.directory(NativeVoiceStore.binding(selected, origin, IDENTITY)).exists());
                 }

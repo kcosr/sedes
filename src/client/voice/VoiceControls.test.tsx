@@ -26,7 +26,7 @@ const threads = [thread("long", longTitle), thread("untitled", "  "), thread("na
   { ...thread("archived", "Archived notes"), inventoryState: "archived" }, { ...thread("offline", "Offline review"), available: false }] as NormalizedApplicationThreadSummary[];
 const idleActions = { canStart: true, canStop: false, canSkip: false, canRetarget: false, canResume: false };
 const ready = (patch: Partial<NativeVoiceState> = {}) => voiceSnapshot({ ready: true, readiness: "ready", phase: "idle", settings: voiceSettings({ audioMode: "response" }),
-  actions: idleActions, ...patch });
+  speech: { ...voiceSnapshot().speech, credentialConfigured: true }, actions: idleActions, ...patch });
 const item = (active: Partial<Active>): Active => ({ id: "item", eventKind: null, threadId: null, threadTitle: null, recognitionThreadId: null, recognitionThreadTitle: null, automatic: false, ...active });
 const listening = (active: Partial<Active>) => ready({ phase: "listening",
   actions: { canStart: false, canStop: true, canSkip: false, canRetarget: true, canResume: false }, active: item(active) });
@@ -97,9 +97,9 @@ describe("voice controls card", () => {
     expect(lines()).toEqual(["Ready to record", "Response · Auto-listen on"]);
     expect(card().querySelector("[data-thread]")).toBeNull();
     expect(within(card()).getByRole("button", { name: "Open voice controls" })).toHaveAccessibleDescription("Ready to record. Response · Auto-listen on");
-    act(() => voice.fake.emit("stateChanged", ready({ stateRevision: 2, ready: false, readiness: "adapterConnecting",
+    act(() => voice.fake.emit("stateChanged", ready({ stateRevision: 2, ready: false, readiness: "starting",
       settings: voiceSettings({ audioMode: "manual", autoListen: false }) })));
-    expect(lines()).toEqual(["Connecting to the voice adapter…", "Manual · Auto-listen off"]);
+    expect(lines()).toEqual(["Voice is starting…", "Manual · Auto-listen off"]);
     expect(within(card()).getByRole("button", { name: "Start voice recording" })).toBeEnabled();
   });
   it("names the saved Voice thread when no thread is visible, or asks for one", async () => {
@@ -339,7 +339,7 @@ describe("voice controls card lifecycle", () => {
     expect(body).toHaveFocus();
   });
   it("stays quiet on Settings → Voice, which announces readiness and errors itself", async () => {
-    voice.fake.plugin.setConnection.mockResolvedValue(ready({ ready: false, readiness: "adapterConnecting" }));
+    voice.fake.plugin.setConnection.mockResolvedValue(ready({ ready: false, readiness: "starting" }));
     navigate("/settings/voice", { replace: true });
     renderControls();
     await screen.findByRole("group", { name: "Voice controls" });

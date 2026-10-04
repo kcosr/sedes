@@ -57,7 +57,11 @@ public class NativeVoiceAudioTest {
             audio.record("hardware-record", null);
             assertTrue("AudioRecord did not start", started.await(15, TimeUnit.SECONDS));
             assertTrue("AudioRecord did not deliver PCM", read.await(10, TimeUnit.SECONDS));
-            assertNull(failure.get()); assertTrue(bytes.get() > 0); audio.stop();
+            assertNull(failure.get()); assertTrue(bytes.get() > 0);
+            android.media.AudioRecord recorder = audio.recorderForTest(); assertNotNull(recorder);
+            assertEquals(24000, recorder.getSampleRate()); assertEquals(1, recorder.getChannelCount());
+            assertEquals(android.media.AudioFormat.ENCODING_PCM_16BIT, recorder.getAudioFormat());
+            audio.stop();
             int stoppedBytes = bytes.get(); SystemClock.sleep(250); assertEquals(stoppedBytes, bytes.get());
         } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
     }

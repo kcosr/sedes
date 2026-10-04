@@ -3,13 +3,15 @@
 The Android `NativeVoice` Capacitor plugin exposes settings, snapshots, and
 actions. `NativeVoiceRuntime` owns the state machine on one handler thread.
 `NativeVoiceRuntimeService` supplies Android foreground execution and controls;
-it does not run a WebView. `NativeVoiceAdapter` connects directly to the media
-adapter, and `NativeVoiceHttp` owns authenticated Sedes requests and live SSE.
+it does not run a WebView. `NativeSpeechTransport` connects directly to OpenAI
+or the OpenAI-Compatible Speech Server. `NativeVoiceHttp` owns authenticated
+Sedes requests and live SSE.
 
 The native owner restores a saved active mode when authenticated connection
 bootstrap completes while the app is visible, or when the activity becomes
 visible after bootstrap. It requires existing microphone permission and a
-configured adapter; startup does not request permission or capture audio.
+configured speech provider and credential; startup does not request permission
+or capture audio.
 One pending service start is allowed at a time. Each launch carries its own
 identity and connection generation, with visibility rechecked before starting
 the foreground service. Off and disconnect invalidate pending launches; stale
@@ -27,9 +29,9 @@ Recognition cue PCM is generated locally. Each recognition consumes its final
 result once, stops capture, and retains its active slot until completion feedback
 drains. Cue callbacks are tied to that active item and a unique cue ID; cancellation
 invalidates them. Cue failure or a bounded drain timeout continues the recognized
-input path, while a late adapter result cannot replay feedback or input. An
+input path, while a late provider result cannot replay feedback or input. An
 uncancelled `empty_transcript` failure re-arms the same item after its failure
-cue; that pending retry remains dependent on the original adapter and current
+cue; that pending retry remains dependent on the original provider and current
 voice policy. External focus loss cancels it without re-arming. No cue audio
 or metadata is submitted to the agent.
 
@@ -58,7 +60,9 @@ origin until native supplies one. No provider identity enters the shared
 client protocol.
 
 The settings record carries an explicit `RECORD_VERSION` and validates strictly
-against it. A field change bumps the version and adds an explicit migration. A
+against it. Version 2 replaces the adapter URL and text-limit contract with
+provider, endpoint, model, voice, speed, text-limit, and result-timeout settings.
+The old settings shape is not retained; an upgrade resets it with voice Off. A
 record that exists but cannot be authenticated, decoded, or validated is moved
 aside as `<name>.corrupt` and replaced with defaults. Native reports
 `voice_settings_reset`, `voice_origin_reset`, or `voice_journal_reset`. Only a
@@ -69,10 +73,19 @@ Atomic reads restore interrupted-write backups before deciding a record is
 absent. Permission and other filesystem read failures preserve both voice
 records and credentials; they never initialize an empty replacement record.
 
-Native reads the existing credential vault directly. Plugin methods never take
-a bearer token. Authenticated GETs and mutations preserve the normal endpoint
-and CSRF rules. Redirects are disabled. Adapter requests use a separate client
-with no Sedes credential.
+Native reads the existing Sedes credential vault directly. Plugin methods never
+take a Sedes bearer token. Authenticated GETs and mutations preserve the normal
+endpoint and CSRF rules. Speech requests use a separate client and a dedicated
+speech credential; neither client follows redirects.
+
+`SpeechCredentialStore` binds each speech credential to the device profile,
+provider, and normalized API endpoint, with a separate purpose and Keystore
+alias from Sedes authentication. AES-GCM ciphertext lives in backup-excluded
+native storage. A native masked dialog saves, tests, or removes the credential;
+the WebView sees only whether one is configured. Native checks connection and
+settings revisions again after the dialog and before a mutation. Changing the
+provider or endpoint cannot reuse another destination's credential. Removing a
+profile also removes its speech credentials.
 Every mutating bridge command carries the caller's `expectedConnectionGeneration`;
 native validates it on its owner thread, including after permission prompts.
 A delayed command from an earlier profile cannot mutate the newly active one,
@@ -150,7 +163,7 @@ Native measures a notification payload as the UTF-8 size of ECMAScript
 Snapshot readiness reports `notificationsConnecting` until the stream delivers
 policy and `notificationsUnavailable` after a failed stream attempt. `ready`
 requires known notification policy. `actions.canStart` depends only on the
-session, adapter, permission, and settings, so explicit recording works during
+session, speech configuration, permission, and settings, so explicit recording works during
 a notification outage.
 
 For completion notifications that precede runtime idle, `ThreadActivityService`
@@ -350,21 +363,51 @@ active item it owned. It cannot withdraw input Sedes already received.
 
 Stop, Off, logout, or profile departure persist cancellation intent before any
 later retry can occur; a POST already in flight still reports its own outcome.
-Callbacks are fenced by connection, adapter, and request generation. Read-only
+Callbacks are fenced by connection, provider configuration, and request identity. Read-only
 reconciliation can still settle a cancelled record; a missing receipt is not
 evidence that the original request cannot arrive later. Only a new explicit
-Resume authorizes another POST with that same identity. An adapter URL change
+Resume authorizes another POST with that same identity. A speech provider change
 cancels only media-dependent work; a usable finalized transcript, including its
 success cue, submission, or admission continues. Failure cues and pending
 recognition retries are cancelled.
 
-## Audio and adapter
+## Speech protocol and local recording
 
-Adapter TTS completion is distinct from AudioTrack drain. A logical item stays
+`NativeSpeechTransport` is a pure-Java OkHttp client shared by host tests and the
+Android runtime. A recognition attempt owns one WebSocket at
+`/realtime?intent=transcription` under the configured API base. It uses the GA
+transcription session shape, requests mono signed PCM16 little-endian at 24 kHz,
+and disables provider turn detection and noise reduction. Capture begins only
+after the provider acknowledges the configuration with `session.updated`.
+
+Android streams Base64 PCM through `input_audio_buffer.append` while
+`NativeVoiceCapturePolicy` evaluates fixed 100 ms frames. Its normalized RMS
+threshold is 0.012. Sample counts measure waiting for speech, maximum recording
+after speech begins, and trailing silence; a separate watchdog bounds a stalled
+microphone. Ending capture stops the microphone and commits once. A separate
+recognition result timeout bounds processing after commit. The committed item
+ID identifies the final transcription event. Optional deltas do not submit
+partial input, and reconnecting never replays recorded audio.
+
+Stop cancels the actual WebSocket or HTTP call, including a request waiting for
+headers. A new attempt has a fresh request identity. There is no persistent
+speech-provider socket whose connection state determines idle voice readiness.
+Provider configuration and credentials are required; network/model failures
+belong to individual operations and catalog requests.
+
+`NativeSpeechCatalog` uses `/models` for OpenAI account availability hints and
+maintained metadata for known model voices and controls. The server preset uses
+its own `/audio/capabilities`. Model IDs stay configurable; model-list entries
+alone do not establish a model's audio capabilities. Unknown or unavailable
+catalog information is reported without fabricating supported controls.
+
+## Audio output and focus
+
+HTTP TTS completion is distinct from AudioTrack drain. A logical item stays
 active through all chunks, actual drain, recognition, and input admission.
-A chunk that is blank, that the adapter's sanitizer empties (an HTTP 400), or
-that produces no audio is skipped; speech continues and keeps the follow-up
-listen. The PCM producer writes an app-private cache spool; a single 64 KiB
+A blank chunk or a successful response that produces no audio is skipped;
+speech continues and keeps the follow-up listen. Provider request failures
+remain errors. The PCM producer writes an app-private cache spool; a single 64 KiB
 playback pump reads it. A chunk may end inside a sample: its odd byte is carried
 into the next chunk, and a trailing half sample is dropped. A request is bounded
 by ten minutes of PCM and 256 MiB of disk data. Startup pre-roll applies only to
@@ -407,17 +450,14 @@ fallback `playback_failed`. Capture failures report
 obtain focus (`audio_focus_unavailable`) remains an error; losing focus after
 acquiring it does not report an error.
 
-Each adapter WebSocket keeps its own identity and readiness. Media messages and
-requests use only the current socket after its handshake. A peer Close is
-answered and reported immediately. Messages up to 8 MiB are accepted; a larger
-one fails with `adapter_message_too_large`. Adapter reconnects back off from
-2 seconds to 60, reset after a successful handshake, and report repeated
-failures once per streak.
-
-The adapter's `media_stt_started` event describes ASR processing after capture, not
-permission to start sending PCM. ASR cancellation uses the adapter HTTP cancel
-endpoint because WebSocket cancel does not cover its finalizing state. Local
-Skip/Stop intent remains authoritative even if the adapter labels late TTS
-termination as completed.
+Speech synthesis sends one complete bounded text chunk to `/audio/speech` and
+consumes its raw 24 kHz PCM response incrementally. Outgoing transcription
+buffers, request deadlines, and streamed audio bytes are bounded. The incoming
+WebSocket message limit is checked before JSON parsing; OkHttp has already
+buffered that message before delivering it to the listener. Local Skip/Stop
+intent remains authoritative even if a provider completes concurrently.
+The transport does not reconnect a transcription session or replay captured
+audio. OkHttp may repeat a pre-upgrade WebSocket GET after HTTP 503 with
+`Retry-After: 0`; no session or audio has been sent at that point.
 
 Return to [Internals](index.md).

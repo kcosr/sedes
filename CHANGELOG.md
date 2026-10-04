@@ -4,6 +4,11 @@
 
 ### Breaking Changes
 
+- Android voice replaces the direct-media adapter protocol with OpenAI-compatible
+  Realtime transcription and streamed HTTP speech. Reconfigure the speech
+  provider and credential after upgrading; old native voice settings reset
+  with voice Off.
+
 - Browser and packaged clients require client protocol 138 for pending Send
   presentation. Upgrade clients together with the server.
   ([#46](https://github.com/kcosr/sedes/pull/46))
@@ -196,6 +201,10 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Android voice can connect directly to OpenAI or a local OpenAI-Compatible
+  Speech Server, with model and voice discovery, native encrypted credential
+  storage, and local silence detection while recording.
 
 - Android native voice supports spoken notifications, explicit and automatic
   recording, thread targeting, background controls, and recoverable input

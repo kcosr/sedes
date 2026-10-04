@@ -1,12 +1,13 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFile as execCallback } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { WebSocket } from "ws";
 import { notificationSettingsSchema, voiceNotificationSchema } from "../../src/shared/protocol/notification.js";
 import { directInputReceiptSchema, threadInputContextSchema } from "../../src/shared/protocol/thread-input.js";
-import { startVoiceAdapterFixture, waitForVoice } from "../support/voice-adapter-fixture.js";
+import { startOpenAiSpeechFixture, waitForSpeech } from "../support/openai-speech-fixture.js";
 import { OpenCodeProductionFixture } from "../support/opencode-production-fixture.js";
 
 const execFile = promisify(execCallback);
@@ -18,7 +19,7 @@ async function adb(args: string[], timeout = 30_000) {
 }
 
 describe("native voice production pipeline with loopback providers", () => {
-  let adapter: Awaited<ReturnType<typeof startVoiceAdapterFixture>>;
+  let speech: Awaited<ReturnType<typeof startOpenAiSpeechFixture>>;
   let app: OpenCodeProductionFixture;
   let artifactDirectory: string;
   let androidInstalled = false;
@@ -27,7 +28,7 @@ describe("native voice production pipeline with loopback providers", () => {
     await mkdir(path.resolve("test-results"), { recursive: true });
     artifactDirectory = await mkdtemp(path.resolve("test-results/voice-run-"));
     console.log(`Voice artifacts: ${artifactDirectory}`);
-    adapter = await startVoiceAdapterFixture(artifactDirectory);
+    speech = await startOpenAiSpeechFixture(artifactDirectory);
     app = await OpenCodeProductionFixture.create("local", "external", { packagedClients: ["android"] });
     const { revision, silenced: _silenced, ...settings } = notificationSettingsSchema.parse(await app.json("/api/application/notifications"));
     await app.json("/api/application/notifications", "PUT", { ...settings, enabled: true, expectedRevision: revision });
@@ -38,8 +39,8 @@ describe("native voice production pipeline with loopback providers", () => {
       await adb(["install", "-r", path.resolve("android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk")], 90_000);
       await adb(["reverse", `tcp:${app.port}`, `tcp:${app.port}`]);
       reversePorts.add(app.port);
-      await adb(["reverse", `tcp:${adapter.port}`, `tcp:${adapter.port}`]);
-      reversePorts.add(adapter.port);
+      await adb(["reverse", `tcp:${speech.port}`, `tcp:${speech.port}`]);
+      reversePorts.add(speech.port);
     }
   });
   afterAll(async () => {
@@ -55,46 +56,44 @@ describe("native voice production pipeline with loopback providers", () => {
       await cleanup(() => writeFile(path.join(artifactDirectory, "sedes.log"), app.logs + "\n" + app.streamErrors.join("\n")));
       await cleanup(() => app.close());
     }
-    if (adapter) await cleanup(() => adapter.close());
+    if (speech) await cleanup(() => speech.close());
     if (errors.length) throw new AggregateError(errors, "Voice fixture cleanup failed");
   });
 
-  it("uses real adapter capability negotiation, PCM, ASR finalization cancellation and reconnect", async () => {
-    const client = await adapter.connect();
+  it("uses real speech HTTP PCM streaming and an explicitly committed realtime transcription", async () => {
+    await speech.configure({ transcripts: ["voice contract input"], asrDelayMs: 0, ttsDurationSeconds: 1, reset: true });
+    const response = await fetch(`${speech.endpoint}/audio/speech`, { method: "POST", headers: {
+      authorization: `Bearer ${speech.token}`, "content-type": "application/json",
+    }, body: JSON.stringify({ model: "kokoro-local", voice: "af_heart", input: "Fixture voice", response_format: "pcm" }), signal: AbortSignal.timeout(10_000) });
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("audio/pcm; rate=24000; channels=1; format=s16le");
+    const pcm = Buffer.from(await response.arrayBuffer());
+    expect(createHash("sha256").update(pcm).digest("hex")).toBe(speech.pcmSha256);
+    const socket = new WebSocket(`${speech.endpoint.replace(/^http/u, "ws")}/realtime?intent=transcription`, {
+      headers: { authorization: `Bearer ${speech.token}` },
+    });
+    const events: Record<string, any>[] = [];
+    socket.on("message", data => events.push(JSON.parse(data.toString())));
+    let socketError: Error | undefined;
+    socket.on("error", error => { socketError = error; });
+    const next = (type: string) => waitForSpeech(() => { if (socketError) throw socketError; return events.find(event => event.type === type); });
     try {
-      expect((await adapter.post("/api/media/tts", { clientId: client.clientId, requestId: "tts-contract", text: "**Fixture:** `voice`" })).status).toBe(202);
-      expect(await client.next("media_tts_end", "tts-contract")).toMatchObject({ status: "completed" });
-      const chunks = client.messages.filter(message => message.type === "media_tts_audio_chunk" && message.requestId === "tts-contract");
-      expect(chunks).toHaveLength(2);
-      expect(chunks.every(chunk => chunk.sampleRate === 24_000 && chunk.encoding === "pcm_s16le")).toBe(true);
-      expect(Buffer.concat(chunks.map(chunk => Buffer.from(chunk.chunkBase64 as string, "base64")))).toEqual(adapter.pcm);
-      expect(adapter.texts.at(-1)).toBe("Fixture: voice");
-      adapter.transcripts.push("voice contract input");
-      const recognize = (requestId: string) => {
-        client.socket.send(JSON.stringify({ type: "media_stt_start", requestId, sampleRate: 16_000, channels: 1, encoding: "pcm_s16le" }));
-        client.socket.send(JSON.stringify({ type: "media_stt_chunk", requestId, chunkBase64: adapter.pcm.toString("base64") }));
-        client.socket.send(JSON.stringify({ type: "media_stt_end", requestId }));
-      };
-      recognize("stt-contract");
-      expect(await client.next("media_stt_result", "stt-contract")).toMatchObject({ success: true, text: "voice contract input" });
-      expect(adapter.wavs.at(-1)?.subarray(44)).toEqual(adapter.pcm);
-      const trace = client.messages.filter(message => message.requestId === "stt-contract").map(message => message.type);
-      // Capture stops before provider recognition starts; both must be present for the order to mean anything.
-      expect(trace).toContain("media_stt_stopped");
-      expect(trace).toContain("media_stt_started");
-      expect(trace.indexOf("media_stt_stopped")).toBeLessThan(trace.indexOf("media_stt_started"));
-      adapter.setAsrDelay(500);
-      adapter.transcripts.push("must not submit after cancel");
-      recognize("stt-cancel");
-      await client.next("media_stt_started", "stt-cancel");
-      expect((await adapter.post("/api/media/stt/cancel", { clientId: client.clientId, requestId: "stt-cancel" })).status).toBe(200);
-      expect(await client.next("media_stt_result", "stt-cancel")).toMatchObject({ canceled: true, success: false });
-      adapter.setAsrDelay(0);
-      const second = await adapter.connect();
-      expect(second.clientId).not.toBe(client.clientId);
-      second.socket.terminate();
-      expect(adapter.errors).toEqual([]);
-    } finally { adapter.setAsrDelay(0); client.socket.terminate(); }
+      const created = await next("session.created");
+      socket.send(JSON.stringify({ type: "session.update", session: { type: "transcription", audio: { input: {
+        format: { type: "audio/pcm", rate: 24000 }, transcription: { model: "parakeet-local" }, turn_detection: null, noise_reduction: null,
+      } } } }));
+      const updated = await next("session.updated");
+      expect(updated.session.id).toBe(created.session.id);
+      socket.send(JSON.stringify({ type: "input_audio_buffer.append", audio: pcm.toString("base64") }));
+      socket.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+      const committed = await next("input_audio_buffer.committed");
+      const completed = await next("conversation.item.input_audio_transcription.completed");
+      expect(completed).toMatchObject({ item_id: committed.item_id, content_index: 0, transcript: "voice contract input" });
+      expect(events.filter(event => event.type === "conversation.item.input_audio_transcription.completed")).toHaveLength(1);
+      const observations = await speech.observations();
+      expect(observations.speech.at(-1)?.text).toBe("Fixture voice");
+      expect(observations.transcriptions.at(-1)).toMatchObject({ sampleRate: 16000, bytes: 32000 });
+    } finally { socket.terminate(); }
   });
 
   it("admits content once without touching drafts, emits a live voice completion, and never replays it", async () => {
@@ -107,11 +106,11 @@ describe("native voice production pipeline with loopback providers", () => {
     const savedDraft = (await app.thread(threadId)).draft;
     const feed = await voiceFeed(app);
     try {
-      await waitForVoice(() => feed.frames.find(frame => frame.event === "notification_policy"));
+      await waitForSpeech(() => feed.frames.find(frame => frame.event === "notification_policy"));
       const input = { mutationId: randomUUID(), text: "First spoken production fixture input", origin: { clientId: randomUUID() }, runningPolicy: { mode: "queue" } };
       const receipt = directInputReceiptSchema.parse(await app.json(`/api/threads/${threadId}/inputs`, "POST", input));
       expect(receipt, JSON.stringify(receipt)).toMatchObject({ mutationId: input.mutationId, threadId, admittedMode: "submit", status: "accepted" });
-      const frame = await waitForVoice(() => feed.frames.find(frame => frame.event === "notification" && frame.value.payload?.thread?.id === threadId));
+      const frame = await waitForSpeech(() => feed.frames.find(frame => frame.event === "notification" && frame.value.payload?.thread?.id === threadId));
       const notification = voiceNotificationSchema.parse(frame.value);
       expect(frame.id).toBeUndefined();
       expect(notification).toMatchObject({ voice: "speakThenListen", origin: input.origin, payload: { event: "turn.completed" } });
@@ -125,12 +124,12 @@ describe("native voice production pipeline with loopback providers", () => {
       expect(app.model.requests.filter(request => request.lastRole === "user" && request.lastText === input.text)).toHaveLength(1);
       const reconnected = await voiceFeed(app);
       try {
-        await waitForVoice(() => reconnected.frames.find(frame => frame.event === "notification_policy"));
+        await waitForSpeech(() => reconnected.frames.find(frame => frame.event === "notification_policy"));
         // A later policy frame on the same ordered transient lane is the sentinel: a
         // replay queued for this subscriber would have to arrive before it.
         const { revision, silenced: _silenced, ...settings } = notificationSettingsSchema.parse(await app.json("/api/application/notifications"));
         await app.json("/api/application/notifications", "PUT", { ...settings, expectedRevision: revision });
-        await waitForVoice(() => reconnected.frames.find(frame => frame.event === "notification_policy" &&
+        await waitForSpeech(() => reconnected.frames.find(frame => frame.event === "notification_policy" &&
           notificationSettingsSchema.safeParse(frame.value.settings).data?.revision === revision + 1));
         expect(reconnected.frames.filter(frame => frame.event === "notification")).toEqual([]);
       } finally { await reconnected.close(); }
@@ -149,7 +148,7 @@ describe("native voice production pipeline with loopback providers", () => {
 
   it.skipIf(!androidSerial)("validates Android Keystore recovery, cancellation, and real AudioRecord/AudioTrack", async () => {
     const result = await adb(["shell", "am", "instrument", "-w", "-r", "-e", "class",
-      "dev.sedes.local.NativeVoiceStoreTest,dev.sedes.local.ClientCredentialStoreTest,dev.sedes.local.NativeVoiceQueueDeviceTest," +
+      "dev.sedes.local.NativeVoiceStoreTest,dev.sedes.local.ClientCredentialStoreTest,dev.sedes.local.SpeechCredentialStoreTest,dev.sedes.local.NativeVoiceQueueDeviceTest," +
       "dev.sedes.local.NativeVoiceRuntimeTest,dev.sedes.local.NativeVoiceStartupTest,dev.sedes.local.NativeVoiceAudioTest", "dev.sedes.local.test/androidx.test.runner.AndroidJUnitRunner"], 180_000);
     await writeFile(path.join(artifactDirectory, "android-native-smoke.log"), result.stdout + result.stderr);
     expect(result.stdout).toContain("OK (");
@@ -168,12 +167,11 @@ describe("native voice production pipeline with loopback providers", () => {
       const secondThreadId = scenario === "retarget" ? await app.createThread(secondThreadTitle) : undefined;
       const pairingCode = app.authentication.createPairing({ kind: "management" }).token;
       const text = `voice fixture reply ${mode} ${scenario}`;
-      adapter.transcripts.splice(0, adapter.transcripts.length, text, "");
+      await speech.configure({ transcripts: [text, ""], asrDelayMs: 0, ttsDurationSeconds: scenario === "skip" ? 12 : 1, reset: true });
       // Give the real playback action a usable window even on software emulators.
-      adapter.setTtsDurationSeconds(scenario === "skip" ? 12 : 1);
       const before = app.model.requests.length;
-      const ttsBefore = adapter.texts.length;
-      const args = { serverOrigin: app.url, adapterOrigin: adapter.url, pairingCode, threadId, threadTitle, mode, scenario,
+      const ttsBefore = (await speech.observations()).speech.length;
+      const args = { serverOrigin: app.url, speechEndpoint: speech.endpoint, speechToken: speech.token, pairingCode, threadId, threadTitle, mode, scenario,
         initialText: `native voice fixture start ${mode} ${scenario}`, draftText: `unsent voice fixture draft ${mode} ${scenario}`,
         ...(secondThreadId ? { secondThreadId, secondThreadTitle } : {}) };
       const diagnosticPath = path.join(artifactDirectory, `android-${mode}-${scenario}-voice-diagnostics.json`);
@@ -228,15 +226,14 @@ describe("native voice production pipeline with loopback providers", () => {
         expect((await app.thread(threadId)).draft.text).toBe(args.draftText);
         const submissions = () => app.model.requests.slice(before).filter(request => request.lastRole === "user" && request.lastText === text);
         // A definitive admission receipt may precede asynchronous provider dispatch.
-        if (scenario !== "stop") await waitForVoice(() => submissions().length > 0);
+        if (scenario !== "stop") await waitForSpeech(() => submissions().length > 0);
         expect(submissions()).toHaveLength(scenario === "stop" ? 0 : 1);
-        if (mode === "manual") expect(adapter.texts.length).toBe(ttsBefore);
+        if (mode === "manual") expect((await speech.observations()).speech.length).toBe(ttsBefore);
         if (secondThreadId) {
           const target = await app.thread(secondThreadId);
           expect(JSON.stringify(target)).toContain(text);
           expect(JSON.stringify(await app.thread(threadId))).not.toContain(text);
         }
-        expect(adapter.errors).toEqual([]);
         await writeFile(diagnosticPath, JSON.stringify({ mode, scenario, ...await observer.report(false) }, null, 2));
       } catch (failure) {
         scenarioFailed = true;

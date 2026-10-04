@@ -4,7 +4,7 @@ const bridge = vi.hoisted(() => ({ getState: vi.fn(), disconnect: vi.fn() }));
 vi.mock("@capacitor/core", () => ({ Capacitor: { isPluginAvailable: () => true }, registerPlugin: () => bridge }));
 vi.mock("../app/client-platform.js", () => ({ isAndroidClient: () => true }));
 
-import { disconnectNativeVoice, nativeThreadTitle } from "./native-voice-plugin.js";
+import { disconnectNativeVoice, nativeThreadTitle, nativeVoiceStateSchema } from "./native-voice-plugin.js";
 import { voiceSnapshot } from "./native-voice-test-fixture.js";
 
 afterEach(() => { vi.resetAllMocks(); });
@@ -19,6 +19,13 @@ describe("native voice bridge helpers", () => {
     expect(nativeThreadTitle(`${"a".repeat(511)}😀tail`)).toBe("a".repeat(511));
     expect(nativeThreadTitle(`${"a".repeat(510)}😀tail`)).toBe(`${"a".repeat(510)}😀`);
     expect(nativeThreadTitle(`${"a".repeat(505)}       tail`)).toBe("a".repeat(505));
+  });
+  it("rejects secret-bearing state and obsolete adapter settings at the bridge boundary", () => {
+    const state = voiceSnapshot();
+    expect(nativeVoiceStateSchema.safeParse(state).success).toBe(true);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, version: 1 }).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, speech: { ...state.speech, credential: "must-never-cross" } }).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, adapterUrl: "https://old.test" } }).success).toBe(false);
   });
   it("disconnects the current native generation and treats bridge failures as best effort", async () => {
     bridge.getState.mockResolvedValue(voiceSnapshot({ connectionGeneration: 7 }));

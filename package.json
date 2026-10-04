@@ -117,7 +117,8 @@
     "verify:server-package": "node scripts/verify-server-package.mjs",
     "electron:package": "node scripts/electron-distribution.mjs package",
     "electron:clean": "node scripts/electron-distribution.mjs clean",
-    "test:voice": "vitest run --config vitest.native-voice.config.ts"
+    "test:voice": "vitest run --config vitest.native-voice.config.ts",
+    "test:speech": "node --import tsx scripts/test-speech-transport.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.3.0",

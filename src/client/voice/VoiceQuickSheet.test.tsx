@@ -12,10 +12,11 @@ import { VoiceQuickSheet } from "./VoiceQuickSheet.js";
 
 const thread = (id: string, title: string) => ({ id, title: { text: title }, available: true, inventoryState: "active" }) as unknown as NormalizedApplicationThreadSummary;
 const threads = [thread("named", "Release review"), thread("standup", "Daily standup notes")];
-const adapterUrl = "https://voice.test";
+const speechEndpoint = "https://voice.test/v1";
+const configuredSpeech: NativeVoiceState["speech"] = { ...voiceSnapshot().speech, credentialConfigured: true };
 const actions = { canStart: true, canStop: false, canSkip: false, canRetarget: false, canResume: false };
 const ready = (settings: Parameters<typeof voiceSettings>[0] = {}) => voiceSnapshot({ phase: "idle", ready: true, readiness: "ready", actions,
-  settings: voiceSettings({ audioMode: "response", adapterUrl, ...settings }) });
+  speech: configuredSpeech, settings: voiceSettings({ audioMode: "response", speechProvider: "server", speechEndpoint, ...settings }) });
 /** Native as the sheet sees it: refreshes return the current state and writes apply their patch. */
 async function renderSheet(state: NativeVoiceState, host?: (store: NativeVoiceStore) => ReactElement) {
   const fake = fakeVoicePlugin();
@@ -59,8 +60,8 @@ describe("voice quick sheet", () => {
     store.dispose();
   });
   it("reports readiness while a mode is on but voice is not ready", async () => {
-    const { store, sheet } = await renderSheet(voiceSnapshot({ phase: "starting", readiness: "adapterConnecting", settings: voiceSettings({ audioMode: "manual", adapterUrl }) }));
-    expect(within(sheet).getByRole("status")).toHaveTextContent("Connecting to the voice adapter…");
+    const { store, sheet } = await renderSheet(voiceSnapshot({ phase: "starting", readiness: "starting", settings: voiceSettings({ audioMode: "manual", speechEndpoint }) }));
+    expect(within(sheet).getByRole("status")).toHaveTextContent("Voice is starting…");
     expect(sheet).toHaveTextContent("Manual keeps completions silent; the mic can still open afterward.");
     store.dispose();
   });
@@ -84,25 +85,33 @@ describe("voice quick sheet", () => {
     store.dispose();
   });
   it("turns voice on from Off with the chosen mode, then offers Resume when native could not start a session", async () => {
-    const { fake, store, sheet } = await renderSheet(voiceSnapshot({ settings: voiceSettings({ adapterUrl }) }));
+    const { fake, store, sheet } = await renderSheet(voiceSnapshot({ speech: configuredSpeech, settings: voiceSettings({ speechProvider: "server", speechEndpoint }) }));
     expect(within(sheet).getByRole("status")).toHaveTextContent("Voice off");
     expect(within(sheet).queryByRole("button", { name: "Resume voice" })).toBeNull();
     fireEvent.click(within(sheet).getByRole("radio", { name: "Manual" }));
     await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { audioMode: "manual" } }));
     // Native saved the mode but has no session; the refreshed mode is what Resume writes back.
-    const paused = voiceSnapshot({ stateRevision: 5, settingsRevision: 3, readiness: "needsResume", settings: voiceSettings({ audioMode: "response", adapterUrl }), actions: { ...actions, canStart: false, canResume: true } });
+    const paused = voiceSnapshot({ stateRevision: 5, settingsRevision: 3, readiness: "needsResume", speech: configuredSpeech, settings: voiceSettings({ audioMode: "response", speechProvider: "server", speechEndpoint }), actions: { ...actions, canStart: false, canResume: true } });
     fake.plugin.getState.mockResolvedValue(paused);
-    act(() => fake.emit("stateChanged", { ...paused, settings: voiceSettings({ audioMode: "manual", adapterUrl }) }));
+    act(() => fake.emit("stateChanged", { ...paused, settings: voiceSettings({ audioMode: "manual", speechEndpoint }) }));
     expect(within(sheet).getByRole("status")).toHaveTextContent("Resume voice from this screen to start a new session.");
     fireEvent.click(within(sheet).getByRole("button", { name: "Resume voice" }));
     await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenLastCalledWith({ expectedConnectionGeneration: 1, expectedRevision: 3, patch: { audioMode: "response" } }));
     store.dispose();
   });
-  it("keeps Manual and Response unavailable from Off until an adapter URL is saved", async () => {
+  it("keeps Manual and Response unavailable from Off until the speech destination is configured", async () => {
+    const { fake, store, sheet } = await renderSheet(voiceSnapshot({ speech: configuredSpeech, settings: voiceSettings({ speechProvider: "server", speechEndpoint: "", sttModel: "", ttsModel: "", ttsVoice: "" }) }));
+    expect(within(sheet).getByRole("radio", { name: "Manual" })).toBeDisabled();
+    expect(within(sheet).getByRole("radio", { name: "Response" })).toBeDisabled();
+    expect(sheet).toHaveTextContent("Off pauses voice. Set up speech in All voice settings first.");
+    fireEvent.click(within(sheet).getByRole("radio", { name: "Response" }));
+    expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
+    store.dispose();
+  });
+  it("keeps configured speech disabled until its native credential is saved", async () => {
     const { fake, store, sheet } = await renderSheet(voiceSnapshot());
     expect(within(sheet).getByRole("radio", { name: "Manual" })).toBeDisabled();
     expect(within(sheet).getByRole("radio", { name: "Response" })).toBeDisabled();
-    expect(sheet).toHaveTextContent("Off pauses voice. Save an adapter URL first.");
     fireEvent.click(within(sheet).getByRole("radio", { name: "Response" }));
     expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
     store.dispose();
