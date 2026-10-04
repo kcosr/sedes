@@ -19,6 +19,7 @@ import { useShowVoiceBarWhenOff } from "./voice-bar-preference.js";
 import { canEnableVoice, resumeVoice } from "./voice-session.js";
 
 const toggles = [
+  ["pinDefaultVoiceThread", "Pin default voice thread", "Start manual recordings here while viewing other threads."],
   ["autoListen", "Auto-listen", "Eligible notifications reopen the microphone."],
   ["ignoreOtherDevices", "Ignore voice started on other devices", "Automations are still included."],
   ["readNotificationContext", "Read notification title and context", "Speak the notice, project and thread before the response."],
@@ -78,7 +79,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
     </SettingsSection>
     <SpeechProviderSettings store={store} native={native} pending={state.pending} />
     <SettingsSection title="Targets and behavior" card>
-      <SettingsField label="Default voice thread" description="Used for explicit recording when no thread is visible.">
+      <SettingsField label="Default voice thread" description="Used when pinned or when no thread is visible.">
         <div className="flex flex-wrap gap-2"><VoiceThreadButton disabled={state.pending} onClick={() => setPicker(true)}>{voiceThreadLabel}</VoiceThreadButton>
           {settings.voiceThreadId ? <Button variant="ghost" disabled={state.pending} onClick={() => update({ voiceThreadId: null, voiceThreadTitle: null })}>Clear</Button> : null}</div>
       </SettingsField>
@@ -113,7 +114,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
     </SettingsSection> : null}
     {native.queue.droppedCount ? <Callout>{native.queue.droppedCount} automatic voice items were dropped because the queue was full or the item became ineligible.</Callout> : null}
     <VoiceThreadPicker threads={application.snapshot?.threads ?? []} open={picker} onOpenChange={setPicker} title="Choose default voice thread"
-      description="Used for recording when no thread is visible."
+      description="Used when pinned or when no thread is visible."
       pinned={{ threadId: settings.voiceThreadId, label: "Current default voice thread" }} onSelect={thread => update({ voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) })} />
   </SettingsPage>;
 }

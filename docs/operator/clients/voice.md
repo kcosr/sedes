@@ -117,7 +117,7 @@ turn is still in progress, and the turn's completion makes the target stale.
 Readiness follows the server's current conversation owner even when no thread
 view is open. Reading readiness does not start or reconnect a conversation.
 
-Explicit recording uses the visible foreground thread, then the pinned
+With pinning off, explicit recording uses the visible foreground thread, then the saved
 **Default voice thread**, then a picker. It can target a running thread. While
 voice is listening, the target chip on the voice card changes the target before
 recognition finishes. Pickers list the visible thread first as **This thread**;
@@ -127,6 +127,17 @@ from default voice thread** filters automatic playback; it does not change the
 recording target. **Ignore voice started on other devices** filters progress
 and completion from another initiating client. Steering an existing turn does
 not take over its origin.
+
+**Pin default voice thread** overrides foreground selection for new explicit
+recordings, including the card, headset, and service-notification Start action.
+The idle card and notification use the default thread too. If no default is
+available, the card asks for a new default before recording; native controls
+never fall back to another foreground thread while pinned. Pinning does not
+redirect an active interaction or change automatic notification targeting.
+
+The pin setting changes the device settings schema. Upgrading from an earlier
+native voice build resets settings with Audio mode Off. Reconfigure the speech
+provider and endpoint; separately saved credentials remain on the device.
 
 By default, recognized input queues behind a running turn. **Follow composer's
 selected mode** instead captures the client-wide Queue/Steer preference when
@@ -141,9 +152,9 @@ Manual or Response. Wherever no composer is shown, including read-only threads
 and pages without a thread, it sits on its own with a top margin and divider.
 A state tile and two lines show the card's thread and its state. The first
 line always names the thread: the one being spoken, the recording target, or,
-when idle, the thread a recording would use. That is the visible thread when it
-can record, otherwise the default voice thread; with neither, the card shows
-**Choose a thread**. The second line is the state: **Ready** with the mode and
+when idle, the thread a recording would use. Pinning uses the default thread;
+otherwise this is the visible thread when it can record, then the default.
+With neither, the card asks you to choose a thread. The second line is the state: **Ready** with the mode and
 Auto-listen, or the readiness text while voice is not ready; **Speaking** with
 the notice kind and queued count, where a narrow card drops the kind first;
 **Listening**; or the recognizing or sending phase. The card shows the latest
@@ -160,7 +171,8 @@ While listening, the state line ends with a **Change** chip (**Choose** when
 there is no target), which opens the thread picker instead.
 The caret button opens the **Voice** sheet in every state. The sheet has
 **Audio mode**, **Auto-listen**, **Default voice thread**, **Only play from default
-voice thread**, **Follow composer mode**, and **All voice settings**, which opens
+voice thread**, **Pin default voice thread**, **Follow composer mode**, and
+**All voice settings**, which opens
 **Settings → Voice**. The default thread can be chosen from either place.
 Its status line reports readiness or the latest error, and it offers **Resume
 voice** when a session needs it.

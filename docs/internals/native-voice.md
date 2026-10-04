@@ -2,6 +2,12 @@
 
 The Android `NativeVoice` Capacitor plugin exposes settings, snapshots, and
 actions. `NativeVoiceRuntime` owns the state machine on one handler thread.
+Native snapshot version 3 requires the `pinDefaultVoiceThread` boolean. It is
+device/profile/identity-scoped with the other voice settings and defaults to
+false. When true, new explicit recordings and idle control targets use the
+saved default thread regardless of foreground navigation. A missing default
+does not fall back to the foreground thread. Automatic notification targeting
+and active retargeting keep their existing rules.
 `NativeVoiceRuntimeService` supplies Android foreground execution and controls;
 it does not run a WebView. `NativeSpeechTransport` connects directly to OpenAI
 or the OpenAI-Compatible Speech Server. `NativeVoiceHttp` owns authenticated
@@ -64,9 +70,10 @@ origin until native supplies one. No provider identity enters the shared
 client protocol.
 
 The settings record carries an explicit `RECORD_VERSION` and validates strictly
-against it. Version 2 replaces the adapter URL and text-limit contract with
-provider, endpoint, model, voice, speed, text-limit, and result-timeout settings.
-The old settings shape is not retained; an upgrade resets it with voice Off. A
+against it. Version 3 includes the recording pin along with provider, endpoint,
+model, voice, speed, text-limit, and result-timeout settings. Older settings
+records are not migrated; an upgrade resets them with voice Off. Speech
+credentials are stored separately and remain intact. A
 record that exists but cannot be authenticated, decoded, or validated is moved
 aside as `<name>.corrupt` and replaced with defaults. Native reports
 `voice_settings_reset`, `voice_origin_reset`, or `voice_journal_reset`. Only a

@@ -24,6 +24,9 @@ describe("native voice bridge helpers", () => {
     const state = voiceSnapshot();
     expect(nativeVoiceStateSchema.safeParse(state).success).toBe(true);
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 1 }).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, version: 2 }).success).toBe(false);
+    const { pinDefaultVoiceThread: _pin, ...missingPin } = state.settings;
+    expect(nativeVoiceStateSchema.safeParse({ ...state, settings: missingPin }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, speech: { ...state.speech, credential: "must-never-cross" } }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, adapterUrl: "https://old.test" } }).success).toBe(false);
   });

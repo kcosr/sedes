@@ -566,6 +566,10 @@ app does not wait for voice.
   threads appear as **Untitled thread**. The quick voice menu also includes
   this picker and **Only play from default voice thread**, which filters
   automatic playback without changing the recording target.
+- **Pin default voice thread** keeps the idle voice bar and new explicit
+  recordings on the default thread, even while another thread is visible.
+  If it is missing or unavailable, the record button asks you to choose a
+  default. Pinning does not redirect a recording or playback already in progress.
 - **Microphone input** lists Android's inputs. Inputs that share a name add
   their type, such as Bluetooth or USB, and then a number.
 - **Pending input recovery** lists spoken messages whose delivery is uncertain.

@@ -305,6 +305,54 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
+    @Test public void pinnedDefaultOwnsExplicitHeadsetAndNotificationStartsButStillAllowsRetargeting() throws Exception {
+        for (String source : new String[] { "app", "headset", "start" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.recognizing(false); assertNull(f.command("stopCurrentInteraction", new JSONObject()));
+                f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", true, "voiceThreadId", f.target, "voiceThreadTitle", "Pinned default"));
+                String other = UUID.randomUUID().toString(); f.foreground(other);
+                if (source.equals("app")) assertNull(f.command("startManualListen", NativeVoiceJson.object("threadId", other, "threadTitle", "Explicit other")));
+                else { f.runtime.notificationAction(source, f.runtime.snapshot().getLong("connectionGeneration")); f.flush(); }
+                JSONObject active = f.runtime.snapshot().getJSONObject("active");
+                assertEquals(source, f.target, active.getString("recognitionThreadId"));
+                assertEquals("Pinned default", active.getString("recognitionThreadTitle"));
+                assertNotNull("The pinned target still requires server validation", f.contexts.poll(10, TimeUnit.SECONDS));
+                f.onOwner(() -> set(f.runtime, "phase", "listening"));
+                assertNull(f.command("retargetActiveRecognition", NativeVoiceJson.object("threadId", other, "threadTitle", "Retargeted")));
+                assertEquals(other, f.runtime.snapshot().getJSONObject("active").getString("recognitionThreadId"));
+            }
+        }
+    }
+
+    @Test public void missingPinnedDefaultRefusesAllStartsWithoutFallingBackToForegroundOrExplicitThread() throws Exception {
+        for (String source : new String[] { "app", "headset", "start" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.recognizing(false); assertNull(f.command("stopCurrentInteraction", new JSONObject()));
+                f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", true)); f.foreground(f.target);
+                if (source.equals("app")) assertEquals("voice_target_required",
+                    f.command("startManualListen", NativeVoiceJson.object("threadId", f.target, "threadTitle", "Explicit target")));
+                else {
+                    f.runtime.notificationAction(source, f.runtime.snapshot().getLong("connectionGeneration")); f.flush();
+                    assertEquals("voice_target_required", f.lastError().getString("code"));
+                }
+                assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.contexts.isEmpty());
+            }
+        }
+    }
+
+    @Test public void unpinnedManualStartKeepsForegroundThenDefaultPrecedence() throws Exception {
+        for (boolean visible : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.recognizing(false); assertNull(f.command("stopCurrentInteraction", new JSONObject()));
+                f.settings(NativeVoiceJson.object("voiceThreadId", f.target, "voiceThreadTitle", "Default"));
+                String other = UUID.randomUUID().toString();
+                if (visible) f.foreground(other);
+                assertNull(f.command("startManualListen", new JSONObject()));
+                assertEquals(visible ? other : f.target, f.runtime.snapshot().getJSONObject("active").getString("recognitionThreadId"));
+            }
+        }
+    }
+
     @Test public void rejectedArgumentsDoNotPartiallyApply() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
             String other = UUID.randomUUID().toString();

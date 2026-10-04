@@ -108,24 +108,29 @@ public final class NativeVoiceRuntimeService extends Service {
         if (working && !wakeLock.isHeld()) wakeLock.acquire(10 * 60 * 1000L);
         if (!working && wakeLock.isHeld()) wakeLock.release();
     }
-    private Notification build(JSONObject state) {
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL);
-        JSONObject active = state.optJSONObject("active"), settings = state.optJSONObject("settings"), actions = state.optJSONObject("actions");
-        String phase = state.optString("phase", "starting"), title = "Sedes voice", threadId = null;
+    /** The notification's label, open action and Start eligibility share one target decision. */
+    static JSONObject notificationTarget(JSONObject state) {
+        JSONObject active = state.optJSONObject("active"), settings = state.optJSONObject("settings");
+        String phase = state.optString("phase", "starting"), threadId = null, threadTitle = null;
         if (active != null) {
             boolean recording = phase.equals("validating") || phase.equals("arming") || phase.equals("listening") || phase.equals("recognizing") || phase.equals("submitting") || phase.equals("recovering");
             threadId = nullable(active, recording ? "recognitionThreadId" : "threadId");
-            String threadTitle = nullable(active, recording ? "recognitionThreadTitle" : "threadTitle");
-            title = threadTitle == null ? (threadId == null ? title : threadId) : threadTitle;
+            threadTitle = nullable(active, recording ? "recognitionThreadTitle" : "threadTitle");
         } else if (settings != null) {
             JSONObject foreground = state.optJSONObject("foreground");
-            String threadTitle = null;
-            if (foreground != null && foreground.optBoolean("visible")) {
+            if (!settings.optBoolean("pinDefaultVoiceThread") && foreground != null && foreground.optBoolean("visible")) {
                 threadId = nullable(foreground, "threadId"); threadTitle = nullable(foreground, "threadTitle");
             }
             if (threadId == null) { threadId = nullable(settings, "voiceThreadId"); threadTitle = nullable(settings, "voiceThreadTitle"); }
-            if (threadId != null) title = threadTitle == null ? threadId : threadTitle;
+            if (threadId == null) threadTitle = null;
         }
+        return NativeVoiceJson.object("threadId", threadId, "threadTitle", threadTitle);
+    }
+    private Notification build(JSONObject state) {
+        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL);
+        JSONObject settings = state.optJSONObject("settings"), actions = state.optJSONObject("actions"), target = notificationTarget(state);
+        String phase = state.optString("phase", "starting"), threadId = nullable(target, "threadId"), threadTitle = nullable(target, "threadTitle");
+        String title = threadTitle == null ? (threadId == null ? "Sedes voice" : threadId) : threadTitle;
         Intent open = new Intent(this, MainActivity.class).setAction(ACTION_OPEN).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP)
             .putExtra("voiceThreadId", threadId).putExtra("voiceProfileId", nullable(state, "profileId"))
             .putExtra("voiceServerOrigin", nullable(state, "serverOrigin")).putExtra("voiceIdentity", nullable(state, "identity"));

@@ -56,6 +56,8 @@ describe("voice quick sheet", () => {
     expect(within(sheet).getByRole("switch", { name: "Auto-listen" })).toHaveAccessibleDescription("Eligible notifications reopen the mic");
     expect(within(sheet).getByRole("switch", { name: "Auto-listen" })).toBeChecked();
     expect(within(sheet).getByRole("button", { name: "Default voice thread" })).toHaveAccessibleDescription("Daily standup notes");
+    expect(within(sheet).getByRole("switch", { name: "Pin default voice thread" })).toHaveAccessibleDescription("Start manual recordings here from any thread");
+    expect(within(sheet).getByRole("switch", { name: "Pin default voice thread" })).not.toBeChecked();
     expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Limit automatic playback to this thread");
     expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).not.toBeChecked();
     expect(within(sheet).getByRole("switch", { name: "Follow composer mode" })).toHaveAccessibleDescription("Use its Steer or Queue choice");
@@ -134,6 +136,26 @@ describe("voice quick sheet", () => {
     expect(patches(fake)).toEqual([{ autoListen: false }, { followComposerMode: true }, { onlyVoiceThread: true }]);
     store.dispose();
   });
+  it("pins the default recording target independently of the playback filter and preserves focus while saving", async () => {
+    const { fake, store, sheet } = await renderSheet(ready({ onlyVoiceThread: true }));
+    const pin = within(sheet).getByRole("switch", { name: "Pin default voice thread" });
+    act(() => pin.focus());
+    const release = holdNextWrite(fake);
+    fireEvent.click(pin);
+    expect(pin).toHaveAttribute("aria-disabled", "true");
+    expect(pin).toHaveFocus();
+    fireEvent.click(within(sheet).getByRole("switch", { name: "Only play from default voice thread" }));
+    await release();
+    await waitFor(() => expect(pin).toBeChecked());
+    expect(pin).toHaveFocus();
+    expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).toBeChecked();
+    expect(patches(fake)).toEqual([{ pinDefaultVoiceThread: true }]);
+    fireEvent.click(pin);
+    await waitFor(() => expect(pin).not.toBeChecked());
+    expect(patches(fake)).toEqual([{ pinDefaultVoiceThread: true }, { pinDefaultVoiceThread: false }]);
+    expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).toBeChecked();
+    store.dispose();
+  });
   it("chooses a default thread above the sheet, pins the current choice, and keeps focus while its saved title is normalized", async () => {
     const { fake, store, sheet } = await renderSheet(ready({ voiceThreadId: "standup", voiceThreadTitle: "Daily standup notes" }));
     const choice = within(sheet).getByRole("button", { name: "Default voice thread" });
@@ -141,7 +163,7 @@ describe("voice quick sheet", () => {
     fireEvent.click(choice);
     const picker = await screen.findByRole("dialog", { name: "Choose default voice thread" });
     expect(picker).toHaveAttribute("data-layer", "over-dialog");
-    expect(picker).toHaveAccessibleDescription("Used for recording when no thread is visible.");
+    expect(picker).toHaveAccessibleDescription("Used when pinned or when no thread is visible.");
     const list = within(picker).getByRole("list", { name: "Voice threads" });
     expect(within(list).getAllByRole("listitem").map(item => item.textContent)).toEqual(["Current default voice threadDaily standup notes", longTitle, "Untitled thread"]);
     expect(within(list).getByRole("button", { name: "Daily standup notes" })).toHaveAccessibleDescription("Current default voice thread");

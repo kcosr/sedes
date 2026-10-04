@@ -9,7 +9,7 @@ export const nativeVoiceSettingsSchema = z.strictObject({
   sttModel: z.string().max(160), ttsModel: z.string().max(160), ttsVoice: z.string().max(160),
   ttsSpeed: z.number().min(0.25).max(4), speechTextLimit: z.number().int().min(2).max(4096),
   voiceThreadId: z.string().nullable(), voiceThreadTitle: z.string().nullable(),
-  onlyVoiceThread: z.boolean(), followComposerMode: z.boolean(), inputDeviceId: z.string().nullable(),
+  pinDefaultVoiceThread: z.boolean(), onlyVoiceThread: z.boolean(), followComposerMode: z.boolean(), inputDeviceId: z.string().nullable(),
   recognitionStartTimeoutMs: z.number().int().positive(), recognitionCompletionTimeoutMs: z.number().int().positive(),
   recognitionResultTimeoutMs: z.number().int().min(1000).max(300000),
   recognitionEndSilenceMs: z.number().int().positive(), recognizeStopCommand: z.boolean(),
@@ -24,7 +24,7 @@ export const nativeSpeechCatalogSchema = z.strictObject({
 });
 export type NativeSpeechCatalog = z.infer<typeof nativeSpeechCatalogSchema>;
 export const nativeVoiceStateSchema = z.strictObject({
-  version: z.literal(2), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
+  version: z.literal(3), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
   profileId: z.string().nullable(), serverOrigin: z.string().nullable(), identity: z.string().nullable(), originClientId: z.uuid().nullable(),
   settingsRevision: z.number().int().nonnegative(), settings: nativeVoiceSettingsSchema,
   speech: z.strictObject({ credentialConfigured: z.boolean(), catalogStatus: z.enum(["idle", "loading", "ready", "error"]),

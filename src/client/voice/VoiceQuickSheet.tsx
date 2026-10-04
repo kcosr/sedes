@@ -1,6 +1,6 @@
 import "./voice-sheet.css";
 import { useId, useState, type ReactNode } from "react";
-import { ChevronRight, Ear, ListFilter, Merge, MessageSquare, Mic, MicOff, Settings2, Volume2 } from "lucide-react";
+import { ChevronRight, Ear, ListFilter, Merge, MessageSquare, Mic, MicOff, Pin, Settings2, Volume2 } from "lucide-react";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import { navigate, settingsPath } from "../app/router.js";
 import { Button } from "../components/ui/button.js";
@@ -80,6 +80,8 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
           <SwitchRow icon={<Merge aria-hidden="true" />} label="Follow composer mode" description="Use its Steer or Queue choice"
             checked={settings.followComposerMode} locked={locked} onCheckedChange={followComposerMode => update({ followComposerMode })} />
           <DefaultThreadRow choice={defaultThread} locked={locked} onClick={() => { if (!state.pending) setPicker(true); }} />
+          <SwitchRow icon={<Pin aria-hidden="true" />} label="Pin default voice thread" description="Start manual recordings here from any thread"
+            checked={settings.pinDefaultVoiceThread} locked={locked} onCheckedChange={pinDefaultVoiceThread => update({ pinDefaultVoiceThread })} />
           <SwitchRow icon={<ListFilter aria-hidden="true" />} label="Only play from default voice thread" description="Limit automatic playback to this thread"
             checked={settings.onlyVoiceThread} locked={locked} onCheckedChange={onlyVoiceThread => update({ onlyVoiceThread })} />
           <Separator className="mx-3 my-1 data-[orientation=horizontal]:w-auto" />
@@ -87,7 +89,7 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
         </div>
       </> : <div className="-mx-3 -mt-2 flex flex-col"><SettingsRow onOpenChange={onOpenChange} /></div>}
       <VoiceThreadPicker threads={threads} open={picker} onOpenChange={setPicker} title="Choose default voice thread"
-        description="Used for recording when no thread is visible." layer="over-dialog"
+        description="Used when pinned or when no thread is visible." layer="over-dialog"
         pinned={{ threadId: settings?.voiceThreadId ?? null, label: "Current default voice thread" }}
         onSelect={thread => update({ voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) })} />
     </DialogContent>

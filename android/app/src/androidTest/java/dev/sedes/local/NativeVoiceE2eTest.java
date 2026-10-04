@@ -409,7 +409,7 @@ public class NativeVoiceE2eTest {
     private static JSONObject diagnosticState(JSONObject state) {
         JSONObject result = select(state, "connectionGeneration", "stateRevision", "settingsRevision", "originClientId", "phase", "ready", "readiness", "queue", "actions");
         NativeVoiceJson.put(result, "settings", select(state.optJSONObject("settings"), "audioMode", "autoListen", "ignoreOtherDevices",
-            "onlyVoiceThread", "voiceThreadId", "followComposerMode", "recognitionCues"));
+            "onlyVoiceThread", "voiceThreadId", "pinDefaultVoiceThread", "followComposerMode", "recognitionCues"));
         NativeVoiceJson.put(result, "active", select(state.optJSONObject("active"), "id", "eventKind", "threadId", "recognitionThreadId", "automatic"));
         NativeVoiceJson.put(result, "foreground", select(state.optJSONObject("foreground"), "visible", "threadId"));
         JSONArray errors = state.optJSONArray("errors"), codes = new JSONArray();

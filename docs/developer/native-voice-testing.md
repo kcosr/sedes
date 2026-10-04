@@ -180,6 +180,9 @@ pickers. The quick sheet covers mode changes with the speech credential gate,
 Resume, switches, the default voice thread picker and playback filter, and its
 Settings link. Other coverage includes per-binding visibility preferences, recent
 errors, microphone labels, provider discovery, and the native credential bridge.
+Pinned-default cases cover the idle card and explicit recording target, choosing
+a missing or unavailable default, and native headset/notification starts, while
+keeping active retargeting and automatic playback filtering independent.
 Catalog tests cover owner/configuration scope and freshness; device cases cover
 restoration, deferred session starts during bootstrap, background refresh,
 request coalescing, invalidation, and retention

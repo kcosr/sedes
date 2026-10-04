@@ -4,6 +4,10 @@
 
 ### Breaking Changes
 
+- Android voice pinning updates the local settings schema. Upgrading from an
+  earlier voice build resets settings with Audio mode Off. Separately stored
+  speech credentials remain on the device.
+
 - Android voice replaces the direct-media adapter protocol with OpenAI-compatible
   Realtime transcription and streamed HTTP speech. Reconfigure the speech
   provider and credential after upgrading; old native voice settings reset
@@ -406,6 +410,8 @@
 
 - Voice settings label the saved recording fallback **Default voice thread**.
   The quick menu includes its picker and **Only play from default voice thread**.
+  **Pin default voice thread** keeps the idle card and new explicit recordings
+  on that thread while browsing elsewhere.
 
 - Android voice loads and caches model and voice choices automatically, with a
   Refresh action for server changes. Settings use shorter help text and the

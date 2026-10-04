@@ -156,6 +156,19 @@ describe("voice settings page", () => {
     expect(within(pinned).getByRole("button", { name: "Untitled thread" })).toHaveAccessibleDescription("Current default voice thread");
     store.dispose();
   });
+  it("saves the default recording pin without changing the playback filter", async () => {
+    const native = voiceSnapshot({ settings: voiceSettings({ onlyVoiceThread: true }) });
+    const { fake, store } = await renderPage(native, fake => fake.plugin.updateSettings.mockResolvedValue({ ...native, stateRevision: 2, settingsRevision: 1,
+      settings: { ...native.settings, pinDefaultVoiceThread: true } }));
+    const pin = screen.getByRole("switch", { name: "Pin default voice thread" });
+    expect(pin).not.toBeChecked();
+    expect(pin).toHaveAccessibleDescription("Start manual recordings here while viewing other threads.");
+    fireEvent.click(pin);
+    await waitFor(() => expect(pin).toBeChecked());
+    expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { pinDefaultVoiceThread: true } });
+    expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toBeChecked();
+    store.dispose();
+  });
   it("opens credential management with only a connection fence and never creates a web password field", async () => {
     const { fake, store } = await renderPage(voiceSnapshot());
     expect(screen.queryByLabelText("OpenAI API key")).toBeNull();

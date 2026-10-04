@@ -29,7 +29,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const route = useRoute();
   const composerMode = useComposerDeliveryMode();
   const [showWhenOff] = useShowVoiceBarWhenOff(store);
-  const [picker, setPicker] = useState<"start" | "retarget" | null>(null);
+  const [picker, setPicker] = useState<"start" | "default-start" | "retarget" | null>(null);
   const [sheet, setSheet] = useState(false);
   const statusId = useId();
   const threadId = route.name === "thread" ? route.threadId : null;
@@ -51,18 +51,18 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   if (!native && (sheet || picker)) { setSheet(false); setPicker(null); }
   // Unavailable voice is reported and retried in Settings → Voice; the card appears only for a connected session.
   if (!native) return null;
+  const { phase, active, settings } = native;
   const act = (action: () => ReturnType<typeof store.plugin.getState>) => { void store.run(action).catch(() => undefined); };
   const available = (id: string | null) => threads.find(thread => thread.id === id && thread.available &&
     (thread.inventoryState === "active" || thread.inventoryState === "settled"));
-  // Explicit recording targets the visible thread, then the default voice thread, then a picker; the idle card names that target.
-  const startTarget = available(threadId) ?? available(native.settings.voiceThreadId);
+  // A pin fixes new explicit recordings to the default; otherwise the visible thread leads. Never fall back from an unavailable pinned default.
+  const startTarget = settings.pinDefaultVoiceThread ? available(settings.voiceThreadId) : available(threadId) ?? available(settings.voiceThreadId);
   const start = () => {
     // Native decides when explicit recording can start; it does not need the notification stream that `ready` includes.
     if (!native.actions.canStart) { navigate(settingsPath("voice")); return; }
-    if (!startTarget) { setPicker("start"); return; }
+    if (!startTarget) { setPicker(settings.pinDefaultVoiceThread ? "default-start" : "start"); return; }
     act(() => store.plugin.startManualListen({ ...store.commandContext(), threadId: startTarget.id, threadTitle: nativeThreadTitle(startTarget.title.text) ?? undefined }));
   };
-  const { phase, active, settings } = native;
   const off = settings.audioMode === "off";
   const busy = !["off", "idle"].includes(phase);
   const failed = phase === "error";
@@ -112,7 +112,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
       if (retargets) status.push({ chip: cardTitle === undefined ? "Choose" : "Change" });
     }
     if (cardTitle !== undefined) { line1 = { thread: cardTitle }; line2 = { parts: status }; }
-    else if (!busy || retargets) { line1 = { empty: "Choose a thread" }; line2 = { parts: status }; }
+    else if (!busy || retargets) { line1 = { empty: !busy && settings.pinDefaultVoiceThread ? "Choose default voice thread" : "Choose a thread" }; line2 = { parts: status }; }
     // Speech without a thread (an automation notice) leads with its phase.
     else { line1 = { parts: status.slice(0, 1) }; line2 = { parts: status.slice(1) }; }
   }
@@ -156,10 +156,23 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
         {alerting ? <span id={`${statusId}-alert`} className="sr-only" role="alert">{message}</span> : null}
       </div>
     </div> : null}
-    <VoiceThreadPicker threads={threads} open={picker !== null} onOpenChange={open => { if (!open) setPicker(null); }} pinned={{ threadId, label: "This thread" }} onSelect={thread => {
+    <VoiceThreadPicker threads={threads} open={picker !== null} onOpenChange={open => { if (!open) setPicker(null); }}
+      title={picker === "default-start" ? "Choose default voice thread" : "Choose voice thread"}
+      description={picker === "default-start" ? "Save this default and start recording." : "Recognized text will be sent to the thread you select."}
+      pinned={picker === "default-start" ? { threadId: settings.voiceThreadId, label: "Current default voice thread" } : { threadId, label: "This thread" }} onSelect={thread => {
       const target = { threadId: thread.id, threadTitle: nativeThreadTitle(thread.title.text) ?? undefined };
-      act(() => picker === "retarget" ? store.plugin.retargetActiveRecognition({ ...store.commandContext(), ...target })
-        : store.plugin.startManualListen({ ...store.commandContext(), ...target }));
+      if (picker === "default-start") {
+        const context = store.commandContext();
+        void store.update({ voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) })
+          .then(() => store.run(() => {
+            if (store.commandContext().expectedConnectionGeneration !== context.expectedConnectionGeneration)
+              throw new Error("Voice connection changed. Start recording again.");
+            return store.plugin.startManualListen({ ...context, ...target });
+          })).catch(() => undefined);
+      } else {
+        act(() => picker === "retarget" ? store.plugin.retargetActiveRecognition({ ...store.commandContext(), ...target })
+          : store.plugin.startManualListen({ ...store.commandContext(), ...target }));
+      }
     }} />
     {/* Beside the card, so choosing Off in the sheet keeps it open even when Off hides the card. */}
     <VoiceQuickSheet store={store} threads={threads} open={sheet} onOpenChange={setSheet} />

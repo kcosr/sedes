@@ -674,8 +674,12 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
         String target = NativeVoiceJson.nullableString(args, "threadId", 512), title = NativeVoiceJson.nullableString(args, "threadTitle", 512);
         if (!sessionStarted || !speechReady() || binding == null) throw new IllegalStateException("voice_not_ready");
         if (active != null) throw new IllegalStateException("voice_busy");
-        if (target == null && foregroundVisible) { target = foregroundThread; title = foregroundTitle; }
-        if (target == null) { target = settings.text("voiceThreadId"); title = settings.text("voiceThreadTitle"); }
+        if (settings.flag("pinDefaultVoiceThread")) {
+            target = settings.text("voiceThreadId"); title = settings.text("voiceThreadTitle");
+        } else {
+            if (target == null && foregroundVisible) { target = foregroundThread; title = foregroundTitle; }
+            if (target == null) { target = settings.text("voiceThreadId"); title = settings.text("voiceThreadTitle"); }
+        }
         if (target == null) throw new IllegalStateException("voice_target_required");
         active = new Active(target, title); validateTarget(active, false);
     }
@@ -1213,7 +1217,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
             "recognitionThreadTitle", active.targetTitle, "automatic", active.automatic);
         String readiness = readiness();
         boolean ready = readiness.equals("ready");
-        JSONObject next = NativeVoiceJson.object("version", 2, "connectionGeneration", connectionGeneration,
+        JSONObject next = NativeVoiceJson.object("version", 3, "connectionGeneration", connectionGeneration,
             "profileId", profileId, "serverOrigin", origin, "identity", identity, "originClientId", originId,
             "settingsRevision", settings.revision, "settings", settings.value, "phase", phase, "ready", ready,
             "speech", NativeVoiceJson.object("credentialConfigured", speechCredential != null, "catalogStatus", catalogStatus,
