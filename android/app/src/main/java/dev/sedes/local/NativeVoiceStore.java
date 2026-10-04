@@ -169,6 +169,27 @@ final class NativeVoiceStore {
     void settings(String binding, NativeVoiceSettings settings) throws Exception {
         synchronized (LOCK) { write(binding, "settings", settings.record()); }
     }
+    NativeSpeechCatalogCache speechCatalog(String binding, String scope) throws Exception {
+        synchronized (LOCK) {
+            JSONObject value = read(binding, "speech-catalog");
+            if (value == null) return null;
+            final NativeSpeechCatalogCache cached;
+            try { cached = NativeSpeechCatalogCache.fromRecord(value); }
+            catch (RuntimeException error) { throw new CorruptRecord("speech-catalog", error); }
+            if (cached.scope.equals(scope)) return cached;
+            removeSpeechCatalog(binding); return null;
+        }
+    }
+    void speechCatalog(String binding, NativeSpeechCatalogCache catalog) throws Exception {
+        synchronized (LOCK) { write(binding, "speech-catalog", catalog.record()); }
+    }
+    void removeSpeechCatalog(String binding) throws Exception {
+        synchronized (LOCK) {
+            AtomicFile record = file(binding, "speech-catalog"); record.delete();
+            if (!missing(record.getBaseFile()) || !missing(new File(record.getBaseFile().getPath() + ".bak")) ||
+                !missing(new File(record.getBaseFile().getPath() + ".new"))) throw new IllegalStateException("voice_storage_unavailable");
+        }
+    }
     String originId(String binding) throws Exception {
         synchronized (LOCK) {
             JSONObject value = read(binding, "origin");

@@ -57,3 +57,12 @@ dependencies {
 }
 
 apply from: 'capacitor.build.gradle'
+
+// The opt-in socket lane starts a fresh ephemeral server every invocation.
+// Its endpoint and credential stay in the test process environment, not Gradle
+// properties, command arguments, cached task inputs, or test report output.
+tasks.withType(Test).configureEach {
+    if (System.getenv('SEDES_SPEECH_TRANSPORT_TEST') == '1') {
+        outputs.upToDateWhen { false }
+    }
+}

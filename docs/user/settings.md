@@ -539,25 +539,39 @@ The Android app's **Voice** page configures
 [Android voice](../operator/clients/voice.md) for the selected server
 connection. Its settings are saved on this device for
 that connection and Sedes user. The caret on the voice card opens a **Voice**
-sheet with Audio mode, Auto-listen, and Follow composer mode; its **All voice
-settings** row opens this page.
+sheet with Audio mode, behavior toggles, and the Default voice thread picker
+below them; its **All voice settings** row opens this page.
 
 While voice connects, the page shows **Connecting voice to this server…**. If
 voice cannot connect, it shows the error and **Retry voice connection**; the app
 also retries on its own and when it returns to the foreground. The rest of the
 app does not wait for voice.
 
-- **Audio mode** chooses Off, Manual, or Response. **Enable voice** selects
-  Response, and **Resume voice** restarts a stopped voice session. The status
-  line below reports what voice still needs, such as microphone permission, an
-  adapter URL, or the voice adapter or Sedes notification connection. When
+- **Audio mode** chooses Off, Manual, or Response. Selecting Manual or Response
+  enables voice; **Resume voice** restarts a stopped voice session. The status
+  line below reports what voice still needs, such as microphone permission,
+  speech configuration and a key, or the Sedes notification connection. When
   notifications are unavailable, explicit recording still works.
+- **Speech provider** selects OpenAI or **Own speech server**.
+  OpenAI connects directly to its hosted speech API. For local model setup, see
+  [OpenAI-Compatible Speech Server](https://github.com/kcosr/openai-speech-server).
+  Configure its endpoint, transcription and speech models, voice, and speed.
+  Models and voices load automatically and stay cached between app launches.
+  **Refresh** checks for server changes; **Custom…** accepts another ID.
+  Credentials are entered in a native dialog and stored encrypted on this device
+  for that provider and endpoint; they are separate from the Sedes pairing credential.
 - **Show voice bar when off** keeps a dimmed voice card under the composer
   while Audio mode is Off, so its Voice sheet can turn voice back on. By
   default Off hides the card. The switch changes only what the app shows.
-- **Voice thread** is the target for explicit recording when no thread is
-  visible. Its picker lists the current Voice thread first. Untitled threads
-  appear as **Untitled thread**.
+- **Default voice thread** is the target for explicit recording when no thread
+  is visible. Its picker lists the current default voice thread first. Untitled
+  threads appear as **Untitled thread**. The quick voice menu also includes
+  this picker and **Only play from default voice thread**, which filters
+  automatic playback without changing the recording target.
+- **Pin default voice thread** keeps the idle voice bar and new explicit
+  recordings on the default thread, even while another thread is visible.
+  If it is missing or unavailable, the record button asks you to choose a
+  default. Pinning does not redirect a recording or playback already in progress.
 - **Microphone input** lists Android's inputs. Inputs that share a name add
   their type, such as Bluetooth or USB, and then a number.
 - **Pending input recovery** lists spoken messages whose delivery is uncertain.

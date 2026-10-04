@@ -12,8 +12,14 @@ import androidx.lifecycle.Lifecycle;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.platform.app.InstrumentationRegistry;
 import java.io.File;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
@@ -26,6 +32,71 @@ import org.junit.Test;
 
 /** Real encrypted settings, authentication bootstrap, lifecycle and main-thread launch scheduling. */
 public class NativeVoiceStartupTest {
+    @Test public void startupRestoresFreshCacheThenRevalidatesOnceWithoutStartingVoice() throws Exception {
+        try (ServerSocket server = new ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"));
+             Fixture f = new Fixture("off", false, true, "http://127.0.0.1:" + server.getLocalPort() + "/v1")) {
+            String binding = NativeVoiceStore.binding(f.profile, f.origin, Fixture.IDENTITY);
+            NativeVoiceSettings settings = f.store.settings(binding);
+            JSONObject catalog = NativeSpeechCatalog.empty("server");
+            NativeVoiceJson.put(catalog, "voices", new org.json.JSONArray().put("cached-voice"));
+            f.store.speechCatalog(binding, new NativeSpeechCatalogCache(NativeSpeechCatalogCache.scope(binding, settings, "fixture-startup-token"),
+                System.currentTimeMillis(), catalog));
+            Reply connected = f.beginConnection(f.profile); f.authenticate(); f.flush();
+            assertEquals(catalog.toString(), f.runtime.snapshot().getJSONObject("speech").getJSONObject("catalog").toString());
+            server.setSoTimeout(200); assertThrows(java.net.SocketTimeoutException.class, server::accept);
+            f.session(); connected.await(); server.setSoTimeout(10000);
+            try (Socket socket = server.accept()) {
+                socket.setSoTimeout(10000);
+                BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
+                assertEquals("GET /v1/audio/capabilities HTTP/1.1", reader.readLine());
+                boolean authenticated = false;
+                for (String line = reader.readLine(); line != null && !line.isEmpty(); line = reader.readLine())
+                    if (line.equals("Authorization: Bearer fixture-startup-token")) authenticated = true;
+                assertTrue(authenticated);
+                assertEquals("loading", f.runtime.snapshot().getJSONObject("speech").getString("catalogStatus"));
+                assertEquals(catalog.toString(), f.runtime.snapshot().getJSONObject("speech").getJSONObject("catalog").toString());
+                f.runtime.nativeVisibility(true); f.beginConnection(f.profile).await(); f.flush();
+                assertTrue(f.starts.isEmpty()); assertEquals("off", f.runtime.snapshot().getString("phase"));
+                byte[] response = "{\"object\":\"list\",\"data\":[{\"id\":\"kokoro-local\",\"task\":\"speech\",\"voices\":[{\"id\":\"fresh-voice\"}]}]}".getBytes(StandardCharsets.UTF_8);
+                socket.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: " + response.length + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                socket.getOutputStream().write(response); socket.getOutputStream().flush();
+            }
+            long deadline = android.os.SystemClock.elapsedRealtime() + 10000;
+            while (f.runtime.snapshot().getJSONObject("speech").getString("catalogStatus").equals("loading") &&
+                android.os.SystemClock.elapsedRealtime() < deadline) Thread.sleep(10);
+            JSONObject state = f.runtime.snapshot();
+            assertEquals("ready", state.getJSONObject("speech").getString("catalogStatus"));
+            assertEquals("fresh-voice", state.getJSONObject("speech").getJSONObject("catalog").getJSONArray("voices").getString(0));
+            assertEquals("af_heart", state.getJSONObject("settings").getString("ttsVoice"));
+            assertEquals("kokoro-local", state.getJSONObject("settings").getString("ttsModel"));
+            server.setSoTimeout(200); assertThrows(java.net.SocketTimeoutException.class, server::accept);
+            assertTrue(f.starts.isEmpty());
+        }
+    }
+    @Test public void modeEditsDuringDelayedBootstrapWaitForTheAuthenticatedSession() throws Exception {
+        try (Fixture f = new Fixture("response", true, true)) {
+            f.runtime.nativeVisibility(true);
+            Reply connection = f.beginConnection(f.profile);
+            f.authenticate(); f.flush();
+            assertEquals("connecting", f.runtime.snapshot().getString("readiness"));
+            assertFalse("Cached settings must not offer Resume before session bootstrap", f.runtime.snapshot().getJSONObject("actions").getBoolean("canResume"));
+            f.updateMode("manual");
+            f.runtime.nativeVisibility(false); f.flush();
+            f.runtime.nativeVisibility(true); f.flush();
+            assertEquals("manual", f.runtime.snapshot().getJSONObject("settings").getString("audioMode"));
+            assertEquals("manual", f.store.settings(NativeVoiceStore.binding(f.profile, f.origin, Fixture.IDENTITY)).mode());
+            assertEquals("connecting", f.runtime.snapshot().getString("readiness"));
+            assertFalse(f.runtime.snapshot().getJSONObject("actions").getBoolean("canResume"));
+            assertTrue("Mode edits and lifecycle events cannot start voice before bootstrap", f.starts.isEmpty());
+            f.session(); connection.await();
+            Intent start = f.start(); assertTrue(f.accepted(start));
+            assertEquals("starting", f.runtime.snapshot().getString("phase"));
+            assertFalse(f.runtime.snapshot().getJSONObject("actions").getBoolean("canResume"));
+            f.runtime.nativeVisibility(true); f.beginConnection(f.profile).await(); f.flush();
+            assertTrue("Bootstrap must start the saved mode exactly once", f.starts.isEmpty());
+        }
+    }
+
     @Test public void savedModesStartOnceAfterAuthenticationWithoutOpeningTheMicrophone() throws Exception {
         for (String mode : new String[] { "manual", "response" }) {
             try (Fixture f = new Fixture(mode, true, true)) {
@@ -66,7 +137,8 @@ public class NativeVoiceStartupTest {
                 if (configured) assertTrue(f.accepted(f.start()));
                 else {
                     assertTrue(f.starts.isEmpty());
-                    assertEquals("adapterRequired", f.runtime.snapshot().getString("readiness"));
+                    assertEquals("speechConfigurationRequired", f.runtime.snapshot().getString("readiness"));
+                    assertFalse(f.runtime.snapshot().getJSONObject("actions").getBoolean("canResume"));
                 }
             }
         }
@@ -125,6 +197,53 @@ public class NativeVoiceStartupTest {
             assertEquals(f.otherProfile, f.runtime.snapshot().getString("profileId"));
             assertEquals("off", f.runtime.snapshot().getString("readiness"));
             assertTrue(f.starts.isEmpty()); assertTrue(f.sessions.isEmpty());
+        }
+    }
+
+    @Test public void ordinaryEnableAndResumeWithExistingPermissionsRepairStaleHiddenVisibility() throws Exception {
+        for (String mode : new String[] { "off", "response" }) {
+            try (Fixture f = new Fixture(mode, true, true); ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+                f.connect(); f.runtime.nativeVisibility(false); f.flush();
+                long generation = f.runtime.snapshot().getLong("connectionGeneration");
+                scenario.onActivity(activity -> assertTrue(NativeVoicePlugin.reconcileUserActionVisibility(activity, f.runtime, generation)));
+                f.updateMode("response");
+                assertTrue(f.accepted(f.start())); f.flush();
+                assertTrue("Visibility reconciliation and the mode write must share one start", f.starts.isEmpty());
+                assertEquals("starting", f.runtime.snapshot().getString("phase"));
+                assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+            }
+        }
+    }
+
+    @Test public void ordinaryEnableFromPausedOrStoppedActivityRevokesStaleVisibleState() throws Exception {
+        for (Lifecycle.State lifecycle : new Lifecycle.State[] { Lifecycle.State.STARTED, Lifecycle.State.CREATED }) {
+            try (Fixture f = new Fixture("off", true, true); ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+                f.connect(); scenario.moveToState(lifecycle);
+                f.runtime.nativeVisibility(true); f.flush();
+                long generation = f.runtime.snapshot().getLong("connectionGeneration");
+                scenario.onActivity(activity -> assertTrue(NativeVoicePlugin.reconcileUserActionVisibility(activity, f.runtime, generation)));
+                Reply reply = new Reply(); f.runtime.command("updateSettings", NativeVoiceJson.object("expectedRevision", 1,
+                    "patch", NativeVoiceJson.object("audioMode", "response")), true, reply);
+                assertEquals("resume_from_visible_app", reply.failure()); f.flush();
+                assertTrue("An inactive activity cannot start voice", f.starts.isEmpty());
+                assertEquals("response", f.runtime.snapshot().getJSONObject("settings").getString("audioMode"));
+            }
+        }
+    }
+
+    @Test public void staleOrdinaryEnableCannotReconcileANewerConnectionsVisibility() throws Exception {
+        try (Fixture f = new Fixture("off", true, true); ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            f.connect(); f.runtime.nativeVisibility(false); f.flush();
+            long generation = f.runtime.snapshot().getLong("connectionGeneration");
+            scenario.onActivity(activity -> assertFalse(NativeVoicePlugin.reconcileUserActionVisibility(activity, f.runtime, generation - 1)));
+            Reply reply = new Reply(); f.runtime.command("updateSettings", NativeVoiceJson.object("expectedRevision", 1,
+                "patch", NativeVoiceJson.object("audioMode", "response")), true, generation - 1, reply);
+            assertEquals("connection_changed", reply.failure()); f.flush();
+            assertEquals("off", f.runtime.snapshot().getJSONObject("settings").getString("audioMode"));
+            Reply current = new Reply(); f.runtime.command("updateSettings", NativeVoiceJson.object("expectedRevision", 1,
+                "patch", NativeVoiceJson.object("audioMode", "response")), true, generation, current);
+            assertEquals("resume_from_visible_app", current.failure()); f.flush();
+            assertTrue(f.starts.isEmpty());
         }
     }
 
@@ -222,13 +341,18 @@ public class NativeVoiceStartupTest {
         final BlockingQueue<NativeVoiceHttp.Result> auth = new LinkedBlockingQueue<>(), sessions = new LinkedBlockingQueue<>();
         final BlockingQueue<Intent> starts = new LinkedBlockingQueue<>();
         Fixture(String mode, boolean permission, boolean configured) throws Exception {
+            this(mode, permission, configured, "http://127.0.0.1:65125/v1");
+        }
+        Fixture(String mode, boolean permission, boolean configured, String endpoint) throws Exception {
             permissionGranted = permission;
             Constructor<NativeVoiceRuntime> constructor = NativeVoiceRuntime.class.getDeclaredConstructor(Context.class);
             constructor.setAccessible(true); runtime = constructor.newInstance(context);
             Field field = NativeVoiceRuntime.class.getDeclaredField("handler"); field.setAccessible(true); owner = (Handler) field.get(runtime);
             store = new NativeVoiceStore(context);
             store.settings(NativeVoiceStore.binding(profile, origin, IDENTITY), NativeVoiceSettings.defaults().patch(0,
-                NativeVoiceJson.object("audioMode", mode, "adapterUrl", configured ? "http://127.0.0.1:65125" : "")));
+                NativeVoiceJson.object("audioMode", mode, "speechProvider", "server", "speechEndpoint", configured ? endpoint : "",
+                    "sttModel", "parakeet-local", "ttsModel", "kokoro-local", "ttsVoice", "af_heart")));
+            if (configured) new SpeechCredentialStore(context).setCredential(profile, "server", endpoint, "fixture-startup-token");
             runtime.setTestSessionStarter(intent -> starts.add(intent));
             NativeVoiceHttp.setTestTransport(new NativeVoiceHttp.TestTransport() {
                 public boolean before(String method, String path, JSONObject body, NativeVoiceHttp.Result result) {
@@ -267,6 +391,7 @@ public class NativeVoiceStartupTest {
                 NativeVoiceHttp.setTestTransport(null); runtime.setTestSessionStarter(null); owner.getLooper().quitSafely();
                 for (String selected : new String[] { profile, otherProfile }) {
                     new ClientCredentialStore(context).removeProfileCredentials(selected);
+                    new SpeechCredentialStore(context).removeProfileCredentials(selected);
                     store.removeProfile(selected);
                     assertFalse(store.directory(NativeVoiceStore.binding(selected, origin, IDENTITY)).exists());
                 }

@@ -1,5 +1,6 @@
 package dev.sedes.local;
 
+import android.content.Context;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -30,12 +31,22 @@ public final class ClientCredentialsPlugin extends Plugin {
     }
     @PluginMethod public void removeProfileCredentials(PluginCall call) {
         try {
-            // Removing a profile also deletes its native voice settings, origin IDs and input journals. Voice cleanup is
-            // best-effort: it runs on the voice owner thread, which completes it later after a timeout, and never keeps the credential.
-            try { NativeVoiceRuntime.get(getContext()).profileRemoved(call.getString("profileId")); } catch (Exception ignored) {}
-            new ClientCredentialStore(getContext()).removeProfileCredentials(call.getString("profileId"));
+            removeProfileCredentials(getContext(), call.getString("profileId"),
+                profile -> NativeVoiceRuntime.get(getContext()).profileRemoved(profile));
             call.resolve();
         } catch (Exception error) { call.reject("The credentials could not be removed.", "credential_storage_unavailable"); }
+    }
+    interface VoiceProfileCleanup { void remove(String profileId) throws Exception; }
+    static void removeProfileCredentials(Context context, String profileId, VoiceProfileCleanup cleanup) throws Exception {
+        // Owner-thread disconnect fences queued dialog actions. Voice records are best-effort and may finish after a timeout.
+        try { cleanup.remove(profileId); } catch (Exception ignored) {}
+        // Both secret stores are mandatory and independent: neither failure may skip the other store or report success.
+        Exception failure = null;
+        try { new ClientCredentialStore(context).removeProfileCredentials(profileId); }
+        catch (Exception error) { failure = error; }
+        try { new SpeechCredentialStore(context).removeProfileCredentials(profileId); }
+        catch (Exception error) { if (failure == null) failure = error; else failure.addSuppressed(error); }
+        if (failure != null) throw failure;
     }
     @PluginMethod public void removeCredential(PluginCall call) {
         try {

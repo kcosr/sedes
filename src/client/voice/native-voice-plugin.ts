@@ -5,19 +5,30 @@ import { isAndroidClient } from "../app/client-platform.js";
 export const nativeVoiceSettingsSchema = z.strictObject({
   audioMode: z.enum(["off", "manual", "response"]),
   autoListen: z.boolean(), ignoreOtherDevices: z.boolean(), readNotificationContext: z.boolean(),
-  adapterUrl: z.string(), adapterTextLimit: z.number().int().positive(),
+  speechProvider: z.enum(["openai", "server"]), speechEndpoint: z.string(),
+  sttModel: z.string().max(160), ttsModel: z.string().max(160), ttsVoice: z.string().max(160),
+  ttsSpeed: z.number().min(0.25).max(4), speechTextLimit: z.number().int().min(2).max(4096),
   voiceThreadId: z.string().nullable(), voiceThreadTitle: z.string().nullable(),
-  onlyVoiceThread: z.boolean(), followComposerMode: z.boolean(), inputDeviceId: z.string().nullable(),
+  pinDefaultVoiceThread: z.boolean(), onlyVoiceThread: z.boolean(), followComposerMode: z.boolean(), inputDeviceId: z.string().nullable(),
   recognitionStartTimeoutMs: z.number().int().positive(), recognitionCompletionTimeoutMs: z.number().int().positive(),
+  recognitionResultTimeoutMs: z.number().int().min(1000).max(300000),
   recognitionEndSilenceMs: z.number().int().positive(), recognizeStopCommand: z.boolean(),
   recognitionCues: z.boolean(), cueGain: z.number().nonnegative(), startupPreRollMs: z.number().int().nonnegative(),
   ttsGain: z.number().nonnegative(), headsetControls: z.boolean(),
 });
 export type NativeVoiceSettings = z.infer<typeof nativeVoiceSettingsSchema>;
+export const nativeSpeechCatalogSchema = z.strictObject({
+  source: z.enum(["openai", "server"]), sttModels: z.array(z.string()), ttsModels: z.array(z.string()),
+  voices: z.array(z.string()), speed: z.strictObject({ min: z.number().positive(), max: z.number().positive() }).nullable(),
+  formats: z.array(z.string()),
+});
+export type NativeSpeechCatalog = z.infer<typeof nativeSpeechCatalogSchema>;
 export const nativeVoiceStateSchema = z.strictObject({
-  version: z.literal(1), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
+  version: z.literal(3), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
   profileId: z.string().nullable(), serverOrigin: z.string().nullable(), identity: z.string().nullable(), originClientId: z.uuid().nullable(),
   settingsRevision: z.number().int().nonnegative(), settings: nativeVoiceSettingsSchema,
+  speech: z.strictObject({ credentialConfigured: z.boolean(), catalogStatus: z.enum(["idle", "loading", "ready", "error"]),
+    catalog: nativeSpeechCatalogSchema.nullable(), error: z.string().nullable() }),
   phase: z.enum(["off", "starting", "idle", "synthesizing", "speaking", "validating", "arming", "listening", "recognizing", "submitting", "cancelling", "recovering", "error"]),
   ready: z.boolean(), readiness: z.string(),
   foreground: z.strictObject({ visible: z.boolean(), threadId: z.string().nullable(), threadTitle: z.string().nullable() }),
@@ -50,6 +61,9 @@ export interface NativeVoicePlugin {
   stopCurrentInteraction(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
   resumeInput(input: NativeVoiceCommandContext & { mutationId: string }): Promise<NativeVoiceState>;
   discardInput(input: NativeVoiceCommandContext & { mutationId: string }): Promise<NativeVoiceState>;
+  refreshSpeechCatalog(input: NativeVoiceCommandContext & { force: boolean }): Promise<NativeVoiceState>;
+  /** Opens native masked credential entry. Secrets are never bridge arguments or results. */
+  openSpeechCredentialDialog(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
   listInputDevices(): Promise<{ devices: Array<{ id: string; label: string; type: number }>; selectedId: string | null }>;
   addListener(event: "stateChanged" | "settingsChanged", listener: (state: NativeVoiceState) => void): Promise<PluginListenerHandle>;
   addListener(event: "runtimeError", listener: (error: { code: string; message: string; connectionGeneration: number;

@@ -22,14 +22,15 @@ import java.util.concurrent.ConcurrentHashMap;
 })
 public final class NativeVoicePlugin extends Plugin {
     private NativeVoiceRuntime runtime;
+    private NativeSpeechCredentialDialog credentialDialog;
     private final ConcurrentHashMap<String, Long> permissionGenerations = new ConcurrentHashMap<>();
     private final NativeVoiceRuntime.Observer observer = (event, value) -> {
         try { notifyListeners(event, new JSObject(value.toString()), event.equals("openThread")); }
         catch (Exception ignored) {}
     };
     @Override public void load() { runtime = NativeVoiceRuntime.get(getContext()); runtime.observe(observer); }
-    // MainActivity owns resume/pause/stop visibility; the permission callback below is the only other visibility source.
-    @Override protected void handleOnDestroy() { permissionGenerations.clear(); runtime.nativeVisibility(false); runtime.unobserve(observer); }
+    // MainActivity owns lifecycle visibility; explicit enable/Resume and permission results reconcile their current Activity.
+    @Override protected void handleOnDestroy() { permissionGenerations.clear(); if (credentialDialog != null) { credentialDialog.dismiss(); credentialDialog = null; } runtime.nativeVisibility(false); runtime.unobserve(observer); }
     @PluginMethod public void setConnection(PluginCall call) { run("setConnection", call, false); }
     @PluginMethod public void disconnect(PluginCall call) { run("disconnect", call, false); }
     @PluginMethod public void getState(PluginCall call) { run("getState", call, false); }
@@ -40,6 +41,35 @@ public final class NativeVoicePlugin extends Plugin {
     @PluginMethod public void stopCurrentInteraction(PluginCall call) { run("stopCurrentInteraction", call, false); }
     @PluginMethod public void resumeInput(PluginCall call) { run("resumeInput", call, true); }
     @PluginMethod public void discardInput(PluginCall call) { run("discardInput", call, true); }
+    @PluginMethod public void refreshSpeechCatalog(PluginCall call) { run("refreshSpeechCatalog", call, false); }
+    @PluginMethod public void openSpeechCredentialDialog(PluginCall call) {
+        final long generation;
+        try {
+            NativeVoiceJson.keys(call.getData(), "expectedConnectionGeneration");
+            generation = expectedGeneration(call.getData());
+        } catch (IllegalArgumentException error) { rejectInvalidGeneration(call); return; }
+        getActivity().runOnUiThread(() -> {
+            JSONObject current = runtime.snapshot();
+            if (generation != current.optLong("connectionGeneration") || current.isNull("identity")) {
+                call.reject("The Sedes connection changed before the voice action arrived.", "connection_changed"); return;
+            }
+            if (credentialDialog != null) { call.reject("Close the open credential dialog first.", "credential_dialog_open"); return; }
+            final long revision = current.optLong("settingsRevision");
+            JSONObject settings = current.optJSONObject("settings"), speech = current.optJSONObject("speech");
+            credentialDialog = new NativeSpeechCredentialDialog(getActivity(), settings.optString("speechProvider"),
+                settings.optString("speechEndpoint"), speech != null && speech.optBoolean("credentialConfigured"),
+                (action, secret, reply) -> runtime.speechCredentialAction(generation, revision, action, secret, reply), () -> {
+                    credentialDialog = null;
+                    JSONObject latest = runtime.snapshot();
+                    if (generation != latest.optLong("connectionGeneration")) {
+                        call.reject("The Sedes connection changed while editing credentials.", "connection_changed"); return;
+                    }
+                    try { call.resolve(new JSObject(latest.toString())); }
+                    catch (Exception error) { call.reject("Voice returned an invalid state.", "voice_state_invalid"); }
+                });
+            credentialDialog.show();
+        });
+    }
     @PluginMethod public void updateSettings(PluginCall call) {
         final long generation;
         try {
@@ -60,9 +90,31 @@ public final class NativeVoicePlugin extends Plugin {
                 permissionGenerations.put(call.getCallbackId(), generation);
                 requestPermissionForAlias("notifications", call, "voicePermission"); return;
             }
-            run("updateSettings", call, true); return;
+            runVisibleSettings(call); return;
         }
         run("updateSettings", call, false);
+    }
+    /** Existing grants skip the permission callback, so ordinary enable/Resume must refresh activity visibility too. */
+    private void runVisibleSettings(PluginCall call) {
+        Activity activity = getActivity();
+        if (activity == null) { call.reject("Resume voice from the visible app.", "resume_from_visible_app"); return; }
+        activity.runOnUiThread(() -> {
+            final long generation;
+            try { generation = expectedGeneration(call.getData()); }
+            catch (IllegalArgumentException error) { rejectInvalidGeneration(call); return; }
+            if (!reconcileUserActionVisibility(activity, runtime, generation)) {
+                call.reject("The Sedes connection changed before the voice action arrived.", "connection_changed"); return;
+            }
+            run("updateSettings", call, true);
+        });
+    }
+    /** Called on main immediately before dispatch; a subsequent pause still clears the volatile native gate. */
+    static boolean reconcileUserActionVisibility(Activity activity, NativeVoiceRuntime runtime, long generation) {
+        if (generation != runtime.snapshot().optLong("connectionGeneration")) return false;
+        boolean visible = activity instanceof LifecycleOwner && !activity.isFinishing() && !activity.isDestroyed() &&
+            ((LifecycleOwner) activity).getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED);
+        runtime.nativeVisibility(visible);
+        return true;
     }
     @PermissionCallback private void voicePermission(PluginCall call) {
         Long generation = permissionGenerations.remove(call.getCallbackId());

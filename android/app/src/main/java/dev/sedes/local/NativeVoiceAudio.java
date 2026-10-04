@@ -57,7 +57,9 @@ final class NativeVoiceAudio {
     private static final long FOCUS_HOLD_MS = 1400, ROUTE_TIMEOUT_MS = 5000;
     private static final long MAX_SPOOL_BYTES = 256 * 1024 * 1024L;
     private static final AtomicLong FOCUS_IDS = new AtomicLong();
-    private static final int SAMPLE_RATE = 16000, PUMP_BYTES = 64 * 1024, MAX_CAPTURE = 16 * 1024 * 1024;
+    static final int SAMPLE_RATE = NativeVoiceCapturePolicy.SAMPLE_RATE;
+    private static final int PUMP_BYTES = 64 * 1024;
+    private static final long MAX_CAPTURE = NativeVoiceCapturePolicy.MAX_CAPTURE_SAMPLES * 2;
     private static boolean staleSpoolsRemoved;
     private final Context context;
     private final AudioManager manager;
@@ -222,6 +224,7 @@ final class NativeVoiceAudio {
     long pendingPcmBytes() { synchronized (lock) { return spoolWritten - spoolRead; } }
     File spoolForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return spool; } }
     AudioTrack trackForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return track; } }
+    AudioRecord recorderForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return recorder; } }
     Object focusForTest() { if (!BuildConfig.DEBUG) throw new IllegalStateException("test_audio_unavailable"); synchronized (lock) { return focus; } }
     // Hold one real track before play(); signal only when its full buffer blocks drain priming.
     CountDownLatch holdNextPlaybackForTest() {
@@ -307,20 +310,24 @@ final class NativeVoiceAudio {
                     if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
                         throw new SecurityException("microphone_permission_required");
                     local = new AudioRecord(bluetooth ? MediaRecorder.AudioSource.VOICE_COMMUNICATION : MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                        SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, Math.max(minimum, 6400));
+                        SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, Math.max(minimum, SAMPLE_RATE / 5 * 2));
                     if (local.getState() != AudioRecord.STATE_INITIALIZED) throw new IllegalStateException("microphone_unavailable");
+                    if (local.getSampleRate() != SAMPLE_RATE || local.getChannelCount() != 1 ||
+                        local.getAudioFormat() != AudioFormat.ENCODING_PCM_16BIT)
+                        throw new IllegalStateException("microphone_format_unavailable");
                     if (preferred != null && !local.setPreferredDevice(preferred)) throw new IllegalStateException("microphone_route_failed");
                     recorder = local; local.startRecording();
                     if (local.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) throw new IllegalStateException("microphone_start_failed");
                 }
             }
             listener.captureStarted(id);
-            byte[] buffer = new byte[3200]; int total = 0;
+            byte[] buffer = new byte[NativeVoiceCapturePolicy.FRAME_SAMPLES * 2]; long total = 0;
             while (current(current)) {
                 byte[] chunk;
                 if (fixture != null) { chunk = fixture.next(); if (chunk == null) break; Thread.sleep(10); }
                 else { int count = local.read(buffer, 0, buffer.length, AudioRecord.READ_BLOCKING); if (count <= 0) throw new IllegalStateException("microphone_read_failed"); chunk = Arrays.copyOf(buffer, count); }
                 if (!current(current)) return;
+                if ((chunk.length & 1) != 0) throw new IllegalStateException("microphone_format_unavailable");
                 total += chunk.length;
                 if (total > MAX_CAPTURE) throw new IllegalStateException("microphone_limit_reached");
                 listener.captured(id, chunk);
@@ -328,7 +335,7 @@ final class NativeVoiceAudio {
             if (current(current)) listener.captureEnded(id);
         } catch (Exception error) {
             if (current(current)) listener.failed(id, error instanceof SecurityException ? "microphone_permission_required" :
-                code(error, "microphone_failed", "audio_focus_unavailable", "microphone_device_unavailable", "microphone_route_failed", "microphone_limit_reached"));
+                code(error, "microphone_failed", "audio_focus_unavailable", "microphone_device_unavailable", "microphone_route_failed", "microphone_limit_reached", "microphone_format_unavailable"));
         }
         finally {
             synchronized (lock) {

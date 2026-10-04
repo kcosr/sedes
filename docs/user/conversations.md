@@ -15,15 +15,20 @@ After configuring [Android voice](../operator/clients/voice.md), use the
 microphone on the voice card under the composer to send spoken text. The card
 appears once voice is connected and set to Manual or Response. If voice cannot
 connect, **Settings → Voice** shows the problem and a retry button; the rest of
-the app keeps working. The microphone targets the visible thread, then your
-pinned Voice thread, or asks you to choose one. Voice sends a separate message
-and preserves the unsent composer draft. It can also make the first send to an
+the app keeps working. By default, the microphone targets the visible thread,
+then your saved default voice thread, or asks you to choose one. Voice sends a separate
+message and preserves the unsent composer draft. It can also make the first send to an
 empty thread.
+
+Enable **Pin default voice thread** to keep the idle bar and new recordings on
+your default thread while browsing elsewhere. If that thread is missing or
+unavailable, the record button asks for a new default before recording.
 
 The card's first line always names its thread, using its title or **Untitled
 thread**: the thread being spoken or recorded to, or, when idle, the thread a
-recording would use. That is the visible thread when it can take a recording,
-otherwise your Voice thread; with neither, the card shows **Choose a thread**.
+recording would use. When pinned, that is the default thread. Otherwise it is
+the visible thread when it can take a recording, then the default. With neither,
+the card asks you to choose a thread.
 The second line is the state, such as **Ready · Response · Auto-listen on**,
 **Speaking** with the notice kind and queued count, or **Listening**. If voice
 needs to resume, the card offers **Resume**.
@@ -34,8 +39,10 @@ recording target before recognition finishes; the picker lists the visible
 thread first. Navigating to another thread alone does not redirect a recording.
 Once recognition finishes, its target and delivery policy stay fixed through
 any connection recovery. The caret on the card opens the **Voice** sheet with
-**Audio mode**, **Auto-listen**, **Follow composer mode**, and **All voice
-settings**; choose the Voice thread in **Settings → Voice**.
+**Audio mode**, **Auto-listen**, **Follow composer mode**, **Pin default voice
+thread**, **Only play from default voice thread**, **Default voice thread**, and
+**All voice settings**. The playback filter limits automatic playback to the default thread; it does not change
+where explicit recordings go.
 
 Spoken input queues while a thread is running. Enable **Follow composer's
 selected mode** to use the client's Queue/Steer preference instead. When

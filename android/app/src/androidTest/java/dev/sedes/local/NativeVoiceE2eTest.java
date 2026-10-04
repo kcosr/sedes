@@ -30,7 +30,7 @@ import org.json.JSONObject;
 import org.junit.Assume;
 import org.junit.Test;
 
-/** Opt-in full-system lane. The host starts real Sedes/adapter with loopback provider fixtures. */
+/** Opt-in full-system lane. The host starts real Sedes and speech server with loopback model fixtures. */
 public class NativeVoiceE2eTest {
     private Instrumentation instrumentation;
     private WebView web;
@@ -41,8 +41,9 @@ public class NativeVoiceE2eTest {
 
     @Test(timeout = 300000) public void nativeConversationCycle() throws Exception {
         Bundle args = InstrumentationRegistry.getArguments();
-        String server = args.getString("serverOrigin"), adapter = args.getString("adapterOrigin"), pairing = args.getString("pairingCode");
-        Assume.assumeTrue("Requires the isolated native voice host harness", server != null && adapter != null && pairing != null);
+        String server = args.getString("serverOrigin"), speechEndpoint = args.getString("speechEndpoint"), pairing = args.getString("pairingCode");
+        Assume.assumeTrue("Requires the isolated native voice host harness", server != null && speechEndpoint != null && pairing != null);
+        String speechToken = required(args, "speechToken");
         String thread = required(args, "threadId"), title = args.getString("threadTitle", "Voice fixture");
         String mode = args.getString("mode", "response"), scenario = args.getString("scenario", "cycle");
         boolean prepareStartup = scenario.equals("startup") && "prepare".equals(args.getString("startupStage"));
@@ -104,9 +105,9 @@ public class NativeVoiceE2eTest {
             boolean speech = index < speechChunks || !allowCaptureCompletion.get();
             if (!speech && silenceChunks.getAndIncrement() >= 20) return null;
             SystemClock.sleep(80);
-            byte[] pcm = new byte[3200];
-            if (speech) for (int i = 0; i < 1600; i++) {
-                short sample = (short) (6000 * Math.sin(2 * Math.PI * 440 * (index * 1600 + i) / 16000));
+            byte[] pcm = new byte[4800];
+            if (speech) for (int i = 0; i < 2400; i++) {
+                short sample = (short) (6000 * Math.sin(2 * Math.PI * 440 * (index * 2400 + i) / 24000));
                 pcm[i * 2] = (byte) sample; pcm[i * 2 + 1] = (byte) (sample >> 8);
             }
             return pcm;
@@ -129,9 +130,20 @@ public class NativeVoiceE2eTest {
                 waitJs("document.querySelector('[data-testid=\"settings-page\"][data-page=\"voice\"]') !== null", 15000);
                 screenshot("settings-entry");
                 click("[data-testid=\"settings-view\"] [data-testid=\"settings-page\"][data-page=\"voice\"] a[data-slot=\"entity-row-main\"]");
-                waitJs("Array.from(document.querySelectorAll('label')).some(x=>x.textContent.trim()==='Adapter URL')", 15000);
-                inputByLabel("Adapter URL", adapter); click("[aria-label=\"Save Adapter URL\"]");
-                await(() -> adapter.equals(runtime.snapshot().optJSONObject("settings").optString("adapterUrl")), 15000, "adapter URL saved");
+                waitJs("Array.from(document.querySelectorAll('label')).some(x=>x.textContent.trim()==='Provider')", 15000);
+                selectByLabel("Provider", "server");
+                saveSpeechSetting("Speech API endpoint", "speechEndpoint", speechEndpoint);
+                saveSpeechSetting("Recognition model", "sttModel", "parakeet-local");
+                saveSpeechSetting("Speech model", "ttsModel", "kokoro-local");
+                saveSpeechSetting("Speech voice", "ttsVoice", "af_heart");
+                clickText("Manage speech credential");
+                // The fixture token goes through the real native dialog. It never
+                // enters a WebView form or a Capacitor JavaScript argument.
+                androidx.test.espresso.Espresso.onView(androidx.test.espresso.matcher.ViewMatchers.withContentDescription("Server bearer token"))
+                    .perform(androidx.test.espresso.action.ViewActions.replaceText(speechToken));
+                androidx.test.espresso.Espresso.onView(androidx.test.espresso.matcher.ViewMatchers.withText("Save"))
+                    .perform(androidx.test.espresso.action.ViewActions.click());
+                await(() -> runtime.snapshot().optJSONObject("speech").optBoolean("credentialConfigured"), 15000, "native speech credential saved");
                 selectByLabel("Audio mode", mode);
                 await(() -> mode.equals(runtime.snapshot().optJSONObject("settings").optString("audioMode")), 15000, "audio mode " + mode + " saved");
             } else {
@@ -140,7 +152,7 @@ public class NativeVoiceE2eTest {
                 assertEquals(Long.parseLong(required(args, "savedSettingsRevision")), runtime.snapshot().getLong("settingsRevision"));
                 assertEquals(required(args, "savedOriginClientId"), runtime.snapshot().getString("originClientId"));
             }
-            await(() -> runtime.snapshot().optBoolean("ready"), 45000, "native adapter handshake");
+            await(() -> runtime.snapshot().optBoolean("ready"), 45000, "native voice ready");
             waitJs("document.querySelector('[aria-label=\"Voice controls\"]') !== null", 15000);
             screenshot("voice-enabled");
             await(() -> runtime.snapshot().optString("phase").equals("idle"), 10000, "idle after handshake with an empty queue");
@@ -397,7 +409,7 @@ public class NativeVoiceE2eTest {
     private static JSONObject diagnosticState(JSONObject state) {
         JSONObject result = select(state, "connectionGeneration", "stateRevision", "settingsRevision", "originClientId", "phase", "ready", "readiness", "queue", "actions");
         NativeVoiceJson.put(result, "settings", select(state.optJSONObject("settings"), "audioMode", "autoListen", "ignoreOtherDevices",
-            "onlyVoiceThread", "voiceThreadId", "followComposerMode", "recognitionCues"));
+            "onlyVoiceThread", "voiceThreadId", "pinDefaultVoiceThread", "followComposerMode", "recognitionCues"));
         NativeVoiceJson.put(result, "active", select(state.optJSONObject("active"), "id", "eventKind", "threadId", "recognitionThreadId", "automatic"));
         NativeVoiceJson.put(result, "foreground", select(state.optJSONObject("foreground"), "visible", "threadId"));
         JSONArray errors = state.optJSONArray("errors"), codes = new JSONArray();
@@ -463,6 +475,12 @@ public class NativeVoiceE2eTest {
     }
     private void inputByLabel(String label, String value) throws Exception {
         assertEquals("true", js("(()=>{const l=Array.from(document.querySelectorAll('label')).find(x=>x.textContent.trim()===" + JSONObject.quote(label) + ");const e=document.getElementById(l.htmlFor);Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e," + JSONObject.quote(value) + ");e.dispatchEvent(new Event('input',{bubbles:true}));return true})()"));
+    }
+    private void saveSpeechSetting(String label, String field, String value) throws Exception {
+        waitJs("(()=>{const l=Array.from(document.querySelectorAll('label')).find(x=>x.textContent.trim()===" + JSONObject.quote(label)
+            + ");const e=l?document.getElementById(l.htmlFor):null;return e instanceof HTMLInputElement&&!e.disabled})()", 15000);
+        inputByLabel(label, value); click("[aria-label=\"Save " + label + "\"]");
+        await(() -> value.equals(runtime.snapshot().optJSONObject("settings").optString(field)), 15000, "speech setting saved: " + field);
     }
     private void selectByLabel(String label, String value) throws Exception {
         String lookup = "const l=Array.from(document.querySelectorAll('label')).find(x=>x.textContent.trim()===" + JSONObject.quote(label)

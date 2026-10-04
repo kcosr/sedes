@@ -4,6 +4,12 @@
 
 ### Breaking Changes
 
+- Android voice now uses OpenAI-compatible Realtime transcription and streamed
+  HTTP speech in place of the direct-media adapter. Upgrading resets local voice
+  settings with Audio mode Off; reconfigure the provider, endpoint, and models.
+  Separately stored speech credentials remain on the device.
+  ([#49](https://github.com/kcosr/sedes/pull/49))
+
 - Browser and packaged clients require client protocol 138 for pending Send
   presentation. Upgrade clients together with the server.
   ([#46](https://github.com/kcosr/sedes/pull/46))
@@ -196,6 +202,12 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Android voice connects directly to OpenAI or a self-hosted
+  [OpenAI-Compatible Speech Server](https://github.com/kcosr/openai-speech-server),
+  with native encrypted credentials, automatic model and voice discovery, and
+  device-owned recording, silence detection, and playback.
+  ([#49](https://github.com/kcosr/sedes/pull/49))
 
 - Android native voice supports spoken notifications, explicit and automatic
   recording, thread targeting, background controls, and recoverable input
@@ -393,6 +405,11 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- Android voice settings and quick controls provide searchable speech choices,
+  a default recording thread with optional pinning, and an independent automatic
+  playback filter. Off, Manual, and Response modes control the voice session.
+  ([#49](https://github.com/kcosr/sedes/pull/49))
 
 - Android HTTPS and secure WebSocket connections now trust user- and
   MDM-installed certificate authorities, including for authenticated Sedes
@@ -718,6 +735,11 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Android voice startup and Resume recover the current activity and thread
+  context after configuration changes. Silent recordings end locally without
+  submitting audio for transcription.
+  ([#49](https://github.com/kcosr/sedes/pull/49))
 
 - Native voice recognition that captures audio but returns no transcript
   (`empty_transcript`) now re-arms and listens again instead of reporting a

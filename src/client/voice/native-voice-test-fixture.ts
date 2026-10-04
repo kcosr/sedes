@@ -8,15 +8,17 @@ export const VOICE_ORIGIN_ID = "34612c41-0bbb-455f-a5af-725bfc7ae768";
 
 export function voiceSettings(patch: Partial<NativeVoiceSettings> = {}): NativeVoiceSettings {
   return { audioMode: "off", autoListen: true, ignoreOtherDevices: true, readNotificationContext: true,
-    adapterUrl: "", adapterTextLimit: 5000, voiceThreadId: null, voiceThreadTitle: null, onlyVoiceThread: false, followComposerMode: false,
-    inputDeviceId: null, recognitionStartTimeoutMs: 30000, recognitionCompletionTimeoutMs: 60000, recognitionEndSilenceMs: 1200,
+    speechProvider: "openai", speechEndpoint: "https://api.openai.com/v1", sttModel: "gpt-live-transcribe",
+    ttsModel: "gpt-4o-mini-tts", ttsVoice: "coral", ttsSpeed: 1, speechTextLimit: 4096, voiceThreadId: null, voiceThreadTitle: null, pinDefaultVoiceThread: false, onlyVoiceThread: false, followComposerMode: false,
+    inputDeviceId: null, recognitionStartTimeoutMs: 30000, recognitionCompletionTimeoutMs: 60000, recognitionEndSilenceMs: 1200, recognitionResultTimeoutMs: 60000,
     recognizeStopCommand: true, recognitionCues: true, cueGain: 100, startupPreRollMs: 512, ttsGain: 100, headsetControls: true, ...patch };
 }
 export function voiceSnapshot(patch: Partial<NativeVoiceState> = {}): NativeVoiceState {
   return {
-    version: 1, stateRevision: 1, connectionGeneration: 1, ...VOICE_CONNECTION, originClientId: VOICE_ORIGIN_ID, settingsRevision: 0,
+    version: 3, stateRevision: 1, connectionGeneration: 1, ...VOICE_CONNECTION, originClientId: VOICE_ORIGIN_ID, settingsRevision: 0,
     settings: voiceSettings(), phase: "off", ready: false, readiness: "off", foreground: { visible: false, threadId: null, threadTitle: null }, active: null,
     queue: { count: 0, bytes: 0, droppedCount: 0, droppedReasons: {} },
+    speech: { credentialConfigured: false, catalogStatus: "idle", catalog: null, error: null },
     actions: { canStart: false, canStop: false, canSkip: false, canRetarget: false, canResume: false }, recovery: [], errors: [], ...patch,
   };
 }
@@ -32,7 +34,7 @@ export function fakeVoicePlugin() {
   const plugin = {
     setConnection: state(), getState: state(), updateSettings: state(), disconnect: state(), setForegroundContext: state(),
     startManualListen: state(), retargetActiveRecognition: state(), skipCurrentPlayback: state(), stopCurrentInteraction: state(),
-    resumeInput: state(), discardInput: state(),
+    resumeInput: state(), discardInput: state(), refreshSpeechCatalog: state(), openSpeechCredentialDialog: state(),
     listInputDevices: vi.fn(async (): Promise<Awaited<ReturnType<NativeVoicePlugin["listInputDevices"]>>> => ({ devices: [], selectedId: null })),
     addListener: vi.fn(async (event: string, listener: (value: unknown) => void) => { listeners.set(event, listener); return { remove }; }),
   };

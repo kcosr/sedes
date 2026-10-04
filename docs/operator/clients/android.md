@@ -144,7 +144,7 @@ The Android app trusts system certificate authorities and CA certificates
 installed by the user, or by device management (MDM), in Android's credential
 settings. This trust is app-wide. It applies to every HTTPS and secure WebSocket
 connection the app makes, including WebView and native requests to Sedes that
-carry the paired credential, and voice-adapter connections. Anyone able to
+carry the paired credential, and speech-provider connections. Anyone able to
 install a CA certificate on the device can therefore intercept and read all
 Sedes traffic from this app, including that credential. Install only CA
 certificates you control, and review the device's user certificate store before
