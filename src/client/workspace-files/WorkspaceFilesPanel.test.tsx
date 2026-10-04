@@ -597,6 +597,10 @@ describe("WorkspaceFilesPanel", () => {
       "aria-selected",
       "true",
     );
+    // The first open document isn't covered by the file browser.
+    expect(
+      screen.getByRole("button", { name: "Toggle file browser" }),
+    ).toHaveAttribute("aria-expanded", "false");
 
     fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
     act(() => openFile("src/other.ts"));

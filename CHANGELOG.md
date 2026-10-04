@@ -746,7 +746,8 @@
   files first, then each directory's files before its subdirectories.
   Previously the navigator and previous/next could disagree.
 - **Open file** in a Changes diff opens Browse at the line you were reading
-  instead of the top of the file.
+  instead of the top of the file, and the file browser no longer covers the
+  file when it is the first one open.
 - Closing the Files browser with no file open shows an **Open file browser**
   prompt instead of a blank panel.
 

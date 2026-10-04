@@ -3702,8 +3702,10 @@ export function WorkspaceFilesPanel({
                     sequence: nextWorkspaceFilesSeekSequence(),
                     lineNumber,
                   });
-                openTab(address, { hideTree: true });
+                // Choose Browse first: it reopens the browser when no tab
+                // is open yet, and opening the tab must close it again.
                 selectMode("browse");
+                openTab(address, { hideTree: true });
               }}
               dataSource={compareDataSource}
               visible={context.visible && mode === "compare"}
