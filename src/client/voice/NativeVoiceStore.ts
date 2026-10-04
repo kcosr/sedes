@@ -92,7 +92,7 @@ export class NativeVoiceStore {
     finally { this.#set({ ...this.#state, loading: false }); }
   }
   async reconnect(): Promise<void> {
-    await this.run(() => this.#attemptConnect());
+    await this.run(() => this.#attemptConnect(true));
   }
   /** The app became visible, came back online, or resumed: reconnect a missing connection now, otherwise rehydrate. */
   foreground(): void {
@@ -101,10 +101,10 @@ export class NativeVoiceStore {
     else void this.#attemptConnect().catch(error => this.#error(error));
   }
   /** One connection attempt at a time; a failure retries with capped exponential backoff until native state is restored. */
-  #attemptConnect(): Promise<NativeVoiceState> {
+  #attemptConnect(reconnect = false): Promise<NativeVoiceState> {
     this.#clearRetry();
     if (!this.#connecting) {
-      const attempt: Promise<NativeVoiceState> = this.#connect()
+      const attempt: Promise<NativeVoiceState> = this.#connect(reconnect)
         .then(state => { this.#retryAttempt = 0; return state; }, (error: unknown) => { this.#scheduleRetry(); throw error; })
         .finally(() => { if (this.#connecting === attempt) this.#connecting = undefined; });
       this.#connecting = attempt;
@@ -127,8 +127,8 @@ export class NativeVoiceStore {
     if (this.#retryTimer !== undefined) clearTimeout(this.#retryTimer);
     this.#retryTimer = undefined;
   }
-  async #connect(): Promise<NativeVoiceState> {
-    const state = nativeVoiceStateSchema.parse(await this.plugin.setConnection(this.connection));
+  async #connect(reconnect: boolean): Promise<NativeVoiceState> {
+    const state = nativeVoiceStateSchema.parse(await this.plugin.setConnection({ ...this.connection, ...(reconnect ? { reconnect: true } : {}) }));
     if (this.#disposed || state.profileId !== this.connection.profileId || state.serverOrigin !== this.connection.serverOrigin || state.identity !== this.connection.identity)
       throw new Error("This voice connection is no longer active.");
     this.#accept(state);

@@ -938,7 +938,13 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     const token = request.get("X-Sedes-Client");
     if (!token && !required) return undefined;
     if (!dependencies.clientControls) throw new ApiError(503, "client_controls_unavailable", "Client registration is unavailable.");
-    return dependencies.clientControls.origin(requestScope, token, clientIdentity(request)?.id);
+    try { return dependencies.clientControls.origin(requestScope, token, clientIdentity(request)?.id); }
+    catch (error) {
+      if (error instanceof DomainError && (error.code === "runtime_unavailable" || error.code === "conflict")) {
+        throw new ApiError(409, "client_registration_required", "The client must reconnect before this input can be admitted.", true);
+      }
+      throw error;
+    }
   };
   routes.post("/api/client-registration", async (request, response) => {
     if (!dependencies.clientControls) throw new ApiError(503, "client_controls_unavailable", "Client registration is unavailable.");

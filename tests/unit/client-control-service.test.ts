@@ -52,6 +52,13 @@ describe("registered client authority", () => {
     expect(service.list(scope).map(item => item.clientId)).toEqual([current.clientId]);
   });
 
+  it("reports registration capacity as retryable unavailability rather than replacement", () => {
+    const service = fixture();
+    for (let index = 0; index < 128; index++) service.register(scope, undefined, registration);
+    try { service.register(scope, undefined, registration); expect.fail("Expected a capacity rejection"); }
+    catch (error) { expect(error).toMatchObject({ code: "runtime_unavailable", retryable: true }); }
+  });
+
   it("resumes anonymous identity with a fresh connection and rejects foreign or replaced sessions", async () => {
     const service = fixture();
     const first = service.register(scope, undefined, registration);

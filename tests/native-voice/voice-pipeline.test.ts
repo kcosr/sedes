@@ -187,13 +187,17 @@ describe("native voice production pipeline with loopback providers", () => {
       const command = delivery.commands[0]!;
       expect(command).toMatchObject({ action: "switch_thread", sourceThreadId: threadId, threadId: destination, listen: false });
       expect(feed.frames.some(frame => frame.event === "notification" && frame.value.payload?.turn?.id === command.sourceTurnId)).toBe(false);
+      const settlementRequestedAt = Date.now();
       const settlement = clientPollResultSchema.parse(await app.json("/api/client-controls/poll", "POST", {
         state, acknowledgements: [{ id: command.id, result: { status: "accepted", reason: "after_turn_completion", state } }],
       }, clientHeaders));
       expect(settlement.commands).toHaveLength(1);
       const reply = voiceNotificationSchema.parse((await waitForSpeech(() => feed.frames.find(frame =>
         frame.event === "notification" && frame.value.payload?.turn?.id === command.sourceTurnId))).value);
-      expect(settlement.commands[0]).toMatchObject({ ...command, action: "turn_settled", replyEventId: reply.sourceEventId });
+      expect(settlement.commands[0]).toMatchObject({ ...command, action: "turn_settled", replyEventId: reply.sourceEventId, expiresAt: expect.any(Number) });
+      expect(settlement.commands[0]!.expiresAt).toBeLessThan(command.expiresAt);
+      expect(settlement.commands[0]!.expiresAt).toBeGreaterThanOrEqual(settlementRequestedAt + 3_600_000);
+      expect(settlement.commands[0]!.expiresAt).toBeLessThanOrEqual(Date.now() + 3_600_000);
       expect(reply.origin).toEqual({ clientId: registration.clientId });
       await app.waitFor(async () => (await app.thread(threadId)).runState === "idle");
     } finally { await feed.close(); }

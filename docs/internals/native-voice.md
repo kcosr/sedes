@@ -81,6 +81,12 @@ five minutes. Each successful reconnect refreshes the session and resumes enable
 voice/recovery work; a temporary control-channel outage clears deferred actions
 without cancelling active capture or playback. Replaced paired windows stop
 reclaiming the connection automatically and expose an explicit reconnect action.
+Reattaching the WebView preserves the native binding during a control outage.
+Inputs prepared in that live process wait for registration before transmission;
+an explicit `client_registration_required` response also proves no admission
+and permits retry after reconnect. Other uncertain outcomes remain read-only
+recovery until the user requests Resume. Capacity failures are retryable
+unavailability, distinct from connection replacement.
 `X-Sedes-Client` carries an opaque connection token, checked against authenticated
 scope and paired identity before the server stamps input attribution. The token
 is a connection fence, not a replacement for authentication. Native and browser

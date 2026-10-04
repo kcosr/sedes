@@ -29,13 +29,13 @@ export class ClientControlConnection {
     const signal = this.#abort.signal;
     while (!signal.aborted) {
       try {
-        const session = await authenticatedFetch(this.endpoint, "/api/application/session", { signal });
+        const session = await authenticatedFetch(this.endpoint, "/api/application/session", { signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) });
         if (!session.ok) throw new Error("session_unavailable");
         const { csrfToken } = await session.json();
         if (typeof csrfToken !== "string") throw new Error("session_invalid");
         const request = async (path: string, body: unknown) => {
           const response = await authenticatedFetch(this.endpoint, path, {
-            method: "POST", signal, headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken,
+            method: "POST", signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]), headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken,
               ...(this.registration ? { "X-Sedes-Client": this.registration.connectionToken } : {}) }, body: JSON.stringify(body),
           });
           if (response.status === 409) { this.close(); this.replaced(); throw new Error("client_connection_replaced"); }

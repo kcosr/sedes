@@ -9853,7 +9853,7 @@ tr.diff-hunk td {
 
 .client-controls-replaced {
   position: fixed;
-  z-index: 1000;
+  z-index: var(--z-floating);
   inset: auto var(--space-3) var(--space-3);
   display: flex;
   flex-wrap: wrap;

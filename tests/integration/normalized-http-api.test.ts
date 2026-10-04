@@ -4832,6 +4832,10 @@ describe("normalized HTTP application contract", () => {
       };
 
       const unprotected = input();
+      const unregistered = input();
+      await current.mutate(request(current.app).post(`/api/threads/${threadId}/inputs`)).send(unregistered)
+        .expect(409).expect(({ body }) => expect(body.error).toMatchObject({ code: "client_registration_required", retryable: true }));
+      expect((await receipt(unregistered.mutationId).expect(200)).body).toEqual({ status: "notObserved" });
       await current
         .withHost(request(current.app).post(`/api/threads/${threadId}/inputs`))
         .send(unprotected)
@@ -4862,7 +4866,8 @@ describe("normalized HTTP application contract", () => {
         .set("X-Sedes-Client", otherClient.connectionToken).send(first).expect(409);
       await current.mutate(request(current.app).post(`/api/threads/${threadId}/inputs`))
         .set("X-Sedes-Client", client.connectionToken).send({ ...input(), origin: { clientId: otherClient.clientId } }).expect(400);
-      await current.mutate(request(current.app).post(`/api/threads/${threadId}/inputs`)).send(input()).expect(503);
+      await current.mutate(request(current.app).post(`/api/threads/${threadId}/inputs`)).send(input())
+        .expect(409).expect(({ body }) => expect(body.error.code).toBe("client_registration_required"));
       const found = await receipt(first.mutationId).expect(200);
       expect(found.headers["cache-control"]).toBe("no-store");
       expect(found.body).toEqual({ status: "found", receipt: admitted.body });

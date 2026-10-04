@@ -63,6 +63,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private final ArrayDeque<JSONObject> errors = new ArrayDeque<>();
     private final Map<String, Call> admissions = new HashMap<>();
     private final Set<String> cancelledAdmissions = new HashSet<>();
+    /** Only live-process inputs proved not to have been admitted may resume automatically on control reconnect. */
+    private final Set<String> waitingClientAdmissions = new HashSet<>();
     private final Map<String, Recovery> recoveries = new HashMap<>();
     private NativeVoiceSettings settings = NativeVoiceSettings.defaults();
     private String profileId, origin, identity, binding, credential, csrf, originId;
@@ -178,12 +180,16 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         return code != null && code.matches("[a-z][a-z0-9_]{0,79}") ? code : "voice_action_failed";
     }
     private void setConnection(JSONObject args, Reply reply) throws Exception {
-        NativeVoiceJson.keys(args, "profileId", "serverOrigin", "identity");
+        NativeVoiceJson.keys(args, "profileId", "serverOrigin", "identity", "reconnect");
+        boolean reconnect = args.has("reconnect") && NativeVoiceJson.bool(args, "reconnect");
         String nextProfile = NativeVoiceJson.string(args, "profileId", 160);
         String nextOrigin = NativeVoiceSettings.origin(NativeVoiceJson.string(args, "serverOrigin", 2048));
         String expectedIdentity = NativeVoiceJson.string(args, "identity", 64);
         if (!expectedIdentity.matches("[0-9a-f]{64}")) throw new IllegalArgumentException("voice_identity_invalid");
-        if (nextProfile.equals(profileId) && nextOrigin.equals(origin) && expectedIdentity.equals(identity) && binding != null && csrf != null && clientConnectionToken != null) { reply.done(snapshot()); return; }
+        if (nextProfile.equals(profileId) && nextOrigin.equals(origin) && expectedIdentity.equals(identity) && binding != null && csrf != null) {
+            if (clientConnectionToken == null || reconnect) clientControls.reconnect(reconnect);
+            reply.done(snapshot()); return;
+        }
         disconnect(true);
         profileId = nextProfile; origin = nextOrigin; phase = "starting";
         final long generation = connectionGeneration;
@@ -232,7 +238,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     public void clientRegistered(String clientId, String token) {
         originId = clientId; clientConnectionToken = token; publish();
-        resumeEnabledSession(); recoverOutstanding(); deliverPendingOpen();
+        resumeEnabledSession(); resumeClientAdmissions(); recoverOutstanding(); deliverPendingOpen();
     }
     public String clientCsrf() { return csrf; }
     public void refreshClientSession(Runnable ready, Runnable retry) {
@@ -358,6 +364,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     private void disconnect(boolean cancelIntended) {
         clientControls.disconnect();
+        waitingClientAdmissions.clear();
         inputSubmissionContext = new Object();
         // Cancellation intent covers every journaled input, including the active admission.
         if (cancelIntended) cancelOutstanding(false);
@@ -1014,6 +1021,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         try {
             JSONObject current = entry(ownerBinding, id);
             if (current == null || current.optBoolean("cancelled") || cancelledAdmissions.contains(key) || admissions.containsKey(key)) return;
+            if (ownerBinding.equals(binding) && clientConnectionToken == null) {
+                waitingClientAdmissions.add(key); publish(); return;
+            }
+            waitingClientAdmissions.remove(key);
             NativeVoiceJson.put(current, "stage", "possiblySubmitted"); saveEntry(ownerBinding, current);
             Call call = http.request(ownerOrigin, ownerCredential, csrf, "POST", "/api/threads/" + Uri.encode(current.optString("threadId")) + "/inputs",
                 externalInputRequest(current.optJSONObject("request")), (status, value, failure) -> handler.post(() -> {
@@ -1035,6 +1046,13 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         boolean csrfRejected = status == 403 && error != null && error.optString("code").equals("csrf_token_invalid");
         boolean cancelled = remaining.optBoolean("cancelled") || cancelledAdmissions.contains(key);
         boolean current = generation == connectionGeneration && ownerBinding.equals(binding);
+        boolean registrationRejected = status == 409 && error != null && error.optString("code").equals("client_registration_required");
+        if (registrationRejected && cancelled) { rejected(ownerBinding, id, null, false); return; }
+        if (registrationRejected && current) {
+            // This response is produced before the server admits any input. Retry the same journaled request only after registration.
+            NativeVoiceJson.put(remaining, "stage", "prepared"); saveEntry(ownerBinding, remaining);
+            waitingClientAdmissions.add(key); clientControls.reconnect(false); publish(); return;
+        }
         // A CSRF rejection admitted nothing; with cancellation intent there is nothing left to deliver.
         if (csrfRejected && cancelled) { rejected(ownerBinding, id, null, false); return; }
         if (csrfRejected && !refreshed && current) {
@@ -1090,7 +1108,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         catch (IllegalArgumentException error) { return false; }
         return entry.optString("mutationId").equals(receipt.optString("mutationId")) && entry.optString("threadId").equals(receipt.optString("threadId"));
     }
-    private void forget(String key) { Recovery recovery = recoveries.remove(key); if (recovery != null && recovery.call != null) recovery.call.cancel(); }
+    private void forget(String key) { waitingClientAdmissions.remove(key); Recovery recovery = recoveries.remove(key); if (recovery != null && recovery.call != null) recovery.call.cancel(); }
     private void accepted(String ownerBinding, String id, JSONObject receipt, long generation) throws Exception {
         // A found receipt, including queued or submitting, is the definitive admission. Dispatch then belongs to the thread.
         String key = ownerBinding + "\n" + id;
@@ -1176,12 +1194,24 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             JSONArray entries = record(binding, () -> store.summaries(binding));
             for (int i = 0; i < entries.length(); i++) {
                 String id = entries.getJSONObject(i).optString("mutationId"), key = binding + "\n" + id;
-                if (admissions.containsKey(key)) continue;
+                if (admissions.containsKey(key) || waitingClientAdmissions.contains(key)) continue;
                 Recovery recovery = recoveries.get(key);
                 if (recovery != null) { recovery.attempts = 0; if (recovery.call != null) continue; }
                 reconcile(id, false, null);
             }
         } catch (Exception error) { report("voice_storage_unavailable"); }
+    }
+    private void resumeClientAdmissions() {
+        if (binding == null || clientConnectionToken == null) return;
+        for (String key : new ArrayList<>(waitingClientAdmissions)) {
+            if (!key.startsWith(binding + "\n")) continue;
+            String id = key.substring(binding.length() + 1);
+            try {
+                JSONObject current = entry(binding, id);
+                if (current == null || current.optBoolean("cancelled")) { waitingClientAdmissions.remove(key); continue; }
+                submit(binding, origin, credential, current, false);
+            } catch (Exception error) { report("voice_storage_unavailable"); }
+        }
     }
     private void reconcile(String id, boolean allowSubmit, String diagnostic) {
         final String ownerBinding = binding, ownerOrigin = origin, ownerCredential = credential;
@@ -1315,7 +1345,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 String id = entry.optString("mutationId"), key = binding + "\n" + id;
                 Recovery recovery = recoveries.get(key);
                 result.put(NativeVoiceJson.object("mutationId", id, "threadId", entry.optString("threadId"),
-                    "status", admissions.containsKey(key) ? "possiblySubmitted" : recovery != null && recovery.call != null ? "reconciling" : "uncertain",
+                    "status", waitingClientAdmissions.contains(key) ? "prepared" : admissions.containsKey(key) ? "possiblySubmitted" : recovery != null && recovery.call != null ? "reconciling" : "uncertain",
                     "cancelled", entry.optBoolean("cancelled") || cancelledAdmissions.contains(key)));
             }
         } catch (Exception ignored) {}

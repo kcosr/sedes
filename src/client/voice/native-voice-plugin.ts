@@ -50,7 +50,7 @@ export const nativeVoiceInputSubmittedSchema = z.strictObject({
 export type NativeVoiceInputSubmitted = z.infer<typeof nativeVoiceInputSubmittedSchema>;
 export type NativeVoiceCommandContext = { expectedConnectionGeneration: number };
 export interface NativeVoicePlugin {
-  setConnection(input: { profileId: string; serverOrigin: string; identity: string }): Promise<NativeVoiceState>;
+  setConnection(input: { profileId: string; serverOrigin: string; identity: string; reconnect?: boolean }): Promise<NativeVoiceState>;
   disconnect(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
   getState(): Promise<NativeVoiceState>;
   updateSettings(input: NativeVoiceCommandContext & { expectedRevision: number; patch: Partial<NativeVoiceSettings> }): Promise<NativeVoiceState>;

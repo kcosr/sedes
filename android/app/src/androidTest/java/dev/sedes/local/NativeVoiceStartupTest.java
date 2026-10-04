@@ -340,6 +340,37 @@ public class NativeVoiceStartupTest {
         }
     }
 
+    @Test public void webViewReattachmentDuringControlGapPreservesTheVoiceBinding() throws Exception {
+        try (Fixture f = new Fixture("off", false, true)) {
+            f.connect();
+            long generation = f.runtime.snapshot().getLong("connectionGeneration");
+            String id = f.runtime.snapshot().getString("originClientId");
+            f.take(f.polls).done(503, null, "network_unavailable"); f.flush();
+            f.beginConnection(f.profile).await();
+            assertEquals(generation, f.runtime.snapshot().getLong("connectionGeneration"));
+            assertEquals(id, f.runtime.snapshot().getString("originClientId"));
+            assertTrue("Reattachment does not reauthenticate or disconnect voice", f.auth.isEmpty());
+            f.session(); f.take(f.polls); f.flush();
+            assertFalse(f.runtime.snapshot().isNull("clientConnectionToken"));
+            assertEquals(id, f.runtime.snapshot().getString("originClientId"));
+        }
+    }
+
+    @Test public void onlyExplicitReconnectReclaimsAReplacedNativeClient() throws Exception {
+        try (Fixture f = new Fixture("off", false, true)) {
+            f.connect(); long generation = f.runtime.snapshot().getLong("connectionGeneration");
+            f.take(f.polls).done(409, NativeVoiceJson.object("error", NativeVoiceJson.object("code", "conflict")), null); f.flush();
+            f.beginConnection(f.profile).await();
+            assertTrue(f.sessions.isEmpty()); assertTrue(f.runtime.snapshot().isNull("clientConnectionToken"));
+            Reply reply = new Reply(); f.runtime.command("setConnection", NativeVoiceJson.object("profileId", f.profile,
+                "serverOrigin", f.origin, "identity", Fixture.IDENTITY, "reconnect", true), false, reply); reply.await();
+            f.session(); f.take(f.polls); f.flush();
+            assertEquals(generation, f.runtime.snapshot().getLong("connectionGeneration"));
+            assertFalse(f.runtime.snapshot().isNull("clientConnectionToken"));
+            assertFalse(f.registrations.get(1).has("resumeToken"));
+        }
+    }
+
     private static final class Reply implements NativeVoiceRuntime.Reply {
         final CountDownLatch done = new CountDownLatch(1);
         String failure;

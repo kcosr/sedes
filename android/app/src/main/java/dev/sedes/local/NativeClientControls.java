@@ -23,6 +23,7 @@ final class NativeClientControls {
     private long generation;
     private Call call;
     private String origin, credential, resumeToken;
+    private boolean replaced;
     NativeClientControls(NativeVoiceHttp http, Handler handler, Owner owner) {
         this.http = http; this.handler = handler; this.owner = owner;
     }
@@ -32,13 +33,24 @@ final class NativeClientControls {
     }
     void disconnect() {
         generation++; if (call != null) call.cancel(); call = null;
-        resumeToken = null;
+        resumeToken = null; replaced = false;
         http.clientRegistration(null, null, null); owner.clientDisconnected();
     }
+    /** A view reattachment speeds up retry; only an explicit user retry may reclaim another window's client. */
+    void reconnect(boolean takeover) {
+        if (origin == null || replaced && !takeover) return;
+        if (replaced) resumeToken = null;
+        replaced = false;
+        generation++; if (call != null) call.cancel(); call = null;
+        http.clientRegistration(null, null, null); owner.clientDisconnected();
+        final long expected = generation;
+        owner.refreshClientSession(() -> register(expected), () -> retry(expected, 0));
+    }
     private void retry(long expected, int status) {
+        if (expected != generation) return;
         http.clientRegistration(null, null, null); owner.clientDisconnected();
         if (status == 401) { owner.clientAuthenticationLost(); return; }
-        if (status == 409) { owner.clientReplaced(); return; }
+        if (status == 409) { replaced = true; owner.clientReplaced(); return; }
         if (status == 404) resumeToken = null;
         handler.postDelayed(() -> {
             if (expected != generation) return;

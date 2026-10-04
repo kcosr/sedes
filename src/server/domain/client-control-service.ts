@@ -45,7 +45,7 @@ export class ClientControlService {
     }
     if (session?.replaced) throw new DomainError("conflict", "This client session was replaced by another application window.");
     if (!session) {
-      if (this.#sessions.size >= 256) throw new DomainError("conflict", "Too many client sessions.");
+      if (this.#sessions.size >= 256) throw new DomainError("runtime_unavailable", "Too many client sessions. Retry shortly.", true);
       session = { scope: { ...scope }, clientId: authenticated?.id ?? randomUUID(), paired: !!authenticated,
         token: randomBytes(32).toString("base64url"), seen: this.now(), replaced: false };
       this.#sessions.set(session.token, session);
@@ -57,7 +57,7 @@ export class ClientControlService {
         this.#replaced.set(client.token, this.now()); this.#remove(client);
       }
     }
-    if (this.#clients.size >= MAX_CLIENTS) throw new DomainError("conflict", "Too many connected clients.");
+    if (this.#clients.size >= MAX_CLIENTS) throw new DomainError("runtime_unavailable", "Too many connected clients. Retry shortly.", true);
     const token = randomBytes(32).toString("base64url");
     this.#clients.set(token, {
       scope: { ...scope }, session, clientId, token, paired: !!authenticated,
