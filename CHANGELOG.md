@@ -736,6 +736,20 @@
 
 ### Fixed
 
+- Choosing a file in the Files browser always opens it. The browser now
+  highlights the open file, so a file it opened earlier no longer ignores the
+  click, and a Ctrl, Cmd, or Shift multi-selection no longer opens a file.
+- Files no longer switches into Changes when you open a file from another root
+  or switch roots, and a root you only browsed no longer reopens in Changes.
+  Files reopens in the mode you last chose.
+- Changes lists, displays, and steps through files in one order: top-level
+  files first, then each directory's files before its subdirectories.
+  Previously the navigator and previous/next could disagree.
+- **Open file** in a Changes diff opens Browse at the line you were reading
+  instead of the top of the file.
+- Closing the Files browser with no file open shows an **Open file browser**
+  prompt instead of a blank panel.
+
 - Android voice startup and Resume recover the current activity and thread
   context after configuration changes. Silent recordings end locally without
   submitting audio for transcription.
