@@ -39,7 +39,6 @@ public class NativeVoiceStoreTest {
             assertTrue(summary.getBoolean("cancelled"));
             store.removeEntry(binding, mutation); assertEquals(0, store.journal(binding).length());
             assertEquals(0, new NativeVoiceStore(context).journal(binding).length());
-            String origin = store.originId(binding); assertEquals(origin, new NativeVoiceStore(context).originId(binding));
         } finally { store.removeProfile(profile); }
     }
 
@@ -159,7 +158,7 @@ public class NativeVoiceStoreTest {
         String first = NativeVoiceStore.binding(profile, ORIGIN, IDENTITY_A), second = NativeVoiceStore.binding(profile, "https://example.test", IDENTITY_B);
         String kept = NativeVoiceStore.binding(other, ORIGIN, IDENTITY_A);
         try {
-            for (String binding : new String[] { first, second, kept }) { store.originId(binding); store.saveEntry(binding, entry(UUID.randomUUID().toString(), "text")); }
+            for (String binding : new String[] { first, second, kept }) { store.saveEntry(binding, entry(UUID.randomUUID().toString(), "text")); }
             store.removeProfile(profile);
             assertFalse(store.directory(first).exists()); assertFalse(store.directory(second).exists());
             assertEquals(0, store.journal(first).length());

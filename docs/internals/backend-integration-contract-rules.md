@@ -3470,6 +3470,35 @@ Publication failures must retain a retry without misreporting a committed write
 as failed. Event payloads stay normalized and do not carry provider identifiers
 or full document bodies.
 
+### Registered client controls
+
+Client-facing agent actions must use the canonical `client.*` tools and normalized
+active-turn authority on every backend. Capture the initiating client from the
+first normalized user input at invocation admission, before asynchronous checks
+or approval waits; later Steer input cannot transfer it. OpenCode's additional
+provider current-input lease also fences client controls, even within an
+unrestricted environment policy. Pi, Codex, Claude, and Grok use the shared
+normalized turn/owner-generation checks and existing invocation cancellation.
+Thread-scoped CLI/MCP source references do not prove an issuing turn before
+Sedes receives the invocation. Unbound, replaced, terminal, or
+unavailable source authority cannot silently become another active turn.
+
+The server derives input attribution from a principal-scoped client registration;
+browser-supplied UUIDs are never client authority. Paired management IDs and
+anonymous registrations use the same control contract. Android native and WebView
+share one registration. Connection generations, commands, acknowledgements and
+reply-drain correlation remain client plumbing, never provider wire identities.
+Do not reroute to another client, replay after reconnect, or start microphone
+capture on server tool completion before the selected client's playback drains.
+
+Navigation and default-thread writes authorize the exact destination through
+normal thread/environment policy. Settings use the client's revision and local
+profile/identity persistence. Unsupported voice, no active interaction, and local
+foreground/permission/setup gates must be reported truthfully. Test all compiled
+backend presentations, explicit foreign targets, stale turn authority across
+approval, wrong principal scope, connection replacement, and the independent
+turn-completion/playback-drain ordering.
+
 ## Model policy is backend authorization
 
 Every backend instance owns exactly one installation-level `modelPolicy`.

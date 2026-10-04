@@ -275,7 +275,8 @@ export class AgentToolEnvironmentAuthorityResolver {
   ): readonly ResolvedEnvironmentResourceRef[] {
     const object = inputObject(request.input);
     const inputField = declaration.inputField ?? `${declaration.resource}Id`;
-    const supplied = object[inputField];
+    const supplied = inputField.split(".").reduce<unknown>((value, key) =>
+      value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined, object);
     const sourceDefault = declaration.defaultToSource
       ? declaration.resource === "environment"
         ? request.defaults.environmentId

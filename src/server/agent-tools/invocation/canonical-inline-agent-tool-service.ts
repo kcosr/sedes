@@ -1,3 +1,5 @@
+import type { ClientControlToolService } from "../tools/client-control-tools.js";
+import type { TrustedClientTurn } from "../contracts/agent-tool-contracts.js";
 import { CanonicalAgentToolRequestError } from "./canonical-agent-tool-request-error.js";
 export { CanonicalAgentToolRequestError } from "./canonical-agent-tool-request-error.js";
 import type { WorkpadAgentToolService } from "../tools/workpad-agent-tool-service.js";
@@ -46,6 +48,7 @@ import type { AgentThreadControlToolServices } from "../tools/thread-control-too
 import type { AgentThreadWorktreeService } from "../tools/thread-worktree-tools.js";
 
 export interface CanonicalAgentToolInvocationContext {
+  readonly clientTurn?: TrustedClientTurn;
   readonly scope: RequestScope;
   readonly subject: TrustedToolInvocationSubject;
   readonly defaults: TrustedAgentToolCallerDefaults;
@@ -289,6 +292,7 @@ export class CanonicalInlineAgentToolService {
 
   constructor(input: {
     readonly application: AgentToolApplicationReader;
+    readonly clientControls?: ClientControlToolService;
     readonly management?: AgentManagementService;
     readonly workpads?: WorkpadAgentToolService;
     readonly automations?: AutomationAgentToolService;
@@ -465,6 +469,7 @@ export class CanonicalInlineAgentToolService {
     const context: TrustedToolInvocationContext = Object.freeze({
       invocationId,
       mutationId,
+      ...(source.clientTurn ? { clientTurn: source.clientTurn } : {}),
       tenantId: source.scope.tenantId,
       principalId: source.scope.principalId,
       subject: Object.freeze({ ...source.subject }),

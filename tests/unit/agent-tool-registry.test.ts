@@ -113,6 +113,7 @@ describe("AgentToolRegistry", () => {
     expect(CANONICAL_AGENT_TOOL_GROUPS.map(({ id }) => id)).toEqual([
       "context",
       "threads",
+      "client",
       "agents",
       "tasks",
       "workpads",
@@ -132,7 +133,7 @@ describe("AgentToolRegistry", () => {
         ({ id, schemaVersion }) => `${id}@${schemaVersion}`,
       ),
     );
-    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(38);
+    expect(CANONICAL_AGENT_TOOL_MANIFEST_ENTRIES).toHaveLength(43);
   });
 
   it("assembles the complete production catalog only with every domain adapter", () => {
@@ -202,7 +203,7 @@ describe("AgentToolRegistry", () => {
     });
     const summaries = canonical.catalogSummaries("cli", "thread_agent");
 
-    expect(summaries).toHaveLength(38);
+    expect(summaries).toHaveLength(43);
     expect(
       Buffer.byteLength(JSON.stringify({ tools: summaries }), "utf8"),
     ).toBeLessThanOrEqual(AGENT_TOOL_MAXIMUM_CATALOG_SUMMARY_BYTES);
@@ -426,7 +427,7 @@ describe("AgentToolRegistry", () => {
     expect(registry.resolveAdapterName("cli", "thread.status").id).toBe(
       "thread.status",
     );
-    expect(registry.artifact("thread.status", 2)).toMatchObject({
+    expect(registry.artifact("thread.status", 3)).toMatchObject({
       deployment: { eligible: true },
       adapters: {
         http: { invocation: "inline" },
@@ -445,7 +446,7 @@ describe("AgentToolRegistry", () => {
     expect(
       registry.resolveAdapterName("mcp", "sedes_thread_status").id,
     ).toBe("thread.status");
-    expect(registry.artifact("thread.status", 2)).toMatchObject({
+    expect(registry.artifact("thread.status", 3)).toMatchObject({
       exposure: { adapters: ["cli", "http", "mcp", "pi_sdk"] },
       adapters: { mcp: { name: "sedes_thread_status" } },
       execution: { adapterWaitCeilingMilliseconds: { mcp: 30_000 } },

@@ -1,5 +1,5 @@
 import { useRef, type Ref } from "react";
-import { AlignLeft, Plus } from "lucide-react";
+import { AlignLeft, Pin, Plus } from "lucide-react";
 import { TASK_DETAILS_MAX_CHARACTERS } from "../../../shared/index.js";
 import { Button } from "../ui/button.js";
 import {
@@ -11,12 +11,15 @@ export interface TaskAddDraft {
   readonly title: string;
   readonly notes: string;
   readonly notesOpen: boolean;
+  /** Null uses the current view's initial pin choice until the user overrides it. */
+  readonly pinned: boolean | null;
 }
 
 export const EMPTY_TASK_ADD_DRAFT: TaskAddDraft = {
   title: "",
   notes: "",
   notesOpen: false,
+  pinned: null,
 };
 
 /**
@@ -30,6 +33,7 @@ export function TaskAddRow({
   variant,
   placeholder,
   draft,
+  defaultPinned,
   inputRef,
   onDraftChange,
   onAdd,
@@ -38,19 +42,21 @@ export function TaskAddRow({
   readonly variant: "row" | "bar";
   readonly placeholder: string;
   readonly draft: TaskAddDraft;
+  readonly defaultPinned: boolean;
   readonly inputRef: Ref<HTMLInputElement>;
   readonly onDraftChange: (draft: TaskAddDraft) => void;
-  readonly onAdd: (title: string, notes: string) => void;
+  readonly onAdd: (title: string, notes: string, pinned: boolean) => void;
   readonly onPasteMany: (titles: readonly string[]) => void;
 }): React.JSX.Element {
   const notesRef = useRef<HTMLTextAreaElement>(null);
   const titleRef = useRef<HTMLInputElement | null>(null);
   const hasTitle = draft.title.trim().length > 0;
+  const pinned = draft.pinned ?? defaultPinned;
 
   const submit = () => {
     const title = draft.title.trim();
     if (title.length === 0) return;
-    onAdd(title, draft.notesOpen ? draft.notes.trim() : "");
+    onAdd(title, draft.notesOpen ? draft.notes.trim() : "", pinned);
     onDraftChange(EMPTY_TASK_ADD_DRAFT);
     titleRef.current?.focus();
   };
@@ -129,6 +135,18 @@ export function TaskAddRow({
             <AlignLeft aria-hidden="true" />
           </Button>
         )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          className="tasks-add-pin"
+          aria-label="Pin new task"
+          aria-pressed={pinned}
+          title="Pin new task"
+          onClick={() => onDraftChange({ ...draft, pinned: !pinned })}
+        >
+          <Pin aria-hidden="true" />
+        </Button>
         {variant === "bar" && (
           <Button
             type="button"

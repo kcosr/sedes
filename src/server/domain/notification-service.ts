@@ -134,13 +134,13 @@ export class NotificationService {
    * Claim once, then dispatch script and voice independently. Payload, result
    * and voice-context work runs only when a channel can deliver.
    */
-  emit(
+  async emit(
     scope: RequestScope,
     event: NotificationEventPayload,
     eventKey: string,
     assistantResult?: ClassifiedAssistantResult,
     voiceContext?: () => VoiceNotificationContext,
-  ): void {
+  ): Promise<string | undefined> {
     if (this.#closed) return;
     try {
       const occurredAt = Date.parse(event.occurredAt);
@@ -169,7 +169,7 @@ export class NotificationService {
         this.#schedule();
       }
       if (recipients.length) {
-        this.#voice(scope, eventKey, payload, channels.voice, dispatch.generation, recipients, voiceContext);
+        return this.#voice(scope, eventKey, payload, channels.voice, dispatch.generation, recipients, voiceContext);
       }
     } catch {
       this.#report("Notification event could not be processed.");
@@ -186,7 +186,7 @@ export class NotificationService {
   }
 
   /** Context capture and the strict envelope parse are voice-only; failures never reach the script lane. */
-  #voice(
+  async #voice(
     scope: RequestScope,
     eventKey: string,
     payload: NotificationPayload,
@@ -194,7 +194,7 @@ export class NotificationService {
     generation: number,
     recipients: readonly Subscriber[],
     voiceContext: (() => VoiceNotificationContext) | undefined,
-  ): void {
+  ): Promise<string | undefined> {
     try {
       const { settlement, ...context } = voiceContext?.() ?? {};
       const envelope = {
@@ -205,18 +205,16 @@ export class NotificationService {
         if (this.#closed || this.input.repository.readDispatch(scope).generation !== generation) return;
         const value = voiceNotificationSchema.parse({ ...envelope, recognitionTarget });
         for (const recipient of recipients) this.#deliver(recipient, "notification", value);
+        return envelope.sourceEventId;
       };
-      if (settlement) {
-        // Bound transient waiting independently from script capacity.
-        if (this.#deferred.size >= 128) { publish(undefined); return; }
-        const key = {};
-        this.#deferred.set(key, scope);
-        void settlement.then((target) => {
-          if (this.#deferred.delete(key)) publish(target);
-        }, () => {
-          if (this.#deferred.delete(key)) publish(undefined);
-        }).catch(() => this.#report("Deferred voice notification could not be processed."));
-      } else publish(context.recognitionTarget);
+      if (!settlement) return publish(context.recognitionTarget);
+      // Bound transient waiting independently from script capacity.
+      if (this.#deferred.size >= 128) return publish(undefined);
+      const key = {};
+      this.#deferred.set(key, scope);
+      let target: VoiceRecognitionTarget | undefined;
+      try { target = await settlement; } catch { /* Announce without recognition authority. */ }
+      if (this.#deferred.delete(key)) return publish(target);
     } catch {
       this.#report("Voice notification could not be processed.");
     }

@@ -65,6 +65,7 @@ import {
 } from "../../stores/ApplicationClientStore.js";
 import { ApiError } from "../../api/ApiClient.js";
 import { Button } from "@client/components/ui/button";
+import { SwitchField } from "../settings/SettingsField.js";
 import { Callout } from "@client/components/ui/callout";
 import { ConfirmDialog } from "@client/components/ui/confirm-dialog";
 import { CountBadge, countBadgeVariants } from "@client/components/ui/count-badge";
@@ -323,6 +324,9 @@ export function TasksPanelContent({
   const [choosingMoveId, setChoosingMoveId] = useState<string | null>(null);
   const [pendingMove, setPendingMove] = useState<PendingMove>();
   const [pasteTitles, setPasteTitles] = useState<readonly string[] | null>(null);
+  const [pastePinned, setPastePinned] = useState(false);
+  const [pasteCreating, setPasteCreating] = useState(false);
+  const pastePinId = useId();
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [viewMenuOpen, setViewMenuOpen] = useState(false);
@@ -834,13 +838,12 @@ export function TasksPanelContent({
     [actions, active, destinations, pending, taskDrag, touch, workspace?.available],
   );
 
-  // New tasks match the Pinned and Backlog filters, so they stay in view.
-  const placement = { pinned: options.onlyPinned, backlog: options.onlyBacklog };
-  const addTask = (title: string, notes: string) => {
+  // Default to the current filters; an explicit pin choice wins.
+  const addTask = (title: string, notes: string, pinned: boolean) => {
     if (!destination) return;
     const key = crypto.randomUUID();
     setCreating((current) => [...current, { key, title, scope: destination }]);
-    void store.createTask(title, destination, notes || undefined, placement).then(
+    void store.createTask(title, destination, notes || undefined, { pinned, backlog: options.onlyBacklog }).then(
       (created) => {
         setError(null);
         setCreating((current) =>
@@ -856,7 +859,7 @@ export function TasksPanelContent({
         // Give the text back unless the next task is already being typed.
         setAddDraft((draft) =>
           draft.title.length === 0 && !draft.notesOpen
-            ? { title, notes, notesOpen: notes.length > 0 }
+            ? { title, notes, notesOpen: notes.length > 0, pinned }
             : draft,
         );
       },
@@ -1552,10 +1555,14 @@ export function TasksPanelContent({
       variant={sheet ? "bar" : "row"}
       placeholder={ADD_PLACEHOLDER[view]}
       draft={addDraft}
+      defaultPinned={options.onlyPinned}
       inputRef={addInputRef}
       onDraftChange={setAddDraft}
       onAdd={addTask}
-      onPasteMany={setPasteTitles}
+      onPasteMany={(titles) => {
+        setPastePinned(addDraft.pinned ?? options.onlyPinned);
+        setPasteTitles(titles);
+      }}
     />
   );
 
@@ -1813,22 +1820,29 @@ export function TasksPanelContent({
         }}
         onConfirm={async () => {
           if (!pasteTitles || !destination) return;
+          setPasteCreating(true);
           // Created last-first, so the newest-first list reads in pasted order.
           const remaining = [...pasteTitles];
-          while (remaining.length > 0) {
-            const title = remaining.at(-1)!;
-            try {
-              await store.createTask(title, destination, undefined, placement);
-            } catch (cause) {
-              setPasteTitles([...remaining]);
-              throw cause;
+          try {
+            while (remaining.length > 0) {
+              const title = remaining.at(-1)!;
+              try {
+                await store.createTask(title, destination, undefined, { pinned: pastePinned, backlog: options.onlyBacklog });
+              } catch (cause) {
+                setPasteTitles([...remaining]);
+                throw cause;
+              }
+              remaining.pop();
             }
-            remaining.pop();
+            announce(`Added ${pasteTitles.length} tasks.`);
+            setError(null);
+          } finally {
+            setPasteCreating(false);
           }
-          announce(`Added ${pasteTitles.length} tasks.`);
-          setError(null);
         }}
       >
+        <SwitchField id={pastePinId} label="Pin these tasks" checked={pastePinned}
+          disabled={pasteCreating} onCheckedChange={setPastePinned} />
         <ul className="tasks-paste-preview">
           {(pasteTitles ?? []).slice(0, 6).map((title, index) => (
             <li key={index}>{title}</li>

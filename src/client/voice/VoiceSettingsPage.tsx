@@ -76,6 +76,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
         checked={showBarWhenOff} onCheckedChange={setShowBarWhenOff} />
       {settings.audioMode !== "off" && native.actions.canResume ? <Button disabled={state.pending} onClick={() => { void resumeVoice(store).catch(() => undefined); }}>Resume voice</Button> : null}
       <p role="status">{voiceReadiness(native.readiness)}</p>
+      {!native.clientConnectionToken && <Button disabled={state.pending} onClick={() => { void store.reconnect().catch(() => undefined); }}>Retry client connection</Button>}
     </SettingsSection>
     <SpeechProviderSettings store={store} native={native} pending={state.pending} />
     <SettingsSection title="Targets and behavior" card>
@@ -100,12 +101,13 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
         disabled={state.pending} onSave={value => store.update({ [key]: Number(value) })} />)}
     </SettingsSection>
     {native.recovery.length ? <SettingsSection title="Pending input recovery" card>
+      {native.recovery.some(input => input.status === "prepared") && <p>Inputs waiting for a client connection send automatically when it returns.</p>}
       <p>These inputs may have reached Sedes. Resume checks delivery and retries the same input if needed.
         Discard removes the saved input from this device; it cannot withdraw input already received.</p>
       {native.recovery.map(input => <div key={input.mutationId} className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="break-words">{application.snapshot?.threads.find(thread => thread.id === input.threadId)?.title.text.trim() || input.threadId}</p>
-          <p className="text-sm text-muted-foreground">{input.status === "uncertain" ? "Outcome uncertain" : "Reconciling input"}
+          <p className="text-sm text-muted-foreground">{input.status === "prepared" ? "Waiting for client connection" : input.status === "uncertain" ? "Outcome uncertain" : "Reconciling input"}
             {input.cancelled ? " · Cancelled; checking receipt only" : ""} · {input.mutationId.slice(0, 8)}</p>
         </div>
         <div className="flex shrink-0 gap-2">

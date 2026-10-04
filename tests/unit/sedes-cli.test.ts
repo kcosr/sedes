@@ -290,7 +290,7 @@ describe("Sedes CLI", () => {
     });
 
     expect(exit, output.stderr()).toBe(0);
-    expect(JSON.parse(output.stdout()).tools).toHaveLength(2);
+    expect(JSON.parse(output.stdout()).tools).toHaveLength(7);
     expect(fetch).toHaveBeenCalledOnce();
   });
 

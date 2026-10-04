@@ -386,6 +386,7 @@ describe("thread agent tool policy persistence", () => {
         "thread.fork",
         "thread.archive",
         "thread.restore",
+        "client.list", "client.end_interaction", "client.switch_thread", "client.settings.get", "client.settings.update",
         "saved_agent.list",
         "saved_agent.get",
         "saved_agent.options",
