@@ -152,8 +152,16 @@ final class NativeVoiceQueue {
             if (result != null) for (String phase : new String[] { "provisional", "unclassified", "final" }) appendBounded(parts, result.optJSONObject(phase));
         } else if (!settings.flag("readNotificationContext")) add(parts, payload.optString("message", ""));
         StringBuilder speech = new StringBuilder();
-        for (String part : parts) { if (speech.length() > 0) speech.append('\n'); speech.append(part); }
-        return NativeSpeechText.prepare(speech.toString(), settings.flag("cleanSpeechText"));
+        boolean cleanup = settings.flag("cleanSpeechText");
+        // Each notification part is an independent document. An unfinished fence in a
+        // truncated section must not consume context, its truncation notice, or later results.
+        for (String part : parts) {
+            String prepared = NativeSpeechText.prepare(part, cleanup);
+            if (prepared.isEmpty()) continue;
+            if (speech.length() > 0) speech.append(cleanup ? "\n\n" : "\n");
+            speech.append(prepared);
+        }
+        return speech.toString();
     }
     private static void appendBounded(List<String> parts, JSONObject text) {
         if (text == null) return;

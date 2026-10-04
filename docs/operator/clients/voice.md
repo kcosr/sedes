@@ -135,7 +135,8 @@ text remains available.
 **Settings → Voice → Clean up formatting for speech** is on by default. It reads
 Markdown as text, including link labels and code contents, with pauses between
 paragraphs and list items. Tables use cell separators; task lists retain checked
-and unchecked status. Code symbols, ordinary punctuation, and literal HTML source
+and unchecked status. Footnote contents are read with numbered references.
+Code symbols, ordinary punctuation, and literal HTML source
 are preserved. Hidden link destinations and code-fence language labels are omitted.
 
 Turn it off to send the original assembled text to the speech provider. The choice

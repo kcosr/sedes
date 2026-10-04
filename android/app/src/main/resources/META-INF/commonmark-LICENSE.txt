@@ -1,4 +1,4 @@
-CommonMark Java 0.30.0 and its strikethrough, tables, and task-list extensions
+CommonMark Java 0.30.0 and its strikethrough, tables, task-list, and footnote extensions
 https://github.com/commonmark/commonmark-java
 
 Copyright (c) 2015, Robin Stocker

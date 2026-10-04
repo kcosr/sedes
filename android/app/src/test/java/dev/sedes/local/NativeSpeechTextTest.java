@@ -31,6 +31,10 @@ public class NativeSpeechTextTest {
         assertEquals("Soft line\nhard\nbreak\n\nNext paragraph", clean("Soft\nline  \nhard\\\nbreak\n\nNext\t paragraph  "));
         assertEquals("Fish & chips — café 🦦", clean("Fish &amp; chips — café 🦦"));
     }
+    @Test public void preservesFootnoteBodiesAndMatchesRepeatedReferences() {
+        assertEquals("Per the docs (footnote 1). More (footnote 2). Again (footnote 1).\n\nFootnote 1: Wikipedia\n\nFootnote 2: A longer note with a link.",
+            clean("Per the docs[^wiki]. More[^2]. Again[^WIKI].\n\n[^wiki]: Wikipedia\n[^2]: A **longer** note with [a link](https://example.test)."));
+    }
     @Test public void emptyFormattingDoesNotBecomeAnUtterance() {
         for (String source : new String[] { "", " \n\t", "---", "#", "```\n```", "[ref]: https://example.test" })
             assertEquals(source, "", clean(source));

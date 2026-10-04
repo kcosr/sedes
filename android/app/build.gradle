@@ -28,10 +28,6 @@ android {
         }
     }
     buildFeatures { buildConfig = true }
-    compileOptions {
-        // CommonMark uses Java collection factories; keep speech available on API 24.
-        coreLibraryDesugaringEnabled true
-    }
     buildTypes {
         release {
             minifyEnabled false
@@ -57,7 +53,7 @@ dependencies {
     implementation "org.commonmark:commonmark-ext-gfm-strikethrough:0.30.0"
     implementation "org.commonmark:commonmark-ext-gfm-tables:0.30.0"
     implementation "org.commonmark:commonmark-ext-task-list-items:0.30.0"
-    coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.5"
+    implementation "org.commonmark:commonmark-ext-footnotes:0.30.0"
     testImplementation "junit:junit:$junitVersion"
     testImplementation "org.json:json:20240303"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"

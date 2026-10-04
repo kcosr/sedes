@@ -115,6 +115,26 @@ public class NativeVoiceQueueTest {
         NativeVoiceQueue queue = new NativeVoiceQueue(); queue.add(item); queue.reconfigure(clean);
         assertTrue(queue.take().followUp);
     }
+    @Test public void preservesContextAndSectionPausesWithoutChangingRawAssembly() {
+        JSONObject source = envelope("parts", "turn.completed", "**Final answer.**", null);
+        NativeVoiceJson.put(source.optJSONObject("payload").optJSONObject("assistantResult"), "unclassified",
+            NativeVoiceJson.object("text", "Earlier text."));
+        NativeVoiceSettings clean = settings("response");
+        assertEquals("Completed\n\nWorkspace: Example\n\nEarlier text.\n\nFinal answer.", new NativeVoiceQueue.Item(source, clean).speech);
+        NativeVoiceSettings raw = clean.patch(1, NativeVoiceJson.object("cleanSpeechText", false));
+        assertEquals("Completed\nWorkspace: Example\nEarlier text.\n**Final answer.**", new NativeVoiceQueue.Item(source, raw).speech);
+    }
+    @Test public void truncatedOpenFenceCannotConsumeTheNoticeOrLaterResult() {
+        JSONObject source = envelope("truncated", "turn.completed", "**Done.** See [the PR](https://example.test/hidden?token=abc).", null);
+        NativeVoiceJson.put(source.optJSONObject("payload").optJSONObject("assistantResult"), "provisional",
+            NativeVoiceJson.object("text", "```js\nconst a = 1;", "truncation",
+                NativeVoiceJson.object("truncated", true, "originalBytes", 5000, "retainedBytes", 20, "reason", "byte_limit")));
+        String expected = "Completed\n\nWorkspace: Example\n\nconst a = 1;\n\nThe remaining response was truncated.\n\nDone. See the PR.";
+        NativeVoiceQueue.Item item = new NativeVoiceQueue.Item(source, settings("response"));
+        assertEquals(expected, item.speech);
+        assertEquals(expected, String.join("", NativeVoiceQueue.chunks(item.speech, 24)));
+        assertEquals(source.toString(), item.envelope.toString());
+    }
     // Server JSON.stringify text. Android org.json adds a byte per '/'; JVM org.json per "</" and U+2014.
     private static final String ESCAPED_PREFIX = "a/b </c> d\u2014e \\\"q\\\" \\\\ \\n\\t\\u0001 \u00e9\u0085 \u20ac\u2000\u2028\u2029 \ud83e\udda6 lone\\ud800 ";
     private static String payloadJson(String escapedText) {

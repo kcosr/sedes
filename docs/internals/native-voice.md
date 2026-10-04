@@ -458,14 +458,17 @@ permission, or starts recording.
 
 ## Audio output and focus
 
-`NativeSpeechText` converts the complete assembled utterance from CommonMark/GFM
-to speech text before request chunking. The device/profile/identity-owned
-`cleanSpeechText` setting defaults to true. It removes formatting delimiters,
+`NativeSpeechText` converts each complete notification part from CommonMark/GFM
+to speech text before assembly and request chunking. Context, result sections,
+and truncation notices are independent documents, joined with paragraph pauses;
+an unfinished code fence in one part cannot swallow another. The
+device/profile/identity-owned `cleanSpeechText` setting defaults to true. It removes formatting delimiters,
 reads link labels and image descriptions, preserves code contents and ordinary
 symbols, and keeps paragraph/list pauses, ordered-list numbers, table cell
-separators, and checkbox meaning. Hidden link destinations and code-fence language
-labels are omitted. Literal HTML source is preserved. Parser nesting is bounded.
-Disabling cleanup passes the assembled text through unchanged. Original envelopes,
+separators, checkbox meaning, and footnote contents with numbered references.
+Hidden link destinations and code-fence language labels are omitted. Literal HTML
+source is preserved. Parser nesting is bounded.
+Disabling cleanup preserves the original single-newline assembly. Original envelopes,
 transcripts, and shared backend notifications are never rewritten; the speech
 server receives the prepared text without a second cleanup pass. Changing this
 setting rebuilds pending utterances from their original envelopes and applies to

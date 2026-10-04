@@ -4,20 +4,16 @@
 
 ### Breaking Changes
 
-- Android native voice snapshot 5 adds speech cleanup. Upgrading resets local
-  voice settings with Audio mode Off; separately stored speech credentials remain.
-  ([#51](https://github.com/kcosr/sedes/pull/51))
-
 - Client protocol 139 replaces browser-supplied input origin IDs with server
   registration. Upgrade browser and packaged clients with the server; native
-  voice snapshot version 4 shares its registered connection with the WebView.
+  voice shares its registered connection with the WebView.
   ([#50](https://github.com/kcosr/sedes/pull/50))
 
 - Android voice now uses OpenAI-compatible Realtime transcription and streamed
   HTTP speech in place of the direct-media adapter. Upgrading resets local voice
   settings with Audio mode Off; reconfigure the provider, endpoint, and models.
   Separately stored speech credentials remain on the device.
-  ([#49](https://github.com/kcosr/sedes/pull/49))
+  ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51))
 
 - Browser and packaged clients require client protocol 138 for pending Send
   presentation. Upgrade clients together with the server.
