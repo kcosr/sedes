@@ -23,7 +23,7 @@ vi.mock("../voice/native-voice-plugin.js", async (importOriginal) => ({
 vi.mock("../authentication/AuthenticationGate.js", async () => {
   const { VoiceProvider } = await import("../voice/VoiceProvider.js");
   return { AuthenticationGate: ({ children }: { children: React.ReactNode }) =>
-    <VoiceProvider profileId={VOICE_CONNECTION.profileId} serverOrigin={VOICE_CONNECTION.serverOrigin} identity={voice.identity}>{children}</VoiceProvider> };
+    <VoiceProvider profileId={VOICE_CONNECTION.profileId} endpoint={{ baseUrl: voice.available ? VOICE_CONNECTION.serverOrigin : null }} identity={voice.identity}>{children}</VoiceProvider> };
 });
 vi.mock("../api/ApiClient.js", () => ({ ApiClient: class {
   constructor(_endpoint: unknown, _credential: unknown, readonly readOrigin: () => unknown) { graph.clients.push(this); }
@@ -109,6 +109,7 @@ describe("application client origin", () => {
     render(<App />);
     await screen.findByText("Application ready");
     await waitFor(() => expect(graph.clients[0]!.readOrigin()).toEqual({ clientId: registration.clientId, connectionToken: registration.connectionToken }));
+    expect(fetch).toHaveBeenCalledWith("/api/client-registration", expect.objectContaining({ credentials: "same-origin" }));
     expect(originKeys()).toEqual([]);
     expect(voice.fake.plugin.setConnection).not.toHaveBeenCalled();
   });

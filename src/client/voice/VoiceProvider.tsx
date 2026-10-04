@@ -5,6 +5,7 @@ import { ClientControlConnection } from "./ClientControlConnection.js";
 import { configuredPanelPresentation, openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 import { NativeVoiceStore } from "./NativeVoiceStore.js";
 import { hasNativeVoice, nativeVoice } from "./native-voice-plugin.js";
+import type { SedesServerEndpoint } from "../app/server-endpoint.js";
 
 /** Reads the registered client connection when a request is sent. Its identity is stable, so consumers never rebuild when the origin arrives or changes. */
 export type ClientOriginSource = () => RegisteredClient | undefined;
@@ -16,27 +17,28 @@ export const useClientOrigin = () => useContext(OriginContext);
 export const useVoiceState = (store: NativeVoiceStore) => useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 
 /** Authenticate first; the Android bridge obtains the same identity using its stored credential. */
-export function VoiceProvider({ profileId, serverOrigin, identity, children }: {
-  profileId?: string; serverOrigin: string; identity?: string; children: ReactNode;
+export function VoiceProvider({ profileId, endpoint, identity, children }: {
+  profileId?: string; endpoint: SedesServerEndpoint; identity?: string; children: ReactNode;
 }): React.JSX.Element {
-  if (!hasNativeVoice()) return <BrowserOriginProvider profileId={profileId} serverOrigin={serverOrigin} identity={identity}>{children}</BrowserOriginProvider>;
+  const serverOrigin = endpoint.baseUrl ?? window.location.origin;
+  if (!hasNativeVoice()) return <BrowserOriginProvider profileId={profileId} endpoint={endpoint} identity={identity}>{children}</BrowserOriginProvider>;
   // Android shares exactly one origin ID with native. Without a native binding the WebView sends none rather than inventing its own.
   if (!profileId || !identity) return <>{children}</>;
   return <AndroidVoiceProvider key={JSON.stringify([profileId, serverOrigin, identity])}
     profileId={profileId} serverOrigin={serverOrigin} identity={identity}>{children}</AndroidVoiceProvider>;
 }
-function BrowserOriginProvider({ profileId, serverOrigin, identity, children }: {
-  profileId?: string; serverOrigin: string; identity?: string; children: ReactNode;
+function BrowserOriginProvider({ profileId, endpoint, identity, children }: {
+  profileId?: string; endpoint: SedesServerEndpoint; identity?: string; children: ReactNode;
 }) {
   const current = useRef<ClientControlConnection | null>(null);
   const [origin] = useState<ClientOriginSource>(() => () => current.current?.registration);
   useEffect(() => {
     if (!identity) return;
-    const connection = new ClientControlConnection({ baseUrl: serverOrigin }, id => openThreadRoute(id, configuredPanelPresentation()));
+    const connection = new ClientControlConnection({ baseUrl: endpoint.baseUrl }, id => openThreadRoute(id, configuredPanelPresentation()));
     current.current = connection;
     void connection.run();
     return () => { connection.close(); if (current.current === connection) current.current = null; };
-  }, [profileId, serverOrigin, identity]);
+  }, [profileId, endpoint.baseUrl, identity]);
   return <OriginContext.Provider value={origin}>{children}</OriginContext.Provider>;
 }
 function createStore(profileId: string, serverOrigin: string, identity: string): NativeVoiceStore {
