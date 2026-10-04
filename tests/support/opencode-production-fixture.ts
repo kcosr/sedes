@@ -258,13 +258,13 @@ export class OpenCodeProductionFixture {
     this.streams.set(controller, task);
   }
   async closeStreams() { const streams = [...this.streams]; for (const [controller] of streams) controller.abort(); await Promise.all(streams.map(([, task]) => task)); }
-  async request(route: string, method = "GET", body?: unknown) {
-    const headers: Record<string, string> = { Authorization: `Bearer ${this.credential}` };
+  async request(route: string, method = "GET", body?: unknown, extraHeaders: Record<string, string> = {}) {
+    const headers: Record<string, string> = { ...extraHeaders, Authorization: `Bearer ${this.credential}` };
     if (method !== "GET") { headers["X-CSRF-Token"] = normalizedApplicationSessionSchema.parse(await this.json("/api/application/session")).csrfToken; headers["Content-Type"] = "application/json"; }
     return fetch(`${this.url}${route}`, { method, headers, signal: AbortSignal.timeout(30_000), ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   }
-  async json(route: string, method = "GET", body?: unknown): Promise<unknown> {
-    const response = await this.request(route, method, body); const value = await response.json();
+  async json(route: string, method = "GET", body?: unknown, extraHeaders: Record<string, string> = {}): Promise<unknown> {
+    const response = await this.request(route, method, body, extraHeaders); const value = await response.json();
     if (response.status !== 200 && response.status !== 201) throw new Error(`fixture_http:${route}:${response.status}:${JSON.stringify(value)}:${this.logs}`);
     return value;
   }

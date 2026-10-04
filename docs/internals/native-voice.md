@@ -2,9 +2,9 @@
 
 The Android `NativeVoice` Capacitor plugin exposes settings, snapshots, and
 actions. `NativeVoiceRuntime` owns the state machine on one handler thread.
-Native snapshot version 3 requires the `pinDefaultVoiceThread` boolean. It is
-device/profile/identity-scoped with the other voice settings and defaults to
-false. When true, new explicit recordings and idle control targets use the
+Native snapshot version 4 includes the registered `clientConnectionToken`
+alongside `originClientId`. The `pinDefaultVoiceThread` setting is scoped to the
+device/profile/identity with the other voice settings and defaults to false. When true, new explicit recordings and idle control targets use the
 saved default thread regardless of foreground navigation. A missing default
 does not fall back to the foreground thread. Automatic notification targeting
 and active retargeting keep their existing rules.
@@ -69,13 +69,29 @@ origin, and authenticated navigation namespace. An Android Keystore AES-GCM
 key protects atomic records in the app's backup-excluded directory, under
 `native-voice/<SHA-256 of profile ID>/<SHA-256 of binding>/`. Record type and
 binding are authenticated associated data. Removing a profile deletes its
-settings, origin IDs, and input journals, including recognized text, for every
-binding of that profile. The input journal holds at most 64 entries and 8 MiB.
-The advisory client-origin ID is stable within that binding and shared with the
-WebView; it never authorizes an operation. Browser origins are scoped to
-endpoint and identity in browser storage. On Android, the WebView sends no
-origin until native supplies one. No provider identity enters the shared
-client protocol.
+settings and input journals, including recognized text, for every binding of that
+profile. The input journal holds at most 64 entries and 8 MiB.
+
+A server registration supplies the shared native/WebView client ID. Paired
+registrations use the authenticated management-client ID; authentication-off
+registrations receive temporary server IDs. Browser and Electron windows use
+the same registration API. There is no independently generated playback UUID.
+An in-memory server resume secret preserves the ID across reconnects within
+five minutes. Each successful reconnect refreshes the session and resumes enabled
+voice/recovery work; a temporary control-channel outage clears deferred actions
+without cancelling active capture or playback. Replaced paired windows stop
+reclaiming the connection automatically and expose an explicit reconnect action.
+Reattaching the WebView preserves the native binding during a control outage.
+Inputs prepared in that live process wait for registration before transmission;
+an explicit `client_registration_required` response also proves no admission
+and permits retry after reconnect. Other uncertain outcomes remain read-only
+recovery until the user requests Resume. Capacity failures are retryable
+unavailability, distinct from connection replacement.
+`X-Sedes-Client` carries an opaque connection token, checked against authenticated
+scope and paired identity before the server stamps input attribution. The token
+is a connection fence, not a replacement for authentication. Native and browser
+registration remain live while voice is Off. Old advisory origins retained in
+historical inputs do not become live client authority.
 
 The settings record carries an explicit `RECORD_VERSION` and validates strictly
 against it. Version 3 includes the recording pin along with provider, endpoint,
@@ -84,7 +100,7 @@ records are not migrated; an upgrade resets them with voice Off. Speech
 credentials are stored separately and remain intact. A
 record that exists but cannot be authenticated, decoded, or validated is moved
 aside as `<name>.corrupt` and replaced with defaults. Native reports
-`voice_settings_reset`, `voice_origin_reset`, or `voice_journal_reset`. Only a
+`voice_settings_reset` or `voice_journal_reset`. Only a
 failed authentication tag, bad framing, malformed JSON, or failed validation
 counts as corruption. Any other keystore failure is retried once and then
 reported as `voice_storage_unavailable`, keeping the record.
@@ -246,10 +262,13 @@ intentionally have no live-progress producer.
 {
   "mutationId": "a UUID",
   "text": "Recognized text",
-  "origin": { "clientId": "a UUID" },
   "runningPolicy": { "mode": "queue" }
 }
 ```
+
+The request requires `X-Sedes-Client` from registration; a supplied `origin` body
+field is rejected. Server admission adds the registered client ID to the internal
+request before computing its durable receipt identity.
 
 Steer uses `{ "mode": "steer", "target": { "kind": "turn", "turnId": "..." },
 "onUnavailable": "queue" }`, or a normalized `{ "kind": "conversation" }`

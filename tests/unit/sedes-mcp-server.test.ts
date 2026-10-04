@@ -58,7 +58,7 @@ function fakeClient(
     state: "completed" as const,
     output:
       request.toolId === "thread.status"
-        ? { threadId, backend: "codex_app_server", lifecycle: "active", activity: "idle" }
+        ? { threadId, backend: "codex_app_server", lifecycle: "active", activity: "idle", pinned: false }
         : { backend: "codex_app_server", threadId, workspaceId: "workspace-1" },
   })),
 ) {
@@ -180,6 +180,7 @@ describe("sedes mcp server", () => {
     expect(tools.map(({ name }) => name)).toEqual([
       "sedes_agent_context",
       "sedes_thread_status",
+      "sedes_client_list", "sedes_client_end_interaction", "sedes_client_switch_thread", "sedes_client_settings_get", "sedes_client_settings_update",
       "sedes_saved_agent_delete",
       "sedes_task_create",
       "sedes_research_web_search",
@@ -188,9 +189,9 @@ describe("sedes mcp server", () => {
     expect(status).toMatchObject({
       title: "Thread status",
       inputSchema: { type: "object", additionalProperties: false },
-      outputSchema: { type: "object", required: ["activity", "backend", "lifecycle", "threadId"] },
+      outputSchema: { type: "object", required: ["activity", "backend", "lifecycle", "pinned", "threadId"] },
       annotations: { readOnlyHint: true, openWorldHint: false },
-      _meta: { "sedes/toolId": "thread.status", "sedes/schemaVersion": 2 },
+      _meta: { "sedes/toolId": "thread.status", "sedes/schemaVersion": 3 },
     });
     expect(status.inputSchema).not.toHaveProperty("$schema");
     expect(status.outputSchema).not.toHaveProperty("$schema");
@@ -223,6 +224,7 @@ describe("sedes mcp server", () => {
       backend: "codex_app_server",
       lifecycle: "active",
       activity: "idle",
+      pinned: false,
     });
     expect(JSON.parse((result.content as { text: string }[])[0]!.text)).toEqual(
       result.structuredContent,
@@ -230,7 +232,7 @@ describe("sedes mcp server", () => {
     expect(client.invoke).toHaveBeenCalledWith(
       {
         toolId: "thread.status",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "tool-request-1",
         input: { threadId },
       },
@@ -380,18 +382,18 @@ describe("sedes mcp server", () => {
       arguments: { action: "describe", toolIds: ["thread.status"] },
     });
     expect(described.structuredContent).toMatchObject({
-      tools: [{ id: "thread.status", schemaVersion: 2 }],
+      tools: [{ id: "thread.status", schemaVersion: 3 }],
     });
 
     const read = await mcp.callTool({
       name: "sedes_read",
-      arguments: { toolId: "thread.status", schemaVersion: 2, input: { threadId } },
+      arguments: { toolId: "thread.status", schemaVersion: 3, input: { threadId } },
     });
     expect(read.structuredContent).toMatchObject({ threadId, lifecycle: "active" });
 
     const wrongLane = await mcp.callTool({
       name: "sedes_act",
-      arguments: { toolId: "thread.status", schemaVersion: 2, input: { threadId } },
+      arguments: { toolId: "thread.status", schemaVersion: 3, input: { threadId } },
     });
     expect(wrongLane.isError).toBe(true);
     expect((wrongLane.content as { text: string }[])[0]!.text).toContain("sedes_read");

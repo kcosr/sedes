@@ -83,8 +83,12 @@ export class DatabaseAgentToolApplicationReader
     const backend = this.database
       .prepare(
         `
-          SELECT backend.kind AS backendKind
+          SELECT backend.kind AS backendKind, principal.pinned
           FROM application_threads AS thread
+          JOIN thread_principal_state AS principal
+            ON principal.tenant_id = thread.tenant_id
+            AND principal.principal_id = thread.owner_principal_id
+            AND principal.thread_id = thread.id
           JOIN agent_backend_instances AS backend
             ON backend.tenant_id = thread.tenant_id
             AND backend.id = thread.backend_instance_id
@@ -93,7 +97,7 @@ export class DatabaseAgentToolApplicationReader
         `,
       )
       .get(scope.tenantId, scope.principalId, threadId) as
-      { readonly backendKind: BackendKind } | undefined;
+      { readonly backendKind: BackendKind; readonly pinned: 0 | 1 } | undefined;
     if (!backend) return undefined;
     requireAdmittedResource(environmentAuthority, {
       kind: "thread",
@@ -106,6 +110,7 @@ export class DatabaseAgentToolApplicationReader
     return {
       threadId: source.id,
       backend: backend.backendKind,
+      pinned: backend.pinned === 1,
       lifecycle:
         snapshot.thread.inventoryState === "archived"
           ? "archived"

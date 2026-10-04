@@ -4,6 +4,11 @@
 
 ### Breaking Changes
 
+- Client protocol 139 replaces browser-supplied input origin IDs with server
+  registration. Upgrade browser and packaged clients with the server; native
+  voice snapshot version 4 shares its registered connection with the WebView.
+  ([#50](https://github.com/kcosr/sedes/pull/50))
+
 - Android voice now uses OpenAI-compatible Realtime transcription and streamed
   HTTP speech in place of the direct-media adapter. Upgrading resets local voice
   settings with Audio mode Off; reconfigure the provider, endpoint, and models.
@@ -202,6 +207,12 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Agent client controls manage basic voice settings, end interactions, and switch
+  threads after reply playback, defaulting to the client that started the turn.
+  ([#50](https://github.com/kcosr/sedes/pull/50))
+- Task creation supports pinning in the add row and paste-many dialog.
+  ([#50](https://github.com/kcosr/sedes/pull/50))
 
 - Android voice connects directly to OpenAI or a self-hosted
   [OpenAI-Compatible Speech Server](https://github.com/kcosr/openai-speech-server),
@@ -412,6 +423,9 @@
   the system monospace font. Terminal panes and the TUI wait briefly for the
   font before measuring cells, and their rows can be slightly taller than with
   the previous fallback font.
+
+- `thread.status@3` and `thread.list@6` expose read-only thread pin state.
+  ([#50](https://github.com/kcosr/sedes/pull/50))
 
 - Android voice settings and quick controls provide searchable speech choices,
   a default recording thread with optional pinning, and an independent automatic
@@ -742,6 +756,10 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Agent tool groups scroll horizontally on narrow screens, keeping the rightmost
+  groups reachable by touch.
+  ([#50](https://github.com/kcosr/sedes/pull/50))
 
 - Android voice startup and Resume recover the current activity and thread
   context after configuration changes. Silent recordings end locally without

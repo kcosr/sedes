@@ -15,7 +15,7 @@ export function voiceSettings(patch: Partial<NativeVoiceSettings> = {}): NativeV
 }
 export function voiceSnapshot(patch: Partial<NativeVoiceState> = {}): NativeVoiceState {
   return {
-    version: 3, stateRevision: 1, connectionGeneration: 1, ...VOICE_CONNECTION, originClientId: VOICE_ORIGIN_ID, settingsRevision: 0,
+    version: 4, stateRevision: 1, connectionGeneration: 1, ...VOICE_CONNECTION, originClientId: VOICE_ORIGIN_ID, clientConnectionToken: "a".repeat(43), settingsRevision: 0,
     settings: voiceSettings(), phase: "off", ready: false, readiness: "off", foreground: { visible: false, threadId: null, threadTitle: null }, active: null,
     queue: { count: 0, bytes: 0, droppedCount: 0, droppedReasons: {} },
     speech: { credentialConfigured: false, catalogStatus: "idle", catalog: null, error: null },
@@ -24,7 +24,7 @@ export function voiceSnapshot(patch: Partial<NativeVoiceState> = {}): NativeVoic
 }
 /** A snapshot native publishes after disconnecting, or while bound to another connection. */
 export function disconnectedVoiceSnapshot(connectionGeneration: number): NativeVoiceState {
-  return voiceSnapshot({ connectionGeneration, stateRevision: 0, profileId: null, serverOrigin: null, identity: null, originClientId: null });
+  return voiceSnapshot({ connectionGeneration, stateRevision: 0, profileId: null, serverOrigin: null, identity: null, originClientId: null, clientConnectionToken: null });
 }
 export function fakeVoicePlugin() {
   const listeners = new Map<string, (value: unknown) => void>();

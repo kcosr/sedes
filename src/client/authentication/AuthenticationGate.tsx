@@ -229,6 +229,6 @@ export function AuthenticationGate({ endpoint, profileId, children, settings }: 
       </div>
     </main>
   );
-  return <AuthenticationContext.Provider key={JSON.stringify([serverOrigin, status.navigationNamespace, status.client?.id ?? "anonymous"])} value={controls}><NavigationScopeContext.Provider value={status.navigationNamespace ? JSON.stringify([serverOrigin, status.navigationNamespace]) : undefined}><VoiceProvider profileId={profileId} serverOrigin={serverOrigin} identity={status.navigationNamespace}>{children}</VoiceProvider></NavigationScopeContext.Provider></AuthenticationContext.Provider>;
+  return <AuthenticationContext.Provider key={JSON.stringify([serverOrigin, status.navigationNamespace, status.client?.id ?? "anonymous"])} value={controls}><NavigationScopeContext.Provider value={status.navigationNamespace ? JSON.stringify([serverOrigin, status.navigationNamespace]) : undefined}><VoiceProvider profileId={profileId} endpoint={endpoint} identity={status.navigationNamespace}>{children}</VoiceProvider></NavigationScopeContext.Provider></AuthenticationContext.Provider>;
 }
 function message(error: unknown): string { return error instanceof Error ? error.message : "The connection could not be authenticated."; }

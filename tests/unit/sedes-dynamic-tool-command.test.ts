@@ -260,7 +260,7 @@ describe("dynamic Sedes tool commands", () => {
     });
     const catalog = service.catalogSummaries("cli", "thread_agent");
     const descriptions = new Map(
-      [catalog.slice(0, 16), catalog.slice(16)]
+      Array.from({ length: Math.ceil(catalog.length / 16) }, (_, index) => catalog.slice(index * 16, (index + 1) * 16))
         .flatMap((chunk) =>
           service.describeMany(
             "cli",

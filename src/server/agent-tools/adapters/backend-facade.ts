@@ -72,7 +72,7 @@ export interface BackendAgentToolPolicy {
   readonly enabledToolIds: readonly string[];
 }
 
-/** Trusted provider-side provenance, consulted only for interactive access decisions. */
+/** Trusted provider-side provenance for interactive access decisions and client controls. */
 export interface BackendAgentToolAccessDecisionAuthority {
   acquire(signal: AbortSignal): Promise<{
     readonly signal: AbortSignal;

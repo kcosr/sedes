@@ -42,6 +42,12 @@ afterEach(() => {
 });
 
 describe("voice settings page", () => {
+  it("offers explicit client reconnect while the native voice binding still exists", async () => {
+    const { fake, store } = await renderPage(voiceSnapshot({ clientConnectionToken: null, readiness: "connecting" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry client connection" }));
+    await waitFor(() => expect(fake.plugin.setConnection).toHaveBeenLastCalledWith({ ...VOICE_CONNECTION, reconnect: true }));
+    store.dispose();
+  });
   it("shows connecting while native hydrates, then the unavailable state with Retry", async () => {
     const fake = fakeVoicePlugin();
     let fail!: (error: Error) => void;

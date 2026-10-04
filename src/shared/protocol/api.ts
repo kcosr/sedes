@@ -105,6 +105,8 @@ export const apiErrorCodeSchema = z.enum([
   "workspace_missing",
   "environment_unavailable",
   "runtime_unavailable",
+  "client_controls_unavailable",
+  "client_registration_required",
   "backend_unavailable",
   "backend_incompatible_protocol",
   "backend_invalid_state",

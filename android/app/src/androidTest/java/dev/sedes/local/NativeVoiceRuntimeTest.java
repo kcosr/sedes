@@ -31,6 +31,43 @@ import org.junit.Test;
 
 /** Exercises the actual owner-thread cancellation and encrypted admission journal without audio. */
 public class NativeVoiceRuntimeTest {
+    @Test public void unsentInputWaitsForRegistrationWithoutBecomingUncertain() throws Exception {
+        for (boolean cancel : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.onOwner(() -> {
+                    f.runtime.clientDisconnected();
+                    f.invoke("submit", new Class<?>[] { String.class, String.class, String.class, JSONObject.class, boolean.class }, f.binding, f.origin, null, f.entry, false);
+                });
+                assertEquals(0, f.inputAttempts.get()); assertEquals(0, f.receiptReads.get());
+                assertEquals("prepared", f.store.entry(f.binding, f.mutation).getString("stage"));
+                assertEquals("prepared", f.runtime.snapshot().getJSONArray("recovery").getJSONObject(0).getString("status"));
+                if (cancel) assertNull(f.command("stopCurrentInteraction", new JSONObject()));
+                f.onOwner(() -> f.runtime.clientRegistered(f.request.getJSONObject("origin").getString("clientId"), "renewed-client-token"));
+                if (cancel) { assertEquals(0, f.inputAttempts.get()); assertEquals(0, f.store.journal(f.binding).length()); }
+                else {
+                    NativeVoiceHttp.Result reply = f.inputs.poll(10, TimeUnit.SECONDS); assertNotNull(reply);
+                    assertEquals(f.externalRequest().toString(), f.lastRequest.get().toString());
+                    reply.done(200, f.receipt("queued"), null); f.flush();
+                    assertEquals(1, f.inputAttempts.get()); assertEquals(0, f.receiptReads.get());
+                }
+            }
+        }
+    }
+
+    @Test public void knownRegistrationRejectionRetriesSameInputAfterReconnect() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.start().done(409, NativeVoiceJson.object("error", NativeVoiceJson.object("code", "client_registration_required")), null);
+            f.flush();
+            assertEquals(1, f.inputAttempts.get()); assertEquals(0, f.receiptReads.get());
+            assertEquals("prepared", f.store.entry(f.binding, f.mutation).getString("stage"));
+            NativeVoiceHttp.Result session = f.sessions.poll(10, TimeUnit.SECONDS); assertNotNull(session); f.refreshed(session);
+            NativeVoiceHttp.Result reply = f.inputs.poll(10, TimeUnit.SECONDS); assertNotNull(reply);
+            assertEquals(f.externalRequest().toString(), f.lastRequest.get().toString());
+            reply.done(200, f.receipt("queued"), null); f.flush();
+            assertEquals(2, f.inputAttempts.get()); assertEquals(0, f.receiptReads.get());
+        }
+    }
+
     @Test public void staleBridgeGenerationCannotMutateNewConnectionEvenWhenSettingsRevisionMatches() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
             f.onOwner(() -> set(f.runtime, "connectionGeneration", 2L));
@@ -207,7 +244,7 @@ public class NativeVoiceRuntimeTest {
             assertFalse(f.store.journal(f.binding).getJSONObject(0).getBoolean("cancelled"));
             f.refreshed(session);
             assertEquals(2, f.inputAttempts.get()); assertEquals(1, f.sessionReads.get()); assertEquals(0, f.receiptReads.get());
-            assertEquals(f.request.toString(), f.lastRequest.get().toString());
+            assertEquals(f.externalRequest().toString(), f.lastRequest.get().toString());
         }
     }
 
@@ -299,7 +336,7 @@ public class NativeVoiceRuntimeTest {
             assertEquals(1, f.inputAttempts.get());
             assertNull(f.command("resumeInput", NativeVoiceJson.object("mutationId", f.mutation)));
             NativeVoiceHttp.Result retry = f.inputs.poll(10, TimeUnit.SECONDS); assertNotNull(retry);
-            assertEquals(2, f.inputAttempts.get()); assertEquals(f.request.toString(), f.lastRequest.get().toString());
+            assertEquals(2, f.inputAttempts.get()); assertEquals(f.externalRequest().toString(), f.lastRequest.get().toString());
             retry.done(200, f.receipt("queued"), null); f.flush();
             assertEquals(0, f.store.journal(f.binding).length()); assertEquals(0, f.runtime.snapshot().getJSONArray("recovery").length());
         }
@@ -1243,7 +1280,7 @@ public class NativeVoiceRuntimeTest {
             f.refreshed(session);
             assertEquals(2, f.inputAttempts.get()); assertEquals(1, f.sessionReads.get());
             assertEquals(0, f.receiptReads.get());
-            assertEquals(f.request.toString(), f.lastRequest.get().toString());
+            assertEquals(f.externalRequest().toString(), f.lastRequest.get().toString());
             assertFalse(f.store.journal(f.binding).getJSONObject(0).getBoolean("cancelled"));
         }
     }
@@ -1303,6 +1340,9 @@ public class NativeVoiceRuntimeTest {
                     if (method.equals("POST") && path.endsWith("/inputs")) {
                         inputAttempts.incrementAndGet(); lastRequest.set(NativeVoiceJson.copy(body)); inputs.add(result);
                     } else if (path.equals("/api/application/session")) { sessionReads.incrementAndGet(); sessions.add(result); }
+                    else if (path.equals("/api/client-registration")) result.done(200, NativeVoiceJson.object("clientId", request.optJSONObject("origin").optString("clientId"),
+                        "connectionToken", "runtime-registered-connection-token", "resumeToken", "runtime-registered-resume-token-value"), null);
+                    else if (path.equals("/api/client-controls/poll")) { /* Retain the idle control poll. */ }
                     else if (path.endsWith("/input-context")) contexts.add(result);
                     else if (path.startsWith("/api/input-receipts/")) {
                         receiptReads.incrementAndGet(); result.done(200, NativeVoiceJson.copy(receiptResponse.get()), null);
@@ -1314,6 +1354,9 @@ public class NativeVoiceRuntimeTest {
             onOwner(() -> {
                 set(runtime, "profileId", profile); set(runtime, "origin", origin); set(runtime, "identity", IDENTITY);
                 set(runtime, "binding", binding); set(runtime, "csrf", "expired-test-token");
+                set(runtime, "originId", request.getJSONObject("origin").getString("clientId"));
+                set(runtime, "clientConnectionToken", "runtime-registered-connection-token");
+                set(field(runtime, "clientControls"), "origin", origin);
                 Class<?> activeClass = Class.forName("dev.sedes.local.NativeVoiceRuntime$Active");
                 Constructor<?> activeConstructor = activeClass.getDeclaredConstructor(String.class, String.class);
                 activeConstructor.setAccessible(true); Object active = activeConstructor.newInstance(target, "Target");
@@ -1326,6 +1369,7 @@ public class NativeVoiceRuntimeTest {
             });
             runtime.observe(submissionObserver);
         }
+        JSONObject externalRequest() { JSONObject body = NativeVoiceJson.copy(request); body.remove("origin"); return body; }
         void foreground(String threadId) throws Exception {
             runtime.nativeVisibility(true);
             assertNull(command("setForegroundContext", NativeVoiceJson.object("visible", true, "threadId", threadId)));

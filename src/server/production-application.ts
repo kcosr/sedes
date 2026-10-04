@@ -1,3 +1,5 @@
+import { ClientControlToolService } from "./agent-tools/tools/client-control-tools.js";
+import { ClientControlService } from "./domain/client-control-service.js";
 import type { BackendRuntimeDiagnostic } from "./backends/module.js";
 import { backendLifecycleActions } from "./configuration-admin/configuration-backend-lifecycle.js";
 import { UsageService } from "./usage/usage-service.js";
@@ -555,17 +557,22 @@ export async function startProductionApplication(
     };
     let profiles = configuredProfiles();
     const inventoryRepository = new InventoryRepository(database);
+    const clientControls = new ClientControlService();
+    resources.defer("client controls", () => clientControls.close());
     const notificationLifecycle = new NotificationLifecycleObserver(
       inventoryRepository,
       (eventScope, payload, eventKey, assistantResult, recognitionThreadId) => {
         // Captured only after dedup, policy and recipient checks admit voice delivery.
-        notifications.emit(eventScope, payload, eventKey, assistantResult, () => {
+        const publication = notifications.emit(eventScope, payload, eventKey, assistantResult, () => {
           const target = recognitionThreadId === undefined ? payload.thread?.id : recognitionThreadId;
           const context = target ? mutations?.activity.notificationContext(eventScope, target, payload.turn?.id) : undefined;
           const subjectId = payload.interaction?.id ?? payload.question?.id ??
             (payload.event === "thread.woke" ? payload.occurredAt : undefined);
           return { ...context, ...(subjectId ? { subjectId } : {}) };
         });
+        if (payload.turn && payload.thread && ["turn.completed", "turn.failed", "turn.interrupted"].includes(payload.event)) {
+          clientControls.observeNotification(eventScope, payload.thread.id, payload.turn.id, publication);
+        }
       },
     );
     const turnBookmarkRepository = new ConversationTurnBookmarkRepository(
@@ -1606,6 +1613,7 @@ export async function startProductionApplication(
       );
       if (!observed) return;
       notificationLifecycle.completion(eventScope, observed);
+      if (observed.applicationTurnId) void clientControls.complete(eventScope, applicationThreadId, observed.applicationTurnId, observed.completionOutcome ?? "interrupted");
       authoritativeCompletionFollowUp.defer(async () => {
         const failures: unknown[] = [];
         try {
@@ -1759,7 +1767,9 @@ export async function startProductionApplication(
         transitions: inventory,
       }),
     };
+    const clientControlTools = new ClientControlToolService(clientControls, actors, mutations.activity, agentToolSources);
     const canonicalAgentTools = new CanonicalInlineAgentToolService({
+      clientControls: clientControlTools,
       workpads: new WorkpadAgentToolService({ workpads, authorityReader: agentToolSources }),
       application: agentToolApplication,
       management: managementAgentTools,
@@ -1791,6 +1801,7 @@ export async function startProductionApplication(
       agentToolSources,
       runtimes,
       interactions,
+      clientControlTools,
     );
     const principalClientAgentTools = new PrincipalAgentToolClientService(
       toolProvenanceKey,
@@ -3036,6 +3047,7 @@ export async function startProductionApplication(
       applicationSnapshots: activeApplicationSnapshots,
       principalPreferences,
       notifications,
+      clientControls,
       questions,
       cannedPrompts,
       threads,

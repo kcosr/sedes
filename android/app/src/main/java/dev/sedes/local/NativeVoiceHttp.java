@@ -35,11 +35,17 @@ final class NativeVoiceHttp {
     // The server writes a heartbeat comment every 20 seconds. A silent half-open stream fails instead of blocking forever.
     static final long STREAM_READ_TIMEOUT_SECONDS = 50;
     private final OkHttpClient streams = client.newBuilder().readTimeout(STREAM_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS).callTimeout(0, TimeUnit.SECONDS).build();
+    private String registrationOrigin, registrationCredential, registrationToken;
+    void clientRegistration(String origin, String credential, String token) {
+        registrationOrigin = origin; registrationCredential = credential; registrationToken = token;
+    }
     Call request(String origin, String credential, String csrf, String method, String path, JSONObject body, Result result) {
         if (!path.startsWith("/api/")) throw new IllegalArgumentException("voice_api_path_invalid");
         Request.Builder builder = new Request.Builder().url(NativeVoiceSettings.origin(origin) + path).header("Accept", "application/json");
         if (credential != null) builder.header("Authorization", "Bearer " + credential);
         if (csrf != null) builder.header("X-CSRF-Token", csrf);
+        if (registrationToken != null && origin.equals(registrationOrigin) && java.util.Objects.equals(credential, registrationCredential))
+            builder.header("X-Sedes-Client", registrationToken);
         if (!method.equals("GET")) builder.method(method, RequestBody.create(body == null ? "{}" : body.toString(), JSON));
         Call call = client.newCall(builder.build());
         TestTransport fixture = BuildConfig.DEBUG ? testTransport : null;

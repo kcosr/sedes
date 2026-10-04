@@ -300,6 +300,77 @@ public class NativeVoiceStartupTest {
         }
     }
 
+    @Test public void clientSettingsPublishPersistedStateWhenMicrophoneStartIsBlocked() throws Exception {
+        try (Fixture f = new Fixture("off", false, true)) {
+            f.runtime.nativeVisibility(true); f.connect();
+            long revision = f.runtime.snapshot().getLong("settingsRevision");
+            JSONObject command = NativeVoiceJson.object("id", "settings", "action", "settings.update", "sourceThreadId", "source",
+                "sourceTurnId", "turn", "expiresAt", System.currentTimeMillis() + 60000, "expectedRevision", revision,
+                "threadTitle", null, "patch", NativeVoiceJson.object("audioMode", "manual", "voiceThreadId", UUID.randomUUID().toString()));
+            JSONObject result = f.clientCommand(command);
+            assertEquals("applied", result.getString("status"));
+            assertEquals("microphone_permission_required", result.getString("reason"));
+            JSONObject state = f.runtime.snapshot();
+            assertEquals(revision + 1, state.getLong("settingsRevision"));
+            assertEquals("manual", state.getJSONObject("settings").getString("audioMode"));
+            assertTrue(state.getJSONObject("settings").isNull("voiceThreadTitle"));
+        }
+    }
+
+    @Test public void clientSettlementTreatsPlatformJsonNullAsNoPlaybackEvent() throws Exception {
+        NativeClientActionQueue queue = new NativeClientActionQueue();
+        Object navigation = new Object();
+        JSONObject command = new JSONObject("{\"id\":\"action\",\"action\":\"switch_thread\",\"sourceThreadId\":\"source\",\"sourceTurnId\":\"turn\",\"replyEventId\":null,\"expiresAt\":120000}");
+        queue.stage(command, navigation, 0);
+        queue.settle("action", NativeVoiceJson.nullableString(command, "replyEventId", 128), 120000);
+        assertEquals(1, queue.takeReady(1, true, null, null, navigation).size());
+    }
+
+    @Test public void clientPollRefreshesSessionAndResumesIdentityAfterCsrfRejection() throws Exception {
+        try (Fixture f = new Fixture("off", false, true)) {
+            f.connect();
+            String id = f.runtime.snapshot().getString("originClientId");
+            f.take(f.polls).done(403, NativeVoiceJson.object("error", NativeVoiceJson.object("code", "csrf_token_invalid")), null);
+            f.take(f.sessions).done(200, NativeVoiceJson.object("clientProtocolVersion", BuildConfig.SEDES_CLIENT_PROTOCOL_VERSION, "csrfToken", "restarted-server"), null);
+            f.take(f.polls); f.flush();
+            assertEquals(id, f.runtime.snapshot().getString("originClientId"));
+            assertFalse(f.runtime.snapshot().isNull("clientConnectionToken"));
+            assertEquals("startup-registered-resume-token-value", f.registrations.get(1).getString("resumeToken"));
+            assertEquals("restarted-server", f.runtime.clientCsrf());
+        }
+    }
+
+    @Test public void webViewReattachmentDuringControlGapPreservesTheVoiceBinding() throws Exception {
+        try (Fixture f = new Fixture("off", false, true)) {
+            f.connect();
+            long generation = f.runtime.snapshot().getLong("connectionGeneration");
+            String id = f.runtime.snapshot().getString("originClientId");
+            f.take(f.polls).done(503, null, "network_unavailable"); f.flush();
+            f.beginConnection(f.profile).await();
+            assertEquals(generation, f.runtime.snapshot().getLong("connectionGeneration"));
+            assertEquals(id, f.runtime.snapshot().getString("originClientId"));
+            assertTrue("Reattachment does not reauthenticate or disconnect voice", f.auth.isEmpty());
+            f.session(); f.take(f.polls); f.flush();
+            assertFalse(f.runtime.snapshot().isNull("clientConnectionToken"));
+            assertEquals(id, f.runtime.snapshot().getString("originClientId"));
+        }
+    }
+
+    @Test public void onlyExplicitReconnectReclaimsAReplacedNativeClient() throws Exception {
+        try (Fixture f = new Fixture("off", false, true)) {
+            f.connect(); long generation = f.runtime.snapshot().getLong("connectionGeneration");
+            f.take(f.polls).done(409, NativeVoiceJson.object("error", NativeVoiceJson.object("code", "conflict")), null); f.flush();
+            f.beginConnection(f.profile).await();
+            assertTrue(f.sessions.isEmpty()); assertTrue(f.runtime.snapshot().isNull("clientConnectionToken"));
+            Reply reply = new Reply(); f.runtime.command("setConnection", NativeVoiceJson.object("profileId", f.profile,
+                "serverOrigin", f.origin, "identity", Fixture.IDENTITY, "reconnect", true), false, reply); reply.await();
+            f.session(); f.take(f.polls); f.flush();
+            assertEquals(generation, f.runtime.snapshot().getLong("connectionGeneration"));
+            assertFalse(f.runtime.snapshot().isNull("clientConnectionToken"));
+            assertFalse(f.registrations.get(1).has("resumeToken"));
+        }
+    }
+
     private static final class Reply implements NativeVoiceRuntime.Reply {
         final CountDownLatch done = new CountDownLatch(1);
         String failure;
@@ -339,6 +410,9 @@ public class NativeVoiceStartupTest {
         final NativeVoiceStore store;
         final Handler owner;
         final BlockingQueue<NativeVoiceHttp.Result> auth = new LinkedBlockingQueue<>(), sessions = new LinkedBlockingQueue<>();
+        final BlockingQueue<NativeVoiceHttp.Result> polls = new LinkedBlockingQueue<>();
+        final java.util.List<JSONObject> registrations = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final String clientId = UUID.randomUUID().toString();
         final BlockingQueue<Intent> starts = new LinkedBlockingQueue<>();
         Fixture(String mode, boolean permission, boolean configured) throws Exception {
             this(mode, permission, configured, "http://127.0.0.1:65125/v1");
@@ -358,6 +432,11 @@ public class NativeVoiceStartupTest {
                 public boolean before(String method, String path, JSONObject body, NativeVoiceHttp.Result result) {
                     if (method.equals("GET") && path.equals("/api/auth/status")) auth.add(result);
                     else if (method.equals("GET") && path.equals("/api/application/session")) sessions.add(result);
+                    else if (path.equals("/api/client-registration")) {
+                        registrations.add(body);
+                        result.done(200, NativeVoiceJson.object("clientId", clientId, "connectionToken", "startup-registered-connection-token", "resumeToken", "startup-registered-resume-token-value"), null);
+                    }
+                    else if (path.equals("/api/client-controls/poll")) polls.add(result);
                     else throw new AssertionError("Unexpected startup request: " + method + " " + path);
                     return true;
                 }
@@ -368,7 +447,11 @@ public class NativeVoiceStartupTest {
             Reply reply = new Reply(); runtime.command("setConnection", NativeVoiceJson.object("profileId", selectedProfile,
                 "serverOrigin", origin, "identity", IDENTITY), false, reply); return reply;
         }
-        void connect() throws Exception { Reply reply = beginConnection(profile); authenticate(); session(); reply.await(); }
+        void connect() throws Exception { Reply reply = beginConnection(profile); authenticate(); session(); reply.await(); ownerBarrier(); }
+        JSONObject clientCommand(JSONObject command) throws Exception {
+            BlockingQueue<JSONObject> results = new LinkedBlockingQueue<>();
+            owner.post(() -> results.add(runtime.clientCommand(command))); return take(results);
+        }
         JSONObject authenticated() { return NativeVoiceJson.object("required", true, "authenticated", true, "navigationNamespace", IDENTITY); }
         void authenticate() throws Exception { take(auth).done(200, authenticated(), null); }
         void session() throws Exception { take(sessions).done(200, NativeVoiceJson.object("clientProtocolVersion", BuildConfig.SEDES_CLIENT_PROTOCOL_VERSION, "csrfToken", "startup-test"), null); }
