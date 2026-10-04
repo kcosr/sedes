@@ -37,6 +37,14 @@ public class NativeVoiceRuntimePolicyTest {
         for (int failures = 0; failures < expected.length; failures++) assertEquals(expected[failures], NativeVoiceRuntime.backoff(failures));
         assertEquals(60000, NativeVoiceRuntime.backoff(Integer.MAX_VALUE));
     }
+    @Test public void emptyTranscriptRearmsButOtherRecognitionFailuresDoNot() {
+        assertTrue(NativeVoiceRuntime.shouldRetryEmptyTranscript(false, false, "empty_transcript"));
+        assertFalse("A canceled result never re-arms", NativeVoiceRuntime.shouldRetryEmptyTranscript(false, true, "empty_transcript"));
+        assertFalse("A successful result is not a retry", NativeVoiceRuntime.shouldRetryEmptyTranscript(true, false, "empty_transcript"));
+        assertFalse("No usable speech remains a surfaced failure", NativeVoiceRuntime.shouldRetryEmptyTranscript(false, false, "no_usable_speech"));
+        assertFalse(NativeVoiceRuntime.shouldRetryEmptyTranscript(false, false, ""));
+        assertFalse(NativeVoiceRuntime.shouldRetryEmptyTranscript(false, false, "Recognition timed out"));
+    }
     @Test public void connectionFailuresDistinguishPairingFromConnectivity() {
         assertEquals("authentication_required", NativeVoiceRuntime.connectionFailure(401));
         for (int status : new int[] { 0, 403, 404, 500, 503 }) assertEquals("connection_unavailable", NativeVoiceRuntime.connectionFailure(status));

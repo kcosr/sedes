@@ -712,6 +712,11 @@
 
 ### Fixed
 
+- Native voice recognition that captures audio but returns no transcript
+  (`empty_transcript`) now re-arms and listens again instead of reporting a
+  recognition error, matching the Assistant client. Canceled recognition and
+  other failures still surface to the user.
+
 - Idle voice submissions appear as ordinary chat messages while delivery
   completes, honor **Seek on send**, and preserve the typed draft. Routine
   delivery labels stay hidden, matching typed Send.

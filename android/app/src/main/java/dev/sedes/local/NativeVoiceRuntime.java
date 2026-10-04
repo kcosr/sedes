@@ -627,14 +627,18 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
                 handler.postDelayed(() -> { if (active == item && currentRequest.equals(item.sttId)) failActive("recognition_result_timeout"); }, settings.number("recognitionCompletionTimeoutMs"));
             }
             else if (type.equals("media_stt_result")) {
-                audio.stop(); item.sttId = null; item.recognitionFinalized = true;
+                audio.stop(); item.sttId = null;
                 String text = event.optString("text", "");
                 boolean success = event.optBoolean("success");
+                boolean retryEmptyTranscript = shouldRetryEmptyTranscript(success, event.optBoolean("canceled"), event.optString("error", ""));
+                // A missing reply is re-armed in place; only a captured transcript makes the item adapter-independent.
+                item.recognitionFinalized = !retryEmptyTranscript;
                 boolean usable = success && !blank(text) &&
                     !(settings.flag("recognizeStopCommand") && NativeVoiceQueue.isStopCommand(text));
                 boolean steer = settings.flag("followComposerMode") && composerMode.equals("steer");
                 recognitionCompletionCue(item, usable, () -> {
-                    if (!success) failActive("recognition_failed");
+                    if (retryEmptyTranscript) arm(item);
+                    else if (!success) failActive("recognition_failed");
                     else if (!usable) finishItem(item);
                     else finalizeRecognition(item, text, steer);
                 });
@@ -1088,6 +1092,13 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
     }
     /** Bounded exponential reconnect and reconciliation delay: 2 s doubling to at most 60 s. */
     static long backoff(int failures) { return Math.min(60000L, 2000L << Math.min(5, Math.max(0, failures - 1))); }
+    /**
+     * A recognition that captured audio but returned no text is a missing reply, not a failure: re-arm and listen
+     * again, matching the Assistant client. Canceled recognition and other failures still surface to the user.
+     */
+    static boolean shouldRetryEmptyTranscript(boolean success, boolean canceled, String error) {
+        return !success && !canceled && "empty_transcript".equals(error);
+    }
     static String message(String code) {
         switch (code) {
             case "voice_target_required": return "Choose a thread for voice input.";
