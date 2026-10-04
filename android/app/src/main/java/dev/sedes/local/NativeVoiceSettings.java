@@ -59,11 +59,11 @@ final class NativeVoiceSettings {
         NativeVoiceJson.keys(value, FIELDS);
         for (String key : FIELDS) if (!value.has(key)) throw new IllegalArgumentException("missing_" + key);
         String mode = NativeVoiceJson.string(value, "audioMode", 16);
-        if (!mode.equals("off") && !mode.equals("manual") && !mode.equals("response")) throw new IllegalArgumentException("invalid_audioMode");
+        if (!mode.equals("off") && !mode.equals("manual") && !mode.equals("response")) throw new NativeVoiceJson.InvalidFieldException("audioMode");
         for (String key : new String[] { "autoListen", "ignoreOtherDevices", "readNotificationContext", "onlyVoiceThread",
             "followComposerMode", "recognizeStopCommand", "recognitionCues", "headsetControls" }) NativeVoiceJson.bool(value, key);
         Object url = value.opt("adapterUrl");
-        if (!(url instanceof String) || ((String) url).length() > 2048) throw new IllegalArgumentException("invalid_adapterUrl");
+        if (!(url instanceof String) || ((String) url).length() > 2048) throw new NativeVoiceJson.InvalidFieldException("adapterUrl");
         if (!((String) url).isEmpty()) NativeVoiceJson.put(value, "adapterUrl", adapterBaseUrl((String) url));
         NativeVoiceJson.integer(value, "adapterTextLimit", 2, 100000);
         NativeVoiceJson.nullableString(value, "voiceThreadId", 160);
@@ -83,7 +83,7 @@ final class NativeVoiceSettings {
         return httpUrl(input, true);
     }
     private static String httpUrl(String input, boolean allowPath) {
-        String errorCode = allowPath ? "invalid_adapterUrl" : "invalid_origin";
+        String field = allowPath ? "adapterUrl" : "origin";
         try {
             URI uri = new URI(input);
             String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
@@ -91,13 +91,13 @@ final class NativeVoiceSettings {
             if (!(scheme.equals("https") || scheme.equals("http")) || uri.getHost() == null || uri.getRawUserInfo() != null ||
                 (!allowPath && !path.isEmpty() && !path.equals("/")) ||
                 uri.getRawQuery() != null || uri.getRawFragment() != null || uri.getPort() > 65535)
-                throw new IllegalArgumentException(errorCode);
+                throw new NativeVoiceJson.InvalidFieldException(field);
             String host = uri.getHost().toLowerCase(Locale.ROOT);
             if (host.indexOf(':') >= 0 && !host.startsWith("[")) host = "[" + host + "]";
             int port = uri.getPort();
             while (path.endsWith("/")) path = path.substring(0, path.length() - 1);
             return scheme + "://" + host + (port < 0 || (port == 443 && scheme.equals("https")) ||
                 (port == 80 && scheme.equals("http")) ? "" : ":" + port) + path;
-        } catch (java.net.URISyntaxException error) { throw new IllegalArgumentException(errorCode, error); }
+        } catch (java.net.URISyntaxException error) { throw new NativeVoiceJson.InvalidFieldException(field, error); }
     }
 }

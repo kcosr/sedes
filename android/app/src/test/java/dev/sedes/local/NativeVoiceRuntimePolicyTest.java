@@ -5,6 +5,17 @@ import org.junit.Test;
 
 /** Pure runtime policy: blank input, definitive rejection, reconnect backoff and user-facing failure messages. */
 public class NativeVoiceRuntimePolicyTest {
+    @Test public void fieldValidationPreservesSchemaNamesWithoutExposingExceptionText() {
+        assertEquals("invalid_threadTitle", NativeVoiceRuntime.code(new NativeVoiceJson.InvalidFieldException("threadTitle")));
+        assertEquals("invalid_composerMode", NativeVoiceRuntime.code(new NativeVoiceJson.InvalidFieldException("composerMode")));
+        assertEquals("invalid_adapterUrl", NativeVoiceRuntime.code(new NativeVoiceJson.InvalidFieldException("adapterUrl", new Exception("private detail"))));
+        assertEquals("connection_changed", NativeVoiceRuntime.code(new IllegalStateException("connection_changed")));
+        for (Exception error : new Exception[] { new IllegalArgumentException("invalid_threadTitle"),
+            new Exception("privateTitle"), new Exception("/private/path: permission denied"), new Exception(),
+            new NativeVoiceJson.InvalidFieldException("threadTitle: private detail"),
+            new NativeVoiceJson.InvalidFieldException(new String(new char[80]).replace('\0', 'x')) })
+            assertEquals("voice_action_failed", NativeVoiceRuntime.code(error));
+    }
     @Test public void blankMatchesEcmaScriptTrim() {
         for (String blank : new String[] { "", " ", "\t\n\u000b\f\r", " ", " ", "   ", "  ",
             " ", " ", "　", "﻿", "  　﻿ " })

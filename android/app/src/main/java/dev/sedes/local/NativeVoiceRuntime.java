@@ -147,8 +147,9 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         });
     }
     /** Only stable machine codes cross the bridge; arbitrary platform exception text does not. */
-    private static String code(Exception error) {
+    static String code(Exception error) {
         String code = error.getMessage();
+        if (error instanceof NativeVoiceJson.InvalidFieldException && code != null && code.matches("invalid_[a-z][A-Za-z0-9_]{0,71}")) return code;
         return code != null && code.matches("[a-z][a-z0-9_]{0,79}") ? code : "voice_action_failed";
     }
     private void setConnection(JSONObject args, Reply reply) throws Exception {
@@ -331,7 +332,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         boolean visible = NativeVoiceJson.bool(args, "visible");
         String thread = NativeVoiceJson.nullableString(args, "threadId", 512), title = NativeVoiceJson.nullableString(args, "threadTitle", 512);
         String mode = args.has("composerMode") ? NativeVoiceJson.string(args, "composerMode", 16) : null;
-        if (mode != null && !mode.equals("queue") && !mode.equals("steer")) throw new IllegalArgumentException("invalid_composerMode");
+        if (mode != null && !mode.equals("queue") && !mode.equals("steer")) throw new NativeVoiceJson.InvalidFieldException("composerMode");
         foregroundVisible = visible && nativeVisible;
         foregroundThread = foregroundVisible ? thread : null;
         foregroundTitle = foregroundVisible ? title : null;

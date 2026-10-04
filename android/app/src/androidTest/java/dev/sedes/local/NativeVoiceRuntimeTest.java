@@ -645,7 +645,7 @@ public class NativeVoiceRuntimeTest {
     }
     /** Loopback adapter HTTP endpoint: answers TTS requests with scripted statuses and everything else with 200. */
     private static final class AdapterHttp implements AutoCloseable {
-        final ServerSocket server = new ServerSocket(0, 8, InetAddress.getLoopbackAddress());
+        final ServerSocket server = new ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"));
         final BlockingQueue<String> ttsBodies = new LinkedBlockingQueue<>();
         AdapterHttp(int... ttsStatuses) throws Exception {
             BlockingQueue<Integer> statuses = new LinkedBlockingQueue<>(); for (int status : ttsStatuses) statuses.add(status);

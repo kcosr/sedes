@@ -720,6 +720,12 @@
 
 ### Fixed
 
+- Claude availability probes wait for complete process output, avoiding
+  intermittent false unavailable errors.
+
+- Android voice preserves specific field-validation errors for invalid titles,
+  composer modes, and settings without exposing platform exception details.
+
 - Electron managed Local accepts the server's health response, which includes
   the server version, and ignores additional fields.
 

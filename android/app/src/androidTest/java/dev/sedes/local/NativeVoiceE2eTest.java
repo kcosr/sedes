@@ -329,11 +329,18 @@ public class NativeVoiceE2eTest {
         long end = SystemClock.elapsedRealtime() + timeout;
         while (true) {
             CountDownLatch done = new CountDownLatch(1); AtomicReference<JSONObject> body = new AtomicReference<>(); AtomicInteger status = new AtomicInteger();
-            http.request(server, credential, null, "GET", "/api/threads/" + thread, null, (code, value, failure) -> { status.set(code); body.set(value); done.countDown(); });
+            AtomicReference<String> readFailure = new AtomicReference<>();
+            http.request(server, credential, null, "GET", "/api/threads/" + thread + "?activityDetail=summary", null, (code, value, failure) -> { status.set(code); body.set(value); readFailure.set(failure); done.countDown(); });
             assertTrue("Thread read did not finish", done.await(45, TimeUnit.SECONDS));
             JSONObject draft = status.get() == 200 && body.get() != null ? body.get().optJSONObject("draft") : null;
-            if (draft != null && expected.equals(draft.optString("text"))) return true;
-            if (SystemClock.elapsedRealtime() >= end) return false;
+            boolean matches = draft != null && expected.equals(draft.optString("text"));
+            if (matches || SystemClock.elapsedRealtime() >= end) {
+                Bundle diagnostic = new Bundle();
+                diagnostic.putString("voiceDraftRead", NativeVoiceJson.object("status", status.get(), "failure", readFailure.get(),
+                    "hasDraft", draft != null, "matches", matches, "responseCharacters", body.get() == null ? 0 : body.get().toString().length()).toString());
+                instrumentation.sendStatus(0, diagnostic);
+                return matches;
+            }
             SystemClock.sleep(250);
         }
     }

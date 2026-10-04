@@ -13,6 +13,11 @@ import org.json.JSONObject;
 /** Small strict JSON helpers shared by the bridge, wire protocol and encrypted records. */
 final class NativeVoiceJson {
     private NativeVoiceJson() {}
+    /** Field names are source-defined schema keys; field values never enter bridge error codes. */
+    static final class InvalidFieldException extends IllegalArgumentException {
+        InvalidFieldException(String field) { super("invalid_" + field); }
+        InvalidFieldException(String field, Throwable cause) { super("invalid_" + field, cause); }
+    }
     static JSONObject object(Object... pairs) {
         JSONObject value = new JSONObject();
         for (int i = 0; i < pairs.length; i += 2) put(value, (String) pairs[i], pairs[i + 1]);
@@ -36,7 +41,7 @@ final class NativeVoiceJson {
     static String string(JSONObject value, String key, int max) {
         Object field = value.opt(key);
         if (!(field instanceof String) || ((String) field).isEmpty() || ((String) field).length() > max)
-            throw new IllegalArgumentException("invalid_" + key);
+            throw new InvalidFieldException(key);
         return (String) field;
     }
     static String nullableString(JSONObject value, String key, int max) {
@@ -45,21 +50,21 @@ final class NativeVoiceJson {
     }
     static boolean bool(JSONObject value, String key) {
         Object field = value.opt(key);
-        if (!(field instanceof Boolean)) throw new IllegalArgumentException("invalid_" + key);
+        if (!(field instanceof Boolean)) throw new InvalidFieldException(key);
         return (Boolean) field;
     }
     static long integer(JSONObject value, String key, long min, long max) {
         Object field = value.opt(key);
-        if (!(field instanceof Number)) throw new IllegalArgumentException("invalid_" + key);
+        if (!(field instanceof Number)) throw new InvalidFieldException(key);
         Number number = (Number) field;
         long result = number.longValue();
         if (number.doubleValue() != result || result < min || result > max)
-            throw new IllegalArgumentException("invalid_" + key);
+            throw new InvalidFieldException(key);
         return result;
     }
     static JSONObject requiredObject(JSONObject value, String key) {
         JSONObject result = value.optJSONObject(key);
-        if (result == null) throw new IllegalArgumentException("invalid_" + key);
+        if (result == null) throw new InvalidFieldException(key);
         return result;
     }
     static int bytes(String value) { return value.getBytes(StandardCharsets.UTF_8).length; }
