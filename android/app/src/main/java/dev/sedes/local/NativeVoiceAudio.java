@@ -86,8 +86,9 @@ final class NativeVoiceAudio {
         final boolean recording;
         final String name = "sedes-voice-focus-" + FOCUS_IDS.incrementAndGet();
         AudioFocusRequest request;
+        String ownerRequestId;
         boolean ducked;
-        Focus(boolean recording) { this.recording = recording; }
+        Focus(boolean recording, String ownerRequestId) { this.recording = recording; this.ownerRequestId = ownerRequestId; }
         @Override public void onAudioFocusChange(int change) { focusChanged(this, change); }
         // AudioManager derives the focus client ID from toString(); each entry needs its own.
         @Override public String toString() { return name; }
@@ -102,7 +103,10 @@ final class NativeVoiceAudio {
                 return;
             }
             if (change != AudioManager.AUDIOFOCUS_LOSS && change != AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) return;
-            abandonFocus(); current = generation; id = request;
+            current = generation;
+            // Capture may have stopped while its recognition result is still pending.
+            id = request == null ? entry.ownerRequestId : request;
+            abandonFocus();
         }
         // Fenced by generation: a loss can only end the request that held this entry when it was lost.
         if (id != null) failCurrent(current, id, "audio_focus_lost");
@@ -407,9 +411,9 @@ final class NativeVoiceAudio {
     // Focus methods run under lock. A held entry of the same kind is reused across consecutive requests.
     private boolean requestFocus(boolean recording) {
         focusRelease++;
-        if (focus != null && focus.recording == recording) return true;
+        if (focus != null && focus.recording == recording) { focus.ownerRequestId = request; return true; }
         if (manager == null) return false;
-        Focus previous = focus, next = new Focus(recording);
+        Focus previous = focus, next = new Focus(recording, request);
         int gain = recording ? AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE : AudioManager.AUDIOFOCUS_GAIN_TRANSIENT;
         boolean granted;
         if (Build.VERSION.SDK_INT >= 26) {

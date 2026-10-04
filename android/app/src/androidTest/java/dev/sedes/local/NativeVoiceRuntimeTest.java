@@ -499,6 +499,222 @@ public class NativeVoiceRuntimeTest {
             }
         }
     }
+    @Test public void emptyTranscriptRetriesOnceAfterCompletionFeedback() throws Exception {
+        for (String completion : new String[] { "drained", "playback_failed" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                NativeVoiceAudioTest.grant(f.context, "android.permission.RECORD_AUDIO");
+                String request = f.recognizing(true);
+                String activeId = f.runtime.snapshot().getJSONObject("active").getString("id");
+                f.result(request, false, "", false, "empty_transcript");
+                Cue failure = f.cue(NativeVoiceCue.Kind.FAILURE);
+                f.result(request, false, "", false, "empty_transcript");
+                f.result(request, true, "Late result from the completed capture");
+                assertTrue("Duplicate results must not play another cue", f.cues.isEmpty());
+                if (completion.equals("drained")) f.runtime.drained(failure.id);
+                else f.runtime.failed(failure.id, completion);
+                f.flush();
+                Cue start = f.cue(NativeVoiceCue.Kind.START);
+                assertNotEquals(failure.id, start.id);
+                assertEquals(activeId, f.runtime.snapshot().getJSONObject("active").getString("id"));
+                assertEquals("arming", f.runtime.snapshot().getString("phase"));
+                f.runtime.drained(failure.id); f.runtime.failed(failure.id, "playback_failed");
+                f.result(request, false, "", false, "empty_transcript");
+                f.result(request, true, "Another late result"); f.flush();
+                assertTrue("Old callbacks must not restart feedback or another retry", f.cues.isEmpty());
+                assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+                assertEquals(0, f.inputAttempts.get()); assertEquals(0, f.store.journal(f.binding).length());
+            }
+        }
+    }
+    @Test public void canceledAndOtherFailedRecognitionResultsDoNotRetry() throws Exception {
+        for (String error : new String[] { "empty_transcript", "no_usable_speech", "Recognition timed out" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.result(f.recognizing(true), false, "", error.equals("empty_transcript"), error);
+                Cue failure = f.cue(NativeVoiceCue.Kind.FAILURE);
+                f.runtime.drained(failure.id); f.flush();
+                assertTrue(error, f.runtime.snapshot().isNull("active"));
+                assertEquals("recognition_failed", f.lastError().getString("code"));
+                assertTrue(f.cues.isEmpty()); assertEquals(0, f.inputAttempts.get());
+                assertEquals(0, f.store.journal(f.binding).length());
+            }
+        }
+    }
+    @Test public void adapterReplacementAndDisconnectCancelPendingEmptyTranscriptRetry() throws Exception {
+        for (String interruption : new String[] { "adapter_url", "adapter_disconnect", "connection" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                String request = f.recognizing(true);
+                f.result(request, false, "", false, "empty_transcript");
+                Cue failure = f.cue(NativeVoiceCue.Kind.FAILURE);
+                if (interruption.equals("adapter_url")) f.settings(NativeVoiceJson.object("adapterUrl", "http://127.0.0.1:9"));
+                else if (interruption.equals("adapter_disconnect")) {
+                    NativeVoiceAdapter adapter = (NativeVoiceAdapter) field(f.runtime, "adapter");
+                    f.runtime.failed(adapter.generation(), "adapter_disconnected"); f.flush();
+                    assertEquals("adapter_disconnected", f.lastError().getString("code"));
+                } else assertNull(f.command("disconnect", new JSONObject()));
+                assertTrue("Unrecognized media must be canceled immediately: " + interruption, f.runtime.snapshot().isNull("active"));
+                f.runtime.drained(failure.id); f.runtime.failed(failure.id, "playback_failed");
+                f.result(request, true, "Late input after disconnect"); f.flush();
+                assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.cues.isEmpty());
+                assertEquals(0, f.inputAttempts.get()); assertEquals(0, f.store.journal(f.binding).length());
+            }
+        }
+    }
+    @Test public void stopOffAndAutomaticSuppressionCancelPendingEmptyTranscriptRetry() throws Exception {
+        for (String interruption : new String[] { "stop", "off", "auto_listen", "policy", "stream" }) {
+            boolean automatic = !interruption.equals("stop") && !interruption.equals("off");
+            try (Fixture f = new Fixture(automatic, false)) {
+                String request = f.recognizing(true);
+                f.result(request, false, "", false, "empty_transcript");
+                Cue failure = f.cue(NativeVoiceCue.Kind.FAILURE);
+                switch (interruption) {
+                    case "stop": assertNull(f.command("stopCurrentInteraction", new JSONObject())); break;
+                    case "off": f.settings(NativeVoiceJson.object("audioMode", "off")); break;
+                    case "auto_listen": f.settings(NativeVoiceJson.object("autoListen", false)); break;
+                    case "policy": f.policy(true, true); break;
+                    case "stream": f.onOwner(() -> f.invoke("streamFailed", new Class<?>[] { String.class }, "stream_closed")); break;
+                    default: throw new AssertionError(interruption);
+                }
+                f.flush(); assertTrue(interruption, f.runtime.snapshot().isNull("active"));
+                f.runtime.drained(failure.id); f.runtime.failed(failure.id, "playback_failed");
+                f.result(request, true, "Late input after cancellation"); f.flush();
+                assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.cues.isEmpty());
+                assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+                assertEquals(0, f.inputAttempts.get()); assertEquals(0, f.store.journal(f.binding).length());
+            }
+        }
+    }
+    @Test public void focusLossDuringEmptyTranscriptFeedbackCancelsQuietlyWithoutRetry() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            String request = f.recognizing(true);
+            f.result(request, false, "", false, "empty_transcript");
+            Cue failure = f.cue(NativeVoiceCue.Kind.FAILURE);
+            f.runtime.failed(failure.id, "audio_focus_lost"); f.flush();
+            assertTrue(f.runtime.snapshot().isNull("active"));
+            f.runtime.drained(failure.id); f.runtime.failed(failure.id, "audio_focus_lost");
+            f.result(request, true, "Late input after focus loss"); f.flush();
+            assertTrue(f.cues.isEmpty()); assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+            assertEquals(0, f.inputAttempts.get()); assertEquals(0, f.store.journal(f.binding).length());
+        }
+    }
+    @Test public void focusLossDuringOtherFailureFeedbackPreservesTheOriginalError() throws Exception {
+        for (String error : new String[] { "no_usable_speech", "microphone_failed", "audio_focus_unavailable" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                String request = f.media("capture");
+                String expected = error.equals("no_usable_speech") ? "recognition_failed" : error;
+                if (error.equals("no_usable_speech")) f.result(request, false, "", false, error);
+                else { f.runtime.failed(request, error); f.flush(); }
+                Cue failure = f.cue(NativeVoiceCue.Kind.FAILURE);
+                assertEquals("The original failure waits for feedback", 0, f.runtime.snapshot().getJSONArray("errors").length());
+                f.runtime.failed(failure.id, "audio_focus_lost"); f.flush();
+                assertTrue(error, f.runtime.snapshot().isNull("active"));
+                assertEquals(expected, f.lastError().getString("code"));
+                f.runtime.drained(failure.id); f.runtime.failed(failure.id, "audio_focus_lost");
+                f.result(request, true, "Late input after failed recognition"); f.flush();
+                assertEquals(1, f.errors(expected)); assertEquals(0, f.errors("audio_focus_lost"));
+                assertEquals(1, f.runtime.snapshot().getJSONArray("errors").length());
+                assertTrue(f.cues.isEmpty()); assertEquals(0, f.inputAttempts.get());
+                assertEquals(0, f.store.journal(f.binding).length());
+            }
+        }
+    }
+    @Test public void focusLossWhileAwaitingRecognitionResultCancelsQuietly() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            String request = f.media("capture");
+            NativeVoiceAdapter adapter = (NativeVoiceAdapter) field(f.runtime, "adapter");
+            f.runtime.event(adapter.generation(), NativeVoiceJson.object("type", "media_stt_stopped", "requestId", request));
+            f.flush();
+            assertEquals("recognizing", f.runtime.snapshot().getString("phase"));
+            assertFalse(f.runtime.snapshot().isNull("active")); assertTrue(f.cues.isEmpty());
+            f.runtime.failed(request, "audio_focus_lost"); f.flush();
+            assertTrue(f.runtime.snapshot().isNull("active"));
+            f.result(request, false, "", false, "empty_transcript");
+            f.result(request, true, "Late transcript after focus loss"); f.flush();
+            assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.cues.isEmpty());
+            assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+            assertEquals(0, f.inputAttempts.get()); assertEquals(0, f.store.journal(f.binding).length());
+        }
+    }
+    @Test public void focusLossDuringAutomaticRetryValidationPreventsCapture() throws Exception {
+        for (boolean cuesEnabled : new boolean[] { true, false }) {
+            try (Fixture f = new Fixture(false, false)) {
+                NativeVoiceAudioTest.grant(f.context, "android.permission.RECORD_AUDIO");
+                String request = f.automaticRecognizing(cuesEnabled);
+                Object active = field(f.runtime, "active");
+                f.result(request, false, "", false, "empty_transcript");
+                String focusOwner = request;
+                if (cuesEnabled) {
+                    Cue failure = f.cue(NativeVoiceCue.Kind.FAILURE);
+                    f.runtime.drained(failure.id); f.flush();
+                    Cue start = f.cue(NativeVoiceCue.Kind.START);
+                    focusOwner = start.id;
+                    f.runtime.drained(start.id); f.flush();
+                }
+                NativeVoiceHttp.Result validation = f.contexts.poll(10, TimeUnit.SECONDS); assertNotNull(validation);
+                assertEquals("validating", f.runtime.snapshot().getString("phase"));
+                assertNull(field(active, "sttId")); assertNull(field(active, "cueId"));
+                if (cuesEnabled) {
+                    f.runtime.failed(request, "audio_focus_lost"); f.flush();
+                    assertFalse("The previous capture no longer owns audio focus", f.runtime.snapshot().isNull("active"));
+                }
+                f.runtime.failed(focusOwner, "audio_focus_lost"); f.flush();
+                assertTrue("Held focus loss must cancel pending validation", f.runtime.snapshot().isNull("active"));
+                JSONObject context = NativeVoiceJson.object("threadId", f.target, "activityToken", "automatic-retry-epoch",
+                    "authority", "current", "runState", "idle", "automaticListenEligible", true,
+                    "steer", NativeVoiceJson.object("availability", "unavailable"));
+                NativeVoiceProtocol.inputContext(context);
+                validation.done(200, context, null); f.flush();
+                assertTrue(f.runtime.snapshot().isNull("active"));
+                assertNull("A late valid target response must not start another capture", field(active, "sttId"));
+                assertTrue(f.cues.isEmpty()); assertTrue(f.contexts.isEmpty());
+                assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+                assertEquals(0, f.inputAttempts.get()); assertEquals(0, f.store.journal(f.binding).length());
+            }
+        }
+    }
+    @Test public void focusLossDuringSpeechCaptureAndStartCueCancelsQuietly() throws Exception {
+        for (String media : new String[] { "speech", "capture", "start_cue" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                String request = f.media(media);
+                f.runtime.failed("stale-" + request, "audio_focus_lost"); f.flush();
+                assertFalse("An unrelated focus callback must not cancel current media", f.runtime.snapshot().isNull("active"));
+                f.runtime.failed(request, "audio_focus_lost"); f.flush();
+                assertTrue(media, f.runtime.snapshot().isNull("active"));
+                f.runtime.drained(request); f.runtime.failed(request, "audio_focus_lost");
+                f.result(request, true, "Late input after focus loss"); f.flush();
+                assertTrue(f.cues.isEmpty()); assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+                assertEquals(0, f.inputAttempts.get()); assertEquals(0, f.store.journal(f.binding).length());
+            }
+        }
+    }
+    @Test public void focusLossDuringSuccessfulFeedbackKeepsTheTranscriptOnce() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            String request = f.recognizing(true);
+            f.result(request, true, "Already recognized before focus changed");
+            Cue success = f.cue(NativeVoiceCue.Kind.SUCCESS);
+            f.runtime.failed(success.id, "audio_focus_lost"); f.flush();
+            assertEquals(1, f.inputAttempts.get());
+            assertEquals("Already recognized before focus changed", f.lastRequest.get().getString("text"));
+            f.runtime.drained(success.id); f.runtime.failed(success.id, "audio_focus_lost");
+            f.result(request, true, "Duplicate transcript"); f.flush();
+            assertEquals(1, f.inputAttempts.get()); assertTrue(f.cues.isEmpty());
+            assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+        }
+    }
+    @Test public void unavailableAudioFocusStillReportsTheMediaFailure() throws Exception {
+        for (String media : new String[] { "speech", "capture", "start_cue" }) {
+            try (Fixture f = new Fixture(false, false)) {
+                String request = f.media(media);
+                f.runtime.failed(request, "audio_focus_unavailable"); f.flush();
+                if (media.equals("capture")) {
+                    Cue failure = f.cue(NativeVoiceCue.Kind.FAILURE);
+                    f.runtime.drained(failure.id); f.flush();
+                }
+                assertTrue(media, f.runtime.snapshot().isNull("active"));
+                assertEquals("audio_focus_unavailable", f.lastError().getString("code"));
+                assertTrue(f.cues.isEmpty()); assertEquals(0, f.inputAttempts.get());
+            }
+        }
+    }
     @Test public void disabledCuesAndCuePlaybackFailureDoNotLoseRecognizedInput() throws Exception {
         for (boolean enabled : new boolean[] { false, true }) {
             try (Fixture f = new Fixture(false, false)) {
@@ -718,15 +934,65 @@ public class NativeVoiceRuntimeTest {
             });
             return request;
         }
+        String automaticRecognizing(boolean cuesEnabled) throws Exception {
+            String request = recognizing(cuesEnabled);
+            policy(true, false, "speakThenListen");
+            onOwner(() -> {
+                NativeVoiceSettings settings = (NativeVoiceSettings) field(runtime, "settings");
+                String id = UUID.randomUUID().toString();
+                NativeVoiceQueue.Item notification = new NativeVoiceQueue.Item(NativeVoiceJson.object(
+                    "sourceEventId", id, "generation", 1, "voice", "speakThenListen",
+                    "recognitionTarget", NativeVoiceJson.object("threadId", target, "activityToken", "automatic-retry-epoch"),
+                    "payload", NativeVoiceJson.object("schemaVersion", 4, "notificationId", id, "event", "turn.completed",
+                        "occurredAt", "2026-10-04T00:00:00Z", "title", "Completed", "message", "Ready for a reply",
+                        "thread", NativeVoiceJson.object("id", target, "title", "Target"))), settings);
+                Constructor<?> constructor = Class.forName("dev.sedes.local.NativeVoiceRuntime$Active")
+                    .getDeclaredConstructor(NativeVoiceQueue.Item.class, int.class);
+                constructor.setAccessible(true);
+                Object active = constructor.newInstance(notification, settings.number("adapterTextLimit"));
+                // Begin after the earlier capture; subsequent audio ownership comes from the real retry path.
+                set(active, "sttId", request); set(active, "lastAudioId", request); set(runtime, "active", active);
+                invoke("publish", new Class<?>[0]);
+            });
+            return request;
+        }
         void result(String request, boolean success, String text) throws Exception {
+            result(request, success, text, false, "");
+        }
+        void result(String request, boolean success, String text, boolean canceled, String error) throws Exception {
             NativeVoiceAdapter adapter = (NativeVoiceAdapter) field(runtime, "adapter");
             runtime.event(adapter.generation(), NativeVoiceJson.object("type", "media_stt_result", "requestId", request,
-                "success", success, "text", text));
+                "success", success, "text", text, "canceled", canceled, "error", error));
             flush();
         }
+        Cue cue(NativeVoiceCue.Kind kind) throws Exception {
+            Cue cue = cues.poll(10, TimeUnit.SECONDS); assertNotNull("Expected " + kind + " cue", cue);
+            assertEquals(kind, cue.kind); return cue;
+        }
+        void settings(JSONObject patch) throws Exception {
+            assertNull(command("updateSettings", NativeVoiceJson.object("expectedRevision", runtime.snapshot().getLong("settingsRevision"), "patch", patch)));
+        }
+        String media(String kind) throws Exception {
+            String request = recognizing(true);
+            onOwner(() -> {
+                Object active = field(runtime, "active");
+                switch (kind) {
+                    case "speech": set(active, "sttId", null); set(active, "ttsId", request); set(runtime, "phase", "speaking"); break;
+                    case "capture": set(runtime, "phase", "listening"); break;
+                    case "start_cue": set(active, "sttId", null); set(active, "cueId", request); set(runtime, "phase", "arming"); break;
+                    default: throw new AssertionError(kind);
+                }
+                invoke("publish", new Class<?>[0]);
+            });
+            return request;
+        }
         void policy(boolean enabled, boolean silenced) throws Exception {
+            policy(enabled, silenced, "none");
+        }
+        void policy(boolean enabled, boolean silenced, String completionVoice) throws Exception {
             JSONObject delivery = new JSONObject();
-            for (String event : NativeVoiceProtocol.EVENTS) NativeVoiceJson.put(delivery, event, NativeVoiceJson.object("script", false, "voice", "none"));
+            for (String event : NativeVoiceProtocol.EVENTS) NativeVoiceJson.put(delivery, event,
+                NativeVoiceJson.object("script", false, "voice", event.equals("turn.completed") ? completionVoice : "none"));
             JSONObject value = NativeVoiceJson.object("generation", 1, "settings", NativeVoiceJson.object("enabled", enabled, "silenced", silenced,
                 "revision", 1, "delivery", delivery, "assistantResultPhases", new JSONArray(), "scriptPath", "", "arguments", new JSONArray(), "timeoutSeconds", 30));
             onOwner(() -> invoke("receive", new Class<?>[] { String.class, JSONObject.class }, "notification_policy", value)); flush();

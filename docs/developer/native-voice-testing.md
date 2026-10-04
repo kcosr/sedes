@@ -73,10 +73,17 @@ the same npm command, for example `npm run test:voice -- -t 'Android response/cy
 JVM checks verify the rising start, single success, and descending failure cue
 PCM. Native runtime checks exercise final-result deduplication, cue failure and
 timeout, explicit Stop, Off/disconnect cancellation, frozen Queue/Steer choice,
-and adapter loss after recognition. They also cover definitive admission
-rejection, release of an uncertain input into read-only reconciliation with
-backoff, Discard of an uncertain or in-flight input, explicit Resume as the only
-resend, rejected arguments that change no state, adapter reconnect backoff,
+and adapter loss after recognition. Empty-transcript checks cover one-time
+re-arming and cancellation during its failure cue by adapter changes or loss,
+Stop, Off, policy changes, and audio-focus loss. Focus-loss checks quietly stop
+speech, start cues, recording, recognition waiting for its result, and automatic
+retry target validation with cues enabled or disabled. They preserve already
+recognized text through an interrupted success cue, keep
+unrelated failures visible when their tone is interrupted, and keep failure to
+acquire focus visible. They also cover definitive admission rejection, release
+of an uncertain input into read-only reconciliation with backoff, Discard of an
+uncertain or in-flight input, explicit Resume as the only resend, rejected
+arguments that change no state, adapter reconnect backoff,
 an adapter URL change that keeps an admitted input, and skipped empty, blank,
 or sanitizer-emptied speech chunks. Further runtime checks keep a finalized
 automatic transcript through a policy change or stream loss while still
@@ -88,7 +95,9 @@ three real cues. Additional AudioTrack checks cover 20/140 ms speech with zero
 pre-roll, a short final tail after underrun, cancellation of a stalled tail
 followed by a new short stream, PCM chunks that split a sample, the
 empty-stream failure code, and one audio-focus entry held across consecutive
-playback until its delayed release. The cancellation fixture holds one real
+playback until its delayed release. A held-focus loss reports its latest request
+after drain or Stop and ignores duplicate or replaced focus callbacks.
+The cancellation fixture holds one real
 AudioTrack before its first start, verifies a full buffer and blocked priming,
 then checks Stop and normal replacement playback. A DEBUG-only, one-shot hook
 holds that track; a played-then-paused track can still consume frames while the

@@ -3,6 +3,7 @@ package dev.sedes.local;
 import static org.junit.Assert.*;
 import android.content.Context;
 import android.content.Intent;
+import android.media.AudioManager;
 import android.media.AudioTrack;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
@@ -192,6 +193,37 @@ public class NativeVoiceAudioTest {
             assertSame("A consecutive chunk replaced its focus entry", held, audio.focusForTest());
             SystemClock.sleep(2500);
             assertNull("Idle focus outlived its delayed release", audio.focusForTest());
+        } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
+    }
+    @Test public void heldFocusLossReportsTheLastRequestAfterDrainOrStop() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(
+            new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        PlaybackProbe probe = new PlaybackProbe();
+        NativeVoiceAudio audio = new NativeVoiceAudio(context, probe);
+        try {
+            audio.configure(NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("startupPreRollMs", 0)));
+            for (boolean stopped : new boolean[] { false, true }) {
+                audio.begin("first-owner"); audio.pcm("first-owner", 24000, new byte[4800]); audio.end("first-owner");
+                probe.await("first-owner");
+                AudioManager.OnAudioFocusChangeListener held = (AudioManager.OnAudioFocusChangeListener) audio.focusForTest();
+                assertNotNull(held);
+                audio.begin("last-owner"); audio.pcm("last-owner", 24000, new byte[4800]);
+                if (stopped) { awaitTrack(audio); audio.stop(); }
+                else { audio.end("last-owner"); probe.await("last-owner"); }
+                assertSame(held, audio.focusForTest());
+                held.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT);
+                assertEquals("last-owner", probe.completed.poll(5, TimeUnit.SECONDS));
+                assertEquals("audio_focus_lost", probe.failure.getAndSet(null));
+                assertNull(audio.focusForTest());
+                held.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS);
+                assertTrue("A duplicate loss must be ignored", probe.completed.isEmpty());
+                audio.begin("new-owner"); audio.pcm("new-owner", 24000, new byte[4800]); audio.end("new-owner");
+                probe.await("new-owner");
+                Object replacement = audio.focusForTest(); assertNotNull(replacement); assertNotSame(held, replacement);
+                held.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS);
+                assertSame(replacement, audio.focusForTest()); assertTrue(probe.completed.isEmpty()); assertNull(probe.failure.get());
+            }
         } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
     }
     @Test public void fastLongSpeechUsesBoundedDiskAndStopRemovesOnlyItsSpool() throws Exception {

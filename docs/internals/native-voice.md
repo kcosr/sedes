@@ -27,8 +27,11 @@ Recognition cue PCM is generated locally. Each recognition consumes its final
 result once, stops capture, and retains its active slot until completion feedback
 drains. Cue callbacks are tied to that active item and a unique cue ID; cancellation
 invalidates them. Cue failure or a bounded drain timeout continues the recognized
-input path, while a late adapter result cannot replay feedback or input. No cue
-audio or metadata is submitted to the agent.
+input path, while a late adapter result cannot replay feedback or input. An
+uncancelled `empty_transcript` failure re-arms the same item after its failure
+cue; that pending retry remains dependent on the original adapter and current
+voice policy. External focus loss cancels it without re-arming. No cue audio
+or metadata is submitted to the agent.
 
 See [Android voice](../operator/clients/voice.md) for setup, defaults, controls,
 and the isolated `test:voice` lane. Backend authors must also follow the
@@ -351,8 +354,9 @@ Callbacks are fenced by connection, adapter, and request generation. Read-only
 reconciliation can still settle a cancelled record; a missing receipt is not
 evidence that the original request cannot arrive later. Only a new explicit
 Resume authorizes another POST with that same identity. An adapter URL change
-cancels only media-dependent work; a finalized transcript, completion cue,
-submission, or admission continues.
+cancels only media-dependent work; a usable finalized transcript, including its
+success cue, submission, or admission continues. Failure cues and pending
+recognition retries are cancelled.
 
 ## Audio and adapter
 
@@ -377,8 +381,18 @@ transient focus. One focus entry is held across consecutive chunks, cues, and
 capture, and released 1.4 seconds after the last request ends unless another
 starts. Changing between playback and capture requests the new focus before
 abandoning the old entry. Callbacks from a replaced entry are ignored. A
-ducking loss lowers playback volume; any other loss ends only the current
-request with `audio_focus_lost`.
+ducking loss lowers playback volume; any other loss ends the current audio
+request with `audio_focus_lost`. The runtime treats this as a quiet external
+stop of the current item, without an error, failure cue, or recognition retry.
+The held focus entry retains its latest request identity, so loss after capture
+stops still cancels recognition waiting for its result. The active item retains
+that identity while automatic listening revalidates its target, including when
+cues are disabled; a late validation response cannot restart interrupted capture.
+If usable text was already captured and only its success cue was interrupted,
+the runtime continues
+submitting that text exactly once. An unrelated error awaiting its failure cue
+still reports that original error. Queued items retain their normal advancement
+policy.
 
 A Bluetooth SCO or LE input enters communication mode. On API 31 and newer,
 native selects the communication device with the same type and address as the
@@ -389,8 +403,9 @@ Recording waits up to five seconds for the route, then fails with
 fallback `playback_failed`. Capture failures report
 `microphone_permission_required`, `audio_focus_unavailable`,
 `microphone_device_unavailable`, `microphone_route_failed`,
-`microphone_limit_reached`, or the fallback `microphone_failed`. Either can
-report `audio_focus_lost`.
+`microphone_limit_reached`, or the fallback `microphone_failed`. Failure to
+obtain focus (`audio_focus_unavailable`) remains an error; losing focus after
+acquiring it does not report an error.
 
 Each adapter WebSocket keeps its own identity and readiness. Media messages and
 requests use only the current socket after its handshake. A peer Close is
