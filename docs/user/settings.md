@@ -539,8 +539,8 @@ The Android app's **Voice** page configures
 [Android voice](../operator/clients/voice.md) for the selected server
 connection. Its settings are saved on this device for
 that connection and Sedes user. The caret on the voice card opens a **Voice**
-sheet with Audio mode, Auto-listen, and Follow composer mode; its **All voice
-settings** row opens this page.
+sheet with Audio mode, behavior toggles, and the Default voice thread picker
+below them; its **All voice settings** row opens this page.
 
 While voice connects, the page shows **Connecting voice to this server…**. If
 voice cannot connect, it shows the error and **Retry voice connection**; the app
@@ -553,6 +553,8 @@ app does not wait for voice.
   speech configuration and a key, or the Sedes notification connection. When
   notifications are unavailable, explicit recording still works.
 - **Speech provider** selects OpenAI or **Own speech server**.
+  OpenAI connects directly to its hosted speech API. For local model setup, see
+  [OpenAI-Compatible Speech Server](https://github.com/kcosr/openai-speech-server).
   Configure its endpoint, transcription and speech models, voice, and speed.
   Models and voices load automatically and stay cached between app launches.
   **Refresh** checks for server changes; **Custom…** accepts another ID.

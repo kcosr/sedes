@@ -4,14 +4,10 @@
 
 ### Breaking Changes
 
-- Android voice pinning updates the local settings schema. Upgrading from an
-  earlier voice build resets settings with Audio mode Off. Separately stored
-  speech credentials remain on the device.
-
-- Android voice replaces the direct-media adapter protocol with OpenAI-compatible
-  Realtime transcription and streamed HTTP speech. Reconfigure the speech
-  provider and credential after upgrading; old native voice settings reset
-  with voice Off.
+- Android voice now uses OpenAI-compatible Realtime transcription and streamed
+  HTTP speech in place of the direct-media adapter. Upgrading resets local voice
+  settings with Audio mode Off; reconfigure the provider, endpoint, and models.
+  Separately stored speech credentials remain on the device.
 
 - Browser and packaged clients require client protocol 138 for pending Send
   presentation. Upgrade clients together with the server.
@@ -206,10 +202,10 @@
 
 ### Added
 
-- Android voice can connect directly to OpenAI or a local OpenAI-Compatible
-  Speech Server, with model and voice discovery, native encrypted credential
-  storage, and local silence detection while recording. A no-speech timeout
-  ends the listening attempt without committing it for transcription.
+- Android voice connects directly to OpenAI or a self-hosted
+  [OpenAI-Compatible Speech Server](https://github.com/kcosr/openai-speech-server),
+  with native encrypted credentials, automatic model and voice discovery, and
+  device-owned recording, silence detection, and playback.
 
 - Android native voice supports spoken notifications, explicit and automatic
   recording, thread targeting, background controls, and recoverable input
@@ -408,14 +404,9 @@
 
 ### Changed
 
-- Voice settings label the saved recording fallback **Default voice thread**.
-  The quick menu includes its picker and **Only play from default voice thread**.
-  **Pin default voice thread** keeps the idle card and new explicit recordings
-  on that thread while browsing elsewhere.
-
-- Android voice loads and caches model and voice choices automatically, with a
-  Refresh action for server changes. Settings use shorter help text and the
-  Off, Manual, and Response modes replace the redundant Enable voice button.
+- Android voice settings and quick controls provide searchable speech choices,
+  a default recording thread with optional pinning, and an independent automatic
+  playback filter. Off, Manual, and Response modes control the voice session.
 
 - Android HTTPS and secure WebSocket connections now trust user- and
   MDM-installed certificate authorities, including for authenticated Sedes
@@ -742,19 +733,9 @@
 
 ### Fixed
 
-- Android voice enable and Resume recheck the current activity's visibility,
-  allowing a stale visibility state to recover without restarting the app.
-  The client also restores the visible thread for headset and notification
-  controls after voice resumes.
-
-- Voice settings and quick controls explain when the playback filter needs a
-  default voice thread before automatic speech can play.
-
-- Android voice waits for its app connection to finish before offering Resume
-  or starting a session after an early mode change.
-
-- Android speech model and voice choices now use searchable app pickers with
-  a custom-ID option, avoiding native autocomplete popups over the voice bar.
+- Android voice startup and Resume recover the current activity and thread
+  context after configuration changes. Silent recordings end locally without
+  submitting audio for transcription.
 
 - Native voice recognition that captures audio but returns no transcript
   (`empty_transcript`) now re-arms and listens again instead of reporting a

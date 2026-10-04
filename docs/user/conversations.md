@@ -39,8 +39,8 @@ recording target before recognition finishes; the picker lists the visible
 thread first. Navigating to another thread alone does not redirect a recording.
 Once recognition finishes, its target and delivery policy stay fixed through
 any connection recovery. The caret on the card opens the **Voice** sheet with
-**Audio mode**, **Auto-listen**, **Default voice thread**, **Only play from default
-voice thread**, **Pin default voice thread**, **Follow composer mode**, and
+**Audio mode**, **Auto-listen**, **Follow composer mode**, **Pin default voice
+thread**, **Only play from default voice thread**, **Default voice thread**, and
 **All voice settings**. The playback filter limits automatic playback to the default thread; it does not change
 where explicit recordings go.
 

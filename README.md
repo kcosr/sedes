@@ -106,6 +106,12 @@ bounded and is documented in the individual
 | Terminals         | Run local or capable SSH/outbound sidecar shells, close client-local panels without stopping them, take control from another device, and reopen bounded retained screen state.                        |
 | Clients           | Use the browser directly or build the included Android and Electron preview clients; Electron can run one app-session Local server or connect through named Direct and managed-SSH profiles. |
 
+Android [native voice](docs/operator/clients/voice.md) connects directly to OpenAI
+for Realtime transcription and streamed speech, with credentials stored on the
+device. For local models, connect to the
+[OpenAI-Compatible Speech Server](https://github.com/kcosr/openai-speech-server),
+whose repository covers model setup and operation.
+
 ## Supported backends
 
 | Backend | Current integration                                                                                            | Execution boundary                                                                                                        |

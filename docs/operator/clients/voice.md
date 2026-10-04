@@ -5,6 +5,11 @@ text directly to a thread. It owns its network connections, audio playback,
 microphone capture, and input recovery while the WebView displays settings and
 controls. Browser and Electron clients do not show the Voice page.
 
+Speech connects directly to OpenAI through Realtime transcription and streamed
+HTTP speech. For local Parakeet transcription and Kokoro speech, use the
+[OpenAI-Compatible Speech Server](https://github.com/kcosr/openai-speech-server).
+Model setup and server operation are documented in that repository.
+
 ## Configure a session
 
 1. Pair the Android app with Sedes as described in [Android](android.md).
@@ -171,8 +176,8 @@ When the card's thread is not the one on screen, tapping the card opens it.
 While listening, the state line ends with a **Change** chip (**Choose** when
 there is no target), which opens the thread picker instead.
 The caret button opens the **Voice** sheet in every state. The sheet has
-**Audio mode**, **Auto-listen**, **Default voice thread**, **Only play from default
-voice thread**, **Pin default voice thread**, **Follow composer mode**, and
+**Audio mode**, **Auto-listen**, **Follow composer mode**, **Pin default voice
+thread**, **Only play from default voice thread**, **Default voice thread**, and
 **All voice settings**, which opens
 **Settings → Voice**. The default thread can be chosen from either place.
 Its status line reports readiness or the latest error, and it offers **Resume

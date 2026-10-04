@@ -79,12 +79,12 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
             checked={settings.autoListen} locked={locked} onCheckedChange={autoListen => update({ autoListen })} />
           <SwitchRow icon={<Merge aria-hidden="true" />} label="Follow composer mode" description="Use its Steer or Queue choice"
             checked={settings.followComposerMode} locked={locked} onCheckedChange={followComposerMode => update({ followComposerMode })} />
-          <DefaultThreadRow choice={defaultThread} locked={locked} onClick={() => { if (!state.pending) setPicker(true); }} />
           <SwitchRow icon={<Pin aria-hidden="true" />} label="Pin default voice thread" description="Record here from any thread"
             checked={settings.pinDefaultVoiceThread} locked={locked} onCheckedChange={pinDefaultVoiceThread => update({ pinDefaultVoiceThread })} />
           <SwitchRow icon={<ListFilter aria-hidden="true" />} label="Only play from default voice thread"
             description={settings.voiceThreadId ? "Limit automatic playback to this thread" : "Choose a default thread first"}
             checked={settings.onlyVoiceThread} locked={locked} onCheckedChange={onlyVoiceThread => update({ onlyVoiceThread })} />
+          <DefaultThreadRow choice={defaultThread} locked={locked} onClick={() => { if (!state.pending) setPicker(true); }} />
           <Separator className="mx-3 my-1 data-[orientation=horizontal]:w-auto" />
           <SettingsRow onOpenChange={onOpenChange} />
         </div>

@@ -19,7 +19,8 @@ Use Node.js 24.18 or newer, JDK 21, and Android SDK 36 as documented in
 dependencies and generated Capacitor configuration; on a fresh checkout run
 `env -u NODE_ENV npm run android:sync` first.
 
-Use a local checkout of `openai-speech-server` containing its Realtime
+Use a local checkout of
+[openai-speech-server](https://github.com/kcosr/openai-speech-server) containing its Realtime
 transcription implementation and `scripts/test-fixture.ts`. Install its locked
 dependencies with `env -u NODE_ENV npm ci`. Set
 `SEDES_SPEECH_SERVER_REPOSITORY` to that checkout's absolute path. The fixture
