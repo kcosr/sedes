@@ -742,6 +742,9 @@
 
 ### Fixed
 
+- Android voice enable and Resume recheck the current activity's visibility,
+  allowing a stale visibility state to recover without restarting the app.
+
 - Android voice waits for its app connection to finish before offering Resume
   or starting a session after an early mode change.
 

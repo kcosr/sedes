@@ -32,6 +32,10 @@ source. A microphone permission result, which Android delivers before resume,
 also marks a started activity visible, so the first enable after a permission
 prompt starts voice. A session start always enters the foreground before
 checking whether the launch is stale, then stops if it is.
+With permissions already granted, an explicit enable or Resume rechecks the
+current activity on the main thread before dispatch. Only a resumed, nonfinishing
+activity is visible; paused, stopped, and destroyed activities clear the cached
+visibility gate. A stale connection generation is rejected before this check.
 
 Recognition cue PCM is generated locally. Each recognition consumes its final
 result once, stops capture, and retains its active slot until completion feedback

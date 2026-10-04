@@ -200,6 +200,53 @@ public class NativeVoiceStartupTest {
         }
     }
 
+    @Test public void ordinaryEnableAndResumeWithExistingPermissionsRepairStaleHiddenVisibility() throws Exception {
+        for (String mode : new String[] { "off", "response" }) {
+            try (Fixture f = new Fixture(mode, true, true); ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+                f.connect(); f.runtime.nativeVisibility(false); f.flush();
+                long generation = f.runtime.snapshot().getLong("connectionGeneration");
+                scenario.onActivity(activity -> assertTrue(NativeVoicePlugin.reconcileUserActionVisibility(activity, f.runtime, generation)));
+                f.updateMode("response");
+                assertTrue(f.accepted(f.start())); f.flush();
+                assertTrue("Visibility reconciliation and the mode write must share one start", f.starts.isEmpty());
+                assertEquals("starting", f.runtime.snapshot().getString("phase"));
+                assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+            }
+        }
+    }
+
+    @Test public void ordinaryEnableFromPausedOrStoppedActivityRevokesStaleVisibleState() throws Exception {
+        for (Lifecycle.State lifecycle : new Lifecycle.State[] { Lifecycle.State.STARTED, Lifecycle.State.CREATED }) {
+            try (Fixture f = new Fixture("off", true, true); ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+                f.connect(); scenario.moveToState(lifecycle);
+                f.runtime.nativeVisibility(true); f.flush();
+                long generation = f.runtime.snapshot().getLong("connectionGeneration");
+                scenario.onActivity(activity -> assertTrue(NativeVoicePlugin.reconcileUserActionVisibility(activity, f.runtime, generation)));
+                Reply reply = new Reply(); f.runtime.command("updateSettings", NativeVoiceJson.object("expectedRevision", 1,
+                    "patch", NativeVoiceJson.object("audioMode", "response")), true, reply);
+                assertEquals("resume_from_visible_app", reply.failure()); f.flush();
+                assertTrue("An inactive activity cannot start voice", f.starts.isEmpty());
+                assertEquals("response", f.runtime.snapshot().getJSONObject("settings").getString("audioMode"));
+            }
+        }
+    }
+
+    @Test public void staleOrdinaryEnableCannotReconcileANewerConnectionsVisibility() throws Exception {
+        try (Fixture f = new Fixture("off", true, true); ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            f.connect(); f.runtime.nativeVisibility(false); f.flush();
+            long generation = f.runtime.snapshot().getLong("connectionGeneration");
+            scenario.onActivity(activity -> assertFalse(NativeVoicePlugin.reconcileUserActionVisibility(activity, f.runtime, generation - 1)));
+            Reply reply = new Reply(); f.runtime.command("updateSettings", NativeVoiceJson.object("expectedRevision", 1,
+                "patch", NativeVoiceJson.object("audioMode", "response")), true, generation - 1, reply);
+            assertEquals("connection_changed", reply.failure()); f.flush();
+            assertEquals("off", f.runtime.snapshot().getJSONObject("settings").getString("audioMode"));
+            Reply current = new Reply(); f.runtime.command("updateSettings", NativeVoiceJson.object("expectedRevision", 1,
+                "patch", NativeVoiceJson.object("audioMode", "response")), true, generation, current);
+            assertEquals("resume_from_visible_app", current.failure()); f.flush();
+            assertTrue(f.starts.isEmpty());
+        }
+    }
+
     @Test public void permissionResultBeforeResumeStartsTheFirstEnable() throws Exception {
         try (Fixture f = new Fixture("off", true, true); ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
             f.runtime.nativeVisibility(true); f.connect(); f.flush();

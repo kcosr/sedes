@@ -29,7 +29,7 @@ public final class NativeVoicePlugin extends Plugin {
         catch (Exception ignored) {}
     };
     @Override public void load() { runtime = NativeVoiceRuntime.get(getContext()); runtime.observe(observer); }
-    // MainActivity owns resume/pause/stop visibility; the permission callback below is the only other visibility source.
+    // MainActivity owns lifecycle visibility; explicit enable/Resume and permission results reconcile their current Activity.
     @Override protected void handleOnDestroy() { permissionGenerations.clear(); if (credentialDialog != null) { credentialDialog.dismiss(); credentialDialog = null; } runtime.nativeVisibility(false); runtime.unobserve(observer); }
     @PluginMethod public void setConnection(PluginCall call) { run("setConnection", call, false); }
     @PluginMethod public void disconnect(PluginCall call) { run("disconnect", call, false); }
@@ -90,9 +90,31 @@ public final class NativeVoicePlugin extends Plugin {
                 permissionGenerations.put(call.getCallbackId(), generation);
                 requestPermissionForAlias("notifications", call, "voicePermission"); return;
             }
-            run("updateSettings", call, true); return;
+            runVisibleSettings(call); return;
         }
         run("updateSettings", call, false);
+    }
+    /** Existing grants skip the permission callback, so ordinary enable/Resume must refresh activity visibility too. */
+    private void runVisibleSettings(PluginCall call) {
+        Activity activity = getActivity();
+        if (activity == null) { call.reject("Resume voice from the visible app.", "resume_from_visible_app"); return; }
+        activity.runOnUiThread(() -> {
+            final long generation;
+            try { generation = expectedGeneration(call.getData()); }
+            catch (IllegalArgumentException error) { rejectInvalidGeneration(call); return; }
+            if (!reconcileUserActionVisibility(activity, runtime, generation)) {
+                call.reject("The Sedes connection changed before the voice action arrived.", "connection_changed"); return;
+            }
+            run("updateSettings", call, true);
+        });
+    }
+    /** Called on main immediately before dispatch; a subsequent pause still clears the volatile native gate. */
+    static boolean reconcileUserActionVisibility(Activity activity, NativeVoiceRuntime runtime, long generation) {
+        if (generation != runtime.snapshot().optLong("connectionGeneration")) return false;
+        boolean visible = activity instanceof LifecycleOwner && !activity.isFinishing() && !activity.isDestroyed() &&
+            ((LifecycleOwner) activity).getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.RESUMED);
+        runtime.nativeVisibility(visible);
+        return true;
     }
     @PermissionCallback private void voicePermission(PluginCall call) {
         Long generation = permissionGenerations.remove(call.getCallbackId());
