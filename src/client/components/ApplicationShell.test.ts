@@ -7,10 +7,15 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import postcss from "postcss";
 import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createWorkspacePanelNavigationBlocker,
+  installVoiceDockHeight,
   installWorkspacePanelBeforeUnloadGuard,
   installPromptSettingsRequestListener,
   openThreadChatPanel,
@@ -309,6 +314,60 @@ describe("workspace panel beforeunload policy", () => {
     store.setWorkspaceTenantDirty("workspace-1", "files", true);
     remove();
     expect(dispatchBeforeUnload()).toBe(false);
+  });
+});
+
+describe("voice dock height", () => {
+  it("publishes the band under the view, follows resizes and clears on removal", () => {
+    const observed: Element[] = [];
+    let resized = () => {};
+    const disconnect = vi.fn();
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: () => void) { resized = callback; }
+      observe(element: Element) { observed.push(element); }
+      unobserve() {}
+      disconnect = disconnect;
+    });
+    const [main, view, root] = [document.createElement("div"), document.createElement("div"), document.createElement("div")];
+    const bottoms = new Map([[main, 915], [view, 915]]);
+    for (const element of [main, view]) element.getBoundingClientRect = () => ({ bottom: bottoms.get(element)! }) as DOMRect;
+    const height = () => root.style.getPropertyValue("--voice-dock-height");
+    try {
+      const remove = installVoiceDockHeight(main, view, root);
+      expect(observed).toEqual([main, view]);
+      expect(height()).toBe("0px");
+      // The card appears under the view, then the soft keyboard shrinks both.
+      bottoms.set(view, 838.5);
+      resized();
+      expect(height()).toBe("76.5px");
+      bottoms.set(main, 600).set(view, 523.5);
+      resized();
+      expect(height()).toBe("76.5px");
+      remove();
+      expect(disconnect).toHaveBeenCalledOnce();
+      expect(height()).toBe("");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("ends the mobile drawer and the touch selection action above the card", () => {
+    const file = path.join(path.dirname(fileURLToPath(import.meta.url)), "../styles.css");
+    const declarations = new Map<string, string>();
+    postcss.parse(readFileSync(file, "utf8")).walkRules((rule) => {
+      const media = rule.parent?.type === "atrule" ? (rule.parent as postcss.AtRule).params : "";
+      rule.walkDecls((declaration) => {
+        for (const selector of rule.selectors) declarations.set(`${media} ${selector} ${declaration.prop}`, declaration.value.replace(/\s+/gu, " "));
+      });
+    });
+    const declared = (media: string, selector: string, prop: string) => declarations.get(`${media} ${selector} ${prop}`);
+    const phone = "(max-width: 819px)";
+    expect(declared(phone, ".mobile-drawer", "bottom")).toBe("var(--voice-dock-height, 0px)");
+    expect(declared(phone, ".mobile-drawer", "height")).toBe("calc(100dvh - var(--workbench-bar-height) - var(--voice-dock-height, 0px))");
+    expect(declared(phone, ".mobile-drawer .sidebar-footer", "padding-bottom")).toContain("env(safe-area-inset-bottom) - var(--voice-dock-height, 0px)");
+    const touch = "(pointer: coarse), (max-width: 700px)";
+    expect(declared(touch, ".pierre-selection-action", "--selection-action-floor")).toBe("max(env(safe-area-inset-bottom), var(--voice-dock-height, 0px))");
+    expect(declared(touch, ".pierre-selection-action", "bottom")).toBe("calc(12px + var(--selection-action-floor))");
   });
 });
 

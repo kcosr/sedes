@@ -81,8 +81,10 @@ view is open. Reading readiness does not start or reconnect a conversation.
 
 Explicit recording uses the visible foreground thread, then the pinned
 **Voice thread**, then a picker. It can target a running thread. While voice is
-listening, tapping the voice card changes the target before recognition
-finishes. Ordinary navigation does not change an active target. **Only play
+listening, the target chip on the voice card changes the target before
+recognition finishes. Pickers list the visible thread first as **This thread**;
+in **Settings → Voice**, the saved Voice thread comes first as **Current Voice
+thread**. Ordinary navigation does not change an active target. **Only play
 from Voice thread** filters automatic playback; it does not change the
 recording target. **Ignore voice started on other devices** filters progress
 and completion from another initiating client. Steering an existing turn does
@@ -110,11 +112,15 @@ offers **Resume**, which works like **Resume voice** in Settings. A failed
 connection hides the card; **Settings → Voice** then shows the error and
 **Retry voice connection**.
 
-Tapping the card opens the **Voice** sheet, except while listening. The sheet
-has **Audio mode**, **Auto-listen**, **Voice thread**, **Follow composer mode**,
-and **All voice settings**, which opens **Settings → Voice**. Its status line
-reports readiness or the latest error, and it offers **Resume voice** when a
-session needs it.
+When the card names a thread other than the one on screen, tapping the card
+opens that thread: the thread being spoken, the recording target, or the thread
+an idle recording would use. While listening, line 2 shows the target chip,
+**This thread** or **Change thread**, which opens the thread picker instead.
+The caret button opens the **Voice** sheet in every state. The sheet has
+**Audio mode**, **Auto-listen**, **Follow composer mode**, and **All voice
+settings**, which opens **Settings → Voice**, where the Voice thread is chosen.
+Its status line reports readiness or the latest error, and it offers **Resume
+voice** when a session needs it.
 
 - **Skip** ends current speech and retains an eligible listen afterward.
 - **Stop** cancels the current interaction and its automatic listen. It leaves
@@ -122,8 +128,9 @@ session needs it.
   or recognizing, Stop becomes **Cancel** and discards the recording unsent.
 - **Off** clears queued audio, stops voice, and hides the service notification.
   It hides the voice card too, unless **Show voice bar when off** is on in
-  **Settings → Voice**; then the card stays dimmed with its microphone disabled
-  and still opens the Voice sheet. That choice is saved only on this device.
+  **Settings → Voice**; then the card stays dimmed with its microphone disabled,
+  and its caret still opens the Voice sheet. That choice is saved only on this
+  device.
   Select Manual or Response in the Voice sheet or **Settings → Voice** to
   enable voice again. The sheet offers them once an adapter URL is saved.
 - The navigation **Silence notifications** bell cancels automatic voice work

@@ -435,8 +435,10 @@ export function ApplicationShell({
                   event.preventDefault();
                   return;
                 }
+                // Persistent chrome keeps focus: the card under the drawer
+                // still does what was tapped while the drawer closes.
                 drawerDismissedFromPersistentBar.current = Boolean(
-                  target.closest(".workspace-workbench-bar, .pane-nav-header"),
+                  target.closest(".workspace-workbench-bar, .pane-nav-header, .voice-dock"),
                 );
               }}
             >
@@ -448,7 +450,13 @@ export function ApplicationShell({
           </DialogPrimitive.Portal>
         </DialogPrimitive.Root>
         <div className="application-main">
-          <div className="application-view">
+          {/* The voice card docks under the view on every route; the drawer
+              covers the view only and ends on the card. */}
+          <div
+            ref={publishVoiceDockHeight}
+            className="application-view"
+            data-drawer-open={(drawerOpen && mobileLayout) || undefined}
+          >
           <div
             ref={workspaceElement}
             className="application-workspace"
@@ -616,6 +624,37 @@ export function installWorkspacePanelBeforeUnloadGuard(
     unsubscribe();
     if (installed) target.removeEventListener("beforeunload", beforeUnload);
   };
+}
+
+/**
+ * Publishes the band under the application view as `--voice-dock-height` on
+ * the document root, where full-height mobile surfaces portalled to the body
+ * (the drawer) read it to end above the voice card instead of covering it.
+ * The card is the main column's only in-flow child after the view, so the
+ * view's shortfall is the card's height: 0px when it does not render.
+ */
+export function installVoiceDockHeight(
+  main: HTMLElement,
+  view: HTMLElement,
+  root: HTMLElement = document.documentElement,
+): () => void {
+  const publish = () => {
+    const height = main.getBoundingClientRect().bottom - view.getBoundingClientRect().bottom;
+    root.style.setProperty("--voice-dock-height", `${Math.max(0, height)}px`);
+  };
+  // The view shrinks as the card appears or grows; both resize with the viewport.
+  const observer = new ResizeObserver(publish);
+  observer.observe(main);
+  observer.observe(view);
+  publish();
+  return () => {
+    observer.disconnect();
+    root.style.removeProperty("--voice-dock-height");
+  };
+}
+
+function publishVoiceDockHeight(view: HTMLDivElement | null): (() => void) | undefined {
+  return view?.parentElement ? installVoiceDockHeight(view.parentElement, view) : undefined;
 }
 
 /**

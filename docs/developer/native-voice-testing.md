@@ -235,9 +235,11 @@ The OpenCode voice harness cannot establish those other backend paths.
 Client tests cover the voice card appearing only for a connected, enabled
 session, or dimmed while Off when the device-local **Show voice bar when off**
 preference is on; the card's thread-title rule, phase labels, and Cancel while
-listening; bridge-safe thread titles, retarget labels, error persistence, and
-Retry; the quick sheet's mode changes, adapter URL gate, Resume, switches,
-Voice thread, and settings link; the preference's per-binding storage and
+listening; caret-only sheet opening, the body opening the card's thread, the
+retarget chip, bridge-safe thread titles, retarget labels, error persistence,
+and Resume; pickers listing the current thread first; the quick sheet's mode
+changes, adapter URL gate, Resume, switches, and settings link; the
+preference's per-binding storage and
 storage failure; the Voice settings connecting and retry states, Discard and
 Resume, Resume using refreshed native settings, recent error listing and
 clearing, and microphone labels. App tests check that the application renders

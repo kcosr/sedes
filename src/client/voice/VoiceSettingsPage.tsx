@@ -108,7 +108,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
     </SettingsSection> : null}
     {native.queue.droppedCount ? <Callout>{native.queue.droppedCount} automatic voice items were dropped because the queue was full or the item became ineligible.</Callout> : null}
     <VoiceThreadPicker threads={application.snapshot?.threads ?? []} open={picker} onOpenChange={setPicker}
-      onSelect={thread => update({ voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) })} />
+      pinned={{ threadId: settings.voiceThreadId, label: "Current Voice thread" }} onSelect={thread => update({ voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) })} />
   </SettingsPage>;
 }
 

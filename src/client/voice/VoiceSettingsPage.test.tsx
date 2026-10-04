@@ -111,6 +111,11 @@ describe("voice settings page", () => {
     expect(fake.plugin.updateSettings.mock.lastCall).toEqual([{ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { voiceThreadId: "untitled", voiceThreadTitle: null } }]);
     act(() => fake.emit("settingsChanged", voiceSnapshot({ stateRevision: 3, settingsRevision: 2, settings: voiceSettings({ voiceThreadId: "untitled", voiceThreadTitle: null }) })));
     expect(screen.getByRole("button", { name: "Voice thread Untitled thread" })).toBeInTheDocument();
+    // The saved Voice thread leads the picker under its label; the rest keep their order without a duplicate.
+    fireEvent.click(screen.getByRole("button", { name: "Voice thread Untitled thread" }));
+    const pinned = await screen.findByRole("list", { name: "Voice threads" });
+    expect(within(pinned).getAllByRole("listitem").map(item => item.textContent)).toEqual(["Current Voice threadUntitled thread", "T".repeat(600), "Release review"]);
+    expect(within(pinned).getByRole("button", { name: "Untitled thread" })).toHaveAccessibleDescription("Current Voice thread");
     store.dispose();
   });
   it("tells microphones with the same product name apart", async () => {
