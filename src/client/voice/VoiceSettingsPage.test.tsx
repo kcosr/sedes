@@ -133,26 +133,27 @@ describe("voice settings page", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("E");
     store.dispose();
   });
-  it("labels the Voice thread control with its choice and saves bridge-safe titles", async () => {
+  it("labels the default voice thread control with its choice and saves bridge-safe titles", async () => {
     const { fake, store } = await renderPage(voiceSnapshot());
-    fireEvent.click(screen.getByRole("button", { name: "Voice thread Choose thread" }));
+    fireEvent.click(screen.getByRole("button", { name: "Default voice thread Choose thread" }));
+    expect(await screen.findByRole("dialog", { name: "Choose default voice thread" })).toBeInTheDocument();
     const list = await screen.findByRole("list", { name: "Voice threads" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(3);
     fireEvent.click(within(list).getByRole("button", { name: "T".repeat(600) }));
     await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledTimes(1));
     expect(fake.plugin.updateSettings.mock.lastCall).toEqual([{ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { voiceThreadId: "long", voiceThreadTitle: "T".repeat(512) } }]);
-    await waitFor(() => expect(screen.getByRole("button", { name: "Voice thread Choose thread" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "Voice thread Choose thread" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Default voice thread Choose thread" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Default voice thread Choose thread" }));
     fireEvent.click(within(await screen.findByRole("list", { name: "Voice threads" })).getByRole("button", { name: "Untitled thread" }));
     await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledTimes(2));
     expect(fake.plugin.updateSettings.mock.lastCall).toEqual([{ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { voiceThreadId: "untitled", voiceThreadTitle: null } }]);
     act(() => fake.emit("settingsChanged", voiceSnapshot({ stateRevision: 3, settingsRevision: 2, settings: voiceSettings({ voiceThreadId: "untitled", voiceThreadTitle: null }) })));
-    expect(screen.getByRole("button", { name: "Voice thread Untitled thread" })).toBeInTheDocument();
-    // The saved Voice thread leads the picker under its label; the rest keep their order without a duplicate.
-    fireEvent.click(screen.getByRole("button", { name: "Voice thread Untitled thread" }));
+    expect(screen.getByRole("button", { name: "Default voice thread Untitled thread" })).toBeInTheDocument();
+    // The saved default voice thread leads the picker under its label; the rest keep their order without a duplicate.
+    fireEvent.click(screen.getByRole("button", { name: "Default voice thread Untitled thread" }));
     const pinned = await screen.findByRole("list", { name: "Voice threads" });
-    expect(within(pinned).getAllByRole("listitem").map(item => item.textContent)).toEqual(["Current Voice threadUntitled thread", "T".repeat(600), "Release review"]);
-    expect(within(pinned).getByRole("button", { name: "Untitled thread" })).toHaveAccessibleDescription("Current Voice thread");
+    expect(within(pinned).getAllByRole("listitem").map(item => item.textContent)).toEqual(["Current default voice threadUntitled thread", "T".repeat(600), "Release review"]);
+    expect(within(pinned).getByRole("button", { name: "Untitled thread" })).toHaveAccessibleDescription("Current default voice thread");
     store.dispose();
   });
   it("opens credential management with only a connection fence and never creates a web password field", async () => {

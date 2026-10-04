@@ -290,6 +290,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
     }
     private void requestSessionStart() {
         if (sessionStarted || sessionStartId != null) return;
+        // Cached settings are visible before session bootstrap finishes. Save mode edits now; bootstrap starts voice.
+        if (csrf == null) return;
         if (!nativeVisible) throw new IllegalStateException("resume_from_visible_app");
         if (!audio.hasPermission()) throw new IllegalStateException("microphone_permission_required");
         if (!speechReady()) throw new IllegalStateException("speech_configuration_required");
@@ -1219,7 +1221,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
             "readiness", readiness, "foreground", NativeVoiceJson.object("visible", foregroundVisible, "threadId", foregroundThread, "threadTitle", foregroundTitle),
             "active", current, "queue", queue.state(), "actions", NativeVoiceJson.object("canStart", canListen() && active == null,
                 "canStop", active != null, "canSkip", active != null && (phase.equals("speaking") || phase.equals("synthesizing")),
-                "canRetarget", active != null && phase.equals("listening"), "canResume", binding != null && settings.active() && speechReady() && !sessionStarted && sessionStartId == null),
+                "canRetarget", active != null && phase.equals("listening"), "canResume", binding != null && csrf != null && settings.active() && speechReady() && !sessionStarted && sessionStartId == null),
             "recovery", recoveryState(), "errors", NativeVoiceJson.array(errors));
         // Unchanged state is not republished: no bridge event, notification update or media session churn per PCM chunk.
         String fingerprint = next.toString();

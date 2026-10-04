@@ -12,6 +12,8 @@ bootstrap completes while the app is visible, or when the activity becomes
 visible after bootstrap. It requires existing microphone permission and a
 configured speech provider and credential; startup does not request permission
 or capture audio.
+Cached settings can appear before bootstrap finishes. Resume remains unavailable
+until then; mode edits are saved and start the selected mode after bootstrap.
 One pending service start is allowed at a time. Each launch carries its own
 identity and connection generation, with visibility rechecked before starting
 the foreground service. Off and disconnect invalidate pending launches; stale

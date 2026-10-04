@@ -118,12 +118,12 @@ Readiness follows the server's current conversation owner even when no thread
 view is open. Reading readiness does not start or reconnect a conversation.
 
 Explicit recording uses the visible foreground thread, then the pinned
-**Voice thread**, then a picker. It can target a running thread. While voice is
-listening, the target chip on the voice card changes the target before
+**Default voice thread**, then a picker. It can target a running thread. While
+voice is listening, the target chip on the voice card changes the target before
 recognition finishes. Pickers list the visible thread first as **This thread**;
-in **Settings → Voice**, the saved Voice thread comes first as **Current Voice
-thread**. Ordinary navigation does not change an active target. **Only play
-from Voice thread** filters automatic playback; it does not change the
+when choosing a default, the saved thread comes first as **Current default
+voice thread**. Ordinary navigation does not change an active target. **Only play
+from default voice thread** filters automatic playback; it does not change the
 recording target. **Ignore voice started on other devices** filters progress
 and completion from another initiating client. Steering an existing turn does
 not take over its origin.
@@ -142,8 +142,8 @@ and pages without a thread, it sits on its own with a top margin and divider.
 A state tile and two lines show the card's thread and its state. The first
 line always names the thread: the one being spoken, the recording target, or,
 when idle, the thread a recording would use. That is the visible thread when it
-can record, otherwise the Voice thread; with neither, the card shows **Choose a
-thread**. The second line is the state: **Ready** with the mode and
+can record, otherwise the default voice thread; with neither, the card shows
+**Choose a thread**. The second line is the state: **Ready** with the mode and
 Auto-listen, or the readiness text while voice is not ready; **Speaking** with
 the notice kind and queued count, where a narrow card drops the kind first;
 **Listening**; or the recognizing or sending phase. The card shows the latest
@@ -159,8 +159,9 @@ When the card's thread is not the one on screen, tapping the card opens it.
 While listening, the state line ends with a **Change** chip (**Choose** when
 there is no target), which opens the thread picker instead.
 The caret button opens the **Voice** sheet in every state. The sheet has
-**Audio mode**, **Auto-listen**, **Follow composer mode**, and **All voice
-settings**, which opens **Settings → Voice**, where the Voice thread is chosen.
+**Audio mode**, **Auto-listen**, **Default voice thread**, **Only play from default
+voice thread**, **Follow composer mode**, and **All voice settings**, which opens
+**Settings → Voice**. The default thread can be chosen from either place.
 Its status line reports readiness or the latest error, and it offers **Resume
 voice** when a session needs it.
 
@@ -181,9 +182,9 @@ voice** when a session needs it.
   “stop listening” are consumed locally. “Stop the server” is ordinary input.
 
 Tapping the service notification opens the thread of the current interaction,
-otherwise the visible thread or the Voice thread. Its actions are **Stop**
-during an interaction, **Start** when recording can begin and a visible thread
-or Voice thread is available, a mode button labelled **Manual** or **Response**
+otherwise the visible thread or the default voice thread. Its actions are
+**Stop** during an interaction, **Start** when recording can begin and a visible
+thread or default voice thread is available, a mode button labelled **Manual** or **Response**
 that switches to the other mode, and **Rearm on** or **Rearm off**, which
 toggles Auto-listen. While speech plays, the expanded notification shows Stop,
 Skip, the mode button, and Rearm.

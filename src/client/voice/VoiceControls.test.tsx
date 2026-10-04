@@ -132,7 +132,7 @@ describe("voice controls card", () => {
     act(() => voice.fake.emit("stateChanged", { ...listening({ recognitionThreadId: "long", recognitionThreadTitle: "Renamed review" }), stateRevision: 2 }));
     expect(status).toHaveTextContent(/^Renamed review\. Listening$/u);
   });
-  it("names the saved Voice thread when no thread is visible, or asks for one", async () => {
+  it("names the saved default voice thread when no thread is visible, or asks for one", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(ready({ settings: voiceSettings({ audioMode: "response", voiceThreadId: "named", voiceThreadTitle: null }) }));
     navigate("/settings/voice", { replace: true });
     renderControls();
@@ -149,7 +149,7 @@ describe("voice controls card", () => {
     expect(await screen.findByRole("list", { name: "Voice threads" })).toBeInTheDocument();
     expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
   });
-  it("names the start target when the visible thread cannot take a recording, and never a missing Voice thread", async () => {
+  it("names the start target when the visible thread cannot take a recording, and never a missing default voice thread", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(ready({ settings: voiceSettings({ audioMode: "response", voiceThreadId: "named", voiceThreadTitle: "Release review" }) }));
     voice.fake.plugin.startManualListen.mockResolvedValue(ready({ stateRevision: 2 }));
     navigate(threadPath("archived"), { replace: true });
@@ -160,7 +160,7 @@ describe("voice controls card", () => {
     expect(within(card()).getByRole("button", { name: "Open thread: Release review" })).toBeInTheDocument();
     fireEvent.click(within(card()).getByRole("button", { name: "Start voice recording" }));
     await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenCalledWith({ expectedConnectionGeneration: 1, threadId: "named", threadTitle: "Release review" }));
-    // A saved Voice thread that is unavailable or deleted is not a target, so it is not named.
+    // A saved default voice thread that is unavailable or deleted is not a target, so it is not named.
     for (const [index, voiceThreadId] of ["offline", "deleted"].entries()) {
       act(() => voice.fake.emit("stateChanged", ready({ stateRevision: index + 3, settings: voiceSettings({ audioMode: "response", voiceThreadId, voiceThreadTitle: "Saved title" }) })));
       expect(lines()).toEqual(["Choose a thread", "Ready · Response · Auto-listen on"]);
@@ -183,6 +183,25 @@ describe("voice controls card", () => {
     fireEvent.click(caret);
     const sheet = await screen.findByRole("dialog", { name: "Voice" });
     expect(within(sheet).getByRole("radiogroup", { name: "Audio mode" })).toBeInTheDocument();
+  });
+  it("uses the available thread inventory to change the default in the quick sheet without starting or retargeting a recording", async () => {
+    const initial = ready();
+    voice.fake.plugin.setConnection.mockResolvedValue(initial);
+    voice.fake.plugin.getState.mockResolvedValue(initial);
+    voice.fake.plugin.updateSettings.mockResolvedValue({ ...initial, stateRevision: 2, settingsRevision: 1,
+      settings: { ...initial.settings, voiceThreadId: "named", voiceThreadTitle: "Release review" } });
+    navigate(threadPath("long"), { replace: true });
+    renderControls();
+    fireEvent.click(await screen.findByRole("button", { name: "Open voice controls" }));
+    const sheet = await screen.findByRole("dialog", { name: "Voice" });
+    fireEvent.click(within(sheet).getByRole("button", { name: "Default voice thread" }));
+    fireEvent.click(within(await screen.findByRole("list", { name: "Voice threads" })).getByRole("button", { name: "Release review" }));
+    await waitFor(() => expect(voice.fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0,
+      patch: { voiceThreadId: "named", voiceThreadTitle: "Release review" } }));
+    expect(within(sheet).getByRole("button", { name: "Default voice thread" })).toHaveAccessibleDescription("Release review");
+    expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
+    expect(voice.fake.plugin.retargetActiveRecognition).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe(threadPath("long"));
   });
   it("opens the card's thread from the body when it is not the visible thread", async () => {
     setPanelPresentation("single");
@@ -412,7 +431,9 @@ describe("voice controls card lifecycle", () => {
     voice.fake.plugin.setConnection.mockResolvedValue(ready());
     renderControls();
     fireEvent.click(await screen.findByRole("button", { name: "Open voice controls" }));
-    await screen.findByRole("dialog", { name: "Voice" });
+    const sheet = await screen.findByRole("dialog", { name: "Voice" });
+    fireEvent.click(within(sheet).getByRole("button", { name: "Default voice thread" }));
+    await screen.findByRole("dialog", { name: "Choose default voice thread" });
     act(() => voice.fake.emit("stateChanged", disconnectedVoiceSnapshot(2)));
     expect(screen.queryByRole("group", { name: "Voice controls" })).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();

@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import { navigate, settingsPath } from "../app/router.js";
 import { NativeVoiceStore } from "./NativeVoiceStore.js";
 import type { NativeVoiceState } from "./native-voice-plugin.js";
@@ -12,6 +13,10 @@ import { VoiceQuickSheet } from "./VoiceQuickSheet.js";
 const speechEndpoint = "https://voice.test/v1";
 const configuredSpeech: NativeVoiceState["speech"] = { ...voiceSnapshot().speech, credentialConfigured: true };
 const actions = { canStart: true, canStop: false, canSkip: false, canRetarget: false, canResume: false };
+const thread = (id: string, title: string) => ({ id, title: { text: title }, available: true, inventoryState: "active" }) as unknown as NormalizedApplicationThreadSummary;
+const longTitle = "L".repeat(600);
+const threads = [thread("long", longTitle), thread("untitled", "  "), thread("standup", "Daily standup notes"),
+  { ...thread("archived", "Archived notes"), inventoryState: "archived" }, { ...thread("offline", "Offline review"), available: false }] as NormalizedApplicationThreadSummary[];
 const ready = (settings: Parameters<typeof voiceSettings>[0] = {}) => voiceSnapshot({ phase: "idle", ready: true, readiness: "ready", actions,
   speech: configuredSpeech, settings: voiceSettings({ audioMode: "response", speechProvider: "server", speechEndpoint, ...settings }) });
 /** Native as the sheet sees it: refreshes return the current state and writes apply their patch. */
@@ -24,9 +29,9 @@ async function renderSheet(state: NativeVoiceState, host?: (store: NativeVoiceSt
     settingsRevision: current.settingsRevision + 1, settings: { ...current.settings, ...patch } }));
   const store = new NativeVoiceStore(fake.asPlugin, VOICE_CONNECTION, () => undefined);
   const onOpenChange = vi.fn();
-  render(host ? host(store) : <VoiceQuickSheet store={store} open onOpenChange={onOpenChange} />);
+  const view = render(host ? host(store) : <VoiceQuickSheet store={store} threads={threads} open onOpenChange={onOpenChange} />);
   await act(async () => { await store.initialize(); });
-  return { fake, store, onOpenChange, sheet: screen.queryByRole("dialog", { name: "Voice" })! };
+  return { fake, store, view, onOpenChange, sheet: screen.queryByRole("dialog", { name: "Voice" })! };
 }
 /** Holds the next native write until released, so the sheet stays pending. */
 function holdNextWrite(fake: ReturnType<typeof fakeVoicePlugin>) {
@@ -42,7 +47,7 @@ beforeEach(() => { navigate("/", { replace: true }); });
 afterEach(() => { cleanup(); });
 
 describe("voice quick sheet", () => {
-  it("names the mode control and every quick setting, with the current values, and leaves the Voice thread to Settings", async () => {
+  it("names the mode control and every quick setting with their current values", async () => {
     const { store, sheet } = await renderSheet(ready({ voiceThreadId: "standup", voiceThreadTitle: "Daily standup notes", followComposerMode: true }));
     expect(within(sheet).getByRole("status")).toHaveTextContent("Ready");
     expect(within(sheet).getByRole("radiogroup", { name: "Audio mode" })).toBeInTheDocument();
@@ -50,8 +55,9 @@ describe("voice quick sheet", () => {
     expect(sheet).toHaveTextContent("Response speaks selected notices and responses.");
     expect(within(sheet).getByRole("switch", { name: "Auto-listen" })).toHaveAccessibleDescription("Eligible notifications reopen the mic");
     expect(within(sheet).getByRole("switch", { name: "Auto-listen" })).toBeChecked();
-    expect(within(sheet).queryByRole("button", { name: "Voice thread" })).toBeNull();
-    expect(sheet).not.toHaveTextContent("Daily standup notes");
+    expect(within(sheet).getByRole("button", { name: "Default voice thread" })).toHaveAccessibleDescription("Daily standup notes");
+    expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Limit automatic playback to this thread");
+    expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).not.toBeChecked();
     expect(within(sheet).getByRole("switch", { name: "Follow composer mode" })).toHaveAccessibleDescription("Use its Steer or Queue choice");
     expect(within(sheet).getByRole("switch", { name: "Follow composer mode" })).toBeChecked();
     expect(within(sheet).getByRole("button", { name: "All voice settings" })).toBeEnabled();
@@ -114,14 +120,60 @@ describe("voice quick sheet", () => {
     expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
     store.dispose();
   });
-  it("flips Auto-listen from its switch and Follow composer mode from anywhere on its row", async () => {
+  it("changes quick switches from their rows, including playback filtering before a default thread is chosen", async () => {
     const { fake, store, sheet } = await renderSheet(ready());
     fireEvent.click(within(sheet).getByRole("switch", { name: "Auto-listen" }));
     await waitFor(() => expect(within(sheet).getByRole("switch", { name: "Auto-listen" })).not.toBeChecked());
     await waitFor(() => expect(within(sheet).getByRole("switch", { name: "Follow composer mode" })).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(within(sheet).getByText("Use its Steer or Queue choice"));
     await waitFor(() => expect(within(sheet).getByRole("switch", { name: "Follow composer mode" })).toBeChecked());
-    expect(patches(fake)).toEqual([{ autoListen: false }, { followComposerMode: true }]);
+    await waitFor(() => expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).not.toHaveAttribute("aria-disabled"));
+    expect(within(sheet).getByRole("button", { name: "Default voice thread" })).toHaveAccessibleDescription("Choose thread");
+    fireEvent.click(within(sheet).getByText("Limit automatic playback to this thread"));
+    await waitFor(() => expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).toBeChecked());
+    expect(patches(fake)).toEqual([{ autoListen: false }, { followComposerMode: true }, { onlyVoiceThread: true }]);
+    store.dispose();
+  });
+  it("chooses a default thread above the sheet, pins the current choice, and keeps focus while its saved title is normalized", async () => {
+    const { fake, store, sheet } = await renderSheet(ready({ voiceThreadId: "standup", voiceThreadTitle: "Daily standup notes" }));
+    const choice = within(sheet).getByRole("button", { name: "Default voice thread" });
+    act(() => choice.focus());
+    fireEvent.click(choice);
+    const picker = await screen.findByRole("dialog", { name: "Choose default voice thread" });
+    expect(picker).toHaveAttribute("data-layer", "over-dialog");
+    expect(picker).toHaveAccessibleDescription("Used for recording when no thread is visible.");
+    const list = within(picker).getByRole("list", { name: "Voice threads" });
+    expect(within(list).getAllByRole("listitem").map(item => item.textContent)).toEqual(["Current default voice threadDaily standup notes", longTitle, "Untitled thread"]);
+    expect(within(list).getByRole("button", { name: "Daily standup notes" })).toHaveAccessibleDescription("Current default voice thread");
+    const release = holdNextWrite(fake);
+    fireEvent.click(within(list).getByRole("button", { name: longTitle }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Choose default voice thread" })).toBeNull());
+    expect(choice).toHaveFocus();
+    expect(choice).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(choice);
+    expect(screen.queryByRole("dialog", { name: "Choose default voice thread" })).toBeNull();
+    fireEvent.click(within(sheet).getByRole("switch", { name: "Only play from default voice thread" }));
+    await release();
+    await waitFor(() => expect(choice).toHaveAccessibleDescription("L".repeat(512)));
+    expect(choice).toHaveFocus();
+    expect(patches(fake)).toEqual([{ voiceThreadId: "long", voiceThreadTitle: "L".repeat(512) }]);
+    fireEvent.click(choice);
+    fireEvent.click(within(await screen.findByRole("list", { name: "Voice threads" })).getByRole("button", { name: "Untitled thread" }));
+    await waitFor(() => expect(choice).toHaveAccessibleDescription("Untitled thread"));
+    expect(patches(fake).at(-1)).toEqual({ voiceThreadId: "untitled", voiceThreadTitle: null });
+    expect(fake.plugin.startManualListen).not.toHaveBeenCalled();
+    expect(fake.plugin.retargetActiveRecognition).not.toHaveBeenCalled();
+    store.dispose();
+  });
+  it("closes the default picker with its sheet and does not reopen it on the next visit", async () => {
+    const { store, view, sheet, onOpenChange } = await renderSheet(ready());
+    fireEvent.click(within(sheet).getByRole("button", { name: "Default voice thread" }));
+    await screen.findByRole("dialog", { name: "Choose default voice thread" });
+    view.rerender(<VoiceQuickSheet store={store} threads={threads} open={false} onOpenChange={onOpenChange} />);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    view.rerender(<VoiceQuickSheet store={store} threads={threads} open onOpenChange={onOpenChange} />);
+    expect(screen.getByRole("dialog", { name: "Voice" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Choose default voice thread" })).toBeNull();
     store.dispose();
   });
   it("returns focus to the visible view when choosing Off removes the card that opened the sheet", async () => {
@@ -132,7 +184,7 @@ describe("voice quick sheet", () => {
         <div className="application-workspace" tabIndex={-1} inert />
         <section className="settings-content" tabIndex={-1} aria-label="Voice settings page" />
         {off ? null : <button type="button" onClick={() => setOpen(true)}>Open voice controls</button>}
-        <VoiceQuickSheet store={store} open={open} onOpenChange={setOpen} />
+        <VoiceQuickSheet store={store} threads={threads} open={open} onOpenChange={setOpen} />
       </>;
     }
     const { store } = await renderSheet(ready(), store => <Card store={store} />);

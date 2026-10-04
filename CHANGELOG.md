@@ -404,6 +404,9 @@
 
 ### Changed
 
+- Voice settings label the saved recording fallback **Default voice thread**.
+  The quick menu includes its picker and **Only play from default voice thread**.
+
 - Android voice loads and caches model and voice choices automatically, with a
   Refresh action for server changes. Settings use shorter help text and the
   Off, Manual, and Response modes replace the redundant Enable voice button.
@@ -732,6 +735,9 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Android voice waits for its app connection to finish before offering Resume
+  or starting a session after an early mode change.
 
 - Android speech model and voice choices now use searchable app pickers with
   a custom-ID option, avoiding native autocomplete popups over the voice bar.

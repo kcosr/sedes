@@ -73,6 +73,30 @@ public class NativeVoiceStartupTest {
             assertTrue(f.starts.isEmpty());
         }
     }
+    @Test public void modeEditsDuringDelayedBootstrapWaitForTheAuthenticatedSession() throws Exception {
+        try (Fixture f = new Fixture("response", true, true)) {
+            f.runtime.nativeVisibility(true);
+            Reply connection = f.beginConnection(f.profile);
+            f.authenticate(); f.flush();
+            assertEquals("connecting", f.runtime.snapshot().getString("readiness"));
+            assertFalse("Cached settings must not offer Resume before session bootstrap", f.runtime.snapshot().getJSONObject("actions").getBoolean("canResume"));
+            f.updateMode("manual");
+            f.runtime.nativeVisibility(false); f.flush();
+            f.runtime.nativeVisibility(true); f.flush();
+            assertEquals("manual", f.runtime.snapshot().getJSONObject("settings").getString("audioMode"));
+            assertEquals("manual", f.store.settings(NativeVoiceStore.binding(f.profile, f.origin, Fixture.IDENTITY)).mode());
+            assertEquals("connecting", f.runtime.snapshot().getString("readiness"));
+            assertFalse(f.runtime.snapshot().getJSONObject("actions").getBoolean("canResume"));
+            assertTrue("Mode edits and lifecycle events cannot start voice before bootstrap", f.starts.isEmpty());
+            f.session(); connection.await();
+            Intent start = f.start(); assertTrue(f.accepted(start));
+            assertEquals("starting", f.runtime.snapshot().getString("phase"));
+            assertFalse(f.runtime.snapshot().getJSONObject("actions").getBoolean("canResume"));
+            f.runtime.nativeVisibility(true); f.beginConnection(f.profile).await(); f.flush();
+            assertTrue("Bootstrap must start the saved mode exactly once", f.starts.isEmpty());
+        }
+    }
+
     @Test public void savedModesStartOnceAfterAuthenticationWithoutOpeningTheMicrophone() throws Exception {
         for (String mode : new String[] { "manual", "response" }) {
             try (Fixture f = new Fixture(mode, true, true)) {

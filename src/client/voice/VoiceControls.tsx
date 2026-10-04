@@ -54,7 +54,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const act = (action: () => ReturnType<typeof store.plugin.getState>) => { void store.run(action).catch(() => undefined); };
   const available = (id: string | null) => threads.find(thread => thread.id === id && thread.available &&
     (thread.inventoryState === "active" || thread.inventoryState === "settled"));
-  // Explicit recording targets the visible thread, then the Voice thread, then a picker; the idle card names that target.
+  // Explicit recording targets the visible thread, then the default voice thread, then a picker; the idle card names that target.
   const startTarget = available(threadId) ?? available(native.settings.voiceThreadId);
   const start = () => {
     // Native decides when explicit recording can start; it does not need the notification stream that `ready` includes.
@@ -162,7 +162,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
         : store.plugin.startManualListen({ ...store.commandContext(), ...target }));
     }} />
     {/* Beside the card, so choosing Off in the sheet keeps it open even when Off hides the card. */}
-    <VoiceQuickSheet store={store} open={sheet} onOpenChange={setSheet} />
+    <VoiceQuickSheet store={store} threads={threads} open={sheet} onOpenChange={setSheet} />
   </>;
 }
 function renderLine(line: Line, className: string, chip: (label: string) => ReactNode): ReactNode {

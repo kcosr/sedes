@@ -1,6 +1,7 @@
 import "./voice-sheet.css";
-import { useId, type ReactNode } from "react";
-import { ChevronRight, Ear, Merge, Mic, MicOff, Settings2, Volume2 } from "lucide-react";
+import { useId, useState, type ReactNode } from "react";
+import { ChevronRight, Ear, ListFilter, Merge, MessageSquare, Mic, MicOff, Settings2, Volume2 } from "lucide-react";
+import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import { navigate, settingsPath } from "../app/router.js";
 import { Button } from "../components/ui/button.js";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
@@ -14,7 +15,8 @@ import { useVoiceState } from "./VoiceProvider.js";
 import type { NativeVoiceStore } from "./NativeVoiceStore.js";
 import { voiceReadiness } from "./VoiceSettingsPage.js";
 import { canEnableVoice, resumeVoice } from "./voice-session.js";
-import type { NativeVoiceSettings } from "./native-voice-plugin.js";
+import { nativeThreadTitle, type NativeVoiceSettings } from "./native-voice-plugin.js";
+import { VoiceThreadPicker } from "./VoiceThreadPicker.js";
 
 const modes = [
   ["off", "Off", MicOff, "pauses voice. Pick Manual or Response to resume."],
@@ -29,15 +31,19 @@ const lockedClass = "aria-disabled:cursor-not-allowed aria-disabled:opacity-(--d
 /** With the card gone (Off while the bar is hidden), closing returns focus to the view the card sat under; not the composer, whose focus raises the keyboard. */
 const viewFocus = () => Array.from(document.querySelectorAll<HTMLElement>(".application-workspace, .settings-content")).find(element => !element.closest("[inert], [hidden]"));
 
-/** Quick voice settings from the voice card's caret. Every write goes through the store, as in Settings → Voice; the Voice thread is chosen there. */
-export function VoiceQuickSheet({ store, open, onOpenChange }: {
+/** Quick voice settings from the voice card's caret. Every write goes through the store, as in Settings → Voice. */
+export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
   store: NativeVoiceStore;
+  threads: readonly NormalizedApplicationThreadSummary[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
   const state = useVoiceState(store);
+  const [picker, setPicker] = useState(false);
   const native = state.native;
   const settings = native?.settings;
+  // A dismissed sheet or lost connection must not reopen its picker on the next visit.
+  if (picker && (!open || !native)) setPicker(false);
   // A pending write locks controls with aria-disabled, not disabled: a disabled control drops focus to the page.
   const locked = state.pending || undefined;
   const update = (patch: Partial<NativeVoiceSettings>) => { if (!state.pending) void store.update(patch).catch(() => undefined); };
@@ -46,6 +52,8 @@ export function VoiceQuickSheet({ store, open, onOpenChange }: {
   const mode = settings ? modes.find(([value]) => value === settings.audioMode)! : undefined;
   // Enabling voice requires both the speech destination and its native credential.
   const blocked = settings?.audioMode === "off" && !canEnableVoice(settings, native?.speech.credentialConfigured === true);
+  const defaultThread = settings?.voiceThreadTitle ?? (settings?.voiceThreadId
+    ? threads.find(thread => thread.id === settings.voiceThreadId)?.title.text.trim() || "Untitled thread" : "Choose thread");
   return <Dialog open={open} onOpenChange={onOpenChange}>
     <DialogContent layout="sheet" className="voice-sheet" fallbackFocus={viewFocus}>
       <DialogHeader>
@@ -71,12 +79,28 @@ export function VoiceQuickSheet({ store, open, onOpenChange }: {
             checked={settings.autoListen} locked={locked} onCheckedChange={autoListen => update({ autoListen })} />
           <SwitchRow icon={<Merge aria-hidden="true" />} label="Follow composer mode" description="Use its Steer or Queue choice"
             checked={settings.followComposerMode} locked={locked} onCheckedChange={followComposerMode => update({ followComposerMode })} />
+          <DefaultThreadRow choice={defaultThread} locked={locked} onClick={() => { if (!state.pending) setPicker(true); }} />
+          <SwitchRow icon={<ListFilter aria-hidden="true" />} label="Only play from default voice thread" description="Limit automatic playback to this thread"
+            checked={settings.onlyVoiceThread} locked={locked} onCheckedChange={onlyVoiceThread => update({ onlyVoiceThread })} />
           <Separator className="mx-3 my-1 data-[orientation=horizontal]:w-auto" />
           <SettingsRow onOpenChange={onOpenChange} />
         </div>
       </> : <div className="-mx-3 -mt-2 flex flex-col"><SettingsRow onOpenChange={onOpenChange} /></div>}
+      <VoiceThreadPicker threads={threads} open={picker} onOpenChange={setPicker} title="Choose default voice thread"
+        description="Used for recording when no thread is visible." layer="over-dialog"
+        pinned={{ threadId: settings?.voiceThreadId ?? null, label: "Current default voice thread" }}
+        onSelect={thread => update({ voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) })} />
     </DialogContent>
   </Dialog>;
+}
+
+function DefaultThreadRow({ choice, locked, onClick }: { choice: string; locked?: true; onClick: () => void }) {
+  const id = useId();
+  return <button type="button" className={cn(rowClass, lockedClass)} aria-disabled={locked} aria-haspopup="dialog"
+    aria-labelledby={`${id}-label`} aria-describedby={`${id}-description`} onClick={onClick}>
+    <MessageSquare aria-hidden="true" /><RowText id={id} label="Default voice thread" description={choice} />
+    <ChevronRight className={trailClass} aria-hidden="true" />
+  </button>;
 }
 
 /** The whole row toggles the switch, which is named by the label alone. */

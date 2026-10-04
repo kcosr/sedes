@@ -561,9 +561,11 @@ app does not wait for voice.
 - **Show voice bar when off** keeps a dimmed voice card under the composer
   while Audio mode is Off, so its Voice sheet can turn voice back on. By
   default Off hides the card. The switch changes only what the app shows.
-- **Voice thread** is the target for explicit recording when no thread is
-  visible. Its picker lists the current Voice thread first. Untitled threads
-  appear as **Untitled thread**.
+- **Default voice thread** is the target for explicit recording when no thread
+  is visible. Its picker lists the current default voice thread first. Untitled
+  threads appear as **Untitled thread**. The quick voice menu also includes
+  this picker and **Only play from default voice thread**, which filters
+  automatic playback without changing the recording target.
 - **Microphone input** lists Android's inputs. Inputs that share a name add
   their type, such as Bluetooth or USB, and then a number.
 - **Pending input recovery** lists spoken messages whose delivery is uncertain.

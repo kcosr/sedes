@@ -177,11 +177,12 @@ Client tests cover the voice card across application screens and above the
 mobile drawer, its thread-title and phase labels, caret-only sheet opening,
 body taps opening its thread, the retarget chip, and current-thread-first
 pickers. The quick sheet covers mode changes with the speech credential gate,
-Resume, switches, and its Settings link. The saved Voice thread remains in
-Settings. Other coverage includes per-binding visibility preferences, recent
+Resume, switches, the default voice thread picker and playback filter, and its
+Settings link. Other coverage includes per-binding visibility preferences, recent
 errors, microphone labels, provider discovery, and the native credential bridge.
 Catalog tests cover owner/configuration scope and freshness; device cases cover
-restoration, background refresh, request coalescing, invalidation, and retention
+restoration, deferred session starts during bootstrap, background refresh,
+request coalescing, invalidation, and retention
 after temporary failures. Settings tests cover automatic freshness checks,
 explicit Refresh, mode activation, and custom model/voice selection.
 

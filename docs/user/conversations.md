@@ -16,14 +16,15 @@ microphone on the voice card under the composer to send spoken text. The card
 appears once voice is connected and set to Manual or Response. If voice cannot
 connect, **Settings → Voice** shows the problem and a retry button; the rest of
 the app keeps working. The microphone targets the visible thread, then your
-pinned Voice thread, or asks you to choose one. Voice sends a separate message
-and preserves the unsent composer draft. It can also make the first send to an
+pinned default voice thread, or asks you to choose one. Voice sends a separate
+message and preserves the unsent composer draft. It can also make the first send to an
 empty thread.
 
 The card's first line always names its thread, using its title or **Untitled
 thread**: the thread being spoken or recorded to, or, when idle, the thread a
 recording would use. That is the visible thread when it can take a recording,
-otherwise your Voice thread; with neither, the card shows **Choose a thread**.
+otherwise your default voice thread; with neither, the card shows **Choose a
+thread**.
 The second line is the state, such as **Ready · Response · Auto-listen on**,
 **Speaking** with the notice kind and queued count, or **Listening**. If voice
 needs to resume, the card offers **Resume**.
@@ -34,8 +35,10 @@ recording target before recognition finishes; the picker lists the visible
 thread first. Navigating to another thread alone does not redirect a recording.
 Once recognition finishes, its target and delivery policy stay fixed through
 any connection recovery. The caret on the card opens the **Voice** sheet with
-**Audio mode**, **Auto-listen**, **Follow composer mode**, and **All voice
-settings**; choose the Voice thread in **Settings → Voice**.
+**Audio mode**, **Auto-listen**, **Default voice thread**, **Only play from default
+voice thread**, **Follow composer mode**, and **All voice settings**. The playback
+filter limits automatic playback to the default thread; it does not change
+where explicit recordings go.
 
 Spoken input queues while a thread is running. Enable **Follow composer's
 selected mode** to use the client's Queue/Steer preference instead. When
