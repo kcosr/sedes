@@ -3,6 +3,9 @@ package dev.sedes.local;
 import android.content.Context;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
+import android.system.ErrnoException;
+import android.system.Os;
+import android.system.OsConstants;
 import android.util.AtomicFile;
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -74,14 +77,28 @@ final class ClientCredentialStore {
         synchronized (LOCK) {
         String binding = binding(profileId, serverUrl);
         byte[] encrypted;
+        AtomicFile target = file(binding);
         // readFully restores an interrupted pre-R write from its backup; checking the base file first would discard it.
-        try { encrypted = file(binding).readFully(); }
-        catch (FileNotFoundException absent) { return null; }
+        try { encrypted = target.readFully(); }
+        catch (FileNotFoundException error) {
+            // Failed opens also report permissions and I/O errors this way. Only proven absence means unpaired.
+            try {
+                if (missing(target.getBaseFile()) && missing(new File(target.getBaseFile().getPath() + ".bak"))) return null;
+            } catch (ErrnoException check) { error.addSuppressed(check); }
+            throw new IllegalStateException("credential_storage_unavailable", error);
+        }
         if (encrypted.length < 29 || encrypted[0] != 1) throw new IllegalStateException("credential_record_invalid");
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
         cipher.init(Cipher.DECRYPT_MODE, key(), new GCMParameterSpec(128, Arrays.copyOfRange(encrypted, 1, 13)));
         cipher.updateAAD(binding.getBytes(StandardCharsets.UTF_8));
         return new String(cipher.doFinal(encrypted, 13, encrypted.length - 13), StandardCharsets.UTF_8);
+        }
+    }
+    private static boolean missing(File file) throws ErrnoException {
+        try { Os.lstat(file.getPath()); return false; }
+        catch (ErrnoException error) {
+            if (error.errno == OsConstants.ENOENT) return true;
+            throw error;
         }
     }
     void setCredential(String profileId, String serverUrl, String credential) throws Exception {

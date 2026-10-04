@@ -206,7 +206,8 @@
   recent errors. Input whose delivery is uncertain stays in recovery, where
   voice rechecks it automatically without resending; **Resume input** retries
   the same message and **Discard** removes it. Enabled voice resumes when the
-  app opens, and adapter URLs may include a reverse-proxy path.
+  app opens, and adapter URLs may include a reverse-proxy path. Device storage
+  read failures preserve saved input and credentials for recovery.
 
 - Codex threads can use **Ultrafast** speed when the account's Codex model
   catalog offers it. When a model offers both Fast and Ultrafast, the

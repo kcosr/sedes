@@ -62,6 +62,9 @@ aside as `<name>.corrupt` and replaced with defaults. Native reports
 failed authentication tag, bad framing, malformed JSON, or failed validation
 counts as corruption. Any other keystore failure is retried once and then
 reported as `voice_storage_unavailable`, keeping the record.
+Atomic reads restore interrupted-write backups before deciding a record is
+absent. Permission and other filesystem read failures preserve both voice
+records and credentials; they never initialize an empty replacement record.
 
 Native reads the existing credential vault directly. Plugin methods never take
 a bearer token. Authenticated GETs and mutations preserve the normal endpoint

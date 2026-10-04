@@ -2,11 +2,13 @@ package dev.sedes.local;
 
 import static org.junit.Assert.*;
 import android.content.Context;
+import android.system.Os;
 import androidx.test.platform.app.InstrumentationRegistry;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.UUID;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.Test;
 
@@ -62,6 +64,46 @@ public class NativeVoiceStoreTest {
             assertTrue(base.renameTo(backup)); assertFalse(base.exists());
             assertEquals(mutation, new NativeVoiceStore(context).journal(binding).getJSONObject(0).getString("mutationId"));
         } finally { store.removeProfile(profile); }
+    }
+
+    @Test public void unreadableJournalDoesNotCacheAnEmptyJournal() throws Exception {
+        assertFailedReadPreservesJournal(ReadFailure.UNREADABLE_RECORD);
+    }
+
+    @Test public void inaccessibleJournalDirectoryDoesNotCacheAnEmptyJournal() throws Exception {
+        assertFailedReadPreservesJournal(ReadFailure.INACCESSIBLE_DIRECTORY);
+    }
+
+    @Test public void failedBackupRestoreDoesNotCacheAnEmptyJournal() throws Exception {
+        assertFailedReadPreservesJournal(ReadFailure.BLOCKED_BACKUP_RESTORE);
+    }
+
+    private enum ReadFailure { UNREADABLE_RECORD, INACCESSIBLE_DIRECTORY, BLOCKED_BACKUP_RESTORE }
+
+    private void assertFailedReadPreservesJournal(ReadFailure failure) throws Exception {
+        String profile = "voice-test-" + UUID.randomUUID();
+        String binding = NativeVoiceStore.binding(profile, ORIGIN, IDENTITY_A);
+        NativeVoiceStore writer = new NativeVoiceStore(context), reader = new NativeVoiceStore(context);
+        String first = UUID.randomUUID().toString(), second = UUID.randomUUID().toString();
+        try {
+            writer.saveEntry(binding, entry(first, "pending before the failed read"));
+            File directory = writer.directory(binding), base = new File(directory, "journal.enc");
+            if (failure == ReadFailure.BLOCKED_BACKUP_RESTORE) assertTrue(base.renameTo(new File(base.getPath() + ".bak")));
+            File restricted = failure == ReadFailure.UNREADABLE_RECORD ? base : directory;
+            int permissions = Os.stat(restricted.getPath()).st_mode & 0777;
+            try {
+                // A readable but unwritable directory prevents AtomicFile from restoring its sole backup.
+                Os.chmod(restricted.getPath(), failure == ReadFailure.BLOCKED_BACKUP_RESTORE ? 0500 : 0000);
+                IllegalStateException error = assertThrows(IllegalStateException.class, () -> reader.journal(binding));
+                assertEquals("voice_storage_unavailable", error.getMessage());
+            } finally { Os.chmod(restricted.getPath(), permissions); }
+            // Reuse the failed reader: a cached empty journal would overwrite the first pending input here.
+            reader.saveEntry(binding, entry(second, "pending after access is restored"));
+            JSONArray persisted = new NativeVoiceStore(context).journal(binding);
+            assertEquals(2, persisted.length());
+            assertEquals(first, persisted.getJSONObject(0).getString("mutationId"));
+            assertEquals(second, persisted.getJSONObject(1).getString("mutationId"));
+        } finally { writer.removeProfile(profile); }
     }
 
     @Test public void corruptRecordsAreReportedAndQuarantined() throws Exception {

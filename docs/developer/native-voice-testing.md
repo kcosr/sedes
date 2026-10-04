@@ -105,7 +105,8 @@ first enable, that an enable without visibility is rejected but persisted, that
 corrupt settings are quarantined without blocking the connection, and that
 connectivity failures are reported separately from pairing. Store checks cover
 absent records, restoring an interrupted write from its backup, quarantine of
-corrupt records, and profile removal deleting only that profile's bindings.
+corrupt records, unreadable records failing without discarding saved input or
+credentials, and profile removal deleting only that profile's bindings.
 The Manual and Response startup scenarios also configure the actual app, stop
 its process, relaunch without changing settings, and run a full conversation
 cycle. They verify that readiness is restored without spontaneous recording
