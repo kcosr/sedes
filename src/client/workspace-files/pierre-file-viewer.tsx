@@ -26,6 +26,11 @@ import {
 } from "../app/appearance.js";
 import { boundedPierreLanguage } from "./pierre-language.js";
 import {
+  SEDES_DIFF_LINE_HEIGHT,
+  SEDES_DIFF_THEMES,
+  SEDES_PIERRE_UNSAFE_CSS,
+} from "../components/diff/diff-theme.js";
+import {
   captureFileLineSelection,
   type CapturedFileLineSelection,
   type PierreSelectionCapture,
@@ -212,7 +217,11 @@ export function PierreFileViewer({
     () => ({
       disableFileHeader: true,
       overflow: "scroll" as const,
+      theme: SEDES_DIFF_THEMES,
       themeType,
+      unsafeCSS: SEDES_PIERRE_UNSAFE_CSS,
+      // Rows are positioned from this, not measured: match the CSS.
+      itemMetrics: { lineHeight: SEDES_DIFF_LINE_HEIGHT },
       stickyHeaders: false,
       enableLineSelection: !editing && onAttachSelection !== undefined,
       onLineSelected: handleLineSelected,
@@ -230,7 +239,7 @@ export function PierreFileViewer({
       <EditProvider createEditor={createPierreEditor}>
         <CodeView
           ref={codeViewRef}
-          className="workspace-files-code-view"
+          className="workspace-files-code-view sedes-diff-surface"
           items={items}
           options={options}
           editorOptions={PIERRE_EDITOR_OPTIONS}

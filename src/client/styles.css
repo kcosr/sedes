@@ -47,18 +47,22 @@
   --muted-foreground-2: oklch(0.512 0.012 260);
   --border-soft: oklch(0.235 0.01 260 / 0.07);
   --code: oklch(0.938 0.004 250);
+  /* One quiet syntax palette for chat code blocks, diffs and the file
+     viewer: keywords and punctuation in the secondary grey, names in the
+     text colour, strings and constants in two muted accents, comments muted.
+     Every step clears WCAG AA on the code surfaces and change tints. */
   --syntax-foreground: var(--foreground);
   --syntax-background: transparent;
   --syntax-token-comment: var(--muted-foreground-2);
-  --syntax-token-constant: var(--warning);
-  --syntax-token-string: var(--success);
+  --syntax-token-constant: color-mix(in oklab, var(--warning) 70%, var(--foreground));
+  --syntax-token-string: color-mix(in oklab, var(--info) 78%, var(--foreground));
   --syntax-token-parameter: var(--foreground);
-  --syntax-token-function: var(--info);
-  --syntax-token-string-expression: var(--success);
+  --syntax-token-function: var(--foreground);
+  --syntax-token-string-expression: var(--syntax-token-string);
   --syntax-token-punctuation: var(--muted-foreground);
   --syntax-token-link: var(--info);
-  --syntax-token-keyword: oklch(0.43 0.16 305);
-  --syntax-token-string-section: var(--success);
+  --syntax-token-keyword: var(--muted-foreground);
+  --syntax-token-string-section: var(--syntax-token-string);
   --syntax-token-inserted: var(--success);
   --syntax-token-deleted: var(--destructive);
   --syntax-token-changed: var(--warning);
@@ -283,7 +287,7 @@
   --muted-foreground-2: oklch(0.64 0.008 260);
   --border-soft: oklch(1 0 0 / 0.05);
   --code: oklch(0.135 0.005 260);
-  --syntax-token-keyword: oklch(0.76 0.13 305);
+  --syntax-token-constant: color-mix(in oklab, var(--warning) 55%, var(--muted-foreground));
   --accent-soft: oklch(1 0 0 / 0.06);
   --success: oklch(0.74 0.15 150);
   --info: oklch(0.7 0.12 250);
@@ -2899,8 +2903,6 @@ textarea:disabled {
   width: 100%;
   height: 100%;
   font-family: var(--font-mono);
-  /* Keep full-file reading/editing at the same density as chat Pierre diffs. */
-  --diffs-font-size: 12px;
 }
 
 .workspace-files-editor-shell,
@@ -6980,16 +6982,85 @@ button.activity-group-summary:hover {
   font-size: 12px;
 }
 
+/* The one look of every Pierre surface: the Changes diff, the Browse file
+   viewer and chat file-change diffs. Pierre renders in shadow roots that only
+   inherited custom properties reach, so this sets its --diffs-* knobs from
+   Sedes tokens; the syntax colours are the shared --syntax-* palette
+   (components/diff/diff-theme.ts) and what variables cannot reach is in
+   components/diff/pierre-unsafe.css. The line height, header and separator
+   heights are also item metrics in diff-theme.ts and WorkspaceCompareView. */
+.sedes-diff-surface {
+  /* The code surface and its muted band (separators, context, buffers). */
+  --sedes-diff-bg: var(--popover);
+  --sedes-diff-muted: var(--muted);
+  --syntax-background: var(--sedes-diff-bg);
+
+  /* Type: code in the app's mono, headers and separators in the UI font. */
+  --diffs-font-family: var(--font-mono);
+  --diffs-header-font-family: var(--font-sans);
+  --diffs-font-size: 12px;
+  --diffs-line-height: 18px;
+  --diffs-font-features: "calt" 0, "liga" 0;
+  --diffs-min-number-column-width: 3ch;
+
+  /* Change colours: --success/--destructive diluted into the surface before
+     Pierre mixes them into line backgrounds (12% light, 20% dark), so a
+     changed line reads as a tint rather than a band. */
+  --sedes-diff-add-tint: color-mix(in oklab, var(--success) 55%, var(--sedes-diff-bg));
+  --sedes-diff-del-tint: color-mix(in oklab, var(--destructive) 50%, var(--sedes-diff-bg));
+  --diffs-bg-addition-override: var(--sedes-diff-add-tint);
+  --diffs-bg-deletion-override: var(--sedes-diff-del-tint);
+  --diffs-bg-addition-number-override: var(--sedes-diff-add-tint);
+  --diffs-bg-deletion-number-override: var(--sedes-diff-del-tint);
+  --diffs-bg-addition-emphasis-override: color-mix(in oklab, var(--success) 15%, transparent);
+  --diffs-bg-deletion-emphasis-override: color-mix(in oklab, var(--destructive) 13%, transparent);
+  --diffs-fg-number-override: var(--muted-foreground-2);
+  --diffs-fg-number-addition-override: color-mix(in oklab, var(--success) 60%, var(--muted-foreground-2));
+  --diffs-fg-number-deletion-override: color-mix(in oklab, var(--destructive) 60%, var(--muted-foreground-2));
+  --diffs-bg-separator-override: var(--sedes-diff-muted);
+  --diffs-bg-buffer-override: var(--sedes-diff-muted);
+  --diffs-bg-context-override: var(--sedes-diff-muted);
+
+  /* Selected lines: the ring, diluted like the change colours. */
+  --diffs-bg-selection-override: color-mix(in oklab, var(--ring) 45%, var(--sedes-diff-bg));
+  --diffs-bg-selection-number-override: color-mix(in oklab, var(--ring) 60%, var(--sedes-diff-bg));
+}
+
+:root[data-theme="dark"] .sedes-diff-surface {
+  --sedes-diff-bg: var(--card);
+  --sedes-diff-muted: var(--secondary);
+  --sedes-diff-add-tint: color-mix(in oklab, var(--success) 50%, var(--sedes-diff-bg));
+  --sedes-diff-del-tint: color-mix(in oklab, var(--destructive) 48%, var(--sedes-diff-bg));
+  --diffs-bg-addition-emphasis-override: color-mix(in oklab, var(--success) 22%, transparent);
+  --diffs-bg-deletion-emphasis-override: color-mix(in oklab, var(--destructive) 20%, transparent);
+}
+
+/* Pierre sets this on each host element itself, so it is set there. */
+.sedes-diff-surface diffs-container {
+  --diffs-selection-number-fg: var(--foreground);
+}
+
+/* Coarse pointers: 40px hunk separators and expand arrows. */
+@media (pointer: coarse) {
+  .sedes-diff-surface {
+    --sedes-diff-touch: 40px;
+  }
+}
+
 .chat-pierre-diff {
   width: 100%;
   min-width: 0;
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-ctl);
   overflow: hidden;
-  /* Match markdown fenced code / legacy .diff-block (Pierre defaults to 13px). */
-  --diffs-font-size: 12px;
-  --diffs-line-height: 1.65;
-  --diffs-font-family: var(--font-mono);
+}
+
+/* In chat, a diff reads like a fenced code block beside it. */
+.chat-pierre-diff.sedes-diff-surface,
+:root[data-theme="dark"] .chat-pierre-diff.sedes-diff-surface {
+  --sedes-diff-bg: var(--code);
+  --sedes-diff-muted: color-mix(in oklab, var(--foreground) 5%, var(--code));
+  --diffs-gap-block: 4px;
 }
 
 .diff-empty-file {

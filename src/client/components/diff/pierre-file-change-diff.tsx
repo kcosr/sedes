@@ -23,6 +23,7 @@ import {
 import { PierreSelectionAction } from "../../context-excerpts/PierreSelectionAction.js";
 import type { PierreFileChangeSource } from "../../lib/pierre-patch-candidate.js";
 import { boundedPierreLanguage } from "../../workspace-files/pierre-language.js";
+import { SEDES_DIFF_THEMES, SEDES_PIERRE_UNSAFE_CSS } from "./diff-theme.js";
 
 /**
  * Lazy-chunk entry for chat `file_change` diffs. Imports `@pierre/diffs` so
@@ -128,11 +129,15 @@ export function PierreFileChangeDiff({
 
   const options = useMemo(
     () => ({
+      theme: SEDES_DIFF_THEMES,
       themeType,
+      unsafeCSS: SEDES_PIERRE_UNSAFE_CSS,
       overflow: wrap ? ("wrap" as const) : ("scroll" as const),
       disableFileHeader: true,
       disableLineNumbers: source.kind === "replacement_preview",
       diffStyle: "unified" as const,
+      diffIndicators: "classic" as const,
+      lineDiffType: "word-alt" as const,
       // Quiet between-hunk rules only — drop leading/trailing
       // "N unmodified lines" chrome that line numbers already imply.
       hunkSeparators: "simple" as const,
@@ -185,7 +190,7 @@ export function PierreFileChangeDiff({
   return (
     <div
       aria-label={`Diff for ${destinationPath ?? path}`}
-      className="chat-pierre-diff pierre-selection-surface"
+      className="chat-pierre-diff sedes-diff-surface pierre-selection-surface"
       data-testid="pierre-file-change-diff"
       ref={surfaceRef}
       tabIndex={-1}
