@@ -50,10 +50,12 @@
   /* One quiet syntax palette for chat code blocks, diffs and the file
      viewer: keywords and punctuation in the secondary grey, names in the
      text colour, strings and constants in two muted accents, comments muted.
-     Every step clears WCAG AA on the code surfaces and change tints. */
+     Every step clears WCAG AA on the code surfaces and on the composed
+     added/deleted line and word-emphasis backgrounds (.sedes-diff-surface),
+     which is why comments sit between the two greys. */
   --syntax-foreground: var(--foreground);
   --syntax-background: transparent;
-  --syntax-token-comment: var(--muted-foreground-2);
+  --syntax-token-comment: color-mix(in oklab, var(--muted-foreground-2) 60%, var(--muted-foreground));
   --syntax-token-constant: color-mix(in oklab, var(--warning) 70%, var(--foreground));
   --syntax-token-string: color-mix(in oklab, var(--info) 78%, var(--foreground));
   --syntax-token-parameter: var(--foreground);
@@ -288,6 +290,7 @@
   --border-soft: oklch(1 0 0 / 0.05);
   --code: oklch(0.135 0.005 260);
   --syntax-token-constant: color-mix(in oklab, var(--warning) 55%, var(--muted-foreground));
+  --syntax-token-comment: color-mix(in oklab, var(--muted-foreground-2) 50%, var(--muted-foreground));
   --accent-soft: oklch(1 0 0 / 0.06);
   --success: oklch(0.74 0.15 150);
   --info: oklch(0.7 0.12 250);
@@ -7034,8 +7037,10 @@ button.activity-group-summary:hover {
   --diffs-bg-deletion-override: var(--sedes-diff-del-tint);
   --diffs-bg-addition-number-override: var(--sedes-diff-add-tint);
   --diffs-bg-deletion-number-override: var(--sedes-diff-del-tint);
-  --diffs-bg-addition-emphasis-override: color-mix(in oklab, var(--success) 15%, transparent);
-  --diffs-bg-deletion-emphasis-override: color-mix(in oklab, var(--destructive) 13%, transparent);
+  /* Word emphasis stays light enough that every syntax colour keeps 4.5:1
+     on it. */
+  --diffs-bg-addition-emphasis-override: color-mix(in oklab, var(--success) 10%, transparent);
+  --diffs-bg-deletion-emphasis-override: color-mix(in oklab, var(--destructive) 10%, transparent);
   --diffs-fg-number-override: var(--muted-foreground-2);
   --diffs-fg-number-addition-override: color-mix(in oklab, var(--success) 60%, var(--muted-foreground-2));
   --diffs-fg-number-deletion-override: color-mix(in oklab, var(--destructive) 60%, var(--muted-foreground-2));
@@ -7053,8 +7058,8 @@ button.activity-group-summary:hover {
   --sedes-diff-muted: var(--secondary);
   --sedes-diff-add-tint: color-mix(in oklab, var(--success) 50%, var(--sedes-diff-bg));
   --sedes-diff-del-tint: color-mix(in oklab, var(--destructive) 48%, var(--sedes-diff-bg));
-  --diffs-bg-addition-emphasis-override: color-mix(in oklab, var(--success) 22%, transparent);
-  --diffs-bg-deletion-emphasis-override: color-mix(in oklab, var(--destructive) 20%, transparent);
+  --diffs-bg-addition-emphasis-override: color-mix(in oklab, var(--success) 9%, transparent);
+  --diffs-bg-deletion-emphasis-override: color-mix(in oklab, var(--destructive) 10%, transparent);
 }
 
 /* Pierre sets this on each host element itself, so it is set there. */
@@ -7077,11 +7082,9 @@ button.activity-group-summary:hover {
   overflow: hidden;
 }
 
-/* In chat, a diff reads like a fenced code block beside it. */
-.chat-pierre-diff.sedes-diff-surface,
-:root[data-theme="dark"] .chat-pierre-diff.sedes-diff-surface {
-  --sedes-diff-bg: var(--code);
-  --sedes-diff-muted: color-mix(in oklab, var(--foreground) 5%, var(--code));
+/* Chat diffs keep the Files surface, so one set of change tints reads the
+   same everywhere; only their padding is tighter. */
+.chat-pierre-diff.sedes-diff-surface {
   --diffs-gap-block: 4px;
 }
 
