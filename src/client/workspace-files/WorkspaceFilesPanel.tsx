@@ -3323,6 +3323,12 @@ export function WorkspaceFilesPanel({
                     rootId={selectedRoot.rootId}
                     paths={selectedListing.paths}
                     searchEnabled={selectedListing.fullTreeLoaded}
+                    activePath={
+                      activeFileAddress?.rootId === selectedRoot.rootId
+                        ? activeFileAddress.path
+                        : undefined
+                    }
+                    visible={treeOpen && context.visible}
                     initialExpandedPaths={
                       expandedPathsByRootRef.current[selectedRoot.rootId] ?? []
                     }
@@ -4196,6 +4202,8 @@ function RootFileTree({
   rootId,
   paths,
   searchEnabled,
+  activePath,
+  visible,
   initialExpandedPaths,
   onOpen,
   onExpand,
@@ -4204,6 +4212,9 @@ function RootFileTree({
   readonly rootId: WorkspaceFileRootId;
   readonly paths: readonly string[];
   readonly searchEnabled: boolean;
+  /** The active document when it belongs to this root. */
+  readonly activePath: string | undefined;
+  readonly visible: boolean;
   readonly initialExpandedPaths: readonly string[];
   readonly onOpen: (address: WorkspaceFileAddress) => void;
   readonly onExpand: (directory: WorkspaceFileDirectoryPath) => void;
@@ -4214,12 +4225,23 @@ function RootFileTree({
 }) {
   const pathsRef = useRef<readonly string[]>([]);
   const expandedRef = useRef<readonly string[]>(initialExpandedPaths);
+  // Pierre reports only selection changes, so the selection must follow the
+  // active document for a click on any other file to register. Changes made
+  // here, and multi-selection made with Ctrl, Cmd, or Shift, open nothing.
+  const syncingSelectionRef = useRef(false);
+  const modifiedSelectionRef = useRef(false);
+  const recordSelectionModifiers = (
+    event: React.MouseEvent | React.KeyboardEvent,
+  ) => {
+    modifiedSelectionRef.current =
+      event.ctrlKey || event.metaKey || event.shiftKey;
+  };
   const selectRef = useRef<(paths: readonly string[]) => void>(() => undefined);
   selectRef.current = (selected) => {
-    const path = [...selected]
-      .reverse()
-      .find((candidate) => !candidate.endsWith("/"));
-    if (path) onOpen({ rootId, path });
+    if (syncingSelectionRef.current || modifiedSelectionRef.current) return;
+    const [path] = selected;
+    if (selected.length === 1 && path && !path.endsWith("/"))
+      onOpen({ rootId, path });
   };
   const { model } = useFileTree({
     paths: [],
@@ -4250,11 +4272,29 @@ function RootFileTree({
           );
     expandedRef.current = expanded;
     pathsRef.current = paths;
-    modelRef.current.resetPaths({
-      preparedInput: prepareFileTreeInput(paths),
-      ...(expanded.length > 0 ? { initialExpandedPaths: expanded } : {}),
-    });
+    syncingSelectionRef.current = true;
+    try {
+      modelRef.current.resetPaths({
+        preparedInput: prepareFileTreeInput(paths),
+        ...(expanded.length > 0 ? { initialExpandedPaths: expanded } : {}),
+      });
+    } finally {
+      syncingSelectionRef.current = false;
+    }
   }, [paths]);
+  useEffect(() => {
+    syncingSelectionRef.current = true;
+    try {
+      selectOnlyTreeFile(model, activePath);
+    } finally {
+      syncingSelectionRef.current = false;
+    }
+  }, [activePath, model, paths]);
+  useEffect(() => {
+    // A hidden tree has no viewport to scroll, so reveal when it is shown.
+    if (visible && activePath !== undefined)
+      model.scrollToPath(activePath, { focus: false });
+  }, [activePath, model, visible]);
   useEffect(() => {
     const loadExpandedDirectories = () => {
       for (const path of pathsRef.current) {
@@ -4274,7 +4314,36 @@ function RootFileTree({
     });
     return () => register(rootId);
   }, [register, rootId]);
-  return <FileTree model={model} className="workspace-files-tree-host" />;
+  return (
+    <FileTree
+      model={model}
+      className="workspace-files-tree-host"
+      onClickCapture={recordSelectionModifiers}
+      onKeyDownCapture={recordSelectionModifiers}
+    />
+  );
+}
+
+/** Makes a loaded file the tree's only selection, or clears the selection. */
+function selectOnlyTreeFile(
+  model: {
+    getItem(path: string): {
+      isDirectory(): boolean;
+      getPath(): string;
+      isSelected(): boolean;
+      select(): void;
+      deselect(): void;
+    } | null;
+    getSelectedPaths(): readonly string[];
+  },
+  path: string | undefined,
+): void {
+  const item = path === undefined ? null : model.getItem(path);
+  const target = item && !item.isDirectory() ? item : undefined;
+  for (const selected of model.getSelectedPaths()) {
+    if (selected !== target?.getPath()) model.getItem(selected)?.deselect();
+  }
+  if (target && !target.isSelected()) target.select();
 }
 
 function PanelMessage({

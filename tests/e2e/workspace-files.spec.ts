@@ -528,6 +528,23 @@ test.describe.serial("workspace file browser and editor", () => {
     await capture(page, testInfo, "workspace-files-markdown-preview.png");
     await panel.getByRole("tab", { name: /example\.ts/ }).click();
     await expect(panel).toContainText('export const workspace = "alpha";');
+    // The tree selection follows the active tab, so the file the tree opened
+    // last still opens when chosen again.
+    await ensureTreeOpen(page);
+    await expect(fileItem(panel, "example.ts")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(fileItem(panel, "SPEC.md")).toHaveAttribute(
+      "aria-selected",
+      "false",
+    );
+    await fileItem(panel, "SPEC.md").click();
+    await expect(
+      panel.getByRole("heading", { name: "Alpha spec" }),
+    ).toBeVisible();
+    await panel.getByRole("tab", { name: /example\.ts/ }).click();
+    await expect(panel).toContainText('export const workspace = "alpha";');
 
     let editable = await enterEditMode(panel);
     const savedContent = [

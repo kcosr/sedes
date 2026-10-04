@@ -24,6 +24,7 @@ let fileTreeUnsafeCss: string | undefined;
 let latestCompareProps: Record<string, unknown> | undefined;
 const resetPaths = vi.fn();
 const setGitStatus = vi.fn();
+const scrollToPath = vi.fn();
 const getItem = vi.fn<
   (_path: string) => { isDirectory(): boolean; isExpanded(): boolean } | null
 >(() => null);
@@ -51,6 +52,8 @@ vi.mock("@pierre/trees/react", () => ({
         resetPaths,
         setGitStatus,
         getItem,
+        getSelectedPaths: () => [],
+        scrollToPath,
         subscribe: () => () => undefined,
       },
     };
@@ -629,7 +632,7 @@ describe("WorkspaceFilesPanel", () => {
       }),
     );
 
-    act(() => selectPaths(["src/", "src/index.ts"]));
+    act(() => selectPaths(["src/index.ts"]));
     await waitFor(() =>
       expect(api.readWorkspaceFile).toHaveBeenCalledWith(
         "workspace-1",
@@ -656,7 +659,7 @@ describe("WorkspaceFilesPanel", () => {
     );
 
     await waitForListing(api);
-    act(() => selectPaths(["src/", "src/index.ts"]));
+    act(() => selectPaths(["src/index.ts"]));
     const download = await screen.findByRole("button", {
       name: "Download saved file src/index.ts",
     });
@@ -708,7 +711,7 @@ describe("WorkspaceFilesPanel", () => {
     );
 
     await waitForListing(api);
-    act(() => selectPaths(["src/", "src/index.ts"]));
+    act(() => selectPaths(["src/index.ts"]));
     fireEvent.click(
       await screen.findByRole("button", {
         name: "Download saved file src/index.ts",
@@ -778,7 +781,7 @@ describe("WorkspaceFilesPanel", () => {
     );
 
     await waitForListing(api);
-    act(() => selectPaths(["src/", "src/index.ts"]));
+    act(() => selectPaths(["src/index.ts"]));
     fireEvent.click(
       await screen.findByRole("button", { name: "Change draft" }),
     );
@@ -823,7 +826,7 @@ describe("WorkspaceFilesPanel", () => {
     );
 
     await waitForListing(api);
-    act(() => selectPaths(["src/", "src/index.ts"]));
+    act(() => selectPaths(["src/index.ts"]));
     const download = await screen.findByRole("button", {
       name: "Download saved file src/index.ts",
     });
@@ -853,7 +856,7 @@ describe("WorkspaceFilesPanel", () => {
     );
 
     await waitForListing(api);
-    act(() => selectPaths(["src/", "src/index.ts"]));
+    act(() => selectPaths(["src/index.ts"]));
     fireEvent.click(
       await screen.findByRole("button", { name: "Change draft" }),
     );
@@ -914,13 +917,41 @@ describe("WorkspaceFilesPanel", () => {
     render(<WorkspaceFilesPanel context={context} api={api} />);
 
     await waitForListing(api);
-    act(() => selectPaths(["src/", "src/index.ts"]));
+    act(() => selectPaths(["src/index.ts"]));
 
     expect(
       await screen.findByRole("button", {
         name: "Download saved file src/index.ts",
       }),
     ).toBeEnabled();
+  });
+
+  it("opens only a single-file tree selection", async () => {
+    const api = setupApi();
+    const { context } = setupContext();
+    render(
+      <WorkspaceFilesPanel
+        context={context}
+        api={api}
+        renderFile={({ path }) => <div data-testid="file-viewer">{path}</div>}
+      />,
+    );
+    await waitForListing(api);
+
+    act(() => selectPaths(["README.md", "src/index.ts"]));
+    act(() => selectPaths(["src/"]));
+    expect(openFileTabs()).toHaveLength(0);
+    expect(api.readWorkspaceFile).not.toHaveBeenCalled();
+
+    act(() => selectPaths(["src/index.ts"]));
+    expect(await screen.findByTestId("file-viewer")).toHaveTextContent(
+      "src/index.ts",
+    );
+
+    // Reopening the browser reveals the active document without focusing it.
+    scrollToPath.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Toggle file browser" }));
+    expect(scrollToPath).toHaveBeenCalledWith("src/index.ts", { focus: false });
   });
 
   it("keeps Browse and Compare state mounted while switching modes", async () => {
@@ -934,7 +965,7 @@ describe("WorkspaceFilesPanel", () => {
       />,
     );
     await waitForListing(api);
-    act(() => selectPaths(["src/", "src/index.ts"]));
+    act(() => selectPaths(["src/index.ts"]));
     await screen.findByTestId("file-viewer");
 
     fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
@@ -998,7 +1029,7 @@ describe("WorkspaceFilesPanel", () => {
       />,
     );
     await waitForListing(api);
-    act(() => selectPaths(["src/", "src/index.ts"]));
+    act(() => selectPaths(["src/index.ts"]));
     fireEvent.click(
       await screen.findByRole("button", { name: "Change draft" }),
     );
