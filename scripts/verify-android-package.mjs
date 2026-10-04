@@ -100,6 +100,7 @@ async function verifySyncedAssets() {
     "terminal-admission",
     "OutputImageActions",
     "ClientCredentials",
+    "NativeVoice",
   ]) {
     assert(
       javascript.includes(required),
@@ -117,6 +118,16 @@ async function verifySyncedAssets() {
     "android_keyboard_resize_policy_missing",
   );
   assertOutputImageNativeContract(sourceManifest);
+  assertVoiceNativeContract(sourceManifest);
+  assertNetworkSecurityManifest(sourceManifest);
+  const networkSecurity = await readFile(
+    path.join(androidRoot, "app/src/main/res/xml/network_security_config.xml"),
+    "utf8",
+  );
+  assert(/<base-config\b[^>]*\bcleartextTrafficPermitted=["']true["']/u.test(networkSecurity), "android_explicit_http_support_missing");
+  const certificateSources = [...networkSecurity.matchAll(/<certificates\b[^>]*\bsrc=["']([^"']+)["']/gu)]
+    .map(match => match[1]).sort();
+  assert(JSON.stringify(certificateSources) === JSON.stringify(["system", "user"]), "android_certificate_trust_sources_changed");
 
   const mainActivity = await readFile(
     path.join(
@@ -130,6 +141,7 @@ async function verifySyncedAssets() {
     "output_image_actions_plugin_not_registered",
   );
   assert(mainActivity.includes("registerPlugin(ClientCredentialsPlugin.class)"), "client_credentials_plugin_not_registered");
+  assert(mainActivity.includes("registerPlugin(NativeVoicePlugin.class)"), "native_voice_plugin_not_registered");
   assert(/android:allowBackup=["']false["']/u.test(sourceManifest), "android_credential_backup_enabled");
   const outputImagePaths = await readFile(
     path.join(androidRoot, "app/src/main/res/xml/output_image_paths.xml"),
@@ -164,8 +176,9 @@ async function verifyAssembledPackage() {
     /android:windowSoftInputMode=["']adjustResize["']/u.test(mergedManifest),
     "merged_keyboard_resize_policy_missing",
   );
-  assert(!/<service\b/iu.test(mergedManifest), "unexpected_android_service");
+  assertVoiceNativeContract(mergedManifest);
   assertOutputImageNativeContract(mergedManifest);
+  assertNetworkSecurityManifest(mergedManifest);
 
   const debugApk = path.join(
     androidRoot,
@@ -185,6 +198,7 @@ async function verifyAssembledPackage() {
     maxBuffer: 4 * 1024 * 1024,
   });
   const entries = new Set(stdout.split(/\r?\n/u).filter(Boolean));
+  assert(entries.has("res/xml/network_security_config.xml"), "apk_network_security_config_missing");
   assert(entries.has("assets/public/index.html"), "apk_index_asset_missing");
   assert(
     entries.has("assets/capacitor.config.json"),
@@ -197,6 +211,10 @@ async function verifyAssembledPackage() {
     ),
     "apk_javascript_assets_missing",
   );
+}
+
+function assertNetworkSecurityManifest(manifest) {
+  assert(/android:networkSecurityConfig=["']@xml\/network_security_config["']/u.test(manifest), "android_network_security_config_missing");
 }
 
 function assertOutputImageNativeContract(manifest) {
@@ -232,24 +250,36 @@ function assertRequestedPermissions(manifest, merged) {
   const platformPermissions = permissions.filter((permission) =>
     permission.startsWith("android.permission."),
   );
+  const approved = ["INTERNET", "FOREGROUND_SERVICE", "FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+    "FOREGROUND_SERVICE_MICROPHONE", "POST_NOTIFICATIONS", "POST_PROMOTED_NOTIFICATIONS",
+    "MODIFY_AUDIO_SETTINGS", "RECORD_AUDIO", "WAKE_LOCK"].map(name => `android.permission.${name}`);
   assert(
-    platformPermissions.length === 1 &&
-      platformPermissions[0] === "android.permission.INTERNET",
+    platformPermissions.length === approved.length && approved.every(permission => platformPermissions.includes(permission)),
     `android_platform_permissions_changed:${platformPermissions.join(",")}`,
   );
   if (!merged) {
-    assert(permissions.length === 1, "source_manifest_permission_changed");
+    assert(permissions.length === approved.length, "source_manifest_permission_changed");
     return;
   }
   assert(
     permissions.every(
       (permission) =>
-        permission === "android.permission.INTERNET" ||
+        approved.includes(permission) ||
         permission ===
           `${expectedAppId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`,
     ),
     `merged_manifest_permission_changed:${permissions.join(",")}`,
   );
+}
+
+function assertVoiceNativeContract(manifest) {
+  const services = [...manifest.matchAll(/<service\b[^>]*>/giu)].map(match => match[0]);
+  assert(services.length === 1, "unexpected_android_service");
+  const service = services[0];
+  assert(/android:name=["'](?:dev\.sedes\.local)?\.NativeVoiceRuntimeService["']/u.test(service), "native_voice_service_missing");
+  assert(/android:exported=["']false["']/u.test(service), "native_voice_service_exported");
+  const types = service.match(/android:foregroundServiceType=["']([^"']+)["']/u)?.[1]?.split("|").sort();
+  assert(JSON.stringify(types) === JSON.stringify(["mediaPlayback", "microphone"]), "native_voice_service_types_changed");
 }
 
 async function filesBelow(directory) {

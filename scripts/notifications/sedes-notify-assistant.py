@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Sedes v3 stdin hook -> Assistant notification with optional response speech.
+"""Sedes v4 stdin hook -> Assistant notification with optional response speech.
 
 Sedes settings: absolute script path, no arguments, timeout 30 seconds.
 Use --dry-run to print the outgoing fields without contacting Assistant.
@@ -16,6 +16,8 @@ NODE = str(Path.home() / ".local/bin/node")
 CLI = str(Path.home() / ".local/bin/assistant-notifications-cli")
 ASSISTANT_URL = "https://assistant"
 EVENT_LABELS = {
+    "turn.progress": "Agent update",
+    "question.requested": "Nonblocking questions",
     "turn.completed": "Agent finished",
     "turn.failed": "Agent turn failed",
     "turn.interrupted": "Agent turn interrupted",
@@ -45,8 +47,8 @@ def main():
     if len(raw) > 1_048_576:
         raise ValueError("Notification payload exceeds 1 MiB")
     payload = json.loads(raw)
-    if not isinstance(payload, dict) or type(payload.get("schemaVersion")) is not int or payload["schemaVersion"] != 3:
-        raise ValueError("Expected Sedes notification schemaVersion 3")
+    if not isinstance(payload, dict) or type(payload.get("schemaVersion")) is not int or payload["schemaVersion"] != 4:
+        raise ValueError("Expected Sedes notification schemaVersion 4")
     event = payload.get("event")
     if not isinstance(event, str) or event not in EVENT_LABELS:
         raise ValueError("Unsupported notification event")
@@ -90,6 +92,8 @@ def main():
             response = text(section["text"], limit=None)
             if response:
                 speech += " " + response
+    if event == "turn.progress":
+        speech += " " + text(payload["progress"]["text"], limit=None)
     fields = {
         "title": "Sedes: " + label,
         "body": "\n".join(body_parts) or label,

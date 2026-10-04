@@ -5086,6 +5086,11 @@ export class CodexConversationHandle implements ConversationHandle {
                   : "item_updated"
                 : "item_completed",
             item,
+            ...(method === "item/completed" && parsed.item.type === "agentMessage" &&
+              parsed.item.phase === "commentary" && currentTurn.status === "inProgress" &&
+              item.semanticKind === "assistant_message" && item.status === "completed" &&
+              item.responsePhase === "provisional" && item.markdown.text.trim()
+              ? { liveProgress: true as const } : {}),
           });
         }
         if (

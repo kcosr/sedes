@@ -1335,6 +1335,13 @@ inherit the behavior.
 
 ## Normalize history and live events
 
+Equality checks that suppress redundant projection work must include
+server-private authority metadata such as turn completion correlations. Retain
+metadata-only changes before deciding whether the browser needs a delta; an
+unchanged visible transcript does not make its admission evidence unchanged.
+Pi, Codex, Claude, Grok, and OpenCode use this shared projector rule. It does not
+enable live progress for Grok or OpenCode, whose producers remain unsupported.
+
 Confirmed failed turns carry bounded `failure.message` metadata, separate from
 provider transcript items and transient runtime notices. Backends select a
 provider-authored diagnostic; the shared projector supplies a generic explanation
@@ -1989,6 +1996,27 @@ observation; `canEvict` is exclusively a cleanup-safety check. A thread may
 accept a new ordinary message while its background work or notifications still
 prevent retirement.
 
+Direct-input and automatic-listen activity authority comes from the scoped
+`ConversationActorManager` owner, independently of the thread-view runtime
+coordinator. Observe only cached, current execution actors and never attach,
+hydrate, or recover a provider merely to answer an input-context read. Publish
+actor activity transitions even without an open view so a return to an earlier
+state cannot reuse an old activity token. Closing, maintenance, eviction,
+read-only history, and failed projection recovery provide no current authority.
+An in-place replacement snapshot under the same owner, such as recovery from a
+rejected event, coalescer overflow, or a backend window trim, is pending rather
+than lost authority. Derive the activity token from the owner generation and
+semantic facts (authority, run state, settlement, source turn and status, and
+blocking interactions), never from the projection generation, so an equivalent
+replacement keeps the token. An input-context read during a replacement waits a
+bounded time for its outcome without attaching or calling the provider, then
+reports current authority only if the replacement succeeded. A failed
+replacement, and recovery after one, is loss of authority.
+Compose automatic-listen readiness with current durable availability, pending
+input/recovery, cached presentation settings, and normalized blocking
+interactions. This shared contract applies to all five backends; steering still
+uses each backend's declared target and delivery capabilities.
+
 Application thread summaries project this observation as optional
 `backgroundWork` category counts, without descriptions or provider identities.
 This is volatile thread/runtime-generation state delivered through the existing
@@ -2121,7 +2149,26 @@ phase means no evidence, not final. Strip this field at browser projection.
 Classify all text blocks of one native message together. Codex preserves native
 phase labels; Pi uses settled native assistant-message evidence; Claude uses
 native message groups and terminal evidence/receipts. Grok intentionally remains
-unclassified because ACP chunks do not establish a final-message boundary.
+unclassified because ACP chunks do not establish a final-message boundary;
+OpenCode also intentionally remains unclassified.
+
+Live progress is a separate, passive observation of an already projected,
+completed provisional assistant item on an active Sedes-accepted turn. Providers
+must attach `liveProgress: true` to the qualifying live `item_completed` or
+`item_updated` event; phase plus a running turn alone is insufficient evidence.
+Codex qualifies native commentary completion, Pi qualifies a native assistant
+message-end that contains a tool call and stopped for tool use (`toolUse`), and
+Claude qualifies a live tool-use message group, including earlier closed text
+reclassified by a later block of that same group. A message that ends aborted
+or errored is not progress even when it contains a tool call, because its tools
+never run. Grok and OpenCode intentionally do not produce live progress.
+History, snapshots, terminal retrospective classification, reasoning, tool
+output, and provider-only turns never create progress. The annotation is
+server-private and does not enter normalized browser items or sidecar native
+protocols. The actor emits only after successful projection, and the observer
+requires a principal-scoped accepted submission correlation. Deduplicate by the
+stable normalized thread, turn, and item identity; no text matching or partial
+delta notification is allowed.
 
 The authoritative completion transaction freezes the three nullable sections.
 Historical rows with unavailable classification remain unavailable on replay;
@@ -2132,10 +2179,13 @@ wrong-scope denial, event eligibility, generation fencing, and disabled-path
 avoidance of result copying. Partition before bounding with one 16 KiB text
 budget, prioritizing final, then provisional, then unclassified. The serialized
 64 KiB notification limit can further shorten sections or omit the result
-without dropping otherwise valid metadata. Notification version 3 carries these
+without dropping otherwise valid metadata; live progress text is shortened the
+same way rather than dropped. When neither the script nor a current voice
+subscriber can deliver an event, skip payload construction, result copying, and
+voice-context capture. Notification version 4 carries these
 selected sections, omitting unselected keys; scripts must not accept obsolete
 shapes as aliases. The principal-owned `assistantResultPhases` selection defaults
-to empty and shares notification revision/generation fencing. It is the sole
+to final and unclassified on new settings and shares notification revision/generation fencing. It is the sole
 response-inclusion control; no separate master boolean is accepted. Filtering
 precedes response copying: unselected sections must not be read or cloned. An
 empty phase selection produces metadata-only delivery.
@@ -2280,7 +2330,17 @@ rejection. Generic rejection, timeout, disconnect, malformed response, or any
 crossed-boundary outcome must not take this fallback.
 Application admission must reject a target-bound Steer behind ordinary active
 queue work instead of durably accepting a guaranteed-stale intent; existing
-target-bound Steers may stack in FIFO order. Pending and proven-unsent intents
+target-bound Steers may stack in FIFO order. Direct input, whose Steer request
+carries an explicit Queue fallback, demotes to Queue under that same
+queue-owned predicate, and input-context advertises a Steer target only when
+admission would accept it. A direct-input Steer for an unbound thread or a
+backend without Steer fails closed. Direct-input admission reports a
+transitional state that can clear by itself, such as changed runtime authority,
+a starting or stopping runtime, an in-place replacement, creation in flight, a
+temporarily unavailable delivery mode, or first-send revision churn, as a
+retryable 503 `runtime_unavailable`. Only a state the client cannot outwait is
+a definitive 400 `invalid_transition`, because clients may discard input on a
+definitive refusal. Pending and proven-unsent intents
 remain application-mutable; after the submission boundary, cancellation is
 unsupported unless a backend
 adds a separately normalized, truthfully advertised cancellation operation.

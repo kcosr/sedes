@@ -9,6 +9,58 @@ the containing history page must also fit its limit.
 This guide covers the full conversation workflow, from an empty draft through
 running, queued, completed, and forked work.
 
+## Speak to a thread on Android
+
+After configuring [Android voice](../operator/clients/voice.md), use the
+microphone control in the voice bar at the bottom of the app to send spoken
+text. The bar appears once voice is connected and set to Manual or Response. If
+voice cannot connect, **Settings → Voice** shows the problem and a retry
+button; the rest of the app keeps working. The microphone targets the visible
+thread, then your pinned Voice thread, or asks you to choose one. Voice sends a
+separate message and preserves the unsent composer draft. It can also make the
+first send to an empty thread.
+
+The recording chip shows the target's title, or **Untitled thread**. Select
+the chip to change that target before recognition finishes; navigating to
+another thread alone does not redirect a recording. Once recognition finishes,
+its target and delivery policy stay fixed through any connection recovery.
+
+Spoken input queues while a thread is running. Enable **Follow composer's
+selected mode** to use the client's Queue/Steer preference instead. When
+supported, Steer addresses the current turn or conversation; if that target
+is no longer available at admission, or other queued messages must deliver
+first, the message queues. An unavailable thread produces an error rather than
+redirecting the message elsewhere.
+
+Response mode speaks selected notifications and may listen afterward. Manual
+mode keeps completion speech silent but can still listen after a completion;
+other selected notices remain spoken without listening. Automatic listening
+requires both the event's **Speak then listen** setting and **Auto-listen**,
+plus a current, idle target with no blocking input or unresolved admission. It
+never types an answer into an approval or question form.
+
+**Skip** ends the current speech and retains an eligible follow-up recording.
+**Stop** cancels the current voice interaction without stopping the agent;
+other queued notices may continue. **Off** clears the voice queue. The
+notification silence bell suppresses automatic voice and script delivery,
+while explicit recording remains available. The bar shows the latest voice
+error until your next voice action or the next interaction.
+
+If Sedes rejects a spoken message, voice reports that it was not delivered. If
+voice cannot tell whether a message arrived, or Sedes asks it to try again
+later because the thread is busy starting, changing, or being created, it keeps
+the message under **Pending input recovery** in **Settings → Voice** and checks
+again on its own without resending, while voice stays available for other
+notices and recording. **Resume input** explicitly authorizes another attempt
+with the same message identity, used only if Sedes never received it.
+**Discard** deletes the saved message from this device; it cannot withdraw a
+message Sedes already received.
+
+A spoken first send to an empty thread counts as delivered once Sedes has
+recorded it. If creating the conversation is then interrupted, use the thread's
+recovery card, as for a typed first send; see
+[First send is uncertain](troubleshooting.md#first-send-is-uncertain).
+
 ## Turn speed
 
 Completed Pi turns can show a small **tok/s** value at the left of the turn

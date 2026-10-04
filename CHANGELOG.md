@@ -4,6 +4,11 @@
 
 ### Breaking Changes
 
+- Native voice requires client protocol 137 and notification script payload
+  version 4. Upgrade packaged clients and separately copied notification hooks
+  with the server, and review the migrated per-event Script/Voice settings.
+  ([#45](https://github.com/kcosr/sedes/pull/45))
+
 - Codex Speed is provider feature `codex.fast_mode@2`, which replaces the
   Fast mode enable/disable actions with `set_standard`, `set_fast`, and
   `set_ultrafast`. Clients that only know `codex.fast_mode@1` hide the control
@@ -188,6 +193,12 @@
 
 ### Added
 
+- Android native voice supports spoken notifications, explicit and automatic
+  recording, thread targeting, background controls, and recoverable input
+  without changing composer drafts. Choose Script and Voice delivery per event;
+  Codex, Pi, and Claude provide live progress announcements.
+  ([#45](https://github.com/kcosr/sedes/pull/45))
+
 - Codex threads can use **Ultrafast** speed when the account's Codex model
   catalog offers it. When a model offers both Fast and Ultrafast, the
   composer's lightning button opens a **Speed** menu, and a rocket marks
@@ -371,6 +382,11 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- Android HTTPS and secure WebSocket connections now trust user- and
+  MDM-installed certificate authorities, including for authenticated Sedes
+  traffic. Certificate and hostname checks remain enabled.
+  ([#45](https://github.com/kcosr/sedes/pull/45))
 
 - Codex Fast mode is now called **Speed** in the composer, docs, and saved
   Agent settings. Changing to a model that doesn't offer the selected speed
@@ -691,6 +707,13 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Claude availability probes wait for complete process output, avoiding
+  intermittent false unavailable errors.
+  ([#45](https://github.com/kcosr/sedes/pull/45))
+
+- Electron managed Local accepts the server's versioned health response.
+  ([#45](https://github.com/kcosr/sedes/pull/45))
 
 - Changing a thread setting right after Codex confirmed a Fast mode change
   no longer fails with "The Codex thread or settings changed in another

@@ -1,3 +1,4 @@
+import { initialThreadSettingsReady } from "./thread-input-readiness.js";
 import type { UsageService } from "../usage/usage-service.js";
 import { createHash } from "node:crypto";
 import type { BackendCapabilityDocument } from "../../shared/protocol/backend.js";
@@ -46,6 +47,7 @@ import type { ComposerAttachmentDeliveryService } from "../composer-attachments/
 import { COMPOSER_ATTACHMENT_POLICY } from "../../shared/protocol/composer-attachments.js";
 import { hasDeliverableComposerInput } from "../../shared/protocol/conversation.js";
 import { interactionRunState } from "./thread-interaction-run-state.js";
+import type { DirectInputRequest, DirectInputReceipt, DirectInputReceiptLookup, ThreadInputContext } from "../../shared/protocol/thread-input.js";
 
 type InventoryThread = Omit<
   NormalizedThreadSummary,
@@ -224,6 +226,9 @@ export interface ThreadApplicationInteractionReader {
 }
 
 export interface ThreadApplicationMutationGateway {
+  admitInput(scope: RequestScope, applicationThreadId: string, input: DirectInputRequest): Promise<DirectInputReceipt>;
+  readInputReceipt(scope: RequestScope, mutationId: string): DirectInputReceiptLookup;
+  inputContext(scope: RequestScope, applicationThreadId: string): Promise<ThreadInputContext>;
   mutate(
     scope: RequestScope,
     applicationThreadId: string,
@@ -814,6 +819,21 @@ export class ThreadApplicationService {
     return this.#mutations.mutate(scope, applicationThreadId, operation);
   }
 
+  admitInput(scope: RequestScope, applicationThreadId: string, input: DirectInputRequest): Promise<DirectInputReceipt> {
+    if (!this.#mutations) throw new Error("thread_application_mutations_unavailable");
+    return this.#mutations.admitInput(scope, applicationThreadId, input);
+  }
+
+  readInputReceipt(scope: RequestScope, mutationId: string): DirectInputReceiptLookup {
+    if (!this.#mutations) throw new Error("thread_application_mutations_unavailable");
+    return this.#mutations.readInputReceipt(scope, mutationId);
+  }
+
+  inputContext(scope: RequestScope, applicationThreadId: string): Promise<ThreadInputContext> {
+    if (!this.#mutations) throw new Error("thread_application_mutations_unavailable");
+    return this.#mutations.inputContext(scope, applicationThreadId);
+  }
+
   async #authorize(
     scope: RequestScope,
     applicationThreadId: string,
@@ -937,19 +957,7 @@ function composeCapabilities(input: {
     input.recovery === undefined &&
     !input.exclusivePendingSteer &&
     input.backendCapabilities.deliveryModes.includes("steer");
-  const initialSettingsReady = input.presentation.settingDescriptors
-    .filter(({ requiredForFirstSubmission }) => requiredForFirstSubmission)
-    .every((descriptor) => {
-      const value = input.presentation.settings.values.find(
-        ({ id }) => id === descriptor.id,
-      )?.desiredValue;
-      return (
-        typeof value === "string" &&
-        descriptor.options.some(
-          (option) => option.available && option.value === value,
-        )
-      );
-    });
+  const initialSettingsReady = initialThreadSettingsReady(input.presentation);
   const settingsMutationQueueBlocked = input.queue.some(
     ({ state }) => state !== "failed",
   );

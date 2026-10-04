@@ -1,4 +1,5 @@
 import { usePickerFocus } from "../../lib/use-picker-focus.js";
+import { setComposerDeliveryMode, useComposerDeliveryMode } from "../../app/composer-delivery-mode.js";
 import { useComposerReasoningFit } from "./use-composer-reasoning-fit.js";
 import { QuestionInboxButton, QuestionInboxPanel } from "./QuestionInbox.js";
 import {
@@ -394,17 +395,7 @@ export function Composer({
   );
   const stashTitleId = useId();
   const stashDescriptionId = useId();
-  const [preferredDeliveryMode, setPreferredDeliveryMode] = useState<
-    "steer" | "queue"
-  >(() => {
-    try {
-      return localStorage.getItem("sedes-composer-delivery-mode") === "queue"
-        ? "queue"
-        : "steer";
-    } catch {
-      return "steer";
-    }
-  });
+  const preferredDeliveryMode = useComposerDeliveryMode();
   const [activeCommandIndex, setActiveCommandIndex] = useState(0);
   const [dismissedCommandDraft, setDismissedCommandDraft] = useState<string>();
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
@@ -3598,15 +3589,7 @@ export function Composer({
                                     if (value !== "steer" && value !== "queue") {
                                       return;
                                     }
-                                    setPreferredDeliveryMode(value);
-                                    try {
-                                      localStorage.setItem(
-                                        "sedes-composer-delivery-mode",
-                                        value,
-                                      );
-                                    } catch {
-                                      /* Keep the session choice when storage is unavailable. */
-                                    }
+                                    setComposerDeliveryMode(value);
                                   }}
                                 >
                                   {supportedBusyDeliveryModes.map((mode) => (

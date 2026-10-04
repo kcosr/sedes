@@ -557,8 +557,16 @@ export async function startProductionApplication(
     const inventoryRepository = new InventoryRepository(database);
     const notificationLifecycle = new NotificationLifecycleObserver(
       inventoryRepository,
-      (eventScope, payload, eventKey, assistantResult) =>
-        notifications.emit(eventScope, payload, eventKey, assistantResult),
+      (eventScope, payload, eventKey, assistantResult, recognitionThreadId) => {
+        // Captured only after dedup, policy and recipient checks admit voice delivery.
+        notifications.emit(eventScope, payload, eventKey, assistantResult, () => {
+          const target = recognitionThreadId === undefined ? payload.thread?.id : recognitionThreadId;
+          const context = target ? mutations?.activity.notificationContext(eventScope, target, payload.turn?.id) : undefined;
+          const subjectId = payload.interaction?.id ?? payload.question?.id ??
+            (payload.event === "thread.woke" ? payload.occurredAt : undefined);
+          return { ...context, ...(subjectId ? { subjectId } : {}) };
+        });
+      },
     );
     const turnBookmarkRepository = new ConversationTurnBookmarkRepository(
       database,
@@ -1016,6 +1024,7 @@ export async function startProductionApplication(
     let observeAuthoritativeCompletion:
       AuthoritativeCompletionObserver | undefined;
     actors = new ConversationActorManager({
+      onLiveProgress: (eventScope, threadId, input) => notificationLifecycle.progress(eventScope, threadId, input),
       environments: execution,
       attachmentDelivery,
       deliveryInputSnapshots,
@@ -1636,6 +1645,7 @@ export async function startProductionApplication(
     });
     mutations = new ThreadMutationGateway({
       bindings,
+      actors,
       inventory: inventoryRepository,
       lifecycle,
       forks,

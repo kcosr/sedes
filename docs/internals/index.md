@@ -38,6 +38,7 @@ native authority begins and ends.
 | [Provider-owned conversation state](provider-owned-conversation-state.md) | Canonical transcript authority, Sedes overlay state, attach/projection lifecycle, interoperability, and performance tradeoffs. |
 | [Native fork lineage](native-fork-lineage.md) | Durable child publication, ancestry, fork boundaries, and recovery. |
 | [Blocking interactions](blocking-interactions.md) | Questions, approvals, permission prompts, and other turn-blocking responses. |
+| [Native voice and direct input](native-voice.md) | Live notification transport, activity authority, direct admission, Android audio ownership, and recovery. |
 | [Codex thread execution settings](codex-thread-execution-settings.md) | Codex desired/effective execution settings and policy. |
 | [Managed Codex TUI](codex-managed-tui.md) | TUI eligibility, admission, transport, lifecycle, and terminal security. |
 | [Provider output artifacts](output-artifacts.md) | Durable provider-generated images, byte authority, storage, and retrieval. |

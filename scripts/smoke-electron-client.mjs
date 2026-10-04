@@ -7,7 +7,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { _electron as electron } from "@playwright/test";
 import { WebSocketServer } from "ws";
-import { SEDES_CLIENT_PROTOCOL_VERSION } from "../src/shared/protocol/application.ts";
+import {
+  normalizedApplicationSessionSchema,
+  normalizedApplicationSnapshotSchema,
+  SEDES_CLIENT_PROTOCOL_VERSION,
+} from "../src/shared/protocol/application.ts";
 import { SEDES_VERSION } from "../src/shared/version.ts";
 import { electronBuilderUnpackedDirectory } from "./electron-package-layout.mjs";
 
@@ -45,16 +49,17 @@ const PROCESS_TERM_TIMEOUT_MILLISECONDS = 1_000;
 const PROCESS_KILL_TIMEOUT_MILLISECONDS = 1_000;
 
 function sessionFor(label) {
-  return {
+  return normalizedApplicationSessionSchema.parse({
     clientProtocolVersion: SEDES_CLIENT_PROTOCOL_VERSION,
     version: SEDES_VERSION,
     csrfToken: `electron-smoke-${label}-csrf-token`,
     providerPulseEnabled: true,
-  };
+    experimentalUsageEnabled: false,
+  });
 }
 
 function snapshotFor(label) {
-  return {
+  return normalizedApplicationSnapshotSchema.parse({
     advisories: [],
     environments: [
       {
@@ -65,6 +70,7 @@ function snapshotFor(label) {
         directoryBrowsing: "available",
       },
     ],
+    projects: [],
     workspaces: [],
     executionTargets: [
       {
@@ -84,7 +90,7 @@ function snapshotFor(label) {
     lineageFamilies: [],
     counts: { active: 0, snoozed: 0, settled: 0, archived: 0 },
     tasks: [],
-  };
+  });
 }
 
 function createSmokeBackend(label, { webSocket = false } = {}) {
@@ -641,13 +647,8 @@ async function selectedProfileId(page) {
 
 async function openChooser(page) {
   await page.getByRole("button", { name: "Settings" }).click();
-  const categoryPicker = page.getByLabel("Settings category", { exact: true });
-  if (await categoryPicker.isVisible()) {
-    await categoryPicker.selectOption("connection");
-  } else {
-    await page.getByRole("navigation", { name: "Settings pages" })
-      .getByRole("button", { name: "Connection", exact: true }).click();
-  }
+  await page.getByRole("navigation", { name: "Settings pages" })
+    .getByRole("link", { name: "Connection", exact: true }).click();
   await page.getByRole("button", { name: "Switch connection" }).click();
   await page
     .getByRole("heading", { name: "Choose a Sedes connection" })
@@ -986,10 +987,16 @@ try {
     await openChooser(page);
     await page.getByText("Currently running", { exact: true }).waitFor();
   }
-  await addConnection(page, {
+  const firstDirectConnection = {
     name: "Direct A",
     baseUrl: directA.origin,
-  });
+  };
+  if (full) {
+    await addConnection(page, firstDirectConnection);
+  } else {
+    await page.getByRole("heading", { name: "Connect to Sedes", exact: true }).waitFor();
+    await fillConnectionEditor(page, firstDirectConnection);
+  }
   if (full) {
     const retainedBeforeConfirmation = await connectionRuntimeStatus(page);
     if (

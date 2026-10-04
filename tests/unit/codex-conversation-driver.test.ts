@@ -11273,6 +11273,9 @@ describe("CodexConversationHandle", () => {
           event.type === "item_completed") &&
         event.item.semanticKind === "assistant_message",
     );
+    expect(assistantLifecycle.filter(event => "liveProgress" in event && event.liveProgress)).toEqual([
+      expect.objectContaining({ type: "item_completed", item: expect.objectContaining({ responsePhase: "provisional" }) }),
+    ]);
     expect(assistantLifecycle).toEqual([
       expect.objectContaining({
         type: "item_started",
@@ -12285,6 +12288,116 @@ describe("CodexConversationHandle", () => {
     harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
     await handle.close();
   });
+
+  it.each(["user-before-receipt", "receipt-before-user"] as const)(
+    "publishes live commentary after a correlated user item with %s",
+    async (order) => {
+      const harness = new RpcHarness();
+      const handle = await attachIdle(harness);
+      const projector = new ConversationProjector({
+        backendInstanceId: instance.id,
+        bindingIdentity: binding().applicationThreadId,
+      });
+      const progress: Array<{ text: string; correlations: readonly string[] }> = [];
+      const actor = new ConversationActor({
+        handle,
+        projector,
+        attachmentDelivery: {} as ComposerAttachmentDeliveryService,
+        initialObserver: (event) => {
+          if (event.type === "live_progress") {
+            progress.push({ text: event.text.text, correlations: event.backendCorrelations });
+          }
+        },
+      });
+      harness.enqueue("thread/read", { thread: nativeThread({ turns: [] }) });
+      harness.enqueue("thread/resume", resumeResult(nativeThread()));
+      await actor.start({ signal: new AbortController().signal });
+      const startedTurn = {
+        ...nativeTurn(1),
+        items: [],
+        itemsView: "notLoaded" as const,
+        status: "inProgress" as const,
+        completedAt: null,
+      };
+      let clientId: string;
+      const notifyUser = () => {
+        const item = {
+          type: "userMessage" as const,
+          id: "own-user-live",
+          clientId,
+          content: [{ type: "text" as const, text: "hello", text_elements: [] }],
+        };
+        harness.notify("item/started", {
+          threadId: "thread-1", turnId: startedTurn.id, item,
+          startedAtMs: 1_700_000_002_000,
+        });
+        harness.notify("item/completed", {
+          threadId: "thread-1", turnId: startedTurn.id, item,
+          completedAtMs: 1_700_000_002_010,
+        });
+      };
+      try {
+        harness.enqueue("turn/start", (params: unknown) => {
+          clientId = (params as { clientUserMessageId: string }).clientUserMessageId;
+          if (order === "user-before-receipt") {
+            harness.notify("turn/started", { threadId: "thread-1", turn: startedTurn });
+            notifyUser();
+          }
+          return { turn: startedTurn };
+        });
+        const accepted = await handle.submit({
+          applicationOperationId: "live-commentary-operation",
+          source: { kind: "user" },
+          mutationId: "live-commentary-mutation",
+          reconciliationToken: "live-commentary-token",
+          taskContexts: [], contextExcerpts: [], attachments: [], text: "hello",
+        });
+        expect(accepted).toMatchObject({
+          accepted: true, completionCorrelation: "live-commentary-operation",
+        });
+        if (order === "receipt-before-user") notifyUser();
+        await actor.captureSnapshotState();
+
+        // The handle emits the user item before its correlation-bearing turn
+        // update. The item has already appended its ID to the actor's turn,
+        // so only the private correlation differs when that update arrives.
+        const item = {
+          type: "agentMessage" as const,
+          id: "first-commentary",
+          text: "I am checking the result.",
+          phase: "commentary" as const,
+          memoryCitation: null, delivery: null, questions: null,
+        };
+        harness.notify("item/started", {
+          threadId: "thread-1", turnId: startedTurn.id, item,
+          startedAtMs: 1_700_000_003_000,
+        });
+        harness.notify("item/completed", {
+          threadId: "thread-1", turnId: startedTurn.id, item,
+          completedAtMs: 1_700_000_003_500,
+        });
+        await actor.captureSnapshotState();
+
+        expect(actor.timeline.runState).toBe("running");
+        expect(projector.backendTurns().find((turn) => turn.backendTurnId === accepted.backendTurnId))
+          .toMatchObject({ status: "in_progress", completionCorrelations: ["live-commentary-operation"] });
+        expect(progress).toEqual([{
+          text: item.text, correlations: ["live-commentary-operation"],
+        }]);
+
+        harness.notify("item/completed", {
+          threadId: "thread-1", turnId: startedTurn.id, item,
+          completedAtMs: 1_700_000_003_500,
+        });
+        await actor.captureSnapshotState();
+        expect(progress).toHaveLength(1);
+        expect(harness.calls.filter(({ method }) => method === "thread/read")).toHaveLength(1);
+      } finally {
+        harness.enqueue("thread/unsubscribe", { status: "unsubscribed" });
+        await actor.close();
+      }
+    },
+  );
 
   it("fences a submit receipt before a later paginated projection failure", async () => {
     const harness = new RpcHarness();

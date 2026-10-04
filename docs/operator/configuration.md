@@ -898,6 +898,20 @@ credentials, operating-system account, and process environment remain managed
 by the server operator. Browser requests derive tenant/principal authority on
 the server; a request cannot select another user's settings.
 
+Each event has independent `script` and `voice` (`none`, `speak`, or
+`speakThenListen`) delivery. `turn.progress`, `approval.requested`,
+`input.requested`, and `question.requested` cannot use `speakThenListen`;
+settings that request it are rejected. `automation.started` accepts it but
+behaves as `speak` in practice: its recognition target, when present, is the
+automation's thread while the run's turn is still in progress, and that turn's
+completion makes the target stale. Fresh settings select no script events, speak every
+event, and speak then listen after `turn.completed`, with the master
+notification switch initially disabled. The former `events` array is removed.
+The database upgrade preserves existing response-phase choices and script
+selections and applies the fresh voice actions. Disabled settings without a
+script path have never run a script, so the upgrade leaves them with no script
+events selected.
+
 Sedes launches the configured absolute executable directly with its argument
 array, on the Sedes server even when a thread uses SSH. Install an executable
 script with a suitable shebang, or configure an interpreter as the executable
@@ -906,11 +920,11 @@ or interpolation of thread content is performed. Arguments in the settings UI
 are one per line. Use absolute paths for files the script needs.
 
 Each invocation receives one UTF-8 JSON object on standard input followed by
-EOF. Version 3 uses this shape for a completed turn:
+EOF. Version 4 uses this shape for a completed turn:
 
 ```json
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "notificationId": "92e18aa5-70f7-41ee-afbc-48437f90619c",
   "event": "turn.completed",
   "occurredAt": "2026-09-05T14:32:10.000Z",
@@ -929,6 +943,7 @@ appear:
 
 | Event                                               | Event-specific data                                                                                          |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `turn.progress` | `turn.id`, `progress.itemId`, completed live provisional `progress.text`, optional truncation |
 | `turn.completed`, `turn.failed`, `turn.interrupted` | `turn.id` and `turn.outcome`                                                                                 |
 | `thread.woke`                                       | `wake.reason` (`deadline`) and optional `wake.reminderText`                                                  |
 | `automation.started`, `automation.failed`           | `automation.id`, `name`, `runId`, `trigger` (`scheduled` or `manual`), and optional failure stage/diagnostic |
@@ -937,8 +952,8 @@ appear:
 | `notification.test`                                 | Synthetic title/message; no thread is required                                                               |
 
 **Response text**, nested inside **Turn completed**, offers compact
-**Provisional**, **Unclassified**, and **Final** checkboxes. All are off by
-default; no selection means metadata-only notifications. Select any combination
+**Provisional**, **Unclassified**, and **Final** checkboxes. Fresh settings select
+Final and Unclassified; no selection means metadata-only notifications. Select any combination
 to include those sections of the assistant text captured at successful turn
 completion. Turning off **Turn completed** retains the selection. Existing
 settings keep their selected sections if response text was enabled; disabled
@@ -994,11 +1009,17 @@ metadata; it is not changed to `null`. If metadata leaves no room for the result
 envelope, the entire field is omitted to preserve notification delivery.
 Scripts should inspect truncation before assuming the text is complete.
 
-Notification schema version 3 makes the selected sections explicit by omitting
-unselected keys; update consumer scripts with the server. The repository's Assistant hook
+`turn.progress` uses the same 64 KiB limit. An oversized progress payload is
+still delivered: `progress.text` is shortened, ending in "…", and carries
+truncation metadata with `reason: "byte_limit"`. A notification is dropped only
+when its metadata alone exceeds the limit.
+
+Notification schema version 4 adds `turn.progress` with `progress.itemId`,
+`progress.text`, and optional truncation metadata. It continues to omit unselected
+completion sections. Update consumer scripts with the server. The repository's Assistant hook
 speaks each supplied nonempty section in **Provisional → Unclassified → Final**
 order, matching the checkbox row. Missing, null, empty, or whitespace-only
-sections add no speech. Select Unclassified to hear Grok's response; it may
+sections add no speech. Select Unclassified to hear Grok and OpenCode responses; they may
 include progress commentary. With no selected text, only the normal completion
 announcement is spoken. Reinstall any separately installed copy of the hook.
 
@@ -1016,8 +1037,8 @@ not UI presentation, replay, or resolution. `question.requested` covers newly
 committed nonblocking question batches, independently of blocking input. It
 includes only the request identity, question count, and generic thread/workspace
 context. Sending, dismissing, history hydration, and reconnect do not emit it.
-Existing event selections remain unchanged; enable these events explicitly in
-Settings.
+Existing script selections remain unchanged; script delivery for these events
+is opt-in.
 
 For example, the following executable Python script consumes the contract:
 
@@ -1027,7 +1048,7 @@ import json
 import sys
 
 notification = json.load(sys.stdin)
-if notification["schemaVersion"] != 3:
+if notification["schemaVersion"] != 4:
     raise SystemExit("Unsupported notification schema")
 # Call your notification API here, using credentials from a server-owned file.
 print(notification["title"] + ": " + notification["message"])
@@ -1046,8 +1067,11 @@ delivery jobs, outcomes, payloads, or history and do not retry. Small internal
 consumption markers prevent replayed application events from launching a script
 again; these are independent of UI acknowledgment and contain no delivery result.
 Disabling, silencing, or changing configuration discards pending work rather than
-sending it later. There are currently no webhook destinations, routing rules,
-thread-to-thread notifications, or native mobile push integration.
+sending it later. Native Android voice uses the independent Voice action in the
+same per-event delivery map. Script capacity does not consume voice capacity, and
+a voice delivery failure never blocks the script.
+The navigation bell silences both automatic channels. This is an active native
+service, not mobile push; see [Android voice](clients/voice.md).
 
 Return to the [operator guide](index.md) or choose a provider from the
 [backend operator guide](backends/index.md).

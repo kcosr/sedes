@@ -32,6 +32,8 @@ import type { DeliveryInputOrigin } from "../../../shared/protocol/conversation.
 import type { BoundedDisplayText } from "../../../shared/protocol/payload.js";
 import { ThreadCompletionCallbackRepository } from "./thread-completion-callback-repository.js";
 import { boundDisplayText } from "../../conversations/payload-policy.js";
+import type { ClientOrigin } from "../../../shared/protocol/thread-input.js";
+import { DirectInputRepository } from "./direct-input-repository.js";
 
 export type QueuedInputState =
   | "pending"
@@ -318,6 +320,36 @@ export class QueuedInputRepository {
     this.#callbacks = new ThreadCompletionCallbackRepository(database);
   }
 
+  /**
+   * Unresolved non-Steer work, or any unacknowledged failure, must deliver or
+   * be cleared before another Steer may be admitted. Admission, direct-input
+   * fallback, and input-context availability share this single predicate.
+   */
+  hasSteerBlockingInput(scope: RequestScope, applicationThreadId: string): boolean {
+    return this.database
+      .prepare(
+        `
+          SELECT 1
+          FROM queued_inputs
+          WHERE tenant_id = ? AND owner_principal_id = ?
+            AND application_thread_id = ?
+            AND (
+              state IN ('pending', 'retry_wait', 'dispatching', 'uncertain')
+              OR (state = 'failed' AND failure_acknowledged_at IS NULL)
+            )
+            AND (
+              (state = 'failed' AND failure_acknowledged_at IS NULL)
+              OR (
+                resolved_delivery_mode <> 'steer'
+                AND coalesce(delivery_mode, '') <> 'steer'
+              )
+            )
+          LIMIT 1
+        `,
+      )
+      .get(scope.tenantId, scope.principalId, applicationThreadId) !== undefined;
+  }
+
   enqueue(
     scope: RequestScope,
     applicationThreadId: string,
@@ -325,6 +357,7 @@ export class QueuedInputRepository {
       readonly id?: string;
       readonly mutationId: string;
       readonly text: string;
+      readonly origin?: ClientOrigin;
       readonly selectedSkillId?: string;
       readonly contextExcerpts: readonly ContextExcerpt[];
       readonly attachmentIds: readonly string[];
@@ -351,6 +384,12 @@ export class QueuedInputRepository {
                 readonly resolvedDeliveryMode: "submit" | "queue";
               }
           ))
+        | {
+            readonly kind: "direct_input";
+            readonly resolvedDeliveryMode: "submit" | "queue" | "steer";
+            readonly resolvedSteerTarget?: SteerTarget;
+            readonly expectedThreadRevision: number;
+          }
         | {
             /** Ordinary user input admitted independently of the composer. */
             readonly kind: "question_response";
@@ -512,6 +551,7 @@ export class QueuedInputRepository {
             "The queue mutation ID was reused with different input.",
           );
         }
+        new DirectInputRepository(this.database).recordOrigin(scope, applicationThreadId, input.mutationId, input.origin);
         return { item: replay, replayed: true };
       }
       const threadRevision = this.#boundThreadRevision(
@@ -616,33 +656,12 @@ export class QueuedInputRepository {
       this.#assertActiveCapacity(scope, applicationThreadId);
       if (
         (input.source.kind === "composer" ||
+          input.source.kind === "direct_input" ||
           input.source.kind === "question_response" ||
           input.source.kind === "completion_callback") &&
         input.source.resolvedDeliveryMode === "steer"
       ) {
-        const blockingInput = this.database
-          .prepare(
-            `
-              SELECT 1
-              FROM queued_inputs
-              WHERE tenant_id = ? AND owner_principal_id = ?
-                AND application_thread_id = ?
-                AND (
-                  state IN ('pending', 'retry_wait', 'dispatching', 'uncertain')
-                  OR (state = 'failed' AND failure_acknowledged_at IS NULL)
-                )
-                AND (
-                  (state = 'failed' AND failure_acknowledged_at IS NULL)
-                  OR (
-                    resolved_delivery_mode <> 'steer'
-                    AND coalesce(delivery_mode, '') <> 'steer'
-                  )
-                )
-              LIMIT 1
-            `,
-          )
-          .get(scope.tenantId, scope.principalId, applicationThreadId);
-        if (blockingInput) {
+        if (this.hasSteerBlockingInput(scope, applicationThreadId)) {
           throw new DomainError(
             "invalid_transition",
             "Deliver, steer, or clear the existing queued input before adding another Steer.",
@@ -730,11 +749,13 @@ export class QueuedInputRepository {
             ? JSON.stringify(steerTargetSchema.parse(input.source.requestedSteerTarget))
             : null,
           input.source.kind === "composer" ||
+            input.source.kind === "direct_input" ||
             input.source.kind === "question_response" ||
             input.source.kind === "completion_callback"
             ? input.source.resolvedDeliveryMode
             : "queue",
           (input.source.kind === "composer" ||
+            input.source.kind === "direct_input" ||
             input.source.kind === "question_response" ||
             input.source.kind === "completion_callback") &&
             input.source.resolvedDeliveryMode === "steer"
@@ -748,6 +769,7 @@ export class QueuedInputRepository {
             : null,
           input.now,
         );
+      new DirectInputRepository(this.database).recordOrigin(scope, applicationThreadId, input.mutationId, input.origin);
       if (input.source.kind === "completion_callback") {
         this.#callbacks.markMaterialized(scope, input.source.callbackId, {
           queuedInputId: id,
@@ -2016,6 +2038,10 @@ export class QueuedInputRepository {
         }
       ).sequence;
       const id = input.id ?? randomUUID();
+      // The retry resends the same content, so it keeps the original advisory origin.
+      new DirectInputRepository(this.database).copyOrigin(
+        scope, applicationThreadId, failed.mutationId, input.mutationId,
+      );
       this.#attachments.copyOwnerLinks(
         scope,
         {

@@ -6,6 +6,8 @@ import type {
   InventoryRepository,
 } from "../db/repositories/inventory-repository.js";
 import type { SubmissionCompletionObservationRecord } from "../db/repositories/submission-completion-repository.js";
+import { SubmissionCompletionRepository } from "../db/repositories/submission-completion-repository.js";
+import type { LiveProgressObserver } from "../conversations/conversation-actor-manager.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import type { AutomationRunLifecycleObserver } from "./automation-service.js";
 
@@ -18,8 +20,22 @@ export class NotificationLifecycleObserver {
       payload: NotificationEventPayload,
       eventKey: string,
       assistantResult?: ClassifiedAssistantResult,
+      recognitionThreadId?: string | null,
     ) => void,
   ) {}
+
+  progress(scope: RequestScope, threadId: string, input: Parameters<LiveProgressObserver>[2]): void {
+    try {
+      if (!input.text.text.trim() || !new SubmissionCompletionRepository(this.inventory.database)
+        .hasActiveAcceptedCorrelation(scope, threadId, input.backendCorrelations)) return;
+      const context = this.#context(scope, threadId);
+      this.emit(scope, {
+        event: "turn.progress", occurredAt: new Date().toISOString(), title: "Agent progress",
+        message: context.thread.title, ...context, turn: { id: input.applicationTurnId },
+        progress: { itemId: input.applicationItemId, ...input.text },
+      }, JSON.stringify(["progress", threadId, input.applicationTurnId, input.applicationItemId]));
+    } catch { /* Passive progress cannot affect provider work. */ }
+  }
 
   interactionOpened(
     scope: RequestScope,
@@ -210,6 +226,8 @@ export class NotificationLifecycleObserver {
           },
         },
         JSON.stringify(["automation", run.id, event]),
+        undefined,
+        run.childThreadId,
       );
     } catch {
       // Passive script failures have no effect on automation state.

@@ -448,7 +448,12 @@ function createService(input?: {
     attachmentDelivery: {
       supports: () => input?.attachmentStagingAvailable ?? false,
     },
-    mutations: { mutate },
+    mutations: {
+      mutate,
+      admitInput: vi.fn(),
+      readInputReceipt: vi.fn(),
+      inputContext: vi.fn(),
+    },
   });
   service.bindHistory({
     operational: (actor) => actor !== undefined,

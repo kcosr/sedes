@@ -37,6 +37,7 @@ import {
 import { GrokRuntimeAdvisorySource } from "../../src/server/backends/grok/grok-runtime-advisories.js";
 import { LocalEnvironmentChannelProvider } from "../../src/server/execution/local-environment-channel.js";
 import type { BackendAgentToolFacade } from "../../src/server/agent-tools/adapters/backend-facade.js";
+import type { BackendConversationEvent } from "../../src/shared/protocol/backend.js";
 
 const fixture = fileURLToPath(
   new URL(
@@ -1336,6 +1337,33 @@ describe("normalized Grok conversation driver", () => {
         (await readState(fixtureState.workspace.canonicalPath)).sessions[0]
           .promptCalls,
       ).toBe(1);
+    } finally {
+      await handle.close().catch(() => undefined);
+      await fixtureState.close();
+    }
+  });
+
+  it("never qualifies live assistant text as progress across a tool-using turn", async () => {
+    const sessionId = "44444444-6666-4666-8666-444444444444";
+    const fixtureState = await openDriver([{ ...session(sessionId, "Progress"), emitRelativeToolLocation: true }]);
+    const handle = await fixtureState.driver.attach({
+      scope, workspace: fixtureState.workspace,
+      binding: conversationBinding(sessionId), opaqueBindingDetail: fixtureState.bindingDetail(sessionId),
+    });
+    try {
+      const baseline = await handle.establishProjection({ signal: new AbortController().signal });
+      const events: BackendConversationEvent[] = [];
+      baseline.subscribeFromNext(({ event }) => events.push(event));
+      await handle.submit(submitInput());
+      await waitFor(async () => events.some(({ type }) => type === "turn_completed"), 10_000);
+      const items = events.flatMap(event =>
+        event.type === "item_started" || event.type === "item_updated" || event.type === "item_completed" ? [event.item] : []);
+      expect(items).toContainEqual(expect.objectContaining({ semanticKind: "command", status: "completed" }));
+      expect(events).toContainEqual(expect.objectContaining({ type: "item_completed",
+        item: expect.objectContaining({ semanticKind: "assistant_message", markdown: { text: "done" } }) }));
+      // Grok has no live phase evidence: its completion text stays unclassified.
+      expect(items.filter(item => item.semanticKind === "assistant_message" && item.responsePhase !== undefined)).toEqual([]);
+      expect(events.filter(event => "liveProgress" in event)).toEqual([]);
     } finally {
       await handle.close().catch(() => undefined);
       await fixtureState.close();

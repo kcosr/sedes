@@ -22,3 +22,14 @@ export function piAssistantResponseEvidence(
     ? "terminal_candidate"
     : "unclassified";
 }
+
+/**
+ * Live progress evidence: a tool-call message that ended for tool use. Aborted
+ * or errored messages are still provisional history, but their tools never run.
+ */
+export function piAssistantLiveToolUseEvidence(message: unknown): boolean {
+  return (
+    piAssistantResponseEvidence(message) === "provisional" &&
+    Object.getOwnPropertyDescriptor(message, "stopReason")?.value === "toolUse"
+  );
+}

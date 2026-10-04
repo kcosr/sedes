@@ -687,13 +687,15 @@ export function checkLocalHealth(input) {
         response.on("end", () => {
           try {
             const decoded = JSON.parse(body);
+            // Required fields only: additive health fields must not fail startup.
             if (
               response.statusCode !== 200 ||
               !decoded ||
               typeof decoded !== "object" ||
               Array.isArray(decoded) ||
-              Object.keys(decoded).length !== 1 ||
-              decoded.status !== "ok"
+              decoded.status !== "ok" ||
+              typeof decoded.version !== "string" ||
+              decoded.version.length === 0
             ) throw new Error("invalid_health");
             resolve();
           } catch (error) {

@@ -373,6 +373,7 @@ function fixture(input?: {
     input?.afterInterruptAccepted ?? (async () => false),
   );
   const gateway = new ThreadMutationGateway({
+      actors: {} as never,
     bindings: {
       database,
       isUnboundThreadWorkspaceMoveReplay,
@@ -1497,6 +1498,7 @@ describe("ThreadMutationGateway several uncertain Steers", () => {
       };
     });
     const gateway = new ThreadMutationGateway({
+      actors: {} as never,
       bindings: { database } as never,
       inventory: { database, getThread: vi.fn(() => ({ thread: { availability: "available" } })) } as never,
       lifecycle: {} as never,
@@ -1536,6 +1538,7 @@ describe("ThreadMutationGateway delivery readiness", () => {
     const getDraft = vi.fn();
     const release = vi.fn();
     const gateway = new ThreadMutationGateway({
+      actors: {} as never,
       bindings: {
         database,
         getTarget: vi.fn(() => ({ backingState: "bound" })),
@@ -1649,6 +1652,7 @@ describe("ThreadMutationGateway delivery readiness", () => {
     const getDraft = vi.fn();
     const release = vi.fn();
     const gateway = new ThreadMutationGateway({
+      actors: {} as never,
       bindings: {
         database,
         getTarget: vi.fn(() => ({ backingState: "bound" })),
@@ -1980,6 +1984,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       throw new Error("delivery must not read presentation");
     });
     const gateway = new ThreadMutationGateway({
+      actors: {} as never,
       bindings: {
         database,
         getTarget: vi.fn(() => ({ backingState: "bound" })),
@@ -2220,6 +2225,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       },
     }));
     const gateway = new ThreadMutationGateway({
+      actors: {} as never,
       bindings: {
         database,
         getTarget: vi.fn(() => ({ backingState: "bound" })),
@@ -2345,6 +2351,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       },
     }));
     const gateway = new ThreadMutationGateway({
+      actors: {} as never,
       bindings: {
         database,
         getTarget: vi.fn(() => ({ backingState: "bound" })),
@@ -2463,6 +2470,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       },
     }));
     const gateway = new ThreadMutationGateway({
+      actors: {} as never,
       bindings: {
         database,
         getTarget: vi.fn(() => ({ backingState: "bound" })),
@@ -2612,6 +2620,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       replayAuthoritativeCompletions: vi.fn(async () => undefined),
     };
     const gateway = new ThreadMutationGateway({
+      actors: {} as never,
       bindings: {
         database,
         getTarget: vi.fn(() => ({ backingState: "bound" })),
@@ -2998,6 +3007,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       release: vi.fn(),
     }));
     const gateway = new ThreadMutationGateway({
+      actors: {} as never,
       bindings: {
         database,
         getTarget: vi.fn(() => ({ backingState: "bound" })),
@@ -3108,6 +3118,7 @@ describe("ThreadMutationGateway incremental publication", () => {
     const rejectSteerBeforeAcceptance = vi.fn();
     const acquireFailure = new Error("runtime unavailable");
     const gateway = new ThreadMutationGateway({
+      actors: {} as never,
       bindings: {
         database,
         getTarget: vi.fn(() => ({ backingState: "bound" })),
@@ -3218,6 +3229,7 @@ describe("ThreadMutationGateway incremental publication", () => {
       },
     }));
     const gateway = new ThreadMutationGateway({
+      actors: {} as never,
       bindings: {
         database,
         getTarget: vi.fn(() => ({ backingState: "bound" })),
@@ -3404,6 +3416,7 @@ function interactionResponseFixture(input?: {
   );
   const onThreadChanged = vi.fn(async () => undefined);
   const gateway = new ThreadMutationGateway({
+      actors: {} as never,
     bindings: { database } as never,
     inventory: {
       assertWorkspaceActive: vi.fn(),
@@ -3849,6 +3862,7 @@ function backendActionFixture(input?: {
   const publishAuthoritativeReplacement = vi.fn(async () => undefined);
   const publishThreadSnapshot = vi.fn(async () => undefined);
   const gateway = new ThreadMutationGateway({
+      actors: {} as never,
     bindings: { database } as never,
     inventory: {
       assertWorkspaceActive: vi.fn(),
@@ -4013,6 +4027,7 @@ function unboundSettingFixture(input?: {
     })),
   };
   const gateway = new ThreadMutationGateway({
+      actors: {} as never,
     bindings: { database } as never,
     inventory: {
       assertWorkspaceActive: vi.fn(),
@@ -4191,6 +4206,7 @@ function boundSettingActionFixture(input?: {
   const publishAuthoritativeReplacement = vi.fn(async () => undefined);
   const publishThreadSnapshot = vi.fn(async () => undefined);
   const gateway = new ThreadMutationGateway({
+      actors: {} as never,
     bindings: { database } as never,
     inventory: {
       assertWorkspaceActive: vi.fn(),
@@ -4782,6 +4798,7 @@ describe("ThreadMutationGateway durable submission observation", () => {
     const publication = new Promise<void>(resolve => { releasePublication = resolve; });
     const publishThreadSnapshot = vi.fn(async () => { order.push("snapshot"); await publication; });
     const gateway = new ThreadMutationGateway({
+      actors: {} as never,
       bindings: {} as never, inventory: {} as never,
       lifecycle: { observeAuthoritativeSubmission: observeFirstSend, recoverActiveFirstSend } as never,
       forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
@@ -4824,6 +4841,7 @@ describe("ThreadMutationGateway durable submission observation", () => {
       queuedInputId: "queued-input-1",
     }));
     const gateway = new ThreadMutationGateway({
+      actors: {} as never,
       bindings: {} as never,
       inventory: {} as never,
       lifecycle: { observeAuthoritativeSubmission: async () => false } as never,
@@ -4890,6 +4908,7 @@ describe("ThreadMutationGateway durable submission observation", () => {
       release: vi.fn(),
     }));
     const gateway = new ThreadMutationGateway({
+      actors: {} as never,
       bindings: { database } as never,
       inventory: { database } as never,
       lifecycle: { observeAuthoritativeSubmission: async () => false } as never,
@@ -5007,6 +5026,7 @@ function providerFeatureMutationFixture(input: {
     },
   );
   const gateway = new ThreadMutationGateway({
+      actors: {} as never,
     bindings: { database } as never,
     inventory: {
       assertWorkspaceActive: vi.fn(),
@@ -5216,6 +5236,7 @@ function agentToolPolicyMutationFixture(input: {
   });
   const publishThreadSnapshot = vi.fn(async () => undefined);
   const gateway = new ThreadMutationGateway({
+      actors: {} as never,
     bindings: { database } as never,
     inventory: {
       assertWorkspaceActive: vi.fn(),

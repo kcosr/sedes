@@ -21,6 +21,12 @@ import {
   type PiSdkSession,
 } from "../../src/server/backends/pi/pi-sdk-session.js";
 import type { ValidatedWorkspace } from "../../src/server/execution/contracts.js";
+import { PiConversationBackendDriver } from "../../src/server/backends/pi/pi-conversation-driver.js";
+import { compileBackendModelPolicy } from "../../src/server/backends/model-policy.js";
+import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
+import type { BackendConversationEvent } from "../../src/shared/protocol/backend.js";
+import { createFakeAgentToolSourceCapabilities } from "../helpers/fake-agent-tool-source-capabilities.js";
+import { createInMemoryOutputArtifactPublisher } from "../helpers/output-artifact-publisher.js";
 
 type ProviderContext = Parameters<
   AgentSession["modelRuntime"]["streamSimple"]
@@ -69,11 +75,13 @@ async function fixture() {
   );
   const bind = vi.spyOn(AgentSession.prototype, "bindExtensions");
   const factory = new DefaultPiSdkSessionFactory({ agentDir });
-  const open = async (manager: SessionManager, targetWorkspace = workspace) => {
+  const open = async (manager: SessionManager, targetWorkspace = workspace,
+    options: Partial<Parameters<DefaultPiSdkSessionFactory["create"]>[0]> = {}) => {
     const session = await factory.create({
+      ...options,
       manager,
       workspace: targetWorkspace,
-      interactions: new PiInteractionBridge(),
+      interactions: options.interactions ?? new PiInteractionBridge(),
     });
     sessions.push(session);
     await session.ready();
@@ -149,6 +157,79 @@ function assertLoadout(
 }
 
 describe("Pi 0.86 transcript and lifecycle compatibility", () => {
+  it("publishes real SDK tool-loop progress through the driver while a model-only stub holds the final response", async () => {
+    const f = await fixture();
+    const scope = { tenantId: "tenant", principalId: "principal" };
+    const workspace: ValidatedWorkspace = { ...f.workspace, authorityRevision: 1, summary: {
+      id: crypto.randomUUID(), environmentId: crypto.randomUUID(), displayName: "SDK progress",
+      displayPath: f.cwd, availability: "available", trustState: "trusted", revision: 0,
+    } };
+    const instance = { id: "pi-progress", tenantId: scope.tenantId, kind: "pi" as const,
+      label: "Pi", enabled: true, configurationRevision: 1, protocolRelease: "0.86.0" };
+    const connection = { id: "pi-connection", tenantId: scope.tenantId, ownerPrincipalId: scope.principalId,
+      templateId: "pi-template", kind: "pi_sdk" as const, backendInstanceId: instance.id,
+      executionEnvironmentId: workspace.summary.environmentId, label: "Pi", enabled: true, configurationRevision: 1 };
+    let finishFinal: (() => void) | undefined;
+    let requests = 0;
+    const driver = new PiConversationBackendDriver({
+      instance, connection, store: f.store, usage: NO_USAGE_SINK,
+      nativeDiscoveryNamespaceKey: "sdk-progress", toolProvenanceKey: new Uint8Array(32).fill(7),
+      toolAccessPolicy: () => "read_only", modelPolicy: compileBackendModelPolicy({ type: "catalog" }, "provider_model_effort"),
+      outputArtifacts: createInMemoryOutputArtifactPublisher(),
+      agentToolSourceCapabilities: createFakeAgentToolSourceCapabilities().issuer,
+      agentTools: { eligibleCatalog: () => [], catalogSummaries: () => [], describeMany: () => [],
+        readPolicy: () => ({ enabled: false, presentation: { surface: "native", mode: "individual" }, accessBoundary: "environment", enabledToolIds: [] }),
+        invoke: async () => { throw new Error("No application tools in this test"); } },
+      sessionFactory: { create: async input => {
+        const source = await f.open(input.manager, input.workspace, input);
+        source.stream.mockImplementation(() => {
+          requests += 1;
+          const stream = new AssistantMessageEventStream();
+          if (requests === 1) {
+            const message: AssistantMessage = { ...source.reply("Inspecting AGENTS.md"), stopReason: "toolUse",
+              content: [{ type: "text", text: "Inspecting AGENTS.md" },
+                { type: "toolCall", id: "read-agents", name: "read", arguments: { path: "AGENTS.md" } }] };
+            queueMicrotask(() => { stream.push({ type: "done", reason: "toolUse", message }); stream.end(message); });
+          } else {
+            const message = source.reply("Finished reading the instructions");
+            finishFinal = () => { stream.push({ type: "done", reason: "stop", message }); stream.end(message); };
+          }
+          return stream;
+        });
+        return source.session;
+      } },
+    });
+    const applicationThreadId = crypto.randomUUID();
+    const created = await driver.create({ scope, workspace, applicationThreadId,
+      applicationOperationId: crypto.randomUUID(), source: { kind: "user" } });
+    const handle = await driver.attach({ scope, workspace, opaqueBindingDetail: created.opaqueBindingDetail,
+      binding: { tenantId: scope.tenantId, ownerPrincipalId: scope.principalId, applicationThreadId,
+        backendInstanceId: instance.id, connectionProfileId: connection.id, executionEnvironmentId: workspace.summary.environmentId,
+        backendConversationId: created.backendConversationId, createdAt: new Date().toISOString() } });
+    try {
+      const projection = await handle.establishProjection({ signal: new AbortController().signal });
+      const events: BackendConversationEvent[] = [];
+      projection.subscribeFromNext(({ event }) => events.push(event));
+      await handle.submit({ applicationOperationId: crypto.randomUUID(), mutationId: crypto.randomUUID(), reconciliationToken: crypto.randomUUID(),
+        source: { kind: "user" }, text: "Read AGENTS.md and report completion", contextExcerpts: [], attachments: [], taskContexts: [] });
+      await vi.waitFor(() => expect(finishFinal).toBeDefined());
+      const progress = events.filter(event => "liveProgress" in event && event.liveProgress);
+      expect(progress).toEqual([expect.objectContaining({ type: "item_completed", item: expect.objectContaining({
+        semanticKind: "assistant_message", status: "completed", responsePhase: "provisional", markdown: { text: "Inspecting AGENTS.md" },
+      }) })]);
+      expect(events.some(event => event.type === "turn_completed")).toBe(false);
+      expect(events).toContainEqual(expect.objectContaining({ type: "item_completed", item: expect.objectContaining({ semanticKind: "file_read", phase: "completed" }) }));
+      finishFinal!();
+      await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ type: "turn_completed", turn: expect.objectContaining({ status: "completed" }) })));
+      expect(events.filter(event => "liveProgress" in event && event.liveProgress)).toEqual(progress);
+      const history = await handle.history({ limit: 10 });
+      expect(Object.values(history.itemsById)).toContainEqual(expect.objectContaining({ semanticKind: "assistant_message",
+        responsePhase: "final", markdown: { text: "Finished reading the instructions" } }));
+      expect(JSON.stringify(history)).not.toContain("liveProgress");
+      expect(requests).toBe(2);
+    } finally { finishFinal?.(); await handle.close(); }
+  }, 30_000);
+
   it("correlates request timing with the exact SDK message, independently of history and later consumers", async () => {
     const f = await fixture();
     const source = await f.open(f.reserved.manager);

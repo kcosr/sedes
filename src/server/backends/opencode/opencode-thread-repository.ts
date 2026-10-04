@@ -346,7 +346,7 @@ function mismatch(): DomainError {
   return new DomainError("conflict", "The OpenCode operation or native binding does not match its recorded authority.");
 }
 function attemptSource(attempt: Pick<ActiveAttempt, "sourceKind" | "automationId" | "automationRunId">): NonNullable<OpenCodeOperationEvidence["requestSource"]> {
-  if (!["composer", "automation", "agent_control", "principal_client"].includes(attempt.sourceKind)) throw mismatch();
+  if (!["composer", "automation", "agent_control", "principal_client", "direct_input"].includes(attempt.sourceKind)) throw mismatch();
   return sourceSchema.parse(attempt.sourceKind === "automation"
     ? { kind: "automation", automationId: attempt.automationId, automationRunId: attempt.automationRunId }
     : { kind: "user" });

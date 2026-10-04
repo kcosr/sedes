@@ -452,6 +452,10 @@ export class ConversationProjector {
     return result;
   }
 
+  /** Cheap reads of timeline scalars; timeline() copies every item. */
+  get generation(): string { return this.#generation; }
+  get runState(): ThreadRunState { return this.#runState; }
+
   timeline(): ProjectedConversationTimeline {
     return {
       generation: this.#generation,
@@ -469,6 +473,11 @@ export class ConversationProjector {
       if (projectedTurnId === turnId) return backendTurnId;
     }
     return undefined;
+  }
+
+  itemForBackendId(backendItemId: string): ConversationItem | undefined {
+    const itemId = this.#itemIds.get(backendItemId);
+    return itemId === undefined ? undefined : this.#items.get(itemId);
   }
 
   matchesApplicationTurnId(
@@ -1073,6 +1082,7 @@ function equalBackendTurn(left: BackendTurn, right: BackendTurn): boolean {
     left.backendTurnId === right.backendTurnId &&
     left.status === right.status &&
     left.endedBy === right.endedBy &&
+    JSON.stringify(left.completionCorrelations) === JSON.stringify(right.completionCorrelations) &&
     JSON.stringify(left.failure) === JSON.stringify(right.failure) &&
     JSON.stringify(left.throughput) === JSON.stringify(right.throughput) &&
     JSON.stringify(left.forkUnavailableReason) === JSON.stringify(right.forkUnavailableReason) &&

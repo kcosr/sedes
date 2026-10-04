@@ -59,6 +59,7 @@ import {
   projectClassifiedAssistantResult,
 } from "./completion-result-projection.js";
 import type { BoundedText } from "../../shared/protocol/payload.js";
+import { boundText } from "./payload-policy.js";
 
 export const DEFAULT_PROJECTION_UPDATE_INTERVAL_MILLISECONDS = 50;
 export const DEFAULT_MAXIMUM_PENDING_PROJECTION_ITEMS = 512;
@@ -100,6 +101,13 @@ type AncillaryBackendEvent = Extract<
 >;
 
 export type ConversationActorEvent =
+  | {
+      readonly type: "live_progress";
+      readonly applicationTurnId: string;
+      readonly applicationItemId: string;
+      readonly backendCorrelations: readonly string[];
+      readonly text: BoundedText;
+    }
   | {
       readonly type: "nonblocking_questions";
       readonly sourceItemId: string;
@@ -151,6 +159,20 @@ export interface ConversationActorSnapshotState {
     /** Backend-opaque and server-internal; never send this value to a client. */
     readonly previousCursor?: string;
   };
+}
+
+export interface ConversationActorInputState {
+  readonly state: ConversationActorSnapshotState;
+  readonly authoritative: boolean;
+  /**
+   * A retained snapshot is being replaced in place. Authority is pending, not
+   * lost: `state` still carries the retained facts until the replacement lands.
+   */
+  readonly reestablishing: boolean;
+  /** Main-turn settlement of `state`; false unless authoritative or reestablishing. */
+  readonly settled: boolean;
+  /** Server-internal identities used only to detect changes to pending input. */
+  readonly blockingInteractionIds: readonly string[];
 }
 
 export interface ConversationActorHistoryCapture {
@@ -213,6 +235,7 @@ export class ConversationActor {
   readonly #environmentLease: ExecutionEnvironmentLease | undefined;
   readonly #attachmentDelivery: ComposerAttachmentDeliveryService;
   readonly #drainAuthoritativeObservers?: () => Promise<void>;
+  readonly #onInputStateChanged?: () => void;
   readonly #persistDeliveryInputSnapshot?: (
     input: PrepareDeliveryInputSnapshot,
   ) => void;
@@ -237,6 +260,7 @@ export class ConversationActor {
   #establishmentAbort?: AbortController;
   readonly #historyAborts = new Set<AbortController>();
   #establishing = false;
+  #replacingProjection = false;
   #handleCloseProven = false;
   #leaseReleaseProven = false;
   #executionCloseBegun = false;
@@ -256,6 +280,7 @@ export class ConversationActor {
     readonly handle: ConversationHandle;
     /** Installed before establishment so durable observers cannot miss startup events. */
     readonly initialObserver?: ConversationActorListener;
+    readonly onInputStateChanged?: () => void;
     /** Absent only for a passive history projection with no execution authority. */
     readonly environmentLease?: ExecutionEnvironmentLease;
     readonly attachmentDelivery: ComposerAttachmentDeliveryService;
@@ -280,6 +305,7 @@ export class ConversationActor {
     this.#environmentLease = input.environmentLease;
     this.#attachmentDelivery = input.attachmentDelivery;
     this.#drainAuthoritativeObservers = input.drainAuthoritativeObservers;
+    this.#onInputStateChanged = input.onInputStateChanged;
     this.#persistDeliveryInputSnapshot = input.persistDeliveryInputSnapshot;
     this.#removeDeliveryInputSnapshot = input.removeDeliveryInputSnapshot;
     this.#projector = input.projector;
@@ -316,6 +342,7 @@ export class ConversationActor {
         // subscriber before capturing a new baseline. Keep irreversible
         // handle closure observable through the independent raw event rail.
         this.#handleReplacementRequired = true;
+        this.#notifyInputStateChanged();
         this.#establishmentAbort?.abort(
           new Error("conversation_actor_handle_replacement_required"),
         );
@@ -339,7 +366,7 @@ export class ConversationActor {
   /** Main-turn readiness is independent of background work and cleanup safety. */
   get authoritativelySettled(): boolean {
     if (!this.#started || this.#closing || this.#closed || this.#handleReplacementRequired || !this.#snapshotState || this.#projectionRecoveryRequired) return false;
-    const state = this.#projector.timeline().runState;
+    const state = this.#projector.runState;
     return !this.#awaitingAuthoritativeIdle && (state === "idle" || state === "failed");
   }
 
@@ -459,12 +486,12 @@ export class ConversationActor {
         Object.values(page.turnsById),
       );
       return {
-        generation: this.#projector.timeline().generation,
+        generation: this.#projector.generation,
         page: this.#projector.projectHistoryPage(
           page,
           {
             branching: this.#snapshotState.backendCapabilities.branching,
-            sourceRunState: this.#projector.timeline().runState,
+            sourceRunState: this.#projector.runState,
           },
         ),
       };
@@ -500,7 +527,7 @@ export class ConversationActor {
         status: "found" as const,
         page: this.#projector.projectHistoryPage(result.page, {
           branching: this.#snapshotState.backendCapabilities.branching,
-          sourceRunState: this.#projector.timeline().runState,
+          sourceRunState: this.#projector.runState,
         }),
       };
     }).finally(() => {
@@ -546,6 +573,7 @@ export class ConversationActor {
         this.#removeDeliveryInputSnapshot?.(applicationOperationId);
       } finally {
         this.#awaitingAuthoritativeIdle = false;
+        this.#notifyInputStateChanged();
       }
     });
   }
@@ -604,7 +632,7 @@ export class ConversationActor {
             : "This backend cannot resume a completed-turn fork.",
         });
       }
-      const sourceRunState = this.#projector.timeline().runState;
+      const sourceRunState = this.#projector.runState;
       if (
         (this.#awaitingAuthoritativeIdle &&
           (branching.sourceMustBeIdle ||
@@ -662,7 +690,7 @@ export class ConversationActor {
                 : "This backend cannot fork its latest completed turn.",
       });
     }
-    const sourceRunState = this.#projector.timeline().runState;
+    const sourceRunState = this.#projector.runState;
     if (
       selection.kind === "latest_completed"
         ? this.#awaitingAuthoritativeIdle ||
@@ -911,6 +939,29 @@ export class ConversationActor {
     return this.#snapshotState;
   }
 
+  /** Current local input facts; never queues work, repairs projection, or reads the provider. */
+  peekInputState(): ConversationActorInputState | undefined {
+    const state = this.#snapshotState;
+    if (!this.#started || this.#closing || this.#closed || !state) return undefined;
+    const retained = !this.readOnly && !this.#handleReplacementRequired && !this.#projectionRecoveryRequired &&
+      state.timeline.runState !== "disconnected" && state.timeline.runState !== "reconciling";
+    const authoritative = retained && !this.#establishing && this.#unsubscribeProjection !== undefined &&
+      state.timeline.generation === this.#projector.generation;
+    // Recovery from a rejected event, coalescer overflow, or a backend window
+    // trim replaces the projection under the same owner. Failure clears it.
+    const reestablishing = retained && !authoritative && this.#replacingProjection;
+    return {
+      state,
+      authoritative,
+      reestablishing,
+      // Derived from `state` and the awaiting-idle flag, which change in the
+      // same synchronous steps, so a half-installed replacement cannot mix facts.
+      settled: (authoritative || reestablishing) && !this.#awaitingAuthoritativeIdle &&
+        (state.timeline.runState === "idle" || state.timeline.runState === "failed"),
+      blockingInteractionIds: [...this.#pendingInteractions.keys()].sort(),
+    };
+  }
+
   /**
    * Runs an application-owned mutation in the same mailbox as turn-starting
    * backend mutations, but only while the authoritative actor is settled.
@@ -924,7 +975,7 @@ export class ConversationActor {
     | { readonly executed: true; readonly value: T }
   > {
     return this.#enqueue(async () => {
-      const runState = this.#projector.timeline().runState;
+      const runState = this.#projector.runState;
       if (
         this.#awaitingAuthoritativeIdle ||
         (runState !== "idle" && runState !== "failed")
@@ -1105,6 +1156,7 @@ export class ConversationActor {
     if (this.#closed) return Promise.resolve();
     if (this.#closePromise) return this.#closePromise;
     this.#closing = true;
+    this.#notifyInputStateChanged();
     this.#explicitStopPending = beforeCleanup !== undefined;
     this.#establishmentAbort?.abort();
     this.#abortHistoryReads("conversation_actor_history_cancelled_by_close");
@@ -1186,6 +1238,7 @@ export class ConversationActor {
       const claimed = await this.#mailbox.enqueue(async () => {
         if (this.#closing || !predicate()) return false;
         this.#closing = true;
+        this.#notifyInputStateChanged();
         this.#establishmentAbort?.abort();
         this.#abortHistoryReads("conversation_actor_history_cancelled_by_close");
         await this.#closeResources(failures, evicted);
@@ -1251,6 +1304,7 @@ export class ConversationActor {
     this.#unsubscribeProjection = undefined;
     previousSubscription?.();
     this.#establishing = true;
+    this.#notifyInputStateChanged();
     let established: EstablishedBackendProjection;
     try {
       established = await this.#handle.establishProjection({ signal });
@@ -1280,9 +1334,6 @@ export class ConversationActor {
       established.handleSequence,
     );
     this.#projectionRecoveryRequired = false;
-    if (timeline.runState === "idle" || timeline.runState === "failed") {
-      this.#awaitingAuthoritativeIdle = false;
-    }
     this.#coalescer.reset(timeline);
     this.#unsubscribeProjection = this.#subscribeEstablished(
       established,
@@ -1302,6 +1353,11 @@ export class ConversationActor {
             }
           : { operational: false as const },
     };
+    // Settlement facts change together with the retained snapshot, never
+    // across the usage read, so input observers cannot see a mixed state.
+    if (timeline.runState === "idle" || timeline.runState === "failed") {
+      this.#awaitingAuthoritativeIdle = false;
+    }
     this.#snapshotState = state;
     this.#publish({ type: "projection_replaced", state });
     this.#publishSnapshotSubmissions();
@@ -1327,13 +1383,26 @@ export class ConversationActor {
             await this.#recoverProjection();
             return;
           }
+          const projectionGeneration = this.#projector.generation;
           const application = this.#projector.apply(event);
           await this.#applyProjection(application);
-          if (application.kind === "resnapshot_required") {
+          if (application.kind === "resnapshot_required" || this.#projector.generation !== projectionGeneration) {
             // The replacement snapshot is the sole authority after a rejected
-            // event. Snapshot replay publishes any submission/completion that
+            // event, including coalescer recovery. Snapshot replay publishes any submission/completion that
             // actually survived recovery.
             return;
+          }
+          if ((nativeEvent.type === "item_completed" || nativeEvent.type === "item_updated") && nativeEvent.liveProgress &&
+              nativeEvent.item.semanticKind === "assistant_message" && nativeEvent.item.status === "completed" &&
+              nativeEvent.item.responsePhase === "provisional" && nativeEvent.item.markdown.text.trim()) {
+            const timeline = this.#projector.timeline();
+            const item = this.#projector.itemForBackendId(nativeEvent.item.backendItemId);
+            const backendTurn = this.#projector.backendTurns().find(turn => turn.backendTurnId === nativeEvent.item.backendTurnId);
+            if (item && backendTurn?.status === "in_progress" && backendTurn.completionCorrelations?.length &&
+                timeline.activeTurnId === item.turnId && timeline.runState === "running") {
+              this.#publish({ type: "live_progress", applicationTurnId: item.turnId, applicationItemId: item.id,
+                backendCorrelations: backendTurn.completionCorrelations, text: boundText(nativeEvent.item.markdown.text, 8_192) });
+            }
           }
           if (
             event.event.type === "turn_started" ||
@@ -1450,7 +1519,7 @@ export class ConversationActor {
       await this.#recoverProjection();
       return;
     }
-    const generation = this.#projector.timeline().generation;
+    const generation = this.#projector.generation;
     if (application.kind === "events") {
       const runStateChanged = application.events.some(
         (event) => event.type === "run_state",
@@ -1491,7 +1560,7 @@ export class ConversationActor {
             generation,
             forkSource: projectedThreadForkSourceCapability({
               branching: this.#snapshotState.backendCapabilities.branching,
-              sourceRunState: this.#projector.timeline().runState,
+              sourceRunState: this.#projector.runState,
             }),
           });
         }
@@ -1537,7 +1606,7 @@ export class ConversationActor {
               generation,
               forkSource: projectedThreadForkSourceCapability({
                 branching: application.event.capabilities.branching,
-                sourceRunState: this.#projector.timeline().runState,
+                sourceRunState: this.#projector.runState,
               }),
             },
           ],
@@ -1577,7 +1646,7 @@ export class ConversationActor {
       fork: projectedTurnForkCapability({
         turn: event.turn,
         branching,
-        sourceRunState: this.#projector.timeline().runState,
+        sourceRunState: this.#projector.runState,
       }),
     };
   }
@@ -1600,7 +1669,7 @@ export class ConversationActor {
   ): Promise<void> {
     const outputGeneration =
       output.kind === "event" ? output.event.generation : output.generation;
-    if (outputGeneration !== this.#projector.timeline().generation) return;
+    if (outputGeneration !== this.#projector.generation) return;
     if (output.kind === "resnapshot_required") {
       await this.#recoverProjection();
       return;
@@ -1619,20 +1688,27 @@ export class ConversationActor {
       );
     }
     let failure: unknown;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        await this.#establishProjection();
-        return;
-      } catch (error) {
-        failure = error;
-        if (this.#closing || this.#closed) throw error;
-        // Retrying a fixed provider limit cannot repair the projection and may
-        // repeat an expensive history acquisition. Preserve the backend's proof.
-        if (error instanceof BackendError && error.projectionRecovery === "futile") break;
-        await Promise.resolve();
+    // Only a current snapshot is retained as pending authority; recovery after
+    // a failed replacement is new authority, not the continuation of the old one.
+    this.#replacingProjection = this.#snapshotState !== undefined && !this.#projectionRecoveryRequired;
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          await this.#establishProjection();
+          return;
+        } catch (error) {
+          failure = error;
+          if (this.#closing || this.#closed) throw error;
+          // Retrying a fixed provider limit cannot repair the projection and may
+          // repeat an expensive history acquisition. Preserve the backend's proof.
+          if (error instanceof BackendError && error.projectionRecovery === "futile") break;
+          await Promise.resolve();
+        }
       }
+      this.#failProjectionRecovery(failure);
+    } finally {
+      this.#replacingProjection = false;
     }
-    this.#failProjectionRecovery(failure);
   }
 
   #failProjectionRecovery(failure: unknown): never {
@@ -1642,7 +1718,7 @@ export class ConversationActor {
       this.#projectionRecoveryFailureSequence += 1;
       this.#publish({
         type: "backend_event",
-        generation: this.#projector.timeline().generation,
+        generation: this.#projector.generation,
         event: {
           type: "notice",
           notice: {
@@ -1668,11 +1744,13 @@ export class ConversationActor {
     this.#abortHistoryReads("conversation_actor_history_preempted_by_mutation");
     return this.#enqueue(async () => {
       this.#awaitingAuthoritativeIdle = true;
+      this.#notifyInputStateChanged();
       try {
         return await operation();
       } catch (error) {
         if (error instanceof BackendError && !error.crossedSubmissionBoundary) {
           this.#awaitingAuthoritativeIdle = false;
+          this.#notifyInputStateChanged();
         }
         throw error;
       }
@@ -1815,6 +1893,7 @@ export class ConversationActor {
   }
 
   #publish(event: ConversationActorEvent): void {
+    this.#notifyInputStateChanged();
     for (const listener of [...this.#listeners]) {
       try {
         listener(event);
@@ -1822,5 +1901,10 @@ export class ConversationActor {
         // One browser subscriber cannot poison the conversation actor.
       }
     }
+  }
+
+  #notifyInputStateChanged(): void {
+    try { this.#onInputStateChanged?.(); }
+    catch { /* A passive input observer cannot affect provider work. */ }
   }
 }

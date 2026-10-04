@@ -1,3 +1,4 @@
+import { scriptDelivery } from "../../../tests/support/notification-settings.js";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/ApiClient.js";
 import type { NotificationSettings } from "../../shared/protocol/notification.js";
@@ -10,7 +11,7 @@ const settings: NotificationSettings = {
   arguments: [],
   timeoutSeconds: 30,
   assistantResultPhases: [],
-  events: ["turn.completed"],
+  delivery: scriptDelivery(["turn.completed"]),
 };
 describe("NotificationSettingsStore", () => {
   it("ignores a stale settings read finishing after silence has been saved", async () => {

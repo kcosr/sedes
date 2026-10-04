@@ -27,6 +27,7 @@ import type { ComposerAttachmentDeliveryService } from "../../src/server/compose
 import type {
   AuthoritativeCompletionObserver,
   AuthoritativeSubmissionObserver,
+  LiveProgressObserver,
 } from "../../src/server/conversations/conversation-actor-manager.js";
 import type { ConversationActor, ConversationActorEvent } from "../../src/server/conversations/conversation-actor.js";
 import { applicationTurnIdForBackendTurn } from "../../src/server/conversations/conversation-projector.js";
@@ -298,6 +299,7 @@ function fixture(
   retentionMilliseconds = 10,
   deliveryInputSnapshots?: DeliveryInputSnapshotRepository,
   runtimeBudget = 8,
+  onLiveProgress?: LiveProgressObserver,
 ) {
   const closeOrder: string[] = [];
   const handle = new FakeHandle(closeOrder);
@@ -361,6 +363,7 @@ function fixture(
     ...(deliveryInputSnapshots ? { deliveryInputSnapshots } : {}),
     ...(onAuthoritativeCompletion ? { onAuthoritativeCompletion } : {}),
     ...(onAuthoritativeSubmission ? { onAuthoritativeSubmission } : {}),
+    ...(onLiveProgress ? { onLiveProgress } : {}),
   });
   const manager = {
     acquire: (
@@ -409,6 +412,7 @@ describe("passive archived history", () => {
     const acquired = await manager.acquire(input);
     try {
       expect(acquired.actor.readOnly).toBe(true);
+      expect(current.actorManager.observeInputRuntime(scope, binding.applicationThreadId)).toBeUndefined();
       const captured = await acquired.actor.captureSnapshotState();
       expect(captured.timeline.orderedTurnIds).toEqual([projectedTurnId]);
       expect(captured.history).toEqual({ operational: true, previousCursor: "older" });
@@ -5222,6 +5226,55 @@ describe("ConversationActorManager", () => {
     await manager.close();
   });
 
+  it("publishes qualified live progress after projection, including late phase evidence, but not snapshots or terminal backfill", async () => {
+    const observed = vi.fn<LiveProgressObserver>();
+    const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8, observed);
+    const base = snapshot("running", "Inspecting the files");
+    const initial = { ...base, turnsById: { "turn-1": { ...base.turnsById["turn-1"]!, completionCorrelations: ["accepted-input"] } } };
+    handle.establishmentSnapshots[0] = initial;
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      expect(observed).not.toHaveBeenCalled();
+      const item = { ...initial.itemsById["item-1"]!, semanticKind: "assistant_message" as const,
+        status: "completed" as const, markdown: { text: "Inspecting the files" } };
+      handle.emit(0, { type: "item_completed", item }, 0);
+      await acquired.actor.captureSnapshotState();
+      expect(observed).not.toHaveBeenCalled();
+      handle.emit(0, { type: "item_updated", item: { ...item, responsePhase: "provisional" }, liveProgress: true }, 1);
+      await vi.waitFor(() => expect(observed).toHaveBeenCalledTimes(1));
+      const progress = observed.mock.calls[0]![2];
+      expect(progress).toMatchObject({ applicationTurnId: projectedTurnId, backendCorrelations: ["accepted-input"], text: { text: "Inspecting the files" } });
+      expect(progress.applicationItemId).not.toBe("item-1");
+      expect(acquired.actor.timeline.itemsById[progress.applicationItemId]).toMatchObject({ status: "completed" });
+      handle.emit(0, { type: "turn_completed", turn: { ...initial.turnsById["turn-1"]!, status: "completed", endedBy: "agent_settled" } }, 2);
+      await acquired.actor.captureSnapshotState();
+      expect(acquired.actor.timeline.turnsById[progress.applicationTurnId]?.status).toBe("completed");
+      handle.emit(0, { type: "item_updated", item: { ...item, responsePhase: "provisional" }, liveProgress: true }, 3);
+      await acquired.actor.captureSnapshotState();
+      expect(observed).toHaveBeenCalledTimes(1);
+    } finally { acquired.release(); await manager.close(); }
+  });
+
+  it("rejects progress from a sequence-gap replacement or a provider-only turn", async () => {
+    const observed = vi.fn<LiveProgressObserver>();
+    const { driver, handle, manager } = fixture(undefined, undefined, 10, undefined, 8, observed);
+    const initial = snapshot("running", "Progress");
+    handle.establishmentSnapshots[0] = initial;
+    handle.establishmentSnapshots.push(initial);
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      const item = { ...initial.itemsById["item-1"]!, semanticKind: "assistant_message" as const,
+        status: "completed" as const, markdown: { text: "Progress" }, responsePhase: "provisional" as const };
+      handle.emit(0, { type: "item_completed", item, liveProgress: true }, 0);
+      await acquired.actor.captureSnapshotState();
+      expect(observed).not.toHaveBeenCalled();
+      handle.emit(0, { type: "item_updated", item, liveProgress: true }, 4);
+      await acquired.actor.captureSnapshotState();
+      expect(handle.establishCount).toBe(2);
+      expect(observed).not.toHaveBeenCalled();
+    } finally { acquired.release(); await manager.close(); }
+  });
+
   it("publishes a backend capability refresh after a run-state transition", async () => {
     const { driver, handle, manager } = fixture();
     handle.establishmentSnapshots[0] = snapshot("running", "a");
@@ -5951,5 +6004,171 @@ describe("authoritative pending interaction subscription replay", () => {
     const unsubscribe = acquired.actor.subscribe(event => events.push(event));
     expect(events.some(event => event.type === "backend_event" && event.event.type === "interaction_opened")).toBe(false);
     unsubscribe(); acquired.release(); await manager.close();
+  });
+});
+
+describe("actor-owned input observation", () => {
+  it("publishes established input authority before acquisition returns without reading the provider", async () => {
+    const { actorManager, manager, handle, driver, environments } = fixture(undefined, undefined, 60_000);
+    expect(actorManager.observeInputRuntime(scope, binding.applicationThreadId)).toBeUndefined();
+    expect(driver.attach).not.toHaveBeenCalled();
+    expect(environments.acquireLease).not.toHaveBeenCalled();
+    const capabilities = await handle.backendCapabilities();
+    handle.backendCapabilities.mockClear();
+    let releaseCapabilities!: () => void;
+    handle.backendCapabilities.mockImplementationOnce(() => new Promise(resolve => {
+      releaseCapabilities = () => resolve(capabilities);
+    }));
+    let acquisitionFinished = false;
+    const observations: boolean[] = [];
+    const unsubscribe = actorManager.subscribeInputActivity((observedScope, threadId) => {
+      const current = actorManager.observeInputRuntime(observedScope, threadId);
+      if (current?.authoritative) observations.push(acquisitionFinished);
+    });
+    const acquisition = manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    try {
+      await vi.waitFor(() => expect(handle.backendCapabilities).toHaveBeenCalledOnce());
+      expect(actorManager.observeInputRuntime(scope, binding.applicationThreadId)).toBeUndefined();
+      releaseCapabilities();
+      const acquired = await acquisition;
+      acquisitionFinished = true;
+      const current = actorManager.observeInputRuntime(scope, binding.applicationThreadId);
+      expect(current).toMatchObject({ authoritative: true, runState: "idle", settled: true, sourceTurnId: projectedTurnId });
+      expect(observations).toContain(false);
+      expect(actorManager.observeInputRuntime({ ...scope, principalId: "another-principal" }, binding.applicationThreadId)).toBeUndefined();
+      acquired.release();
+      expect(actorManager.observeInputRuntime(scope, binding.applicationThreadId)).toEqual(current);
+      expect(handle.backendCapabilities).toHaveBeenCalledOnce();
+      expect(handle.establishCount).toBe(1);
+      expect(driver.attach).toHaveBeenCalledOnce();
+    } finally {
+      releaseCapabilities?.();
+      unsubscribe();
+      await manager.close();
+    }
+  });
+
+  it("observes rapid activity and blocking-interaction transitions without a coordinator or browser", async () => {
+    const { actorManager, manager, handle, driver } = fixture();
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const states: string[] = [];
+    const blockers: string[][] = [];
+    const unsubscribe = actorManager.subscribeInputActivity((observedScope, threadId) => {
+      const current = actorManager.observeInputRuntime(observedScope, threadId);
+      if (current) { states.push(current.runState); blockers.push([...current.blockingInteractionIds]); }
+    });
+    try {
+      handle.emit(0, { type: "run_state_changed", state: "running" }, 0);
+      handle.emit(0, { type: "run_state_changed", state: "idle" }, 1);
+      handle.emit(0, { type: "interaction_opened", interaction: {
+        backendInteractionId: "pending-input", kind: "confirmation", sourceLabel: { text: "Provider" },
+        title: { text: "Proceed?" }, message: { text: "Confirm the operation." },
+        openedAt: "2026-10-03T00:00:00.000Z", secret: false, destructive: false, cancellable: true,
+      } }, 2);
+      handle.emit(0, { type: "interaction_resolved", backendInteractionId: "pending-input" }, 3);
+      await acquired.actor.captureSnapshotState();
+      expect(states.indexOf("running")).toBeGreaterThanOrEqual(0);
+      expect(states.lastIndexOf("idle")).toBeGreaterThan(states.indexOf("running"));
+      expect(blockers).toContainEqual(["pending-input"]);
+      expect(blockers.at(-1)).toEqual([]);
+      expect(actorManager.observeInputRuntime(scope, binding.applicationThreadId)).toMatchObject({ authoritative: true, settled: true });
+      expect(driver.attach).toHaveBeenCalledOnce();
+    } finally { unsubscribe(); acquired.release(); await manager.close(); }
+  });
+
+  it("invalidates input authority at maintenance and close boundaries and never reuses an owner generation", async () => {
+    const { actorManager, manager, handle, driver } = fixture(undefined, undefined, 60_000);
+    const input = { scope, binding, workspace, opaqueBindingDetail: "opaque", driver };
+    const acquired = await manager.acquire(input);
+    const generation = actorManager.observeInputRuntime(scope, binding.applicationThreadId)!.generation;
+    const observed: Array<boolean | undefined> = [];
+    const unsubscribe = actorManager.subscribeInputActivity((observedScope, threadId) => {
+      observed.push(actorManager.observeInputRuntime(observedScope, threadId)?.authoritative);
+    });
+    let releaseDetach!: () => void;
+    const detach = new Promise<void>(resolve => { releaseDetach = resolve; });
+    const retirement = manager.runWithRuntimeRetired({ scope, applicationThreadId: binding.applicationThreadId,
+      disposition: { kind: "idle" }, detachCoordinatorRuntime: () => detach, operation: async () => undefined });
+    try {
+      expect(actorManager.observeInputRuntime(scope, binding.applicationThreadId)).toBeUndefined();
+      expect(observed).toEqual([undefined]);
+      acquired.release();
+      releaseDetach();
+      await retirement;
+      expect(handle.close).toHaveBeenCalledOnce();
+      const replacement = await manager.acquire(input);
+      expect(actorManager.observeInputRuntime(scope, binding.applicationThreadId)?.generation).not.toBe(generation);
+      const closing = replacement.actor.close();
+      expect(actorManager.observeInputRuntime(scope, binding.applicationThreadId)).toBeUndefined();
+      expect(observed.at(-1)).toBeUndefined();
+      await closing;
+      replacement.release();
+    } finally { releaseDetach(); unsubscribe(); acquired.release(); await manager.close(); }
+  });
+
+  it("reports retained facts as pending authority while a replacement snapshot is installed, and failure as loss", async () => {
+    const { actorManager, manager, handle, driver } = fixture(undefined, undefined, 60_000);
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const observe = () => actorManager.observeInputRuntime(scope, binding.applicationThreadId);
+    const before = observe()!;
+    expect(before).toMatchObject({ authoritative: true, reestablishing: false, settled: true, runState: "idle", sourceTurnStatus: "completed" });
+    const establish = handle.establishProjection.bind(handle);
+    let release: (() => void) | undefined;
+    vi.spyOn(handle, "establishProjection").mockImplementationOnce(async input => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return establish(input);
+    });
+    const pending: boolean[] = [];
+    const unsubscribe = actorManager.subscribeInputActivity((observedScope, threadId) => {
+      pending.push(actorManager.observeInputRuntime(observedScope, threadId)?.reestablishing === true);
+    });
+    try {
+      handle.emit(0, { type: "resnapshot_required", reason: "buffer_overflow" }, 0);
+      await vi.waitFor(() => expect(release).toBeDefined());
+      expect(pending).toContain(true);
+      expect(observe()).toEqual({ ...before, authoritative: false, reestablishing: true });
+      release!();
+      await vi.waitFor(() => expect(observe()?.authoritative).toBe(true));
+      const after = observe()!;
+      expect(after).toMatchObject({ reestablishing: false, settled: true, ownerGeneration: before.ownerGeneration,
+        runState: "idle", sourceTurnId: before.sourceTurnId, sourceTurnStatus: "completed" });
+      expect(after.generation).not.toBe(before.generation);
+
+      vi.spyOn(handle, "establishProjection").mockRejectedValue(new Error("history unavailable"));
+      handle.emit(1, { type: "resnapshot_required", reason: "buffer_overflow" }, 0);
+      await vi.waitFor(() => expect(acquired.actor.projectionRecoveryRequired).toBe(true));
+      const lost = observe();
+      expect(lost?.authoritative ?? false).toBe(false);
+      expect(lost?.reestablishing ?? false).toBe(false);
+      expect(lost?.settled ?? false).toBe(false);
+    } finally { release?.(); unsubscribe(); acquired.release(); await manager.close(); }
+  });
+
+  it("invalidates an ended native control immediately while ignoring an obsolete control's abort", async () => {
+    const { actorManager, manager, handle, driver } = fixture();
+    const firstLifetime = new AbortController();
+    const nextLifetime = new AbortController();
+    let publishControl: Parameters<ConversationBackendDriver["attach"]>[0]["onControlReady"];
+    vi.mocked(driver.attach).mockImplementation(async input => {
+      publishControl = input.onControlReady;
+      publishControl?.({ generation: "first-owner", lifetime: firstLifetime.signal,
+        interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt });
+      return handle as unknown as ConversationHandle;
+    });
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const observed: Array<boolean | undefined> = [];
+    const unsubscribe = actorManager.subscribeInputActivity((observedScope, threadId) => {
+      observed.push(actorManager.observeInputRuntime(observedScope, threadId)?.authoritative);
+    });
+    try {
+      publishControl?.({ generation: "replacement-control", lifetime: nextLifetime.signal,
+        interrupt: handle.interrupt, reconcileInterrupt: handle.reconcileInterrupt });
+      firstLifetime.abort();
+      expect(actorManager.observeInputRuntime(scope, binding.applicationThreadId)?.authoritative).toBe(true);
+      nextLifetime.abort();
+      expect(actorManager.observeInputRuntime(scope, binding.applicationThreadId)).toBeUndefined();
+      expect(observed.at(-1)).toBeUndefined();
+      expect(handle.establishCount).toBe(1);
+    } finally { unsubscribe(); acquired.release(); await manager.close(); }
   });
 });

@@ -11,12 +11,12 @@ stays loaded behind it, with its draft, uploads, scroll position, and terminal
 sessions, and running work continues.
 
 Pages are grouped. A page appears only where this client can use it; for
-example, **Connection** exists only in the Electron app and **Server** only in
-the Android app.
+example, **Connection** exists only in the Electron app, and **Server** and
+**Voice** only in the Android app.
 
 | Group | Pages |
 | --- | --- |
-| Preferences | General, Appearance, Mobile, Terminal |
+| Preferences | General, Appearance, Mobile, Terminal, Voice |
 | Account | Prompts, Notifications |
 | Execution | Environments, Backends, Projects, Agents |
 | Access | Tool clients, Paired clients, Connection or Server |
@@ -316,39 +316,55 @@ stores and how threads use it.
 
 ## Notifications
 
-Configure **Settings → Notifications** to invoke one executable script on the
-Sedes server when a selected event occurs. Enter its absolute **Server script
-path**, optional **Arguments (one per line)**, and **Timeout (seconds)**, choose
-events, then turn on **Enable notifications** and save. Settings follow the current Sedes user
-across clients and server restarts.
+Configure **Settings → Notifications** to choose Script and Voice delivery for
+each event. Each event has a **Script** switch and a **Voice** choice. Script
+delivery invokes one executable on the Sedes server. Enter its absolute
+**Server script path**, optional **Arguments (one per line)**, and **Timeout
+(seconds)** when using that channel. Voice delivery chooses **None**, **Speak**,
+or **Speak then listen** on Android. Turn on **Enable notifications** and save.
+These settings follow the current Sedes user across clients and server restarts.
 
-Available events are **Turn completed**, **Turn failed**, **Turn interrupted**,
-**Snooze wake**, **Automation started**, **Automation failed**, **Approval requested**,
-and **Input requested**. A turn event
+Fresh settings select no script events, speak every event, and choose **Speak
+then listen** for **Turn completed**. They include Final and Unclassified
+completion text. Provisional text can repeat progress already spoken; select it
+only if that repetition is useful. **Turn progress**, **Approval requested**,
+**Input requested**, and **Nonblocking questions** offer only None or Speak, so
+they never open the microphone automatically. **Automation started** offers
+Speak then listen, but it behaves as Speak: the notice targets the automation's
+thread while its turn is running, and that turn finishing makes the target out
+of date. See [Voice](#voice) and [Android voice](../operator/clients/voice.md)
+for local audio modes, microphone settings, and target selection.
+
+Available events are **Turn progress**, **Turn completed**, **Turn failed**,
+**Turn interrupted**, **Snooze wake**, **Automation started**, **Automation
+failed before starting**, **Approval requested**, **Input requested**, and
+**Nonblocking questions**. Turn progress is a completed live assistant update
+before the turn finishes, from Codex, Pi, or Claude. A turn event
 requires an authoritative terminal outcome; a pause in output or a disconnected
 backend does not count. Snooze wake means its deadline was reached. A completion
 that wakes a snoozed thread produces the selected turn event, not an additional
 wake notification. Manual wake and Remind now do not emit notifications.
 Automation started means the agent input was accepted after any pre-check;
 becoming due, waiting in the queue, and a pre-check skipping a run do not count.
-Automation failed covers definitive failures before successful acceptance.
-Approval requested covers new approval decisions and confirmation dialogs. Input
-requested covers new blocking questions, choices, text input, and editor requests,
-including Codex blocking questions. Nonblocking questions covers questions an
-agent asks while it keeps working, such as Codex async questions; the
-notification carries the question count, never the question text. These three
-events are opt-in. They fire when the backend accepts a new request, even
-without an open browser; reconnecting or redisplaying the same pending dialog
-does not notify again. Answering, approving, rejecting, or dismissing a request
-does not send a notification or affect an already emitted hook.
+Automation failed before starting covers definitive failures before successful
+acceptance. Approval requested covers new approval decisions and confirmation
+dialogs. Input requested covers new blocking questions, choices, text input, and
+editor requests, including Codex blocking questions. Nonblocking questions covers
+questions an agent asks while it keeps working, such as Codex async questions;
+the notification carries the question count, never the question text. These
+three events fire when the backend accepts a new request, even without an open
+browser; reconnecting or redisplaying the same pending dialog does not notify
+again. Answering, approving, rejecting, or dismissing a request does not send a
+notification or affect an already emitted hook.
 
-The bell in application navigation **silences** external notifications without
+The bell in application navigation **silences** automatic script and voice notifications without
 changing their configuration. A blue bell indicates notifications are enabled
 and unsilenced; a gray slashed bell indicates they are silenced or disabled in
 Settings. Silence follows the user across clients and
 restarts. Resuming does not send a backlog. Opening a thread, acknowledging its
 completion, or dismissing a wake reminder has no effect on these passive hooks.
-An already running script cannot be unsent.
+An already running script cannot be unsent. Silence cancels automatic voice
+work, while explicit microphone recording remains available.
 
 **Send test notification** invokes the script using the fields currently in the
 form, including unsaved edits. It works while disabled or silenced and displays
@@ -516,6 +532,36 @@ server independently retains up to 20,000 rows in its bounded restore
 checkpoint. Increasing browser scrollback cannot recover rows erased by a
 terminal `CSI 3 J` sequence or history removed by **End terminal** or **Remove
 terminal**.
+
+## Voice
+
+The Android app's **Voice** page configures
+[Android voice](../operator/clients/voice.md) for the selected server
+connection. Its settings are saved on this device for
+that connection and Sedes user.
+
+While voice connects, the page shows **Connecting voice to this server…**. If
+voice cannot connect, it shows the error and **Retry voice connection**; the app
+also retries on its own and when it returns to the foreground. The rest of the
+app does not wait for voice.
+
+- **Audio mode** chooses Off, Manual, or Response. **Enable voice** selects
+  Response, and **Resume voice** restarts a stopped voice session. The status
+  line below reports what voice still needs, such as microphone permission, an
+  adapter URL, or the voice adapter or Sedes notification connection. When
+  notifications are unavailable, explicit recording still works.
+- **Voice thread** is the target for explicit recording when no thread is
+  visible. Untitled threads appear as **Untitled thread**.
+- **Microphone input** lists Android's inputs. Inputs that share a name add
+  their type, such as Bluetooth or USB, and then a number.
+- **Pending input recovery** lists spoken messages whose delivery is uncertain.
+  Voice keeps checking them without resending. **Resume input** checks again
+  and resends the same message only if Sedes never received it. **Discard**
+  deletes the saved message from this device and stops checking; it cannot
+  withdraw a message Sedes already received.
+
+Up to three recent voice errors appear at the top of the page. **Clear errors**
+hides them on this device until a newer error occurs.
 
 ## Server and connection
 

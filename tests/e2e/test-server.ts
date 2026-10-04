@@ -4206,8 +4206,17 @@ async function main(): Promise<void> {
   const inventoryRepository = new InventoryRepository(database);
   const notificationLifecycle = new NotificationLifecycleObserver(
     inventoryRepository,
-    (eventScope, payload, eventKey, assistantResult) =>
-      notifications.emit(eventScope, payload, eventKey, assistantResult),
+    (eventScope, payload, eventKey, assistantResult, recognitionThreadId) => {
+      // Same wiring as production: voice context is captured only after dedup,
+      // policy and recipient checks admit voice delivery.
+      notifications.emit(eventScope, payload, eventKey, assistantResult, () => {
+        const target = recognitionThreadId === undefined ? payload.thread?.id : recognitionThreadId;
+        const context = target ? mutationsForSubmissions?.activity.notificationContext(eventScope, target, payload.turn?.id) : undefined;
+        const subjectId = payload.interaction?.id ?? payload.question?.id ??
+          (payload.event === "thread.woke" ? payload.occurredAt : undefined);
+        return { ...context, ...(subjectId ? { subjectId } : {}) };
+      });
+    },
   );
   const threadGroupRepository = new ThreadGroupRepository(database);
   const environmentRecord = inventoryRepository.getLocalEnvironment(scope);
@@ -4435,6 +4444,7 @@ async function main(): Promise<void> {
   let observeAuthoritativeCompletion:
     AuthoritativeCompletionObserver | undefined;
   const actors = new ConversationActorManager({
+    onLiveProgress: (eventScope, threadId, input) => notificationLifecycle.progress(eventScope, threadId, input),
     environments: execution,
     attachmentDelivery,
     deliveryInputSnapshots,
@@ -4936,6 +4946,7 @@ async function main(): Promise<void> {
       snapshots.publish(eventScope, applicationThreadId),
   });
   const mutations = new ThreadMutationGateway({
+    actors,
     bindings,
     inventory: inventoryRepository,
     lifecycle,

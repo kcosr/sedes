@@ -2,7 +2,7 @@ import { authenticatedFetch } from "../authentication/auth-transport.js";
 import { authenticationStatusSchema } from "../../shared/authentication.js";
 import { AuthenticationGate } from "../authentication/AuthenticationGate.js";
 import { getCredential, removeProfileCredentials } from "./client-credentials.js";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { App as CapacitorApp } from "@capacitor/app";
 import { ApiClient } from "../api/ApiClient.js";
 import { BrowserEventStreamTransport } from "../api/EventStreamTransport.js";
@@ -65,6 +65,8 @@ import {
 import { Button } from "../components/ui/button.js";
 import { ThreadArchiveOperationHost } from "../operations/ThreadArchiveOperationHost.js";
 import { OperationOverlayHost } from "../operations/OperationOverlay.js";
+import { useClientOrigin } from "../voice/VoiceProvider.js";
+import { disconnectNativeVoice } from "../voice/native-voice-plugin.js";
 
 export function App({
   panelTenants = workspacePanelTenants,
@@ -92,7 +94,12 @@ function AndroidApp({ panelTenants }: { readonly panelTenants: WorkspacePanelTen
   useEffect(() => { let alive = true; void loadPackagedConnections().then((value) => { if (alive) setConnections(value); }).catch((error: unknown) => { if (alive) { setStorageError(messageFrom(error)); setConnections(emptyPackagedConnections()); } }); return () => { alive = false; }; }, []);
   if (!connections) return <FullPageLoading />;
   const save = async (next: PackagedConnectionPreferences) => {
-    setConnections(await savePackagedConnections(next)); setStorageError(undefined); navigate("/", { replace: true });
+    const previous = connections.profiles.find(profile => profile.id === connections.selectedProfileId);
+    const selected = next.profiles.find(profile => profile.id === next.selectedProfileId);
+    const saved = await savePackagedConnections(next);
+    // Leaving a profile stops its native voice only once the switch is durable. The disconnect is best effort and precedes the new connection.
+    if (previous?.id !== selected?.id || previous?.baseUrl !== selected?.baseUrl) await disconnectNativeVoice();
+    setConnections(saved); setStorageError(undefined); navigate("/", { replace: true });
   };
   const controls: ServerSettingsControls = {
     connections, storageError,
@@ -679,8 +686,13 @@ function ConnectedApp({
   electronConnectionSettings?: ElectronConnectionSettingsControls;
   panelTenants: WorkspacePanelTenantRegistry;
 }): React.JSX.Element {
+  // Deliveries read the advisory origin when sent. It arrives after startup on Android and changes on native reconnects,
+  // neither of which may rebuild the API client, transport, or stores.
+  const clientOrigin = useClientOrigin();
+  const clientOriginRef = useRef(clientOrigin);
+  useLayoutEffect(() => { clientOriginRef.current = clientOrigin; }, [clientOrigin]);
   const dependencies = useMemo(() => {
-    const api = new ApiClient(endpoint);
+    const api = new ApiClient(endpoint, undefined, () => clientOriginRef.current());
     const transport = new BrowserEventStreamTransport(endpoint);
     const threadRegistry = new ThreadStoreRegistry(api, transport);
     const applicationStore = new ApplicationClientStore(api, transport);

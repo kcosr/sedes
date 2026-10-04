@@ -22,6 +22,8 @@ import { assertConversationRetentionMilliseconds } from "./conversation-retentio
 import { assertConversationRuntimeBudget } from "./conversation-runtime-budget-policy.js";
 import type { DeliveryInputSnapshotRepository } from "../db/repositories/delivery-input-snapshot-repository.js";
 import type { BoundedText } from "../../shared/protocol/payload.js";
+import type { BackendCapabilityDocument } from "../../shared/protocol/backend.js";
+import type { ConversationItem, ThreadRunState } from "../../shared/protocol/conversation.js";
 
 export interface AcquireConversationActorInput {
   readonly scope: ExecutionScope;
@@ -112,7 +114,43 @@ export type AuthoritativeSubmissionObserver = (
   },
 ) => void | Promise<void>;
 
+export type LiveProgressObserver = (
+  scope: ExecutionScope,
+  applicationThreadId: string,
+  input: {
+    readonly applicationTurnId: string;
+    readonly applicationItemId: string;
+    readonly backendCorrelations: readonly string[];
+    readonly text: BoundedText;
+  },
+) => void;
+
+export interface ConversationInputRuntimeObservation {
+  /** Owner plus projection generation; every replacement snapshot changes it. */
+  readonly generation: string;
+  /** Exclusive owner identity; never reused, and kept across in-place replacement snapshots. */
+  readonly ownerGeneration: string;
+  readonly authoritative: boolean;
+  /** Retained facts while a replacement snapshot is established; authority is pending, not lost. */
+  readonly reestablishing: boolean;
+  readonly runState: ThreadRunState;
+  /** Settlement of the observed facts; never true unless authoritative or reestablishing. */
+  readonly settled: boolean;
+  readonly activeTurnId?: string;
+  readonly sourceTurnId?: string;
+  readonly sourceTurnStatus?: string;
+  readonly firstInput?: { readonly operationId?: string };
+  readonly blockingInteractionIds: readonly string[];
+  readonly backendCapabilities: BackendCapabilityDocument;
+}
+
+type InputActivityListener = (
+  scope: Pick<ExecutionScope, "tenantId" | "principalId">,
+  applicationThreadId: string,
+) => void;
+
 interface ActorEntry {
+  readonly applicationThreadId: string;
   readonly access: "execution" | "history";
   readonly nativeEffects: ConversationNativeEffectFence;
   readonly unprojectedGeneration: string;
@@ -123,12 +161,14 @@ interface ActorEntry {
   references: number;
   controlReferences: number;
   control?: ConversationControl;
+  controlEnded: boolean;
   readonly controlsReleased: Set<() => void>;
   onReferencesReleased?: () => void;
   evictionTimer?: ReturnType<typeof setTimeout>;
   eviction?: Promise<boolean>;
   poisoned?: unknown;
   actor?: ConversationActor;
+  established: boolean;
   pendingIdleRelease?: AcquireConversationActorOptions["idleRelease"];
   idleSince?: number;
   pressureSlotClaimed?: boolean;
@@ -249,7 +289,9 @@ export class ConversationActorManager {
   readonly #runtimeBudget: number;
   readonly #onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
   readonly #onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
+  readonly #onLiveProgress?: LiveProgressObserver;
   readonly #entries = new Map<string, ActorEntry>();
+  readonly #inputActivityListeners = new Set<InputActivityListener>();
   readonly #maintenance = new Map<string, ActorMaintenance>();
   #pressureReclaimer?: ConversationRuntimePressureReclaimer;
   #closing = false;
@@ -263,6 +305,7 @@ export class ConversationActorManager {
     readonly runtimeBudget: number;
     readonly onAuthoritativeCompletion?: AuthoritativeCompletionObserver;
     readonly onAuthoritativeSubmission?: AuthoritativeSubmissionObserver;
+    readonly onLiveProgress?: LiveProgressObserver;
     readonly onNonblockingQuestions?: NonblockingQuestionObserver;
     readonly onHistoricalQuestion?: HistoricalQuestionObserver;
   }) {
@@ -271,6 +314,7 @@ export class ConversationActorManager {
     this.#deliveryInputSnapshots = input.deliveryInputSnapshots;
     this.#onAuthoritativeCompletion = input.onAuthoritativeCompletion;
     this.#onAuthoritativeSubmission = input.onAuthoritativeSubmission;
+    this.#onLiveProgress = input.onLiveProgress;
     this.#onNonblockingQuestions = input.onNonblockingQuestions;
     this.#onHistoricalQuestion = input.onHistoricalQuestion;
     assertConversationRetentionMilliseconds(input.retentionMilliseconds);
@@ -284,6 +328,56 @@ export class ConversationActorManager {
       throw new Error("conversation_runtime_pressure_reclaimer_already_bound");
     }
     this.#pressureReclaimer = reclaimer;
+  }
+
+  subscribeInputActivity(listener: InputActivityListener): () => void {
+    if (this.#closing) return () => {};
+    this.#inputActivityListeners.add(listener);
+    return () => { this.#inputActivityListeners.delete(listener); };
+  }
+
+  /** Observe the exclusive owner even when no browser/coordinator lease exists. Never attaches. */
+  observeInputRuntime(
+    scope: Pick<ExecutionScope, "tenantId" | "principalId">,
+    applicationThreadId: string,
+    sourceTurnId?: string,
+  ): ConversationInputRuntimeObservation | undefined {
+    const key = scopedActorKey(scope, applicationThreadId);
+    const entry = this.#entries.get(key);
+    if (this.#closing || this.#maintenance.has(key) || !entry || entry.access !== "execution" ||
+        entry.eviction || entry.poisoned || entry.controlEnded || entry.creationAbort.signal.aborted) return undefined;
+    const observed = entry.actor?.peekInputState();
+    if (!observed) return undefined;
+    const timeline = observed.state.timeline;
+    const turnId = sourceTurnId ?? timeline.activeTurnId ?? timeline.orderedTurnIds.at(-1);
+    const turn = turnId ? timeline.turnsById[turnId] : undefined;
+    let firstInput: ConversationItem | undefined;
+    for (const id of turn?.orderedItemIds ?? []) {
+      if (timeline.itemsById[id]?.kind === "user_message") { firstInput = timeline.itemsById[id]; break; }
+    }
+    return {
+      generation: `${entry.unprojectedGeneration}:${timeline.generation}`,
+      ownerGeneration: entry.unprojectedGeneration,
+      authoritative: observed.authoritative,
+      reestablishing: observed.reestablishing,
+      runState: timeline.runState,
+      settled: observed.settled,
+      ...(timeline.activeTurnId ? { activeTurnId: timeline.activeTurnId } : {}),
+      ...(turn ? { sourceTurnId: turn.id, sourceTurnStatus: turn.status } : {}),
+      ...(firstInput?.kind === "user_message" ? { firstInput: {
+        ...(firstInput.deliveryOperationId ? { operationId: firstInput.deliveryOperationId } : {}),
+      } } : {}),
+      blockingInteractionIds: observed.blockingInteractionIds,
+      backendCapabilities: observed.state.backendCapabilities,
+    };
+  }
+
+  #publishInputActivity(entry: ActorEntry): void {
+    const scope = { tenantId: entry.budgetScope.tenantId, principalId: entry.budgetScope.principalId };
+    for (const listener of [...this.#inputActivityListeners]) {
+      try { listener(scope, entry.applicationThreadId); }
+      catch { /* Input observation cannot affect actor ownership. */ }
+    }
   }
 
   async acquire(
@@ -323,14 +417,17 @@ export class ConversationActorManager {
         const admission = this.#reserveRuntimeSlot(budgetScope);
         const creationAbort = new AbortController();
         const createdEntry = {
+          applicationThreadId: input.binding.applicationThreadId,
           access: input.access ?? "execution",
           nativeEffects: new ConversationNativeEffectFence(),
           unprojectedGeneration: randomUUID(),
           fingerprint,
           budgetScope,
           creationAbort,
+          established: false,
           references: 0,
           controlReferences: 0,
+          controlEnded: false,
           controlsReleased: new Set<() => void>(),
         } as ActorEntry;
         createdEntry.promise = (async () => {
@@ -345,10 +442,12 @@ export class ConversationActorManager {
           );
         })().then((actor) => {
           createdEntry.actor = actor;
+          createdEntry.established = true;
           return actor;
         });
         entry = createdEntry;
         this.#entries.set(key, createdEntry);
+        creationAbort.signal.addEventListener("abort", () => this.#publishInputActivity(createdEntry), { once: true });
         void createdEntry.promise.catch((error) => {
           if (this.#entries.get(key) === createdEntry) {
             if (error instanceof ConversationActorCreationCleanupError) {
@@ -380,7 +479,7 @@ export class ConversationActorManager {
           // Restore can replace a history reader even while an old browser
           // retains it. Closing this acquisition never interrupts agent work.
           let historyActor: ConversationActor;
-          if (!entry.actor) {
+          if (!entry.actor || !entry.established) {
             entry.creationAbort.abort(new ConversationActorCreationAbortedError());
             try { historyActor = await entry.promise; }
             catch (error) {
@@ -549,6 +648,8 @@ export class ConversationActorManager {
       void completion.catch(() => undefined);
       const maintenance = { completion, resolve, reject };
       this.#maintenance.set(key, maintenance);
+      const observedEntry = this.#entries.get(key);
+      if (observedEntry) this.#publishInputActivity(observedEntry);
       let retirementUnproven:
         ConversationActorRetirementUnprovenError | undefined;
       try {
@@ -576,6 +677,7 @@ export class ConversationActorManager {
           } else {
             this.#maintenance.delete(key);
             maintenance.resolve();
+            if (observedEntry) this.#publishInputActivity(observedEntry);
           }
         }
       }
@@ -602,6 +704,8 @@ export class ConversationActorManager {
       void completion.catch(() => undefined);
       const maintenance = { completion, resolve, reject };
       for (const key of keys) this.#maintenance.set(key, maintenance);
+      const observedEntries = keys.flatMap(key => this.#entries.get(key) ?? []);
+      for (const entry of observedEntries) this.#publishInputActivity(entry);
       let retirementUnproven: ConversationActorRetirementUnprovenError | undefined;
       try {
         let releaseCleanup!: () => void;
@@ -616,7 +720,7 @@ export class ConversationActorManager {
           entry.creationAbort.abort(new Error("conversation_actor_explicit_stop"));
           try {
             let actor = entry.actor;
-            if (!actor) {
+            if (!actor || !entry.established) {
               try { actor = await entry.promise; }
               catch (error) {
                 if (error instanceof ConversationActorCreationCleanupError || entry.poisoned) throw entry.poisoned ?? error;
@@ -656,6 +760,7 @@ export class ConversationActorManager {
         else {
           for (const key of keys) if (this.#maintenance.get(key) === maintenance) this.#maintenance.delete(key);
           maintenance.resolve();
+          for (const entry of observedEntries) this.#publishInputActivity(entry);
         }
       }
     }
@@ -664,6 +769,8 @@ export class ConversationActorManager {
   close(): Promise<void> {
     if (this.#closePromise) return this.#closePromise;
     this.#closing = true;
+    for (const entry of this.#entries.values()) this.#publishInputActivity(entry);
+    this.#inputActivityListeners.clear();
     this.#closePromise = (async () => {
       const entries = [...this.#entries.values()];
       for (const entry of entries) {
@@ -816,9 +923,11 @@ export class ConversationActorManager {
               entry.eviction = undefined;
               this.#reconcileEviction(reclaimed.actorKey, entry);
             }
+            this.#publishInputActivity(entry);
           }
         });
       entry.eviction = tracked;
+      this.#publishInputActivity(entry);
       return tracked.then(() => undefined);
     }
     if (ownVictim) {
@@ -928,7 +1037,7 @@ export class ConversationActorManager {
         continue;
       }
       if (entry.references > 0) {
-        if (disposition.kind !== "idle" || (entry.actor && !entry.actor.canEvict)) {
+        if (disposition.kind !== "idle" || (entry.established && entry.actor && !entry.actor.canEvict)) {
           throw new ConversationActorRetirementBusyError();
         }
         // Snapshot readers borrow the same actor as mutations. Once admission
@@ -955,7 +1064,7 @@ export class ConversationActorManager {
         clearTimeout(entry.evictionTimer);
         entry.evictionTimer = undefined;
       }
-      if (!entry.actor) {
+      if (!entry.actor || !entry.established) {
         entry.creationAbort.abort(new Error("conversation_actor_maintenance"));
         try {
           await entry.promise;
@@ -1161,10 +1270,12 @@ export class ConversationActorManager {
           } else if (!this.#closing && entry.references === 0) {
             this.#reconcileEviction(key, entry);
           }
+          this.#publishInputActivity(entry);
         }
       }
     })();
     entry.eviction = eviction;
+    this.#publishInputActivity(entry);
     return eviction;
   }
 
@@ -1190,6 +1301,7 @@ export class ConversationActorManager {
         nativeEffects: entry.nativeEffects,
         attachmentDelivery: this.#attachmentDelivery,
         initialObserver: onStateChanged,
+        onInputStateChanged: () => this.#publishInputActivity(entry),
         projector: new ConversationProjector({
           backendInstanceId: input.binding.backendInstanceId,
           bindingIdentity: input.binding.applicationThreadId,
@@ -1200,6 +1312,7 @@ export class ConversationActorManager {
           } : {}),
         }),
       });
+      entry.actor = actor;
       try {
         await actor.start({ signal });
         return actor;
@@ -1227,8 +1340,14 @@ export class ConversationActorManager {
         onControlReady: control => {
           if (signal.aborted || control.lifetime.aborted || !control.generation) return;
           entry.control = control;
+          entry.controlEnded = false;
+          this.#publishInputActivity(entry);
           control.lifetime.addEventListener("abort", () => {
-            if (entry.control === control) entry.control = undefined;
+            if (entry.control === control) {
+              entry.control = undefined;
+              entry.controlEnded = true;
+              this.#publishInputActivity(entry);
+            }
           }, { once: true });
         },
         onSubmissionObserved: observation => {
@@ -1244,6 +1363,7 @@ export class ConversationActorManager {
         handle,
         nativeEffects: entry.nativeEffects,
         environmentLease: lease,
+        onInputStateChanged: () => this.#publishInputActivity(entry),
         attachmentDelivery: this.#attachmentDelivery,
         ...(this.#deliveryInputSnapshots
           ? {
@@ -1266,6 +1386,17 @@ export class ConversationActorManager {
         initialObserver: (event) => {
 
           onStateChanged();
+          if (event.type === "live_progress" && this.#onLiveProgress) {
+            // Preceding submission observers establish durable admission first.
+            // Delayed observers must never revive progress after the live turn ends.
+            observationChain = observationChain.then(() => {
+              const timeline = actor?.timeline;
+              if (signal.aborted || !timeline || timeline.runState !== "running" ||
+                  timeline.activeTurnId !== event.applicationTurnId ||
+                  timeline.turnsById[event.applicationTurnId]?.status !== "in_progress") return;
+              this.#onLiveProgress?.(input.scope, input.binding.applicationThreadId, event);
+            }).catch(() => undefined);
+          }
           if (
             (event.type === "authoritative_completion" && this.#onAuthoritativeCompletion) ||
             (event.type === "authoritative_submission" && this.#onAuthoritativeSubmission)
@@ -1354,6 +1485,9 @@ export class ConversationActorManager {
             selection,
           }),
       });
+      // Initial projection/completion callbacks must observe this same owner.
+      // peekInputState stays unavailable until start has established cached state.
+      entry.actor = actor;
       await actor.start({ signal });
       return actor;
     } catch (error) {

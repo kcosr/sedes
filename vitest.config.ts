@@ -26,6 +26,7 @@ export default defineConfig({
       "tests/real-grok/**",
       "tests/real-opencode/**",
       "tests/live-opencode/**",
+      "tests/native-voice/**",
       "**/node_modules/**",
       "dist/**",
     ],

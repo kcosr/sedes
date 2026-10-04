@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import type {
   NotificationEventKind,
   NotificationSettings,
+  VoiceAction,
 } from "../../shared/protocol/notification.js";
 import { ApiError } from "../api/ApiClient.js";
 import {
@@ -22,12 +23,14 @@ import {
 } from "./settings/SettingsField.js";
 import { SettingsPage } from "./settings/SettingsPage.js";
 import { SettingsSection } from "./settings/SettingsSection.js";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select.js";
 
 const eventOptions: ReadonlyArray<{
   value: NotificationEventKind;
   label: string;
   description: string;
 }> = [
+  { value: "turn.progress", label: "Turn progress", description: "A completed live assistant update before the turn finishes." },
   {
     value: "turn.completed",
     label: "Turn completed",
@@ -111,7 +114,9 @@ function draftChanged(draft: Draft, saved: NotificationSettings): boolean {
     draft.settings.scriptPath !== saved.scriptPath ||
     draft.argumentsText !== base.argumentsText ||
     draft.timeout !== base.timeout ||
-    sortedKey(draft.settings.events) !== sortedKey(saved.events) ||
+    eventOptions.some(({ value }) =>
+      draft.settings.delivery[value].script !== saved.delivery[value].script ||
+      draft.settings.delivery[value].voice !== saved.delivery[value].voice) ||
     sortedKey(draft.settings.assistantResultPhases) !==
       sortedKey(saved.assistantResultPhases)
   );
@@ -187,7 +192,7 @@ export function NotificationSettingsPage({
       const result = await store.save({
         ...scriptInput(),
         enabled: draft.settings.enabled,
-        events: draft.settings.events,
+        delivery: draft.settings.delivery,
         assistantResultPhases: draft.settings.assistantResultPhases,
         expectedRevision: draft.settings.revision,
       });
@@ -235,7 +240,7 @@ export function NotificationSettingsPage({
     }
   };
   const description =
-    "Run a script on the Sedes server when selected events occur. Settings apply across your clients.";
+    "Choose script and Android voice delivery for each event. Settings apply across your clients.";
   if (!draft)
     return (
       <SettingsPage title="Notifications" description={description}>
@@ -288,7 +293,7 @@ export function NotificationSettingsPage({
         <SwitchField
           id="notifications-enabled"
           label="Enable notifications"
-          description="Run the script below for the selected events."
+          description="Deliver selected events through the script and voice channels."
           checked={draft.settings.enabled}
           disabled={pending}
           onCheckedChange={(enabled) => patch({ enabled })}
@@ -364,29 +369,38 @@ export function NotificationSettingsPage({
       </SettingsSection>
       <SettingsSection
         title="Events"
-        description="The events that run the script."
+        description="Script delivery and voice are independent. Voice also requires an enabled Android voice session."
         card
       >
         {eventOptions.map((option) => {
-          const selected = draft.settings.events.includes(option.value);
+          const delivery = draft.settings.delivery[option.value];
+          const canListen = !["turn.progress", "approval.requested", "input.requested", "question.requested"].includes(option.value);
           return (
             <SwitchField
               key={option.value}
               id={`notification-${option.value}`}
-              label={option.label}
+              label={`Script: ${option.label}`}
               description={option.description}
-              checked={selected}
+              checked={delivery.script}
               disabled={pending}
               onCheckedChange={(checked) =>
                 patch({
-                  events: checked
-                    ? [...draft.settings.events, option.value]
-                    : draft.settings.events.filter(
-                        (value) => value !== option.value,
-                      ),
+                  delivery: { ...draft.settings.delivery, [option.value]: { ...delivery, script: checked } },
                 })
               }
             >
+              <SettingsField id={`voice-${option.value}`} label={`Voice: ${option.label}`}>
+                <Select value={delivery.voice} disabled={pending} onValueChange={(voice) => patch({
+                  delivery: { ...draft.settings.delivery, [option.value]: { ...delivery, voice: voice as VoiceAction } },
+                })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    <SelectItem value="speak">Speak</SelectItem>
+                    {canListen ? <SelectItem value="speakThenListen">Speak then listen</SelectItem> : null}
+                  </SelectContent>
+                </Select>
+              </SettingsField>
               {option.value === "turn.completed" ? (
                 <div
                   className="settings-choice-group"
@@ -402,7 +416,7 @@ export function NotificationSettingsPage({
                         <Checkbox
                           id={`notification-assistant-${value}`}
                           checked={draft.settings.assistantResultPhases.includes(value)}
-                          disabled={pending || !selected}
+                          disabled={pending || (!delivery.script && delivery.voice === "none")}
                           onCheckedChange={(checked) =>
                             patch({
                               assistantResultPhases: assistantResultPhaseOptions
@@ -421,6 +435,7 @@ export function NotificationSettingsPage({
                       </div>
                     ))}
                   </div>
+                  <p className="settings-field-description">Provisional response text may repeat updates already spoken as progress.</p>
                 </div>
               ) : null}
             </SwitchField>

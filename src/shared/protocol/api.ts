@@ -1,4 +1,5 @@
 import { formAnswersSchema } from "./interactions.js";
+import { clientOriginSchema } from "./thread-input.js";
 import {
   environmentVariableOverridesSchema,
   environmentVariablesRevisionSchema,
@@ -1096,6 +1097,7 @@ export const threadApplicationOperationSchema = z.discriminatedUnion("kind", [
   z
     .strictObject({
       kind: z.literal("deliver"),
+      origin: clientOriginSchema.optional(),
       mode: z.enum(["submit", "steer", "queue"]),
       mutationId: mutationIdSchema,
       expectedThreadRevision: z.number().int().nonnegative(),

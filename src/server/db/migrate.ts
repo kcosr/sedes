@@ -17,6 +17,9 @@ import { projectsAndLocationsMigration } from "./migrations/126-projects-and-loc
 import { sharedProjectTasksMigration } from "./migrations/127-shared-project-tasks.js";
 import { taskBacklogMigration } from "./migrations/128-task-backlog.js";
 import { codexUltrafastServiceTierMigration } from "./migrations/129-codex-ultrafast-service-tier.js";
+import { notificationDeliveryMigration } from "./migrations/130-notification-delivery.js";
+import { directThreadInputsMigration } from "./migrations/131-direct-thread-inputs.js";
+import { notificationPathlessScriptDeliveryMigration } from "./migrations/132-notification-pathless-script-delivery.js";
 import { conversationStopReceiptsMigration } from "./migrations/119-conversation-stop-receipts.js";
 import { claudeTurnFailureDetailsMigration } from "./migrations/109-claude-turn-failure-details.js";
 import { forkEnvironmentFingerprintsMigration } from "./migrations/108-fork-environment-fingerprints.js";
@@ -272,6 +275,9 @@ export const backendNormalizedMigrations = [
   sharedProjectTasksMigration,
   taskBacklogMigration,
   codexUltrafastServiceTierMigration,
+  notificationDeliveryMigration,
+  directThreadInputsMigration,
+  notificationPathlessScriptDeliveryMigration,
 ] as const;
 
 export type DatabaseMigration = {

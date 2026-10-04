@@ -27,10 +27,12 @@ comparison, compatibility policy, and security boundary.
 - Bounded native copy/save actions for provider-generated PNG, JPEG, GIF, and
   WebP images.
 
-The source manifest requests only `android.permission.INTERNET`. There is no
-microphone, media, notification, foreground-service, or broad storage
-permission, and the package does not contain a Sedes backend or provider
-credentials.
+The package supports [native voice](voice.md) through an Android foreground
+service. Its reviewed permission set includes network access, microphone,
+notifications, foreground media playback/microphone service types, audio routing,
+and wake locks. It requests no broad storage permission and contains no Sedes
+backend or provider credentials. Microphone permission is requested when enabling
+voice; notification permission controls the normal notification presentation.
 
 ## Saved connections and pairing
 
@@ -138,6 +140,19 @@ and do not enable the wildcard LAN listener merely for tailnet access. The same
 rules apply to an operator-controlled HTTPS proxy: the proxy and network must
 provide the private network boundary in addition to Sedes pairing authentication.
 
+The Android app trusts system certificate authorities and CA certificates
+installed by the user, or by device management (MDM), in Android's credential
+settings. This trust is app-wide. It applies to every HTTPS and secure WebSocket
+connection the app makes, including WebView and native requests to Sedes that
+carry the paired credential, and voice-adapter connections. Anyone able to
+install a CA certificate on the device can therefore intercept and read all
+Sedes traffic from this app, including that credential. Install only CA
+certificates you control, and review the device's user certificate store before
+pairing. For a private CA, install its certificate on the device before
+connecting. Certificate-chain, validity, and hostname checks remain enabled; the
+server certificate must cover the hostname in the saved URL. Trust follows the
+device's certificate store, not a Sedes profile setting.
+
 ## Direct trusted-home-LAN mode
 
 Direct LAN HTTP is available for a deliberately trusted home network. It is
@@ -240,8 +255,8 @@ network path and at least the following:
 8. Activity modes: reconnect and page history in detailed and summary modes;
    summary responses must omit raw reasoning, tool payloads, and tool errors.
 9. Permissions: inspect the merged manifest and installed-app permission screen;
-   only network access should be requested and the output-image provider must
-   remain non-exported.
+   microphone and notification prompts should accompany voice enablement. The
+   voice service and output-image provider must remain non-exported.
 
 For an eligible Codex thread, additionally verify a complete initial terminal
 repaint, input and resize, composed Unicode text, Backspace/navigation controls,
@@ -287,7 +302,9 @@ sidecar interruption retains truthful history until removal.
 - Output-image copy/save revalidates the closed image MIME set, byte count,
   signature, SHA-256, and 16 MiB ceiling. Clipboard data is exposed from an
   app-cache file through a non-exported, read-granting provider.
-- Backgrounding suspends application, thread, and Files event streams. On
+- Backgrounding suspends WebView application, thread, and Files event streams.
+  An enabled native voice service owns a separate live notification connection
+  and may continue playback and recording while Android permits it. On
   resume, application inventory and an open thread receive retained replay when
   possible and otherwise one fresh authoritative snapshot. Session metadata is
   refreshed separately from inventory, and backgrounding does not create a

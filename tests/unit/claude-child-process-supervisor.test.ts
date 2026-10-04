@@ -258,6 +258,37 @@ describe("Claude child process supervisor", () => {
     await expect(supervisor.close()).resolves.toBeUndefined();
   });
 
+  it("waits for probe stdout to drain after the process exits", async () => {
+    const supervisor = shortSupervisor();
+    const originalSpawn = supervisor.spawn.bind(supervisor);
+    let spawned!: ReturnType<ClaudeChildProcessSupervisor["spawn"]>;
+    const spawnProbe = vi.spyOn(supervisor, "spawn").mockImplementation((options) => {
+      spawned = originalSpawn(options);
+      return spawned;
+    });
+    let settled = false;
+    const probing = supervisor.executeProbe({
+      executablePath: process.execPath,
+      arguments: ["-e", "process.stdout.write('complete probe output')"],
+      timeoutMilliseconds: 5_000,
+    }).finally(() => { settled = true; });
+    // Hold the real pipe unread until the child's exit event has been handled.
+    // Exit is allowed to arrive before stdout delivery; it is not EOF.
+    spawned.stdout.pause();
+    try {
+      await new Promise<void>((resolve) => spawned.once("exit", () => resolve()));
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      spawned.stdout.resume();
+      await expect(probing).resolves.toBe("complete probe output");
+    } finally {
+      spawned.stdout.resume();
+      await probing.catch(() => undefined);
+      spawnProbe.mockRestore();
+      await supervisor.close();
+    }
+  });
+
   it("terminates the exact tracked probe group on caller cancellation", async () => {
     const supervisor = shortSupervisor();
     const controller = new AbortController();

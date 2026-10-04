@@ -11,6 +11,8 @@ import type { SedesServerEndpoint } from "../app/server-endpoint.js";
 import { Button } from "../components/ui/button.js";
 import { FullPageLoading } from "../components/LoadingStates.js";
 import { authenticatedFetch, onUnauthorized, setEndpointProfile, setEndpointCredential } from "./auth-transport.js";
+import { VoiceProvider } from "../voice/VoiceProvider.js";
+import { disconnectNativeVoice } from "../voice/native-voice-plugin.js";
 
 type Client = AuthenticationClient;
 interface GateScope { alive: boolean; epoch: number; controller: AbortController }
@@ -78,6 +80,7 @@ export function AuthenticationGate({ endpoint, profileId, children, settings }: 
     setBusy(false);
     const unsubscribe = onUnauthorized(endpoint, () => {
       if (!scope.alive) return;
+      void disconnectNativeVoice();
       setStatus((current) => ({ required: current?.required ?? true, authenticated: false }));
       setError("This connection needs to be paired again.");
       scope.epoch += 1;
@@ -177,6 +180,8 @@ export function AuthenticationGate({ endpoint, profileId, children, settings }: 
   async function logout(): Promise<void> {
     const operation = ticket();
     await request("/api/auth/logout", { method: "POST" }, operation);
+    // Removing the credential disconnects this profile's native voice first (ClientCredentials), so logout does not
+    // depend on a separate bridge call that could fail and leave the credential behind.
     if (native && profileId) {
       await writeCredential(profileId, serverOrigin, () => isCurrent(operation), () => removeCredential(profileId, serverOrigin));
       check(operation);
@@ -224,6 +229,6 @@ export function AuthenticationGate({ endpoint, profileId, children, settings }: 
       </div>
     </main>
   );
-  return <AuthenticationContext.Provider key={JSON.stringify([serverOrigin, status.navigationNamespace, status.client?.id ?? "anonymous"])} value={controls}><NavigationScopeContext.Provider value={status.navigationNamespace ? JSON.stringify([serverOrigin, status.navigationNamespace]) : undefined}>{children}</NavigationScopeContext.Provider></AuthenticationContext.Provider>;
+  return <AuthenticationContext.Provider key={JSON.stringify([serverOrigin, status.navigationNamespace, status.client?.id ?? "anonymous"])} value={controls}><NavigationScopeContext.Provider value={status.navigationNamespace ? JSON.stringify([serverOrigin, status.navigationNamespace]) : undefined}><VoiceProvider profileId={profileId} serverOrigin={serverOrigin} identity={status.navigationNamespace}>{children}</VoiceProvider></NavigationScopeContext.Provider></AuthenticationContext.Provider>;
 }
 function message(error: unknown): string { return error instanceof Error ? error.message : "The connection could not be authenticated."; }

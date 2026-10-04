@@ -350,7 +350,10 @@ export class ClaudeChildProcessSupervisor {
         abortController.abort(error);
         reject(new Error("claude_worker_probe_failed", { cause: error }));
       });
-      process.once("exit", (code, signal) => {
+      // A successful exit does not prove stdout has drained. The SDK-shaped
+      // process exposes exit only, so observe the owned child's close event.
+      // Otherwise overlapping short probes can return an empty auth response.
+      this.#records.get(process)!.child.once("close", (code, signal) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);

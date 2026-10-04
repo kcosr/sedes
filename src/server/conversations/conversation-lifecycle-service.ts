@@ -42,6 +42,8 @@ import type { ConversationActorManager } from "./conversation-actor-manager.js";
 import type { ComposerAttachmentDeliveryService } from "../composer-attachments/composer-attachment-delivery-service.js";
 import { ThreadCompletionCallbackRepository } from "../db/repositories/thread-completion-callback-repository.js";
 import { boundDisplayText } from "./payload-policy.js";
+import type { ClientOrigin, DirectInputRequest } from "../../shared/protocol/thread-input.js";
+import { DirectInputRepository } from "../db/repositories/direct-input-repository.js";
 
 export interface ResolvedLifecycleTarget {
   readonly connection: AgentConnectionProfile;
@@ -552,6 +554,7 @@ export class ConversationLifecycleService {
       readonly mutationId: string;
       readonly expectedThreadRevision: number;
       readonly expectedDraftRevision: number;
+      readonly origin?: ClientOrigin;
     },
   ): Promise<FirstSendResult> {
     const key = operationKey(scope, applicationThreadId, input.mutationId);
@@ -580,6 +583,51 @@ export class ConversationLifecycleService {
   isBoundFirstInputMutation(scope: RequestScope, mutationId: string): boolean {
     const attempt = this.#creation.findByMutationId(scope, mutationId);
     return attempt?.creationKind === "first_input" && attempt.phase === "bound";
+  }
+
+  /** Prepare content and its principal-wide receipt atomically before any provider mutation. */
+  async startDirectFirstSend(
+    scope: RequestScope,
+    applicationThreadId: string,
+    request: DirectInputRequest,
+    /**
+     * Revalidates admission inside the transaction and returns the revision the
+     * caller validated; a stale revision fails the prepare fence. It may throw
+     * to roll the reservation back.
+     */
+    assertAdmission: () => number,
+  ): Promise<FirstSendResult> {
+    const receipts = new DirectInputRepository(this.#bindings.database);
+    const existing = receipts.replay(scope, applicationThreadId, request);
+    if (existing) {
+      if (existing.creationAttemptId === null) {
+        throw new DomainError("conflict", "This input was admitted through the durable queue.");
+      }
+      return this.recoverFirstSend(scope, applicationThreadId, existing.creationAttemptId);
+    }
+    await this.#validateInitialization(scope, applicationThreadId);
+    const backendCreationCorrelation = await this.#reserveCreationCorrelation(scope, applicationThreadId);
+    const attempt = this.#bindings.database.transaction(() => {
+      const replay = receipts.replay(scope, applicationThreadId, request);
+      if (replay) {
+        if (replay.creationAttemptId === null) throw new DomainError("conflict", "This input was already queued.");
+        return this.#creation.get(scope, applicationThreadId, replay.creationAttemptId);
+      }
+      // Initialization can await provider work. Inventory/recovery authority
+      // must still be current at the atomic first-send admission boundary.
+      const expectedThreadRevision = assertAdmission();
+      const prepared = this.#creation.prepare(scope, applicationThreadId, {
+        attemptId: this.#id(), mutationId: request.mutationId,
+        expectedThreadRevision, creationKind: "first_input", sourceKind: "direct_input",
+        initialInputText: request.text, initialAttachmentIds: [], origin: request.origin,
+        backendCreationCorrelation, now: this.#now(),
+      });
+      receipts.record(scope, applicationThreadId, request, {
+        admittedMode: "submit", creationAttemptId: prepared.attemptId, now: this.#now(),
+      });
+      return prepared;
+    })();
+    return this.recoverFirstSend(scope, applicationThreadId, attempt.attemptId);
   }
 
   startAutomationFirstSend(
@@ -937,6 +985,7 @@ export class ConversationLifecycleService {
       readonly mutationId: string;
       readonly expectedThreadRevision: number;
       readonly expectedDraftRevision: number;
+      readonly origin?: ClientOrigin;
     },
   ): Promise<FirstSendResult> {
     const replay = this.#creation.findByMutationId(scope, input.mutationId);
@@ -954,6 +1003,7 @@ export class ConversationLifecycleService {
           "The first-send mutation ID was reused with different input.",
         );
       }
+      new DirectInputRepository(this.#bindings.database).recordOrigin(scope, applicationThreadId, input.mutationId, input.origin);
       return this.#runAttemptOperation(
         scope,
         applicationThreadId,
@@ -986,6 +1036,7 @@ export class ConversationLifecycleService {
           expectedThreadRevision: input.expectedThreadRevision,
           creationKind: "first_input",
           sourceKind: "composer",
+          ...(input.origin ? { origin: input.origin } : {}),
           initialInputText: draft.text,
           ...(draft.selectedSkillId === null
             ? {}
@@ -1087,6 +1138,21 @@ export class ConversationLifecycleService {
     );
     if (!attempt || attempt.creationKind !== "first_input") return undefined;
     return this.recoverFirstSend(scope, applicationThreadId, attempt.attemptId);
+  }
+
+  /**
+   * A replayed direct first send recovers its own unfinished reservation as
+   * the same operation, as a composer retry does. Terminal and force-reset
+   * attempts are only presented; no other attempt is ever driven.
+   */
+  resumeDirectFirstSend(
+    scope: RequestScope,
+    applicationThreadId: string,
+    attemptId: string,
+  ): Promise<FirstSendResult> | undefined {
+    const attempt = this.#creation.findActiveForThread(scope, applicationThreadId);
+    if (attempt?.attemptId !== attemptId || attempt.sourceKind !== "direct_input") return undefined;
+    return this.recoverFirstSend(scope, applicationThreadId, attemptId);
   }
 
   /** Finalize only the exact post-submission attempt; never enter effectful recovery branches. */

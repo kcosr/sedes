@@ -36,6 +36,44 @@ function snapshot(): BackendConversationSnapshot {
 }
 
 describe("ConversationProjector", () => {
+  it("retains completion-correlation-only updates without changing the browser timeline", () => {
+    const projector = new ConversationProjector({ backendInstanceId: "backend", bindingIdentity: "binding" });
+    const source = snapshot();
+    const turn = {
+      backendTurnId: "user-1",
+      status: "in_progress" as const,
+      orderedBackendItemIds: source.turnsById["user-1"]!.orderedBackendItemIds,
+    };
+    const initial = projector.replace({
+      ...source,
+      turnsById: { [turn.backendTurnId]: turn },
+      activeBackendTurnId: turn.backendTurnId,
+      runState: "running",
+    }, -1);
+    const turnId = initial.orderedTurnIds[0]!;
+    expect(projector.backendTurns()[0]).not.toHaveProperty("completionCorrelations");
+
+    const updates: Array<string[] | undefined> = [
+      ["submit-operation"],
+      ["submit-operation", "steer-operation"],
+      ["steer-operation", "submit-operation"],
+      ["steer-operation", "submit-operation"],
+      undefined,
+    ];
+    for (const [handleSequence, completionCorrelations] of updates.entries()) {
+      expect(projector.apply({ handleSequence, event: {
+        type: "turn_updated", turn: {
+          ...turn,
+          ...(completionCorrelations ? { completionCorrelations } : {}),
+        },
+      } })).toEqual({ kind: "events", events: [] });
+      expect(projector.backendTurns()[0]?.completionCorrelations).toEqual(completionCorrelations);
+      expect(projector.timeline()).toEqual(initial);
+      expect(projector.timeline().turnsById[turnId]).toBe(initial.turnsById[turnId]);
+      expect(projector.timeline().turnsById[turnId]).not.toHaveProperty("completionCorrelations");
+    }
+  });
+
   it("preserves volatile throughput in snapshots and pages, publishes metric-only enrichment, and clears it on replacement", () => {
     const projector = new ConversationProjector({ backendInstanceId: "backend", bindingIdentity: "binding" });
     const source = snapshot();

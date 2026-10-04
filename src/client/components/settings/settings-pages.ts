@@ -7,6 +7,7 @@ import {
   Folder,
   KeyRound,
   MessageSquareText,
+  Mic,
   MonitorSmartphone,
   Network,
   Server,
@@ -36,6 +37,7 @@ export type SettingsGroupId = (typeof SETTINGS_GROUPS)[number]["id"];
 export interface SettingsAvailability {
   readonly prompts: boolean;
   readonly notifications: boolean;
+  readonly voice: boolean;
   readonly execution: boolean;
   readonly projects: boolean;
   /** Saved Agents: the client can reach the principal's Agent presets. */
@@ -94,6 +96,8 @@ export const SETTINGS_PAGES: readonly SettingsPageEntry[] = [
     group: "preferences",
     available: always,
   },
+  { id: "voice", label: "Voice", description: "Android speech, microphone and follow-up.", icon: Mic,
+    group: "preferences", available: ({ voice }) => voice },
   {
     id: "prompts",
     label: "Prompts",

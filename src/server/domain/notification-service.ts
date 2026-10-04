@@ -1,9 +1,12 @@
 import type { ClassifiedAssistantResult } from "../../shared/protocol/completion-result.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { BoundedText } from "../../shared/protocol/payload.js";
 import {
   testNotificationRequestSchema,
   updateNotificationSettingsRequestSchema,
+  voiceNotificationSchema,
+  type VoiceAction,
+  type VoiceRecognitionTarget,
   type NotificationEventPayload,
   type NotificationAssistantResultPhase,
   type NotificationPayload,
@@ -12,7 +15,7 @@ import {
   type TestNotificationRequest,
   type UpdateNotificationSettingsRequest,
 } from "../../shared/protocol/notification.js";
-import type { NotificationRepository } from "../db/repositories/notification-repository.js";
+import type { NotificationDispatchSettings, NotificationRepository } from "../db/repositories/notification-repository.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import { executeNotificationScript } from "../runtime/notification-script-executor.js";
 import { DomainError } from "./errors.js";
@@ -25,6 +28,16 @@ type Pending = {
   readonly payload: NotificationPayload;
   readonly generation: number;
 };
+export type VoiceNotificationContext = {
+  readonly origin?: { readonly clientId: string };
+  readonly recognitionTarget?: VoiceRecognitionTarget;
+  readonly subjectId?: string;
+  /** The epoch and recipients are captured before waiting for terminal settlement. */
+  readonly settlement?: Promise<VoiceRecognitionTarget | undefined>;
+};
+type Subscriber = { readonly scope: RequestScope; readonly listener: (frame: string) => void };
+const sameScope = (left: RequestScope, right: RequestScope) =>
+  left.tenantId === right.tenantId && left.principalId === right.principalId;
 
 /** Passive, best-effort hooks. No durable delivery queue, receipts, or retries. */
 export class NotificationService {
@@ -34,6 +47,8 @@ export class NotificationService {
     Promise<NotificationTestResult>
   >();
   readonly #cwd = process.cwd();
+  readonly #subscribers = new Set<Subscriber>();
+  readonly #deferred = new Map<object, RequestScope>();
   #closed = false;
   #scheduled = false;
 
@@ -50,6 +65,21 @@ export class NotificationService {
     return this.input.repository.read(scope);
   }
 
+  /** Subscribe and deliver policy synchronously; this lane has no replay or inventory cursor. */
+  subscribe(scope: RequestScope, listener: (frame: string) => void): () => void {
+    let policy: NotificationDispatchSettings;
+    try { policy = this.input.repository.readDispatch(scope); } catch {
+      // No policy, no lane: the stream keeps inventory and never receives voice frames.
+      this.#report("Notification policy could not be read; voice notifications are unavailable on this stream.");
+      return () => {};
+    }
+    if (this.#closed) return () => {};
+    const subscriber = { scope: { ...scope }, listener };
+    this.#subscribers.add(subscriber);
+    this.#deliver(subscriber, "notification_policy", policy);
+    return () => { this.#subscribers.delete(subscriber); };
+  }
+
   update(
     scope: RequestScope,
     input: UpdateNotificationSettingsRequest,
@@ -60,6 +90,7 @@ export class NotificationService {
       this.#now(),
     );
     this.#discardPending(scope);
+    this.#publishPolicy(scope);
     return settings;
   }
 
@@ -70,7 +101,10 @@ export class NotificationService {
       silenced,
       this.#now(),
     );
-    if (before.silenced !== silenced) this.#discardPending(scope);
+    if (before.silenced !== silenced) {
+      this.#discardPending(scope);
+      this.#publishPolicy(scope);
+    }
     return settings;
   }
 
@@ -87,7 +121,7 @@ export class NotificationService {
       );
     }
     return this.#execute(script, {
-      schemaVersion: 3,
+      schemaVersion: 4,
       notificationId: randomUUID(),
       event: "notification.test",
       occurredAt: new Date(this.#now()).toISOString(),
@@ -96,11 +130,16 @@ export class NotificationService {
     });
   }
 
+  /**
+   * Claim once, then dispatch script and voice independently. Payload, result
+   * and voice-context work runs only when a channel can deliver.
+   */
   emit(
     scope: RequestScope,
     event: NotificationEventPayload,
     eventKey: string,
     assistantResult?: ClassifiedAssistantResult,
+    voiceContext?: () => VoiceNotificationContext,
   ): void {
     if (this.#closed) return;
     try {
@@ -114,38 +153,24 @@ export class NotificationService {
       if (
         !dispatch ||
         !dispatch.settings.enabled ||
-        dispatch.settings.silenced ||
-        !dispatch.settings.events.includes(event.event) ||
-        this.#pending.length >= MAX_PENDING
+        dispatch.settings.silenced
       )
         return;
-      let payload: NotificationPayload = {
-        ...structuredClone(event),
-        schemaVersion: 3,
-        notificationId: randomUUID(),
-      };
-      // Event metadata is bounded independently of any source transcript size.
-      if (
-        Buffer.byteLength(JSON.stringify(payload), "utf8") > MAX_PAYLOAD_BYTES
-      )
-        return;
-      if (
-        event.event === "turn.completed" &&
-        dispatch.settings.assistantResultPhases.length > 0 &&
-        assistantResult !== undefined
-      ) {
-        payload = withAssistantResult(
-          payload,
-          assistantResult,
-          dispatch.settings.assistantResultPhases,
-        );
+      const channels = dispatch.settings.delivery[event.event];
+      const script = channels.script && this.#pending.length < MAX_PENDING;
+      // Recipients are fixed at emission; later subscribers never join.
+      const recipients = channels.voice === "none" ? []
+        : [...this.#subscribers].filter((subscriber) => sameScope(scope, subscriber.scope));
+      if (!script && !recipients.length) return;
+      const payload = notificationPayload(event, dispatch.settings, assistantResult);
+      if (!payload) return;
+      if (script) {
+        this.#pending.push({ scope: { ...scope }, payload, generation: dispatch.generation });
+        this.#schedule();
       }
-      this.#pending.push({
-        scope: { ...scope },
-        payload,
-        generation: dispatch.generation,
-      });
-      this.#schedule();
+      if (recipients.length) {
+        this.#voice(scope, eventKey, payload, channels.voice, dispatch.generation, recipients, voiceContext);
+      }
     } catch {
       this.#report("Notification event could not be processed.");
     }
@@ -154,8 +179,47 @@ export class NotificationService {
   async close(): Promise<void> {
     this.#closed = true;
     this.#pending.length = 0;
+    this.#deferred.clear();
+    this.#subscribers.clear();
     for (const controller of this.#active.keys()) controller.abort();
     await Promise.allSettled(this.#active.values());
+  }
+
+  /** Context capture and the strict envelope parse are voice-only; failures never reach the script lane. */
+  #voice(
+    scope: RequestScope,
+    eventKey: string,
+    payload: NotificationPayload,
+    voice: VoiceAction,
+    generation: number,
+    recipients: readonly Subscriber[],
+    voiceContext: (() => VoiceNotificationContext) | undefined,
+  ): void {
+    try {
+      const { settlement, ...context } = voiceContext?.() ?? {};
+      const envelope = {
+        payload, sourceEventId: createHash("sha256").update(eventKey).digest("hex"),
+        voice, generation, ...context,
+      };
+      const publish = (recognitionTarget: VoiceRecognitionTarget | undefined) => {
+        if (this.#closed || this.input.repository.readDispatch(scope).generation !== generation) return;
+        const value = voiceNotificationSchema.parse({ ...envelope, recognitionTarget });
+        for (const recipient of recipients) this.#deliver(recipient, "notification", value);
+      };
+      if (settlement) {
+        // Bound transient waiting independently from script capacity.
+        if (this.#deferred.size >= 128) { publish(undefined); return; }
+        const key = {};
+        this.#deferred.set(key, scope);
+        void settlement.then((target) => {
+          if (this.#deferred.delete(key)) publish(target);
+        }, () => {
+          if (this.#deferred.delete(key)) publish(undefined);
+        }).catch(() => this.#report("Deferred voice notification could not be processed."));
+      } else publish(context.recognitionTarget);
+    } catch {
+      this.#report("Voice notification could not be processed.");
+    }
   }
 
   #schedule(): void {
@@ -180,9 +244,7 @@ export class NotificationService {
           current.generation !== pending.generation ||
           !current.settings.enabled ||
           current.settings.silenced ||
-          !current.settings.events.includes(
-            pending.payload.event as NotificationEventPayload["event"],
-          )
+          !current.settings.delivery[pending.payload.event as NotificationEventPayload["event"]].script
         )
           continue;
         void this.#execute(current.settings, pending.payload).then((result) => {
@@ -229,6 +291,9 @@ export class NotificationService {
   }
 
   #discardPending(scope: RequestScope): void {
+    for (const [key, pendingScope] of this.#deferred) {
+      if (sameScope(scope, pendingScope)) this.#deferred.delete(key);
+    }
     for (let index = this.#pending.length - 1; index >= 0; index -= 1) {
       const pending = this.#pending[index]!;
       if (
@@ -238,6 +303,19 @@ export class NotificationService {
         this.#pending.splice(index, 1);
       }
     }
+  }
+
+  #publishPolicy(scope: RequestScope): void {
+    const policy = this.input.repository.readDispatch(scope);
+    for (const subscriber of [...this.#subscribers]) {
+      if (sameScope(scope, subscriber.scope)) this.#deliver(subscriber, "notification_policy", policy);
+    }
+  }
+
+  #deliver(subscriber: Subscriber, event: string, data: unknown): void {
+    if (!this.#subscribers.has(subscriber)) return;
+    try { subscriber.listener(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
+    catch { this.#subscribers.delete(subscriber); }
   }
 
   #now(): number {
@@ -251,6 +329,72 @@ export class NotificationService {
       /* Hooks cannot fail conversation work. */
     }
   }
+}
+
+const fitsPayload = (payload: NotificationPayload) =>
+  Buffer.byteLength(JSON.stringify(payload), "utf8") <= MAX_PAYLOAD_BYTES;
+
+/** Event metadata is bounded independently of any source transcript size; only progress text shortens. */
+function notificationPayload(
+  event: NotificationEventPayload,
+  settings: NotificationSettings,
+  assistantResult: ClassifiedAssistantResult | undefined,
+): NotificationPayload | undefined {
+  let payload: NotificationPayload = {
+    ...structuredClone(event),
+    schemaVersion: 4,
+    notificationId: randomUUID(),
+  };
+  if (!fitsPayload(payload)) {
+    const progress = payload.progress;
+    if (!progress?.text || !fitText(progress, () => fitsPayload(payload), (text) => {
+      payload = { ...payload, progress: { itemId: progress.itemId, ...text } };
+    })) return undefined;
+  }
+  if (
+    event.event === "turn.completed" &&
+    settings.assistantResultPhases.length > 0 &&
+    assistantResult !== undefined
+  ) {
+    payload = withAssistantResult(
+      payload,
+      assistantResult,
+      settings.assistantResultPhases,
+    );
+  }
+  return payload;
+}
+
+/** Keep the longest code-point prefix that fits, marking byte-limit truncation; false if even empty text cannot. */
+function fitText(
+  original: BoundedText,
+  fits: () => boolean,
+  assign: (text: BoundedText) => void,
+): boolean {
+  const points = Array.from(original.text);
+  const candidate = (count: number): BoundedText => {
+    const text = points.slice(0, count).join("") + (count > 0 ? "…" : "");
+    return { text, truncation: {
+      ...original.truncation,
+      truncated: true,
+      retainedBytes: Buffer.byteLength(text, "utf8"),
+      reason: "byte_limit",
+    } };
+  };
+  let best = candidate(0);
+  assign(best);
+  if (!fits()) return false;
+  let low = 1;
+  let high = Math.max(0, points.length - 1);
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const next = candidate(middle);
+    assign(next);
+    if (fits()) { best = next; low = middle + 1; }
+    else high = middle - 1;
+  }
+  assign(best);
+  return true;
 }
 
 /** Fit escaped JSON while preserving final text ahead of provisional/unknown text. */
@@ -267,34 +411,12 @@ function withAssistantResult(
     }
   }
   const payload = { ...metadata, assistantResult: sections };
-  const fits = () => Buffer.byteLength(JSON.stringify(payload), "utf8") <= MAX_PAYLOAD_BYTES;
+  const fits = () => fitsPayload(payload);
   if (fits()) return payload;
   for (const phase of ["unclassified", "provisional", "final"] as const) {
     const original = sections[phase];
     if (original == null || original.text.length === 0) continue;
-    const points = Array.from(original.text);
-    const candidate = (count: number): BoundedText => {
-      const text = points.slice(0, count).join("") + (count > 0 ? "…" : "");
-      return { text, truncation: {
-        ...original.truncation,
-        truncated: true,
-        retainedBytes: Buffer.byteLength(text, "utf8"),
-        reason: "byte_limit",
-      } };
-    };
-    sections[phase] = candidate(0);
-    if (!fits()) continue;
-    let best = sections[phase];
-    let low = 1;
-    let high = Math.max(0, points.length - 1);
-    while (low <= high) {
-      const middle = Math.floor((low + high) / 2);
-      sections[phase] = candidate(middle);
-      if (fits()) { best = sections[phase]; low = middle + 1; }
-      else high = middle - 1;
-    }
-    sections[phase] = best;
-    return payload;
+    if (fitText(original, fits, (text) => { sections[phase] = text; })) return payload;
   }
   return fits() ? payload : metadata;
 }

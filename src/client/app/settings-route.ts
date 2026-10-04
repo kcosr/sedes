@@ -2,6 +2,7 @@
 export type SettingsPage =
   | "paired_clients"
   | "notifications"
+  | "voice"
   | "general"
   | "diagnostics"
   | "appearance"
@@ -19,6 +20,7 @@ export type SettingsPage =
 export const settingsPageSlugs = {
   paired_clients: "paired-clients",
   notifications: "notifications",
+  voice: "voice",
   general: "general",
   diagnostics: "diagnostics",
   appearance: "appearance",

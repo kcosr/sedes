@@ -3,8 +3,12 @@ package dev.sedes.local;
 import android.content.Context;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
+import android.system.ErrnoException;
+import android.system.Os;
+import android.system.OsConstants;
 import android.util.AtomicFile;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -41,7 +45,6 @@ final class ClientCredentialStore {
         StringBuilder name = new StringBuilder();
         for (byte value : hash) name.append(String.format(java.util.Locale.ROOT, "%02x", value & 255));
         File directory = profileDirectory(binding.substring(0, binding.indexOf("\n")));
-        if (!directory.isDirectory() && !directory.mkdirs()) throw new IllegalStateException("credential_storage_unavailable");
         return new AtomicFile(new File(directory, name + ".enc"));
     }
     private File profileDirectory(String profileId) throws Exception {
@@ -73,14 +76,29 @@ final class ClientCredentialStore {
     String getCredential(String profileId, String serverUrl) throws Exception {
         synchronized (LOCK) {
         String binding = binding(profileId, serverUrl);
-        AtomicFile file = file(binding);
-        if (!file.getBaseFile().exists()) return null;
-        byte[] encrypted = file.readFully();
+        byte[] encrypted;
+        AtomicFile target = file(binding);
+        // readFully restores an interrupted pre-R write from its backup; checking the base file first would discard it.
+        try { encrypted = target.readFully(); }
+        catch (FileNotFoundException error) {
+            // Failed opens also report permissions and I/O errors this way. Only proven absence means unpaired.
+            try {
+                if (missing(target.getBaseFile()) && missing(new File(target.getBaseFile().getPath() + ".bak"))) return null;
+            } catch (ErrnoException check) { error.addSuppressed(check); }
+            throw new IllegalStateException("credential_storage_unavailable", error);
+        }
         if (encrypted.length < 29 || encrypted[0] != 1) throw new IllegalStateException("credential_record_invalid");
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
         cipher.init(Cipher.DECRYPT_MODE, key(), new GCMParameterSpec(128, Arrays.copyOfRange(encrypted, 1, 13)));
         cipher.updateAAD(binding.getBytes(StandardCharsets.UTF_8));
         return new String(cipher.doFinal(encrypted, 13, encrypted.length - 13), StandardCharsets.UTF_8);
+        }
+    }
+    private static boolean missing(File file) throws ErrnoException {
+        try { Os.lstat(file.getPath()); return false; }
+        catch (ErrnoException error) {
+            if (error.errno == OsConstants.ENOENT) return true;
+            throw error;
         }
     }
     void setCredential(String profileId, String serverUrl, String credential) throws Exception {
@@ -91,6 +109,8 @@ final class ClientCredentialStore {
         cipher.init(Cipher.ENCRYPT_MODE, key());
         cipher.updateAAD(binding.getBytes(StandardCharsets.UTF_8));
         AtomicFile file = file(binding);
+        File directory = file.getBaseFile().getParentFile();
+        if (!directory.isDirectory() && !directory.mkdirs()) throw new IllegalStateException("credential_storage_unavailable");
         FileOutputStream output = null;
         try {
             output = file.startWrite();

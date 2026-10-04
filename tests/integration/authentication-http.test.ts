@@ -99,6 +99,10 @@ describe("authentication HTTP admission", () => {
     const { api } = fixture();
     await api.get("/").set("Host", "127.0.0.1").expect(200);
     await api.get("/api/private").set("Host", "127.0.0.1").expect(401);
+    await api.post("/api/threads/thread/inputs").set("Host", "127.0.0.1").expect(401);
+    await api.get("/api/threads/thread/input-context").set("Host", "127.0.0.1").expect(401);
+    await api.get("/api/input-receipts/mutation").set("Host", "127.0.0.1").expect(401);
+    await api.get("/api/application/events").set("Host", "127.0.0.1").expect(401);
     await api.get("/api/agent-tools").set("Host", "127.0.0.1").expect(418);
     await api.get("/api/agent-tools/other").set("Host", "127.0.0.1").expect(401);
     await api.get("/api/outbound/connector/sedes-sidecar.mjs").set("Host", "127.0.0.1").expect(200);

@@ -1,10 +1,12 @@
 import { EventEmitter } from "node:events";
+import { createServer } from "node:http";
 import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  checkLocalHealth,
   hydrateManagedLocalPath,
   LocalServerManager,
   pairLocalServer,
@@ -13,6 +15,7 @@ import {
   readLoginShellPath,
   spawnLocalServer,
 } from "../../packages/electron-connection-runtime/electron/dist/local-server-manager.mjs";
+import { SEDES_VERSION } from "../../src/shared/version.ts";
 
 const temporaryDirectories = [];
 const connectionId = "10000000-0000-4000-8000-000000000001";
@@ -60,6 +63,42 @@ afterEach(async () => {
 });
 
 describe("Electron managed local server", () => {
+  it("checks the required authenticated health fields, tolerates additive fields, and rejects obsolete or unhealthy responses", async () => {
+    let status = 200;
+    let payload = { status: "ok", version: SEDES_VERSION };
+    const requests = [];
+    const server = createServer((request, response) => {
+      requests.push({ path: request.url, authorization: request.headers.authorization });
+      response.writeHead(status, { "Content-Type": "application/json" });
+      response.end(JSON.stringify(payload));
+    });
+    await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+    const input = { host: "127.0.0.1", port: server.address().port, credential: "health-fixture-credential" };
+    try {
+      await expect(checkLocalHealth(input)).resolves.toBeUndefined();
+      expect(requests).toEqual([{ path: "/api/health", authorization: "Bearer health-fixture-credential" }]);
+      payload = { status: "ok", version: SEDES_VERSION, additive: { ready: true } };
+      await expect(checkLocalHealth(input)).resolves.toBeUndefined();
+      for (const invalid of [
+        { status: "ok" },
+        { status: "ok", version: "" },
+        { status: "ok", version: 1 },
+        { version: SEDES_VERSION, additive: true },
+        { status: "draining", version: SEDES_VERSION },
+        ["ok", SEDES_VERSION],
+        null,
+      ]) {
+        payload = invalid;
+        await expect(checkLocalHealth(input)).rejects.toMatchObject({ code: "local_server_health_invalid" });
+      }
+      status = 503;
+      payload = { status: "ok", version: SEDES_VERSION };
+      await expect(checkLocalHealth(input)).rejects.toMatchObject({ code: "local_server_health_invalid" });
+    } finally {
+      await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  });
+
   it("exchanges the IPC token only at the exact local origin and hides failures", async () => {
     const input = { baseUrl: "http://127.0.0.1:32124", pairingToken: "p".repeat(43) };
     const request = vi.fn(async () => ({ ok: true, json: async () => ({ credential: "c".repeat(43) }) }));

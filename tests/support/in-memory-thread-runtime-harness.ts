@@ -209,7 +209,10 @@ const presentationProvider: ThreadBackendPresentationProvider = {
  * driver, actors, the runtime coordinator, thread publication, the durable
  * queue, and thread mutations. Nothing is attached until a test acts.
  */
-export async function createInMemoryThreadRuntimeHarness() {
+export async function createInMemoryThreadRuntimeHarness(options: {
+  readonly retentionMilliseconds?: number;
+  readonly onCompletion?: (scope: RequestScope, threadId: string, turnId: string) => void;
+} = {}) {
   const database = openOverlayDatabase(":memory:");
   const scope = new SingleUserIdentityProvider(database).getScope();
   const legacyInventory = new ThreadInventoryService(
@@ -342,7 +345,7 @@ export async function createInMemoryThreadRuntimeHarness() {
   const actors = new ConversationActorManager({
     environments,
     attachmentDelivery: {} as never,
-    retentionMilliseconds: 0,
+    retentionMilliseconds: options.retentionMilliseconds ?? 0,
     runtimeBudget: 8,
     onAuthoritativeSubmission: (eventScope, applicationThreadId, input) =>
       observeSubmission?.(eventScope, applicationThreadId, input),
@@ -427,7 +430,7 @@ export async function createInMemoryThreadRuntimeHarness() {
     bridge: new ConversationEventBridge(new ThreadEventPresentation(threads), (eventScope, threadId, turns) => usage.registerVisibleTurns(eventScope, threadId, turns)),
     interactions,
     hubs: threadHubs,
-    retentionMilliseconds: 0,
+    retentionMilliseconds: options.retentionMilliseconds ?? 0,
     onThreadChanged: publishApplicationThread,
     onAuthoritativeSettled: (eventScope, applicationThreadId) =>
       queueDispatcher.onAuthoritativeSettled(eventScope, applicationThreadId),
@@ -468,6 +471,7 @@ export async function createInMemoryThreadRuntimeHarness() {
   });
   const mutations = new ThreadMutationGateway({
     bindings,
+    actors,
     inventory: inventoryRepository,
     lifecycle,
     forks: { recoverActive: () => undefined, discardActive: async () => { throw new Error("test_unexpected_discard"); } },
@@ -494,6 +498,7 @@ export async function createInMemoryThreadRuntimeHarness() {
       input,
     );
     if (!observed) return;
+    if (observed.applicationTurnId) options.onCompletion?.(eventScope, applicationThreadId, observed.applicationTurnId);
     // Match the production observer boundary: recovery and inventory wake
     // re-enter the loaded actor and must not be awaited from the actor's
     // own authoritative observer chain.

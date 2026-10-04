@@ -192,6 +192,7 @@ function createSubject(input: {
     throw new Error("expected interaction kind was not opened");
   }
   const gateway = new ThreadMutationGateway({
+      actors: {} as never,
     bindings: { database } as never,
     inventory: new InventoryRepository(database),
     lifecycle: {} as never,

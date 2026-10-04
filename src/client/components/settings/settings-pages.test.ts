@@ -13,6 +13,7 @@ import {
 const everything: SettingsAvailability = {
   prompts: true,
   notifications: true,
+  voice: false,
   execution: true,
   projects: true,
   agents: true,
@@ -25,6 +26,7 @@ const everything: SettingsAvailability = {
 const none: SettingsAvailability = {
   prompts: false,
   notifications: false,
+  voice: false,
   execution: false,
   projects: false,
   agents: false,
@@ -84,6 +86,7 @@ describe("settings page registry", () => {
       "paired_clients",
       "diagnostics",
     ]);
+    expect(ids({ ...none, voice: true })).toContain("voice");
     expect(ids({ ...none, execution: true })).toContain("backends");
     expect(ids({ ...none, execution: true })).not.toContain("projects");
     expect(ids({ ...none, execution: true })).not.toContain("agents");

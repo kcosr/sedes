@@ -62,29 +62,30 @@ test("notification settings persist and passive server scripts follow selected l
     .fill(payloadPath);
   await settings.getByLabel("Timeout (seconds)", { exact: true }).fill("10");
   await settings
-    .getByRole("switch", { name: "Turn completed", exact: true })
+    .getByRole("switch", { name: "Script: Turn completed", exact: true })
     .check();
   await expect(settings.getByRole("group", { name: "Response text", exact: true })).toBeVisible();
   await expect(settings.getByRole("checkbox", { name: "Include assistant response text", exact: true })).toHaveCount(0);
   for (const name of ["Provisional", "Unclassified", "Final"]) {
     const phase = settings.getByRole("checkbox", { name, exact: true });
-    await expect(phase).not.toBeChecked();
+    if (name === "Provisional") await expect(phase).not.toBeChecked();
+    else await expect(phase).toBeChecked();
     await expect(phase).toBeEnabled();
     await phase.check();
   }
   await settings
-    .getByRole("switch", { name: "Automation started", exact: true })
+    .getByRole("switch", { name: "Script: Automation started", exact: true })
     .check();
-  for (const name of ["Approval requested", "Input requested"]) {
+  for (const name of ["Script: Approval requested", "Script: Input requested"]) {
     const event = settings.getByRole("switch", { name, exact: true });
     await expect(event).not.toBeChecked();
     await event.check();
   }
   for (const name of [
-    "Turn failed",
-    "Turn interrupted",
-    "Snooze wake",
-    "Automation failed before starting",
+    "Script: Turn failed",
+    "Script: Turn interrupted",
+    "Script: Snooze wake",
+    "Script: Automation failed before starting",
   ]) {
     await settings.getByRole("switch", { name, exact: true }).uncheck();
   }
@@ -104,7 +105,7 @@ test("notification settings persist and passive server scripts follow selected l
   ).toBeVisible();
   await expect.poll(async () => (await payloads()).length).toBe(1);
   expect((await payloads())[0]).toMatchObject({
-    schemaVersion: 3,
+    schemaVersion: 4,
     event: "notification.test",
     notificationId: expect.any(String),
   });
@@ -125,9 +126,9 @@ test("notification settings persist and passive server scripts follow selected l
     settings.getByLabel("Arguments (one per line)", { exact: true }),
   ).toHaveValue(payloadPath);
   await expect(
-    settings.getByRole("switch", { name: "Automation started", exact: true }),
+    settings.getByRole("switch", { name: "Script: Automation started", exact: true }),
   ).toBeChecked();
-  for (const name of ["Approval requested", "Input requested"]) {
+  for (const name of ["Script: Approval requested", "Script: Input requested"]) {
     await expect(
       settings.getByRole("switch", { name, exact: true }),
     ).toBeChecked();
@@ -146,7 +147,7 @@ test("notification settings persist and passive server scripts follow selected l
     .scrollIntoViewIfNeeded();
   await capture(page, testInfo, "notification-settings-mobile.png");
   await settings
-    .getByRole("switch", { name: "Automation started", exact: true })
+    .getByRole("switch", { name: "Script: Automation started", exact: true })
     .scrollIntoViewIfNeeded();
   await capture(page, testInfo, "notification-settings-mobile-events.png");
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -179,7 +180,7 @@ test("notification settings persist and passive server scripts follow selected l
     (payload) => payload.event === "turn.completed",
   )!;
   expect(completion).toMatchObject({
-    schemaVersion: 3,
+    schemaVersion: 4,
     thread: { id: threadId },
     turn: { id: expect.any(String), outcome: "completed" },
   });
@@ -195,20 +196,20 @@ test("notification settings persist and passive server scripts follow selected l
 
   await page
     .getByRole("button", {
-      name: "Silence external notifications",
+      name: "Silence notifications",
       exact: true,
     })
     .click();
   await expect(
     page.getByRole("button", {
-      name: "Resume external notifications",
+      name: "Resume notifications",
       exact: true,
     }),
   ).toBeVisible();
   await page.reload();
   await expect(
     page.getByRole("button", {
-      name: "Resume external notifications",
+      name: "Resume notifications",
       exact: true,
     }),
   ).toBeVisible();
@@ -225,11 +226,11 @@ test("notification settings persist and passive server scripts follow selected l
     page.getByRole("button", { name: "Stop", exact: true }),
   ).toBeHidden({ timeout: 15_000 });
   await page
-    .getByRole("button", { name: "Resume external notifications", exact: true })
+    .getByRole("button", { name: "Resume notifications", exact: true })
     .click();
   await expect(
     page.getByRole("button", {
-      name: "Silence external notifications",
+      name: "Silence notifications",
       exact: true,
     }),
   ).toBeVisible();

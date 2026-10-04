@@ -110,7 +110,10 @@ import {
   type PiViewedImageChildTarget,
   type PiViewedImagePart,
 } from "./pi-viewed-image.js";
-import { piAssistantResponseEvidence } from "./pi-assistant-response-phase.js";
+import {
+  piAssistantLiveToolUseEvidence,
+  piAssistantResponseEvidence,
+} from "./pi-assistant-response-phase.js";
 import {
   PI_ASSISTANT_SOURCE_ORDER_STRIDE,
   PI_MAXIMUM_ASSISTANT_CONTENT_INDEX,
@@ -4451,11 +4454,13 @@ class PiConversationHandle implements ConversationHandle {
   #completeAssistantItems(message: unknown): void {
     const evidence = piAssistantResponseEvidence(message);
     const responsePhase = evidence === "provisional" ? "provisional" : "unclassified";
+    const liveToolUse = piAssistantLiveToolUseEvidence(message);
     this.#terminalAssistantItemIds.clear();
     for (const state of this.#assistantItems.values()) {
       this.#emit({
         type: "item_completed",
         item: this.#assistantItem(state, "completed", responsePhase),
+        ...(liveToolUse && state.kind === "assistant_message" && state.text.trim() ? { liveProgress: true as const } : {}),
       });
       if (
         state.kind === "assistant_message" &&
@@ -4484,6 +4489,7 @@ class PiConversationHandle implements ConversationHandle {
       this.#emit({
         type: "item_completed",
         item: this.#assistantItem(state, "completed", responsePhase),
+        ...(liveToolUse && state.text.trim() ? { liveProgress: true as const } : {}),
       });
       if (evidence === "terminal_candidate") {
         this.#terminalAssistantItemIds.add(state.itemId);

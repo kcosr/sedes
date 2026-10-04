@@ -239,7 +239,9 @@ const piWithdrawnSteer = {
 
 function fakeSessionFactory(
   assistantResponseCount = 1,
-  includeToolLoop = false,
+  includeToolLoop:
+    | boolean
+    | { readonly text: string; readonly stopReason?: "aborted" | "error" } = false,
   onCompact: (manager: PiSdkSession["sessionManager"]) => void = () =>
     undefined,
   userPersistenceDelayMilliseconds = 0,
@@ -320,6 +322,8 @@ function fakeSessionFactory(
           await beforeAssistant?.(text);
 
           if (includeToolLoop) {
+            const toolStopReason: "toolUse" | "aborted" | "error" =
+              (typeof includeToolLoop === "object" && includeToolLoop.stopReason) || "toolUse";
             const toolAssistant = {
               role: "assistant" as const,
               content: [
@@ -329,6 +333,7 @@ function fakeSessionFactory(
                   name: "read",
                   arguments: { path: "README.md" },
                 },
+                ...(typeof includeToolLoop === "object" ? [{ type: "text" as const, text: includeToolLoop.text }] : []),
               ],
               api: "test",
               provider: "test",
@@ -347,7 +352,8 @@ function fakeSessionFactory(
                   total: 0,
                 },
               },
-              stopReason: "toolUse" as const,
+              stopReason: toolStopReason,
+              ...(toolStopReason === "error" ? { errorMessage: "Provider failed" } : {}),
               timestamp: Date.now(),
             };
             emit({
@@ -364,12 +370,22 @@ function fakeSessionFactory(
                 partial: toolAssistant,
               },
             } as never);
+            if (typeof includeToolLoop === "object") {
+              emit({ type: "message_update", message: toolAssistant, assistantMessageEvent: {
+                type: "text_delta", contentIndex: 1, delta: includeToolLoop.text, partial: toolAssistant,
+              } } as never);
+            }
             manager.appendMessage(toolAssistant);
             emit({
               type: "message_end",
               message: toolAssistant,
             } as never);
             await Promise.resolve();
+            if (toolStopReason !== "toolUse") {
+              // Pi ends the run without executing an aborted or errored message's tools.
+              emit({ type: "agent_settled" } as never);
+              return;
+            }
             emit({
               type: "tool_execution_start",
               toolCallId: "call-read",
@@ -9289,6 +9305,49 @@ describe("Pi conversation backend driver", () => {
     await handle.close();
   });
 
+  it.each([
+    ["toolUse", undefined, 1],
+    ["aborted", "aborted", 0],
+    ["error", "error", 0],
+  ] as const)("announces live progress for a %s tool-call message only when its tools run", async (_, stopReason, progressCount) => {
+    const fixture = await workspace();
+    const driver = new PiConversationBackendDriver({
+      instance, connection, usage: NO_USAGE_SINK, nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
+      toolProvenanceKey, agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy, sessionDirectory: fixture.sessions,
+      sessionFactory: fakeSessionFactory(1, { text: "Inspecting the README", ...(stopReason ? { stopReason } : {}) }),
+    });
+    const created = await driver.create({
+      scope, workspace: fixture.workspace, applicationThreadId: "tool-progress-create",
+      applicationOperationId: "tool-progress-create", source: { kind: "user" },
+    });
+    const handle = await driver.attach({
+      scope, workspace: fixture.workspace,
+      binding: binding(created.backendConversationId), opaqueBindingDetail: created.opaqueBindingDetail,
+    });
+    const live = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    const unsubscribe = live.subscribeFromNext(({ event }) => events.push(event));
+
+    await handle.submit({
+      applicationOperationId: "tool-progress-submit", source: { kind: "user" }, mutationId: "tool-progress-mutation",
+      reconciliationToken: "tool-progress-token", contextExcerpts: [], attachments: [], taskContexts: [], text: "Read the file",
+    });
+    // An unrun streamed tool call leaves settlement to resnapshot from history.
+    await vi.waitFor(() => expect(events.some(({ type }) =>
+      type === "turn_completed" || type === "resnapshot_required")).toBe(true));
+    unsubscribe();
+    const toolText = expect.objectContaining({
+      type: "item_completed", item: expect.objectContaining({
+        semanticKind: "assistant_message", responsePhase: "provisional", markdown: { text: "Inspecting the README" },
+      }),
+    });
+    expect(events).toContainEqual(toolText);
+    expect(events.filter(event => "liveProgress" in event && event.liveProgress)).toEqual(
+      Array.from({ length: progressCount }, () => toolText),
+    );
+    await handle.close();
+  });
+
   it("persists one exact tool identity marker and reuses it after reopen", async () => {
     const fixture = await workspace();
     const options: PiDriverOptions = {
@@ -9300,7 +9359,7 @@ describe("Pi conversation backend driver", () => {
       agentTools: noAgentTools,
       toolAccessPolicy: fullToolAccessPolicy,
       sessionDirectory: fixture.sessions,
-      sessionFactory: fakeSessionFactory(1, true),
+      sessionFactory: fakeSessionFactory(1, { text: "Inspecting the README" }),
     };
     const driver = new PiConversationBackendDriver(options);
     const created = await driver.create({
@@ -9339,6 +9398,11 @@ describe("Pi conversation backend driver", () => {
     expect(
       liveEvents.filter((event) => event.type === "resnapshot_required"),
     ).toEqual([]);
+    expect(liveEvents.filter(event => "liveProgress" in event && event.liveProgress)).toEqual([
+      expect.objectContaining({ type: "item_completed", item: expect.objectContaining({
+        semanticKind: "assistant_message", responsePhase: "provisional", markdown: { text: "Inspecting the README" },
+      }) }),
+    ]);
     expect(
       new Set(
         liveEvents.flatMap((event) =>
@@ -10657,6 +10721,9 @@ describe("Pi conversation backend driver", () => {
       event.item.semanticKind === "assistant_message" && event.item.responsePhase === "final");
     expect(finalUpdates).toHaveLength(2);
     expect(finalUpdates.every(event => events.indexOf(event) < completionIndex)).toBe(true);
+    // These are stop candidates; only settlement retrospectively classifies
+    // the earlier one provisional. It is never live progress evidence.
+    expect(events.filter(event => "liveProgress" in event && event.liveProgress)).toEqual([]);
     await handle.close();
     const reopened = await driver.attach({
       scope, workspace: fixture.workspace,
