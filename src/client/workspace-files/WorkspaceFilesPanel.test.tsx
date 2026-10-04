@@ -132,6 +132,8 @@ afterEach(() => {
   workspaceFilesUiStateCache.clear();
   fileTreeUnsafeCss = undefined;
   createdTreeItemHeights.length = 0;
+  // Tests that expand directories replace this; every test starts collapsed.
+  getItem.mockImplementation(() => null);
   latestCompareProps = undefined;
   vi.clearAllMocks();
 });
