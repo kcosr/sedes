@@ -14,9 +14,10 @@ import { resumeVoice } from "./voice-session.js";
 import { nativeThreadTitle } from "./native-voice-plugin.js";
 import "./voice.css";
 
-/** Card text: parts joined by dots (a phase word carries its tone, an alert part is the error message, a chip retargets), a named thread, or a muted placeholder. */
+/** Card text: parts joined by dots (a phase word carries its tone, an alert part is the error message, an optional part gives way on a narrow card,
+ * a chip retargets), a named thread, or a muted placeholder. */
 type Tone = "info" | "destructive" | "warning";
-type Part = string | { phase: string; tone?: Tone } | { alert: string; tone?: Tone } | { chip: string; glyph?: boolean };
+type Part = string | { phase: string; tone?: Tone } | { alert: string; tone?: Tone } | { optional: string } | { chip: string };
 type Line = { parts: Part[] } | { thread: string } | { empty: string };
 
 export function VoiceControls({ threads }: { threads: readonly NormalizedApplicationThreadSummary[] }) {
@@ -79,54 +80,53 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   // A failure stays until the next action, a reconnect or progress; the error phase falls back to native's latest report.
   const latest = native.errors.at(-1);
   const message = state.error ?? (failed ? latest?.message ?? cardReadiness(native.readiness) : undefined);
-  // Line 1 names a thread only when it is not the visible one.
-  const visibleTarget = threadId !== null && targetId === threadId;
   const kind = speaking && active?.eventKind ? eventLabels.get(active.eventKind) : undefined;
   const phaseWord: Part = state.error ? { alert: state.error, tone: "warning" }
     : { phase: phaseLabel(phase), tone: recording ? "destructive" : phase === "speaking" ? "info" : undefined };
   let tile: ReactNode, tone: string | undefined, line1: Line, line2: Line;
   const errorLook = !off && (failed || (!busy && message !== undefined));
+  // The card's thread: the idle start target, the spoken notice's thread, or the recording target; Off and an error have none.
+  const [cardThread, cardTitle] = off || errorLook ? [] : busy ? [targetId ?? undefined, activeTitle] : [startTarget?.id, startTarget && (startTarget.title.text.trim() || "Untitled thread")];
   if (off) { tile = <MicOff strokeWidth={1.8} aria-hidden="true" />; tone = "muted"; line1 = { parts: ["Voice off"] }; line2 = { parts: ["Open controls to turn on"] }; }
   else if (errorLook) {
     tile = <TriangleAlert strokeWidth={1.8} aria-hidden="true" />; tone = "warning";
     // Native's start rejection asks to resume "from the visible app"; on the card that is its own Resume. The alert keeps native's words.
     line1 = latest?.code === "foreground_start_rejected" && message === latest.message ? { parts: [cardReadiness("needsResume")] } : { parts: [{ alert: message ?? phaseLabel("error") }] };
     line2 = { parts: [{ phase: phaseLabel("error"), tone: "warning" }] };
-  } else if (!busy) {
-    tile = <AudioLines strokeWidth={1.8} aria-hidden="true" />;
-    const mode = [settings.audioMode === "manual" ? "Manual" : "Response", `Auto-listen ${settings.autoListen ? "on" : "off"}`];
-    const readiness = native.ready ? undefined : cardReadiness(native.readiness);
-    // When the start target is not the visible thread, line 1 names it (or asks for one), so readiness takes line 2.
-    if (startTarget && startTarget.id === threadId) { line1 = { parts: [readiness ?? "Ready to record"] }; line2 = { parts: mode }; }
-    else { line1 = startTarget ? { thread: startTarget.title.text.trim() || "Untitled thread" } : { empty: "Choose a thread" }; line2 = { parts: readiness ? [readiness] : mode }; }
   } else {
-    tile = phase === "speaking" ? <span className="voice-card-wave" aria-hidden="true"><i /><i /><i /><i /><i /></span>
-      : recording ? <><Mic strokeWidth={1.8} aria-hidden="true" /><span className="voice-card-rec" aria-hidden="true" /></>
-        : <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" />;
-    tone = phase === "speaking" ? "info" : recording ? "destructive" : undefined;
-    const status = state.error ? phaseWord : phaseLabel(phase);
-    // Retargeting stays on its chip, always on line 2, so line 1 reads like every other state and the body around the chip opens the thread.
-    if (retargets && visibleTarget) { line1 = { parts: [status] }; line2 = { parts: [{ chip: "This thread", glyph: true }] }; }
-    else if (retargets && activeTitle !== undefined) { line1 = { thread: activeTitle }; line2 = { parts: [phaseWord, { chip: "Change thread" }] }; }
-    else if (retargets) { line1 = { parts: [status] }; line2 = { parts: [{ chip: "Choose a thread", glyph: true }] }; }
-    else if (!visibleTarget && activeTitle !== undefined) { line1 = { thread: activeTitle }; line2 = { parts: state.error || !kind ? [phaseWord] : [phaseWord, kind] }; }
-    else {
+    // Line 1 always names the card's thread, the visible one included; line 2 carries the state.
+    let status: Part[];
+    if (!busy) {
+      tile = <AudioLines strokeWidth={1.8} aria-hidden="true" />;
+      // Readiness replaces the whole state line: with the mode beside it, it would truncate.
+      status = native.ready ? ["Ready", settings.audioMode === "manual" ? "Manual" : "Response", `Auto-listen ${settings.autoListen ? "on" : "off"}`] : [cardReadiness(native.readiness)];
+    } else {
+      tile = phase === "speaking" ? <span className="voice-card-wave" aria-hidden="true"><i /><i /><i /><i /><i /></span>
+        : recording ? <><Mic strokeWidth={1.8} aria-hidden="true" /><span className="voice-card-rec" aria-hidden="true" /></>
+          : <LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" />;
+      tone = phase === "speaking" ? "info" : recording ? "destructive" : undefined;
       const queued = speaking && native.queue.count > 0 ? `${native.queue.count} queued` : undefined;
-      line1 = { parts: [status] }; line2 = { parts: [visibleTarget ? "This thread" : kind, queued].filter((part): part is string => part !== undefined) };
+      // A failed action takes the phase word's place. Beside a thread's phase and queue count, the kind gives way first on a narrow card.
+      // Thread-less speech puts the phase on its own line, so its kind stays visible with the queue on line 2.
+      status = state.error ? [phaseWord] : [phaseWord, ...kind ? [queued && cardTitle !== undefined ? { optional: kind } : kind] : [], ...queued ? [queued] : []];
+      if (retargets) status.push({ chip: cardTitle === undefined ? "Choose" : "Change" });
     }
+    if (cardTitle !== undefined) { line1 = { thread: cardTitle }; line2 = { parts: status }; }
+    else if (!busy || retargets) { line1 = { empty: "Choose a thread" }; line2 = { parts: status }; }
+    // Speech without a thread (an automation notice) leads with its phase.
+    else { line1 = { parts: status.slice(0, 1) }; line2 = { parts: status.slice(1) }; }
   }
   // Settings → Voice announces readiness and errors itself; there the card's regions stay quiet.
   const quiet = route.name === "settings" && route.page === "voice";
   const alerting = message !== undefined && !quiet;
-  const describedBy = alerting ? `${statusId} ${statusId}-alert` : statusId;
-  // The body opens the card's thread: the spoken notice's, the recording target, or the idle start target. Off, an error and the visible thread have none.
-  const [cardThread, cardTitle] = off || errorLook ? [] : busy ? [targetId ?? undefined, activeTitle] : [startTarget?.id, startTarget && (startTarget.title.text.trim() || "Untitled thread")];
+  const threadDescription = "thread" in line1 ? line1.thread.replace(/\.$/u, "") : undefined;
+  const describedBy = [threadDescription !== undefined ? `${statusId}-thread` : undefined, statusId, alerting ? `${statusId}-alert` : undefined].filter(Boolean).join(" ");
+  // The body opens the card's thread unless it is already on screen.
   const opens = cardThread !== undefined && cardThread !== threadId;
   // A pending retarget stays focusable, so the picker returns focus to the chip after a selection.
-  const chip = ({ chip: label, glyph }: { chip: string; glyph?: boolean }) => <button type="button" className="voice-card-chip" aria-haspopup="dialog" aria-disabled={state.pending || undefined}
-    aria-label={visibleTarget ? "Change recording target: this thread" : activeTitle ? `Change recording target: ${activeTitle}` : "Change recording target"}
-    onClick={() => { if (!state.pending) setPicker("retarget"); }}>
-    {glyph ? <MessageSquare strokeWidth={1.8} aria-hidden="true" /> : null}<span className="voice-card-chip-label">{label}</span><ChevronsUpDown aria-hidden="true" /></button>;
+  const chip = (label: string) => <button type="button" className="voice-card-chip" aria-haspopup="dialog" aria-disabled={state.pending || undefined}
+    aria-label={activeTitle ? `Change recording target: ${activeTitle}` : "Change recording target"} onClick={() => { if (!state.pending) setPicker("retarget"); }}>
+    <span className="voice-card-chip-label">{label}</span><ChevronsUpDown aria-hidden="true" /></button>;
   return <>
     {!off || showWhenOff ? <div className="voice-dock">
       <div className="voice-card" role="group" aria-label="Voice controls" data-tone={recording ? "destructive" : undefined} data-off={off ? "" : undefined}>
@@ -149,9 +149,10 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
             title={cancels ? "Cancel" : "Stop"} disabled={state.pending} onClick={() => act(() => store.plugin.stopCurrentInteraction(store.commandContext()))}>
             <span className="voice-card-stop" aria-hidden="true" /></button> : null}
         </div>
-        {/* The body's name is its action; the status region describes it and announces phase changes, and the alert carries the error once. */}
+        {/* Describe the thread without announcing navigation or title changes; only the state and errors are live. */}
+        {threadDescription !== undefined ? <span id={`${statusId}-thread`} className="sr-only">{threadDescription}.</span> : null}
         <span id={statusId} className="sr-only" role="status" aria-live={quiet ? "off" : undefined}>
-          {[line1, line2].map(line => lineText(line, alerting).replace(/\.$/u, "")).filter(Boolean).join(". ")}</span>
+          {[line1, line2].filter(line => !("thread" in line)).map(line => lineText(line, alerting).replace(/\.$/u, "")).filter(Boolean).join(". ")}</span>
         {alerting ? <span id={`${statusId}-alert`} className="sr-only" role="alert">{message}</span> : null}
       </div>
     </div> : null}
@@ -164,21 +165,24 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
     <VoiceQuickSheet store={store} open={sheet} onOpenChange={setSheet} />
   </>;
 }
-function renderLine(line: Line, className: string, chip: (part: { chip: string; glyph?: boolean }) => ReactNode): ReactNode {
+function renderLine(line: Line, className: string, chip: (label: string) => ReactNode): ReactNode {
   if ("thread" in line) return <span className={className} data-thread><MessageSquare strokeWidth={1.8} aria-hidden="true" /><span>{line.thread}</span></span>;
   if ("empty" in line) return <span className={className} data-empty>{line.empty}</span>;
   const chipped = line.parts.some(part => typeof part !== "string" && "chip" in part);
-  // The chip keeps one key, so retargeting between this thread and another keeps the focused button.
+  const dot = <span className="voice-card-dot" aria-hidden="true">·</span>;
+  // The chip keeps one key, so a retarget that changes the line keeps the focused button.
   return line.parts.length ? <span className={className} data-chip={chipped ? "" : undefined}>{line.parts.map((part, index) =>
     <Fragment key={typeof part !== "string" && "chip" in part ? "chip" : index}>
-      {index ? <span className="voice-card-dot" aria-hidden="true">·</span> : null}
-      {typeof part === "string" ? part : "chip" in part ? chip(part) : "phase" in part || part.tone
-        ? <span className="voice-card-phase" data-tone={part.tone}>{"phase" in part ? part.phase : part.alert}</span> : part.alert}</Fragment>)}</span> : null;
+      {typeof part !== "string" && "optional" in part ? <span className="voice-card-optional">{index ? dot : null}{part.optional}</span> : <>
+        {index ? dot : null}
+        {typeof part === "string" ? part : "chip" in part ? chip(part.chip) : "phase" in part || part.tone
+          ? <span className="voice-card-phase" data-tone={part.tone}>{"phase" in part ? part.phase : part.alert}</span> : part.alert}</>}</Fragment>)}</span> : null;
 }
-/** Plain text for the status region; the alert region already carries an alert part. */
+/** Plain text for the status region: chips are controls, and the alert region already carries an alert part. */
 function lineText(line: Line, alerting: boolean): string {
   return "thread" in line ? line.thread : "empty" in line ? line.empty
-    : line.parts.flatMap(part => typeof part === "string" ? [part] : "chip" in part ? [part.chip] : "phase" in part ? [part.phase] : alerting ? [] : [part.alert]).join(" · ");
+    : line.parts.flatMap(part => typeof part === "string" ? [part] : "chip" in part ? [] : "optional" in part ? [part.optional] : "phase" in part ? [part.phase]
+      : alerting ? [] : [part.alert]).join(" · ");
 }
 /** The card is not Settings → Voice, so its resume hint points at the card's own Resume. */
 function cardReadiness(readiness: string): string {

@@ -191,6 +191,8 @@
 }
 
 /* Two lines. */
+/* A size container, so line 2 drops its optional part when the column is
+   narrow (a phone with Skip and Stop beside it). */
 .voice-card-text {
   display: flex;
   min-width: 0;
@@ -198,6 +200,13 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 2px;
+  container: voice-card-text / inline-size;
+}
+
+@container voice-card-text (max-width: 239px) {
+  .voice-card-optional {
+    display: none;
+  }
 }
 
 .voice-card-title,
@@ -234,8 +243,7 @@
 .voice-card-phase[data-tone="destructive"] { color: var(--destructive); }
 .voice-card-phase[data-tone="warning"] { color: var(--warning); }
 
-/* A thread named on line 1: only when the voice target is not the visible
-   thread. The message-square glyph marks "another thread". */
+/* Line 1 names the card's thread, next to the message-square glyph. */
 .voice-card-title[data-thread] {
   display: flex;
   align-items: center;
@@ -277,8 +285,9 @@
   height: var(--icon-md);
 }
 
-/* Listening: line 2 carries the retarget chip ("This thread" or "Change
-   thread"). It shrinks before the phase word and keeps a 44px hit area. */
+/* Listening: line 2 ends with the retarget chip ("Change", or "Choose"
+   without a target). It shrinks before the phase word and keeps a 44px hit
+   area. */
 .voice-card-sub[data-chip] {
   display: flex;
   align-items: center;

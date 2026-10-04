@@ -126,10 +126,15 @@ input never edits or clears the composer draft.
 The voice card under the composer appears while voice is connected and set to
 Manual or Response. Wherever no composer is shown, including read-only threads
 and pages without a thread, it sits on its own with a top margin and divider.
-A state tile and two lines show the phase and target; the card names a thread
-only when the target is not the thread on screen. When an idle card cannot
-record into the visible thread, it names the Voice thread a recording would
-use, or asks you to choose one. The card shows the latest voice error until
+A state tile and two lines show the card's thread and its state. The first
+line always names the thread: the one being spoken, the recording target, or,
+when idle, the thread a recording would use. That is the visible thread when it
+can record, otherwise the Voice thread; with neither, the card shows **Choose a
+thread**. The second line is the state: **Ready** with the mode and
+Auto-listen, or the readiness text while voice is not ready; **Speaking** with
+the notice kind and queued count, where a narrow card drops the kind first;
+**Listening**; or the recognizing or sending phase. The card shows the latest
+voice error until
 your next voice action, a reconnect, voice becoming ready, or the next
 interaction starting. When the voice session needs to resume, for example
 after Android refuses to start it, the card reads **Voice needs to resume** and
@@ -137,10 +142,9 @@ offers **Resume**, which works like **Resume voice** in Settings. A failed
 connection hides the card; **Settings → Voice** then shows the error and
 **Retry voice connection**.
 
-When the card names a thread other than the one on screen, tapping the card
-opens that thread: the thread being spoken, the recording target, or the thread
-an idle recording would use. While listening, line 2 shows the target chip,
-**This thread** or **Change thread**, which opens the thread picker instead.
+When the card's thread is not the one on screen, tapping the card opens it.
+While listening, the state line ends with a **Change** chip (**Choose** when
+there is no target), which opens the thread picker instead.
 The caret button opens the **Voice** sheet in every state. The sheet has
 **Audio mode**, **Auto-listen**, **Follow composer mode**, and **All voice
 settings**, which opens **Settings → Voice**, where the Voice thread is chosen.
