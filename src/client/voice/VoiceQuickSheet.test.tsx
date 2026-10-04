@@ -56,7 +56,7 @@ describe("voice quick sheet", () => {
     expect(within(sheet).getByRole("switch", { name: "Auto-listen" })).toHaveAccessibleDescription("Eligible notifications reopen the mic");
     expect(within(sheet).getByRole("switch", { name: "Auto-listen" })).toBeChecked();
     expect(within(sheet).getByRole("button", { name: "Default voice thread" })).toHaveAccessibleDescription("Daily standup notes");
-    expect(within(sheet).getByRole("switch", { name: "Pin default voice thread" })).toHaveAccessibleDescription("Start manual recordings here from any thread");
+    expect(within(sheet).getByRole("switch", { name: "Pin default voice thread" })).toHaveAccessibleDescription("Record here from any thread");
     expect(within(sheet).getByRole("switch", { name: "Pin default voice thread" })).not.toBeChecked();
     expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Limit automatic playback to this thread");
     expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).not.toBeChecked();
