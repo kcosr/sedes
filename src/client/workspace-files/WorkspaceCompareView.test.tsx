@@ -49,7 +49,7 @@ vi.mock("@pierre/diffs/react", () => ({
     const renderHeader = props.renderCustomHeader as
       ((item: (typeof items)[number]) => React.ReactNode) | undefined;
     return (
-      <div data-testid="code-view">
+      <div data-testid="code-view" className={props.className as string}>
         {items.map((item) => (
           <div key={item.id}>
             {item.id}
@@ -93,15 +93,12 @@ function openSettings() {
   if (trigger.getAttribute("aria-expanded") !== "true")
     fireEvent.click(trigger);
 }
+function codeViewOptions(): Record<string, unknown> | undefined {
+  return capturedCodeViewProps?.options as Record<string, unknown> | undefined;
+}
 async function configureComparison() {
   openSettings();
   return screen.findByRole("button", { name: "Compare" });
-}
-function openViewOptions() {
-  fireEvent.keyDown(screen.getByRole("button", { name: "Diff view options" }), {
-    key: "Enter",
-  });
-  return screen.getByRole("menu", { name: "Diff view options" });
 }
 /** Picks an option of a primitive Select (Strategy, Commit history). */
 async function choose(select: string, option: string) {
@@ -239,7 +236,7 @@ describe("WorkspaceCompareView", () => {
     );
   });
 
-  it("keeps display preferences in View and restores split after widening", async () => {
+  it("keeps display preferences in the toolbar and restores split after widening", async () => {
     const dataSource = createDataSource(1);
     render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
     const compare = await configureComparison();
@@ -251,49 +248,65 @@ describe("WorkspaceCompareView", () => {
         screen.queryByRole("dialog", { name: "Comparison settings" }),
       ).toBeNull(),
     );
-    expect(screen.queryByRole("menuitemradio", { name: "Unified" })).toBeNull();
-    let menu = openViewOptions();
-    expect(within(menu).getByRole("menuitemradio", { name: "Split" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
-    const wrap = within(menu).getByRole("menuitemcheckbox", { name: "Wrap lines" });
-    expect(wrap).toHaveAttribute("aria-checked", "false");
+    const layout = screen.getByRole("radiogroup", { name: "Diff layout" });
+    const unified = within(layout).getByRole("radio", { name: "Unified" });
+    const split = within(layout).getByRole("radio", { name: "Split" });
+    expect(split).toHaveAttribute("aria-checked", "true");
+    expect(codeViewOptions()).toMatchObject({
+      diffStyle: "split",
+      overflow: "scroll",
+    });
+    const wrap = screen.getByRole("button", { name: "Wrap lines" });
+    expect(wrap).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(wrap);
-    await waitFor(() =>
-      expect(screen.queryByRole("menu", { name: "Diff view options" })).toBeNull(),
-    );
-    menu = openViewOptions();
-    const split = within(menu).getByRole("menuitemradio", { name: /^Split/ });
-    expect(
-      within(menu).getByRole("menuitemcheckbox", { name: "Wrap lines" }),
-    ).toHaveAttribute("aria-checked", "true");
+    expect(wrap).toHaveAttribute("aria-pressed", "true");
+    expect(codeViewOptions()).toMatchObject({ overflow: "wrap" });
     act(() => {
       measuredWidth = 600;
       notifyResize();
     });
     // Too narrow: Split is disabled with its reason and Unified shows as chosen.
-    await waitFor(() => expect(split).toHaveAttribute("aria-disabled", "true"));
-    expect(split).toHaveTextContent("Too narrow");
+    await waitFor(() => expect(split).toBeDisabled());
     expect(split).toHaveAttribute("title", "Split view is unavailable at this width");
-    expect(
-      within(menu).getByRole("menuitemradio", { name: "Unified" }),
-    ).toHaveAttribute("aria-checked", "true");
+    expect(unified).toHaveAttribute("aria-checked", "true");
+    expect(codeViewOptions()).toMatchObject({ diffStyle: "unified" });
     act(() => {
       measuredWidth = 900;
       notifyResize();
     });
-    await waitFor(() => expect(split).not.toHaveAttribute("aria-disabled"));
+    await waitFor(() => expect(split).toBeEnabled());
     expect(split).toHaveAttribute("aria-checked", "true");
-    expect(split).not.toHaveTextContent("Too narrow");
-    expect(
-      within(menu).getByRole("menuitemcheckbox", { name: "Wrap lines" }),
-    ).toHaveAttribute("aria-checked", "true");
-    fireEvent.click(within(menu).getByRole("menuitemradio", { name: "Unified" }));
-    menu = openViewOptions();
-    expect(
-      within(menu).getByRole("menuitemradio", { name: "Unified" }),
-    ).toHaveAttribute("aria-checked", "true");
+    expect(wrap).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(unified);
+    expect(unified).toHaveAttribute("aria-checked", "true");
+    expect(split).toHaveAttribute("aria-checked", "false");
+    expect(codeViewOptions()).toMatchObject({ diffStyle: "unified" });
+  });
+
+  it("gives Pierre the shared Sedes diff look with metrics that match its CSS", async () => {
+    const dataSource = createDataSource(2);
+    render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    const compare = await configureComparison();
+    await waitFor(() => expect(compare).toBeEnabled());
+    fireEvent.click(compare);
+    await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(2));
+    expect(screen.getByTestId("code-view")).toHaveClass("sedes-diff-surface");
+    expect(codeViewOptions()).toMatchObject({
+      theme: { light: "sedes-light", dark: "sedes-dark" },
+      diffIndicators: "classic",
+      lineDiffType: "word-alt",
+      hunkSeparators: "line-info-basic",
+      itemMetrics: {
+        lineHeight: 18,
+        diffHeaderHeight: 34,
+        hunkSeparatorHeight: 24,
+      },
+      layout: { paddingTop: 12, paddingBottom: 24, gap: 12 },
+      unsafeCSS: expect.any(String),
+      onPostRender: expect.any(Function),
+    });
+    // "File N of M" follows the file in view.
+    expect(screen.getByTitle("File 1 of 2")).toBeInTheDocument();
   });
 
   it("defaults to merge-base only when both endpoints are revisions", async () => {
@@ -730,9 +743,17 @@ describe("WorkspaceCompareView", () => {
     const reviewed = await screen.findByRole("button", {
       name: "Mark reviewed",
     });
-    expect(
-      within(screen.getByTestId("code-view")).getByText("src/file-1.ts"),
-    ).toBeVisible();
+    // The path keeps its directory and name together for truncation from
+    // the left, and its full form as the tooltip.
+    const path = within(screen.getByTestId("code-view")).getByTitle(
+      "src/file-1.ts",
+    );
+    expect(path).toHaveTextContent("src/file-1.ts");
+    expect(within(path).getByText("src/")).toHaveClass(
+      "workspace-compare-file-dir",
+    );
+    expect(reviewed).toHaveAttribute("aria-pressed", "false");
+    expect(reviewed).toHaveAttribute("title", "Mark reviewed");
     fireEvent.click(reviewed);
     expect(onReviewedChange).toHaveBeenCalledWith("file-1", true);
     fireEvent.click(screen.getByRole("button", { name: "Open file" }));
@@ -1142,10 +1163,7 @@ describe("WorkspaceCompareView", () => {
     );
   });
 
-  it.each([
-    ["Comparison settings", "dialog"],
-    ["Diff view options", "menu"],
-  ] as const)(
+  it.each([["Comparison settings", "dialog"]] as const)(
     "closes the portaled %s when Changes is hidden and keeps it closed on return",
     async (label, role) => {
       const dataSource = createDataSource(1);
@@ -1156,8 +1174,7 @@ describe("WorkspaceCompareView", () => {
           visible
         />,
       );
-      if (role === "menu") openViewOptions();
-      else fireEvent.click(screen.getByRole("button", { name: label }));
+      fireEvent.click(screen.getByRole("button", { name: label }));
       expect(await screen.findByRole(role, { name: label })).toBeVisible();
       if (label === "Comparison settings") {
         fireEvent.click(screen.getByLabelText("Base revision"));

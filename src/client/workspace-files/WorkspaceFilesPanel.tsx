@@ -100,6 +100,7 @@ import {
   type WorkspaceFileDocumentState,
 } from "./workspace-file-editor-state.js";
 import { TREE_TRUNCATION_CSS } from "./tree-truncation-css.js";
+import { useCoarsePointer } from "../app/use-coarse-pointer.js";
 import {
   collectExpandedDirectoryPaths,
   pruneWorkspaceFilesUiSnapshot,
@@ -4221,9 +4222,12 @@ function RootFileTree({
       .find((candidate) => !candidate.endsWith("/"));
     if (path) onOpen({ rootId, path });
   };
+  // The Changes list's row height (WorkspaceChangedFileNavigator.tsx).
+  const coarsePointer = useCoarsePointer();
   const { model } = useFileTree({
     paths: [],
     density: "compact",
+    itemHeight: coarsePointer ? 40 : 26,
     initialExpansion: 0,
     search: searchEnabled,
     searchBlurBehavior: "retain",

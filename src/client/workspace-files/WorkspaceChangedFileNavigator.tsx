@@ -1,5 +1,13 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Search, X } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  MessageSquare,
+  Search,
+  X,
+} from "lucide-react";
+import { useCoarsePointer } from "../app/use-coarse-pointer.js";
 import { WORKSPACE_COMPARE_FILTER_MAX_LENGTH } from "./workspace-compare-navigation.js";
 import type {
   WorkspaceDiffChangedFileSummary,
@@ -11,7 +19,9 @@ import {
   workspaceCompareFilePath,
 } from "./workspace-compare-state.js";
 
-const ROW_HEIGHT = 32;
+/** Row heights (workspace-compare.css): fine pointers, then touch. */
+const FINE_ROW_HEIGHT = 26;
+const TOUCH_ROW_HEIGHT = 40;
 type Row =
   | { kind: "directory"; path: string }
   | { kind: "file"; file: WorkspaceDiffChangedFileSummary };
@@ -43,6 +53,7 @@ export function WorkspaceChangedFileNavigator({
   readonly truncated: boolean;
 }) {
   const id = useId();
+  const ROW_HEIGHT = useCoarsePointer() ? TOUCH_ROW_HEIGHT : FINE_ROW_HEIGHT;
   const listRef = useRef<HTMLDivElement>(null);
   const userScrollUntilRef = useRef(0);
   const [scrollTop, setScrollTop] = useState(0);
@@ -212,7 +223,9 @@ export function WorkspaceChangedFileNavigator({
                 ) : (
                   <ChevronDown />
                 )}
-                <span>{row.path}/</span>
+                <span title={`${row.path}/`}>
+                  <bdi>{row.path}/</bdi>
+                </span>
               </div>
             ) : (
               <div
@@ -236,7 +249,9 @@ export function WorkspaceChangedFileNavigator({
               >
                 <span
                   className={`workspace-compare-change is-${row.file.changeKind}`}
+                  role="img"
                   aria-label={workspaceCompareChangeLabel(row.file.changeKind)}
+                  title={workspaceCompareChangeLabel(row.file.changeKind)}
                 >
                   {workspaceCompareChangeLabel(row.file.changeKind)[0]}
                 </span>
@@ -248,12 +263,12 @@ export function WorkspaceChangedFileNavigator({
                     "Binary"
                   ) : (
                     <>
-                      {row.file.additions !== undefined && (
+                      {!!row.file.additions && (
                         <span className="is-addition">
                           +{row.file.additions}
                         </span>
                       )}
-                      {row.file.deletions !== undefined && (
+                      {!!row.file.deletions && (
                         <span className="is-deletion">
                           −{row.file.deletions}
                         </span>
@@ -266,8 +281,20 @@ export function WorkspaceChangedFileNavigator({
                   )}
                 </span>
                 {(commentCounts.get(row.file.fileId) ?? 0) > 0 && (
-                  <span title="Comments">
-                    {commentCounts.get(row.file.fileId)} ◇
+                  <span
+                    className="workspace-compare-comment-count"
+                    role="img"
+                    aria-label={commentCountLabel(
+                      commentCounts.get(row.file.fileId)!,
+                    )}
+                    title={commentCountLabel(
+                      commentCounts.get(row.file.fileId)!,
+                    )}
+                  >
+                    <MessageSquare aria-hidden="true" />
+                    <span aria-hidden="true">
+                      {commentCounts.get(row.file.fileId)}
+                    </span>
                   </span>
                 )}
                 {reviewedFileIds.has(row.file.fileId) && (
@@ -300,4 +327,8 @@ export function WorkspaceChangedFileNavigator({
       )}
     </aside>
   );
+}
+
+function commentCountLabel(count: number): string {
+  return `${count} ${count === 1 ? "comment" : "comments"}`;
 }

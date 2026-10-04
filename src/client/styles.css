@@ -2727,6 +2727,14 @@ textarea:disabled {
   background: var(--muted);
 }
 
+@media (pointer: coarse) {
+  .workspace-files-tab-close {
+    width: var(--control-md);
+    height: var(--control-md);
+    margin-block: calc(var(--space-1) * -1);
+  }
+}
+
 .workspace-files-body {
   position: relative;
   display: flex;
@@ -2796,10 +2804,24 @@ textarea:disabled {
   overflow: hidden;
 }
 
+/* The Browse tree reads like the Changes list: UI font, the same row height
+   (RootFileTree's itemHeight), muted names that brighten on hover, and an
+   accent-tinted current row. */
 .workspace-files-tree-host {
   --trees-border-color-override: var(--border-soft);
-  --trees-fg-override: var(--foreground);
-  --trees-selected-bg-override: var(--secondary);
+  --trees-bg-override: var(--sidebar);
+  --trees-fg-override: var(--muted-foreground);
+  --trees-fg-muted-override: var(--muted-foreground-2);
+  --trees-bg-muted-override: var(--hover);
+  --trees-selected-bg-override: var(--info-soft);
+  --trees-selected-fg-override: var(--foreground);
+  --trees-focus-ring-color-override: var(--ring);
+  --trees-selected-focused-border-color-override: var(--ring);
+  --trees-font-family-override: var(--font-sans);
+  --trees-font-size-override: var(--text-meta);
+  --trees-border-radius-override: var(--radius-inline);
+  --trees-item-margin-x-override: var(--space-1-5);
+  --trees-padding-inline-override: var(--space-2);
   display: block;
   width: 100%;
   height: 100%;
