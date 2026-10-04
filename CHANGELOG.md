@@ -6,6 +6,7 @@
 
 - Browser and packaged clients require client protocol 138 for pending Send
   presentation. Upgrade clients together with the server.
+  ([#46](https://github.com/kcosr/sedes/pull/46))
 
 - Native voice requires client protocol 137 and notification script payload
   version 4. Upgrade packaged clients and separately copied notification hooks
@@ -714,6 +715,7 @@
 - Idle voice submissions appear as ordinary chat messages while delivery
   completes, honor **Seek on send**, and preserve the typed draft. Routine
   delivery labels stay hidden, matching typed Send.
+  ([#46](https://github.com/kcosr/sedes/pull/46))
 
 - Claude availability probes wait for complete process output, avoiding
   intermittent false unavailable errors.
