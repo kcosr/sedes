@@ -6,6 +6,7 @@
 
 - Android native voice snapshot 5 adds speech cleanup. Upgrading resets local
   voice settings with Audio mode Off; separately stored speech credentials remain.
+  ([#51](https://github.com/kcosr/sedes/pull/51))
 
 - Client protocol 139 replaces browser-supplied input origin IDs with server
   registration. Upgrade browser and packaged clients with the server; native
@@ -213,6 +214,7 @@
 
 - Android voice can clean up Markdown before speaking, preserving link labels,
   code contents, and reading pauses. The device-local setting defaults to on.
+  ([#51](https://github.com/kcosr/sedes/pull/51))
 
 - Agent client controls manage basic voice settings, end interactions, and switch
   threads after reply playback, defaulting to the client that started the turn.
