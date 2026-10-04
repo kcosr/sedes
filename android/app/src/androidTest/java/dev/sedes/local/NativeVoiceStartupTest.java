@@ -8,17 +8,19 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Handler;
 import android.os.Looper;
+import androidx.lifecycle.Lifecycle;
+import androidx.test.core.app.ActivityScenario;
 import androidx.test.platform.app.InstrumentationRegistry;
 import java.io.File;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
+import java.nio.file.Files;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.json.JSONObject;
 import org.junit.Test;
 
@@ -126,6 +128,59 @@ public class NativeVoiceStartupTest {
         }
     }
 
+    @Test public void permissionResultBeforeResumeStartsTheFirstEnable() throws Exception {
+        try (Fixture f = new Fixture("off", true, true); ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
+            f.runtime.nativeVisibility(true); f.connect(); f.flush();
+            // A permission dialog covers the activity: it is paused but still STARTED when Android returns the result.
+            scenario.moveToState(Lifecycle.State.STARTED);
+            f.runtime.nativeVisibility(false); f.flush();
+            // The plugin's permission callback path, before it queues the user-initiated enable.
+            scenario.onActivity(activity -> NativeVoicePlugin.markVisibleForPermissionResult(activity, f.runtime));
+            f.updateMode("response");
+            assertTrue(f.accepted(f.start()));
+            assertEquals(0, f.runtime.snapshot().getJSONArray("errors").length());
+            // A stopped activity is not visible, so a late result cannot authorize a foreground start.
+            scenario.moveToState(Lifecycle.State.CREATED);
+            AtomicBoolean visible = new AtomicBoolean(true);
+            scenario.onActivity(activity -> visible.set(NativeVoicePlugin.visibleForPermissionResult(activity)));
+            assertFalse(visible.get());
+        }
+    }
+
+    @Test public void enableWithoutVisibilityIsRejectedButPersisted() throws Exception {
+        try (Fixture f = new Fixture("off", true, true)) {
+            f.connect(); f.flush();
+            Reply reply = new Reply(); f.runtime.command("updateSettings", NativeVoiceJson.object("expectedRevision", 1,
+                "patch", NativeVoiceJson.object("audioMode", "response")), true, reply);
+            assertEquals("resume_from_visible_app", reply.failure()); f.flush();
+            assertTrue(f.starts.isEmpty()); assertEquals("response", f.runtime.snapshot().getJSONObject("settings").getString("audioMode"));
+        }
+    }
+
+    @Test public void corruptSettingsAreQuarantinedAndTheConnectionContinues() throws Exception {
+        try (Fixture f = new Fixture("response", true, true)) {
+            String binding = NativeVoiceStore.binding(f.profile, f.origin, Fixture.IDENTITY);
+            byte[] garbage = new byte[64]; garbage[0] = 1;
+            Files.write(new File(f.store.directory(binding), "settings.enc").toPath(), garbage);
+            f.runtime.nativeVisibility(true); f.connect(); f.flush();
+            JSONObject state = f.runtime.snapshot();
+            assertEquals("off", state.getJSONObject("settings").getString("audioMode")); assertFalse(state.isNull("originClientId"));
+            assertEquals("voice_settings_reset", state.getJSONArray("errors").getJSONObject(0).getString("code"));
+            assertTrue(new File(f.store.directory(binding), "settings.corrupt").exists()); assertTrue(f.starts.isEmpty());
+        }
+    }
+
+    @Test public void connectionFailuresReportConnectivitySeparatelyFromPairing() throws Exception {
+        for (int status : new int[] { 0, 401, 503 }) {
+            try (Fixture f = new Fixture("response", true, true)) {
+                Reply reply = f.beginConnection(f.profile);
+                f.take(f.auth).done(status, null, status == 0 ? "network_unavailable" : null);
+                assertEquals(status == 401 ? "authentication_required" : "connection_unavailable", reply.failure());
+                f.flush(); assertEquals("error", f.runtime.snapshot().getString("readiness"));
+            }
+        }
+    }
+
     private static final class Reply implements NativeVoiceRuntime.Reply {
         final CountDownLatch done = new CountDownLatch(1);
         String failure;
@@ -212,12 +267,8 @@ public class NativeVoiceStartupTest {
                 NativeVoiceHttp.setTestTransport(null); runtime.setTestSessionStarter(null); owner.getLooper().quitSafely();
                 for (String selected : new String[] { profile, otherProfile }) {
                     new ClientCredentialStore(context).removeProfileCredentials(selected);
-                    String binding = NativeVoiceStore.binding(selected, origin, IDENTITY);
-                    StringBuilder name = new StringBuilder();
-                    for (byte b : MessageDigest.getInstance("SHA-256").digest(binding.getBytes(StandardCharsets.UTF_8))) name.append(String.format("%02x", b & 255));
-                    File directory = new File(new File(context.getNoBackupFilesDir(), "native-voice"), name.toString());
-                    File[] files = directory.listFiles(); if (files != null) for (File file : files) assertTrue(file.delete());
-                    if (directory.exists()) assertTrue(directory.delete());
+                    store.removeProfile(selected);
+                    assertFalse(store.directory(NativeVoiceStore.binding(selected, origin, IDENTITY)).exists());
                 }
             }
         }

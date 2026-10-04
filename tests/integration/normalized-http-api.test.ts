@@ -7,6 +7,9 @@ import { QuestionRequestService } from "../../src/server/domain/question-request
 import { QuestionRequestRepository } from "../../src/server/db/repositories/question-request-repository.js";
 import { QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
 import { ConversationDraftRepository } from "../../src/server/db/repositories/conversation-draft-repository.js";
+import { DirectInputRepository } from "../../src/server/db/repositories/direct-input-repository.js";
+import { ThreadActivityService } from "../../src/server/conversations/thread-activity-service.js";
+import { MAX_DIRECT_INPUT_TEXT_BYTES, type DirectInputRequest } from "../../src/shared/protocol/thread-input.js";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import type { Server } from "node:http";
@@ -565,6 +568,44 @@ async function readThreadSseHandshake(
   });
 }
 
+/** Raw frames, so tests can assert which lines (such as `id:`) each frame carries. */
+async function readSseFramesUntil(
+  server: Server,
+  pathname: string,
+  done: (frame: string) => boolean,
+): Promise<readonly string[]> {
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("test_server_address_invalid");
+  }
+  const controller = new AbortController();
+  const response = await fetch(`http://127.0.0.1:${address.port}${pathname}`, {
+    headers: { Host: "127.0.0.1:4783" },
+    signal: controller.signal,
+  });
+  expect(response.status).toBe(200);
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  const frames: string[] = [];
+  let buffered = "";
+  try {
+    while (!frames.some(done)) {
+      const next = await reader.read();
+      if (next.done) break;
+      buffered += decoder.decode(next.value, { stream: true });
+      let end: number;
+      while ((end = buffered.indexOf("\n\n")) !== -1) {
+        frames.push(buffered.slice(0, end));
+        buffered = buffered.slice(end + 2);
+      }
+    }
+  } finally {
+    controller.abort();
+    await reader.cancel().catch(() => undefined);
+  }
+  return frames;
+}
+
 async function fixture(
   options: {
     readonly packagedClientOrigins?: readonly PackagedClientOrigin[];
@@ -667,10 +708,40 @@ async function fixture(
     configurationRevision: 0,
     activeConfigurationRevision: () => 0,
   });
+  const directInputs = new DirectInputRepository(database);
+  // Real durable activity authority; no conversation runtime is ever observed here.
+  const inputActivity = new ThreadActivityService({
+    database,
+    actors: { observeInputRuntime: () => undefined, subscribeInputActivity: () => () => undefined },
+    presentation: { readCached: async () => { throw new Error("input_presentation_not_used"); } },
+  });
   const snapshots = {
     async skills(scope: RequestScope, threadId: string) {
       repository.getThread(scope, threadId);
       return { skills: [] };
+    },
+    inputContext(scope: RequestScope, threadId: string) {
+      return inputActivity.capture(scope, threadId);
+    },
+    readInputReceipt(scope: RequestScope, mutationId: string) {
+      return directInputs.lookup(scope, mutationId);
+    },
+    // Queue-mode admission over the real receipt and queue repositories.
+    async admitInput(scope: RequestScope, threadId: string, input: DirectInputRequest) {
+      const current = repository.getThread(scope, threadId);
+      const replay = directInputs.replay(scope, threadId, input);
+      if (replay) return directInputs.present(scope, replay);
+      return database.transaction(() => {
+        const queued = new QueuedInputRepository(database).enqueue(scope, threadId, {
+          mutationId: input.mutationId, text: input.text, origin: input.origin,
+          contextExcerpts: [], attachmentIds: [], taskReferences: [],
+          source: { kind: "direct_input", resolvedDeliveryMode: "queue", expectedThreadRevision: current.thread.revision },
+          now: Date.now(),
+        });
+        return directInputs.present(scope, directInputs.record(scope, threadId, input, {
+          admittedMode: "queue", queuedInputId: queued.item.id, now: Date.now(),
+        }));
+      })();
     },
     async snapshot(scope: RequestScope, threadId: string) {
       return threadSnapshot(
@@ -1623,6 +1694,7 @@ async function fixture(
     withHost,
     mutate,
     close() {
+      inputActivity.close();
       execution.close();
       database.close();
     },
@@ -4700,7 +4772,7 @@ describe("normalized HTTP application contract", () => {
       .set(SEDES_AGENT_TOOL_SOURCE_CAPABILITY_HEADER, sourceCapability)
       .send({
         toolId: "agent.context",
-        schemaVersion: 4,
+        schemaVersion: 3,
         requestId: "request-1",
         input: {},
       })
@@ -4716,6 +4788,165 @@ describe("normalized HTTP application contract", () => {
       .expect(({ body }) =>
         expect(body.error.code).toBe("application_draining"),
       );
+  });
+
+  it("admits direct input with its own body limit, CSRF, and principal-wide receipts", async () => {
+    const current = await fixture();
+    try {
+      const workspace = await current
+        .mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" } })
+        .expect(201);
+      const createThread = async (title: string) => (await current
+        .mutate(request(current.app).post("/api/threads"))
+        .send({ workspaceId: workspace.body.id, configuration: { kind: "custom", targetId: current.profile.id },
+          executionWorkspace: { kind: "direct" }, title })
+        .expect(201)).body.threadId as string;
+      const threadId = await createThread("Direct input");
+      const otherThreadId = await createThread("Other direct input");
+      const unboundThreadId = await createThread("Unbound direct input");
+      current.bindThread(threadId);
+      current.bindThread(otherThreadId);
+      const input = (text = "Spoken input"): DirectInputRequest => ({
+        mutationId: randomUUID(), text, origin: { clientId: randomUUID() }, runningPolicy: { mode: "queue" },
+      });
+      const post = (target: string, body: DirectInputRequest) =>
+        current.mutate(request(current.app).post(`/api/threads/${target}/inputs`)).send(body);
+      const receipt = (mutationId: string, foreign = false) => {
+        const read = current.withHost(request(current.app).get(`/api/input-receipts/${mutationId}`));
+        return foreign ? read.set("X-Test-Foreign-Principal", "yes") : read;
+      };
+
+      const unprotected = input();
+      await current
+        .withHost(request(current.app).post(`/api/threads/${threadId}/inputs`))
+        .send(unprotected)
+        .expect(403)
+        .expect(({ body }) => expect(body.error.code).toBe("csrf_token_invalid"));
+      const missing = await receipt(unprotected.mutationId).expect(200);
+      expect(missing.headers["cache-control"]).toBe("no-store");
+      expect(missing.body).toEqual({ status: "notObserved" });
+
+      const first = input();
+      const admitted = await post(threadId, first).expect(200);
+      expect(admitted.headers["cache-control"]).toBe("no-store");
+      expect(admitted.body).toEqual({
+        mutationId: first.mutationId, threadId, operationId: first.mutationId, admittedMode: "queue",
+        currentMode: "queue", status: "queued", queuedInputId: expect.any(String),
+      });
+      expect((await post(threadId, first).expect(200)).body).toEqual(admitted.body);
+      for (const [target, changed] of [
+        [threadId, { ...first, text: "Different spoken input" }],
+        [threadId, { ...first, origin: { clientId: randomUUID() } }],
+        [otherThreadId, first],
+      ] as const) {
+        await post(target, changed)
+          .expect(409)
+          .expect(({ body }) => expect(body.error.code).toBe("conflict"));
+      }
+      const found = await receipt(first.mutationId).expect(200);
+      expect(found.headers["cache-control"]).toBe("no-store");
+      expect(found.body).toEqual({ status: "found", receipt: admitted.body });
+      await receipt(first.mutationId, true).expect(200, { status: "notObserved" });
+      await receipt("not-a-mutation-id").expect(400);
+
+      // JSON escaping may exceed the ordinary 256 KiB parser while the exact text fits 64 KiB.
+      const escaped = input("\u0001".repeat(50_000));
+      expect(Buffer.byteLength(JSON.stringify(escaped))).toBeGreaterThan(256 * 1024);
+      expect(Buffer.byteLength(JSON.stringify(escaped))).toBeLessThan(512 * 1024);
+      expect((await post(threadId, escaped).expect(200)).body).toMatchObject({ mutationId: escaped.mutationId, status: "queued" });
+      const overParser = input("\u0001".repeat(90_000));
+      expect(Buffer.byteLength(JSON.stringify(overParser))).toBeGreaterThan(512 * 1024);
+      await post(threadId, overParser)
+        .expect(413)
+        .expect(({ body }) => expect(body.error.code).toBe("bad_request"));
+      const atTextLimit = input("é".repeat(MAX_DIRECT_INPUT_TEXT_BYTES / 2));
+      expect(Buffer.byteLength(atTextLimit.text)).toBe(MAX_DIRECT_INPUT_TEXT_BYTES);
+      await post(threadId, atTextLimit).expect(200);
+      const overText = input(atTextLimit.text + "e");
+      await post(threadId, overText)
+        .expect(400)
+        .expect(({ body }) => expect(body.error.code).toBe("bad_request"));
+      for (const rejected of [overParser, overText]) {
+        await receipt(rejected.mutationId).expect(200, { status: "notObserved" });
+      }
+
+      const context = await current
+        .withHost(request(current.app).get(`/api/threads/${threadId}/input-context`))
+        .expect(200);
+      expect(context.headers["cache-control"]).toBe("no-store");
+      expect(context.body).toEqual({
+        threadId, activityToken: expect.any(String), authority: "unavailable", runState: null,
+        automaticListenEligible: false, steer: { availability: "unavailable" },
+      });
+      expect((await current
+        .withHost(request(current.app).get(`/api/threads/${threadId}/input-context`))
+        .expect(200)).body.activityToken).toBe(context.body.activityToken);
+      expect((await current
+        .withHost(request(current.app).get(`/api/threads/${unboundThreadId}/input-context`))
+        .expect(200)).body).toMatchObject({ threadId: unboundThreadId, authority: "unbound", automaticListenEligible: false });
+      await current
+        .withHost(request(current.app).get(`/api/threads/${threadId}/input-context`))
+        .set("X-Test-Foreign-Principal", "yes")
+        .expect(404);
+    } finally {
+      current.close();
+    }
+  });
+
+  it("reports unpresentable input receipts and contexts as server faults", async () => {
+    const current = await fixture();
+    const capture = vi.spyOn(ThreadActivityService.prototype, "capture");
+    try {
+      const mutationId = randomUUID();
+      current.database.prepare(`INSERT INTO direct_input_receipts (tenant_id, owner_principal_id, mutation_id,
+        application_thread_id, request_fingerprint, admitted_mode, creation_attempt_id, created_at)
+        VALUES (?, ?, ?, 'not-a-thread-id', ?, 'submit', 'attempt', 1)`)
+        .run(current.owner.tenantId, current.owner.principalId, mutationId, "0".repeat(64));
+      await current
+        .withHost(request(current.app).get(`/api/input-receipts/${mutationId}`))
+        .expect(500)
+        .expect(({ body }) => expect(body.error.code).toBe("internal_error"));
+      capture.mockResolvedValue({ threadId: "not-a-thread-id" } as never);
+      await current
+        .withHost(request(current.app).get(`/api/threads/${randomUUID()}/input-context`))
+        .expect(500)
+        .expect(({ body }) => expect(body.error.code).toBe("internal_error"));
+    } finally {
+      capture.mockRestore();
+      current.close();
+    }
+  });
+
+  it("opens the authenticated application stream with its principal's notification policy and no replay id", async () => {
+    const current = await fixture();
+    const server = current.app.listen(0, "127.0.0.1");
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("listening", resolve);
+        server.once("error", reject);
+      });
+      const route = "/api/application/notifications";
+      const { silenced: _silenced, revision, ...settings } = (await current
+        .withHost(request(current.app).get(route))
+        .expect(200)).body;
+      await current
+        .mutate(request(current.app).put(route))
+        .send({ ...settings, enabled: true, expectedRevision: revision })
+        .expect(200);
+      const isPolicy = (frame: string) => frame.startsWith("event: notification_policy\n");
+      const frames = await readSseFramesUntil(server, "/api/application/events", isPolicy);
+      const policy = frames.find(isPolicy)!;
+      // Unlike the replayable inventory lane, policy is transient and carries no cursor.
+      expect(policy).not.toMatch(/^id:/mu);
+      expect(frames.find((frame) => /^event: application$/mu.test(frame))).toMatch(/^id: /mu);
+      expect(JSON.parse(/^data: (.+)$/mu.exec(policy)![1]!)).toMatchObject({
+        settings: { enabled: true, revision: 1 }, generation: expect.any(Number),
+      });
+    } finally {
+      await closeHttpTestServer(server);
+      current.close();
+    }
   });
 
   it("preflights and archives a family through the normalized inventory route", async () => {

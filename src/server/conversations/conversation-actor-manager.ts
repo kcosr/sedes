@@ -23,7 +23,7 @@ import { assertConversationRuntimeBudget } from "./conversation-runtime-budget-p
 import type { DeliveryInputSnapshotRepository } from "../db/repositories/delivery-input-snapshot-repository.js";
 import type { BoundedText } from "../../shared/protocol/payload.js";
 import type { BackendCapabilityDocument } from "../../shared/protocol/backend.js";
-import type { ThreadRunState } from "../../shared/protocol/conversation.js";
+import type { ConversationItem, ThreadRunState } from "../../shared/protocol/conversation.js";
 
 export interface AcquireConversationActorInput {
   readonly scope: ExecutionScope;
@@ -126,9 +126,15 @@ export type LiveProgressObserver = (
 ) => void;
 
 export interface ConversationInputRuntimeObservation {
+  /** Owner plus projection generation; every replacement snapshot changes it. */
   readonly generation: string;
+  /** Exclusive owner identity; never reused, and kept across in-place replacement snapshots. */
+  readonly ownerGeneration: string;
   readonly authoritative: boolean;
+  /** Retained facts while a replacement snapshot is established; authority is pending, not lost. */
+  readonly reestablishing: boolean;
   readonly runState: ThreadRunState;
+  /** Settlement of the observed facts; never true unless authoritative or reestablishing. */
   readonly settled: boolean;
   readonly activeTurnId?: string;
   readonly sourceTurnId?: string;
@@ -345,11 +351,15 @@ export class ConversationActorManager {
     const timeline = observed.state.timeline;
     const turnId = sourceTurnId ?? timeline.activeTurnId ?? timeline.orderedTurnIds.at(-1);
     const turn = turnId ? timeline.turnsById[turnId] : undefined;
-    const firstInput = turn?.orderedItemIds.map(id => timeline.itemsById[id])
-      .find(item => item?.kind === "user_message");
+    let firstInput: ConversationItem | undefined;
+    for (const id of turn?.orderedItemIds ?? []) {
+      if (timeline.itemsById[id]?.kind === "user_message") { firstInput = timeline.itemsById[id]; break; }
+    }
     return {
       generation: `${entry.unprojectedGeneration}:${timeline.generation}`,
+      ownerGeneration: entry.unprojectedGeneration,
       authoritative: observed.authoritative,
+      reestablishing: observed.reestablishing,
       runState: timeline.runState,
       settled: observed.settled,
       ...(timeline.activeTurnId ? { activeTurnId: timeline.activeTurnId } : {}),

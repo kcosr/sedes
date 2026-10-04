@@ -33,6 +33,20 @@ function fingerprint(threadId: string, request: DirectInputRequest): string {
   ])).digest("hex");
 }
 
+const MAX_RECEIPT_DIAGNOSTIC_UNITS = 500;
+
+/**
+ * Stored diagnostics are bounded in code points; the receipt wire contract (and
+ * its Java/TypeScript validators) counts UTF-16 units. Never split a surrogate pair.
+ */
+function boundDiagnostic(text: string): string | undefined {
+  if (text.length <= MAX_RECEIPT_DIAGNOSTIC_UNITS) return text;
+  let end = MAX_RECEIPT_DIAGNOSTIC_UNITS;
+  const last = text.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return text.slice(0, end) || undefined;
+}
+
 /** Principal-wide idempotency is independent of thread/queue retention. */
 export class DirectInputRepository {
   constructor(readonly database: Database.Database) {}
@@ -85,11 +99,24 @@ export class DirectInputRepository {
     let currentMode = record.admittedMode;
     let diagnostic: string | undefined = "The admitted input is no longer retained.";
     if (record.queuedInputId !== null) {
-      const queued = this.database.prepare(`SELECT state, resolved_delivery_mode AS mode, diagnostic
-        FROM queued_inputs WHERE tenant_id = ? AND owner_principal_id = ?
-          AND application_thread_id = ? AND id = ? AND mutation_id = ?
-      `).get(scope.tenantId, scope.principalId, record.threadId, record.queuedInputId, record.mutationId) as
-        { state: string; mode: DirectInputReceipt["currentMode"]; diagnostic: string | null } | undefined;
+      // An explicit retry carries the same admitted content forward in a new
+      // row; the receipt keeps its immutable queue identity and reports the latest.
+      const queued = this.database.prepare(`WITH RECURSIVE chain(id, depth) AS (
+          SELECT id, 0 FROM queued_inputs WHERE tenant_id = ? AND owner_principal_id = ?
+            AND application_thread_id = ? AND id = ? AND mutation_id = ?
+          UNION ALL
+          SELECT retry.id, chain.depth + 1 FROM chain JOIN queued_inputs retry
+            ON retry.tenant_id = ? AND retry.owner_principal_id = ? AND retry.application_thread_id = ?
+            AND retry.retry_of_id = chain.id
+          WHERE chain.depth < 64)
+        SELECT q.state, q.resolved_delivery_mode AS mode, q.diagnostic FROM chain JOIN queued_inputs q
+          ON q.tenant_id = ? AND q.owner_principal_id = ? AND q.application_thread_id = ? AND q.id = chain.id
+        ORDER BY chain.depth DESC LIMIT 1
+      `).get(
+        scope.tenantId, scope.principalId, record.threadId, record.queuedInputId, record.mutationId,
+        scope.tenantId, scope.principalId, record.threadId,
+        scope.tenantId, scope.principalId, record.threadId,
+      ) as { state: string; mode: DirectInputReceipt["currentMode"]; diagnostic: string | null } | undefined;
       if (queued) {
         currentMode = queued.mode;
         status = queued.state === "pending" || queued.state === "retry_wait" ? "queued"
@@ -100,24 +127,39 @@ export class DirectInputRepository {
         diagnostic = queued.diagnostic ?? undefined;
       }
     } else {
-      const attempt = this.database.prepare(`SELECT phase, diagnostic FROM conversation_creation_attempts
+      const attempt = this.database.prepare(`SELECT phase, diagnostic, force_reset_at AS forceResetAt
+        FROM conversation_creation_attempts
         WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ?
           AND attempt_id = ? AND mutation_id = ?
       `).get(scope.tenantId, scope.principalId, record.threadId, record.creationAttemptId, record.mutationId) as
-        { phase: string; diagnostic: string | null } | undefined;
+        { phase: string; diagnostic: string | null; forceResetAt: number | null } | undefined;
       if (attempt) {
+        // A force reset abandons an unresolved creation exactly like a force-reset queue row.
         status = attempt.phase === "bound" || attempt.phase === "accepted_unpersisted" ? "accepted"
-          : attempt.phase === "aborted_unpersisted" ? "failed"
+          : attempt.phase === "aborted_unpersisted" || attempt.forceResetAt !== null ? "failed"
           : attempt.phase === "recovery_required" ? "recovery_required" : "submitting";
         diagnostic = attempt.diagnostic ?? undefined;
       }
     }
-    return directInputReceiptSchema.parse({
+    diagnostic = diagnostic === undefined ? undefined : boundDiagnostic(diagnostic);
+    const receipt = directInputReceiptSchema.safeParse({
       mutationId: record.mutationId, threadId: record.threadId, operationId: record.mutationId,
       admittedMode: record.admittedMode, currentMode, status,
       ...(record.queuedInputId === null ? {} : { queuedInputId: record.queuedInputId }),
       ...(diagnostic ? { diagnostic } : {}),
     });
+    // Stored state that cannot be presented is a server fault, never a client
+    // 400 that a caller could mistake for a definitive admission rejection.
+    if (!receipt.success) throw new Error("direct_input_receipt_unpresentable", { cause: receipt.error });
+    return receipt.data;
+  }
+
+  /** Retries resend the same content, so they inherit the original advisory origin. */
+  copyOrigin(scope: RequestScope, threadId: string, fromOperationId: string, toOperationId: string): void {
+    const source = this.database.prepare(`SELECT client_id AS clientId FROM input_client_origins
+      WHERE tenant_id = ? AND owner_principal_id = ? AND application_thread_id = ? AND operation_id = ?
+    `).get(scope.tenantId, scope.principalId, threadId, fromOperationId) as { clientId: string | null } | undefined;
+    this.recordOrigin(scope, threadId, toOperationId, source?.clientId ? { clientId: source.clientId } : undefined);
   }
 
   recordOrigin(scope: RequestScope, threadId: string, operationId: string, origin?: ClientOrigin): void {

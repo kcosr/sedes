@@ -141,12 +141,17 @@ rules apply to an operator-controlled HTTPS proxy: the proxy and network must
 provide the private network boundary in addition to Sedes pairing authentication.
 
 The Android app trusts system certificate authorities and CA certificates
-installed by the user in Android's credential settings. This applies to Sedes
-and voice-adapter HTTPS/WebSocket connections. For a private CA, install its
-certificate on the device before connecting. Certificate-chain, validity, and
-hostname checks remain enabled; the server certificate must cover the hostname
-in the saved URL. Trust follows the device's certificate store, not a Sedes
-profile setting.
+installed by the user, or by device management (MDM), in Android's credential
+settings. This trust is app-wide. It applies to every HTTPS and secure WebSocket
+connection the app makes, including WebView and native requests to Sedes that
+carry the paired credential, and voice-adapter connections. Anyone able to
+install a CA certificate on the device can therefore intercept and read all
+Sedes traffic from this app, including that credential. Install only CA
+certificates you control, and review the device's user certificate store before
+pairing. For a private CA, install its certificate on the device before
+connecting. Certificate-chain, validity, and hostname checks remain enabled; the
+server certificate must cover the hostname in the saved URL. Trust follows the
+device's certificate store, not a Sedes profile setting.
 
 ## Direct trusted-home-LAN mode
 

@@ -63,7 +63,7 @@ afterEach(async () => {
 });
 
 describe("Electron managed local server", () => {
-  it("checks the current authenticated health response and rejects obsolete or unhealthy responses", async () => {
+  it("checks the required authenticated health fields, tolerates additive fields, and rejects obsolete or unhealthy responses", async () => {
     let status = 200;
     let payload = { status: "ok", version: SEDES_VERSION };
     const requests = [];
@@ -77,12 +77,16 @@ describe("Electron managed local server", () => {
     try {
       await expect(checkLocalHealth(input)).resolves.toBeUndefined();
       expect(requests).toEqual([{ path: "/api/health", authorization: "Bearer health-fixture-credential" }]);
+      payload = { status: "ok", version: SEDES_VERSION, additive: { ready: true } };
+      await expect(checkLocalHealth(input)).resolves.toBeUndefined();
       for (const invalid of [
         { status: "ok" },
         { status: "ok", version: "" },
         { status: "ok", version: 1 },
-        { status: "ok", version: SEDES_VERSION, unexpected: true },
+        { version: SEDES_VERSION, additive: true },
         { status: "draining", version: SEDES_VERSION },
+        ["ok", SEDES_VERSION],
+        null,
       ]) {
         payload = invalid;
         await expect(checkLocalHealth(input)).rejects.toMatchObject({ code: "local_server_health_invalid" });

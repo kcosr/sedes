@@ -79,6 +79,9 @@ describe("native voice production pipeline with loopback providers", () => {
       expect(await client.next("media_stt_result", "stt-contract")).toMatchObject({ success: true, text: "voice contract input" });
       expect(adapter.wavs.at(-1)?.subarray(44)).toEqual(adapter.pcm);
       const trace = client.messages.filter(message => message.requestId === "stt-contract").map(message => message.type);
+      // Capture stops before provider recognition starts; both must be present for the order to mean anything.
+      expect(trace).toContain("media_stt_stopped");
+      expect(trace).toContain("media_stt_started");
       expect(trace.indexOf("media_stt_stopped")).toBeLessThan(trace.indexOf("media_stt_started"));
       adapter.setAsrDelay(500);
       adapter.transcripts.push("must not submit after cancel");
@@ -123,6 +126,12 @@ describe("native voice production pipeline with loopback providers", () => {
       const reconnected = await voiceFeed(app);
       try {
         await waitForVoice(() => reconnected.frames.find(frame => frame.event === "notification_policy"));
+        // A later policy frame on the same ordered transient lane is the sentinel: a
+        // replay queued for this subscriber would have to arrive before it.
+        const { revision, silenced: _silenced, ...settings } = notificationSettingsSchema.parse(await app.json("/api/application/notifications"));
+        await app.json("/api/application/notifications", "PUT", { ...settings, expectedRevision: revision });
+        await waitForVoice(() => reconnected.frames.find(frame => frame.event === "notification_policy" &&
+          notificationSettingsSchema.safeParse(frame.value.settings).data?.revision === revision + 1));
         expect(reconnected.frames.filter(frame => frame.event === "notification")).toEqual([]);
       } finally { await reconnected.close(); }
 
@@ -140,7 +149,8 @@ describe("native voice production pipeline with loopback providers", () => {
 
   it.skipIf(!androidSerial)("validates Android Keystore recovery, cancellation, and real AudioRecord/AudioTrack", async () => {
     const result = await adb(["shell", "am", "instrument", "-w", "-r", "-e", "class",
-      "dev.sedes.local.NativeVoiceStoreTest,dev.sedes.local.NativeVoiceRuntimeTest,dev.sedes.local.NativeVoiceStartupTest,dev.sedes.local.NativeVoiceAudioTest", "dev.sedes.local.test/androidx.test.runner.AndroidJUnitRunner"], 180_000);
+      "dev.sedes.local.NativeVoiceStoreTest,dev.sedes.local.ClientCredentialStoreTest,dev.sedes.local.NativeVoiceQueueDeviceTest," +
+      "dev.sedes.local.NativeVoiceRuntimeTest,dev.sedes.local.NativeVoiceStartupTest,dev.sedes.local.NativeVoiceAudioTest", "dev.sedes.local.test/androidx.test.runner.AndroidJUnitRunner"], 180_000);
     await writeFile(path.join(artifactDirectory, "android-native-smoke.log"), result.stdout + result.stderr);
     expect(result.stdout).toContain("OK (");
     expect(result.stdout).not.toMatch(/FAILURES|INSTRUMENTATION_FAILED/u);
@@ -164,7 +174,7 @@ describe("native voice production pipeline with loopback providers", () => {
       const before = app.model.requests.length;
       const ttsBefore = adapter.texts.length;
       const args = { serverOrigin: app.url, adapterOrigin: adapter.url, pairingCode, threadId, threadTitle, mode, scenario,
-        initialText: `native voice fixture start ${mode} ${scenario}`,
+        initialText: `native voice fixture start ${mode} ${scenario}`, draftText: `unsent voice fixture draft ${mode} ${scenario}`,
         ...(secondThreadId ? { secondThreadId, secondThreadTitle } : {}) };
       const diagnosticPath = path.join(artifactDirectory, `android-${mode}-${scenario}-voice-diagnostics.json`);
       const observer = await observeScenarioVoice(app, [threadId, ...(secondThreadId ? [secondThreadId] : [])]);
@@ -197,8 +207,13 @@ describe("native voice production pipeline with loopback providers", () => {
         const rawResult = /^INSTRUMENTATION_STATUS: voiceResult=(.+)$/mu.exec(result.stdout)?.[1];
         expect(rawResult).toBeDefined();
         const evidence = JSON.parse(rawResult!);
-        expect(evidence).toMatchObject({ draftPreserved: true, audioSource: "deterministic-pcm", audioSink: "AudioTrack" });
+        // Every scenario records after a start cue, so a real AudioTrack always plays; Response speech is observed separately.
+        expect(evidence).toMatchObject({ draftPreserved: true, composerDraftPreserved: true, serverDraftPreserved: true,
+          audioSource: "deterministic-pcm", audioSink: "AudioTrack" });
+        if (mode === "response" && scenario !== "stop") expect(evidence.speechPlayback).toBe(true);
         expect(evidence.journalOutstanding).toBe(0);
+        // The device polled Sedes for the autosaved draft; confirm it is still the unsent composer text.
+        expect((await app.thread(threadId)).draft.text).toBe(args.draftText);
         const submissions = () => app.model.requests.slice(before).filter(request => request.lastRole === "user" && request.lastText === text);
         // A definitive admission receipt may precede asynchronous provider dispatch.
         if (scenario !== "stop") await waitForVoice(() => submissions().length > 0);

@@ -7,8 +7,12 @@
 - Client protocol 137 adds direct text admission, live voice notifications, and
   per-event Script/Voice delivery. Upgrade packaged clients with the server.
   Notification script payloads use schema version 4; reinstall separately copied
-  hooks. The database upgrade preserves existing script selections and response
-  phases while replacing the old event-list settings contract.
+  hooks. The database upgrade replaces the old event-list settings contract. It
+  preserves response phases and script selections, except that disabled
+  settings without a script path keep no script events, and sets every event's
+  Voice action to Speak, or Speak then listen for Turn completed. Fresh
+  notification settings select no script events and include Final and
+  Unclassified response text.
 
 - Codex Speed is provider feature `codex.fast_mode@2`, which replaces the
   Fast mode enable/disable actions with `set_standard`, `set_fast`, and
@@ -194,10 +198,15 @@
 
 ### Added
 
-- Android native voice supports spoken notifications, automatic or explicit
-  recording, thread targeting, foreground-service controls, and durable input
-  recovery without changing composer drafts. Live progress is available for
-  Codex, Pi, and Claude; other backends retain completion announcements.
+- Android native voice speaks selected notifications, records explicitly or
+  after a notification, and sends recognized text directly to a thread without
+  changing its composer draft. Live progress is available for Codex, Pi, and
+  Claude; other backends keep completion announcements. **Settings → Voice**
+  shows readiness, including the adapter and notification connections, and
+  recent errors. Input whose delivery is uncertain stays in recovery, where
+  voice rechecks it automatically without resending; **Resume input** retries
+  the same message and **Discard** removes it. Enabled voice resumes when the
+  app opens, and adapter URLs may include a reverse-proxy path.
 
 - Codex threads can use **Ultrafast** speed when the account's Codex model
   catalog offers it. When a model offers both Fast and Ultrafast, the
@@ -383,8 +392,12 @@
 
 ### Changed
 
-- The Android voice bar is hidden when Audio mode is Off. Enable voice again
-  from Settings → Voice.
+- The Android app now trusts CA certificates installed by the user or by
+  device management (MDM), in addition to system CAs, for all of its HTTPS and
+  secure WebSocket traffic. This includes Sedes connections that carry the
+  paired credential, so anyone able to install a CA on the device can intercept
+  that traffic. Certificate and hostname validation still apply. Review the
+  device's user certificates before pairing.
 
 - Codex Fast mode is now called **Speed** in the composer, docs, and saved
   Agent settings. Changing to a model that doesn't offer the selected speed
@@ -706,32 +719,8 @@
 
 ### Fixed
 
-- Android restores enabled voice when the app opens and its authenticated
-  connection is ready. Routine launches no longer require **Resume voice**;
-  microphone capture still follows explicit recording and Auto-listen controls.
-
-- Live progress notifications retain newly observed submission ownership even
-  when the visible turn is unchanged, so eligible provisional replies can be
-  spoken without waiting for a thread reload.
-
-- Short Android voice cues and speech now start and drain even with zero startup
-  pre-roll or a playback underrun, without delaying completion for added silence.
-
-- Android recognition now plays success and descending failure/cancellation
-  tones after capture stops, using the existing Recognition cues and Cue gain
-  settings. The start tone now matches Assistant's rising cue.
-
-- Android HTTPS and secure WebSocket connections trust user-installed
-  certificate authorities, including private voice-adapter certificates,
-  while retaining certificate and hostname validation.
-
-- Android voice accepts adapter base URLs with reverse-proxy path prefixes and
-  preserves the prefix for HTTP media requests and WebSocket connections.
-
-- Android automatic listening receives current thread authority after a composer
-  first send, including when no thread view is open.
-
-- Electron managed Local accepts the server's versioned health response.
+- Electron managed Local accepts the server's health response, which includes
+  the server version, and ignores additional fields.
 
 - Changing a thread setting right after Codex confirmed a Fast mode change
   no longer fails with "The Codex thread or settings changed in another

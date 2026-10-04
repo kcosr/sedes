@@ -156,6 +156,44 @@ public class NativeVoiceAudioTest {
             assertTrue("Cancelled stream produced a late callback", probe.completed.isEmpty());
         } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
     }
+    @Test public void oddChunksCarrySplitSamplesAndEmptyStreamsReportTheirCode() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(
+            new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        PlaybackProbe probe = new PlaybackProbe();
+        NativeVoiceAudio audio = new NativeVoiceAudio(context, probe);
+        try {
+            audio.configure(NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("startupPreRollMs", 0)));
+            audio.begin("odd-chunks");
+            audio.pcm("odd-chunks", 24000, new byte[4801]); audio.pcm("odd-chunks", 24000, new byte[0]);
+            audio.pcm("odd-chunks", 24000, new byte[4799]); audio.pcm("odd-chunks", 24000, new byte[3]);
+            File spool = audio.spoolForTest(); assertNotNull(spool);
+            assertEquals("Only whole samples were spooled", 9602, spool.length());
+            audio.end("odd-chunks");
+            probe.await("odd-chunks");
+            audio.begin("empty-stream"); audio.end("empty-stream");
+            assertEquals("empty-stream", probe.completed.poll(5, TimeUnit.SECONDS));
+            assertEquals("empty_pcm_stream", probe.failure.getAndSet(null));
+        } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
+    }
+    @Test public void consecutivePlaybackHoldsOneFocusEntryUntilTheDelayedRelease() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(
+            new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        PlaybackProbe probe = new PlaybackProbe();
+        NativeVoiceAudio audio = new NativeVoiceAudio(context, probe);
+        try {
+            audio.configure(NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("startupPreRollMs", 0)));
+            audio.begin("first-chunk"); audio.pcm("first-chunk", 24000, new byte[24000 * 2 / 10]); audio.end("first-chunk");
+            probe.await("first-chunk");
+            Object held = audio.focusForTest(); assertNotNull("Focus was abandoned between consecutive chunks", held);
+            audio.begin("second-chunk"); audio.pcm("second-chunk", 24000, new byte[24000 * 2 / 10]); audio.end("second-chunk");
+            probe.await("second-chunk");
+            assertSame("A consecutive chunk replaced its focus entry", held, audio.focusForTest());
+            SystemClock.sleep(2500);
+            assertNull("Idle focus outlived its delayed release", audio.focusForTest());
+        } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
+    }
     @Test public void fastLongSpeechUsesBoundedDiskAndStopRemovesOnlyItsSpool() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(

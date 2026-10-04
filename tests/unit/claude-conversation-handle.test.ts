@@ -1166,6 +1166,59 @@ describe("ClaudeConversationHandle", () => {
     } finally { await handle.close(); }
   });
 
+  it("announces superseded tool-use progress once and a replacement only on its own later tool-use evidence", async () => {
+    const provider = fixture();
+    const { handle } = createHandle(provider);
+    const established = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    established.subscribeFromNext(({ event }) => events.push(event));
+    try {
+      provider.messages.push({ type: "user", message: { role: "user", content: "Inspect the files" },
+        parent_tool_use_id: null, uuid: OPERATION_ID, session_id: SESSION_ID, origin: { kind: "human" },
+      } as SDKMessage);
+      const row = (id: string, content: unknown[], stopReason: "tool_use" | null, supersedes?: string[]) => ({
+        type: "assistant", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null, ...(supersedes ? { supersedes } : {}),
+        message: { id, type: "message", role: "assistant", model: "claude-sonnet-5", content,
+          stop_reason: stopReason, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } },
+      }) as SDKMessage & { uuid: string };
+      const read = (id: string) => [{ type: "tool_use", id, name: "Read", input: { file_path: "/workspace/README.md" } }];
+      const progress = () => events.flatMap(event =>
+        (event.type === "item_completed" || event.type === "item_updated") && event.liveProgress ? [event] : []);
+      const refusedText = row("refused-group", [{ type: "text", text: "Inspecting now" }], null);
+      const refusedTool = row("refused-group", read("refused-read"), "tool_use");
+      const refusedResult = { type: "user", uuid: crypto.randomUUID(), session_id: SESSION_ID, parent_tool_use_id: null,
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: "refused-read", content: "Read complete", is_error: false }] },
+        origin: { kind: "human" },
+      } as SDKMessage & { uuid: string };
+      for (const message of [refusedText, refusedTool, refusedResult]) provider.messages.push(message);
+      await vi.waitFor(() => expect(progress()).toHaveLength(1));
+      const supersededItemId = progress()[0]!.item.backendItemId;
+      expect(progress()[0]).toMatchObject({ type: "item_updated", item: { responsePhase: "provisional", markdown: { text: "Inspecting now" } } });
+
+      // A refusal fallback replaces the whole leg with a new native message,
+      // hence a new item identity. Its own frame follows the resnapshot boundary.
+      provider.messages.push(row("fallback-group", [{ type: "text", text: "Inspecting now" }], null,
+        [refusedText.uuid, refusedTool.uuid, refusedResult.uuid]));
+      const replacement = () => events.flatMap((event, index) => event.type === "item_completed" &&
+        event.item.semanticKind === "assistant_message" && event.item.backendItemId !== supersededItemId
+        ? [{ index, backendItemId: event.item.backendItemId }] : [])[0];
+      await vi.waitFor(() => expect(replacement()).toBeDefined());
+      const boundary = events.findIndex(event => event.type === "resnapshot_required" && event.reason === "contradictory_state");
+      expect(boundary).toBeGreaterThan(events.indexOf(progress()[0]!));
+      expect(boundary).toBeLessThan(replacement()!.index);
+      expect(progress()).toHaveLength(1);
+      expect((await handle.history({ limit: 10 })).itemsById[supersededItemId]).toBeUndefined();
+
+      // Only the replacement's own later tool-use evidence qualifies it.
+      provider.messages.push(row("fallback-group", read("fallback-read"), "tool_use"));
+      await vi.waitFor(() => expect(progress()).toHaveLength(2));
+      expect(progress()[1]).toMatchObject({ type: "item_updated", item: {
+        backendItemId: replacement()!.backendItemId, responsePhase: "provisional", markdown: { text: "Inspecting now" },
+      } });
+      expect(progress().map(event => event.item.backendItemId)).toEqual([supersededItemId, replacement()!.backendItemId]);
+    } finally { await handle.close(); }
+  });
+
   it("fails closed when accumulated live text exceeds the complete message limit", async () => {
     const provider = fixture();
     const onError = vi.fn();

@@ -6,6 +6,7 @@ import android.app.Notification;
 import android.app.NotificationManager;
 import android.content.Context;
 import android.content.Intent;
+import android.media.AudioTrack;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
@@ -54,10 +55,20 @@ public class NativeVoiceE2eTest {
         if (Build.VERSION.SDK_INT >= 33) NativeVoiceAudioTest.grant(context, "android.permission.POST_NOTIFICATIONS");
         MainActivity activity = (MainActivity) instrumentation.startActivitySync(new Intent(context, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         instrumentation.runOnMainSync(() -> web = activity.getBridge().getWebView()); runtime = NativeVoiceRuntime.get(context);
+        AtomicReference<String> currentPhase = new AtomicReference<>("");
+        AtomicBoolean stopRequested = new AtomicBoolean(), stoppedItemReleased = new AtomicBoolean();
         NativeVoiceRuntime.Observer observer = (event, value) -> {
-            if (event.equals("stateChanged")) { String phase = value.optString("phase"); if (phases.isEmpty() || !phase.equals(phases.get(phases.size() - 1))) phases.add(phase); }
+            if (event.equals("stateChanged")) {
+                String phase = value.optString("phase"); currentPhase.set(phase);
+                if (phases.isEmpty() || !phase.equals(phases.get(phases.size() - 1))) phases.add(phase);
+                // Every published state reaches observers, so even a brief release before the next queued item is seen.
+                if (stopRequested.get() && value.isNull("active")) stoppedItemReleased.set(true);
+            }
         };
         runtime.observe(observer);
+        // Evidence for the host: a real AudioTrack owned by the runtime advanced its playback head.
+        AtomicBoolean trackPlayed = new AtomicBoolean(), speechPlayed = new AtomicBoolean();
+        Thread audioSampler = playbackSampler(runtimeAudio(runtime), currentPhase, trackPlayed, speechPlayed);
         AtomicInteger inputAttempts = new AtomicInteger(), receiptReads = new AtomicInteger();
         AtomicBoolean allowReceipt = new AtomicBoolean(false);
         List<String> mutationIds = new CopyOnWriteArrayList<>();
@@ -166,13 +177,16 @@ public class NativeVoiceE2eTest {
                 notificationAction(context, "Skip");
             }
             if (scenario.equals("stop")) {
-                await(() -> runtime.snapshot().optString("phase").equals("listening"), 45000, "recognition before Stop"); notificationAction(context, "Stop");
-                SystemClock.sleep(1500); assertFalse(phases.contains("submitting"));
+                await(() -> runtime.snapshot().optString("phase").equals("listening"), 45000, "recognition before Stop");
+                stopRequested.set(true); notificationAction(context, "Stop");
+                // A released item can no longer submit; wait for that terminal state instead of a fixed delay.
+                await(stoppedItemReleased::get, 15000, "stopped recognition released its item");
+                assertFalse(phases.contains("submitting"));
             } else {
                 if (scenario.equals("retarget")) {
                     String second = required(args, "secondThreadId");
                     await(() -> runtime.snapshot().optString("phase").equals("listening"), 45000, "recognition before retarget");
-                    click("[aria-label=\"Change recording target\"]");
+                    click("[aria-label^=\"Change recording target\"]");
                     clickTextIn("[role=\"dialog\"] [role=\"list\"][aria-label=\"Voice threads\"]", args.getString("secondThreadTitle", second));
                     await(() -> second.equals(runtime.snapshot().optJSONObject("active").optString("recognitionThreadId")), 10000, "retarget applied");
                     screenshot("retargeted");
@@ -180,23 +194,43 @@ public class NativeVoiceE2eTest {
                 allowCaptureCompletion.set(true);
                 await(() -> phases.contains("submitting"), 60000, "recognized text admission");
                 if (recoveryScenario) {
-                    await(() -> runtime.snapshot().optString("phase").equals("recovering") && receiptReads.get() >= 1, 15000, "uncertain input after transport loss");
-                    assertEquals(1, runtime.snapshot().optJSONArray("recovery").length());
+                    // The first failed reconciliation releases the active slot; the journaled input stays in recovery.
+                    await(() -> {
+                        JSONObject state = runtime.snapshot(); JSONArray recovery = state.optJSONArray("recovery");
+                        return state.isNull("active") && receiptReads.get() >= 1 && recovery.length() == 1 &&
+                            recovery.optJSONObject(0).optString("status").equals("uncertain");
+                    }, 15000, "uncertain input released into recovery after transport loss");
+                    assertTrue("Checking submission precedes release", phases.contains("recovering"));
+                    assertTrue("Released recovery leaves voice available", runtime.snapshot().optJSONObject("actions").optBoolean("canStart"));
                     String mutation = runtime.snapshot().optJSONArray("recovery").optJSONObject(0).optString("mutationId");
                     assertEquals(mutationIds.get(0), mutation);
                     screenshot("uncertain");
                     if (scenario.equals("cancel-uncertain")) {
-                        notificationAction(context, "Stop");
-                        await(() -> runtime.snapshot().optJSONArray("recovery").optJSONObject(0).optBoolean("cancelled"), 10000, "durable cancellation intent");
-                        SystemClock.sleep(1200); assertEquals(1, inputAttempts.get());
-                        assertTrue(runtime.snapshot().isNull("active"));
-                        // Re-entering the same authenticated binding must reconcile the journal read-only.
-                        allowReceipt.set(true);
+                        // Leaving the binding persists cancellation intent; re-entering it reconciles read-only and never resends.
                         JSONObject bound = runtime.snapshot();
                         command("disconnect", new JSONObject());
                         command("setConnection", NativeVoiceJson.object("profileId", bound.optString("profileId"), "serverOrigin", server, "identity", bound.optString("identity")));
-                    } else {
+                        await(() -> {
+                            JSONArray recovery = runtime.snapshot().optJSONArray("recovery");
+                            return recovery.length() == 1 && recovery.optJSONObject(0).optBoolean("cancelled") && recovery.optJSONObject(0).optString("status").equals("uncertain");
+                        }, 15000, "durable cancellation intent after re-entering the binding");
+                        // A completed read-only reconciliation after re-entry is the positive signal that
+                        // the runtime has processed the entry again without sending it.
+                        int readsAfterReentry = receiptReads.get();
+                        await(() -> receiptReads.get() > readsAfterReentry, 15000, "read-only reconciliation after re-entering the binding");
+                        assertEquals(1, inputAttempts.get());
+                        // Discard is the explicit resolution of an uncertain input.
+                        command("discardInput", NativeVoiceJson.object("mutationId", mutation));
+                        assertEquals(1, inputAttempts.get());
+                    } else if (scenario.equals("lost-ack")) {
+                        // The input reached Sedes; automatic read-only reconciliation finds its receipt without Resume.
                         allowReceipt.set(true);
+                    } else {
+                        // Nothing reached Sedes, so only an explicit Resume may send the same request again.
+                        allowReceipt.set(true);
+                        int reads = receiptReads.get();
+                        await(() -> receiptReads.get() > reads, 15000, "automatic read-only reconciliation");
+                        assertEquals(1, inputAttempts.get());
                         click("[aria-label=\"Voice settings\"]"); clickText("Resume input");
                     }
                 }
@@ -217,9 +251,14 @@ public class NativeVoiceE2eTest {
             screenshot("settled");
             assertTrue("Capture did not traverse the deterministic audio source", supplied.get() > 0);
             if (mode.equals("response") && !scenario.equals("stop")) assertTrue("No actual AudioTrack playback phase", phases.contains("speaking"));
+            // Report observations, not expectations; the host harness asserts them.
+            boolean composerDraft = "true".equals(js("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(draft)));
+            boolean serverDraft = awaitServerDraft(server, thread, draft, 15000);
             JSONObject result = NativeVoiceJson.object("scenario", scenario, "mode", mode, "elapsedMs", SystemClock.elapsedRealtime() - began,
-                "phases", new JSONArray(phases), "captureChunks", supplied.get(), "audioSource", "deterministic-pcm", "audioSink", "AudioTrack",
-                "draftPreserved", true, "journalOutstanding", runtime.snapshot().optJSONArray("recovery").length(),
+                "phases", new JSONArray(phases), "captureChunks", supplied.get(), "audioSource", supplied.get() > 0 ? "deterministic-pcm" : "none",
+                "audioSink", trackPlayed.get() ? "AudioTrack" : "none", "speechPlayback", speechPlayed.get(),
+                "draftPreserved", composerDraft && serverDraft, "composerDraftPreserved", composerDraft, "serverDraftPreserved", serverDraft,
+                "journalOutstanding", runtime.snapshot().optJSONArray("recovery").length(),
                 "inputAttempts", inputAttempts.get(), "receiptReads", receiptReads.get(), "mutationIds", new JSONArray(mutationIds),
                 "screenshots", new JSONArray(screenshots));
             Bundle resultBundle = new Bundle(); resultBundle.putString("voiceResult", result.toString()); instrumentation.sendStatus(0, resultBundle);
@@ -230,6 +269,7 @@ public class NativeVoiceE2eTest {
                     "threadId", thread, "elapsedMs", SystemClock.elapsedRealtime() - began,
                     "reason", failure.getMessage(), "phases", new JSONArray(phases),
                     "state", diagnosticState(runtime.snapshot()), "captureChunks", supplied.get(),
+                    "audioTrackPlayed", trackPlayed.get(), "speechPlayback", speechPlayed.get(),
                     "inputAttempts", inputAttempts.get(), "receiptReads", receiptReads.get(),
                     "mutationIds", new JSONArray(mutationIds), "screenshots", new JSONArray(screenshots));
                 try { NativeVoiceJson.put(diagnostic, "ui", diagnosticUiState()); }
@@ -243,6 +283,7 @@ public class NativeVoiceE2eTest {
             throw failure;
         } finally {
             runtime.unobserve(observer);
+            audioSampler.interrupt();
             JSONObject snapshot = runtime.snapshot();
             CountDownLatch stopped = new CountDownLatch(1);
             if (startupPrepared) {
@@ -254,6 +295,46 @@ public class NativeVoiceE2eTest {
             else stopped.countDown();
             stopped.await(10, TimeUnit.SECONDS); NativeVoiceAudio.setTestSource(null); NativeVoiceHttp.setTestTransport(null);
             instrumentation.runOnMainSync(activity::finish);
+        }
+    }
+    /** The runtime owns its audio engine privately; its debug-only track accessor exposes real playback. */
+    private static NativeVoiceAudio runtimeAudio(NativeVoiceRuntime runtime) throws Exception {
+        java.lang.reflect.Field field = NativeVoiceRuntime.class.getDeclaredField("audio");
+        field.setAccessible(true);
+        return (NativeVoiceAudio) field.get(runtime);
+    }
+    /** Samples faster than the shortest cue lasts, recording only a track whose playback head advanced. */
+    private static Thread playbackSampler(NativeVoiceAudio audio, AtomicReference<String> phase, AtomicBoolean played, AtomicBoolean speech) {
+        Thread sampler = new Thread(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    AudioTrack track = audio.trackForTest();
+                    if (track != null && track.getPlayState() == AudioTrack.PLAYSTATE_PLAYING && (track.getPlaybackHeadPosition() & 0xffffffffL) > 0) {
+                        played.set(true);
+                        if ("speaking".equals(phase.get())) speech.set(true);
+                    }
+                } catch (IllegalStateException released) { /* Released between reads; the next sample sees its replacement. */ }
+                try { Thread.sleep(10); } catch (InterruptedException stopped) { return; }
+            }
+        }, "native-voice-e2e-playback-sampler");
+        sampler.setDaemon(true);
+        sampler.start();
+        return sampler;
+    }
+    /** The composer autosaves after a debounce, so poll Sedes itself for the persisted draft. */
+    private boolean awaitServerDraft(String server, String thread, String expected, long timeout) throws Exception {
+        String credential = new ClientCredentialStore(instrumentation.getTargetContext()).getCredential(runtime.snapshot().optString("profileId"), server);
+        assertNotNull("No stored credential for the paired server", credential);
+        NativeVoiceHttp http = new NativeVoiceHttp();
+        long end = SystemClock.elapsedRealtime() + timeout;
+        while (true) {
+            CountDownLatch done = new CountDownLatch(1); AtomicReference<JSONObject> body = new AtomicReference<>(); AtomicInteger status = new AtomicInteger();
+            http.request(server, credential, null, "GET", "/api/threads/" + thread, null, (code, value, failure) -> { status.set(code); body.set(value); done.countDown(); });
+            assertTrue("Thread read did not finish", done.await(45, TimeUnit.SECONDS));
+            JSONObject draft = status.get() == 200 && body.get() != null ? body.get().optJSONObject("draft") : null;
+            if (draft != null && expected.equals(draft.optString("text"))) return true;
+            if (SystemClock.elapsedRealtime() >= end) return false;
+            SystemClock.sleep(250);
         }
     }
     private JSONObject diagnosticUiState() throws Exception {

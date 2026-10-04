@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import android.util.AtomicFile;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -41,7 +42,6 @@ final class ClientCredentialStore {
         StringBuilder name = new StringBuilder();
         for (byte value : hash) name.append(String.format(java.util.Locale.ROOT, "%02x", value & 255));
         File directory = profileDirectory(binding.substring(0, binding.indexOf("\n")));
-        if (!directory.isDirectory() && !directory.mkdirs()) throw new IllegalStateException("credential_storage_unavailable");
         return new AtomicFile(new File(directory, name + ".enc"));
     }
     private File profileDirectory(String profileId) throws Exception {
@@ -73,9 +73,10 @@ final class ClientCredentialStore {
     String getCredential(String profileId, String serverUrl) throws Exception {
         synchronized (LOCK) {
         String binding = binding(profileId, serverUrl);
-        AtomicFile file = file(binding);
-        if (!file.getBaseFile().exists()) return null;
-        byte[] encrypted = file.readFully();
+        byte[] encrypted;
+        // readFully restores an interrupted pre-R write from its backup; checking the base file first would discard it.
+        try { encrypted = file(binding).readFully(); }
+        catch (FileNotFoundException absent) { return null; }
         if (encrypted.length < 29 || encrypted[0] != 1) throw new IllegalStateException("credential_record_invalid");
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
         cipher.init(Cipher.DECRYPT_MODE, key(), new GCMParameterSpec(128, Arrays.copyOfRange(encrypted, 1, 13)));
@@ -91,6 +92,8 @@ final class ClientCredentialStore {
         cipher.init(Cipher.ENCRYPT_MODE, key());
         cipher.updateAAD(binding.getBytes(StandardCharsets.UTF_8));
         AtomicFile file = file(binding);
+        File directory = file.getBaseFile().getParentFile();
+        if (!directory.isDirectory() && !directory.mkdirs()) throw new IllegalStateException("credential_storage_unavailable");
         FileOutputStream output = null;
         try {
             output = file.startWrite();

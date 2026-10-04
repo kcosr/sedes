@@ -1,25 +1,40 @@
 import type { PluginListenerHandle } from "@capacitor/core";
 import { nativeVoiceStateSchema, type NativeVoiceCommandContext, type NativeVoicePlugin, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
 
+type NativeVoiceError = NativeVoiceState["errors"][number];
 export interface VoiceClientState {
   readonly native?: NativeVoiceState;
   readonly loading: boolean;
   readonly pending: boolean;
+  /** The latest action, connection, or runtime failure. It stays until the next user action, a reconnect, or progress. */
   readonly error?: string;
+  /** Native errors the user cleared on this device; native keeps its own bounded list. */
+  readonly dismissedErrors?: { readonly connectionGeneration: number; readonly errors: readonly NativeVoiceError[] };
 }
+export type VoiceSettingsPatch = Partial<NativeVoiceSettings> | ((current: NativeVoiceState) => Partial<NativeVoiceSettings> | null);
+const RETRY_BASE_MS = 2_000;
+const RETRY_MAX_MS = 60_000;
+/** Entering one of these phases means a new interaction is under way, so an earlier failure no longer describes the bar. */
+const PROGRESS_PHASES = new Set<NativeVoiceState["phase"]>(["starting", "synthesizing", "speaking", "validating", "arming", "listening", "recognizing", "submitting"]);
+
 /** Native snapshots are authoritative, including changes made while the WebView was suspended. */
 export class NativeVoiceStore {
   #state: VoiceClientState = { loading: true, pending: false };
   #listeners = new Set<() => void>();
   #handles: PluginListenerHandle[] = [];
   #disposed = false;
+  #listening = false;
   #connected = false;
+  #connecting: Promise<NativeVoiceState> | undefined;
+  #retryTimer: ReturnType<typeof setTimeout> | undefined;
+  #retryAttempt = 0;
   #pendingOpenThread: string | undefined;
   #generation = -1;
   #revision = -1;
   constructor(readonly plugin: NativeVoicePlugin, readonly connection: { profileId: string; serverOrigin: string; identity: string }, readonly openThread: (threadId: string) => void) {}
   getSnapshot = (): VoiceClientState => this.#state;
   subscribe = (listener: () => void): (() => void) => { this.#listeners.add(listener); return () => { this.#listeners.delete(listener); }; };
+  get disposed(): boolean { return this.#disposed; }
   commandContext(): NativeVoiceCommandContext {
     const current = this.#state.native;
     if (this.#disposed || !current) throw new Error("This voice connection is no longer active.");
@@ -52,12 +67,46 @@ export class NativeVoiceStore {
       }
       if (this.#disposed) { for (const handle of handles) void handle.remove(); return; }
       this.#handles = handles;
-      await this.#connect();
+      this.#listening = true;
+      await this.#attemptConnect();
     } catch (error) { this.#error(error); }
     finally { this.#set({ ...this.#state, loading: false }); }
   }
   async reconnect(): Promise<void> {
-    await this.run(() => this.#connect());
+    await this.run(() => this.#attemptConnect());
+  }
+  /** The app became visible, came back online, or resumed: reconnect a missing connection now, otherwise rehydrate. */
+  foreground(): void {
+    if (this.#disposed || !this.#listening) return;
+    if (this.#state.native) void this.refresh().catch(() => undefined);
+    else void this.#attemptConnect().catch(error => this.#error(error));
+  }
+  /** One connection attempt at a time; a failure retries with capped exponential backoff until native state is restored. */
+  #attemptConnect(): Promise<NativeVoiceState> {
+    this.#clearRetry();
+    if (!this.#connecting) {
+      const attempt: Promise<NativeVoiceState> = this.#connect()
+        .then(state => { this.#retryAttempt = 0; return state; }, (error: unknown) => { this.#scheduleRetry(); throw error; })
+        .finally(() => { if (this.#connecting === attempt) this.#connecting = undefined; });
+      this.#connecting = attempt;
+    }
+    return this.#connecting;
+  }
+  #scheduleRetry(): void {
+    if (this.#disposed || this.#retryTimer !== undefined) return;
+    const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** this.#retryAttempt);
+    this.#retryAttempt = Math.min(this.#retryAttempt + 1, 8);
+    this.#retryTimer = setTimeout(() => {
+      this.#retryTimer = undefined;
+      // A hidden or offline app waits for the foreground and online signals instead of polling.
+      if (this.#disposed || this.#state.native || (typeof document !== "undefined" && document.visibilityState === "hidden") ||
+        (typeof navigator !== "undefined" && navigator.onLine === false)) return;
+      void this.#attemptConnect().catch(error => this.#error(error));
+    }, delay);
+  }
+  #clearRetry(): void {
+    if (this.#retryTimer !== undefined) clearTimeout(this.#retryTimer);
+    this.#retryTimer = undefined;
   }
   async #connect(): Promise<NativeVoiceState> {
     const state = nativeVoiceStateSchema.parse(await this.plugin.setConnection(this.connection));
@@ -78,12 +127,14 @@ export class NativeVoiceStore {
     if (this.#disposed || snapshot.profileId !== this.connection.profileId || snapshot.serverOrigin !== this.connection.serverOrigin || snapshot.identity !== this.connection.identity)
       throw new Error("This voice connection is no longer active.");
   }
-  async update(patch: Partial<NativeVoiceSettings>): Promise<void> {
+  /** A function patch is built from the refreshed native state, so it never writes back a stale rendered value; `null` skips the write. */
+  async update(patch: VoiceSettingsPatch): Promise<void> {
     await this.run(async () => {
       await this.refresh();
       const state = this.#state.native;
       if (!state) throw new Error("Voice settings are unavailable. Reconnect to this server.");
-      return this.plugin.updateSettings({ ...this.commandContext(), expectedRevision: state.settingsRevision, patch });
+      const next = typeof patch === "function" ? patch(state) : patch;
+      return next ? this.plugin.updateSettings({ ...this.commandContext(), expectedRevision: state.settingsRevision, patch: next }) : state;
     });
   }
   async run(action: () => Promise<NativeVoiceState>): Promise<void> {
@@ -94,8 +145,14 @@ export class NativeVoiceStore {
     catch (error) { this.#error(error); throw error; }
     finally { this.#set({ ...this.#state, pending: false }); }
   }
+  /** Hides the current native errors on this device until native reports a newer one. Native state is unchanged. */
+  dismissErrors(): void {
+    const native = this.#state.native;
+    this.#set({ ...this.#state, error: undefined, dismissedErrors: native ? { connectionGeneration: native.connectionGeneration, errors: native.errors } : undefined });
+  }
   dispose(): void {
     this.#disposed = true;
+    this.#clearRetry();
     for (const handle of this.#handles) void handle.remove();
     this.#handles = [];
     this.#listeners.clear();
@@ -111,9 +168,13 @@ export class NativeVoiceStore {
     if (state.profileId !== this.connection.profileId || state.serverOrigin !== this.connection.serverOrigin || state.identity !== this.connection.identity) {
       this.#connected = false;
       this.#set({ loading: this.#state.loading, pending: this.#state.pending, error: "Voice is disconnected. Retry the connection to use voice." });
+      if (!this.#connecting) this.#scheduleRetry();
       return;
     }
-    this.#set({ ...this.#state, native: state, error: undefined });
+    const previous = this.#state.native;
+    const progressed = !previous || previous.connectionGeneration !== state.connectionGeneration || (!previous.ready && state.ready) ||
+      (previous.phase !== state.phase && PROGRESS_PHASES.has(state.phase));
+    this.#set({ ...this.#state, native: state, error: progressed ? undefined : this.#state.error });
   }
   #error(error: unknown): void {
     this.#set({ ...this.#state, error: error instanceof Error ? error.message : "Voice is unavailable." });
@@ -123,4 +184,21 @@ export class NativeVoiceStore {
     this.#state = state;
     for (const listener of this.#listeners) listener();
   }
+}
+
+/** Most recent distinct messages first: the store's latest failure, then native errors not cleared on this device. */
+export function recentVoiceErrors(state: VoiceClientState, limit = 3): string[] {
+  const native = state.native;
+  const dismissed = native && state.dismissedErrors?.connectionGeneration === native.connectionGeneration ? state.dismissedErrors.errors : [];
+  const fresh = native ? errorsAfter(native.errors, dismissed).map(error => error.message).reverse() : [];
+  return [...new Set([...(state.error ? [state.error] : []), ...fresh])].slice(0, limit);
+}
+/** Native appends to a bounded list without identities; the cleared list's longest suffix that still prefixes the current list was already seen. */
+function errorsAfter(current: readonly NativeVoiceError[], dismissed: readonly NativeVoiceError[]): readonly NativeVoiceError[] {
+  for (let overlap = Math.min(current.length, dismissed.length); overlap > 0; overlap--) {
+    const offset = dismissed.length - overlap;
+    if (current.slice(0, overlap).every((error, index) => error.code === dismissed[offset + index]!.code && error.message === dismissed[offset + index]!.message))
+      return current.slice(overlap);
+  }
+  return current;
 }

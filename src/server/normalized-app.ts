@@ -20,8 +20,7 @@ import {
   restoreProjectResultSchema,
 } from "../shared/protocol/projects.js";
 import { projectIdSchema, mutationIdSchema } from "../shared/protocol/domain.js";
-import { directInputRequestSchema, directInputReceiptSchema, directInputReceiptLookupSchema,
-  threadInputContextSchema, MAX_DIRECT_INPUT_REQUEST_BYTES } from "../shared/protocol/thread-input.js";
+import { directInputRequestSchema, threadInputContextSchema, MAX_DIRECT_INPUT_REQUEST_BYTES } from "../shared/protocol/thread-input.js";
 import { LocationConflictError, ProjectRemovalBlockedError } from "./db/repositories/inventory-repository.js";
 import { respondToQuestionResultSchema } from "../shared/protocol/api.js";
 import type { QuestionRequestService } from "./domain/question-request-service.js";
@@ -1458,22 +1457,27 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     const requestScope = await scope(request);
     const { threadId } = threadRouteParametersSchema.parse(request.params);
     response.setHeader("Cache-Control", "no-store");
-    response.json(threadInputContextSchema.parse(await dependencies.threads.inputContext(requestScope, threadId)));
+    const context = threadInputContextSchema.safeParse(await dependencies.threads.inputContext(requestScope, threadId));
+    // Output that fails its contract is a server fault, never a client 400.
+    if (!context.success) throw new Error("thread_input_context_unpresentable", { cause: context.error });
+    response.json(context.data);
   });
 
+  // Receipts are validated where they are presented; a stored receipt that
+  // cannot be presented fails there as a 500. Only the request maps to 400.
   routes.post("/api/threads/:threadId/inputs", async (request, response) => {
     const requestScope = await scope(request);
     const { threadId } = threadRouteParametersSchema.parse(request.params);
     const input = directInputRequestSchema.parse(request.body);
     response.setHeader("Cache-Control", "no-store");
-    response.json(directInputReceiptSchema.parse(await dependencies.threads.admitInput(requestScope, threadId, input)));
+    response.json(await dependencies.threads.admitInput(requestScope, threadId, input));
   });
 
   routes.get("/api/input-receipts/:mutationId", async (request, response) => {
     const requestScope = await scope(request);
     const mutationId = mutationIdSchema.parse(request.params.mutationId);
     response.setHeader("Cache-Control", "no-store");
-    response.json(directInputReceiptLookupSchema.parse(dependencies.threads.readInputReceipt(requestScope, mutationId)));
+    response.json(dependencies.threads.readInputReceipt(requestScope, mutationId));
   });
 
   routes.get(

@@ -27,18 +27,36 @@ WebSocket connection stay under that path. Query strings, fragments, and
 embedded credentials are not accepted.
 
 HTTPS adapters may use a private certificate authority installed in Android's
-user certificate store; see [Android HTTPS connections](android.md#connect-through-a-private-https-boundary).
+user certificate store. That trust is app-wide: the app also accepts such a CA
+for its Sedes connections, which carry the paired credential. See
+[Android HTTPS connections](android.md#connect-through-a-private-https-boundary).
+
+The app opens without waiting for voice. While voice connects, **Settings →
+Voice** shows "Connecting voice to this server…". If voice cannot connect, the
+page shows the error and **Retry voice connection**. The app also retries on
+its own, from 2 seconds doubling to 60 while visible, and immediately when it
+resumes, becomes visible, or comes back online. Messages sent from the composer
+before voice connects carry no client-origin metadata.
+
+The status line in the Voice settings **Voice session** section reports the
+first unmet requirement: the Sedes connection, voice Off, microphone
+permission, an adapter URL, a service start that needs **Resume voice**, the
+adapter connection, then the notification stream. **Connecting to Sedes
+notifications…** appears until the server sends notification policy. **Sedes
+notifications are unavailable. Explicit recording still works.** appears after
+a failed stream attempt; voice keeps retrying. **Voice is ready.** requires all
+of them.
 
 | Mode | Completion | Other selected events | Explicit microphone |
 | --- | --- | --- | --- |
 | Off | Disabled | Disabled | Enable voice first |
-| Manual | Silent; may listen afterward | Speaks | Available |
+| Manual | Silent; may listen afterward | Speaks; does not listen afterward | Available |
 | Response | Speaks selected text and context; may listen afterward | Speaks | Available |
 
 Automatic recognition requires **Speak then listen**, **Auto-listen**, and a
-still-current eligible target. Manual mode also observes these requirements.
-Progress, approvals, blocking input, and nonblocking questions are speak-only.
-They never answer a structured form with free text.
+still-current eligible target. In Manual mode only completions listen
+afterward. Progress, approvals, blocking input, and nonblocking questions are
+speak-only. They never answer a structured form with free text.
 
 Fresh completion settings select Final and Unclassified response text.
 Provisional is optional and can repeat live progress. Codex, Pi, and Claude
@@ -55,6 +73,9 @@ is idle, available, has no blocking interaction or pending input recovery, and
 has not begun newer activity. A missing or stale target leaves an announcement
 without recording. Notifications without client-origin metadata, such as
 automation, remain eligible when explicitly configured to speak then listen.
+**Automation started** set to **Speak then listen** behaves as **Speak** in
+practice: any target it carries is the automation's thread while that run's
+turn is still in progress, and the turn's completion makes the target stale.
 Readiness follows the server's current conversation owner even when no thread
 view is open. Reading readiness does not start or reconnect a conversation.
 
@@ -70,9 +91,15 @@ origin.
 By default, recognized input queues behind a running turn. **Follow composer's
 selected mode** instead captures the client-wide Queue/Steer preference when
 recognition finalizes. Steer names the exact current normalized target; if it
-is no longer available the input queues. Backend support remains explicit:
-Codex and Pi use a turn target, Claude and OpenCode a conversation target, and
-Grok has no steering. Spoken input never edits or clears the composer draft.
+is no longer available, or other queued input must deliver first, the input
+queues. Backend support remains explicit: Codex and Pi use a turn target,
+Claude and OpenCode a conversation target, and Grok has no steering. Spoken
+input never edits or clears the composer draft.
+
+The bottom voice bar appears only while voice is connected and set to Manual or
+Response. It shows the recording target, phase, and the latest voice error
+until your next voice action, a reconnect, voice becoming ready, or the next
+interaction starting.
 
 - **Skip** ends current speech and retains an eligible listen afterward.
 - **Stop** cancels the current interaction and its automatic listen. It leaves
@@ -85,7 +112,13 @@ Grok has no steering. Spoken input never edits or clears the composer draft.
 - With **Recognize stop command**, only the complete utterances “stop” and
   “stop listening” are consumed locally. “Stop the server” is ordinary input.
 
-The service notification provides Open thread, Skip, and Stop when applicable.
+Tapping the service notification opens the thread of the current interaction,
+otherwise the visible thread or the Voice thread. Its actions are **Stop**
+during an interaction, **Start** when recording can begin and a visible thread
+or Voice thread is available, a mode button labelled **Manual** or **Response**
+that switches to the other mode, and **Rearm on** or **Rearm off**, which
+toggles Auto-listen. While speech plays, the expanded notification shows Stop,
+Skip, the mode button, and Rearm.
 Headset controls apply only during an active voice session. Android controls
 lock-screen visibility and any promoted presentation; these are not guaranteed.
 Opening the app restores the saved Manual or Response mode after its Sedes
@@ -102,6 +135,15 @@ The default microphone is Android's current input. Defaults are a 30-second
 speech-start timeout, 60-second completion timeout, 1,200 ms end silence,
 512 ms startup pre-roll, cues enabled, and 100% speech/cue gains. Input devices,
 timing, cues, gain, and headset controls can be changed in Voice settings.
+Microphones that share a product name are labelled with their input type and,
+if still identical, a number.
+
+Startup pre-roll warms the output only after audio has been idle. Voice holds
+audio focus across consecutive speech, cues, and recording, so other media
+resumes about 1.4 seconds after voice audio ends. Another app taking focus ends
+only the current speech or recording. A Bluetooth headset microphone is used
+once Android connects its voice link; recording waits up to 5 seconds for that
+route and otherwise reports that the microphone could not be routed.
 
 **Recognition cues** plays a rising start tone, a single success tone for
 recognized speech, and a descending tone for failed or empty recognition,
@@ -115,7 +157,9 @@ One logical notice completes before another begins, including all speech
 chunks, audio drain, recognition, and admission. Long speech is split at safe
 boundaries using **Adapter text limit** (default 5,000 UTF-16 units); configure
 that value no higher than the adapter's sanitizer limit. Context is spoken once.
-Recognition starts after actual AudioTrack drain, never between chunks.
+A chunk that the adapter's sanitizer leaves empty, or that produces no audio, is
+skipped and speech continues. Recognition starts after actual AudioTrack drain,
+never between chunks.
 Incoming PCM uses a bounded private cache file so fast synthesis can run ahead
 of playback without retaining the whole recording in memory. Each adapter
 request is limited to ten minutes of audio and 256 MiB of cache data. If the
@@ -130,18 +174,50 @@ can evict old pending progress. Dropped counts appear in Voice settings.
 
 Recognized input is journaled atomically in encrypted, backup-excluded native
 storage before sending. It carries one immutable mutation ID and original
-target. A lost response is reconciled by reading its server receipt; a retry
-uses the same identity and content. **Resume input** reconciles a pending item.
+target. When Sedes accepts it, or a later receipt read finds it, the journal
+entry is removed and delivery follows the thread's normal queue. When Sedes
+definitively rejects it, for example because the thread is archived or does
+not support the requested Steer, the entry is removed and Voice settings
+reports that it was not delivered, with Sedes's reason.
+
+When the outcome is unknown, such as after a lost reply or a server error,
+voice reads the server receipt without resending. A temporary refusal is
+handled the same way: Sedes answers 503 while the thread's runtime is starting
+or changing, the thread is still being created, or its queue is full. So is a
+refusal because the thread has an uncertain operation to resolve first; resolve
+it in the thread, then use **Resume input**. If that is still uncertain,
+voice frees itself for other notices and recording, reports the uncertain input
+once, and keeps it under **Pending input recovery** in Voice settings. It keeps
+checking the receipt automatically, from 2 seconds doubling to 60, up to eight
+times, and starts again after reconnecting to Sedes. It never resends
+automatically. **Resume input** checks again and resends the same input
+identity only if Sedes has no record of it. **Discard** deletes the saved input
+from this device and stops checking; it cannot withdraw input Sedes already
+received.
+
+Once a receipt shows that Sedes has the input, voice treats it as delivered,
+including a first send whose new conversation is still being created. If that
+creation is interrupted, recover it from the thread's first-send recovery card,
+as for a composer first send; see
+[First send is uncertain](../../user/troubleshooting.md#first-send-is-uncertain).
+
 After cancellation, logout, profile departure, or Off, recovery only reads
 receipts until a new explicit **Resume input** action authorizes another
 same-ID admission attempt. An absent receipt alone is not proof that an earlier
-request cannot still commit. Uncertain outcomes remain visible instead of
-silently resending.
+request cannot still commit. Removing a server profile deletes its voice
+settings and saved input on this device. Saved voice records that are corrupt
+are set aside and reset to defaults, with an error naming what was reset. A
+temporary Android Keystore failure keeps the saved data and reports that voice
+storage is unavailable.
+
+Voice settings lists up to three recent distinct errors. **Clear errors** hides
+them on this device until a newer error occurs.
 
 ## Verification without external models
 
-The ordinary suite covers server admission, token validity, migration, policy
-invalidation, live progress, and native-state synchronization. `android:verify`
+The ordinary suite covers server admission, the direct-input HTTP routes and
+notification policy frame, token validity, migration, policy invalidation, live
+progress, and native-state synchronization. `android:verify`
 checks the exact permission/service allowlist, runs JVM tests, and builds app
 and instrumentation APKs.
 

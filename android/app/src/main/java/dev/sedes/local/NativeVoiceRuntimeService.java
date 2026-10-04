@@ -29,6 +29,7 @@ public final class NativeVoiceRuntimeService extends Service {
     private boolean foreground;
     private long connectionGeneration;
     private String sessionStartId;
+    private int lastStartId = -1;
     @Override public void onCreate() {
         super.onCreate(); runtime = NativeVoiceRuntime.get(this);
         if (Build.VERSION.SDK_INT >= 26) {
@@ -37,6 +38,8 @@ public final class NativeVoiceRuntimeService extends Service {
             getSystemService(NotificationManager.class).createNotificationChannel(channel);
         }
         mediaSession = new MediaSession(this, "Sedes voice");
+        // API 24-25 deliver headset buttons and transport controls only to sessions that declare these flags.
+        mediaSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
         mediaSession.setCallback(new MediaSession.Callback() {
             @Override public boolean onMediaButtonEvent(Intent intent) {
                 KeyEvent event = intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
@@ -56,35 +59,40 @@ public final class NativeVoiceRuntimeService extends Service {
         wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "sedes:voice"); wakeLock.setReferenceCounted(false);
     }
     @Override public int onStartCommand(Intent intent, int flags, int serviceStartId) {
+        lastStartId = serviceStartId;
         if (intent == null) { finish(); return START_NOT_STICKY; }
         long expectedGeneration = intent.getLongExtra("voiceGeneration", -1);
         String startId = intent.getStringExtra("voiceStartId");
+        boolean start = ACTION_START.equals(intent.getAction()), attachedSession = foreground;
+        // startForegroundService requires startForeground even when this launch turns out to be stale.
+        if (start && !foreground) {
+            try { enterForeground(); }
+            catch (SecurityException | IllegalStateException error) { runtime.startFailed(expectedGeneration, startId); finish(); return START_NOT_STICKY; }
+        }
         if (expectedGeneration != runtime.snapshot().optLong("connectionGeneration")) {
-            if (!foreground) finish();
+            if (!attachedSession) finish();
             return START_NOT_STICKY;
         }
-        if (ACTION_START.equals(intent.getAction()) && !runtime.acceptsSessionStart(expectedGeneration, startId)) {
+        if (start && !runtime.acceptsSessionStart(expectedGeneration, startId)) {
             runtime.deferSessionStart(expectedGeneration, startId);
-            if (!foreground) finish();
+            if (!attachedSession) finish();
             return START_NOT_STICKY;
         }
         // A notification from an ended session must not cold-start another session.
-        if (!ACTION_START.equals(intent.getAction()) && !foreground) { finish(); return START_NOT_STICKY; }
-        try {
-            if (!foreground) {
-                Notification notification = build(runtime.snapshot());
-                if (Build.VERSION.SDK_INT >= 30) startForeground(NOTIFICATION, notification,
-                    ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
-                else if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
-                else startForeground(NOTIFICATION, notification);
-                foreground = true;
-            }
-            if (ACTION_START.equals(intent.getAction())) {
-                connectionGeneration = expectedGeneration; sessionStartId = startId;
-                runtime.attached(this, expectedGeneration, startId);
-            } else runtime.notificationAction(intent.getAction(), expectedGeneration);
-        } catch (SecurityException | IllegalStateException error) { runtime.startFailed(expectedGeneration, startId); finish(); }
+        if (!start && !foreground) { finish(); return START_NOT_STICKY; }
+        if (start) {
+            connectionGeneration = expectedGeneration; sessionStartId = startId;
+            runtime.attached(this, expectedGeneration, startId);
+        } else runtime.notificationAction(intent.getAction(), expectedGeneration);
         return START_NOT_STICKY;
+    }
+    private void enterForeground() {
+        Notification notification = build(runtime.snapshot());
+        if (Build.VERSION.SDK_INT >= 30) startForeground(NOTIFICATION, notification,
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
+        else if (Build.VERSION.SDK_INT >= 29) startForeground(NOTIFICATION, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+        else startForeground(NOTIFICATION, notification);
+        foreground = true;
     }
     void render(JSONObject state) {
         if (!foreground) return;
@@ -176,11 +184,14 @@ public final class NativeVoiceRuntimeService extends Service {
             default: return "Starting voice";
         }
     }
-    void finish() { if (foreground) { stopForeground(STOP_FOREGROUND_REMOVE); foreground = false; } stopSelf(); }
+    /** Stops only if no newer start was issued; a pending foreground start must still reach onStartCommand. */
+    void finish() { if (foreground) { stopForeground(STOP_FOREGROUND_REMOVE); foreground = false; } stopSelf(lastStartId); }
     void finishStart(long generation, String startId) {
         if (generation == connectionGeneration && startId != null && startId.equals(sessionStartId)) finish();
     }
     @Override public void onDestroy() {
+        // A render already queued on the main thread must not re-post the notification or reacquire the wake lock.
+        foreground = false;
         if (mediaSession != null) { mediaSession.setActive(false); mediaSession.release(); }
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
         runtime.detached(this); super.onDestroy();

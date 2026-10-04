@@ -208,17 +208,22 @@ export async function serveApplicationEventStream(
   heartbeat.unref();
   request.once("close", cleanup);
   response.once("close", cleanup);
-  removeTransient = options.subscribeTransient?.((frame) => {
-    try {
-      if (closed) return;
-      if (live && !drain) { write(frame); return; }
-      const bytes = Buffer.byteLength(frame, "utf8");
-      if (pending.length + transient.length + 1 > pendingEventLimit ||
-        pendingBytes + transientBytes + bytes > pendingByteLimit) { close(); return; }
-      transient.push(frame);
-      transientBytes += bytes;
-    } catch { close(); }
-  });
+  try {
+    removeTransient = options.subscribeTransient?.((frame) => {
+      try {
+        if (closed) return;
+        if (live && !drain) { write(frame); return; }
+        const bytes = Buffer.byteLength(frame, "utf8");
+        if (pending.length + transient.length + 1 > pendingEventLimit ||
+          pendingBytes + transientBytes + bytes > pendingByteLimit) { close(); return; }
+        transient.push(frame);
+        transientBytes += bytes;
+      } catch { close(); }
+    });
+  } catch {
+    // The transient lane is optional: a failed subscription leaves inventory
+    // live without it. Native treats a stream without policy as unknown.
+  }
   if (closed) { removeTransient?.(); return; }
 
   try {

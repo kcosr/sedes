@@ -452,6 +452,10 @@ export class ConversationProjector {
     return result;
   }
 
+  /** Cheap reads of timeline scalars; timeline() copies every item. */
+  get generation(): string { return this.#generation; }
+  get runState(): ThreadRunState { return this.#runState; }
+
   timeline(): ProjectedConversationTimeline {
     return {
       generation: this.#generation,

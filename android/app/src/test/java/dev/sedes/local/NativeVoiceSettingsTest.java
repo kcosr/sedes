@@ -12,6 +12,16 @@ public class NativeVoiceSettingsTest {
         assertThrows(IllegalStateException.class, () -> next.patch(0, NativeVoiceJson.object("autoListen", false)));
         assertEquals(next.value.toString(), NativeVoiceSettings.fromRecord(next.record()).value.toString());
     }
+    @Test public void storedRecordsValidateStrictlyAgainstTheirExplicitSchemaVersion() {
+        org.json.JSONObject record = NativeVoiceSettings.defaults().record();
+        assertEquals(NativeVoiceSettings.RECORD_VERSION, record.optInt("version"));
+        org.json.JSONObject newer = NativeVoiceJson.copy(record); NativeVoiceJson.put(newer, "version", NativeVoiceSettings.RECORD_VERSION + 1);
+        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(newer));
+        org.json.JSONObject missing = NativeVoiceJson.copy(record); missing.optJSONObject("settings").remove("headsetControls");
+        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(missing));
+        org.json.JSONObject extra = NativeVoiceJson.copy(record); NativeVoiceJson.put(extra.optJSONObject("settings"), "removedField", true);
+        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(extra));
+    }
     @Test public void rejectsUnknownFieldsAndWrongScalarTypes() {
         assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("enabled", true)));
         assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("autoListen", "true")));

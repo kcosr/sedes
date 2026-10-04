@@ -39,7 +39,7 @@ before you change a deployment shape, upgrade, or restore.
   ```
 
   The default endpoint is `http://127.0.0.1:4784`, and `/api/health` returns
-  `{"status":"ok"}` for a paired management credential. See
+  `{"status":"ok","version":"X.Y.Z"}` for a paired management credential. See
   [Production lifecycle](#production-lifecycle) for service-manager
   requirements, the optional Linux
   [installed user service](#installed-user-service-on-linux), and the
@@ -368,7 +368,7 @@ require [explicit offline import](configuration.md#configuration-changes-and-rol
 before normal startup.
 
 The default endpoint is `http://127.0.0.1:4784`. A health check returns
-`{"status":"ok"}`. It requires a paired management credential in
+`{"status":"ok","version":"X.Y.Z"}`. It requires a paired management credential in
 `SEDES_AUTH_TOKEN`, as described in [Credentials for operator scripts](#credentials-for-operator-scripts):
 
 ```sh

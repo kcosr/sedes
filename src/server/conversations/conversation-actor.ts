@@ -164,6 +164,12 @@ export interface ConversationActorSnapshotState {
 export interface ConversationActorInputState {
   readonly state: ConversationActorSnapshotState;
   readonly authoritative: boolean;
+  /**
+   * A retained snapshot is being replaced in place. Authority is pending, not
+   * lost: `state` still carries the retained facts until the replacement lands.
+   */
+  readonly reestablishing: boolean;
+  /** Main-turn settlement of `state`; false unless authoritative or reestablishing. */
   readonly settled: boolean;
   /** Server-internal identities used only to detect changes to pending input. */
   readonly blockingInteractionIds: readonly string[];
@@ -254,6 +260,7 @@ export class ConversationActor {
   #establishmentAbort?: AbortController;
   readonly #historyAborts = new Set<AbortController>();
   #establishing = false;
+  #replacingProjection = false;
   #handleCloseProven = false;
   #leaseReleaseProven = false;
   #executionCloseBegun = false;
@@ -359,7 +366,7 @@ export class ConversationActor {
   /** Main-turn readiness is independent of background work and cleanup safety. */
   get authoritativelySettled(): boolean {
     if (!this.#started || this.#closing || this.#closed || this.#handleReplacementRequired || !this.#snapshotState || this.#projectionRecoveryRequired) return false;
-    const state = this.#projector.timeline().runState;
+    const state = this.#projector.runState;
     return !this.#awaitingAuthoritativeIdle && (state === "idle" || state === "failed");
   }
 
@@ -479,12 +486,12 @@ export class ConversationActor {
         Object.values(page.turnsById),
       );
       return {
-        generation: this.#projector.timeline().generation,
+        generation: this.#projector.generation,
         page: this.#projector.projectHistoryPage(
           page,
           {
             branching: this.#snapshotState.backendCapabilities.branching,
-            sourceRunState: this.#projector.timeline().runState,
+            sourceRunState: this.#projector.runState,
           },
         ),
       };
@@ -520,7 +527,7 @@ export class ConversationActor {
         status: "found" as const,
         page: this.#projector.projectHistoryPage(result.page, {
           branching: this.#snapshotState.backendCapabilities.branching,
-          sourceRunState: this.#projector.timeline().runState,
+          sourceRunState: this.#projector.runState,
         }),
       };
     }).finally(() => {
@@ -625,7 +632,7 @@ export class ConversationActor {
             : "This backend cannot resume a completed-turn fork.",
         });
       }
-      const sourceRunState = this.#projector.timeline().runState;
+      const sourceRunState = this.#projector.runState;
       if (
         (this.#awaitingAuthoritativeIdle &&
           (branching.sourceMustBeIdle ||
@@ -683,7 +690,7 @@ export class ConversationActor {
                 : "This backend cannot fork its latest completed turn.",
       });
     }
-    const sourceRunState = this.#projector.timeline().runState;
+    const sourceRunState = this.#projector.runState;
     if (
       selection.kind === "latest_completed"
         ? this.#awaitingAuthoritativeIdle ||
@@ -936,15 +943,21 @@ export class ConversationActor {
   peekInputState(): ConversationActorInputState | undefined {
     const state = this.#snapshotState;
     if (!this.#started || this.#closing || this.#closed || !state) return undefined;
-    const authoritative = !this.readOnly && !this.#establishing &&
-      this.#unsubscribeProjection !== undefined && !this.#handleReplacementRequired &&
-      !this.#projectionRecoveryRequired &&
-      state.timeline.generation === this.#projector.timeline().generation &&
+    const retained = !this.readOnly && !this.#handleReplacementRequired && !this.#projectionRecoveryRequired &&
       state.timeline.runState !== "disconnected" && state.timeline.runState !== "reconciling";
+    const authoritative = retained && !this.#establishing && this.#unsubscribeProjection !== undefined &&
+      state.timeline.generation === this.#projector.generation;
+    // Recovery from a rejected event, coalescer overflow, or a backend window
+    // trim replaces the projection under the same owner. Failure clears it.
+    const reestablishing = retained && !authoritative && this.#replacingProjection;
     return {
       state,
       authoritative,
-      settled: authoritative && this.authoritativelySettled,
+      reestablishing,
+      // Derived from `state` and the awaiting-idle flag, which change in the
+      // same synchronous steps, so a half-installed replacement cannot mix facts.
+      settled: (authoritative || reestablishing) && !this.#awaitingAuthoritativeIdle &&
+        (state.timeline.runState === "idle" || state.timeline.runState === "failed"),
       blockingInteractionIds: [...this.#pendingInteractions.keys()].sort(),
     };
   }
@@ -962,7 +975,7 @@ export class ConversationActor {
     | { readonly executed: true; readonly value: T }
   > {
     return this.#enqueue(async () => {
-      const runState = this.#projector.timeline().runState;
+      const runState = this.#projector.runState;
       if (
         this.#awaitingAuthoritativeIdle ||
         (runState !== "idle" && runState !== "failed")
@@ -1321,9 +1334,6 @@ export class ConversationActor {
       established.handleSequence,
     );
     this.#projectionRecoveryRequired = false;
-    if (timeline.runState === "idle" || timeline.runState === "failed") {
-      this.#awaitingAuthoritativeIdle = false;
-    }
     this.#coalescer.reset(timeline);
     this.#unsubscribeProjection = this.#subscribeEstablished(
       established,
@@ -1343,6 +1353,11 @@ export class ConversationActor {
             }
           : { operational: false as const },
     };
+    // Settlement facts change together with the retained snapshot, never
+    // across the usage read, so input observers cannot see a mixed state.
+    if (timeline.runState === "idle" || timeline.runState === "failed") {
+      this.#awaitingAuthoritativeIdle = false;
+    }
     this.#snapshotState = state;
     this.#publish({ type: "projection_replaced", state });
     this.#publishSnapshotSubmissions();
@@ -1368,10 +1383,10 @@ export class ConversationActor {
             await this.#recoverProjection();
             return;
           }
-          const projectionGeneration = this.#projector.timeline().generation;
+          const projectionGeneration = this.#projector.generation;
           const application = this.#projector.apply(event);
           await this.#applyProjection(application);
-          if (application.kind === "resnapshot_required" || this.#projector.timeline().generation !== projectionGeneration) {
+          if (application.kind === "resnapshot_required" || this.#projector.generation !== projectionGeneration) {
             // The replacement snapshot is the sole authority after a rejected
             // event, including coalescer recovery. Snapshot replay publishes any submission/completion that
             // actually survived recovery.
@@ -1504,7 +1519,7 @@ export class ConversationActor {
       await this.#recoverProjection();
       return;
     }
-    const generation = this.#projector.timeline().generation;
+    const generation = this.#projector.generation;
     if (application.kind === "events") {
       const runStateChanged = application.events.some(
         (event) => event.type === "run_state",
@@ -1545,7 +1560,7 @@ export class ConversationActor {
             generation,
             forkSource: projectedThreadForkSourceCapability({
               branching: this.#snapshotState.backendCapabilities.branching,
-              sourceRunState: this.#projector.timeline().runState,
+              sourceRunState: this.#projector.runState,
             }),
           });
         }
@@ -1591,7 +1606,7 @@ export class ConversationActor {
               generation,
               forkSource: projectedThreadForkSourceCapability({
                 branching: application.event.capabilities.branching,
-                sourceRunState: this.#projector.timeline().runState,
+                sourceRunState: this.#projector.runState,
               }),
             },
           ],
@@ -1631,7 +1646,7 @@ export class ConversationActor {
       fork: projectedTurnForkCapability({
         turn: event.turn,
         branching,
-        sourceRunState: this.#projector.timeline().runState,
+        sourceRunState: this.#projector.runState,
       }),
     };
   }
@@ -1654,7 +1669,7 @@ export class ConversationActor {
   ): Promise<void> {
     const outputGeneration =
       output.kind === "event" ? output.event.generation : output.generation;
-    if (outputGeneration !== this.#projector.timeline().generation) return;
+    if (outputGeneration !== this.#projector.generation) return;
     if (output.kind === "resnapshot_required") {
       await this.#recoverProjection();
       return;
@@ -1673,20 +1688,27 @@ export class ConversationActor {
       );
     }
     let failure: unknown;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        await this.#establishProjection();
-        return;
-      } catch (error) {
-        failure = error;
-        if (this.#closing || this.#closed) throw error;
-        // Retrying a fixed provider limit cannot repair the projection and may
-        // repeat an expensive history acquisition. Preserve the backend's proof.
-        if (error instanceof BackendError && error.projectionRecovery === "futile") break;
-        await Promise.resolve();
+    // Only a current snapshot is retained as pending authority; recovery after
+    // a failed replacement is new authority, not the continuation of the old one.
+    this.#replacingProjection = this.#snapshotState !== undefined && !this.#projectionRecoveryRequired;
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          await this.#establishProjection();
+          return;
+        } catch (error) {
+          failure = error;
+          if (this.#closing || this.#closed) throw error;
+          // Retrying a fixed provider limit cannot repair the projection and may
+          // repeat an expensive history acquisition. Preserve the backend's proof.
+          if (error instanceof BackendError && error.projectionRecovery === "futile") break;
+          await Promise.resolve();
+        }
       }
+      this.#failProjectionRecovery(failure);
+    } finally {
+      this.#replacingProjection = false;
     }
-    this.#failProjectionRecovery(failure);
   }
 
   #failProjectionRecovery(failure: unknown): never {
@@ -1696,7 +1718,7 @@ export class ConversationActor {
       this.#projectionRecoveryFailureSequence += 1;
       this.#publish({
         type: "backend_event",
-        generation: this.#projector.timeline().generation,
+        generation: this.#projector.generation,
         event: {
           type: "notice",
           notice: {

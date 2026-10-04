@@ -3,6 +3,7 @@ package dev.sedes.local;
 /** Incremental SSE framing. The enclosing Reader performs incremental UTF-8 decoding. */
 final class NativeVoiceSse {
     interface Listener { void frame(String event, String data); }
+    static final String LIVE = "application-live";
     private final Listener listener;
     private final StringBuilder line = new StringBuilder(), data = new StringBuilder();
     private String event = "message";
@@ -22,7 +23,8 @@ final class NativeVoiceSse {
     private void consumeLine() {
         String value = line.toString(); line.setLength(0);
         if (value.isEmpty()) {
-            if (!oversized && data.length() > 0 && (event.equals("notification") || event.equals("notification_policy"))) {
+            // application-live marks the end of the inventory handshake; transient frames queued during it precede it.
+            if (!oversized && data.length() > 0 && (event.equals("notification") || event.equals("notification_policy") || event.equals(LIVE))) {
                 data.setLength(data.length() - 1); listener.frame(event, data.toString());
             }
             data.setLength(0); event = "message"; oversized = false; return;

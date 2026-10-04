@@ -1,34 +1,18 @@
-import { describe, expect, it, vi } from "vitest";
-import { NativeVoiceStore } from "./NativeVoiceStore.js";
-import type { NativeVoicePlugin, NativeVoiceState } from "./native-voice-plugin.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { NativeVoiceStore, recentVoiceErrors } from "./NativeVoiceStore.js";
+import type { NativeVoiceState } from "./native-voice-plugin.js";
+import { disconnectedVoiceSnapshot, fakeVoicePlugin, VOICE_CONNECTION, VOICE_IDENTITY, voiceSettings, voiceSnapshot as snapshot } from "./native-voice-test-fixture.js";
 
-function snapshot(patch: Partial<NativeVoiceState> = {}): NativeVoiceState {
-  return {
-    version: 1, stateRevision: 1, connectionGeneration: 1, profileId: "profile", serverOrigin: "https://sedes.test",
-    identity: "identity", originClientId: "34612c41-0bbb-455f-a5af-725bfc7ae768", settingsRevision: 0,
-    settings: { audioMode: "off", autoListen: true, ignoreOtherDevices: true, readNotificationContext: true,
-      adapterUrl: "", adapterTextLimit: 5000, voiceThreadId: null, voiceThreadTitle: null, onlyVoiceThread: false, followComposerMode: false,
-      inputDeviceId: null, recognitionStartTimeoutMs: 30000, recognitionCompletionTimeoutMs: 60000, recognitionEndSilenceMs: 1200,
-      recognizeStopCommand: true, recognitionCues: true, cueGain: 100, startupPreRollMs: 512, ttsGain: 100, headsetControls: true },
-    phase: "off", ready: false, readiness: "off", foreground: { visible: false, threadId: null, threadTitle: null }, active: null,
-    queue: { count: 0, bytes: 0, droppedCount: 0, droppedReasons: {} },
-    actions: { canStart: false, canStop: false, canSkip: false, canRetarget: false, canResume: false }, recovery: [], errors: [], ...patch,
-  };
-}
 function fixture() {
-  const listeners = new Map<string, (value: unknown) => void>();
-  const remove = vi.fn(async () => {});
-  const plugin = {
-    setConnection: vi.fn(async () => snapshot()), getState: vi.fn(async () => snapshot()),
-    updateSettings: vi.fn(async () => snapshot()), disconnect: vi.fn(),
-    addListener: vi.fn(async (event: string, listener: (value: unknown) => void) => { listeners.set(event, listener); return { remove }; }),
-  };
+  const { plugin, listeners, remove, asPlugin } = fakeVoicePlugin();
   const open = vi.fn();
-  const store = new NativeVoiceStore(plugin as unknown as NativeVoicePlugin, { profileId: "profile", serverOrigin: "https://sedes.test", identity: "identity" }, open);
+  const store = new NativeVoiceStore(asPlugin, VOICE_CONNECTION, open);
   return { store, plugin, listeners, open, remove };
 }
 const openEvent = (threadId: string, profileId = "profile") => ({ threadId, profileId,
-  serverOrigin: "https://sedes.test", identity: "identity", connectionGeneration: 1 });
+  serverOrigin: "https://sedes.test", identity: VOICE_IDENTITY, connectionGeneration: 1 });
+const runtimeError = (message: string, connectionGeneration = 1) => ({ code: "voice_error", message, connectionGeneration, ...VOICE_CONNECTION });
+afterEach(() => { vi.useRealTimers(); });
 describe("native voice state authority", () => {
   it("retains a notification open until native hydration and supports retry after transient startup failure", async () => {
     const { store, plugin, listeners, open } = fixture();
@@ -113,11 +97,117 @@ describe("native voice state authority", () => {
   it("never adopts settings from a different authenticated identity at the same endpoint", async () => {
     const { store, listeners, plugin } = fixture();
     await store.initialize();
-    listeners.get("stateChanged")!(snapshot({ connectionGeneration: 2, identity: "different-principal" }));
+    listeners.get("stateChanged")!(snapshot({ connectionGeneration: 2, identity: "f".repeat(64) }));
     expect(store.getSnapshot().native).toBeUndefined();
-    plugin.getState.mockResolvedValue(snapshot({ connectionGeneration: 2, identity: "different-principal" }));
+    plugin.getState.mockResolvedValue(snapshot({ connectionGeneration: 2, identity: "f".repeat(64) }));
     await expect(store.update({ audioMode: "response" })).rejects.toThrow("no longer active");
     expect(plugin.updateSettings).not.toHaveBeenCalled();
+    store.dispose();
+  });
+  it("retries a failed startup connection with capped backoff and stops once native state returns", async () => {
+    vi.useFakeTimers();
+    const { store, plugin } = fixture();
+    plugin.setConnection.mockRejectedValue(new Error("Server unavailable"));
+    await store.initialize();
+    expect(plugin.setConnection).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(plugin.setConnection).toHaveBeenCalledTimes(1);
+    let calls = 1;
+    for (const delay of [2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000]) {
+      await vi.advanceTimersByTimeAsync(delay - (calls === 1 ? 1_999 : 0));
+      expect(plugin.setConnection).toHaveBeenCalledTimes(++calls);
+    }
+    expect(store.getSnapshot().native).toBeUndefined();
+    expect(store.getSnapshot()).toMatchObject({ error: "Server unavailable", loading: false });
+    plugin.setConnection.mockResolvedValue(snapshot());
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(plugin.setConnection).toHaveBeenCalledTimes(++calls);
+    expect(store.getSnapshot().native?.originClientId).toBeDefined();
+    expect(store.getSnapshot().error).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(plugin.setConnection).toHaveBeenCalledTimes(calls);
+    store.dispose();
+  });
+  it("reconnects at once on foreground, rehydrates a live connection, and retries after native drops this binding", async () => {
+    vi.useFakeTimers();
+    const { store, plugin, listeners } = fixture();
+    plugin.setConnection.mockRejectedValueOnce(new Error("offline"));
+    await store.initialize();
+    store.foreground();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(plugin.setConnection).toHaveBeenCalledTimes(2);
+    expect(store.getSnapshot().native).toBeDefined();
+    store.foreground();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(plugin.getState).toHaveBeenCalledTimes(1);
+    expect(plugin.setConnection).toHaveBeenCalledTimes(2);
+    plugin.setConnection.mockResolvedValue(snapshot({ connectionGeneration: 3 }));
+    listeners.get("stateChanged")!(disconnectedVoiceSnapshot(2));
+    expect(store.getSnapshot().native).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(plugin.setConnection).toHaveBeenCalledTimes(3);
+    expect(store.getSnapshot().native?.connectionGeneration).toBe(3);
+    store.dispose();
+  });
+  it("cancels a pending reconnect when the WebView store is disposed", async () => {
+    vi.useFakeTimers();
+    const { store, plugin, listeners } = fixture();
+    await store.initialize();
+    listeners.get("stateChanged")!(disconnectedVoiceSnapshot(2));
+    store.dispose();
+    store.foreground();
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(plugin.setConnection).toHaveBeenCalledTimes(1);
+  });
+  it("keeps a runtime error through following snapshots until voice makes progress or the user acts", async () => {
+    const { store, plugin, listeners } = fixture();
+    const ready = (patch: Parameters<typeof snapshot>[0]) => snapshot({ ready: true, readiness: "ready", settings: voiceSettings({ audioMode: "response" }), ...patch });
+    plugin.setConnection.mockResolvedValue(ready({ phase: "recognizing" }));
+    await store.initialize();
+    const failure = { code: "voice_error", message: "Recognition failed." };
+    listeners.get("stateChanged")!(ready({ stateRevision: 2, phase: "recognizing", errors: [failure] }));
+    listeners.get("runtimeError")!(runtimeError(failure.message));
+    listeners.get("stateChanged")!(ready({ stateRevision: 3, phase: "idle", errors: [failure] }));
+    expect(store.getSnapshot().error).toBe("Recognition failed.");
+    listeners.get("stateChanged")!(ready({ stateRevision: 4, phase: "speaking", errors: [failure] }));
+    expect(store.getSnapshot().error).toBeUndefined();
+    listeners.get("runtimeError")!(runtimeError("Playback failed."));
+    listeners.get("stateChanged")!(ready({ stateRevision: 5, phase: "idle" }));
+    expect(store.getSnapshot().error).toBe("Playback failed.");
+    await store.run(async () => ready({ stateRevision: 6, phase: "idle" }));
+    expect(store.getSnapshot().error).toBeUndefined();
+    store.dispose();
+  });
+  it("lists recent distinct errors newest first and hides cleared ones until native reports another", async () => {
+    const { store, listeners } = fixture();
+    await store.initialize();
+    const timeout = { code: "adapter_handshake_timeout", message: "The voice adapter did not respond." };
+    const microphone = { code: "microphone_failed", message: "The microphone failed." };
+    const a = { code: "a", message: "A" }, b = { code: "b", message: "B" };
+    listeners.get("stateChanged")!(snapshot({ stateRevision: 2, errors: [timeout, microphone, timeout, timeout, a, b] }));
+    expect(recentVoiceErrors(store.getSnapshot())).toEqual(["B", "A", timeout.message]);
+    store.dismissErrors();
+    expect(recentVoiceErrors(store.getSnapshot())).toEqual([]);
+    listeners.get("stateChanged")!(snapshot({ stateRevision: 3, errors: [microphone, timeout, timeout, a, b, timeout] }));
+    expect(recentVoiceErrors(store.getSnapshot())).toEqual([timeout.message]);
+    listeners.get("runtimeError")!(runtimeError(microphone.message));
+    expect(recentVoiceErrors(store.getSnapshot())).toEqual([microphone.message, timeout.message]);
+    listeners.get("stateChanged")!(snapshot({ connectionGeneration: 2, stateRevision: 1, errors: [a, b] }));
+    expect(recentVoiceErrors(store.getSnapshot())).toEqual(["B", "A"]);
+    store.dispose();
+  });
+  it("builds a function patch from refreshed native state and skips the write when it no longer applies", async () => {
+    const { store, plugin } = fixture();
+    await store.initialize();
+    const resume = (current: NativeVoiceState) => current.settings.audioMode !== "off" && current.actions.canResume ? { audioMode: current.settings.audioMode } : null;
+    plugin.getState.mockResolvedValue(snapshot({ stateRevision: 4, settingsRevision: 3, settings: voiceSettings({ audioMode: "manual" }),
+      actions: { canStart: false, canStop: false, canSkip: false, canRetarget: false, canResume: true } }));
+    await store.update(resume);
+    expect(plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 3, patch: { audioMode: "manual" } });
+    plugin.getState.mockResolvedValue(snapshot({ stateRevision: 5, settingsRevision: 4 }));
+    await store.update(resume);
+    expect(plugin.updateSettings).toHaveBeenCalledTimes(1);
+    expect(store.getSnapshot()).toMatchObject({ pending: false, native: { settingsRevision: 4 } });
     store.dispose();
   });
 });

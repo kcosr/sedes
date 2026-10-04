@@ -89,4 +89,32 @@ public class NativeVoiceQueueTest {
         queue.reconfigure(settings("response")); assertTrue(queue.bytes() > 0);
         queue.cancelFollowups(); queue.reconfigure(settings("response")); assertFalse(queue.take().followUp);
     }
+    // Server JSON.stringify text. Android org.json adds a byte per '/'; JVM org.json per "</" and U+2014.
+    private static final String ESCAPED_PREFIX = "a/b </c> d\u2014e \\\"q\\\" \\\\ \\n\\t\\u0001 \u00e9\u0085 \u20ac\u2000\u2028\u2029 \ud83e\udda6 lone\\ud800 ";
+    private static String payloadJson(String escapedText) {
+        return "{\"schemaVersion\":4,\"notificationId\":\"notice-1\",\"event\":\"turn.completed\",\"occurredAt\":\"2026-10-03T00:00:00.000Z\"," +
+            "\"title\":\"Completed\",\"message\":\"Workspace: a/b\",\"thread\":{\"id\":\"thread-a\",\"title\":\"Thread A\"}," +
+            "\"assistantResult\":{\"final\":{\"text\":\"" + escapedText + "\",\"truncation\":{\"truncated\":true,\"originalBytes\":200000," +
+            "\"retainedBytes\":65000,\"reason\":\"byte_limit\"}}}}";
+    }
+    private static int utf8(String value) { return value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length; }
+    private static JSONObject wire(String payload) throws Exception {
+        return NativeVoiceJson.object("sourceEventId", "fitted", "generation", 1, "voice", "speak", "payload", new JSONObject(payload));
+    }
+    @Test public void payloadSizeMatchesServerJsonStringifyMeasure() throws Exception {
+        String mixed = payloadJson(ESCAPED_PREFIX + "tail");
+        assertEquals(utf8(mixed), NativeVoiceJson.serializedBytes(new JSONObject(mixed)));
+        String values = "{\"a\":[true,false,null,-12,0,9007199254740991],\"b\":{},\"c\":[],\"d\":\"x\"}";
+        assertEquals(utf8(values), NativeVoiceJson.serializedBytes(new JSONObject(values)));
+    }
+    @Test public void serverFittedPayloadFullOfSlashesIsAcceptedAtTheExactLimit() throws Exception {
+        int fill = (int) NativeVoiceQueue.MAX_PAYLOAD_BYTES - utf8(payloadJson(ESCAPED_PREFIX));
+        String fitted = payloadJson(ESCAPED_PREFIX + "/".repeat(fill));
+        assertEquals(65536, utf8(fitted));
+        NativeVoiceQueue.Item item = new NativeVoiceQueue.Item(wire(fitted), settings("response"));
+        assertTrue(item.speech.contains("/".repeat(fill)));
+        String over = payloadJson(ESCAPED_PREFIX + "/".repeat(fill + 1));
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> new NativeVoiceQueue.Item(wire(over), settings("response")));
+        assertEquals("voice_payload_too_large", error.getMessage());
+    }
 }

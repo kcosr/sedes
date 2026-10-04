@@ -239,7 +239,9 @@ const piWithdrawnSteer = {
 
 function fakeSessionFactory(
   assistantResponseCount = 1,
-  includeToolLoop: boolean | { readonly text: string } = false,
+  includeToolLoop:
+    | boolean
+    | { readonly text: string; readonly stopReason?: "aborted" | "error" } = false,
   onCompact: (manager: PiSdkSession["sessionManager"]) => void = () =>
     undefined,
   userPersistenceDelayMilliseconds = 0,
@@ -320,6 +322,8 @@ function fakeSessionFactory(
           await beforeAssistant?.(text);
 
           if (includeToolLoop) {
+            const toolStopReason: "toolUse" | "aborted" | "error" =
+              (typeof includeToolLoop === "object" && includeToolLoop.stopReason) || "toolUse";
             const toolAssistant = {
               role: "assistant" as const,
               content: [
@@ -348,7 +352,8 @@ function fakeSessionFactory(
                   total: 0,
                 },
               },
-              stopReason: "toolUse" as const,
+              stopReason: toolStopReason,
+              ...(toolStopReason === "error" ? { errorMessage: "Provider failed" } : {}),
               timestamp: Date.now(),
             };
             emit({
@@ -376,6 +381,11 @@ function fakeSessionFactory(
               message: toolAssistant,
             } as never);
             await Promise.resolve();
+            if (toolStopReason !== "toolUse") {
+              // Pi ends the run without executing an aborted or errored message's tools.
+              emit({ type: "agent_settled" } as never);
+              return;
+            }
             emit({
               type: "tool_execution_start",
               toolCallId: "call-read",
@@ -9292,6 +9302,49 @@ describe("Pi conversation backend driver", () => {
         .getBranch()
         .filter((entry) => entry.type === "compaction"),
     ).toEqual([]);
+    await handle.close();
+  });
+
+  it.each([
+    ["toolUse", undefined, 1],
+    ["aborted", "aborted", 0],
+    ["error", "error", 0],
+  ] as const)("announces live progress for a %s tool-call message only when its tools run", async (_, stopReason, progressCount) => {
+    const fixture = await workspace();
+    const driver = new PiConversationBackendDriver({
+      instance, connection, usage: NO_USAGE_SINK, nativeDiscoveryNamespaceKey: "pi-test-native-namespace",
+      toolProvenanceKey, agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy, sessionDirectory: fixture.sessions,
+      sessionFactory: fakeSessionFactory(1, { text: "Inspecting the README", ...(stopReason ? { stopReason } : {}) }),
+    });
+    const created = await driver.create({
+      scope, workspace: fixture.workspace, applicationThreadId: "tool-progress-create",
+      applicationOperationId: "tool-progress-create", source: { kind: "user" },
+    });
+    const handle = await driver.attach({
+      scope, workspace: fixture.workspace,
+      binding: binding(created.backendConversationId), opaqueBindingDetail: created.opaqueBindingDetail,
+    });
+    const live = await handle.establishProjection({ signal: new AbortController().signal });
+    const events: BackendConversationEvent[] = [];
+    const unsubscribe = live.subscribeFromNext(({ event }) => events.push(event));
+
+    await handle.submit({
+      applicationOperationId: "tool-progress-submit", source: { kind: "user" }, mutationId: "tool-progress-mutation",
+      reconciliationToken: "tool-progress-token", contextExcerpts: [], attachments: [], taskContexts: [], text: "Read the file",
+    });
+    // An unrun streamed tool call leaves settlement to resnapshot from history.
+    await vi.waitFor(() => expect(events.some(({ type }) =>
+      type === "turn_completed" || type === "resnapshot_required")).toBe(true));
+    unsubscribe();
+    const toolText = expect.objectContaining({
+      type: "item_completed", item: expect.objectContaining({
+        semanticKind: "assistant_message", responsePhase: "provisional", markdown: { text: "Inspecting the README" },
+      }),
+    });
+    expect(events).toContainEqual(toolText);
+    expect(events.filter(event => "liveProgress" in event && event.liveProgress)).toEqual(
+      Array.from({ length: progressCount }, () => toolText),
+    );
     await handle.close();
   });
 

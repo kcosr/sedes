@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import type { ClientOrigin, ThreadInputContext } from "../../shared/protocol/thread-input.js";
 import { DirectInputRepository } from "../db/repositories/direct-input-repository.js";
+import { QueuedInputRepository } from "../db/repositories/queued-input-repository.js";
 import type { RequestScope } from "../identity/identity-provider.js";
 import type { ConversationInputRuntimeObservation, ConversationActorManager } from "./conversation-actor-manager.js";
 import type { ThreadApplicationPresentationReader } from "./thread-application-service.js";
@@ -27,14 +28,22 @@ type DurableObservation = {
   pending: number;
   recovery: number;
 };
+type Captured = {
+  readonly context: ThreadInputContext;
+  readonly observation?: ConversationInputRuntimeObservation;
+  /** A bound owner is replacing its retained snapshot; authority is neither current nor lost. */
+  readonly pending: boolean;
+};
 type Waiter = {
   scope: RequestScope;
   target: RecognitionTarget;
   deadline: number;
   resolve: (target: RecognitionTarget | undefined) => void;
 };
+type ReplacementWaiter = { scope: RequestScope; threadId: string; deadline: number; resolve: () => void };
 const MAX_ACTIVITY_CONTEXTS = 4_096;
 const MAX_SETTLEMENT_WAITERS = 256;
+const SETTLEMENT_TIMEOUT_MILLISECONDS = 5_000;
 
 function key(scope: Pick<RequestScope, "tenantId" | "principalId">, threadId: string): string {
   return `${scope.tenantId}\0${scope.principalId}\0${threadId}`;
@@ -42,9 +51,15 @@ function key(scope: Pick<RequestScope, "tenantId" | "principalId">, threadId: st
 function terminal(observation?: ConversationInputRuntimeObservation): boolean {
   return observation?.sourceTurnStatus === "completed" || observation?.sourceTurnStatus === "failed" || observation?.sourceTurnStatus === "interrupted";
 }
+function settling(observation?: ConversationInputRuntimeObservation): boolean {
+  return observation?.authoritative === true || observation?.reestablishing === true;
+}
+// Semantic facts only. The owner generation fences eviction, restart, and owner
+// replacement; projection generation is excluded so an equivalent replacement
+// snapshot, and the retained facts observed while it is installed, keep the token.
 function runtimeKey(observation?: ConversationInputRuntimeObservation): string {
   return JSON.stringify(observation ? [
-    observation.generation, observation.authoritative, observation.runState, observation.settled,
+    observation.ownerGeneration, settling(observation), observation.runState, observation.settled,
     observation.sourceTurnId, observation.sourceTurnStatus, observation.blockingInteractionIds,
   ] : null);
 }
@@ -53,7 +68,9 @@ function runtimeKey(observation?: ConversationInputRuntimeObservation): string {
 export class ThreadActivityService {
   readonly #states = new Map<string, ActivityRecord>();
   readonly #waiters = new Set<Waiter>();
+  readonly #replacements = new Set<ReplacementWaiter>();
   readonly #origins: DirectInputRepository;
+  readonly #queue: QueuedInputRepository;
   readonly #unsubscribe: () => void;
   #timer?: ReturnType<typeof setInterval>;
   #closed = false;
@@ -65,25 +82,36 @@ export class ThreadActivityService {
     readonly now?: () => number;
   }) {
     this.#origins = new DirectInputRepository(input.database);
+    this.#queue = new QueuedInputRepository(input.database);
     this.#unsubscribe = input.actors.subscribeInputActivity((scope, threadId) => {
       const stateKey = key(scope, threadId);
       const before = this.#states.get(stateKey);
       if (!before) return;
       // Text deltas do not change input authority. Avoid querying durable state
-      // for every streamed token while still observing every readiness edge.
-      if (before.runtime === runtimeKey(input.actors.observeInputRuntime(scope, threadId))) return;
+      // for every streamed token while still observing every readiness edge,
+      // including the end of an equivalent in-place replacement.
+      const observation = input.actors.observeInputRuntime(scope, threadId);
+      if (before.runtime === runtimeKey(observation) &&
+          (observation?.reestablishing ?? false) === (before.observation?.reestablishing ?? false)) return;
       try { this.#capture(before.scope, threadId); } catch { this.#states.delete(stateKey); }
       this.#drainWaiters();
     });
   }
 
   async capture(scope: RequestScope, threadId: string): Promise<ThreadInputContext> {
-    // Authorize before reading presentation, then capture current authority again
-    // after the cached (non-attaching) policy read. No provider call is allowed here.
-    const before = this.#capture(scope, threadId);
+    // Authorize before waiting or reading presentation, then capture current
+    // authority again after the cached (non-attaching) policy read. An in-place
+    // replacement is pending, not lost: answer from its outcome within the
+    // settlement bound, since a caller re-checks only once. No provider call.
+    const deadline = this.#now() + SETTLEMENT_TIMEOUT_MILLISECONDS;
+    let observed = this.#capture(scope, threadId);
+    if (observed.pending) observed = await this.#afterReplacement(observed, scope, threadId, deadline);
+    const before = observed.context;
     if (before.authority !== "current" || this.#closed) return before;
     const presentation = await this.input.presentation.readCached(scope, threadId);
-    const current = this.#capture(scope, threadId);
+    observed = this.#capture(scope, threadId);
+    if (observed.pending) observed = await this.#afterReplacement(observed, scope, threadId, deadline);
+    const current = observed.context;
     if (before.activityToken !== current.activityToken) {
       return { ...current, automaticListenEligible: false, steer: { availability: "unavailable" } };
     }
@@ -94,7 +122,18 @@ export class ThreadActivityService {
     };
   }
 
-  #capture(scope: RequestScope, threadId: string): ThreadInputContext {
+  async #afterReplacement(captured: Captured, scope: RequestScope, threadId: string, deadline: number): Promise<Captured> {
+    while (captured.pending && !this.#closed && this.#now() < deadline && this.#replacements.size < MAX_SETTLEMENT_WAITERS) {
+      await new Promise<void>(resolve => {
+        this.#replacements.add({ scope: { ...scope }, threadId, deadline, resolve });
+        this.#startTimer();
+      });
+      captured = this.#capture(scope, threadId);
+    }
+    return captured;
+  }
+
+  #capture(scope: RequestScope, threadId: string): Captured {
     const stored = this.input.database.prepare(`SELECT
       thread.backing_state AS backingState, thread.availability,
       thread.input_activity_revision AS activityRevision, inventory.inventory_state AS inventoryState,
@@ -128,14 +167,15 @@ export class ThreadActivityService {
     const runtime = runtimeKey(observation);
     const stateKey = key(scope, threadId);
     const before = this.#states.get(stateKey);
-    // A terminal bookend and its matching idle are one boundary. Every other
-    // transition, including running again after idle, creates a fresh token.
+    // A terminal bookend and its matching idle are one boundary, including when
+    // either side is observed through an equivalent replacement snapshot. Every
+    // other transition, including running again after idle, creates a fresh token.
     const matchingSettlement = before?.durable === durable && terminal(before.observation) && terminal(observation) &&
-      before.observation?.generation === observation?.generation &&
+      before.observation?.ownerGeneration === observation?.ownerGeneration &&
       before.observation?.sourceTurnId === observation?.sourceTurnId &&
-      before.observation?.authoritative && observation?.authoritative &&
+      settling(before.observation) && settling(observation) &&
       !before.observation?.settled && observation?.settled &&
-      JSON.stringify(before.observation.blockingInteractionIds) === JSON.stringify(observation.blockingInteractionIds);
+      JSON.stringify(before.observation?.blockingInteractionIds) === JSON.stringify(observation?.blockingInteractionIds);
     const token = before && (before.durable === durable && before.runtime === runtime || matchingSettlement)
       ? before.token : randomUUID();
     this.#states.delete(stateKey);
@@ -148,21 +188,26 @@ export class ThreadActivityService {
       : stored.backingState === "bound" && observation?.authoritative ? "current" : "unavailable";
     const steerSupported = observation?.backendCapabilities.deliveryModes.includes("steer") === true;
     const steerKind = observation?.backendCapabilities.steerTarget;
+    // Admission queues a Steer behind this same predicate, so never advertise one it would not admit.
     const steerTarget = authority === "current" && targetAvailable && stored.recovery === 0 &&
-      observation?.runState === "running" && steerSupported
+      observation?.runState === "running" && steerSupported && !this.#queue.hasSteerBlockingInput(scope, threadId)
       ? steerKind === "conversation" ? { kind: "conversation" as const }
         : steerKind === "turn" && observation.activeTurnId ? { kind: "turn" as const, turnId: observation.activeTurnId } : undefined
       : undefined;
     return {
-      threadId, activityToken: token, authority,
-      runState: observation?.runState ?? null,
-      ...(observation?.sourceTurnId ? { sourceTurnId: observation.sourceTurnId } : {}),
-      automaticListenEligible: !this.#closed && targetAvailable && authority === "current" &&
-        observation!.settled && observation!.backendCapabilities.deliveryModes.includes("submit") && observation!.blockingInteractionIds.length === 0 &&
-        stored.pending === 0 && stored.recovery === 0,
-      steer: authority !== "current" ? { availability: "unavailable" }
-        : steerTarget ? { availability: "available", target: steerTarget }
-        : steerSupported ? { availability: "unavailable" } : { availability: "unsupported" },
+      observation,
+      pending: stored.backingState === "bound" && observation?.reestablishing === true,
+      context: {
+        threadId, activityToken: token, authority,
+        runState: observation?.runState ?? null,
+        ...(observation?.sourceTurnId ? { sourceTurnId: observation.sourceTurnId } : {}),
+        automaticListenEligible: !this.#closed && targetAvailable && authority === "current" &&
+          observation!.settled && observation!.backendCapabilities.deliveryModes.includes("submit") && observation!.blockingInteractionIds.length === 0 &&
+          stored.pending === 0 && stored.recovery === 0,
+        steer: authority !== "current" ? { availability: "unavailable" }
+          : steerTarget ? { availability: "available", target: steerTarget }
+          : steerSupported ? { availability: "unavailable" } : { availability: "unsupported" },
+      },
     };
   }
 
@@ -172,29 +217,35 @@ export class ThreadActivityService {
       observed?.sourceTurnId === turnId ? observed.firstInput : undefined);
   }
 
+  /** Total: voice context failures degrade to announce-only and never block the notification itself. */
   notificationContext(scope: RequestScope, threadId: string, sourceTurnId?: string): {
     readonly origin?: ClientOrigin;
     readonly recognitionTarget?: RecognitionTarget;
     readonly settlement?: Promise<RecognitionTarget | undefined>;
   } {
-    const origin = sourceTurnId ? this.originForTurn(scope, threadId, sourceTurnId) : undefined;
-    const provenance = origin ? { origin } : {};
-    let current: ThreadInputContext;
-    try { current = this.#capture(scope, threadId); } catch { return provenance; }
-    if (this.#closed || current.authority !== "current" || sourceTurnId && current.sourceTurnId !== sourceTurnId) return provenance;
-    const target: RecognitionTarget = { threadId, activityToken: current.activityToken,
-      ...(sourceTurnId ? { sourceTurnId } : {}) };
-    const observed = this.input.actors.observeInputRuntime(scope, threadId);
-    if (!sourceTurnId || observed?.settled || !terminal(observed)) return { ...provenance, recognitionTarget: target };
-    if (this.#waiters.size >= MAX_SETTLEMENT_WAITERS) return provenance;
-    const settlement = new Promise<RecognitionTarget | undefined>(resolve => {
-      this.#waiters.add({ scope: { ...scope }, target, deadline: this.#now() + 5_000, resolve });
-    });
-    if (!this.#timer) {
-      this.#timer = setInterval(() => this.#drainWaiters(), 25);
-      this.#timer.unref?.();
-    }
-    return { ...provenance, recognitionTarget: target, settlement };
+    let provenance: { readonly origin?: ClientOrigin } = {};
+    try {
+      const origin = sourceTurnId ? this.originForTurn(scope, threadId, sourceTurnId) : undefined;
+      if (origin) provenance = { origin };
+    } catch { /* Advisory attribution is optional; announce without it. */ }
+    try {
+      const { context: current, observation, pending } = this.#capture(scope, threadId);
+      if (this.#closed || current.authority !== "current" && !pending ||
+          sourceTurnId && current.sourceTurnId !== sourceTurnId) return provenance;
+      const target: RecognitionTarget = { threadId, activityToken: current.activityToken,
+        ...(sourceTurnId ? { sourceTurnId } : {}) };
+      if (!sourceTurnId || !terminal(observation) || observation?.authoritative && observation.settled) {
+        return { ...provenance, recognitionTarget: target };
+      }
+      // A terminal turn awaits its matching settlement, including one observed
+      // through an equivalent replacement snapshot that is still being installed.
+      if (this.#waiters.size >= MAX_SETTLEMENT_WAITERS) return provenance;
+      const settlement = new Promise<RecognitionTarget | undefined>(resolve => {
+        this.#waiters.add({ scope: { ...scope }, target, deadline: this.#now() + SETTLEMENT_TIMEOUT_MILLISECONDS, resolve });
+      });
+      this.#startTimer();
+      return { ...provenance, recognitionTarget: target, settlement };
+    } catch { return provenance; }
   }
 
   close(): void {
@@ -204,24 +255,38 @@ export class ThreadActivityService {
     this.#timer = undefined;
     for (const waiter of this.#waiters) waiter.resolve(undefined);
     this.#waiters.clear();
+    for (const waiter of this.#replacements) waiter.resolve();
+    this.#replacements.clear();
     this.#states.clear();
   }
 
   #now(): number { return (this.input.now ?? Date.now)(); }
 
+  #startTimer(): void {
+    if (this.#timer) return;
+    this.#timer = setInterval(() => this.#drainWaiters(), 25);
+    this.#timer.unref?.();
+  }
+
   #drainWaiters(): void {
     for (const waiter of this.#waiters) {
-      let current: ThreadInputContext | undefined;
-      try { current = this.#capture(waiter.scope, waiter.target.threadId); } catch { /* Target disappeared. */ }
-      let done = false;
+      let captured: Captured | undefined;
+      try { captured = this.#capture(waiter.scope, waiter.target.threadId); } catch { /* Target disappeared. */ }
+      let done = true;
       let result: RecognitionTarget | undefined;
-      if (!current || current.authority !== "current" || this.#now() >= waiter.deadline) done = true;
-      else if (current.activityToken !== waiter.target.activityToken) { done = true; result = waiter.target; }
-      else if (this.input.actors.observeInputRuntime(waiter.scope, waiter.target.threadId)?.settled) {
-        done = true; result = waiter.target;
-      }
+      // Loss of authority or the deadline releases announce-only speech; newer
+      // activity releases the original, now stale, target; replacement keeps waiting.
+      if (!captured || this.#now() >= waiter.deadline || captured.context.authority !== "current" && !captured.pending) result = undefined;
+      else if (captured.context.activityToken !== waiter.target.activityToken) result = waiter.target;
+      else if (captured.pending || !captured.observation?.settled) done = false;
+      else result = waiter.target;
       if (done) { this.#waiters.delete(waiter); waiter.resolve(result); }
     }
-    if (this.#waiters.size === 0) { clearInterval(this.#timer); this.#timer = undefined; }
+    for (const waiter of this.#replacements) {
+      let pending = false;
+      try { pending = this.#capture(waiter.scope, waiter.threadId).pending; } catch { /* Answered by the re-capture. */ }
+      if (!pending || this.#now() >= waiter.deadline) { this.#replacements.delete(waiter); waiter.resolve(); }
+    }
+    if (this.#waiters.size === 0 && this.#replacements.size === 0) { clearInterval(this.#timer); this.#timer = undefined; }
   }
 }

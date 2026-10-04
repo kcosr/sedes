@@ -80,7 +80,7 @@ export function AuthenticationGate({ endpoint, profileId, children, settings }: 
     setBusy(false);
     const unsubscribe = onUnauthorized(endpoint, () => {
       if (!scope.alive) return;
-      void disconnectNativeVoice().catch(() => undefined);
+      void disconnectNativeVoice();
       setStatus((current) => ({ required: current?.required ?? true, authenticated: false }));
       setError("This connection needs to be paired again.");
       scope.epoch += 1;
@@ -180,7 +180,8 @@ export function AuthenticationGate({ endpoint, profileId, children, settings }: 
   async function logout(): Promise<void> {
     const operation = ticket();
     await request("/api/auth/logout", { method: "POST" }, operation);
-    await disconnectNativeVoice();
+    // Removing the credential disconnects this profile's native voice first (ClientCredentials), so logout does not
+    // depend on a separate bridge call that could fail and leave the credential behind.
     if (native && profileId) {
       await writeCredential(profileId, serverOrigin, () => isCurrent(operation), () => removeCredential(profileId, serverOrigin));
       check(operation);

@@ -899,11 +899,18 @@ by the server operator. Browser requests derive tenant/principal authority on
 the server; a request cannot select another user's settings.
 
 Each event has independent `script` and `voice` (`none`, `speak`, or
-`speakThenListen`) delivery. Progress and structured questions cannot use
-`speakThenListen`. The former `events` array is removed; the database upgrade
-preserves script selections and existing response-phase choices. Fresh voice
-defaults speak notices and speak then listen after completion, with the master
-notification switch initially disabled.
+`speakThenListen`) delivery. `turn.progress`, `approval.requested`,
+`input.requested`, and `question.requested` cannot use `speakThenListen`;
+settings that request it are rejected. `automation.started` accepts it but
+behaves as `speak` in practice: its recognition target, when present, is the
+automation's thread while the run's turn is still in progress, and that turn's
+completion makes the target stale. Fresh settings select no script events, speak every
+event, and speak then listen after `turn.completed`, with the master
+notification switch initially disabled. The former `events` array is removed.
+The database upgrade preserves existing response-phase choices and script
+selections and applies the fresh voice actions. Disabled settings without a
+script path have never run a script, so the upgrade leaves them with no script
+events selected.
 
 Sedes launches the configured absolute executable directly with its argument
 array, on the Sedes server even when a thread uses SSH. Install an executable
@@ -1002,6 +1009,11 @@ metadata; it is not changed to `null`. If metadata leaves no room for the result
 envelope, the entire field is omitted to preserve notification delivery.
 Scripts should inspect truncation before assuming the text is complete.
 
+`turn.progress` uses the same 64 KiB limit. An oversized progress payload is
+still delivered: `progress.text` is shortened, ending in "…", and carries
+truncation metadata with `reason: "byte_limit"`. A notification is dropped only
+when its metadata alone exceeds the limit.
+
 Notification schema version 4 adds `turn.progress` with `progress.itemId`,
 `progress.text`, and optional truncation metadata. It continues to omit unselected
 completion sections. Update consumer scripts with the server. The repository's Assistant hook
@@ -1025,8 +1037,8 @@ not UI presentation, replay, or resolution. `question.requested` covers newly
 committed nonblocking question batches, independently of blocking input. It
 includes only the request identity, question count, and generic thread/workspace
 context. Sending, dismissing, history hydration, and reconnect do not emit it.
-Existing event selections remain unchanged; enable these events explicitly in
-Settings.
+Existing script selections remain unchanged; script delivery for these events
+is opt-in.
 
 For example, the following executable Python script consumes the contract:
 
@@ -1056,7 +1068,8 @@ consumption markers prevent replayed application events from launching a script
 again; these are independent of UI acknowledgment and contain no delivery result.
 Disabling, silencing, or changing configuration discards pending work rather than
 sending it later. Native Android voice uses the independent Voice action in the
-same per-event delivery map. Script capacity does not consume voice capacity.
+same per-event delivery map. Script capacity does not consume voice capacity, and
+a voice delivery failure never blocks the script.
 The navigation bell silences both automatic channels. This is an active native
 service, not mobile push; see [Android voice](clients/voice.md).
 

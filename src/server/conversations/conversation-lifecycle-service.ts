@@ -590,8 +590,12 @@ export class ConversationLifecycleService {
     scope: RequestScope,
     applicationThreadId: string,
     request: DirectInputRequest,
-    expectedThreadRevision: number,
-    assertAdmission: () => void,
+    /**
+     * Revalidates admission inside the transaction and returns the revision the
+     * caller validated; a stale revision fails the prepare fence. It may throw
+     * to roll the reservation back.
+     */
+    assertAdmission: () => number,
   ): Promise<FirstSendResult> {
     const receipts = new DirectInputRepository(this.#bindings.database);
     const existing = receipts.replay(scope, applicationThreadId, request);
@@ -611,7 +615,7 @@ export class ConversationLifecycleService {
       }
       // Initialization can await provider work. Inventory/recovery authority
       // must still be current at the atomic first-send admission boundary.
-      assertAdmission();
+      const expectedThreadRevision = assertAdmission();
       const prepared = this.#creation.prepare(scope, applicationThreadId, {
         attemptId: this.#id(), mutationId: request.mutationId,
         expectedThreadRevision, creationKind: "first_input", sourceKind: "direct_input",
@@ -1134,6 +1138,21 @@ export class ConversationLifecycleService {
     );
     if (!attempt || attempt.creationKind !== "first_input") return undefined;
     return this.recoverFirstSend(scope, applicationThreadId, attempt.attemptId);
+  }
+
+  /**
+   * A replayed direct first send recovers its own unfinished reservation as
+   * the same operation, as a composer retry does. Terminal and force-reset
+   * attempts are only presented; no other attempt is ever driven.
+   */
+  resumeDirectFirstSend(
+    scope: RequestScope,
+    applicationThreadId: string,
+    attemptId: string,
+  ): Promise<FirstSendResult> | undefined {
+    const attempt = this.#creation.findActiveForThread(scope, applicationThreadId);
+    if (attempt?.attemptId !== attemptId || attempt.sourceKind !== "direct_input") return undefined;
+    return this.recoverFirstSend(scope, applicationThreadId, attemptId);
   }
 
   /** Finalize only the exact post-submission attempt; never enter effectful recovery branches. */

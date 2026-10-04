@@ -3,7 +3,9 @@ import { notificationAssistantResultMigration } from "../../src/server/db/migrat
 import { notificationAssistantResultPhasesMigration } from "../../src/server/db/migrations/105-notification-assistant-result-phases.js";
 import { notificationPhaseSelectionMigration } from "../../src/server/db/migrations/106-notification-phase-selection.js";
 import { notificationDeliveryMigration } from "../../src/server/db/migrations/130-notification-delivery.js";
+import { notificationPathlessScriptDeliveryMigration } from "../../src/server/db/migrations/132-notification-pathless-script-delivery.js";
 import type { BoundedText } from "../../src/shared/protocol/payload.js";
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,9 +13,11 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   notificationEventKindSchema,
+  notificationPayloadSchema,
   notificationSettingsSchema,
   testNotificationRequestSchema,
   updateNotificationSettingsRequestSchema,
+  voiceNotificationSchema,
   type NotificationEventPayload,
   type NotificationAssistantResultPhase,
   type NotificationTestResult,
@@ -55,6 +59,7 @@ function fixture(
   executor = vi
     .fn<typeof executeNotificationScript>()
     .mockResolvedValue(success),
+  onError?: (message: string) => void,
 ) {
   const database = new Database(":memory:");
   database.pragma("foreign_keys = ON");
@@ -67,6 +72,7 @@ function fixture(
     repository,
     executor,
     now: () => now,
+    ...(onError ? { onError } : {}),
   });
   disposals.push(
     () => {
@@ -95,6 +101,16 @@ function event(at = 1001): NotificationEventPayload {
     turn: { id: "turn", outcome: "completed" },
   };
 }
+function progress(text: BoundedText = { text: "Checking the build." }, at = 1001): NotificationEventPayload {
+  return {
+    event: "turn.progress", occurredAt: new Date(at).toISOString(), title: "Agent progress", message: "Example",
+    thread: { id: "thread", title: "Example" }, workspace: { id: "workspace", name: "Workspace" },
+    turn: { id: "turn" }, progress: { itemId: "item", ...text },
+  };
+}
+const voiceFrames = (frames: readonly string[]) => frames
+  .filter(frame => frame.startsWith("event: notification\n"))
+  .map(frame => voiceNotificationSchema.parse(JSON.parse(frame.split("\n")[1]!.slice("data: ".length))));
 function enable(service: NotificationService) {
   return service.update(scope, { ...config, delivery: config.delivery });
 }
@@ -119,6 +135,52 @@ describe("notification settings and passive hooks", () => {
     expect(settings).not.toHaveProperty("events");
     expect(settings.delivery).toEqual(scriptDelivery(["turn.completed", "question.requested"]));
     expect(repository.consume(scope, "already-consumed", 1001)).toBeNull();
+  });
+
+  it("clears migrated script selections only from disabled settings without a script path", () => {
+    const { service, database, repository } = fixture();
+    const relative = { tenantId: "tenant", principalId: "relative" };
+    const enabledRow = { tenantId: "tenant", principalId: "enabled" };
+    database.exec("INSERT INTO principals VALUES ('tenant','relative'), ('tenant','enabled');");
+    const { delivery: _delivery, expectedRevision: _revision, ...old } = config;
+    const rows = [
+      { target: scope, values: { enabled: false, scriptPath: "" } },
+      { target: other, values: { enabled: false, scriptPath: script.scriptPath } },
+      { target: relative, values: { enabled: false, scriptPath: "notify.sh" } },
+      // Raw state only: it isolates the enabled predicate from the path predicate.
+      { target: enabledRow, values: { enabled: true, scriptPath: "" } },
+    ];
+    for (const { target, values } of rows) {
+      service.update(target, { ...config, enabled: false, delivery: scriptDelivery([]) });
+      database.prepare(`UPDATE principal_notification_settings SET config_json = ?
+        WHERE tenant_id = ? AND owner_principal_id = ?`).run(JSON.stringify({
+        ...old, ...values, events: ["turn.completed", "question.requested"],
+      }), target.tenantId, target.principalId);
+    }
+    database.exec(notificationDeliveryMigration.sql);
+    const raw = (target: typeof scope) => database.prepare(`SELECT config_json AS configJson, revision,
+      dispatch_generation AS generation FROM principal_notification_settings
+      WHERE tenant_id = ? AND owner_principal_id = ?`).get(target.tenantId, target.principalId) as
+      { configJson: string; revision: number; generation: number };
+    const before = new Map(rows.map(({ target }) => [target, raw(target)]));
+    const migrated = repository.read(scope);
+    expect(migrated.delivery).toEqual(scriptDelivery(["turn.completed", "question.requested"]));
+    const { silenced: _silenced, revision, ...voiceOnly } = migrated;
+    // The defect: a voice-only enable of the migrated, pathless settings is rejected.
+    expect(() => service.update(scope, { ...voiceOnly, enabled: true, expectedRevision: revision }))
+      .toThrow("Enabled script delivery requires an absolute script path.");
+
+    database.exec(notificationPathlessScriptDeliveryMigration.sql);
+    const repaired = raw(scope);
+    expect(repaired).toMatchObject({ revision: before.get(scope)!.revision + 1, generation: before.get(scope)!.generation + 1 });
+    const settings = repository.read(scope);
+    expect(settings.delivery).toEqual(scriptDelivery([]));
+    expect({ ...settings, delivery: undefined, revision: undefined })
+      .toEqual({ ...migrated, delivery: undefined, revision: undefined });
+    for (const { target } of rows.slice(1)) expect(raw(target)).toEqual(before.get(target));
+    const { silenced: _after, revision: current, ...repairedConfig } = settings;
+    expect(service.update(scope, { ...repairedConfig, enabled: true, expectedRevision: current }))
+      .toMatchObject({ enabled: true, scriptPath: "", delivery: scriptDelivery([]) });
   });
 
   it("supports voice-only policy, sends policy before speech, and never replays speech", () => {
@@ -170,7 +232,7 @@ describe("notification settings and passive hooks", () => {
     const disconnect = service.subscribe(scope, departed);
     let settle!: (target: VoiceRecognitionTarget | undefined) => void;
     const settlement = new Promise<VoiceRecognitionTarget | undefined>(resolve => { settle = resolve; });
-    service.emit(scope, event(), "deferred", undefined, { settlement });
+    service.emit(scope, event(), "deferred", undefined, () => ({ settlement }));
     disconnect();
     service.subscribe(scope, later);
     settle({ threadId: "thread", activityToken: "original-token", sourceTurnId: "turn" });
@@ -180,11 +242,135 @@ describe("notification settings and passive hooks", () => {
     expect(departed).toHaveBeenCalledOnce();
     expect(later).toHaveBeenCalledOnce();
     let settleOld!: (target: VoiceRecognitionTarget | undefined) => void;
-    service.emit(scope, event(1003), "obsolete", undefined, { settlement: new Promise(resolve => { settleOld = resolve; }) });
+    service.emit(scope, event(1003), "obsolete", undefined, () => ({ settlement: new Promise(resolve => { settleOld = resolve; }) }));
     service.setSilenced(scope, true);
     settleOld({ threadId: "thread", activityToken: "obsolete" });
     await flush();
     expect(retained).toHaveBeenCalledTimes(3); // Only the new policy.
+  });
+
+  it("opens no voice lane when policy cannot be read, and a later readable policy does not admit that stream", async () => {
+    const onError = vi.fn();
+    const { service, database, executor } = fixture(undefined, onError);
+    enable(service);
+    const saved = (database.prepare("SELECT config_json AS config FROM principal_notification_settings").get() as { config: string }).config;
+    database.prepare("UPDATE principal_notification_settings SET config_json = json_remove(config_json, '$.delivery')").run();
+    const listener = vi.fn();
+    const unsubscribe = service.subscribe(scope, listener);
+    expect(listener).not.toHaveBeenCalled();
+    expect(onError.mock.calls).toEqual([["Notification policy could not be read; voice notifications are unavailable on this stream."]]);
+    expect(() => unsubscribe()).not.toThrow();
+    database.prepare("UPDATE principal_notification_settings SET config_json = ?").run(saved);
+    service.emit(scope, event(), "after-repair");
+    await flush();
+    expect(executor).toHaveBeenCalledOnce();
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("delivers turn.progress through payload validation, the voice frame and the script", async () => {
+    const { service, executor } = fixture();
+    service.update(scope, { ...config, delivery: scriptDelivery(["turn.progress"]) });
+    const frames: string[] = [];
+    service.subscribe(scope, frame => frames.push(frame));
+    const context = vi.fn(() => ({ origin: { clientId: "phone" } }));
+    service.emit(scope, progress(), "progress-key", undefined, context);
+    await flush();
+    expect(executor).toHaveBeenCalledOnce();
+    const payload = executor.mock.calls[0]![0].payload;
+    expect(payload).toEqual({ ...progress(), schemaVersion: 4, notificationId: expect.any(String) });
+    expect(notificationPayloadSchema.parse(payload)).toEqual(payload);
+    expect(voiceFrames(frames)).toEqual([{
+      payload, voice: "speak", generation: expect.any(Number), origin: { clientId: "phone" },
+      sourceEventId: createHash("sha256").update("progress-key").digest("hex"),
+    }]);
+    expect(context).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { text: "\u0000".repeat(8_000) + "tail" },
+    { text: "😀\"\n".repeat(2_000), truncation: { truncated: true as const, reason: "byte_limit" as const, retainedBytes: 8_192, originalBytes: 40_000 } },
+  ])("shortens oversized progress text on both channels instead of dropping it %#", async (source) => {
+    const { service, executor } = fixture();
+    service.update(scope, { ...config, delivery: scriptDelivery(["turn.progress"]) });
+    const frames: string[] = [];
+    service.subscribe(scope, frame => frames.push(frame));
+    service.emit(scope, { ...progress(source), message: "m".repeat(50_000) }, "large-progress");
+    await flush();
+    const payload = executor.mock.calls[0]![0].payload;
+    const text = payload.progress!.text;
+    expect(Buffer.byteLength(JSON.stringify(payload))).toBeLessThanOrEqual(65_536);
+    expect(text.endsWith("…")).toBe(true);
+    expect(text.length).toBeGreaterThan(1);
+    expect(source.text.startsWith(text.slice(0, -1))).toBe(true);
+    expect(payload.progress).toEqual({ itemId: "item", text, truncation: {
+      ...source.truncation, truncated: true, reason: "byte_limit", retainedBytes: Buffer.byteLength(text),
+    } });
+    expect(voiceFrames(frames).map(frame => frame.payload)).toEqual([payload]);
+  });
+
+  it("drops progress whose metadata alone exceeds the payload budget", async () => {
+    const onError = vi.fn();
+    const { service, executor } = fixture(undefined, onError);
+    service.update(scope, { ...config, delivery: scriptDelivery(["turn.progress"]) });
+    const frames: string[] = [];
+    service.subscribe(scope, frame => frames.push(frame));
+    service.emit(scope, { ...progress(), message: "m".repeat(65_536) }, "oversized-metadata");
+    await flush();
+    expect(executor).not.toHaveBeenCalled();
+    expect(voiceFrames(frames)).toEqual([]);
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "an invalid voice envelope", payload: { ...progress(), progress: { itemId: "i".repeat(513), text: "Update" } }, context: undefined },
+    { name: "a failed context capture", payload: progress(), context: () => { throw new Error("activity unavailable"); } },
+  ])("keeps script delivery when voice fails on $name", async ({ payload, context }) => {
+    const onError = vi.fn();
+    const { service, executor } = fixture(undefined, onError);
+    service.update(scope, { ...config, delivery: scriptDelivery(["turn.progress"]) });
+    const frames: string[] = [];
+    service.subscribe(scope, frame => frames.push(frame));
+    service.emit(scope, payload, "voice-failure", undefined, context);
+    await flush();
+    expect(executor).toHaveBeenCalledOnce();
+    expect(executor.mock.calls[0]![0].payload.progress).toEqual(payload.progress);
+    expect(voiceFrames(frames)).toEqual([]);
+    expect(onError.mock.calls).toEqual([["Voice notification could not be processed."]]);
+  });
+
+  it("captures voice context and copies results only after dedup, policy and recipient checks admit delivery", async () => {
+    const onError = vi.fn();
+    const { service, executor } = fixture(undefined, onError);
+    const context = vi.fn(() => ({}));
+    const unread = {
+      get provisional(): BoundedText { throw new Error("must not read provisional"); },
+      get final(): BoundedText { throw new Error("must not read final"); },
+      get unclassified(): BoundedText { throw new Error("must not read unclassified"); },
+    };
+    const voiceOnly = { ...config, scriptPath: "", assistantResultPhases: ["final"] as NotificationAssistantResultPhase[], delivery: scriptDelivery([]) };
+    service.update(scope, { ...voiceOnly, enabled: false });
+    service.emit(scope, event(1001), "disabled", unread, context);
+    service.update(scope, { ...voiceOnly, expectedRevision: 1 });
+    service.emit(scope, event(1002), "no-recipient", unread, context);
+    const frames: string[] = [];
+    service.subscribe(scope, frame => frames.push(frame));
+    service.update(scope, { ...voiceOnly, expectedRevision: 2, delivery: { ...scriptDelivery([]), "turn.completed": { script: false, voice: "none" } } });
+    service.emit(scope, event(1003), "voice-none", unread, context);
+    service.update(scope, { ...voiceOnly, expectedRevision: 3 });
+    service.setSilenced(scope, true);
+    service.emit(scope, event(1004), "silenced", unread, context);
+    service.setSilenced(scope, false);
+    service.emit(scope, event(1004), "silenced", unread, context);
+    expect(context).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+    service.update(scope, { ...voiceOnly, expectedRevision: 4, assistantResultPhases: [] });
+    service.emit(scope, event(1005), "admitted", unread, context);
+    service.emit(scope, event(1005), "admitted", unread, context);
+    await flush();
+    expect(context).toHaveBeenCalledOnce();
+    expect(voiceFrames(frames).map(frame => frame.voice)).toEqual(["speakThenListen"]);
+    expect(executor).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it("advances policy generation on restart even when saved settings have not changed", () => {

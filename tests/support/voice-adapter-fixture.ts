@@ -136,24 +136,46 @@ export async function startVoiceAdapterFixture(artifactDirectory: string) {
       } catch (error) { errors.push(String(error)); socket.close(1011); }
     });
     const providerPort = await listen(stub);
-    const reservation = createServer();
-    const port = await listen(reservation);
-    await new Promise<void>(resolve => reservation.close(() => resolve()));
+    // The pinned adapter cannot bind an OS-assigned port: it treats PORT=0 as unset
+    // and logs only its configured port. Another process can take a reserved port
+    // before the adapter binds it, so only that failure retries with a new port.
+    let port = 0;
+    for (let attempt = 1; ; attempt++) {
+      const reservation = createServer();
+      port = await listen(reservation);
+      await new Promise<void>(resolve => reservation.close(() => resolve()));
+      let attemptLog = "";
+      const started = spawn(process.execPath, ["--import", path.join(checkout, "node_modules/tsx/dist/loader.mjs"), path.join(checkout, "src/server/index.ts")], {
+        cwd: runtime, stdio: ["ignore", "pipe", "pipe"], env: { ...environment,
+          AGENT_VOICE_ADAPTER_CONFIG_FILE: path.join(runtime, "config.json"), LISTEN_HOST: "127.0.0.1", PORT: String(port),
+          TTS_PROVIDER: "elevenlabs", ELEVENLABS_API_KEY: "fixture-only-tts-key", ELEVENLABS_TTS_BASE_URL: `http://127.0.0.1:${providerPort}/`,
+          ELEVENLABS_TTS_VOICE_ID: "fixture-voice", ELEVENLABS_TTS_MODEL: "fixture-tts", ELEVENLABS_TTS_OUTPUT_FORMAT: "pcm_24000",
+          ASR_PROVIDER: "openai", OPENAI_API_KEY: "fixture-only-asr-key", OPENAI_ASR_BASE_URL: `http://127.0.0.1:${providerPort}`,
+          OPENAI_ASR_MODEL: "fixture-asr", OPENAI_ASR_TIMEOUT_MS: "10000", SESSION_DISPATCH_PROVIDER: "none", TTS_MAX_TEXT_CHARS: "5000",
+        },
+      });
+      child = started;
+      const outputClosed = new Promise<void>(resolve => started.once("close", () => resolve()));
+      for (const output of [started.stdout, started.stderr]) output?.on("data", data => {
+        attemptLog += String(data);
+        logs = (logs + String(data)).slice(-1024 * 1024);
+      });
+      const outcome = await waitForVoice(async () => {
+        if (started.exitCode !== null) await outputClosed;
+        // A listen failure does not necessarily end the adapter process.
+        if (/EADDRINUSE/u.test(attemptLog)) return "address_in_use" as const;
+        if (started.exitCode !== null) throw new Error(`Adapter exited: ${logs}`);
+        // Its own listening line proves this child, not another process, owns the port.
+        if (!attemptLog.includes(`listening on http://localhost:${port}`)) return undefined;
+        try { return (await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(250) })).ok ? "ready" as const : undefined; }
+        catch { return undefined; }
+      });
+      if (outcome === "ready") break;
+      await terminateChild(started);
+      child = undefined;
+      if (attempt >= 3) throw new Error(`Adapter port reservation was taken ${attempt} times: ${logs}`);
+    }
     const url = `http://127.0.0.1:${port}`;
-    child = spawn(process.execPath, ["--import", path.join(checkout, "node_modules/tsx/dist/loader.mjs"), path.join(checkout, "src/server/index.ts")], {
-      cwd: runtime, stdio: ["ignore", "pipe", "pipe"], env: { ...environment,
-        AGENT_VOICE_ADAPTER_CONFIG_FILE: path.join(runtime, "config.json"), LISTEN_HOST: "127.0.0.1", PORT: String(port),
-        TTS_PROVIDER: "elevenlabs", ELEVENLABS_API_KEY: "fixture-only-tts-key", ELEVENLABS_TTS_BASE_URL: `http://127.0.0.1:${providerPort}/`,
-        ELEVENLABS_TTS_VOICE_ID: "fixture-voice", ELEVENLABS_TTS_MODEL: "fixture-tts", ELEVENLABS_TTS_OUTPUT_FORMAT: "pcm_24000",
-        ASR_PROVIDER: "openai", OPENAI_API_KEY: "fixture-only-asr-key", OPENAI_ASR_BASE_URL: `http://127.0.0.1:${providerPort}`,
-        OPENAI_ASR_MODEL: "fixture-asr", OPENAI_ASR_TIMEOUT_MS: "10000", SESSION_DISPATCH_PROVIDER: "none", TTS_MAX_TEXT_CHARS: "5000",
-      },
-    });
-    for (const output of [child.stdout, child.stderr]) output?.on("data", data => { logs = (logs + String(data)).slice(-1024 * 1024); });
-    await waitForVoice(async () => {
-      if (child!.exitCode !== null) throw new Error(`Adapter exited: ${logs}`);
-      try { return (await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(250) })).ok; } catch { return false; }
-    });
     return {
       url, port, texts, wavs, transcripts, errors, pcm,
       setAsrDelay(milliseconds: number) { asrDelay = milliseconds; },

@@ -6106,6 +6106,44 @@ describe("actor-owned input observation", () => {
     } finally { releaseDetach(); unsubscribe(); acquired.release(); await manager.close(); }
   });
 
+  it("reports retained facts as pending authority while a replacement snapshot is installed, and failure as loss", async () => {
+    const { actorManager, manager, handle, driver } = fixture(undefined, undefined, 60_000);
+    const acquired = await manager.acquire({ scope, binding, workspace, opaqueBindingDetail: "opaque", driver });
+    const observe = () => actorManager.observeInputRuntime(scope, binding.applicationThreadId);
+    const before = observe()!;
+    expect(before).toMatchObject({ authoritative: true, reestablishing: false, settled: true, runState: "idle", sourceTurnStatus: "completed" });
+    const establish = handle.establishProjection.bind(handle);
+    let release: (() => void) | undefined;
+    vi.spyOn(handle, "establishProjection").mockImplementationOnce(async input => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return establish(input);
+    });
+    const pending: boolean[] = [];
+    const unsubscribe = actorManager.subscribeInputActivity((observedScope, threadId) => {
+      pending.push(actorManager.observeInputRuntime(observedScope, threadId)?.reestablishing === true);
+    });
+    try {
+      handle.emit(0, { type: "resnapshot_required", reason: "buffer_overflow" }, 0);
+      await vi.waitFor(() => expect(release).toBeDefined());
+      expect(pending).toContain(true);
+      expect(observe()).toEqual({ ...before, authoritative: false, reestablishing: true });
+      release!();
+      await vi.waitFor(() => expect(observe()?.authoritative).toBe(true));
+      const after = observe()!;
+      expect(after).toMatchObject({ reestablishing: false, settled: true, ownerGeneration: before.ownerGeneration,
+        runState: "idle", sourceTurnId: before.sourceTurnId, sourceTurnStatus: "completed" });
+      expect(after.generation).not.toBe(before.generation);
+
+      vi.spyOn(handle, "establishProjection").mockRejectedValue(new Error("history unavailable"));
+      handle.emit(1, { type: "resnapshot_required", reason: "buffer_overflow" }, 0);
+      await vi.waitFor(() => expect(acquired.actor.projectionRecoveryRequired).toBe(true));
+      const lost = observe();
+      expect(lost?.authoritative ?? false).toBe(false);
+      expect(lost?.reestablishing ?? false).toBe(false);
+      expect(lost?.settled ?? false).toBe(false);
+    } finally { release?.(); unsubscribe(); acquired.release(); await manager.close(); }
+  });
+
   it("invalidates an ended native control immediately while ignoring an obsolete control's abort", async () => {
     const { actorManager, manager, handle, driver } = fixture();
     const firstLifetime = new AbortController();

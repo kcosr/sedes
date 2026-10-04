@@ -19,7 +19,7 @@ import org.json.JSONObject;
 /** Sedes-only authenticated HTTP. Redirects cannot carry a device credential elsewhere. */
 final class NativeVoiceHttp {
     interface Result { void done(int status, JSONObject value, String failure); }
-    interface Stream { void frame(String event, JSONObject value); void closed(String failure); }
+    interface Stream { void live(); void frame(String event, JSONObject value); void closed(String failure); }
     interface TestTransport {
         boolean before(String method, String path, JSONObject body, Result result);
         boolean after(String method, String path, JSONObject body, int status, JSONObject response, Result result);
@@ -32,7 +32,9 @@ final class NativeVoiceHttp {
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
     private final OkHttpClient client = new OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
         .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).callTimeout(45, TimeUnit.SECONDS).build();
-    private final OkHttpClient streams = client.newBuilder().readTimeout(0, TimeUnit.SECONDS).callTimeout(0, TimeUnit.SECONDS).build();
+    // The server writes a heartbeat comment every 20 seconds. A silent half-open stream fails instead of blocking forever.
+    static final long STREAM_READ_TIMEOUT_SECONDS = 50;
+    private final OkHttpClient streams = client.newBuilder().readTimeout(STREAM_READ_TIMEOUT_SECONDS, TimeUnit.SECONDS).callTimeout(0, TimeUnit.SECONDS).build();
     Call request(String origin, String credential, String csrf, String method, String path, JSONObject body, Result result) {
         if (!path.startsWith("/api/")) throw new IllegalArgumentException("voice_api_path_invalid");
         Request.Builder builder = new Request.Builder().url(NativeVoiceSettings.origin(origin) + path).header("Accept", "application/json");
@@ -75,6 +77,7 @@ final class NativeVoiceHttp {
                     String type = response.header("Content-Type", "");
                     if (!type.startsWith("text/event-stream")) throw new IOException("invalid_stream_type");
                     NativeVoiceSse parser = new NativeVoiceSse((event, data) -> {
+                        if (event.equals(NativeVoiceSse.LIVE)) { listener.live(); return; }
                         try { listener.frame(event, new JSONObject(data)); }
                         catch (Exception error) { listener.closed("invalid_notification_frame"); call.cancel(); }
                     });

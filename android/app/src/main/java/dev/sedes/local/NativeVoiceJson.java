@@ -1,5 +1,6 @@
 package dev.sedes.local;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -62,6 +63,44 @@ final class NativeVoiceJson {
         return result;
     }
     static int bytes(String value) { return value.getBytes(StandardCharsets.UTF_8).length; }
+    /**
+     * UTF-8 size of ECMAScript JSON.stringify output, the server's payload measure. Unlike toString(), it does not
+     * depend on this platform's org.json escaping (Android writes every '/' as "\/").
+     */
+    static long serializedBytes(Object value) {
+        if (value instanceof JSONObject) {
+            JSONObject object = (JSONObject) value; long total = 2;
+            for (Iterator<String> keys = object.keys(); keys.hasNext();) {
+                String key = keys.next(); total += serializedBytes(key) + 1 + serializedBytes(object.opt(key)) + (keys.hasNext() ? 1 : 0);
+            }
+            return total;
+        }
+        if (value instanceof JSONArray) {
+            JSONArray array = (JSONArray) value; long total = 2 + Math.max(0, array.length() - 1);
+            for (int i = 0; i < array.length(); i++) total += serializedBytes(array.opt(i));
+            return total;
+        }
+        if (value instanceof String) {
+            String text = (String) value; long total = 2;
+            for (int i = 0; i < text.length(); i++) {
+                char c = text.charAt(i);
+                if (c == '"' || c == '\\' || c == '\b' || c == '\f' || c == '\n' || c == '\r' || c == '\t') total += 2;
+                else if (c < 0x20) total += 6;
+                else if (c < 0x80) total += 1;
+                else if (c < 0x800) total += 2;
+                else if (Character.isHighSurrogate(c) && i + 1 < text.length() && Character.isLowSurrogate(text.charAt(i + 1))) { total += 4; i++; }
+                else total += Character.isSurrogate(c) ? 6 : 3;
+            }
+            return total;
+        }
+        if (value instanceof Boolean) return (Boolean) value ? 4 : 5;
+        if (value instanceof Number) {
+            // Payload numbers are bounded integers, which ECMAScript prints without exponent or fraction.
+            double number = ((Number) value).doubleValue();
+            return number == Math.rint(number) && Math.abs(number) < 1e21 ? new BigDecimal(number).toBigInteger().toString().length() : value.toString().length();
+        }
+        return 4;
+    }
     static JSONArray array(Iterable<JSONObject> values) {
         JSONArray result = new JSONArray();
         for (JSONObject value : values) result.put(copy(value));

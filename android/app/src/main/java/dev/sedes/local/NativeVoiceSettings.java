@@ -11,6 +11,13 @@ final class NativeVoiceSettings {
         "adapterUrl", "adapterTextLimit", "voiceThreadId", "voiceThreadTitle", "onlyVoiceThread", "followComposerMode",
         "inputDeviceId", "recognitionStartTimeoutMs", "recognitionCompletionTimeoutMs", "recognitionEndSilenceMs",
         "recognizeStopCommand", "recognitionCues", "cueGain", "startupPreRollMs", "ttsGain", "headsetControls" };
+    /**
+     * Stored records carry this explicit schema version and validate strictly against it. Adding, removing or changing a
+     * field bumps the version and adds an explicit migration from the previous version in fromRecord; there is no silent
+     * aliasing or tolerance of missing fields. A record that fails validation is quarantined by the runtime and replaced
+     * with defaults, so an unreadable or newer record cannot block voice.
+     */
+    static final int RECORD_VERSION = 1;
     final long revision;
     final JSONObject value;
     NativeVoiceSettings(long revision, JSONObject value) {
@@ -41,10 +48,10 @@ final class NativeVoiceSettings {
     boolean flag(String key) { return value.optBoolean(key); }
     int number(String key) { return value.optInt(key); }
     String text(String key) { return value.isNull(key) ? null : value.optString(key); }
-    JSONObject record() { return NativeVoiceJson.object("version", 1, "revision", revision, "settings", value); }
+    JSONObject record() { return NativeVoiceJson.object("version", RECORD_VERSION, "revision", revision, "settings", value); }
     static NativeVoiceSettings fromRecord(JSONObject record) {
         NativeVoiceJson.keys(record, "version", "revision", "settings");
-        NativeVoiceJson.integer(record, "version", 1, 1);
+        NativeVoiceJson.integer(record, "version", RECORD_VERSION, RECORD_VERSION);
         return new NativeVoiceSettings(NativeVoiceJson.integer(record, "revision", 0, Long.MAX_VALUE),
             NativeVoiceJson.requiredObject(record, "settings"));
     }

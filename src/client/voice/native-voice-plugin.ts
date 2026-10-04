@@ -43,6 +43,7 @@ export interface NativeVoicePlugin {
   skipCurrentPlayback(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
   stopCurrentInteraction(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
   resumeInput(input: NativeVoiceCommandContext & { mutationId: string }): Promise<NativeVoiceState>;
+  discardInput(input: NativeVoiceCommandContext & { mutationId: string }): Promise<NativeVoiceState>;
   listInputDevices(): Promise<{ devices: Array<{ id: string; label: string; type: number }>; selectedId: string | null }>;
   addListener(event: "stateChanged" | "settingsChanged", listener: (state: NativeVoiceState) => void): Promise<PluginListenerHandle>;
   addListener(event: "runtimeError", listener: (error: { code: string; message: string; connectionGeneration: number;
@@ -54,9 +55,18 @@ export const nativeVoice = registerPlugin<NativeVoicePlugin>("NativeVoice");
 export function hasNativeVoice(): boolean {
   return isAndroidClient() && typeof Capacitor.isPluginAvailable === "function" && Capacitor.isPluginAvailable("NativeVoice");
 }
+/** Best effort: callers continue on failure. Credential writes and removals also disconnect the matching native binding. */
 export async function disconnectNativeVoice(): Promise<void> {
-  if (hasNativeVoice()) {
+  if (!hasNativeVoice()) return;
+  try {
     const current = nativeVoiceStateSchema.parse(await nativeVoice.getState());
     await nativeVoice.disconnect({ expectedConnectionGeneration: current.connectionGeneration });
-  }
+  } catch { /* A newer connection or an already disconnected runtime needs nothing from this caller. */ }
+}
+/** Native accepts 1–512 UTF-16 units; an untitled thread crosses the bridge as null. */
+export function nativeThreadTitle(text: string): string | null {
+  const title = text.trim();
+  if (title.length <= 512) return title || null;
+  const high = title.charCodeAt(511);
+  return title.slice(0, high >= 0xd800 && high <= 0xdbff ? 511 : 512).trimEnd();
 }

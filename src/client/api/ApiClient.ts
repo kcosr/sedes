@@ -353,6 +353,7 @@ import type {
   ThreadAutomationSchedulePreview,
 } from "../types.js";
 import type { AutomationSchedule } from "../../shared/protocol/automation.js";
+import type { ClientOrigin } from "../../shared/protocol/thread-input.js";
 import type {
   AutomationMisfirePolicy,
   AutomationRunMode,
@@ -495,10 +496,14 @@ export class ApiClient {
   #appliedSessionSequence = 0;
   #sessionPromise?: Promise<NormalizedApplicationSession>;
 
+  readonly #clientOrigin: () => ClientOrigin | undefined;
+
+  /** `clientOrigin` is read at each delivery, so an origin that arrives or changes later never requires a new client. */
   constructor(endpoint: SedesServerEndpoint = sameOriginSedesServer, credentialOverride?: string | null,
-    readonly clientOrigin?: { readonly clientId: string }) {
+    clientOrigin: () => ClientOrigin | undefined = () => undefined) {
     this.#endpoint = endpoint;
     this.#credentialOverride = credentialOverride;
+    this.#clientOrigin = clientOrigin;
   }
 
   #fetch(path: string, init: RequestInit): Promise<Response> {
@@ -1644,8 +1649,8 @@ export class ApiClient {
     threadId: string,
     rawOperation: ThreadApplicationOperation,
   ): Promise<ThreadApplicationMutationResult> {
-    const operation = threadApplicationOperationSchema.parse(rawOperation.kind === "deliver" && this.clientOrigin
-      ? { ...rawOperation, origin: rawOperation.origin ?? this.clientOrigin } : rawOperation);
+    const origin = rawOperation.kind === "deliver" && !rawOperation.origin ? this.#clientOrigin() : undefined;
+    const operation = threadApplicationOperationSchema.parse(origin ? { ...rawOperation, origin } : rawOperation);
     return this.#mutation<ThreadApplicationMutationResult>(
       `/api/threads/${encodeURIComponent(threadId)}/operations`,
       operation.kind === "deliver"

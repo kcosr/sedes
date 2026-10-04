@@ -2,7 +2,7 @@ import { authenticatedFetch } from "../authentication/auth-transport.js";
 import { authenticationStatusSchema } from "../../shared/authentication.js";
 import { AuthenticationGate } from "../authentication/AuthenticationGate.js";
 import { getCredential, removeProfileCredentials } from "./client-credentials.js";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { App as CapacitorApp } from "@capacitor/app";
 import { ApiClient } from "../api/ApiClient.js";
 import { BrowserEventStreamTransport } from "../api/EventStreamTransport.js";
@@ -96,8 +96,10 @@ function AndroidApp({ panelTenants }: { readonly panelTenants: WorkspacePanelTen
   const save = async (next: PackagedConnectionPreferences) => {
     const previous = connections.profiles.find(profile => profile.id === connections.selectedProfileId);
     const selected = next.profiles.find(profile => profile.id === next.selectedProfileId);
+    const saved = await savePackagedConnections(next);
+    // Leaving a profile stops its native voice only once the switch is durable. The disconnect is best effort and precedes the new connection.
     if (previous?.id !== selected?.id || previous?.baseUrl !== selected?.baseUrl) await disconnectNativeVoice();
-    setConnections(await savePackagedConnections(next)); setStorageError(undefined); navigate("/", { replace: true });
+    setConnections(saved); setStorageError(undefined); navigate("/", { replace: true });
   };
   const controls: ServerSettingsControls = {
     connections, storageError,
@@ -684,9 +686,13 @@ function ConnectedApp({
   electronConnectionSettings?: ElectronConnectionSettingsControls;
   panelTenants: WorkspacePanelTenantRegistry;
 }): React.JSX.Element {
+  // Deliveries read the advisory origin when sent. It arrives after startup on Android and changes on native reconnects,
+  // neither of which may rebuild the API client, transport, or stores.
   const clientOrigin = useClientOrigin();
+  const clientOriginRef = useRef(clientOrigin);
+  useLayoutEffect(() => { clientOriginRef.current = clientOrigin; }, [clientOrigin]);
   const dependencies = useMemo(() => {
-    const api = new ApiClient(endpoint, undefined, clientOrigin);
+    const api = new ApiClient(endpoint, undefined, () => clientOriginRef.current());
     const transport = new BrowserEventStreamTransport(endpoint);
     const threadRegistry = new ThreadStoreRegistry(api, transport);
     const applicationStore = new ApplicationClientStore(api, transport);
@@ -703,7 +709,7 @@ function ConnectedApp({
       disposed: false,
       panelLayoutStore: new PanelLayoutStore(panelTenants),
     };
-  }, [endpoint.baseUrl, panelTenants, clientOrigin]);
+  }, [endpoint.baseUrl, panelTenants]);
   const state = useApplicationStore(dependencies.applicationStore);
 
   useEffect(() => {

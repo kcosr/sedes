@@ -1,7 +1,10 @@
 package dev.sedes.local;
 
 import android.Manifest;
+import android.app.Activity;
 import android.os.Build;
+import androidx.lifecycle.Lifecycle;
+import androidx.lifecycle.LifecycleOwner;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
@@ -25,8 +28,7 @@ public final class NativeVoicePlugin extends Plugin {
         catch (Exception ignored) {}
     };
     @Override public void load() { runtime = NativeVoiceRuntime.get(getContext()); runtime.observe(observer); }
-    @Override protected void handleOnResume() { runtime.nativeVisibility(true); }
-    @Override protected void handleOnPause() { runtime.nativeVisibility(false); }
+    // MainActivity owns resume/pause/stop visibility; the permission callback below is the only other visibility source.
     @Override protected void handleOnDestroy() { permissionGenerations.clear(); runtime.nativeVisibility(false); runtime.unobserve(observer); }
     @PluginMethod public void setConnection(PluginCall call) { run("setConnection", call, false); }
     @PluginMethod public void disconnect(PluginCall call) { run("disconnect", call, false); }
@@ -37,6 +39,7 @@ public final class NativeVoicePlugin extends Plugin {
     @PluginMethod public void skipCurrentPlayback(PluginCall call) { run("skipCurrentPlayback", call, false); }
     @PluginMethod public void stopCurrentInteraction(PluginCall call) { run("stopCurrentInteraction", call, false); }
     @PluginMethod public void resumeInput(PluginCall call) { run("resumeInput", call, true); }
+    @PluginMethod public void discardInput(PluginCall call) { run("discardInput", call, true); }
     @PluginMethod public void updateSettings(PluginCall call) {
         final long generation;
         try {
@@ -66,10 +69,22 @@ public final class NativeVoicePlugin extends Plugin {
         if (generation == null || generation != runtime.snapshot().optLong("connectionGeneration")) {
             call.reject("The Sedes connection changed while requesting permission.", "connection_changed"); return;
         }
+        markVisibleForPermissionResult(getActivity(), runtime);
         // Persist the selected mode even when permission is denied; readiness explains the required action.
         run("updateSettings", call, true);
     }
     @PluginMethod public void startManualListen(PluginCall call) { run("startManualListen", call, true); }
+    /**
+     * Android delivers permission results before onResume, while the activity is already visible (at least STARTED).
+     * Marking it visible synchronously keeps the user-initiated enable from being queued ahead of the resume notification.
+     */
+    static void markVisibleForPermissionResult(Activity activity, NativeVoiceRuntime runtime) {
+        if (visibleForPermissionResult(activity)) runtime.nativeVisibility(true);
+    }
+    static boolean visibleForPermissionResult(Activity activity) {
+        return activity instanceof LifecycleOwner && !activity.isFinishing() &&
+            ((LifecycleOwner) activity).getLifecycle().getCurrentState().isAtLeast(Lifecycle.State.STARTED);
+    }
     private static long expectedGeneration(JSONObject data) {
         return NativeVoiceJson.integer(data, "expectedConnectionGeneration", 0, 9007199254740991L);
     }

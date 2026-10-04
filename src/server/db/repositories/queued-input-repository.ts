@@ -320,6 +320,36 @@ export class QueuedInputRepository {
     this.#callbacks = new ThreadCompletionCallbackRepository(database);
   }
 
+  /**
+   * Unresolved non-Steer work, or any unacknowledged failure, must deliver or
+   * be cleared before another Steer may be admitted. Admission, direct-input
+   * fallback, and input-context availability share this single predicate.
+   */
+  hasSteerBlockingInput(scope: RequestScope, applicationThreadId: string): boolean {
+    return this.database
+      .prepare(
+        `
+          SELECT 1
+          FROM queued_inputs
+          WHERE tenant_id = ? AND owner_principal_id = ?
+            AND application_thread_id = ?
+            AND (
+              state IN ('pending', 'retry_wait', 'dispatching', 'uncertain')
+              OR (state = 'failed' AND failure_acknowledged_at IS NULL)
+            )
+            AND (
+              (state = 'failed' AND failure_acknowledged_at IS NULL)
+              OR (
+                resolved_delivery_mode <> 'steer'
+                AND coalesce(delivery_mode, '') <> 'steer'
+              )
+            )
+          LIMIT 1
+        `,
+      )
+      .get(scope.tenantId, scope.principalId, applicationThreadId) !== undefined;
+  }
+
   enqueue(
     scope: RequestScope,
     applicationThreadId: string,
@@ -631,29 +661,7 @@ export class QueuedInputRepository {
           input.source.kind === "completion_callback") &&
         input.source.resolvedDeliveryMode === "steer"
       ) {
-        const blockingInput = this.database
-          .prepare(
-            `
-              SELECT 1
-              FROM queued_inputs
-              WHERE tenant_id = ? AND owner_principal_id = ?
-                AND application_thread_id = ?
-                AND (
-                  state IN ('pending', 'retry_wait', 'dispatching', 'uncertain')
-                  OR (state = 'failed' AND failure_acknowledged_at IS NULL)
-                )
-                AND (
-                  (state = 'failed' AND failure_acknowledged_at IS NULL)
-                  OR (
-                    resolved_delivery_mode <> 'steer'
-                    AND coalesce(delivery_mode, '') <> 'steer'
-                  )
-                )
-              LIMIT 1
-            `,
-          )
-          .get(scope.tenantId, scope.principalId, applicationThreadId);
-        if (blockingInput) {
+        if (this.hasSteerBlockingInput(scope, applicationThreadId)) {
           throw new DomainError(
             "invalid_transition",
             "Deliver, steer, or clear the existing queued input before adding another Steer.",
@@ -2030,6 +2038,10 @@ export class QueuedInputRepository {
         }
       ).sequence;
       const id = input.id ?? randomUUID();
+      // The retry resends the same content, so it keeps the original advisory origin.
+      new DirectInputRepository(this.database).copyOrigin(
+        scope, applicationThreadId, failed.mutationId, input.mutationId,
+      );
       this.#attachments.copyOwnerLinks(
         scope,
         {

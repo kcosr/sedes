@@ -11,6 +11,7 @@ import {
 import { DirectInputRepository } from "../db/repositories/direct-input-repository.js";
 import { QueuedInputRepository } from "../db/repositories/queued-input-repository.js";
 import { ThreadActivityService } from "./thread-activity-service.js";
+import { initialThreadSettingsReady } from "./thread-input-readiness.js";
 import type {
   ThreadDeliveryMutationResult,
   ThreadApplicationMutationResult,
@@ -57,6 +58,20 @@ import {
   ThreadRuntimeNotIdleError,
   ThreadRuntimeRetirementUnprovenError,
 } from "../events/thread-runtime-coordinator.js";
+
+/** Rolls back a first-send reservation whose validated revision moved before commit. */
+class FirstSendRevisionChanged extends Error {}
+const FIRST_SEND_VALIDATION_ATTEMPTS = 3;
+
+/**
+ * Admission blocked only by a transitional state (starting work, an in-place
+ * projection replacement, stopping, creation in flight, or a draft still
+ * changing during first-send validation). It is retryable and never a
+ * definitive rejection a client could use to discard the input.
+ */
+function transientAdmission(message: string): DomainError {
+  return new DomainError("runtime_unavailable", `${message} Retry the same input.`, true);
+}
 
 type PerformOperation = Extract<
   ThreadApplicationOperation,
@@ -340,7 +355,12 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
   }
 
   get activity(): ThreadActivityService {
-    return this.#activity ??= new ThreadActivityService({ database: this.input.bindings.database, actors: this.input.actors, presentation: this.input.presentation });
+    if (!this.#activity) {
+      this.#activity = new ThreadActivityService({ database: this.input.bindings.database, actors: this.input.actors, presentation: this.input.presentation });
+      // Created after close: answer as closed rather than retain a subscription or waiter timer.
+      if (this.#closing) this.#activity.close();
+    }
+    return this.#activity;
   }
 
   inputContext(scope: RequestScope, applicationThreadId: string): Promise<ThreadInputContext> {
@@ -364,7 +384,19 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
     const database = this.input.bindings.database;
     const receipts = new DirectInputRepository(database);
     const replay = receipts.replay(scope, applicationThreadId, request);
-    if (replay) return receipts.present(scope, replay);
+    if (replay) {
+      // A partially completed first-send reservation recovers as the same
+      // operation. Its receipt stays the answer even if recovery cannot finish.
+      let resumed = false;
+      try {
+        const recovery = replay.creationAttemptId === null ? undefined
+          : this.input.lifecycle.resumeDirectFirstSend(scope, applicationThreadId, replay.creationAttemptId);
+        resumed = recovery !== undefined;
+        await recovery;
+      } catch (error) { this.#reportPublicationError(error); }
+      if (resumed) this.#publishDirectAdmission(scope, applicationThreadId, true);
+      return receipts.present(scope, replay);
+    }
     const validateInventory = () => {
       const current = this.input.inventory.getThread(scope, applicationThreadId);
       this.input.inventory.assertWorkspaceActive(scope, current.thread.workspaceId);
@@ -377,12 +409,48 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       }
       return current;
     };
-    const aggregate = validateInventory();
+    validateInventory();
     const target = this.input.bindings.getTarget(scope, applicationThreadId);
+    if (request.runningPolicy.mode === "steer" && target.backingState !== "bound") {
+      // No steering target can have been observed before a conversation is bound.
+      throw new DomainError("invalid_transition", "The requested steering target is not supported by this thread.");
+    }
     if (target.backingState === "unbound") {
-      await this.input.lifecycle.startDirectFirstSend(scope, applicationThreadId, request, aggregate.thread.revision, validateInventory);
+      // Readiness and backend validation await catalog reads, so they hold for
+      // the revision observed before them. A newer revision at the commit
+      // re-runs them (a rename passes again); persistent churn is transient,
+      // not a definitive rejection.
+      for (let attempt = 1; ; attempt += 1) {
+        const revision = validateInventory().thread.revision;
+        // Explicit first sends share the composer's readiness rules; queue-mode
+        // native sends never consult input-context first.
+        const presentation = await this.input.presentation.read(scope, applicationThreadId);
+        if (presentation.interactionMode !== "interactive") {
+          throw new DomainError("invalid_transition", "This thread does not accept new input.");
+        }
+        if (!initialThreadSettingsReady(presentation)) {
+          throw new DomainError("invalid_transition", "Choose the required thread settings before sending.");
+        }
+        try {
+          await this.input.lifecycle.startDirectFirstSend(scope, applicationThreadId, request, () => {
+            if (validateInventory().thread.revision !== revision) {
+              if (attempt < FIRST_SEND_VALIDATION_ATTEMPTS) throw new FirstSendRevisionChanged();
+              throw transientAdmission("The thread kept changing while the input was validated.");
+            }
+            return revision;
+          });
+        } catch (error) {
+          if (error instanceof FirstSendRevisionChanged) continue;
+          // Once its receipt commits, a failed provider step is the receipt's
+          // dispatch outcome. It must not read as a rejected admission.
+          if (!receipts.replay(scope, applicationThreadId, request)) throw error;
+          this.#reportPublicationError(error);
+        }
+        break;
+      }
     } else {
-      if (target.backingState !== "bound") throw new DomainError("invalid_transition", "The target is being created or requires recovery.");
+      if (target.backingState === "creating") throw transientAdmission("The thread is still being created.");
+      if (target.backingState !== "bound") throw new DomainError("invalid_transition", "The thread requires recovery before it can accept input.");
       const runtime = await this.#acquireActiveWorkspaceRuntime(scope, applicationThreadId);
       try {
         const generation = this.input.actors.observeInputRuntime(scope, applicationThreadId)?.generation;
@@ -391,28 +459,35 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
           const current = validateInventory();
           const observed = this.input.actors.observeInputRuntime(scope, applicationThreadId);
           if (!generation || observed?.generation !== generation || !observed.authoritative) {
-            throw new DomainError("invalid_transition", "The input target's runtime authority changed.");
+            throw transientAdmission("The input target's runtime authority changed.");
           }
           const timeline = runtime.actor.timeline;
           const settled = runtime.actor.authoritativelySettled;
           const active = ["running", "waiting_for_input", "waiting_for_approval"].includes(timeline.runState);
-          if (!settled && !active) throw new DomainError("invalid_transition", "Input cannot be delivered while the runtime is transitional.");
+          if (!settled && !active) throw transientAdmission("Input cannot be delivered while the runtime is transitional.");
           const modes = runtime.hub.snapshot?.capabilities.deliveryModes ?? [];
           const steer = modes.find(mode => mode.id === "steer");
-          if (request.runningPolicy.mode === "steer" && steer && request.runningPolicy.target.kind !== steer.steerTarget) {
+          // A backend without Steer has no valid target shape; fail closed rather than queue.
+          if (request.runningPolicy.mode === "steer" && (!steer || request.runningPolicy.target.kind !== steer.steerTarget)) {
             throw new DomainError("invalid_transition", "The requested steering target is not supported by this backend.");
           }
           const steerTarget: SteerTarget | undefined = timeline.runState === "running" && steer?.available
             ? steer.steerTarget === "conversation" ? { kind: "conversation" }
               : steer.steerTarget === "turn" && timeline.activeTurnId ? { kind: "turn", turnId: timeline.activeTurnId } : undefined
             : undefined;
+          const queue = new QueuedInputRepository(database);
           let mode: "submit" | "queue" | "steer" = settled ? "submit" : "queue";
+          // Blocking queue work makes the exact target unavailable for now; the
+          // request's explicit fallback queues it behind that work.
           if (!settled && request.runningPolicy.mode === "steer" && steerTarget &&
-              JSON.stringify(request.runningPolicy.target) === JSON.stringify(steerTarget)) mode = "steer";
-          if (!modes.some(candidate => candidate.id === mode && candidate.available)) {
-            throw new DomainError("invalid_transition", "The requested input cannot currently be admitted.");
-          }
-          const queued = new QueuedInputRepository(database).enqueue(scope, applicationThreadId, {
+              JSON.stringify(request.runningPolicy.target) === JSON.stringify(steerTarget) &&
+              !queue.hasSteerBlockingInput(scope, applicationThreadId)) mode = "steer";
+          // An absent mode is unsupported by this thread; an unavailable one is
+          // a capability projection that has not caught up with the runtime yet.
+          const delivery = modes.find(candidate => candidate.id === mode);
+          if (!delivery) throw new DomainError("invalid_transition", "This thread does not accept new input.");
+          if (!delivery.available) throw transientAdmission("The requested input cannot currently be admitted.");
+          const queued = queue.enqueue(scope, applicationThreadId, {
             mutationId: request.mutationId, text: request.text, origin: request.origin,
             contextExcerpts: [], attachmentIds: [], taskReferences: [],
             source: { kind: "direct_input", expectedThreadRevision: current.thread.revision,
@@ -425,10 +500,17 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
       // Admission already committed. Dispatch/publication failure cannot turn it into a rejected send.
       this.#ownDetachedPublication(() => this.input.queue.dispatchAdmitted(scope, applicationThreadId));
     }
+    this.#publishDirectAdmission(scope, applicationThreadId, target.backingState === "unbound");
+    const admitted = receipts.replay(scope, applicationThreadId, request);
+    if (!admitted) throw new Error("direct_input_admission_receipt_missing");
+    return receipts.present(scope, admitted);
+  }
+
+  #publishDirectAdmission(scope: RequestScope, applicationThreadId: string, firstSend: boolean): void {
     this.#ownDetachedPublication(async () => {
       let runtime: AcquiredThreadRuntime | undefined;
       try {
-        if (target.backingState === "unbound" && this.input.bindings.getTarget(scope, applicationThreadId).backingState === "bound") {
+        if (firstSend && this.input.bindings.getTarget(scope, applicationThreadId).backingState === "bound") {
           runtime = await this.#acquireActiveWorkspaceRuntime(scope, applicationThreadId);
         }
       } catch (error) { this.#reportPublicationError(error); }
@@ -437,9 +519,6 @@ export class ThreadMutationGateway implements ThreadApplicationMutationGateway {
         await this.#changed(scope, applicationThreadId);
       } finally { runtime?.release(); }
     });
-    const admitted = receipts.replay(scope, applicationThreadId, request);
-    if (!admitted) throw new Error("direct_input_admission_receipt_missing");
-    return receipts.present(scope, admitted);
   }
 
   mutate(

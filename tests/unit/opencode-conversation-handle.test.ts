@@ -800,6 +800,34 @@ describe("OpenCode SSE and native history composition", () => {
     await vi.waitFor(() => expect(textOf(events, "reasoning")).toBe(""));
     expect(events.filter(value => value.event.type === "resnapshot_required")).toEqual([]);
   });
+  it("never qualifies live assistant text as progress across a tool-using turn", async () => {
+    const tool = { type: "tool" as const, id: "tool_progress", name: "read", state: { status: "running" as const, input: {}, metadata: {} }, time: { created: 2 } };
+    const current = await attached([user(), assistant([{ type: "text", text: "" }, tool])]);
+    current.wire.setResponse("/api/session/active", 200, { data: { ses_fixture: { type: "running" } } });
+    const baseline = await current.handle.establishProjection({ signal: signal() }); const events: SequencedBackendEvent[] = [];
+    baseline.subscribeFromNext(value => events.push(value));
+    current.wire.send(textEvent("text", "delta", "Inspecting now"));
+    await vi.waitFor(() => expect(textOf(events, "assistant_message")).toBe("Inspecting now"));
+    current.wire.send(textEvent("text", "ended", "Inspecting now"));
+    const content: [{ type: "text"; text: string }] = [{ type: "text", text: "read result" }];
+    const read = { status: "completed" as const, input: {}, content };
+    current.wire.messages[1] = { ...assistant([{ type: "text", text: "Inspecting now" }, { ...tool, state: read, time: { created: 2, completed: 3 } }]),
+      time: { created: 2, completed: 4 } };
+    const success = event("session.tool.success", { assistantMessageID: "msg_assistant", id: "tool_progress", executed: true, content }, true);
+    current.wire.send({ ...success, durable: { ...success.durable, version: 2 } });
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ event: expect.objectContaining({ type: "item_completed",
+      item: expect.objectContaining({ semanticKind: "tool", status: "completed" }) }) })));
+    current.wire.messages.push(idle()); current.wire.setResponse("/api/session/active", 200, { data: {} });
+    current.wire.send(event("session.execution.succeeded", {}, true));
+    await vi.waitFor(() => expect(events.some(({ event: value }) => value.type === "turn_completed")).toBe(true));
+    expect(events).toContainEqual(expect.objectContaining({ event: expect.objectContaining({ type: "item_completed",
+      item: expect.objectContaining({ semanticKind: "assistant_message", markdown: { text: "Inspecting now" } }) }) }));
+    // OpenCode has no live phase evidence: its completion text stays unclassified.
+    expect(events.filter(({ event: value }) => "item" in value && value.item.semanticKind === "assistant_message" &&
+      value.item.responsePhase !== undefined)).toEqual([]);
+    expect(events.filter(({ event: value }) => "liveProgress" in value)).toEqual([]);
+    expect(events.some(({ event: value }) => value.type === "resnapshot_required")).toBe(false);
+  });
   it("recovers a missed prefix from native final history after disconnect without concatenating it twice", async () => {
     const current = await attached([user(), assistant()]);
     current.wire.setResponse("/api/session/active", 200, { data: { ses_fixture: { type: "running" } } });

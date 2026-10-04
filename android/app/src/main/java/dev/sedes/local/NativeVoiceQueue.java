@@ -15,6 +15,8 @@ import org.json.JSONObject;
 /** Pure queue/presentation policy; the runtime exclusively owns the active item. */
 final class NativeVoiceQueue {
     static final int MAX_ITEMS = 64, MAX_BYTES = 256 * 1024, RETAINED_IDS = 4096;
+    // The server fits payloads to this JSON.stringify UTF-8 size; measuring the same way accepts every such payload.
+    static final long MAX_PAYLOAD_BYTES = 65536;
     private static final Set<String> EVENTS = new HashSet<>(java.util.Arrays.asList("turn.progress", "turn.completed", "turn.failed",
         "turn.interrupted", "thread.woke", "automation.started", "automation.failed", "approval.requested", "input.requested", "question.requested"));
     static final class Item {
@@ -34,7 +36,7 @@ final class NativeVoiceQueue {
             NativeVoiceJson.keys(payload, "schemaVersion", "notificationId", "event", "occurredAt", "title", "message", "thread", "workspace",
                 "turn", "progress", "interaction", "question", "wake", "automation", "assistantResult");
             NativeVoiceJson.integer(payload, "schemaVersion", 4, 4);
-            if (NativeVoiceJson.bytes(payload.toString()) > 65536) throw new IllegalArgumentException("voice_payload_too_large");
+            if (NativeVoiceJson.serializedBytes(payload) > MAX_PAYLOAD_BYTES) throw new IllegalArgumentException("voice_payload_too_large");
             NativeVoiceJson.string(payload, "notificationId", 512);
             NativeVoiceJson.string(payload, "occurredAt", 80);
             NativeVoiceProtocol.text(payload, "title", 65536); NativeVoiceProtocol.text(payload, "message", 65536);

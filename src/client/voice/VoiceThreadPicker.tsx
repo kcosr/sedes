@@ -17,11 +17,10 @@ export function VoiceThreadPicker({ threads, open, onOpenChange, onSelect }: {
       <DialogHeader><DialogTitle>Choose voice thread</DialogTitle>
         <DialogDescription>Recognized text will be sent to the thread you select.</DialogDescription></DialogHeader>
       <Input aria-label="Search voice threads" value={search} onChange={event => setSearch(event.target.value)} />
-      <div className="grid max-h-80 gap-1 overflow-y-auto" role="list" aria-label="Voice threads">
-        {choices.map(thread => <Button key={thread.id} variant="ghost" className="justify-start overflow-hidden text-ellipsis"
-          onClick={() => { onSelect(thread); onOpenChange(false); }}>{thread.title.text || "Untitled thread"}</Button>)}
-        {choices.length === 0 ? <p>No available threads match.</p> : null}
-      </div>
+      {choices.length ? <ul className="grid max-h-80 gap-1 overflow-y-auto" role="list" aria-label="Voice threads">
+        {choices.map(thread => <li key={thread.id} className="grid min-w-0"><Button variant="ghost" className="min-w-0 justify-start"
+          onClick={() => { onSelect(thread); onOpenChange(false); }}><span className="truncate">{thread.title.text.trim() || "Untitled thread"}</span></Button></li>)}
+      </ul> : <p>No available threads match.</p>}
     </DialogContent>
   </Dialog>;
 }
