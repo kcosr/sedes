@@ -501,6 +501,27 @@ test.describe.serial("agent tool policy", () => {
     await expect(
       accessBoundary,
     ).toBeInViewport();
+    const groups = settings.getByRole("navigation", { name: "Agent tool groups" });
+    await groups.scrollIntoViewIfNeeded();
+    const groupBounds = await groups.boundingBox();
+    expect(groupBounds!.width).toBeLessThan(390);
+    expect(await groups.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+    const touch = await page.context().newCDPSession(page);
+    await touch.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+    for (let swipe = 0; swipe < 6; swipe++) {
+      const x = groupBounds!.x + groupBounds!.width - 20, y = groupBounds!.y + groupBounds!.height / 2;
+      await touch.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+      for (let step = 1; step <= 8; step++) {
+        await touch.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x - (groupBounds!.width - 40) * step / 8, y }] });
+        // Give the browser a frame to process each point in the actual touch gesture.
+        await page.waitForTimeout(16);
+      }
+      await touch.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    }
+    await expect.poll(() => groups.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+    await expect(groups.getByRole("button", { name: "Automations", exact: true })).toBeInViewport();
+    await touch.send("Emulation.setTouchEmulationEnabled", { enabled: false });
+    await touch.detach();
     await settings.getByRole("button", { name: "Automations" }).click();
     await expect(
       settings.getByRole("checkbox", {

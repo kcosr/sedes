@@ -10139,6 +10139,8 @@ tr.diff-hunk td {
 
   .agent-tool-group-nav {
     position: static;
+    min-width: 0;
+    align-self: stretch;
     flex-direction: row;
     overflow-x: auto;
     border-bottom: 1px solid var(--border-soft);

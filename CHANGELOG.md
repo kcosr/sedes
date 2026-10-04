@@ -747,6 +747,9 @@
 
 ### Fixed
 
+- Agent tool groups scroll horizontally on narrow screens, keeping the rightmost
+  groups reachable by touch.
+
 - Android voice startup and Resume recover the current activity and thread
   context after configuration changes. Silent recordings end locally without
   submitting audio for transcription.
