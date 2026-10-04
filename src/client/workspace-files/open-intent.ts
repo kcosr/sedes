@@ -63,9 +63,22 @@ function isWorkspaceFilesOpenTarget(
 }
 
 let nextSequence = 0;
+
+/**
+ * Allocates a source-line seek sequence from the intent counter, so a seek
+ * started inside Files never repeats a sequence a viewer already handled.
+ */
+export function nextWorkspaceFilesSeekSequence(): number {
+  nextSequence = (nextSequence + 1) % Number.MAX_SAFE_INTEGER;
+  return nextSequence;
+}
+
 export function createWorkspaceFilesOpenIntent(
   input: Omit<WorkspaceFilesOpenIntent, "kind" | "sequence">,
 ): WorkspaceFilesOpenIntent {
-  nextSequence = (nextSequence + 1) % Number.MAX_SAFE_INTEGER;
-  return { kind: "open-workspace-file", ...input, sequence: nextSequence };
+  return {
+    kind: "open-workspace-file",
+    ...input,
+    sequence: nextWorkspaceFilesSeekSequence(),
+  };
 }

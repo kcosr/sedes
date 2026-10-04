@@ -568,6 +568,49 @@ describe("WorkspaceFilesPanel", () => {
     expect(screen.getByRole("button", { name: "Refresh workspace files" })).toBeEnabled();
   });
 
+  it("opens a diff's file in Browse at its reading line", async () => {
+    const api = setupApi();
+    const { context } = setupContext();
+    render(
+      <WorkspaceFilesPanel
+        context={context}
+        api={api}
+        renderFile={({ path, seek }) => (
+          <div data-testid="file-viewer" data-seek-line={seek?.lineNumber ?? ""}>
+            {path}
+          </div>
+        )}
+      />,
+    );
+    await waitForListing(api);
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    const openFile = latestCompareProps?.onOpenFile as (
+      path: string,
+      lineNumber?: number,
+    ) => void;
+
+    act(() => openFile("src/index.ts", 12));
+    const viewer = await screen.findByTestId("file-viewer");
+    expect(viewer).toHaveTextContent("src/index.ts");
+    expect(viewer).toHaveAttribute("data-seek-line", "12");
+    expect(screen.getByRole("tab", { name: "Browse" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    act(() => openFile("src/other.ts"));
+    await waitFor(() =>
+      expect(screen.getByTestId("file-viewer")).toHaveTextContent(
+        "src/other.ts",
+      ),
+    );
+    expect(screen.getByTestId("file-viewer")).toHaveAttribute(
+      "data-seek-line",
+      "",
+    );
+  });
+
   it("explains when a saved root is missing and keeps available roots usable", async () => {
     const scope = "missing-root-recovery";
     workspaceCompareStorage.set(scope, "workspace-1", "removed-root", { mode: "compare" });

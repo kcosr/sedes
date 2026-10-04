@@ -110,6 +110,7 @@ import {
 } from "./workspace-files-ui-state.js";
 import {
   isWorkspaceFilesOpenIntent,
+  nextWorkspaceFilesSeekSequence,
   type WorkspaceFileSourceLineSeek,
 } from "./open-intent.js";
 import {
@@ -3671,8 +3672,16 @@ export function WorkspaceFilesPanel({
               onNavigationChange={saveCompareNavigation}
               stagingTarget={context.contextExcerpts}
               rootId={activeRootId}
-              onOpenFile={(path) => {
-                openTab({ rootId: activeRootId, path }, { hideTree: true });
+              onOpenFile={(path, lineNumber) => {
+                const address = { rootId: activeRootId, path };
+                // Same source-line seek as a chat file link.
+                if (lineNumber !== undefined)
+                  setPendingSeek({
+                    address,
+                    sequence: nextWorkspaceFilesSeekSequence(),
+                    lineNumber,
+                  });
+                openTab(address, { hideTree: true });
                 selectMode("browse");
               }}
               dataSource={compareDataSource}

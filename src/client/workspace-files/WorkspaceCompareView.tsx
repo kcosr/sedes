@@ -109,6 +109,7 @@ import {
 import { WorkspaceRevisionPicker } from "./WorkspaceRevisionPicker.js";
 import { WorkspaceChangedFileNavigator } from "./WorkspaceChangedFileNavigator.js";
 import { sortWorkspaceChangedFiles } from "./workspace-compare-file-order.js";
+import { workspaceCompareNewSideLine } from "./workspace-compare-reading-line.js";
 import {
   compareEndpointIntent,
   compareEndpointSelection,
@@ -182,7 +183,8 @@ export interface WorkspaceCompareViewProps {
   readonly onNavigationChange?: (
     navigation: WorkspaceCompareNavigation,
   ) => void;
-  readonly onOpenFile?: (path: string) => void;
+  /** `lineNumber` is the new-side reading line, when one is known. */
+  readonly onOpenFile?: (path: string, lineNumber?: number) => void;
   readonly dataSource: WorkspaceCompareDataSource;
   readonly visible?: boolean;
   readonly reviewControls?: ReactNode;
@@ -1418,6 +1420,32 @@ export function WorkspaceCompareView({
     [ensurePatch],
   );
 
+  // The new-side line Browse should open at: the selected lines in this file,
+  // else the viewport anchor when it is in this file, else the top.
+  const readingLine = (
+    file: WorkspaceDiffChangedFileSummary,
+  ): number | undefined => {
+    const load = patchesRef.current.get(file.fileId);
+    const fileDiff = load?.status === "loaded" ? load.item.fileDiff : undefined;
+    if (selectedLines?.id === file.fileId) {
+      const { start, end, side, endSide } = selectedLines.range;
+      const lines = [
+        workspaceCompareNewSideLine(fileDiff, start, side),
+        workspaceCompareNewSideLine(fileDiff, end, endSide ?? side),
+      ].filter((line): line is number => line !== undefined);
+      if (lines.length > 0) return Math.min(...lines);
+    }
+    const anchor = anchorRef.current;
+    if (
+      anchor?.line === undefined ||
+      anchor.oldPath !== file.oldPath ||
+      anchor.newPath !== file.newPath ||
+      anchor.changeKind !== file.changeKind
+    )
+      return undefined;
+    return workspaceCompareNewSideLine(fileDiff, anchor.line, anchor.side);
+  };
+
   const handleSelection = useCallback(
     (
       range: SelectedLineRange | null,
@@ -2172,7 +2200,9 @@ export function WorkspaceCompareView({
                         className="workspace-compare-header-action"
                         aria-label="Open file"
                         title="Open file"
-                        onClick={() => onOpenFile(file.newPath!)}
+                        onClick={() =>
+                          onOpenFile(file.newPath!, readingLine(file))
+                        }
                       >
                         <span className="workspace-compare-header-action-icon">
                           <FileText aria-hidden="true" />

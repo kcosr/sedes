@@ -727,7 +727,75 @@ describe("WorkspaceCompareView", () => {
     fireEvent.click(reviewed);
     expect(onReviewedChange).toHaveBeenCalledWith("file-1", true);
     fireEvent.click(screen.getByRole("button", { name: "Open file" }));
-    expect(onOpenFile).toHaveBeenCalledWith("src/file-1.ts");
+    expect(onOpenFile).toHaveBeenCalledWith("src/file-1.ts", undefined);
+  });
+
+  it("opens a file at the new-side line of the selection or the reading anchor", async () => {
+    // Two lines are inserted after old line 3, so old line 7 is new line 9.
+    const insertion = (file: WorkspaceDiffChangedFileSummary) => ({
+      ...availablePatch(file),
+      patch: `diff --git a/${file.oldPath} b/${file.newPath}\n--- a/${file.oldPath}\n+++ b/${file.newPath}\n@@ -3,0 +4,2 @@\n+inserted\n+inserted\n`,
+    } as WorkspaceDiffPatchResult);
+    const dataSource = createDataSource(2, {
+      loadPatch: async (file) => insertion(file),
+    });
+    const onOpenFile = vi.fn();
+    render(
+      <WorkspaceCompareView
+        rootId="primary"
+        dataSource={dataSource}
+        onOpenFile={onOpenFile}
+        initialNavigation={{
+          repository: {
+            repositoryKey: "repository-key-sedes",
+            displayName: "Sedes",
+          },
+          base: { kind: "ref", refKind: "local_branch", label: "main" },
+          head: { kind: "working_tree" },
+          mode: "direct",
+          fingerprint: "fingerprint_123456789",
+          // Unified anchors on unchanged lines report the old side.
+          file: {
+            oldPath: "src/file-1.ts",
+            newPath: "src/file-1.ts",
+            changeKind: "modified",
+            line: 7,
+            side: "deletions",
+          },
+          filter: "",
+          navigatorWidth: 260,
+          collapsedDirectories: [],
+          preferences: { diffStyle: "split", overflow: "scroll" },
+        }}
+      />,
+    );
+    await waitFor(() =>
+      expect(
+        (capturedCodeViewProps?.items as readonly { type: string }[] | undefined)
+          ?.map((item) => item.type),
+      ).toEqual(["diff", "diff"]),
+    );
+    const [firstOpen, secondOpen] = within(
+      screen.getByTestId("code-view"),
+    ).getAllByRole("button", { name: "Open file" });
+
+    fireEvent.click(firstOpen!);
+    expect(onOpenFile).toHaveBeenLastCalledWith("src/file-1.ts", 9);
+    // The anchor belongs to the first file; another file opens at its top.
+    fireEvent.click(secondOpen!);
+    expect(onOpenFile).toHaveBeenLastCalledWith("src/file-2.ts", undefined);
+
+    // Selected lines take precedence, using the top of the selection.
+    act(() =>
+      (capturedCodeViewProps?.onSelectedLinesChange as (
+        selection: unknown,
+      ) => void)({
+        id: "file-2",
+        range: { start: 6, end: 2, side: "additions" },
+      }),
+    );
+    fireEvent.click(secondOpen!);
+    expect(onOpenFile).toHaveBeenLastCalledWith("src/file-2.ts", 2);
   });
 
   it("orders files canonically in the navigator, the diff, previous/next, and loading", async () => {
