@@ -469,6 +469,20 @@ export function WorkspaceFilesPanel({
     pendingUiRestoreRef.current?.expandedPathsByRoot ?? {},
   );
   const treeControllersRef = useRef(new Map<string, TreeController>());
+  // @pierre/trees reads its row height once, so the tree remounts (its key)
+  // when the pointer becomes coarse or fine. In that render, before the old
+  // tree unmounts, carry its live expansion into the remounted one.
+  const treeCoarsePointer = useCoarsePointer();
+  const treeCoarsePointerRef = useRef(treeCoarsePointer);
+  if (treeCoarsePointerRef.current !== treeCoarsePointer) {
+    treeCoarsePointerRef.current = treeCoarsePointer;
+    for (const [rootId, controller] of treeControllersRef.current) {
+      expandedPathsByRootRef.current = {
+        ...expandedPathsByRootRef.current,
+        [rootId]: controller.getExpandedPaths(),
+      };
+    }
+  }
   const treeToggleRef = useRef<HTMLButtonElement | null>(null);
   const treePanelRef = useRef<HTMLElement | null>(null);
   const filesBodyRef = useRef<HTMLDivElement | null>(null);
@@ -3320,7 +3334,7 @@ export function WorkspaceFilesPanel({
                   />
                 ) : (
                   <RootFileTree
-                    key={`${selectedRoot.rootId}:${selectedListing.fullTreeLoaded}`}
+                    key={`${selectedRoot.rootId}:${selectedListing.fullTreeLoaded}:${treeCoarsePointer ? "touch" : "fine"}`}
                     rootId={selectedRoot.rootId}
                     paths={selectedListing.paths}
                     searchEnabled={selectedListing.fullTreeLoaded}

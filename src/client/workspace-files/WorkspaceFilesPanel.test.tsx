@@ -21,6 +21,8 @@ import type { WorkspaceFilesApi } from "./WorkspaceFilesPanel.js";
 
 let selectPaths: (paths: readonly string[]) => void = () => undefined;
 let fileTreeUnsafeCss: string | undefined;
+/** The row height each tree model was created with, in mount order. */
+const createdTreeItemHeights: Array<number | undefined> = [];
 let latestCompareProps: Record<string, unknown> | undefined;
 const resetPaths = vi.fn();
 const setGitStatus = vi.fn();
@@ -39,24 +41,31 @@ vi.mock("../components/conversation/MarkdownContent.js", () => ({
   ),
 }));
 
-vi.mock("@pierre/trees/react", () => ({
-  useFileTree: (options: {
-    onSelectionChange(paths: readonly string[]): void;
-    unsafeCSS?: string;
-  }) => {
-    selectPaths = (paths) => options.onSelectionChange(paths);
-    fileTreeUnsafeCss = options.unsafeCSS;
-    return {
-      model: {
-        resetPaths,
-        setGitStatus,
-        getItem,
-        subscribe: () => () => undefined,
-      },
-    };
-  },
-  FileTree: () => <div data-testid="file-tree" />,
-}));
+vi.mock("@pierre/trees/react", async () => {
+  const React = await import("react");
+  return {
+    useFileTree: (options: {
+      onSelectionChange(paths: readonly string[]): void;
+      unsafeCSS?: string;
+      itemHeight?: number;
+    }) => {
+      selectPaths = (paths) => options.onSelectionChange(paths);
+      fileTreeUnsafeCss = options.unsafeCSS;
+      // Like @pierre/trees, a model reads its options once, when it is created.
+      const [model] = React.useState(() => {
+        createdTreeItemHeights.push(options.itemHeight);
+        return {
+          resetPaths,
+          setGitStatus,
+          getItem,
+          subscribe: () => () => undefined,
+        };
+      });
+      return { model };
+    },
+    FileTree: () => <div data-testid="file-tree" />,
+  };
+});
 
 vi.mock("./WorkspaceCompareView.js", () => ({
   WorkspaceCompareView: (props: Record<string, unknown>) => {
@@ -122,6 +131,7 @@ afterEach(() => {
   chromeActionTargets.clear();
   workspaceFilesUiStateCache.clear();
   fileTreeUnsafeCss = undefined;
+  createdTreeItemHeights.length = 0;
   latestCompareProps = undefined;
   vi.clearAllMocks();
 });
@@ -585,6 +595,57 @@ describe("WorkspaceFilesPanel", () => {
 
     await waitForListing(api);
     expect(fileTreeUnsafeCss).toBe(TREE_TRUNCATION_CSS);
+  });
+
+  it("recreates the tree at the touch row height when the pointer changes, keeping its expansion", async () => {
+    let coarse = false;
+    const pointerListeners = new Set<() => void>();
+    const previousMatchMedia = window.matchMedia;
+    window.matchMedia = vi.fn((query: string) => ({
+      get matches() {
+        return query === "(pointer: coarse)" && coarse;
+      },
+      media: query,
+      addEventListener: (_type: string, listener: () => void) => {
+        if (query === "(pointer: coarse)") pointerListeners.add(listener);
+      },
+      removeEventListener: (_type: string, listener: () => void) =>
+        pointerListeners.delete(listener),
+    })) as unknown as typeof window.matchMedia;
+    try {
+      getItem.mockImplementation((path: string) =>
+        path === "src/"
+          ? { isDirectory: () => true, isExpanded: () => true }
+          : null,
+      );
+      const api = setupApi();
+      const { context } = setupContext();
+      render(<WorkspaceFilesPanel context={context} api={api} />);
+      await waitFor(() =>
+        expect(resetPaths).toHaveBeenCalledWith(
+          expect.objectContaining({
+            preparedInput: { paths: expect.arrayContaining(["src/"]) },
+          }),
+        ),
+      );
+      expect(createdTreeItemHeights).toEqual([26]);
+      resetPaths.mockClear();
+
+      coarse = true;
+      act(() => {
+        for (const listener of [...pointerListeners]) listener();
+      });
+
+      // A new model at the touch height, expanded where the old one was.
+      expect(createdTreeItemHeights).toEqual([26, 40]);
+      await waitFor(() =>
+        expect(resetPaths).toHaveBeenCalledWith(
+          expect.objectContaining({ initialExpandedPaths: ["src/"] }),
+        ),
+      );
+    } finally {
+      window.matchMedia = previousMatchMedia;
+    }
   });
 
   it("loads paths on explicit request without requesting Git status", async () => {
