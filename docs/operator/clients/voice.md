@@ -140,10 +140,13 @@ if still identical, a number.
 
 Startup pre-roll warms the output only after audio has been idle. Voice holds
 audio focus across consecutive speech, cues, and recording, so other media
-resumes about 1.4 seconds after voice audio ends. Another app taking focus ends
-only the current speech or recording. A Bluetooth headset microphone is used
-once Android connects its voice link; recording waits up to 5 seconds for that
-route and otherwise reports that the microphone could not be routed.
+resumes about 1.4 seconds after voice audio ends. Another app taking focus,
+including the keyboard's dictation microphone, quietly ends the current speech
+or recording without a red error or another listening attempt. Text already
+recognized still submits if only its success tone is interrupted. A Bluetooth
+headset microphone is used once Android connects its voice link; recording
+waits up to 5 seconds for that route and otherwise reports that the microphone
+could not be routed.
 
 **Recognition cues** plays a rising start tone, a single success tone for
 recognized speech, and a descending tone for failed or empty recognition,
@@ -152,6 +155,9 @@ controls all three independently of speech volume. Completion tones play after
 microphone capture stops. Success confirms recognition, not agent delivery;
 input recovery still reports any later delivery problem. Turning voice Off or
 switching connections cancels pending cues without another tone.
+If captured audio returns no transcript, voice plays the failure tone and
+listens again. Stop, Off, an adapter change, or another app taking audio focus
+cancels that pending retry.
 
 One logical notice completes before another begins, including all speech
 chunks, audio drain, recognition, and admission. Long speech is split at safe

@@ -75,7 +75,9 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
     private static final class Active {
         final String id, event, noticeThread, noticeTitle;
         String targetId, targetTitle, ttsId, sttId, cueId;
+        String lastAudioId;
         String completionCueId;
+        boolean retryAfterCompletionCue;
         Runnable afterCompletionCue;
         boolean automatic, followUp, waitingAfterSkip, stopped, recognitionFinalized, submissionNotified;
         final NativeVoiceQueue.Item notification;
@@ -261,7 +263,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         }
         publish(); emit("settingsChanged", snapshot()); drain();
     }
-    private static boolean adapterIndependent(Active item) { return item.completionCueId != null || item.recognitionFinalized || item.admission != null; }
+    private static boolean adapterIndependent(Active item) { return item.recognitionFinalized || item.admission != null; }
     private void resumeEnabledSession() {
         if (nativeVisible && binding != null && csrf != null && settings.active() && audio.hasPermission() &&
             !settings.text("adapterUrl").isEmpty()) scheduleSessionStart();
@@ -440,7 +442,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         if (item.chunk >= item.chunks.size()) { afterSpeech(item); return; }
         if (!adapter.ready()) { failActive("adapter_disconnected"); return; }
         item.ttsId = UUID.randomUUID().toString(); String request = item.ttsId;
-        phase = "synthesizing"; audio.begin(request); publish();
+        phase = "synthesizing"; item.lastAudioId = request; audio.begin(request); publish();
         adapter.tts(request, item.chunks.get(item.chunk), status -> handler.post(() -> {
             if (active != item || !request.equals(item.ttsId)) return;
             // The adapter answers 400 only when its sanitizer leaves nothing to speak; that chunk is a no-op.
@@ -484,7 +486,9 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         phase = "arming"; item.cueId = UUID.randomUUID().toString(); publish();
         String cue = item.cueId;
         handler.postDelayed(() -> { if (active == item && cue.equals(item.cueId)) failActive("recognition_cue_timeout"); }, 15000);
-        if (settings.flag("recognitionCues")) audio.cue(item.cueId, NativeVoiceCue.Kind.START, settings.number("cueGain")); else capture(item);
+        if (settings.flag("recognitionCues")) {
+            item.lastAudioId = cue; audio.cue(cue, NativeVoiceCue.Kind.START, settings.number("cueGain"));
+        } else capture(item);
     }
     private void capture(Active item) {
         if (active != item || item.stopped || !sessionStarted || !adapter.ready()) return;
@@ -497,7 +501,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         if (active != item || item.stopped || !sessionStarted || !adapter.ready()) return;
         if (item.automatic && (!settings.flag("autoListen") || !eligible(item.notification))) { finishItem(item); return; }
         item.sttId = UUID.randomUUID().toString(); phase = "arming";
-        audio.record(item.sttId, settings.text("inputDeviceId")); publish();
+        item.lastAudioId = item.sttId; audio.record(item.sttId, settings.text("inputDeviceId")); publish();
         String id = item.sttId;
         handler.postDelayed(() -> { if (active == item && id.equals(item.sttId) && (phase.equals("arming") || phase.equals("listening"))) failActive("recognition_capture_timeout"); },
             (long) settings.number("recognitionStartTimeoutMs") + settings.number("recognitionCompletionTimeoutMs") + 5000);
@@ -552,23 +556,25 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
         Active item = active;
         if (item != null && item.sttId != null) {
             stopRecognition(item, true);
-            recognitionCompletionCue(item, false, () -> { cancelActive(true, "stopped"); drain(); });
+            recognitionCompletionCue(item, false, false, () -> { cancelActive(true, "stopped"); drain(); });
         } else { cancelActive(true, "stopped"); drain(); }
     }
     private void failActive(String code) {
         Active item = active;
-        if (item != null && item.sttId != null && !code.equals("audio_focus_lost")) {
+        if (item != null && item.sttId != null) {
             stopRecognition(item, true);
-            recognitionCompletionCue(item, false, () -> { cancelActive(false, code); report(code); drain(); });
+            recognitionCompletionCue(item, false, false, () -> { cancelActive(false, code); report(code); drain(); });
         } else { cancelActive(false, code); report(code); drain(); }
     }
-    private void recognitionCompletionCue(Active item, boolean success, Runnable done) {
+    private void recognitionCompletionCue(Active item, boolean success, boolean retry, Runnable done) {
         if (active != item || item.stopped) return;
         audio.stop();
         if (!settings.flag("recognitionCues")) { done.run(); return; }
         item.completionCueId = UUID.randomUUID().toString(); item.afterCompletionCue = done;
+        item.retryAfterCompletionCue = retry;
         String cue = item.completionCueId;
         phase = "recognizing"; publish();
+        item.lastAudioId = cue;
         audio.cue(cue, success ? NativeVoiceCue.Kind.SUCCESS : NativeVoiceCue.Kind.FAILURE, settings.number("cueGain"));
         // Feedback is bounded and must not strand otherwise valid recognized input.
         handler.postDelayed(() -> finishCompletionCue(item, cue), 15000);
@@ -576,7 +582,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
     private void finishCompletionCue(Active item, String cue) {
         if (active != item || item.stopped || !cue.equals(item.completionCueId)) return;
         Runnable done = item.afterCompletionCue;
-        item.completionCueId = null; item.afterCompletionCue = null;
+        item.completionCueId = null; item.afterCompletionCue = null; item.retryAfterCompletionCue = false;
         audio.stop(); done.run();
     }
     public void ready(long generation) { handler.post(() -> {
@@ -595,7 +601,7 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
             if (announce) report(code);
         } else if (item != null && item.sttId != null) {
             stopRecognition(item, false);
-            recognitionCompletionCue(item, false, () -> { cancelActive(false, code); report(code); drain(); });
+            recognitionCompletionCue(item, false, false, () -> { cancelActive(false, code); report(code); drain(); });
         } else {
             if (item != null) cancelActive(false, code);
             // Repeated failures while reconnecting are reported once per streak; readiness shows the ongoing state.
@@ -627,14 +633,18 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
                 handler.postDelayed(() -> { if (active == item && currentRequest.equals(item.sttId)) failActive("recognition_result_timeout"); }, settings.number("recognitionCompletionTimeoutMs"));
             }
             else if (type.equals("media_stt_result")) {
-                audio.stop(); item.sttId = null; item.recognitionFinalized = true;
+                audio.stop(); item.sttId = null;
                 String text = event.optString("text", "");
                 boolean success = event.optBoolean("success");
+                boolean retryEmptyTranscript = shouldRetryEmptyTranscript(success, event.optBoolean("canceled"), event.optString("error", ""));
                 boolean usable = success && !blank(text) &&
                     !(settings.flag("recognizeStopCommand") && NativeVoiceQueue.isStopCommand(text));
+                // Only usable text survives adapter changes; feedback alone cannot preserve a pending retry.
+                item.recognitionFinalized = usable;
                 boolean steer = settings.flag("followComposerMode") && composerMode.equals("steer");
-                recognitionCompletionCue(item, usable, () -> {
-                    if (!success) failActive("recognition_failed");
+                recognitionCompletionCue(item, usable, retryEmptyTranscript, () -> {
+                    if (retryEmptyTranscript) arm(item);
+                    else if (!success) failActive("recognition_failed");
                     else if (!usable) finishItem(item);
                     else finalizeRecognition(item, text, steer);
                 });
@@ -671,6 +681,18 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
     public void failed(String requestId, String reason) { handler.post(() -> {
         Active item = active;
         if (item == null) return;
+        if (reason.equals("audio_focus_lost")) {
+            if (requestId.equals(item.completionCueId) && !item.retryAfterCompletionCue) {
+                // Feedback cannot discard already captured text or an unrelated error awaiting reporting.
+                finishCompletionCue(item, requestId);
+            } else if (requestId.equals(item.completionCueId) || requestId.equals(item.ttsId) ||
+                       requestId.equals(item.sttId) || requestId.equals(item.cueId) ||
+                       (requestId.equals(item.lastAudioId) && !adapterIndependent(item))) {
+                // Keyboard dictation and other external interruptions stop this item without re-arming or an error.
+                cancelActive(false, reason); drain();
+            }
+            return;
+        }
         if (requestId.equals(item.completionCueId)) { finishCompletionCue(item, requestId); return; }
         // A chunk that produced no audio is a no-op; continue with the next chunk or the item's follow-up.
         if (requestId.equals(item.ttsId) && reason.equals("empty_pcm_stream")) { item.ttsId = null; item.chunk++; speakChunk(item); return; }
@@ -1088,6 +1110,13 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
     }
     /** Bounded exponential reconnect and reconciliation delay: 2 s doubling to at most 60 s. */
     static long backoff(int failures) { return Math.min(60000L, 2000L << Math.min(5, Math.max(0, failures - 1))); }
+    /**
+     * A recognition that captured audio but returned no text is a missing reply, not a failure: re-arm and listen
+     * again, matching the Assistant client. Canceled recognition and other failures still surface to the user.
+     */
+    static boolean shouldRetryEmptyTranscript(boolean success, boolean canceled, String error) {
+        return !success && !canceled && "empty_transcript".equals(error);
+    }
     static String message(String code) {
         switch (code) {
             case "voice_target_required": return "Choose a thread for voice input.";
@@ -1130,7 +1159,6 @@ final class NativeVoiceRuntime implements NativeVoiceAdapter.Listener, NativeVoi
             case "speech_storage_limit": return "This speech request exceeded the bounded audio storage limit.";
             case "speech_storage_unavailable": return "Speech could not be buffered in this device's private cache.";
             case "audio_focus_unavailable": return "Another app is using audio. Voice could not take audio focus.";
-            case "audio_focus_lost": return "Another app took audio focus and interrupted voice.";
             case "empty_pcm_stream": return "The voice adapter returned no audio.";
             case "playback_drain_timeout": return "Speech audio did not finish playing in time.";
             case "invalid_pcm": case "unsupported_pcm_encoding": return "The voice adapter sent audio this app cannot play.";
