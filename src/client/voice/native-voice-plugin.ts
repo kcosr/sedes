@@ -61,7 +61,7 @@ export interface NativeVoicePlugin {
   stopCurrentInteraction(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
   resumeInput(input: NativeVoiceCommandContext & { mutationId: string }): Promise<NativeVoiceState>;
   discardInput(input: NativeVoiceCommandContext & { mutationId: string }): Promise<NativeVoiceState>;
-  refreshSpeechCatalog(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
+  refreshSpeechCatalog(input: NativeVoiceCommandContext & { force: boolean }): Promise<NativeVoiceState>;
   /** Opens native masked credential entry. Secrets are never bridge arguments or results. */
   openSpeechCredentialDialog(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
   listInputDevices(): Promise<{ devices: Array<{ id: string; label: string; type: number }>; selectedId: string | null }>;

@@ -529,14 +529,17 @@ public class NativeVoiceRuntimeTest {
             new SpeechCredentialStore(f.context).setCredential(f.profile, "server", peer.endpoint(), "catalog-test-token");
             f.settings(NativeVoiceJson.object("speechEndpoint", peer.endpoint()));
             CountDownLatch discovered = new CountDownLatch(1); AtomicReference<String> failure = new AtomicReference<>();
-            f.runtime.command("refreshSpeechCatalog", new JSONObject(), true, new NativeVoiceRuntime.Reply() {
+            f.runtime.command("refreshSpeechCatalog", NativeVoiceJson.object("force", true), false, new NativeVoiceRuntime.Reply() {
                 public void done(JSONObject value) { discovered.countDown(); }
                 public void failed(String code, String message) { failure.set(code); discovered.countDown(); }
             });
             CountDownLatch firstResponse = peer.next();
+            assertTrue("Refresh replies before its network response", discovered.await(1, TimeUnit.SECONDS));
+            assertNull(f.command("refreshSpeechCatalog", NativeVoiceJson.object("force", false)));
+            assertNull(f.command("refreshSpeechCatalog", NativeVoiceJson.object("force", true)));
             f.settings(NativeVoiceJson.object("ttsVoice", "nova", "ttsSpeed", 1.5, "sttModel", "other-stt"));
             assertEquals("loading", f.runtime.snapshot().getJSONObject("speech").getString("catalogStatus"));
-            firstResponse.countDown(); assertTrue(discovered.await(10, TimeUnit.SECONDS)); f.flush(); assertNull(failure.get());
+            firstResponse.countDown(); awaitCatalog(f); assertNull(failure.get());
             assertEquals("[\"first-voice\"]", f.runtime.snapshot().getJSONObject("speech").getJSONObject("catalog").getJSONArray("voices").toString());
             f.settings(NativeVoiceJson.object("ttsModel", "second-tts"));
             CountDownLatch secondResponse = peer.next();
@@ -549,6 +552,49 @@ public class NativeVoiceRuntimeTest {
             f.flush();
             assertEquals("[\"second-voice\"]", f.runtime.snapshot().getJSONObject("speech").getJSONObject("catalog").getJSONArray("voices").toString());
             assertEquals(2, peer.requests.get());
+            assertNull(f.command("refreshSpeechCatalog", NativeVoiceJson.object("force", false)));
+            peer.assertNoFurtherRequests(2);
+        }
+    }
+
+    @Test public void failedRefreshRetainsCachedChoicesUntilAuthenticationIsRejected() throws Exception {
+        try (Fixture f = new Fixture(false, false); CatalogPeer peer = new CatalogPeer("catalog-test-token")) {
+            f.recognizing(false);
+            new SpeechCredentialStore(f.context).setCredential(f.profile, "server", peer.endpoint(), "catalog-test-token");
+            f.settings(NativeVoiceJson.object("speechEndpoint", peer.endpoint()));
+            discover(f, peer);
+            JSONObject catalog = f.runtime.snapshot().getJSONObject("speech").getJSONObject("catalog");
+            JSONObject selections = f.runtime.snapshot().getJSONObject("settings");
+            for (int response : new int[] { 503, 200, 401 }) {
+                peer.status = response; peer.malformed = response == 200;
+                assertNull(f.command("refreshSpeechCatalog", NativeVoiceJson.object("force", true)));
+                peer.next().countDown(); awaitCatalogStatus(f, "error");
+                JSONObject speech = f.runtime.snapshot().getJSONObject("speech");
+                if (response == 401) {
+                    assertTrue(speech.isNull("catalog"));
+                    assertFalse(new File(f.store.directory(f.binding), "speech-catalog.enc").exists());
+                } else assertEquals(catalog.toString(), speech.getJSONObject("catalog").toString());
+                assertEquals(selections.toString(), f.runtime.snapshot().getJSONObject("settings").toString());
+            }
+        }
+    }
+
+    @Test public void expiredCacheRefreshesWithoutClearingChoicesOrStartingVoice() throws Exception {
+        try (Fixture f = new Fixture(false, false); CatalogPeer peer = new CatalogPeer("catalog-test-token")) {
+            f.recognizing(false);
+            new SpeechCredentialStore(f.context).setCredential(f.profile, "server", peer.endpoint(), "catalog-test-token");
+            f.settings(NativeVoiceJson.object("speechEndpoint", peer.endpoint())); discover(f, peer);
+            f.settings(NativeVoiceJson.object("audioMode", "off"));
+            NativeSpeechCatalogCache saved = (NativeSpeechCatalogCache) field(f.runtime, "catalogCache");
+            f.onOwner(() -> set(f.runtime, "catalogCache", new NativeSpeechCatalogCache(saved.scope,
+                System.currentTimeMillis() - NativeSpeechCatalogCache.FRESH_MS, saved.catalog)));
+            assertNull(f.command("refreshSpeechCatalog", NativeVoiceJson.object("force", false)));
+            CountDownLatch response = peer.next();
+            assertEquals("loading", f.runtime.snapshot().getJSONObject("speech").getString("catalogStatus"));
+            assertEquals(saved.catalog.toString(), f.runtime.snapshot().getJSONObject("speech").getJSONObject("catalog").toString());
+            assertEquals("off", f.runtime.snapshot().getString("phase"));
+            assertNull(field(f.runtime, "sessionStartId")); assertFalse((boolean) field(f.runtime, "sessionStarted"));
+            response.countDown(); awaitCatalog(f);
         }
     }
 
@@ -1417,6 +1463,8 @@ public class NativeVoiceRuntimeTest {
         final AtomicInteger requests = new AtomicInteger();
         final AtomicReference<Throwable> failure = new AtomicReference<>();
         volatile Socket active;
+        volatile int status = 200;
+        volatile boolean malformed;
         CatalogPeer(String expectedCredential) throws Exception {
             Thread thread = new Thread(() -> {
                 while (!server.isClosed()) {
@@ -1434,8 +1482,8 @@ public class NativeVoiceRuntimeTest {
                             .put(NativeVoiceJson.object("id", "fixture-stt", "task", "transcription"))
                             .put(NativeVoiceJson.object("id", "gpt-4o-mini-tts", "task", "speech", "voices", new JSONArray().put(NativeVoiceJson.object("id", "first-voice"))))
                             .put(NativeVoiceJson.object("id", "second-tts", "task", "speech", "voices", new JSONArray().put(NativeVoiceJson.object("id", "second-voice")))));
-                        byte[] body = listing.toString().getBytes(StandardCharsets.UTF_8);
-                        socket.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + body.length +
+                        byte[] body = (malformed ? "{}" : listing.toString()).getBytes(StandardCharsets.UTF_8);
+                        socket.getOutputStream().write(("HTTP/1.1 " + status + " Response\r\nContent-Type: application/json\r\nContent-Length: " + body.length +
                             "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
                         socket.getOutputStream().write(body); socket.getOutputStream().flush();
                     } catch (Throwable error) { if (!server.isClosed()) { failure.set(error); break; } }
@@ -1486,18 +1534,22 @@ public class NativeVoiceRuntimeTest {
     }
     private static void discover(Fixture fixture, CatalogPeer peer) throws Exception {
         CountDownLatch done = new CountDownLatch(1); AtomicReference<String> error = new AtomicReference<>();
-        fixture.runtime.command("refreshSpeechCatalog", new JSONObject(), true, new NativeVoiceRuntime.Reply() {
+        fixture.runtime.command("refreshSpeechCatalog", NativeVoiceJson.object("force", true), false, new NativeVoiceRuntime.Reply() {
             public void done(JSONObject value) { done.countDown(); }
             public void failed(String code, String message) { error.set(code); done.countDown(); }
         });
-        peer.next().countDown(); assertTrue(done.await(10, TimeUnit.SECONDS)); fixture.flush(); assertNull(error.get());
-        assertEquals("ready", fixture.runtime.snapshot().getJSONObject("speech").getString("catalogStatus"));
+        CountDownLatch response = peer.next();
+        assertTrue("Refresh must return while metadata is loading", done.await(1, TimeUnit.SECONDS)); assertNull(error.get());
+        response.countDown(); awaitCatalog(fixture);
     }
     private static void awaitCatalog(Fixture fixture) throws Exception {
+        awaitCatalogStatus(fixture, "ready");
+    }
+    private static void awaitCatalogStatus(Fixture fixture, String expected) throws Exception {
         long deadline = android.os.SystemClock.elapsedRealtime() + 10000;
         while (fixture.runtime.snapshot().getJSONObject("speech").getString("catalogStatus").equals("loading") &&
             android.os.SystemClock.elapsedRealtime() < deadline) Thread.sleep(10);
-        fixture.flush(); assertEquals("ready", fixture.runtime.snapshot().getJSONObject("speech").getString("catalogStatus"));
+        fixture.flush(); assertEquals(expected, fixture.runtime.snapshot().getJSONObject("speech").getString("catalogStatus"));
     }
     private static void awaitCommit(Fixture fixture, TranscriptionJob request) throws Exception {
         long deadline = android.os.SystemClock.elapsedRealtime() + 10000;

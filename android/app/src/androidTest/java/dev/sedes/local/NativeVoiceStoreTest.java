@@ -52,6 +52,30 @@ public class NativeVoiceStoreTest {
         assertFalse(store.directory(binding).exists());
     }
 
+    @Test public void speechCatalogSurvivesRecreationAndRejectsOtherOwnersOrAccountScopes() throws Exception {
+        String profile = "voice-test-" + UUID.randomUUID();
+        String binding = NativeVoiceStore.binding(profile, ORIGIN, IDENTITY_A);
+        NativeVoiceStore store = new NativeVoiceStore(context);
+        NativeVoiceSettings settings = NativeVoiceSettings.defaults();
+        String scope = NativeSpeechCatalogCache.scope(binding, settings, "account-a");
+        JSONObject catalog = NativeSpeechCatalog.empty("openai");
+        NativeVoiceJson.put(catalog, "voices", new JSONArray().put("private-voice"));
+        try {
+            store.speechCatalog(binding, new NativeSpeechCatalogCache(scope, 1234, catalog));
+            NativeSpeechCatalogCache restored = new NativeVoiceStore(context).speechCatalog(binding, scope);
+            assertNotNull(restored); assertEquals(1234, restored.fetchedAt);
+            assertEquals("private-voice", restored.catalog.getJSONArray("voices").getString(0));
+            byte[] encrypted = Files.readAllBytes(new File(store.directory(binding), "speech-catalog.enc").toPath());
+            assertFalse(new String(encrypted, StandardCharsets.ISO_8859_1).contains("private-voice"));
+            for (String other : new String[] { NativeVoiceStore.binding(profile, ORIGIN, IDENTITY_B),
+                NativeVoiceStore.binding(profile, "https://other.example", IDENTITY_A) })
+                assertNull(store.speechCatalog(other, scope));
+            assertNull(store.speechCatalog(binding, NativeSpeechCatalogCache.scope(binding, settings, "account-b")));
+            assertFalse(new File(store.directory(binding), "speech-catalog.enc").exists());
+            assertNull("Changing back cannot resurrect the invalidated account catalog", store.speechCatalog(binding, scope));
+        } finally { store.removeProfile(profile); }
+    }
+
     @Test public void interruptedWriteRestoresTheBackupInsteadOfLosingTheJournal() throws Exception {
         String profile = "voice-test-" + UUID.randomUUID();
         String binding = NativeVoiceStore.binding(profile, ORIGIN, IDENTITY_A);

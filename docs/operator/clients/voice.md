@@ -12,10 +12,10 @@ controls. Browser and Electron clients do not show the Voice page.
    OpenAI uses its hosted API; the server option uses an HTTP or HTTPS
    API base you supply, including `/v1`. The speech endpoint is separate from
    Sedes and is not inferred from the Sedes connection.
-3. Enter the provider key or server token in the native credential dialog,
-   choose transcription and speech models and a voice, then save. Select
-   **Response** and grant microphone access. Enable notifications for visible
-   service controls. **Enable voice** selects Response; the initial mode is Off.
+3. Save the provider key or server token in the native credential dialog.
+   Models and voices load automatically. Choose the models and voice, then
+   select **Manual** or **Response** and grant microphone access. Enable
+   notifications for visible service controls. The initial mode is Off.
 4. In **Settings → Notifications**, enable notifications and choose each event's
    Voice action. These are server-side settings for the current user; all Voice
    page settings are local to the Android profile and authenticated identity.
@@ -45,11 +45,18 @@ speech server publishes its available models, voices, and controls through its
 capability endpoint. A failed catalog lookup is reported; it does not fabricate
 supported models or settings.
 
-After configuring the endpoint and credential, choose **Discover speech options**.
+The app keeps the last successful model and voice catalog on this device and
+refreshes it in the background at startup and after speech configuration changes.
+Opening Voice settings or enabling voice also refreshes missing or stale choices.
+Use **Refresh** to pick up changes made on the server immediately. A temporary
+refresh failure keeps the saved list available; changing the endpoint or
+credential invalidates it. Discovery never changes the selected model or voice
+and does not start recording.
+
 Recognition model, Speech model, and Speech voice open searchable pickers; choosing
 an option saves it immediately. On touch screens the options open in a scrollable
-sheet. Choose **Enter custom ID…** to type an ID, then **Save**; **Cancel** leaves
-the saved choice unchanged. Voice choices follow the selected speech model.
+sheet. Choose **Custom…** to type an ID, then **Save**; **Cancel** leaves the saved
+choice unchanged. Voice choices follow the selected speech model.
 
 Speech credentials are stored only on this Android device, encrypted with an
 Android Keystore-protected key and excluded from backups. The credential dialog
@@ -80,7 +87,7 @@ of them.
 
 | Mode | Completion | Other selected events | Explicit microphone |
 | --- | --- | --- | --- |
-| Off | Disabled | Disabled | Enable voice first |
+| Off | Disabled | Disabled | Select Manual or Response first |
 | Manual | Silent; may listen afterward | Speaks; does not listen afterward | Available |
 | Response | Speaks selected text and context; may listen afterward | Speaks | Available |
 

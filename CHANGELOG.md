@@ -404,6 +404,10 @@
 
 ### Changed
 
+- Android voice loads and caches model and voice choices automatically, with a
+  Refresh action for server changes. Settings use shorter help text and the
+  Off, Manual, and Response modes replace the redundant Enable voice button.
+
 - Android HTTPS and secure WebSocket connections now trust user- and
   MDM-installed certificate authorities, including for authenticated Sedes
   traffic. Certificate and hostname checks remain enabled.

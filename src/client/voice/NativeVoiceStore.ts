@@ -146,6 +146,10 @@ export class NativeVoiceStore {
     if (this.#disposed || snapshot.profileId !== this.connection.profileId || snapshot.serverOrigin !== this.connection.serverOrigin || snapshot.identity !== this.connection.identity)
       throw new Error("This voice connection is no longer active.");
   }
+  /** Check native catalog freshness in the background without clearing a user-action error or locking controls. */
+  async checkSpeechCatalog(): Promise<void> {
+    this.#accept(await this.plugin.refreshSpeechCatalog({ ...this.commandContext(), force: false }));
+  }
   /** A function patch is built from the refreshed native state, so it never writes back a stale rendered value; `null` skips the write. */
   async update(patch: VoiceSettingsPatch): Promise<void> {
     await this.run(async () => {

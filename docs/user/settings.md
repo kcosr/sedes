@@ -547,16 +547,17 @@ voice cannot connect, it shows the error and **Retry voice connection**; the app
 also retries on its own and when it returns to the foreground. The rest of the
 app does not wait for voice.
 
-- **Audio mode** chooses Off, Manual, or Response. **Enable voice** selects
-  Response, and **Resume voice** restarts a stopped voice session. The status
+- **Audio mode** chooses Off, Manual, or Response. Selecting Manual or Response
+  enables voice; **Resume voice** restarts a stopped voice session. The status
   line below reports what voice still needs, such as microphone permission,
   speech configuration and a key, or the Sedes notification connection. When
   notifications are unavailable, explicit recording still works.
 - **Speech provider** selects OpenAI or **Own speech server**.
   Configure its endpoint, transcription and speech models, voice, and speed.
-  The catalog offers available model and voice suggestions. Credentials are
-  entered in a native dialog and stored encrypted on this device for that
-  provider and endpoint; they are separate from the Sedes pairing credential.
+  Models and voices load automatically and stay cached between app launches.
+  **Refresh** checks for server changes; **Custom…** accepts another ID.
+  Credentials are entered in a native dialog and stored encrypted on this device
+  for that provider and endpoint; they are separate from the Sedes pairing credential.
 - **Show voice bar when off** keeps a dimmed voice card under the composer
   while Audio mode is Off, so its Voice sheet can turn voice back on. By
   default Off hides the card. The switch changes only what the app shows.

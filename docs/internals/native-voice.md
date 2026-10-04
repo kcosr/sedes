@@ -406,6 +406,20 @@ its own `/audio/capabilities`. Model IDs stay configurable; model-list entries
 alone do not establish a model's audio capabilities. Unknown or unavailable
 catalog information is reported without fabricating supported controls.
 
+Catalog discovery is independent of audio-session readiness. Native restores
+the last successful catalog from encrypted, backup-excluded device storage for
+the authenticated binding, speech provider, endpoint, credential, and selected
+speech model. It revalidates at startup and after relevant configuration changes.
+Opening Voice settings or enabling voice refreshes an absent catalog or one
+older than one hour; explicit Refresh bypasses that freshness check. Concurrent
+requests share the current fetch, and bridge calls return promptly while state
+events report loading and completion. A temporary refresh failure preserves the
+matching cached choices; an authentication rejection removes them. Changing the
+endpoint or credential invalidates the old catalog, and stale callbacks cannot
+publish into another configuration.
+Catalog refresh never rewrites selected model or voice IDs, requests microphone
+permission, or starts recording.
+
 ## Audio output and focus
 
 HTTP TTS completion is distinct from AudioTrack drain. A logical item stays

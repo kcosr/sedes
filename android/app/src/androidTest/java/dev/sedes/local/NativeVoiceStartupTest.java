@@ -12,8 +12,14 @@ import androidx.lifecycle.Lifecycle;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.platform.app.InstrumentationRegistry;
 import java.io.File;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
@@ -26,6 +32,47 @@ import org.junit.Test;
 
 /** Real encrypted settings, authentication bootstrap, lifecycle and main-thread launch scheduling. */
 public class NativeVoiceStartupTest {
+    @Test public void startupRestoresFreshCacheThenRevalidatesOnceWithoutStartingVoice() throws Exception {
+        try (ServerSocket server = new ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"));
+             Fixture f = new Fixture("off", false, true, "http://127.0.0.1:" + server.getLocalPort() + "/v1")) {
+            String binding = NativeVoiceStore.binding(f.profile, f.origin, Fixture.IDENTITY);
+            NativeVoiceSettings settings = f.store.settings(binding);
+            JSONObject catalog = NativeSpeechCatalog.empty("server");
+            NativeVoiceJson.put(catalog, "voices", new org.json.JSONArray().put("cached-voice"));
+            f.store.speechCatalog(binding, new NativeSpeechCatalogCache(NativeSpeechCatalogCache.scope(binding, settings, "fixture-startup-token"),
+                System.currentTimeMillis(), catalog));
+            Reply connected = f.beginConnection(f.profile); f.authenticate(); f.flush();
+            assertEquals(catalog.toString(), f.runtime.snapshot().getJSONObject("speech").getJSONObject("catalog").toString());
+            server.setSoTimeout(200); assertThrows(java.net.SocketTimeoutException.class, server::accept);
+            f.session(); connected.await(); server.setSoTimeout(10000);
+            try (Socket socket = server.accept()) {
+                socket.setSoTimeout(10000);
+                BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream(), StandardCharsets.US_ASCII));
+                assertEquals("GET /v1/audio/capabilities HTTP/1.1", reader.readLine());
+                boolean authenticated = false;
+                for (String line = reader.readLine(); line != null && !line.isEmpty(); line = reader.readLine())
+                    if (line.equals("Authorization: Bearer fixture-startup-token")) authenticated = true;
+                assertTrue(authenticated);
+                assertEquals("loading", f.runtime.snapshot().getJSONObject("speech").getString("catalogStatus"));
+                assertEquals(catalog.toString(), f.runtime.snapshot().getJSONObject("speech").getJSONObject("catalog").toString());
+                f.runtime.nativeVisibility(true); f.beginConnection(f.profile).await(); f.flush();
+                assertTrue(f.starts.isEmpty()); assertEquals("off", f.runtime.snapshot().getString("phase"));
+                byte[] response = "{\"object\":\"list\",\"data\":[{\"id\":\"kokoro-local\",\"task\":\"speech\",\"voices\":[{\"id\":\"fresh-voice\"}]}]}".getBytes(StandardCharsets.UTF_8);
+                socket.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: " + response.length + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+                socket.getOutputStream().write(response); socket.getOutputStream().flush();
+            }
+            long deadline = android.os.SystemClock.elapsedRealtime() + 10000;
+            while (f.runtime.snapshot().getJSONObject("speech").getString("catalogStatus").equals("loading") &&
+                android.os.SystemClock.elapsedRealtime() < deadline) Thread.sleep(10);
+            JSONObject state = f.runtime.snapshot();
+            assertEquals("ready", state.getJSONObject("speech").getString("catalogStatus"));
+            assertEquals("fresh-voice", state.getJSONObject("speech").getJSONObject("catalog").getJSONArray("voices").getString(0));
+            assertEquals("af_heart", state.getJSONObject("settings").getString("ttsVoice"));
+            assertEquals("kokoro-local", state.getJSONObject("settings").getString("ttsModel"));
+            server.setSoTimeout(200); assertThrows(java.net.SocketTimeoutException.class, server::accept);
+            assertTrue(f.starts.isEmpty());
+        }
+    }
     @Test public void savedModesStartOnceAfterAuthenticationWithoutOpeningTheMicrophone() throws Exception {
         for (String mode : new String[] { "manual", "response" }) {
             try (Fixture f = new Fixture(mode, true, true)) {
@@ -223,15 +270,18 @@ public class NativeVoiceStartupTest {
         final BlockingQueue<NativeVoiceHttp.Result> auth = new LinkedBlockingQueue<>(), sessions = new LinkedBlockingQueue<>();
         final BlockingQueue<Intent> starts = new LinkedBlockingQueue<>();
         Fixture(String mode, boolean permission, boolean configured) throws Exception {
+            this(mode, permission, configured, "http://127.0.0.1:65125/v1");
+        }
+        Fixture(String mode, boolean permission, boolean configured, String endpoint) throws Exception {
             permissionGranted = permission;
             Constructor<NativeVoiceRuntime> constructor = NativeVoiceRuntime.class.getDeclaredConstructor(Context.class);
             constructor.setAccessible(true); runtime = constructor.newInstance(context);
             Field field = NativeVoiceRuntime.class.getDeclaredField("handler"); field.setAccessible(true); owner = (Handler) field.get(runtime);
             store = new NativeVoiceStore(context);
             store.settings(NativeVoiceStore.binding(profile, origin, IDENTITY), NativeVoiceSettings.defaults().patch(0,
-                NativeVoiceJson.object("audioMode", mode, "speechProvider", "server", "speechEndpoint", configured ? "http://127.0.0.1:65125/v1" : "",
+                NativeVoiceJson.object("audioMode", mode, "speechProvider", "server", "speechEndpoint", configured ? endpoint : "",
                     "sttModel", "parakeet-local", "ttsModel", "kokoro-local", "ttsVoice", "af_heart")));
-            if (configured) new SpeechCredentialStore(context).setCredential(profile, "server", "http://127.0.0.1:65125/v1", "fixture-startup-token");
+            if (configured) new SpeechCredentialStore(context).setCredential(profile, "server", endpoint, "fixture-startup-token");
             runtime.setTestSessionStarter(intent -> starts.add(intent));
             NativeVoiceHttp.setTestTransport(new NativeVoiceHttp.TestTransport() {
                 public boolean before(String method, String path, JSONObject body, NativeVoiceHttp.Result result) {

@@ -16,7 +16,11 @@ const actions = { canStart: false, canStop: false, canSkip: false, canRetarget: 
 async function renderPage(state: NativeVoiceState | Error, setup?: (fake: ReturnType<typeof fakeVoicePlugin>) => void) {
   const fake = fakeVoicePlugin();
   if (state instanceof Error) fake.plugin.setConnection.mockRejectedValue(state);
-  else { fake.plugin.setConnection.mockResolvedValue(state); fake.plugin.getState.mockResolvedValue(state); }
+  else {
+    fake.plugin.setConnection.mockResolvedValue(state);
+    fake.plugin.getState.mockResolvedValue(state);
+    fake.plugin.refreshSpeechCatalog.mockResolvedValue(state);
+  }
   setup?.(fake);
   const store = new NativeVoiceStore(fake.asPlugin, VOICE_CONNECTION, () => undefined);
   const view = render(<VoiceSettingsPage store={store} applicationStore={applicationStore} />);
@@ -66,19 +70,43 @@ describe("voice settings page", () => {
     await waitFor(() => expect(fake.plugin.resumeInput).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, mutationId: resumed }));
     store.dispose();
   });
-  it("enables voice in Response only once the speech configuration is complete", async () => {
+  it.each(["manual", "response"])("enables voice through Audio mode in %s only once speech setup is complete", async audioMode => {
     const { fake, store } = await renderPage(voiceSnapshot({ settings: voiceSettings({ sttModel: "" }) }));
-    expect(screen.getByRole("button", { name: "Enable voice" })).toBeDisabled();
-    act(() => fake.emit("settingsChanged", voiceSnapshot({ stateRevision: 2, settingsRevision: 1, settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://voice.test/v1" }), speech: { credentialConfigured: true, catalogStatus: "idle", catalog: null, error: null } })));
-    fake.plugin.getState.mockResolvedValue(voiceSnapshot({ stateRevision: 2, settingsRevision: 1, settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://voice.test/v1" }), speech: { credentialConfigured: true, catalogStatus: "idle", catalog: null, error: null } }));
-    fireEvent.click(screen.getByRole("button", { name: "Enable voice" }));
-    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 1, patch: { audioMode: "response" } }));
+    expect(screen.queryByRole("button", { name: "Enable voice" })).toBeNull();
+    expect(screen.getByRole("option", { name: "Manual" })).toBeDisabled();
+    expect(screen.getByRole("option", { name: "Response" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Audio mode" })).toHaveAccessibleDescription("Add a speech credential below.");
+    fireEvent.change(screen.getByRole("combobox", { name: "Audio mode" }), { target: { value: audioMode } });
+    expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
+    expect(fake.plugin.refreshSpeechCatalog).not.toHaveBeenCalled();
+    const configured = voiceSnapshot({ stateRevision: 2, settingsRevision: 1, settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://voice.test/v1" }), speech: { credentialConfigured: true, catalogStatus: "idle", catalog: null, error: null } });
+    fake.plugin.getState.mockResolvedValue(configured);
+    fake.plugin.refreshSpeechCatalog.mockResolvedValue(configured);
+    act(() => fake.emit("settingsChanged", configured));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Audio mode" })).toBeEnabled());
+    expect(screen.getByRole("option", { name: "Manual" })).toBeEnabled();
+    expect(screen.getByRole("option", { name: "Response" })).toBeEnabled();
+    fireEvent.change(screen.getByRole("combobox", { name: "Audio mode" }), { target: { value: audioMode } });
+    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 1, patch: { audioMode } }));
+    store.dispose();
+  });
+  it("keeps activation unavailable with a saved credential until the endpoint and models are configured", async () => {
+    const native = voiceSnapshot({ settings: voiceSettings({ speechProvider: "server", speechEndpoint: "", ttsVoice: "" }),
+      speech: { credentialConfigured: true, catalogStatus: "idle", catalog: null, error: null } });
+    const { fake, store } = await renderPage(native);
+    expect(screen.getByRole("option", { name: "Manual" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Audio mode" })).toHaveAccessibleDescription("Add a speech endpoint below.");
+    expect(fake.plugin.refreshSpeechCatalog).not.toHaveBeenCalled();
+    act(() => fake.emit("settingsChanged", { ...native, stateRevision: 2, settings: { ...native.settings, speechEndpoint: "https://voice.test/v1" } }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Audio mode" })).toBeEnabled());
+    expect(screen.getByRole("option", { name: "Response" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Audio mode" })).toHaveAccessibleDescription("Choose speech models and a voice below.");
     store.dispose();
   });
   it("keeps Show voice bar when off on this device, without a native write", async () => {
     const { fake, store } = await renderPage(voiceSnapshot());
     const toggle = screen.getByRole("switch", { name: "Show voice bar when off" });
-    expect(toggle).toHaveAccessibleDescription("Keep a dimmed bar under the composer while Audio mode is Off. Otherwise Off hides it.");
+    expect(toggle).toHaveAccessibleDescription("Keep a dimmed bar under the composer.");
     expect(toggle).toHaveAttribute("aria-checked", "false");
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-checked", "true");
@@ -142,13 +170,70 @@ describe("voice settings page", () => {
       patch: { speechProvider: "server", speechEndpoint: "", sttModel: "", ttsModel: "", ttsVoice: "", ttsSpeed: 1 } }));
     store.dispose();
   });
+  it("checks catalog freshness on opening, keeps settings usable during refresh, and preserves cached options on failure", async () => {
+    const native = voiceSnapshot({ settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://speech.test/v1", ttsModel: "kokoro", ttsVoice: "af_heart" }),
+      speech: { credentialConfigured: true, catalogStatus: "ready", error: null,
+        catalog: { source: "server", sttModels: ["parakeet"], ttsModels: ["kokoro"], voices: ["af_heart", "af_sky"], speed: { min: 0.5, max: 2 }, formats: ["pcm"] } } });
+    const loading = { ...native, stateRevision: 2, speech: { ...native.speech, catalogStatus: "loading" as const } };
+    const { fake, store, view } = await renderPage(native, fake => fake.plugin.refreshSpeechCatalog.mockResolvedValue(loading));
+    expect(fake.plugin.refreshSpeechCatalog).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, force: false });
+    expect(screen.getByRole("button", { name: "Refresh models and voices" })).toHaveTextContent("Refreshing…");
+    expect(screen.getByRole("button", { name: "Refresh models and voices" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Audio mode" })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "Speech voice" })).toBeEnabled();
+    const failed = { ...native, stateRevision: 3, speech: { ...native.speech, catalogStatus: "error" as const, error: "Couldn’t refresh." } };
+    act(() => fake.emit("stateChanged", failed));
+    expect(screen.getByText("Couldn’t refresh.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("combobox", { name: "Speech voice" }));
+    expect(await screen.findByRole("option", { name: "af_sky" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "af_heart" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.keyDown(screen.getByRole("combobox", { name: "Search speech voice options" }), { key: "Escape" });
+    view.rerender(<VoiceSettingsPage store={store} applicationStore={applicationStore} />);
+    expect(fake.plugin.refreshSpeechCatalog).toHaveBeenCalledTimes(1);
+    expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
+    fake.plugin.refreshSpeechCatalog.mockResolvedValue({ ...loading, stateRevision: 4 });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh models and voices" }));
+    await waitFor(() => expect(fake.plugin.refreshSpeechCatalog).toHaveBeenLastCalledWith({ expectedConnectionGeneration: 1, force: true }));
+    expect(fake.plugin.refreshSpeechCatalog).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Speech voice" })).toBeEnabled());
+    view.unmount();
+    render(<VoiceSettingsPage store={store} applicationStore={applicationStore} />);
+    await waitFor(() => expect(fake.plugin.refreshSpeechCatalog).toHaveBeenCalledTimes(3));
+    expect(fake.plugin.refreshSpeechCatalog).toHaveBeenLastCalledWith({ expectedConnectionGeneration: 1, force: false });
+    store.dispose();
+  });
+  it("does not overwrite newer native settings with a late catalog refresh reply", async () => {
+    const native = voiceSnapshot({ speech: { credentialConfigured: true, catalogStatus: "ready", catalog: null, error: null } });
+    let resolve!: (value: NativeVoiceState) => void;
+    const { fake, store } = await renderPage(native, fake => fake.plugin.refreshSpeechCatalog.mockImplementationOnce(() => new Promise(done => { resolve = done; })));
+    expect(screen.getByRole("combobox", { name: "Audio mode" })).toBeEnabled();
+    const newer = { ...native, stateRevision: 3, settingsRevision: 1, settings: { ...native.settings, ttsVoice: "nova" } };
+    act(() => fake.emit("settingsChanged", newer));
+    await act(async () => { resolve({ ...native, stateRevision: 2 }); });
+    expect(screen.getByRole("combobox", { name: "Speech voice" })).toHaveTextContent("nova");
+    expect(fake.plugin.refreshSpeechCatalog).toHaveBeenCalledTimes(1);
+    store.dispose();
+  });
+  it("preserves the last action error when reopening settings checks catalog freshness", async () => {
+    const native = voiceSnapshot({ speech: { credentialConfigured: true, catalogStatus: "ready", catalog: null, error: null } });
+    const { fake, store, view } = await renderPage(native);
+    fake.plugin.updateSettings.mockRejectedValue(new Error("Could not save voice."));
+    await act(async () => { await store.update({ ttsVoice: "nova" }).catch(() => undefined); });
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not save voice.");
+    view.unmount();
+    render(<VoiceSettingsPage store={store} applicationStore={applicationStore} />);
+    await waitFor(() => expect(fake.plugin.refreshSpeechCatalog).toHaveBeenCalledTimes(2));
+    expect(fake.plugin.refreshSpeechCatalog).toHaveBeenLastCalledWith({ expectedConnectionGeneration: 1, force: false });
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not save voice.");
+    store.dispose();
+  });
   it("keeps model IDs editable when catalog discovery fails and validates advertised speed limits", async () => {
     const native = voiceSnapshot({ settings: voiceSettings({ speechProvider: "server", speechEndpoint: "https://speech.test/v1", ttsModel: "custom-tts" }),
       speech: { credentialConfigured: false, catalogStatus: "ready", error: null,
         catalog: { source: "server", sttModels: ["custom-stt"], ttsModels: ["custom-tts"], voices: ["local-voice"], speed: { min: 0.5, max: 2 }, formats: ["pcm"] } } });
     const { fake, store } = await renderPage(native, fake => fake.plugin.updateSettings.mockResolvedValue(native));
     fireEvent.click(screen.getByRole("combobox", { name: "Recognition model" }));
-    fireEvent.click(await screen.findByRole("option", { name: "Enter custom ID…" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Custom…" }));
     fireEvent.change(screen.getByRole("textbox", { name: "Recognition model" }), { target: { value: "my-new-model" } });
     fireEvent.click(screen.getByRole("button", { name: "Save Recognition model" }));
     await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { sttModel: "my-new-model" } }));
@@ -161,7 +246,7 @@ describe("voice settings page", () => {
     expect(screen.getByRole("combobox", { name: "Speech model" })).toHaveTextContent("custom-tts");
     expect(screen.getByText("Discovery failed.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("combobox", { name: "Speech model" }));
-    fireEvent.click(await screen.findByRole("option", { name: "Enter custom ID…" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Custom…" }));
     expect(screen.getByRole("textbox", { name: "Speech model" })).toHaveValue("custom-tts");
     store.dispose();
   });
@@ -201,7 +286,7 @@ describe("voice settings page", () => {
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: touch }));
     const { fake, store } = await renderPage(voiceSnapshot());
     await user.click(screen.getByRole("combobox", { name: "Speech model" }));
-    await user.click(screen.getByRole("option", { name: "Enter custom ID…" }));
+    await user.click(screen.getByRole("option", { name: "Custom…" }));
     const input = screen.getByRole("textbox", { name: "Speech model" });
     await waitFor(() => expect(input).toHaveFocus());
     await user.clear(input);
@@ -214,7 +299,7 @@ describe("voice settings page", () => {
     expect(screen.getByRole("combobox", { name: "Speech model" })).toHaveFocus();
     expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
     await user.click(screen.getByRole("combobox", { name: "Speech model" }));
-    await user.click(screen.getByRole("option", { name: "Enter custom ID…" }));
+    await user.click(screen.getByRole("option", { name: "Custom…" }));
     expect(screen.getByRole("textbox", { name: "Speech model" })).toHaveValue("gpt-4o-mini-tts");
     fake.plugin.updateSettings.mockRejectedValue(new Error("Could not save model."));
     await user.clear(screen.getByRole("textbox", { name: "Speech model" }));

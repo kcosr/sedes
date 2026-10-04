@@ -19,17 +19,17 @@ import { useShowVoiceBarWhenOff } from "./voice-bar-preference.js";
 import { canEnableVoice, resumeVoice } from "./voice-session.js";
 
 const toggles = [
-  ["autoListen", "Auto-listen", "Allow eligible notifications to reopen the microphone. Explicit recording stays available."],
-  ["ignoreOtherDevices", "Ignore voice started on other devices", "Filter progress and completion for turns started by another device. Automations are still eligible."],
+  ["autoListen", "Auto-listen", "Eligible notifications reopen the microphone."],
+  ["ignoreOtherDevices", "Ignore voice started on other devices", "Automations are still included."],
   ["readNotificationContext", "Read notification title and context", "Speak the notice, project and thread before the response."],
-  ["onlyVoiceThread", "Only play from Voice thread", "Suppress automatic items for other threads. Choose a Voice thread first."],
-  ["followComposerMode", "Follow composer's selected mode", "Use its Steer or Queue preference. Otherwise recognized input always queues while a thread is running."],
-  ["recognizeStopCommand", "Recognize stop command", "Consume only “stop” and “stop listening” locally."],
-  ["recognitionCues", "Recognition cues", "Play tones when recording starts and when recognition succeeds, fails, or is cancelled."],
-  ["headsetControls", "Headset controls", "During an active voice session, start recording, skip speech or stop recording using the headset control."],
+  ["onlyVoiceThread", "Only play from Voice thread", "Limit automatic playback to the Voice thread above."],
+  ["followComposerMode", "Follow composer's selected mode", "Use its Steer or Queue choice. Otherwise queue while a thread is running."],
+  ["recognizeStopCommand", "Recognize stop command", "Say “stop” or “stop listening” to cancel."],
+  ["recognitionCues", "Recognition cues", "Play tones for recording and recognition results."],
+  ["headsetControls", "Headset controls", "Use headset buttons to record, skip speech, or stop recording."],
 ] as const;
 const numbers = [
-  ["speechTextLimit", "Speech chunk limit", 2, 4096, "Maximum characters per speech request. Long speech is split into ordered chunks."],
+  ["speechTextLimit", "Speech chunk limit", 2, 4096, "Characters per request; longer speech is split into chunks."],
   ["recognitionStartTimeoutMs", "Recognition start timeout (ms)", 1000, 300000, "Maximum wait for speech to begin."],
   ["recognitionCompletionTimeoutMs", "Recognition completion timeout (ms)", 1000, 300000, "Maximum recording time after speech begins."],
   ["recognitionResultTimeoutMs", "Recognition result timeout (ms)", 1000, 300000, "Maximum wait for the final transcript after recording ends."],
@@ -51,25 +51,29 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
   if (!native || !native.identity) return <SettingsPage title="Voice"><Callout tone="danger">{state.error ?? "Voice could not connect to this server."}</Callout>
     <Button disabled={state.pending} onClick={() => { void store.reconnect().catch(() => undefined); }}>Retry voice connection</Button></SettingsPage>;
   const settings = native.settings;
+  const blocked = settings.audioMode === "off" && !canEnableVoice(settings, native.speech.credentialConfigured);
+  const setupHelp = !settings.speechEndpoint ? "Add a speech endpoint below." : !native.speech.credentialConfigured ? "Add a speech credential below." : "Choose speech models and a voice below.";
   const update = (patch: Partial<NativeVoiceSettings>) => { void store.update(patch).catch(() => undefined); };
   const errors = recentVoiceErrors(state);
   const deviceLabels = inputDeviceLabels(devices);
   const voiceThreadLabel = settings.voiceThreadTitle ?? (settings.voiceThreadId
     ? application.snapshot?.threads.find(thread => thread.id === settings.voiceThreadId)?.title.text.trim() || "Untitled thread" : "Choose thread");
-  return <SettingsPage title="Voice" description="Android speech and recording for this server profile. Changes are saved on this device.">
+  return <SettingsPage title="Voice" description="Saved on this device for this server profile.">
     {errors.length ? <Callout tone="danger" role="alert" action={<Button variant="outline" size="sm" onClick={() => store.dismissErrors()}>Clear errors</Button>}>
       {errors.length === 1 ? errors[0] : <ul className="grid gap-1">{errors.map(error => <li key={error}>{error}</li>)}</ul>}
     </Callout> : null}
     <SettingsSection title="Voice session" card>
-      <SettingsField label="Audio mode" description="Manual keeps completions silent but can listen afterward. Response speaks selected notices and responses.">
-        <NativeSelect value={settings.audioMode} disabled={state.pending} onChange={event => update({ audioMode: event.target.value as NativeVoiceSettings["audioMode"] })}>
-          <option value="off">Off</option><option value="manual">Manual</option><option value="response">Response</option>
+      <SettingsField label="Audio mode" description={blocked ? setupHelp : "Manual keeps completions silent; Response reads them aloud. Both can auto-listen."}>
+        <NativeSelect value={settings.audioMode} disabled={state.pending} onChange={event => {
+          const audioMode = event.target.value as NativeVoiceSettings["audioMode"];
+          if (audioMode === "off" || !blocked) update({ audioMode });
+        }}>
+          <option value="off">Off</option><option value="manual" disabled={blocked}>Manual</option><option value="response" disabled={blocked}>Response</option>
         </NativeSelect>
       </SettingsField>
-      <SwitchField label="Show voice bar when off" description="Keep a dimmed bar under the composer while Audio mode is Off. Otherwise Off hides it."
+      <SwitchField label="Show voice bar when off" description="Keep a dimmed bar under the composer."
         checked={showBarWhenOff} onCheckedChange={setShowBarWhenOff} />
-      {settings.audioMode === "off" ? <Button disabled={state.pending || !canEnableVoice(settings, native.speech.credentialConfigured)} onClick={() => update({ audioMode: "response" })}>Enable voice</Button>
-        : native.actions.canResume ? <Button disabled={state.pending} onClick={() => { void resumeVoice(store).catch(() => undefined); }}>Resume voice</Button> : null}
+      {settings.audioMode !== "off" && native.actions.canResume ? <Button disabled={state.pending} onClick={() => { void resumeVoice(store).catch(() => undefined); }}>Resume voice</Button> : null}
       <p role="status">{voiceReadiness(native.readiness)}</p>
     </SettingsSection>
     <SpeechProviderSettings store={store} native={native} pending={state.pending} />
@@ -93,8 +97,8 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
         disabled={state.pending} onSave={value => store.update({ [key]: Number(value) })} />)}
     </SettingsSection>
     {native.recovery.length ? <SettingsSection title="Pending input recovery" card>
-      <p>These submissions may have reached Sedes. Resume retries the same input identity; it never creates a replacement message.
-        Discard deletes the saved input from this device and stops checking it; it cannot withdraw input Sedes already received.</p>
+      <p>These inputs may have reached Sedes. Resume checks delivery and retries the same input if needed.
+        Discard removes the saved input from this device; it cannot withdraw input already received.</p>
       {native.recovery.map(input => <div key={input.mutationId} className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="break-words">{application.snapshot?.threads.find(thread => thread.id === input.threadId)?.title.text.trim() || input.threadId}</p>
@@ -115,9 +119,15 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
 
 function SpeechProviderSettings({ store, native, pending }: { store: NativeVoiceStore; native: NativeVoiceState; pending: boolean }) {
   const settings = native.settings, speech = native.speech, catalog = speech.catalog;
+  useEffect(() => {
+    if (settings.speechEndpoint && speech.credentialConfigured) {
+      // Native checks freshness and publishes the result later; catalog updates must not restart this check.
+      void store.checkSpeechCatalog().catch(() => undefined);
+    }
+  }, [store, native.connectionGeneration, settings.speechProvider, settings.speechEndpoint, speech.credentialConfigured]);
   const update = (patch: Partial<NativeVoiceSettings>) => store.update(patch);
   const speed = catalog?.speed;
-  return <SettingsSection title="Speech provider" description="Speech connects directly from this Android device. Generated voices are AI voices." card>
+  return <SettingsSection title="Speech provider" description="Voices are AI-generated." card>
     <SettingsField label="Provider">
       <NativeSelect value={settings.speechProvider} disabled={pending} onChange={event => {
         const provider = event.target.value as NativeVoiceSettings["speechProvider"];
@@ -127,27 +137,25 @@ function SpeechProviderSettings({ store, native, pending }: { store: NativeVoice
     </SettingsField>
     {settings.speechProvider === "openai" ? <p className="text-sm text-muted-foreground">OpenAI API · https://api.openai.com/v1</p> :
       <VoiceTextSetting label="Speech API endpoint" type="url" value={settings.speechEndpoint} disabled={pending}
-        description="Your speech server API root, including /v1. Use a trusted network for an HTTP endpoint."
+        description="API URL including /v1. Use HTTP only on a trusted network."
         onSave={speechEndpoint => update({ speechEndpoint })} />}
-    <SettingsField label="Speech credential" description={speech.credentialConfigured ? "Saved securely on this Android device." : settings.speechProvider === "openai" ? "An OpenAI API key is required." : "A speech server bearer token is required."}>
+    <SettingsField label="Speech credential" description={speech.credentialConfigured ? "Saved securely on this device." : settings.speechProvider === "openai" ? "Add an OpenAI API key." : "Add your server's bearer token."}>
       <Button variant="outline" disabled={pending || !settings.speechEndpoint} onClick={() => {
         void store.run(() => store.plugin.openSpeechCredentialDialog(store.commandContext())).catch(() => undefined);
       }}>Manage speech credential</Button>
     </SettingsField>
     <div className="flex flex-wrap items-center gap-2">
-      <Button variant="outline" disabled={pending || speech.catalogStatus === "loading" || !settings.speechEndpoint || !speech.credentialConfigured} onClick={() => {
-        void store.run(() => store.plugin.refreshSpeechCatalog(store.commandContext())).catch(() => undefined);
-      }}>{speech.catalogStatus === "loading" ? "Discovering speech options…" : "Discover speech options"}</Button>
-      {speech.catalogStatus === "error" ? <p role="status">{speech.error ?? "Could not discover speech options."}</p> : null}
+      <Button variant="outline" aria-label="Refresh models and voices" disabled={pending || speech.catalogStatus === "loading" || !settings.speechEndpoint || !speech.credentialConfigured} onClick={() => {
+        void store.run(() => store.plugin.refreshSpeechCatalog({ ...store.commandContext(), force: true })).catch(() => undefined);
+      }}>{speech.catalogStatus === "loading" ? "Refreshing…" : "Refresh"}</Button>
+      {speech.catalogStatus === "error" ? <p role="status">{speech.error ?? "Couldn’t refresh."}</p> : null}
     </div>
-    <p className="text-sm text-muted-foreground">{settings.speechProvider === "openai" ? "Model choices reflect your account. Voice and speed choices come from maintained OpenAI model information. Choose Enter custom ID… to use another ID." :
-      "Discover and choose the models and voices advertised by your server, or choose Enter custom ID… to use a documented ID."}</p>
     <VoiceChoiceSetting label="Recognition model" value={settings.sttModel} disabled={pending} options={catalog?.sttModels} onSave={sttModel => update({ sttModel })} />
     <VoiceChoiceSetting label="Speech model" value={settings.ttsModel} disabled={pending} options={catalog?.ttsModels} onSave={ttsModel => update({ ttsModel })} />
     <VoiceChoiceSetting label="Speech voice" value={settings.ttsVoice} disabled={pending} options={catalog?.voices} onSave={ttsVoice => update({ ttsVoice })} />
     <VoiceTextSetting label="Speech speed" value={String(settings.ttsSpeed)} disabled={pending} min={Math.max(0.25, speed?.min ?? 0.25)} max={Math.min(4, speed?.max ?? 4)} step={0.05}
-      description={speed ? "Supported speed range for the selected speech model." : "Support for this model has not been verified. 1 is normal speed."} onSave={ttsSpeed => update({ ttsSpeed: Number(ttsSpeed) })} />
-    {catalog && !catalog.formats.includes("pcm") ? <p className="text-sm text-muted-foreground">PCM output support has not been confirmed for this model. Voice playback requires PCM audio.</p> : null}
+      description={speed ? "1 is normal speed." : "1 is normal speed. Model support is unverified."} onSave={ttsSpeed => update({ ttsSpeed: Number(ttsSpeed) })} />
+    {catalog && !catalog.formats.includes("pcm") ? <p className="text-sm text-muted-foreground">Playback requires PCM audio; model support is unverified.</p> : null}
   </SettingsSection>;
 }
 
@@ -186,7 +194,7 @@ function VoiceChoiceSetting({ label, value, disabled, options = [], onSave }: {
       <Button variant="ghost" aria-label={`Cancel custom ${label.toLowerCase()}`} disabled={disabled}
         onClick={() => { setDraft(value); setError(undefined); setCustom(false); }}>Cancel</Button>
     </div> : <SearchableSelect label={label} searchLabel={`Search ${label.toLowerCase()} options`} emptyLabel="No matching options"
-      value={`id:${value}`} placeholder={`Choose ${label.toLowerCase()}`} options={[...choices, { value: "custom", label: "Enter custom ID…", pinned: true }]}
+      value={`id:${value}`} placeholder={`Choose ${label.toLowerCase()}`} options={[...choices, { value: "custom", label: "Custom…", pinned: true }]}
       presentation={touch ? "dialog" : "popover"} disabled={disabled} onValueChange={next => {
         setError(undefined);
         if (next === "custom") { setDraft(value); setCustom(true); }

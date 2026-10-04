@@ -50,8 +50,9 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
     private boolean speechCredentialError;
     private String catalogStatus = "idle", catalogError;
     private JSONObject speechCatalog;
+    private NativeSpeechCatalogCache catalogCache;
     private Call catalogCall, credentialTestCall;
-    private Reply catalogReply, credentialTestReply;
+    private Reply credentialTestReply;
     private long speechGeneration, catalogGeneration;
     private final NativeVoiceAudio audio;
     private final NativeVoiceQueue queue = new NativeVoiceQueue();
@@ -143,7 +144,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
                     case "setConnection": setConnection(args, reply); return;
                     case "disconnect": NativeVoiceJson.keys(args); disconnect(true); break;
                     case "updateSettings": updateSettings(args, userInitiated); break;
-                    case "refreshSpeechCatalog": NativeVoiceJson.keys(args); refreshSpeechCatalog(reply); return;
+                    case "refreshSpeechCatalog":
+                        NativeVoiceJson.keys(args, "force");
+                        if (binding == null) throw new IllegalStateException("authentication_required");
+                        refreshSpeechCatalog(NativeVoiceJson.bool(args, "force")); break;
                     case "setForegroundContext": foreground(args); break;
                     case "startManualListen": manual(args); break;
                     case "retargetActiveRecognition": retarget(args); break;
@@ -200,9 +204,9 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
                 final String owner = binding;
                 // Unreadable records are quarantined and reset rather than blocking voice for this binding.
                 settings = record(owner, () -> store.settings(owner)); originId = record(owner, () -> store.originId(owner));
-                audio.configure(settings); configureSpeech(true, true);
+                audio.configure(settings); configureSpeech(true, true); publish();
             } catch (Exception error) { connectionFailed("voice_storage_unavailable", reply); return; }
-            loadSession(generation, () -> { phase = "off"; resumeEnabledSession(); publish(); recoverOutstanding(); reply.done(snapshot()); deliverPendingOpen(); },
+            loadSession(generation, () -> { phase = "off"; refreshSpeechCatalog(true); resumeEnabledSession(); publish(); recoverOutstanding(); reply.done(snapshot()); deliverPendingOpen(); },
                 code -> {
                     if (generation == connectionGeneration) connectionFailed(code, null);
                     reply.failed(code, message(code));
@@ -211,6 +215,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
     }
     private void connectionFailed(String code, Reply reply) {
         inputSubmissionContext = new Object();
+        invalidateSpeechMetadata();
         binding = null; identity = null; originId = null; csrf = null; phase = "error"; report(code);
         if (reply != null) reply.failed(code, message(code));
     }
@@ -262,6 +267,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
         else if (captureSettingsChanged(previous, next) && active != null && !speechIndependent(active) &&
             (active.sttId != null || phase.equals("validating") || phase.equals("arming") || phase.equals("listening") || phase.equals("recognizing")))
             cancelActive(true, "capture_settings_changed");
+        if (catalogConfigurationChanged(previous, next)) refreshSpeechCatalog(true);
+        else if (!previous.active() && next.active()) refreshSpeechCatalog(false);
         if (!next.active()) {
             cancelOutstanding(true); cancelActive(true, "voice_off"); queue.clear("voice_off"); stopSession(); phase = "off";
         } else {
@@ -368,7 +375,6 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
     }
     private void configureSpeech(boolean reloadCredential, boolean invalidateCatalog) {
         if (active != null && !speechIndependent(active)) cancelActive(true, "speech_configuration_changed");
-        boolean refetch = invalidateCatalog && (catalogStatus.equals("ready") || catalogStatus.equals("loading"));
         closeSpeech(); invalidateCredentialTest();
         if (invalidateCatalog) invalidateSpeechCatalog();
         if (reloadCredential) {
@@ -379,12 +385,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
                 catch (Exception error) { speechCredentialError = true; report("speech_credential_storage_unavailable"); }
             }
         }
-        if (refetch && speechCredential != null && !speechCredentialError && !settings.text("speechEndpoint").isEmpty()) {
-            refreshSpeechCatalog(new Reply() {
-                public void done(JSONObject value) {}
-                public void failed(String code, String message) {} // Discovery status already publishes the safe failure.
-            });
-        }
+        if (invalidateCatalog) restoreSpeechCatalog();
     }
     private void invalidateSpeechMetadata() {
         invalidateCredentialTest(); invalidateSpeechCatalog();
@@ -400,9 +401,21 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
         catalogGeneration++;
         if (catalogCall != null) catalogCall.cancel();
         catalogCall = null;
-        if (catalogReply != null) catalogReply.failed("speech_configuration_changed", message("speech_configuration_changed"));
-        catalogReply = null;
-        speechCatalog = null; catalogStatus = "idle"; catalogError = null;
+        speechCatalog = null; catalogCache = null; catalogStatus = "idle"; catalogError = null;
+    }
+    private void restoreSpeechCatalog() {
+        if (binding == null || speechCredentialError) return;
+        try {
+            catalogCache = store.speechCatalog(binding, NativeSpeechCatalogCache.scope(binding, settings, speechCredential));
+            if (catalogCache != null) { speechCatalog = NativeVoiceJson.copy(catalogCache.catalog); catalogStatus = "ready"; }
+        } catch (NativeVoiceStore.CorruptRecord error) {
+            // Discovery is disposable; a damaged cache must not reset voice settings or prevent authentication.
+            try { store.removeSpeechCatalog(binding); } catch (Exception ignored) {}
+        } catch (Exception ignored) { /* Keep unreadable records intact and revalidate metadata over the network. */ }
+    }
+    private void discardStoredSpeechCatalog() {
+        try { store.removeSpeechCatalog(binding); }
+        catch (Exception ignored) { /* Credential changes must remain available even when disposable cache I/O fails. */ }
     }
     static boolean catalogConfigurationChanged(NativeVoiceSettings previous, NativeVoiceSettings next) {
         for (String key : new String[] { "speechProvider", "speechEndpoint", "ttsModel" })
@@ -418,14 +431,18 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
                 if (settings.revision != expectedRevision) throw new IllegalStateException("settings_revision_conflict");
                 SpeechCredentialStore credentials = new SpeechCredentialStore(context);
                 switch (action) {
-                    case "save": credentials.setCredential(profileId, settings.text("speechProvider"), settings.text("speechEndpoint"), secret); break;
-                    case "remove": credentials.removeCredential(profileId, settings.text("speechProvider"), settings.text("speechEndpoint")); break;
+                    case "save":
+                        discardStoredSpeechCatalog();
+                        credentials.setCredential(profileId, settings.text("speechProvider"), settings.text("speechEndpoint"), secret); break;
+                    case "remove":
+                        discardStoredSpeechCatalog();
+                        credentials.removeCredential(profileId, settings.text("speechProvider"), settings.text("speechEndpoint")); break;
                     case "test":
                         if (secret == null && speechCredentialError) throw new IllegalStateException("speech_credential_storage_unavailable");
                         testSpeechCredential(secret == null ? speechCredential : secret, reply); return;
                     default: throw new IllegalArgumentException("unknown_voice_action");
                 }
-                configureSpeech(true, true); resumeEnabledSession(); publish(); drain(); reply.done(snapshot());
+                configureSpeech(true, true); refreshSpeechCatalog(true); resumeEnabledSession(); publish(); drain(); reply.done(snapshot());
             } catch (Exception error) { String code = code(error); reply.failed(code, message(code)); }
         });
     }
@@ -443,20 +460,30 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
             if (error != null) reply.failed(error, message(error)); else reply.done(snapshot());
         }));
     }
-    private void refreshSpeechCatalog(Reply reply) {
-        if (binding == null) { reply.failed("authentication_required", message("authentication_required")); return; }
-        if (speechCredentialError) { reply.failed("speech_credential_storage_unavailable", message("speech_credential_storage_unavailable")); return; }
-        if (settings.text("speechEndpoint").isEmpty()) { reply.failed("speech_configuration_required", message("speech_configuration_required")); return; }
-        if (catalogCall != null) catalogCall.cancel();
-        if (catalogReply != null) catalogReply.failed("speech_catalog_replaced", message("speech_catalog_replaced"));
-        catalogReply = reply; catalogStatus = "loading"; catalogError = null; publish();
-        long generation = catalogGeneration;
+    /** Advisory only: callers return immediately; matching in-flight requests share one background refresh. */
+    private void refreshSpeechCatalog(boolean force) {
+        if (binding == null || speechCredentialError || speechCredential == null || settings.text("speechEndpoint").isEmpty()) return;
+        if (catalogCall != null || (!force && catalogCache != null && catalogCache.fresh(System.currentTimeMillis()))) return;
+        catalogStatus = "loading"; catalogError = null; publish();
+        long generation = ++catalogGeneration;
+        final String owner = binding, scope = NativeSpeechCatalogCache.scope(binding, settings, speechCredential);
         catalogCall = NativeSpeechCatalog.fetch(settings, speechCredential, (catalog, error) -> handler.post(() -> {
-            if (generation != catalogGeneration || catalogReply != reply) return;
-            catalogReply = null; catalogCall = null;
-            speechCatalog = catalog; catalogError = error; catalogStatus = error == null ? "ready" : "error";
+            if (generation != catalogGeneration || !owner.equals(binding)) return;
+            catalogCall = null;
+            String resultError = error;
+            if (error == null) {
+                try {
+                    NativeSpeechCatalogCache next = new NativeSpeechCatalogCache(scope, System.currentTimeMillis(), catalog);
+                    catalogCache = next; speechCatalog = NativeVoiceJson.copy(next.catalog);
+                    try { store.speechCatalog(owner, next); }
+                    catch (Exception ignored) { /* An unavailable cache never invalidates successful discovery or voice. */ }
+                } catch (IllegalArgumentException invalid) { resultError = "speech_discovery_invalid"; }
+            } else if (error.equals("speech_authentication_failed")) {
+                speechCatalog = null; catalogCache = null; discardStoredSpeechCatalog();
+            }
+            // Transport/server/malformed replies preserve choices; explicit authentication rejection revokes them.
+            catalogError = resultError; catalogStatus = resultError == null ? "ready" : "error";
             publish();
-            if (error != null) reply.failed(error, message(error)); else reply.done(snapshot());
         }));
     }
     private boolean speechReady() { return !speechCredentialError && settings.configured(speechCredential != null); }
@@ -1250,7 +1277,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener {
             case "speech_configuration_required": return "Choose a speech endpoint, models and voice, and add the required credential.";
             case "speech_configuration_changed": return "Speech settings changed before this action finished.";
             case "speech_credential_storage_unavailable": return "This device's secure speech credential storage could not be read.";
-            case "speech_test_replaced": case "speech_catalog_replaced": return "A newer speech settings check replaced this one.";
+            case "speech_test_replaced": return "A newer speech settings check replaced this one.";
             case "speech_discovery_unavailable": return "The speech service could not be reached for model discovery.";
             case "speech_discovery_invalid": return "The speech service returned an unreadable model catalog.";
             case "speech_discovery_cancelled": return "Speech model discovery was cancelled.";
