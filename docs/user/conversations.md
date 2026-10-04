@@ -20,17 +20,16 @@ pinned Voice thread, or asks you to choose one. Voice sends a separate message
 and preserves the unsent composer draft. It can also make the first send to an
 empty thread.
 
-The card names a thread only when voice is speaking from, or recording to, a
-thread other than the one on screen, using its title or **Untitled thread**.
-When the visible thread cannot take a recording, or no thread is on screen,
-the idle card names your Voice thread or shows **Choose a thread**. If voice
-needs to resume, the card offers **Resume**. Otherwise the first line is the
-status, such as **Ready to
-record**, **Speaking**, or **Listening**, and the second adds the mode and
-Auto-listen, the speech queue, or **This thread**.
+The card's first line always names its thread, using its title or **Untitled
+thread**: the thread being spoken or recorded to, or, when idle, the thread a
+recording would use. That is the visible thread when it can take a recording,
+otherwise your Voice thread; with neither, the card shows **Choose a thread**.
+The second line is the state, such as **Ready · Response · Auto-listen on**,
+**Speaking** with the notice kind and queued count, or **Listening**. If voice
+needs to resume, the card offers **Resume**.
 
-Tap a card that names another thread to open that thread. While listening,
-tap the target chip, **This thread** or **Change thread**, to change the
+Tap the card to open its thread when another thread is on screen. While
+listening, tap **Change** (or **Choose** without a target) to change the
 recording target before recognition finishes; the picker lists the visible
 thread first. Navigating to another thread alone does not redirect a recording.
 Once recognition finishes, its target and delivery policy stay fixed through
