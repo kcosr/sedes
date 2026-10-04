@@ -115,7 +115,7 @@ function SwitchRow({ icon, label, description, checked, locked, onCheckedChange 
 }
 function RowText({ id, label, description }: { id: string; label: string; description: string }) {
   return <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-    <span id={`${id}-label`}>{label}</span>
+    <span id={`${id}-label`} className="whitespace-normal">{label}</span>
     <span id={`${id}-description`} className="truncate text-(length:--text-ui) leading-[18px] text-muted-foreground">{description}</span>
   </span>;
 }
