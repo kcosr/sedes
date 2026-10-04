@@ -208,9 +208,8 @@
 
 ### Added
 
-- Client controls tools inspect basic voice settings, update the mode/default
-  thread, finish an interaction, and switch threads after reply playback. They
-  default to the turn’s starting client and allow another client only on request.
+- Agent client controls manage basic voice settings, end interactions, and switch
+  threads after reply playback, defaulting to the client that started the turn.
   ([#50](https://github.com/kcosr/sedes/pull/50))
 - Task creation supports pinning in the add row and paste-many dialog.
   ([#50](https://github.com/kcosr/sedes/pull/50))
