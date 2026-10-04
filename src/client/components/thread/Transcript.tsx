@@ -56,6 +56,11 @@ import { ActivityGroup } from "./ActivityGroup.js";
 import { ViewedImageGroup } from "./ViewedImageGroup.js";
 import { isActivityItem, type ActivityItem } from "./activity-groups.js";
 import { navigationScrollBehavior } from "./navigation-scroll.js";
+import {
+  isServerSubmission,
+  selectTranscriptSubmissions,
+  type TranscriptSubmission,
+} from "./submission-presentation.js";
 
 /**
  * Armed by ThreadView when the composer delivers a message while the
@@ -76,6 +81,8 @@ export type TranscriptHandle = {
   readonly beginHistoryScrub: () => string | undefined;
   readonly seekHistoryItem: (itemId: string) => void;
   readonly seekAdjacentHistoryItem: (direction: "previous" | "next") => void;
+  /** Seek an armed send now, or leave it queued until its exact row appears. */
+  readonly seekPendingSend: () => void;
   /**
    * Seeks a turn that is already rendered in the ordinary transcript.
    * Returns false when the caller must fall back to targeted history lookup.
@@ -123,6 +130,7 @@ export function Transcript({
   findContentRef,
   findViewportRef,
 }: TranscriptProps): React.JSX.Element {
+  const state = useThreadStore(store);
   const {
     snapshot,
     pendingComposerTransfers,
@@ -133,7 +141,7 @@ export function Transcript({
     bookmarks,
     bookmarkStatus,
     pendingBookmarkTurnIds,
-  } = useThreadStore(store);
+  } = state;
   const activityDetail = store.activityDetail;
   const ownedViewport = useRef<HTMLDivElement>(null);
   const ownedContent = useRef<HTMLDivElement>(null);
@@ -245,12 +253,7 @@ export function Transcript({
   const optimisticTransfers =
     focusTurnId || selectedFocusPage
       ? []
-      : pendingComposerTransfers
-          .filter(isVisibleOptimisticSubmit)
-          .sort(
-            (left, right) =>
-              left.presentationSequence - right.presentationSequence,
-          );
+      : selectTranscriptSubmissions(state);
   const optimisticByPlacement = optimisticTransfersByPlacement(
     optimisticTransfers,
     pendingComposerTransfers,
@@ -855,19 +858,6 @@ export function Transcript({
     return true;
   };
 
-  useImperativeHandle(
-    ref,
-    () => ({
-      beginHistoryScrub: () => {
-        return yieldSeekToReader("history_scrub") ?? syncHistoryRailActive();
-      },
-      seekHistoryItem: scrollToHistoryItem,
-      seekAdjacentHistoryItem,
-      seekTurn: seekLoadedTurn,
-    }),
-    [scrollToHistoryItem, seekAdjacentHistoryItem, seekLoadedTurn],
-  );
-
   useEffect(() => {
     if (focusTurnId) setLocallySelectedTurnId(undefined);
   }, [focusTurnId, store]);
@@ -1191,6 +1181,15 @@ export function Transcript({
   }, [chatViewVisible]);
 
   useLayoutEffect(() => {
+    if (chatViewVisible && focusTurnId === undefined) return;
+    if (seekRequest) seekRequest.current = null;
+    if (seekBeginFrame.current !== undefined) {
+      cancelAnimationFrame(seekBeginFrame.current);
+      seekBeginFrame.current = undefined;
+    }
+  }, [chatViewVisible, focusTurnId, seekRequest]);
+
+  useLayoutEffect(() => {
     if (!smoothStreaming) {
       const followerWasActive = liveEdgeFollowOwned.current;
       cancelLiveEdgeFollow();
@@ -1239,7 +1238,11 @@ export function Transcript({
     }
     seekBeginFrame.current = requestAnimationFrame(() => {
       seekBeginFrame.current = undefined;
-      if (viewport.current !== element) return;
+      if (
+        viewport.current !== element ||
+        !chatViewVisibleRef.current ||
+        focusTurnIdRef.current !== undefined
+      ) return;
       const target = findSeekTarget(element, targetIdentity);
       if (!target) {
         traceSeek("seek_target_missing");
@@ -1269,6 +1272,10 @@ export function Transcript({
     { readonly itemId: string; readonly operationId: string } | undefined => {
     const request = seekRequest?.current;
     if (!request || !seekRequest) return undefined;
+    if (!chatViewVisibleRef.current || focusTurnIdRef.current !== undefined) {
+      seekRequest.current = null;
+      return undefined;
+    }
     if (Date.now() - request.requestedAt > seekRequestTtlMilliseconds) {
       traceSeek("seek_request_expired");
       seekRequest.current = null;
@@ -1294,6 +1301,23 @@ export function Transcript({
     traceSeek("seek_request_consumed");
     return { itemId, operationId: request.operationId };
   };
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      beginHistoryScrub: () => {
+        return yieldSeekToReader("history_scrub") ?? syncHistoryRailActive();
+      },
+      seekHistoryItem: scrollToHistoryItem,
+      seekAdjacentHistoryItem,
+      seekTurn: seekLoadedTurn,
+      seekPendingSend: () => {
+        const target = takeSeekTarget();
+        if (target) beginSeek(target);
+      },
+    }),
+    [scrollToHistoryItem, seekAdjacentHistoryItem, seekLoadedTurn, takeSeekTarget, beginSeek],
+  );
 
   useLayoutEffect(
     () =>
@@ -1985,7 +2009,7 @@ export function Transcript({
                       );
                     };
                     const appendTransfer = (
-                      transfer: PendingComposerTransfer,
+                      transfer: TranscriptSubmission,
                     ) => {
                       flushActivity();
                       presentation.push(
@@ -2198,14 +2222,6 @@ function isActiveRun(runState: ThreadRunState): boolean {
 const provisionalItemId = (operationId: string): string =>
   `client-delivery:${operationId}`;
 
-function isVisibleOptimisticSubmit(transfer: PendingComposerTransfer): boolean {
-  return (
-    transfer.mode === "submit" &&
-    transfer.presentation === "transcript" &&
-    transfer.authorityState === "client_only"
-  );
-}
-
 const optimisticStartPlacement = "start";
 const optimisticBeforeItemPlacement = (itemId: string): string =>
   `before-item:${itemId}`;
@@ -2215,13 +2231,13 @@ const optimisticAfterTurnPlacement = (turnId: string): string =>
   `after-turn:${turnId}`;
 
 function optimisticTransfersByPlacement(
-  visibleTransfers: readonly PendingComposerTransfer[],
+  visibleTransfers: readonly TranscriptSubmission[],
   allTransfers: readonly PendingComposerTransfer[],
   authoritativeItemIds: ReadonlySet<string>,
   orderedTurnIds: readonly string[],
   turnsById: Readonly<Record<string, ConversationTurn>> | undefined,
-): Map<string, PendingComposerTransfer[]> {
-  const result = new Map<string, PendingComposerTransfer[]>();
+): Map<string, TranscriptSubmission[]> {
+  const result = new Map<string, TranscriptSubmission[]>();
   for (const transfer of visibleTransfers) {
     let anchor = transfer.baselineTailItemId;
     for (const predecessor of allTransfers) {
@@ -2250,7 +2266,7 @@ function optimisticTransfersByPlacement(
 }
 
 function missingAnchorPlacement(
-  transfer: PendingComposerTransfer,
+  transfer: TranscriptSubmission,
   orderedTurnIds: readonly string[],
   turnsById: Readonly<Record<string, ConversationTurn>> | undefined,
 ): string {
@@ -2288,7 +2304,7 @@ function missingAnchorPlacement(
 }
 
 function hasIrreduciblyMissingAnchor(
-  transfer: PendingComposerTransfer,
+  transfer: TranscriptSubmission,
   orderedTurnIds: readonly string[],
   turnsById: Readonly<Record<string, ConversationTurn>> | undefined,
 ): boolean {
@@ -2325,8 +2341,20 @@ function placementAfterTurnBoundary(
 }
 
 function optimisticUserContent(
-  transfer: PendingComposerTransfer,
+  transfer: TranscriptSubmission,
 ): readonly UserMessagePresentationPart[] {
+  if (isServerSubmission(transfer)) {
+    return transfer.content ?? [
+      {
+        kind: "text",
+        text: {
+          text: transfer.preview.truncation
+            ? `${transfer.preview.text}…`
+            : transfer.preview.text,
+        },
+      },
+    ];
+  }
   const content: UserMessagePresentationPart[] = [];
   const skillLabel = transfer.capturedPresentation.selectedSkillLabel;
   if (skillLabel) {
@@ -2367,7 +2395,7 @@ const TranscriptUserMessage = memo(function TranscriptUserMessage({
   bookmarkStore,
 }: {
   readonly item?: UserMessageItem;
-  readonly transfer?: PendingComposerTransfer;
+  readonly transfer?: TranscriptSubmission;
   readonly suppressLiveAnnouncement?: boolean;
   readonly context?: ItemRenderContext;
   readonly bookmarkTurnId?: string;
@@ -2382,6 +2410,35 @@ const TranscriptUserMessage = memo(function TranscriptUserMessage({
   if (!item && !transfer) return null;
   const operationId = item?.deliveryOperationId ?? transfer?.operationId;
   const provisional = transfer !== undefined;
+  const serverSubmission =
+    transfer && isServerSubmission(transfer) ? transfer : undefined;
+  const truncated =
+    serverSubmission &&
+    !serverSubmission.content &&
+    serverSubmission.preview.truncation !== undefined;
+  const submissionNotices: string[] = [];
+  if (serverSubmission?.phase === "unconfirmed") {
+    submissionNotices.push("Delivery unconfirmed");
+  }
+  if (serverSubmission && !serverSubmission.content) {
+    if (
+      truncated ||
+      serverSubmission.attachmentCount > 0 ||
+      serverSubmission.taskCount > 0
+    ) {
+      submissionNotices.push("Message preview");
+    }
+    if (serverSubmission.attachmentCount > 0) {
+      submissionNotices.push(
+        `${serverSubmission.attachmentCount} ${serverSubmission.attachmentCount === 1 ? "attachment" : "attachments"}`,
+      );
+    }
+    if (serverSubmission.taskCount > 0) {
+      submissionNotices.push(
+        `${serverSubmission.taskCount} ${serverSubmission.taskCount === 1 ? "task" : "tasks"}`,
+      );
+    }
+  }
   return (
     <div
       className="conversation-item"
@@ -2411,6 +2468,15 @@ const TranscriptUserMessage = memo(function TranscriptUserMessage({
               }
             : {})}
         />
+        {submissionNotices.length > 0 && (
+          <div
+            className="mt-1 text-right text-xs text-muted-foreground"
+            data-submission-phase={serverSubmission?.phase}
+            role="status"
+          >
+            {submissionNotices.join(" · ")}
+          </div>
+        )}
         {bookmarkTurnId &&
           bookmarkStore &&
           bookmarkUserPreview !== undefined &&

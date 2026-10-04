@@ -37,12 +37,19 @@ import type {
 } from "../stores/ThreadClientStore.js";
 import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry.js";
 import { clearDiagnostics, readDiagnostics } from "../app/diagnostics.js";
-import { setDiagnosticCategoryEnabled } from "../app/settings.js";
+import { setDiagnosticCategoryEnabled, setSeekOnSubmit } from "../app/settings.js";
+import { NativeVoiceStore } from "../voice/NativeVoiceStore.js";
+import { fakeVoicePlugin, VOICE_CONNECTION } from "../voice/native-voice-test-fixture.js";
 import {
   beginThreadLoadAttempt,
   resetThreadLoadAttemptsForTests,
 } from "../app/thread-load-diagnostics.js";
 import { ThreadView } from "./ThreadView.js";
+const voiceContext = vi.hoisted(() => ({ store: null as NativeVoiceStore | null }));
+vi.mock("../voice/VoiceProvider.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../voice/VoiceProvider.js")>(),
+  useNativeVoice: () => voiceContext.store,
+}));
 import {
   handleTaskDragStart,
   TaskDragProvider,
@@ -82,6 +89,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  voiceContext.store?.dispose();
+  voiceContext.store = null;
   getBlockingOperation()?.dismiss();
   cleanup();
   clearDiagnostics();
@@ -89,6 +98,58 @@ afterEach(() => {
   localStorage.clear();
   vi.unstubAllGlobals();
   window.history.replaceState(null, "", "/");
+});
+
+describe("ThreadView local voice Send", () => {
+  async function mountVoice(visible = true) {
+    const native = fakeVoicePlugin();
+    voiceContext.store = new NativeVoiceStore(native.asPlugin, VOICE_CONNECTION, vi.fn());
+    await voiceContext.store.initialize();
+    const operationId = "d105549b-f6e3-40d2-8a8f-63e059b2d48b";
+    const threadId = "9972fbd3-490e-407c-9695-d733a78780df";
+    const base = makeSnapshot("interactive", "idle");
+    const snapshot: NormalizedThreadSnapshot = {
+      ...base, thread: { ...base.thread, id: threadId }, interactions: [], queue: [],
+      orderedTurnIds: ["voice-turn"],
+      turnsById: { "voice-turn": { id: "voice-turn", revision: 1, status: "completed", orderedItemIds: ["voice-item"] } },
+      itemsById: { "voice-item": { id: "voice-item", turnId: "voice-turn", revision: 1,
+        kind: "user_message", status: "completed", deliveryOperationId: operationId,
+        content: [{ kind: "text", text: { text: "Local spoken message" } }] } },
+    };
+    const state = fixture(snapshot);
+    const view = render(<ThreadView threadId={threadId} visible={visible} automationOpen={false}
+      registry={state.registry} applicationStore={state.applicationStore} />);
+    const viewport = screen.getByRole("region", { name: "Messages", hidden: true });
+    Object.defineProperty(viewport, "scrollTo", { configurable: true, value: vi.fn() });
+    setDiagnosticCategoryEnabled("seek", true);
+    clearDiagnostics();
+    return { ...native, ...state, view, threadId, operationId,
+      event: { ...VOICE_CONNECTION, threadId, operationId, connectionGeneration: 1 } };
+  }
+
+  it("uses Seek on send for a matching local receipt even after the message rendered", async () => {
+    const f = await mountVoice();
+    setSeekOnSubmit(true);
+    act(() => f.emit("inputSubmitted", f.event));
+    expect(readDiagnostics().filter(entry => entry.event === "seek_request_consumed")).toHaveLength(1);
+    expect(readDiagnostics().some(entry => entry.event === "seek_requested")).toBe(true);
+    act(() => f.emit("inputSubmitted", f.event));
+    expect(readDiagnostics().filter(entry => entry.event === "seek_request_consumed")).toHaveLength(1);
+    expect(f.registry.get(f.threadId).getSnapshot().snapshot?.draft).toEqual(makeSnapshot("interactive", "idle").draft);
+  });
+
+  it.each(["disabled", "other-thread", "hidden-panel"] as const)("does not seek for %s", async reason => {
+    const f = await mountVoice(reason !== "hidden-panel");
+    setSeekOnSubmit(reason !== "disabled");
+    act(() => f.emit("inputSubmitted", reason === "other-thread"
+      ? { ...f.event, threadId: "bfa7a392-4186-4ab4-89c4-674a31ae6743" } : f.event));
+    expect(readDiagnostics().some(entry => entry.event === "seek_request_consumed")).toBe(false);
+    // Later enabling/revealing cannot replay an earlier local event.
+    setSeekOnSubmit(true);
+    f.view.rerender(<ThreadView threadId={f.threadId} visible automationOpen={false}
+      registry={f.registry} applicationStore={f.applicationStore} />);
+    expect(readDiagnostics().some(entry => entry.event === "seek_request_consumed")).toBe(false);
+  });
 });
 
 describe("ThreadView load errors", () => {
@@ -1083,6 +1144,7 @@ describe("ThreadView backend interaction modes", () => {
       authoritative: false,
       actionPending: false,
       pendingComposerTransfers: [],
+      pendingServerSubmissions: [],
       pendingQueuedSteers: [],
       historyLoading: false,
       forkAttempts: {},
@@ -1487,6 +1549,7 @@ function fixture(
     authoritative: true,
     actionPending: false,
     pendingComposerTransfers,
+    pendingServerSubmissions: [],
     pendingQueuedSteers: [],
     historyLoading: false,
     forkAttempts: {},

@@ -12,7 +12,69 @@ function fixture() {
 const openEvent = (threadId: string, profileId = "profile") => ({ threadId, profileId,
   serverOrigin: "https://sedes.test", identity: VOICE_IDENTITY, connectionGeneration: 1 });
 const runtimeError = (message: string, connectionGeneration = 1) => ({ code: "voice_error", message, connectionGeneration, ...VOICE_CONNECTION });
-afterEach(() => { vi.useRealTimers(); });
+const submittedEvent = (patch = {}) => ({ ...VOICE_CONNECTION, connectionGeneration: 1,
+  threadId: "c61b5d8b-4a77-43c6-bd72-12e23fe42e38", operationId: "618f73db-b94d-4538-8ed9-7566313eb807", ...patch });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+describe("local voice submission events", () => {
+  it("delivers each exact live operation once without retaining it in state or replaying to new listeners", async () => {
+    const { store, listeners } = fixture();
+    const receive = vi.fn();
+    const unsubscribe = store.subscribeInputSubmitted(receive);
+    await store.initialize();
+    const before = store.getSnapshot();
+    const event = submittedEvent();
+    listeners.get("inputSubmitted")!(event);
+    listeners.get("inputSubmitted")!(event);
+    expect(receive).toHaveBeenCalledExactlyOnceWith(event);
+    expect(store.getSnapshot()).toBe(before);
+    unsubscribe();
+    const later = vi.fn();
+    store.subscribeInputSubmitted(later);
+    expect(later).not.toHaveBeenCalled();
+    store.dispose();
+    listeners.get("inputSubmitted")!(submittedEvent({ operationId: crypto.randomUUID() }));
+    expect(later).not.toHaveBeenCalled();
+  });
+
+  it("drops unhydrated, wrong-binding, stale, future and malformed events", async () => {
+    const { store, listeners, plugin } = fixture();
+    const receive = vi.fn();
+    store.subscribeInputSubmitted(receive);
+    plugin.setConnection.mockImplementationOnce(async () => {
+      listeners.get("inputSubmitted")!(submittedEvent());
+      return snapshot();
+    });
+    await store.initialize();
+    for (const patch of [
+      { profileId: "other" }, { serverOrigin: "https://other.test" }, { identity: "f".repeat(64) },
+      { connectionGeneration: 0 }, { connectionGeneration: 2 }, { threadId: "not-a-uuid" },
+      { operationId: "not-a-uuid" }, { unexpected: true },
+    ]) listeners.get("inputSubmitted")!(submittedEvent(patch));
+    expect(receive).not.toHaveBeenCalled();
+    listeners.get("inputSubmitted")!(submittedEvent());
+    expect(receive).toHaveBeenCalledOnce();
+    listeners.get("stateChanged")!(disconnectedVoiceSnapshot(2));
+    listeners.get("inputSubmitted")!(submittedEvent({ connectionGeneration: 2, operationId: crypto.randomUUID() }));
+    expect(receive).toHaveBeenCalledOnce();
+    store.dispose();
+  });
+
+  it("does not defer hidden-window events until the app becomes visible", async () => {
+    const { store, listeners } = fixture();
+    const receive = vi.fn();
+    store.subscribeInputSubmitted(receive);
+    await store.initialize();
+    vi.stubGlobal("document", { visibilityState: "hidden" });
+    listeners.get("inputSubmitted")!(submittedEvent());
+    expect(receive).not.toHaveBeenCalled();
+    vi.stubGlobal("document", { visibilityState: "visible" });
+    expect(receive).not.toHaveBeenCalled();
+    listeners.get("inputSubmitted")!(submittedEvent({ operationId: crypto.randomUUID() }));
+    expect(receive).toHaveBeenCalledOnce();
+    store.dispose();
+  });
+});
 describe("native voice state authority", () => {
   it("retains a notification open until native hydration and supports retry after transient startup failure", async () => {
     const { store, plugin, listeners, open } = fixture();
@@ -70,7 +132,7 @@ describe("native voice state authority", () => {
     listeners.get("openThread")!(openEvent("own"));
     expect(open).toHaveBeenCalledExactlyOnceWith("own");
     store.dispose();
-    expect(remove).toHaveBeenCalledTimes(4);
+    expect(remove).toHaveBeenCalledTimes(5);
     expect(plugin.disconnect).not.toHaveBeenCalled();
     await expect(store.update({ autoListen: false })).rejects.toThrow("no longer active");
   });

@@ -6,6 +6,8 @@ import { NotificationService } from "../../src/server/domain/notification-servic
 import { QuestionRequestService } from "../../src/server/domain/question-request-service.js";
 import { QuestionRequestRepository } from "../../src/server/db/repositories/question-request-repository.js";
 import { QueuedInputRepository } from "../../src/server/db/repositories/queued-input-repository.js";
+import { DatabaseThreadApplicationQueueReader } from "../../src/server/conversations/database-conversation-adapters.js";
+import { SubmissionCompletionRepository } from "../../src/server/db/repositories/submission-completion-repository.js";
 import { ConversationDraftRepository } from "../../src/server/db/repositories/conversation-draft-repository.js";
 import { DirectInputRepository } from "../../src/server/db/repositories/direct-input-repository.js";
 import { ThreadActivityService } from "../../src/server/conversations/thread-activity-service.js";
@@ -725,6 +727,10 @@ async function fixture(
     },
     readInputReceipt(scope: RequestScope, mutationId: string) {
       return directInputs.lookup(scope, mutationId);
+    },
+    readQueuedInput(scope: RequestScope, threadId: string, queuedInputId: string) {
+      return new DatabaseThreadApplicationQueueReader(new QueuedInputRepository(database))
+        .read(scope, threadId, queuedInputId);
     },
     // Queue-mode admission over the real receipt and queue repositories.
     async admitInput(scope: RequestScope, threadId: string, input: DirectInputRequest) {
@@ -4892,6 +4898,93 @@ describe("normalized HTTP application contract", () => {
     } finally {
       current.close();
     }
+  });
+
+  it("reads full scoped queued input and distinguishes acceptance from cancellation without attaching a runtime", async () => {
+    const current = await fixture();
+    try {
+      const workspace = await current
+        .mutate(request(current.app).post("/api/workspaces/open"))
+        .send({ environmentId: current.environmentId, path: current.workspacePath, project: { kind: "new", name: "workspace" } })
+        .expect(201);
+      const threadId = (await current
+        .mutate(request(current.app).post("/api/threads"))
+        .send({ workspaceId: workspace.body.id, configuration: { kind: "custom", targetId: current.profile.id },
+          executionWorkspace: { kind: "direct" }, title: "Queued input read" })
+        .expect(201)).body.threadId as string;
+      current.bindThread(threadId);
+      const queue = new QueuedInputRepository(current.database);
+      const originalDraft = current.repository.getDraft(current.owner, threadId);
+      const text = `  ${"A long spoken input 🎤. ".repeat(100)}\nFinal sentence.  `;
+      const enqueue = () => queue.enqueue(current.owner, threadId, {
+        mutationId: randomUUID(), text, contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        source: { kind: "direct_input", resolvedDeliveryMode: "submit",
+          expectedThreadRevision: current.repository.getThread(current.owner, threadId).thread.revision },
+        now: Date.now(),
+      }).item;
+      const first = enqueue();
+      const read = (id: string, targetThreadId = threadId) => current
+        .withHost(request(current.app).get(`/api/threads/${targetThreadId}/queued-inputs/${id}`));
+      const totalChanges = () => current.database.prepare("SELECT total_changes() AS count").get();
+      const beforeRead = totalChanges();
+      const pending = await read(first.id).expect(200).expect("Cache-Control", "no-store");
+      expect(pending.body).toEqual({
+        threadId, threadRevision: current.repository.getThread(current.owner, threadId).thread.revision,
+        queuedInputId: first.id, deliveryOperationId: first.mutationId,
+        createdAt: new Date(first.createdAt).toISOString(), state: "pending",
+        resolvedDeliveryMode: "submit", origin: "user", content: [{ kind: "text", text: { text } }],
+      });
+      expect(totalChanges()).toEqual(beforeRead);
+      expect(current.runtimeEstablishmentCaptures).toHaveLength(0);
+      expect(current.runtimeReplacementCaptures).toHaveLength(0);
+      expect(current.operationCalls).toHaveLength(0);
+      expect(current.repository.getDraft(current.owner, threadId)).toEqual(originalDraft);
+      await read(first.id).set("X-Test-Foreign-Principal", "yes").expect(404);
+      await read(first.id, randomUUID()).expect(404);
+      await read("missing").expect(404);
+      await read(first.id, "not-a-thread").expect(400);
+
+      queue.claimHead(current.owner, threadId, "private-retry-anchor", Date.now());
+      const sending = await read(first.id).expect(200);
+      expect(sending.body).toMatchObject({ state: "dispatching", deliveryOperationId: first.mutationId });
+      expect(sending.body.threadRevision).toBeGreaterThan(pending.body.threadRevision);
+      expect(JSON.stringify(sending.body)).not.toContain("private-retry-anchor");
+      queue.markAccepted(current.owner, threadId, first.id, {
+        expectedState: "dispatching", acceptedAt: Date.now(), backendCorrelation: first.mutationId,
+      });
+      const accepted = await read(first.id).expect(200);
+      expect(accepted.body).toMatchObject({ state: "accepted", deliveryOperationId: first.mutationId, content: pending.body.content });
+      expect(accepted.body.threadRevision).toBeGreaterThan(sending.body.threadRevision);
+
+      const cancelled = enqueue();
+      queue.cancelIdempotently(current.owner, threadId, cancelled.id, {
+        mutationId: randomUUID(), now: Date.now(),
+        expectedThreadRevision: current.repository.getThread(current.owner, threadId).thread.revision,
+      });
+      expect((await read(cancelled.id).expect(200)).body).toMatchObject({ state: "cancelled", deliveryOperationId: cancelled.mutationId });
+
+      const steered = enqueue();
+      const steerOperationId = randomUUID();
+      queue.reserveHeadForSteer(current.owner, threadId, steered.id, {
+        steerOperationId, expectedThreadRevision: current.repository.getThread(current.owner, threadId).thread.revision,
+        now: Date.now(),
+      });
+      expect((await read(steered.id).expect(200)).body.deliveryOperationId).toBe(steerOperationId);
+      const acceptedAt = Date.now();
+      new SubmissionCompletionRepository(current.database).recordAccepted(current.owner, threadId, {
+        operationId: steerOperationId, backendCorrelation: steerOperationId, acceptedAt,
+      });
+      queue.acceptSteered(current.owner, threadId, steered.id, {
+        steerOperationId, expectedState: "dispatching", backendCorrelation: steerOperationId, acceptedAt,
+      });
+      expect((await read(steered.id).expect(200)).body).toMatchObject({ state: "accepted", deliveryOperationId: steerOperationId });
+
+      // A stored provider correlation alone cannot become a browser operation identity.
+      current.database.prepare("UPDATE queued_inputs SET backend_correlation = ? WHERE id = ?")
+        .run("private-native-correlation", steered.id);
+      await read(steered.id).expect(500).expect(({ body }) => expect(body.error.code).toBe("internal_error"));
+      expect(current.repository.getDraft(current.owner, threadId)).toEqual(originalDraft);
+    } finally { current.close(); }
   });
 
   it("reports unpresentable input receipts and contexts as server faults", async () => {

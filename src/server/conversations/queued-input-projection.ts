@@ -1,6 +1,15 @@
 import type { QueuedInputSummary } from "../../shared/protocol/conversation.js";
+import {
+  queuedInputPresentationSchema,
+  type QueuedInputPresentation,
+} from "../../shared/protocol/api.js";
 import type { QueuedInputRecord } from "../db/repositories/queued-input-repository.js";
-import { boundDisplayText, DEFAULT_PAYLOAD_LIMITS } from "./payload-policy.js";
+import { presentMessageTaskContext } from "../domain/materialized-task-contexts.js";
+import {
+  boundDisplayText,
+  DEFAULT_PAYLOAD_LIMITS,
+  preserveMessageText,
+} from "./payload-policy.js";
 
 const QUEUE_PREVIEW_LIMITS = {
   ...DEFAULT_PAYLOAD_LIMITS,
@@ -59,6 +68,56 @@ function queuedInputDeliveryMode(
   return item.deliveryMode === null ? {} : { deliveryMode: item.deliveryMode };
 }
 
+function queuedInputOrigin(item: QueuedInputRecord): QueuedInputSummary["origin"] {
+  return item.inputOrigin?.kind === "agent_result"
+    ? "agent_result"
+    : item.initiatingAgentThreadId !== null
+      ? "agent_control"
+      : item.initiatingToolClientId !== null
+        ? "principal_client_control"
+        : item.triggerKind;
+}
+
+/** Full application-owned input, including terminal records omitted from the pending queue. */
+export function projectQueuedInputPresentation(
+  item: QueuedInputRecord,
+  threadRevision: number,
+  deliveryOperationId: string,
+): QueuedInputPresentation {
+  const parsed = queuedInputPresentationSchema.safeParse({
+    threadId: item.applicationThreadId,
+    threadRevision,
+    queuedInputId: item.id,
+    deliveryOperationId,
+    createdAt: new Date(item.createdAt).toISOString(),
+    state: item.state,
+    resolvedDeliveryMode: item.resolvedDeliveryMode,
+    origin: queuedInputOrigin(item),
+    ...(item.inputOrigin === null ? {} : { inputOrigin: item.inputOrigin }),
+    content: [
+      // The queue stores the selected ID, not a display name. Never present an
+      // opaque, potentially provider-owned ID as if it were the skill's name.
+      ...(item.selectedSkillId === null
+        ? []
+        : [{ kind: "skill", name: { text: "Selected skill" } }]),
+      ...item.attachments.map((attachment) => ({ kind: "attachment", attachment })),
+      ...item.taskContexts.map((task) => ({
+        kind: "task_context",
+        task: presentMessageTaskContext(task),
+      })),
+      ...item.contextExcerpts.map((excerpt) => ({ kind: "context_excerpt", excerpt })),
+      ...(item.text.trim().length === 0
+        ? []
+        : [{ kind: "text", text: preserveMessageText(item.text) }]),
+    ],
+  });
+  // Invalid retained data is a server fault, not a refusal of the admitted input.
+  if (!parsed.success) {
+    throw new Error("queued_input_presentation_unpresentable", { cause: parsed.error });
+  }
+  return parsed.data;
+}
+
 /** One normalized projection for both snapshots and queue change events. */
 export function projectQueuedInputSummaries(
   records: readonly QueuedInputRecord[],
@@ -75,14 +134,7 @@ export function projectQueuedInputSummaries(
         ? (item.reconciliationToken ?? item.mutationId)
         : item.mutationId,
     sequence: item.sequence,
-    origin:
-      item.inputOrigin?.kind === "agent_result"
-        ? "agent_result"
-        : item.initiatingAgentThreadId !== null
-          ? "agent_control"
-          : item.initiatingToolClientId !== null
-            ? "principal_client_control"
-            : item.triggerKind,
+    origin: queuedInputOrigin(item),
     ...(item.inputOrigin === null ? {} : { inputOrigin: item.inputOrigin }),
     ...(item.initiatingAgentThreadId === null
       ? {}

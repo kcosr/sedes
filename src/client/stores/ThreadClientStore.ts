@@ -53,6 +53,8 @@ import {
   NormalizedThreadStore,
   type NormalizedThreadApplyResult,
 } from "./NormalizedThreadStore.js";
+import { ServerSubmissionTracker } from "./ServerSubmissionTracker.js";
+export type { PendingServerSubmission } from "./ServerSubmissionTracker.js";
 
 export interface ThreadClientState {
   readonly status: "loading" | "ready" | "error";
@@ -70,6 +72,8 @@ export interface ThreadClientState {
    * out of the composer but has not fully converged with server authority.
    */
   readonly pendingComposerTransfers: readonly PendingComposerTransfer[];
+  /** Ordinary sends admitted outside this composer's local handoff. */
+  readonly pendingServerSubmissions: ReturnType<ServerSubmissionTracker["getSnapshot"]>;
   /** Queue rows converted to Steer remain visible until exact materialization. */
   readonly pendingQueuedSteers: readonly PendingQueuedSteer[];
   readonly historyLoading: boolean;
@@ -256,6 +260,7 @@ const initialState: ThreadClientState = {
   authoritative: false,
   actionPending: false,
   pendingComposerTransfers: [],
+  pendingServerSubmissions: [],
   pendingQueuedSteers: [],
   historyLoading: false,
   forkAttempts: {},
@@ -299,6 +304,7 @@ export class ThreadClientStore {
   readonly usage: UsageQueryCache;
   readonly #api: ApiClient;
   readonly #transport: EventStreamTransport;
+  readonly #serverSubmissions: ServerSubmissionTracker;
   #state = initialState;
   readonly #listeners = new Set<() => void>();
   readonly #activityDetailWillChangeListeners = new Set<
@@ -363,6 +369,16 @@ export class ThreadClientStore {
     this.usage = new UsageQueryCache(threadId, api);
     this.#transport = transport;
     this.#activityDetail = activityDetail;
+    this.#serverSubmissions = new ServerSubmissionTracker({
+      threadId,
+      read: (queuedInputId, signal) => this.#api.readQueuedInput(threadId, queuedInputId, { signal }),
+      nextSequence: () => this.#nextTransferPresentationSequence++,
+      changed: () => {
+        const state = { ...this.#state, pendingServerSubmissions: this.#serverSubmissions.getSnapshot() };
+        if (this.#applyingBatch) this.#state = state;
+        else this.#replaceState(state);
+      },
+    });
     this.#normalizedUnsubscribe = this.normalized.subscribe(() => {
       // A batched flush derives once at batch end; per-envelope derives
       // inside the batch are wasted work.
@@ -552,6 +568,7 @@ export class ThreadClientStore {
 
   dispose(): void {
     this.#disposed = true;
+    this.#serverSubmissions.dispose();
     this.usage.dispose();
     this.#subscriptionEpoch += 1;
     this.#cancelEnvelopeFlush();
@@ -1140,6 +1157,7 @@ export class ThreadClientStore {
         throw new Error("Queue cancellation returned an invalid receipt.");
       }
       this.#queuedInputMutationIds.delete(requestKey);
+      this.#serverSubmissions.retireQueuedInput(queuedInputId);
       this.#removePendingQueuedSteersForInput(queuedInputId);
       this.#removeQueueOwnedTransfersForInput(queuedInputId);
       this.#applyQueueMutationResult(generation, result);
@@ -1182,6 +1200,7 @@ export class ThreadClientStore {
         throw new Error("Queue restoration returned an invalid receipt.");
       }
       this.#queuedInputMutationIds.delete(requestKey);
+      this.#serverSubmissions.retireQueuedInput(queuedInputId);
       this.#removePendingQueuedSteersForInput(queuedInputId);
       this.#removeQueueOwnedTransfersForInput(queuedInputId);
       this.#applyQueueMutationResult(generation, {
@@ -2662,6 +2681,10 @@ export class ThreadClientStore {
             this.#questionStatusProjectionKey = "";
             void this.loadQuestionRequests();
           }
+          if (envelope.event.type === "snapshot" || envelope.event.type === "queue_changed" ||
+              (envelope.event.type === "item_upsert" && envelope.event.item.kind === "user_message")) {
+            this.#observeServerSubmissions();
+          }
           this.#observeComposerQueuePresentation(envelope);
           applied += 1;
           if (envelope.event.type !== "snapshot") madeProgress = true;
@@ -2753,6 +2776,7 @@ export class ThreadClientStore {
         this.usage.invalidate();
         this.#questionStatusProjectionKey = "";
         void this.loadQuestionRequests();
+        this.#observeServerSubmissions();
         this.#observeComposerQueuePresentation({
           eventId: checkpoint.eventId,
           projectionGeneration: checkpoint.projectionGeneration,
@@ -2826,6 +2850,7 @@ export class ThreadClientStore {
   #deriveNormalizedState(): void {
     const normalized = this.normalized.state;
     const snapshot = normalized.snapshot;
+    this.#observeServerSubmissions();
     if (snapshot) {
       this.#reconcileComposerTransfers(snapshot);
       this.#reconcilePendingQueuedSteers(snapshot);
@@ -2858,6 +2883,37 @@ export class ThreadClientStore {
         ? {}
         : { pendingDeliveryThreadRevision }),
     });
+  }
+
+  #observeServerSubmissions(): void {
+    const snapshot = this.normalized.state.snapshot;
+    const serverSubmissions = this.#serverSubmissions.getSnapshot();
+    // Both input sources share transcript ordering. Preserve that order when
+    // one source materializes before the other's pending message.
+    if (snapshot && serverSubmissions.length > 0 && this.#state.pendingComposerTransfers.length > 0) {
+      const materialized = new Map(Object.values(snapshot.itemsById).flatMap(item =>
+        item.kind === "user_message" && item.deliveryOperationId
+          ? [[item.deliveryOperationId, item.id] as const] : []));
+      for (const preceding of [...this.#state.pendingComposerTransfers, ...serverSubmissions]
+        .sort((a, b) => a.presentationSequence - b.presentationSequence)) {
+        const itemId = materialized.get(preceding.operationId);
+        if (!itemId) continue;
+        if ("kind" in preceding) {
+          const transfers = this.#state.pendingComposerTransfers.map(transfer =>
+            transfer.presentationSequence > preceding.presentationSequence &&
+            transfer.baselineTailItemId === preceding.baselineTailItemId
+              ? { ...transfer, baselineTailItemId: itemId } : transfer);
+          this.#state = { ...this.#state, pendingComposerTransfers: transfers };
+        } else {
+          this.#serverSubmissions.reanchorAfter(preceding, itemId);
+        }
+      }
+    }
+    this.#serverSubmissions.observe(
+      snapshot,
+      this.normalized.state.authoritative && !this.#paused && !this.#disposed,
+      new Set(this.#state.pendingComposerTransfers.map(transfer => transfer.operationId)),
+    );
   }
 
   #applyProtocolFailure(error: Error, terminal: boolean): void {

@@ -22,10 +22,12 @@ import type {
   ConversationItem,
   HistoryPage,
   NormalizedThreadSnapshot,
+  QueuedInputSummary,
   ThreadHistorySeekResult,
 } from "../../../shared/index.js";
 import type {
   PendingComposerTransfer,
+  PendingServerSubmission,
   ThreadProjectionViewportAnchor,
   ThreadClientState,
   ThreadClientStore,
@@ -104,6 +106,7 @@ class FakeTranscriptStore {
       bookmarkStatus: "ready",
       pendingBookmarkTurnIds: [],
       pendingComposerTransfers: [],
+      pendingServerSubmissions: [],
       pendingQueuedSteers: [],
       snapshot,
       stashes: [],
@@ -192,6 +195,11 @@ class FakeTranscriptStore {
     for (const listener of this.#listeners) listener();
   }
 
+  replaceServerSubmissions(submissions: readonly PendingServerSubmission[]): void {
+    this.#state = { ...this.#state, pendingServerSubmissions: submissions };
+    for (const listener of this.#listeners) listener();
+  }
+
   replaceBookmarkState(
     changes: Partial<
       Pick<
@@ -259,6 +267,26 @@ function makePendingSubmitTransfer(
     rollbackApplied: false,
     lateMaterializationRequiresComposerReconciliation: false,
     retainTombstoneAfterRollback: false,
+    ...overrides,
+  };
+}
+
+function makeServerSubmission(
+  snapshot: NormalizedThreadSnapshot,
+  overrides: Partial<PendingServerSubmission> = {},
+): PendingServerSubmission {
+  return {
+    kind: "server",
+    operationId: "66666666-6666-4666-8666-666666666666",
+    queuedInputId: "server-input",
+    createdAt: "2026-10-03T12:00:00.000Z",
+    preview: { text: "Spoken message" },
+    attachmentCount: 0,
+    taskCount: 0,
+    phase: "sending",
+    presentationSequence: 1,
+    baselineOrderedTurnIds: [...snapshot.orderedTurnIds],
+    baselineTailTurnItemIds: [],
     ...overrides,
   };
 }
@@ -1708,6 +1736,175 @@ describe("Transcript history positioning", () => {
   });
 });
 
+describe("Transcript server-admitted submissions", () => {
+  it.each(["sending", "confirming", "accepted"] as const)("shows an ordinary voice bubble without routine status while %s", (phase) => {
+    const snapshot = makeSnapshot([], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    const submission = makeServerSubmission(snapshot, { phase });
+    fake.replaceServerSubmissions([submission]);
+
+    const { container } = render(<Transcript store={fake as unknown as ThreadClientStore} />);
+
+    const row = container.querySelector(`[data-delivery-operation-id="${submission.operationId}"]`);
+    expect(row).toHaveAttribute("data-client-provisional", "true");
+    expect(row?.querySelector(".message-row.user")).toHaveTextContent("Spoken message");
+    expect(row).not.toHaveTextContent(/Sending|Checking delivery|Sent|Message preview/);
+    expect(row?.querySelector('[role="status"]')).toBeNull();
+    expect(screen.queryByText("This thread is ready")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Bookmark turn" })).not.toBeInTheDocument();
+  });
+
+  it("marks a bounded preview and replaces it with the full submitted content", () => {
+    const snapshot = makeSnapshot([], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    const submission = makeServerSubmission(snapshot, {
+      preview: {
+        text: "The first part of a long spoken message",
+        truncation: { truncated: true, reason: "byte_limit", originalBytes: 500, retainedBytes: 240 },
+      },
+      attachmentCount: 2,
+      taskCount: 1,
+    });
+    fake.replaceServerSubmissions([submission]);
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+
+    const row = screen.getByText("The first part of a long spoken message…").closest(".conversation-item");
+    expect(row).toHaveTextContent("Message preview");
+    expect(row).toHaveTextContent("2 attachments · 1 task");
+    expect(row).not.toHaveTextContent("Sending…");
+
+    act(() => fake.replaceServerSubmissions([{
+      ...submission,
+      content: [{ kind: "text", text: { text: "The full spoken message, including everything after the preview." } }],
+    }]));
+
+    expect(row).toHaveTextContent("The full spoken message, including everything after the preview.");
+    expect(row).not.toHaveTextContent("Message preview");
+    expect(row).not.toHaveTextContent("2 attachments");
+    expect(row?.querySelector('[role="status"]')).toBeNull();
+  });
+
+  it("marks missing attachment content as a preview even when the text is complete", () => {
+    const snapshot = makeSnapshot([], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    const submission = makeServerSubmission(snapshot, { attachmentCount: 1 });
+    fake.replaceServerSubmissions([submission]);
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+
+    const row = screen.getByText("Spoken message").closest(".conversation-item");
+    expect(row).toHaveTextContent("Message preview · 1 attachment");
+
+    act(() => fake.replaceServerSubmissions([{
+      ...submission,
+      content: [
+        { kind: "attachment", attachment: makePendingSubmitTransfer(snapshot).captured.attachments[0]! },
+        { kind: "text", text: { text: "Spoken message" } },
+      ],
+    }]));
+
+    expect(row).toHaveTextContent("notes.txt");
+    expect(row?.querySelector('[role="status"]')).toBeNull();
+  });
+
+  it("keeps the pending bubble anchored ahead of later assistant output", () => {
+    const snapshot = makeSnapshot(["turn-1"], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    fake.replaceServerSubmissions([makeServerSubmission(snapshot, {
+      baselineTailTurnId: "turn-1",
+      baselineTailItemId: "turn-1-message",
+      baselineTailTurnItemIds: ["turn-1-message"],
+    })]);
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+
+    const later = makeSnapshot(["turn-1", "turn-2"], false);
+    act(() => fake.replaceSnapshot(later));
+
+    const previous = screen.getByText("Message for turn-1");
+    const pending = screen.getByText("Spoken message");
+    const response = screen.getByText("Message for turn-2");
+    expect(previous.compareDocumentPosition(pending) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pending.compareDocumentPosition(response) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("prefers the composer's complete local content and reconciles by exact operation identity", () => {
+    const snapshot = makeSnapshot([], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    const local = makePendingSubmitTransfer(snapshot);
+    const submission = makeServerSubmission(snapshot, { operationId: local.operationId });
+    fake.replaceTransfers([local]);
+    fake.replaceServerSubmissions([submission]);
+    const { container } = render(<Transcript store={fake as unknown as ThreadClientStore} />);
+
+    expect(screen.getAllByText("Immediate prompt")).toHaveLength(1);
+    expect(screen.queryByText("Spoken message")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sending…")).not.toBeInTheDocument();
+
+    const authoritative = makeSnapshot(["turn-1"], false);
+    authoritative.itemsById["turn-1-message"] = {
+      id: "turn-1-message", turnId: "turn-1", kind: "user_message", status: "completed", revision: 1,
+      deliveryOperationId: local.operationId,
+      content: [{ kind: "text", text: { text: "Immediate prompt" } }],
+    };
+    // Keep both stale presentation records: exact authoritative identity must win.
+    act(() => fake.replaceSnapshot(authoritative));
+    expect(container.querySelectorAll(`[data-delivery-operation-id="${local.operationId}"]`)).toHaveLength(1);
+    expect(screen.getByText("Immediate prompt").closest(".conversation-item")).not.toHaveAttribute("data-client-provisional");
+  });
+
+  it("keeps identical submissions distinct and flags only a genuinely unconfirmed delivery", () => {
+    const snapshot = makeSnapshot([], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    const first = makeServerSubmission(snapshot);
+    const second = makeServerSubmission(snapshot, {
+      operationId: "77777777-7777-4777-8777-777777777777", queuedInputId: "second-input", presentationSequence: 2,
+    });
+    fake.replaceServerSubmissions([first, second]);
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    expect(screen.getAllByText("Spoken message")).toHaveLength(2);
+
+    act(() => fake.replaceServerSubmissions([{ ...first, phase: "confirming" }, { ...second, phase: "accepted" }]));
+    expect(screen.queryByText("Checking delivery…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sent")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Spoken message")).toHaveLength(2);
+
+    act(() => fake.replaceServerSubmissions([{ ...first, phase: "unconfirmed" }, { ...second, phase: "accepted" }]));
+    expect(screen.getByText("Delivery unconfirmed")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(/^Delivery unconfirmed$/);
+    expect(screen.queryByText("Checking delivery…")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Spoken message")).toHaveLength(2);
+  });
+
+  it.each([
+    { state: "retry_wait", resolvedDeliveryMode: "submit" },
+    { state: "uncertain", resolvedDeliveryMode: "submit", deliveryMode: "submit" },
+    { state: "failed", resolvedDeliveryMode: "submit" },
+    { state: "pending", resolvedDeliveryMode: "queue" },
+    { state: "dispatching", resolvedDeliveryMode: "steer", deliveryMode: "steer" },
+  ] satisfies Partial<QueuedInputSummary>[])("does not cover the queue's $state/$resolvedDeliveryMode presentation", (patch) => {
+    const snapshot = makeSnapshot([], false);
+    const submission = makeServerSubmission(snapshot);
+    snapshot.queue = [{
+      id: submission.queuedInputId, deliveryOperationId: submission.operationId, sequence: 1,
+      origin: "user", isHead: true, attachmentCount: 0, taskCount: 0,
+      createdAt: submission.createdAt, preview: submission.preview,
+      ...patch,
+    } as QueuedInputSummary];
+    const fake = new FakeTranscriptStore(snapshot);
+    fake.replaceServerSubmissions([submission]);
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    expect(screen.queryByText("Spoken message")).not.toBeInTheDocument();
+  });
+
+  it("leaves historical turn views free of live server submissions", () => {
+    const snapshot = makeSnapshot(["turn-1"], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    fake.replaceServerSubmissions([makeServerSubmission(snapshot)]);
+    render(<Transcript store={fake as unknown as ThreadClientStore} focusTurnId="turn-1" />);
+    expect(screen.queryByText("Spoken message")).not.toBeInTheDocument();
+    expect(screen.getByText("Message for turn-1")).toBeInTheDocument();
+  });
+});
+
 describe("Transcript optimistic idle submission", () => {
   const operationId = "33333333-3333-4333-8333-333333333333";
   const makeTransfer = makePendingSubmitTransfer;
@@ -2184,6 +2381,36 @@ describe("Transcript seek-on-submit", () => {
     };
   }
 
+  function mountSeekVisibilityHarness() {
+    const seekRequest: { current: TranscriptSeekRequest | null } = { current: null };
+    const fake = new FakeTranscriptStore(withSentMessage());
+    const ref = createRef<TranscriptHandle>();
+    const content = (mode?: "hidden" | "history") => (
+      <ChatViewVisibilityContext.Provider value={mode !== "hidden"}>
+        <Transcript
+          ref={ref}
+          store={fake as unknown as ThreadClientStore}
+          seekRequest={seekRequest}
+          focusTurnId={mode === "history" ? "turn-1" : undefined}
+        />
+      </ChatViewVisibilityContext.Provider>
+    );
+    const view = render(content());
+    act(flushRaf);
+    const viewport = screen.getByRole("region", { name: "Messages" });
+    const spacer = mockSeekSpacer(viewport);
+    Object.defineProperties(viewport, {
+      clientHeight: { configurable: true, value: 300 },
+      scrollHeight: { configurable: true, get: () => 900 + spacer.getBoundingClientRect().height },
+    });
+    viewport.scrollTop = 600;
+    return {
+      fake, ref, seekRequest, viewport,
+      ...mockNativeScroll(viewport),
+      setMode: (mode?: "hidden" | "history") => view.rerender(content(mode)),
+    };
+  }
+
   it("coalesces animated viewport height changes and preserves the live edge", () => {
     const resizeCallbacks = new Map<Element, ResizeObserverCallback>();
     vi.stubGlobal(
@@ -2511,6 +2738,216 @@ describe("Transcript seek-on-submit", () => {
     expect(authoritative).toHaveAttribute("data-item-id", "turn-2-message");
     expect(authoritative).not.toHaveAttribute("data-client-provisional");
     expect(measureSeekSpacer()).toBe(324);
+  });
+
+  it.each(["provisional", "canonical"] as const)(
+    "starts the normal send animation when a late request targets an existing %s row",
+    (presentation) => {
+      const seekRequest: { current: TranscriptSeekRequest | null } = { current: null };
+      const { fake, ref, viewport, scrollTo, finishSeek } = mountSeekHarness(seekRequest);
+      if (presentation === "provisional") {
+        act(() => fake.replaceServerSubmissions([
+          makeServerSubmission(fake.getSnapshot().snapshot!, {
+            operationId: sentOperationId,
+            baselineTailItemId: "turn-1-message",
+          }),
+        ]));
+      } else {
+        act(() => fake.replaceSnapshot(withSentMessage()));
+      }
+      act(flushRaf);
+      const target = viewport.querySelector<HTMLElement>(
+        `[data-delivery-operation-id="${sentOperationId}"]`,
+      )!;
+      Object.defineProperty(target, "offsetTop", { configurable: true, value: 940 });
+      scrollTo.mockClear();
+
+      // Native admission can arrive after the stream already rendered this row.
+      // Arming the ref alone causes no React render or transcript topology change.
+      seekRequest.current = { requestedAt: Date.now(), operationId: sentOperationId };
+      act(() => ref.current!.seekPendingSend());
+
+      expect(seekRequest.current).toBeNull();
+      act(flushRaf);
+      expect(scrollTo).toHaveBeenCalledWith({ top: 924, behavior: "smooth" });
+      expect(viewport.scrollTop).toBe(600);
+      act(finishSeek);
+      expect(viewport.scrollTop).toBe(924);
+      expect(measureSeekSpacer()).toBe(324);
+
+      scrollTo.mockClear();
+      act(() => ref.current!.seekPendingSend());
+      act(flushRaf);
+      expect(scrollTo).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps an explicit seek queued until that exact operation appears", () => {
+    const seekRequest: { current: TranscriptSeekRequest | null } = { current: null };
+    const { fake, ref, viewport, scrollTo, finishSeek } = mountSeekHarness(seekRequest);
+    const request = { requestedAt: Date.now(), operationId: nextOperationId };
+    seekRequest.current = request;
+
+    act(() => ref.current!.seekPendingSend());
+    expect(seekRequest.current).toBe(request);
+    expect(scrollTo).not.toHaveBeenCalled();
+
+    act(() => fake.replaceSnapshot(withSentMessage()));
+    act(flushRaf);
+    act(() => ref.current!.seekPendingSend());
+    expect(seekRequest.current).toBe(request);
+    scrollTo.mockClear();
+
+    act(() => fake.replaceServerSubmissions([
+      makeServerSubmission(fake.getSnapshot().snapshot!, {
+        operationId: nextOperationId,
+        baselineTailItemId: "turn-2-message",
+      }),
+    ]));
+    const target = viewport.querySelector<HTMLElement>(
+      `[data-delivery-operation-id="${nextOperationId}"]`,
+    )!;
+    Object.defineProperty(target, "offsetTop", { configurable: true, value: 940 });
+    expect(seekRequest.current).toBeNull();
+    act(finishSeek);
+    expect(scrollTo).toHaveBeenCalledWith({ top: 924, behavior: "smooth" });
+    expect(viewport.scrollTop).toBe(924);
+  });
+
+  it.each(["hidden chat", "historical focus"] as const)(
+    "discards a send seek during %s without replaying it on return",
+    (mode) => {
+      const seekRequest: { current: TranscriptSeekRequest | null } = { current: null };
+      const fake = new FakeTranscriptStore(withSentMessage());
+      const ref = createRef<TranscriptHandle>();
+      const content = (inactive: boolean) => (
+        <ChatViewVisibilityContext.Provider value={mode !== "hidden chat" || !inactive}>
+          <Transcript
+            ref={ref}
+            store={fake as unknown as ThreadClientStore}
+            seekRequest={seekRequest}
+            focusTurnId={mode === "historical focus" && inactive ? "turn-2" : undefined}
+          />
+        </ChatViewVisibilityContext.Provider>
+      );
+      const view = render(content(true));
+      act(flushRaf);
+      const viewport = screen.getByRole("region", { name: "Messages" });
+      const spacer = mockSeekSpacer(viewport);
+      Object.defineProperties(viewport, {
+        clientHeight: { configurable: true, value: 300 },
+        scrollHeight: { configurable: true, get: () => 900 + spacer.getBoundingClientRect().height },
+      });
+      const { scrollTo, finishSeek } = mockNativeScroll(viewport);
+      const target = viewport.querySelector<HTMLElement>(
+        `[data-delivery-operation-id="${sentOperationId}"]`,
+      )!;
+      Object.defineProperty(target, "offsetTop", { configurable: true, value: 940 });
+      seekRequest.current = { requestedAt: Date.now(), operationId: sentOperationId };
+
+      act(() => ref.current!.seekPendingSend());
+      act(flushRaf);
+      expect(seekRequest.current).toBeNull();
+      expect(scrollTo).not.toHaveBeenCalled();
+
+      view.rerender(content(false));
+      act(finishSeek);
+      expect(scrollTo.mock.calls.some(([options]) => options.behavior === "smooth")).toBe(false);
+      expect(measureSeekSpacer()).toBe(0);
+    },
+  );
+
+  it.each(["hidden", "history"] as const)(
+    "drops a waiting send request when the chat becomes %s before its message arrives",
+    (mode) => {
+      const { fake, ref, seekRequest, viewport, scrollTo, setMode, finishSeek } = mountSeekVisibilityHarness();
+      const request = { requestedAt: Date.now(), operationId: nextOperationId };
+      seekRequest.current = request;
+      act(() => ref.current!.seekPendingSend());
+      expect(seekRequest.current).toBe(request);
+
+      setMode(mode);
+      act(() => fake.replaceServerSubmissions([
+        makeServerSubmission(fake.getSnapshot().snapshot!, {
+          operationId: nextOperationId,
+          baselineTailItemId: "turn-2-message",
+        }),
+      ]));
+      const target = viewport.querySelector<HTMLElement>(
+        `[data-delivery-operation-id="${nextOperationId}"]`,
+      );
+      if (target) Object.defineProperty(target, "offsetTop", { configurable: true, value: 940 });
+      act(finishSeek);
+      expect(seekRequest.current).toBeNull();
+      expect(measureSeekSpacer()).toBe(0);
+      expect(scrollTo.mock.calls.some(([options]) => options.top === 924)).toBe(false);
+
+      setMode();
+      act(finishSeek);
+      expect(measureSeekSpacer()).toBe(0);
+      expect(scrollTo.mock.calls.some(([options]) => options.top === 924)).toBe(false);
+    },
+  );
+
+  it.each(["hidden", "history"] as const)(
+    "cancels a scheduled send seek when the chat becomes %s before the animation frame",
+    (mode) => {
+      const { ref, seekRequest, viewport, scrollTo, setMode, finishSeek } = mountSeekVisibilityHarness();
+      const target = viewport.querySelector<HTMLElement>(
+        `[data-delivery-operation-id="${sentOperationId}"]`,
+      )!;
+      Object.defineProperty(target, "offsetTop", { configurable: true, value: 940 });
+      seekRequest.current = { requestedAt: Date.now(), operationId: sentOperationId };
+      act(() => ref.current!.seekPendingSend());
+      expect(seekRequest.current).toBeNull();
+
+      setMode(mode);
+      act(finishSeek);
+      expect(measureSeekSpacer()).toBe(0);
+      expect(scrollTo.mock.calls.some(([options]) => options.top === 924)).toBe(false);
+
+      setMode();
+      act(finishSeek);
+      expect(measureSeekSpacer()).toBe(0);
+      expect(scrollTo.mock.calls.some(([options]) => options.top === 924)).toBe(false);
+    },
+  );
+
+  it("does not revive a scheduled send seek after a hide and reveal before its frame", () => {
+    const { ref, seekRequest, viewport, scrollTo, setMode, finishSeek } = mountSeekVisibilityHarness();
+    const target = viewport.querySelector<HTMLElement>(
+      `[data-delivery-operation-id="${sentOperationId}"]`,
+    )!;
+    Object.defineProperty(target, "offsetTop", { configurable: true, value: 940 });
+    seekRequest.current = { requestedAt: Date.now(), operationId: sentOperationId };
+    act(() => ref.current!.seekPendingSend());
+
+    setMode("hidden");
+    setMode();
+    act(finishSeek);
+    expect(measureSeekSpacer()).toBe(0);
+    expect(scrollTo.mock.calls.some(([options]) => options.top === 924)).toBe(false);
+  });
+
+  it("discards a pending seek when an empty chat hides before its first message", () => {
+    const fake = new FakeTranscriptStore(makeSnapshot([], false));
+    const ref = createRef<TranscriptHandle>();
+    const seekRequest: { current: TranscriptSeekRequest | null } = { current: null };
+    const content = (visible: boolean) => (
+      <ChatViewVisibilityContext.Provider value={visible}>
+        <Transcript ref={ref} store={fake as unknown as ThreadClientStore} seekRequest={seekRequest} />
+      </ChatViewVisibilityContext.Provider>
+    );
+    const view = render(content(true));
+    const request = { requestedAt: Date.now(), operationId: sentOperationId };
+    seekRequest.current = request;
+    act(() => ref.current!.seekPendingSend());
+    expect(seekRequest.current).toBe(request);
+
+    view.rerender(content(false));
+    expect(seekRequest.current).toBeNull();
+    view.rerender(content(true));
+    expect(seekRequest.current).toBeNull();
   });
 
   it("does not synchronously measure height for same-order streaming revisions", () => {

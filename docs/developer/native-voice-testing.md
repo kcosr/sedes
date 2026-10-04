@@ -96,6 +96,18 @@ mixer completes its pause transition. Cue feedback adds one bounded 15-second
 timeout case to the native smoke lane. UI setup waits for enabled controls and
 the saved native audio mode before checking adapter readiness.
 
+Local submission-event checks cover exact receipt operation identity,
+one-time foreground delivery, current binding/generation, cancellation,
+visibility/navigation changes before callback dispatch, late journal recovery,
+and WebView replacement. Client checks cover the same Send seek path for a
+late native receipt, the disabled setting, other threads and hidden panels,
+and routine delivery labels remaining hidden.
+The packaged Manual cycle enables Seek on Send and checks the submitted row's
+position and reserved space in the real WebView. The Response cycle disables
+the setting and checks that no space is reserved. Both require exactly one
+canonical user row for the native receipt's operation, with no routine delivery
+label and the unsent composer draft preserved.
+
 Native startup checks restore real encrypted settings through the authenticated
 bootstrap and activity visibility paths. Only Android service dispatch is
 substituted, to test duplicate starts, missing prerequisites, pending-launch

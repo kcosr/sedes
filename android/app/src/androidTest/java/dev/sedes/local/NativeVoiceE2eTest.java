@@ -57,7 +57,9 @@ public class NativeVoiceE2eTest {
         instrumentation.runOnMainSync(() -> web = activity.getBridge().getWebView()); runtime = NativeVoiceRuntime.get(context);
         AtomicReference<String> currentPhase = new AtomicReference<>("");
         AtomicBoolean stopRequested = new AtomicBoolean(), stoppedItemReleased = new AtomicBoolean();
+        List<JSONObject> submittedInputs = new CopyOnWriteArrayList<>();
         NativeVoiceRuntime.Observer observer = (event, value) -> {
+            if (event.equals("inputSubmitted")) submittedInputs.add(NativeVoiceJson.copy(value));
             if (event.equals("stateChanged")) {
                 String phase = value.optString("phase"); currentPhase.set(phase);
                 if (phases.isEmpty() || !phase.equals(phases.get(phases.size() - 1))) phases.add(phase);
@@ -159,6 +161,7 @@ public class NativeVoiceE2eTest {
             // Route through the actual bundled application; all subsequent operations use its UI.
             js("(()=>{history.pushState({},''," + JSONObject.quote("/threads/" + thread) + ");window.dispatchEvent(new PopStateEvent('popstate'));return true})()");
             waitJs("document.querySelector('[data-testid=\"composer\"] textarea:not(:disabled)') !== null", 45000);
+            if (scenario.equals("cycle")) js("localStorage.setItem('sedes-seek-on-submit', '" + mode.equals("manual") + "')");
             input("[data-testid=\"composer\"] textarea", initial);
             waitJs("!!document.querySelector('[aria-label=\"Send message\"]:not(:disabled)')", 15000); click("[aria-label=\"Send message\"]");
             waitJs("document.querySelector('[data-testid=\"composer\"] textarea')?.value === ''", 15000);
@@ -248,6 +251,14 @@ public class NativeVoiceE2eTest {
                 waitJs("document.visibilityState === 'visible'", 15000);
             }
             waitJs("document.querySelector('[data-testid=\"composer\"] textarea')?.value === " + JSONObject.quote(draft), 15000);
+            JSONObject inputUi = null;
+            if (scenario.equals("cycle")) {
+                await(() -> !submittedInputs.isEmpty(), 15000, "local inputSubmitted event");
+                assertEquals("One local voice Send", 1, submittedInputs.size());
+                JSONObject submitted = submittedInputs.get(0);
+                assertEquals(thread, submitted.getString("threadId"));
+                inputUi = awaitSubmittedInputUi(submitted, mode.equals("manual"), 45000);
+            }
             screenshot("settled");
             assertTrue("Capture did not traverse the deterministic audio source", supplied.get() > 0);
             if (mode.equals("response") && !scenario.equals("stop")) assertTrue("No actual AudioTrack playback phase", phases.contains("speaking"));
@@ -261,6 +272,7 @@ public class NativeVoiceE2eTest {
                 "journalOutstanding", runtime.snapshot().optJSONArray("recovery").length(),
                 "inputAttempts", inputAttempts.get(), "receiptReads", receiptReads.get(), "mutationIds", new JSONArray(mutationIds),
                 "screenshots", new JSONArray(screenshots));
+            if (inputUi != null) NativeVoiceJson.put(result, "inputUi", inputUi);
             Bundle resultBundle = new Bundle(); resultBundle.putString("voiceResult", result.toString()); instrumentation.sendStatus(0, resultBundle);
         } catch (Exception | AssertionError failure) {
             // Capture before cleanup turns voice Off and removes the state that explains the failure.
@@ -350,6 +362,36 @@ public class NativeVoiceE2eTest {
             + "return {available:true,audioMode:{present,disabled:present?e.matches(':disabled'):null,"
             + "value:present&&['off','manual','response'].includes(e.value)?e.value:null},"
             + "alertCount:document.querySelectorAll('[role=alert]').length}})()"));
+    }
+    /** Observe the real transcript destination and scroll geometry, independently of the native receipt event. */
+    private JSONObject awaitSubmittedInputUi(JSONObject submitted, boolean seekEnabled, long timeout) throws Exception {
+        String operationId = submitted.getString("operationId");
+        String selector = "[role=\"region\"][aria-label=\"Messages\"] [data-message-role=\"user\"][data-delivery-operation-id=\"" + operationId + "\"]";
+        String read = "(()=>{const rows=document.querySelectorAll(" + JSONObject.quote(selector) + ");const row=rows[0];"
+            + "const viewport=row?.closest('[aria-label=\"Messages\"]');const spacer=viewport?.querySelector('[data-testid=\"seek-spacer\"]');"
+            + "return {rowCount:rows.length,operationId:row?.getAttribute('data-delivery-operation-id')??null,"
+            + "text:row?.textContent?.trim()??null,provisional:row?.getAttribute('data-client-provisional')==='true',"
+            + "routineLabelCount:row?.querySelectorAll('[data-submission-phase]').length??null,"
+            + "seekEnabled:localStorage.getItem('sedes-seek-on-submit')==='true',"
+            + "spacerHeight:spacer?.getBoundingClientRect().height??null,scrollTop:viewport?.scrollTop??null,"
+            + "viewportHeight:viewport?.clientHeight??null,targetInset:row&&viewport?row.getBoundingClientRect().top-viewport.getBoundingClientRect().top:null}})()";
+        long end = SystemClock.elapsedRealtime() + timeout;
+        JSONObject observed;
+        do {
+            observed = new JSONObject(js(read));
+            boolean matched = observed.optInt("rowCount") == 1 && !observed.optBoolean("provisional") &&
+                observed.optInt("routineLabelCount", -1) == 0 && observed.optBoolean("seekEnabled") == seekEnabled;
+            boolean positioned = seekEnabled
+                ? observed.optDouble("spacerHeight", 0) > 0 && Math.abs(observed.optDouble("targetInset", -1000) - 16) <= 3
+                : observed.optDouble("spacerHeight", -1) == 0;
+            if (matched && positioned) {
+                NativeVoiceJson.put(observed, "submitted", submitted);
+                return observed;
+            }
+            SystemClock.sleep(100);
+        } while (SystemClock.elapsedRealtime() < end);
+        fail("Local voice Send did not reach its transcript destination: " + observed);
+        return null;
     }
     private static JSONObject diagnosticState(JSONObject state) {
         JSONObject result = select(state, "connectionGeneration", "stateRevision", "settingsRevision", "originClientId", "phase", "ready", "readiness", "queue", "actions");

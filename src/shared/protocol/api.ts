@@ -41,6 +41,9 @@ import {
   activityDetailModeSchema,
   executionWorkspaceSelectionSchema,
   normalizedDraftSchema,
+  messageContentPartSchema,
+  deliveryInputOriginSchema,
+  MAXIMUM_USER_MESSAGE_CONTENT_PARTS,
   queuedInputSummarySchema,
   threadEventIdSchema,
 } from "./conversation.js";
@@ -66,6 +69,10 @@ import {
   savedAgentIdSchema,
 } from "./saved-agents.js";
 import { applicationEventIdSchema } from "./application.js";
+import {
+  MAXIMUM_MESSAGE_ITEM_BYTES,
+  requireSerializedByteLimit,
+} from "./payload.js";
 
 export const apiErrorCodeSchema = z.enum([
   "authentication_required",
@@ -1197,6 +1204,57 @@ const deliveryRecoveryRequiredResultSchema = z.strictObject({
   status: z.literal("recovery_required"),
   retryable: z.boolean(),
   draft: normalizedDraftSchema,
+});
+
+/** Exact retained input and delivery state; reading it never starts or retries delivery. */
+export const queuedInputPresentationSchema = z.strictObject({
+  threadId: threadIdSchema,
+  threadRevision: z.number().int().nonnegative(),
+  queuedInputId: queuedInputSummarySchema.shape.id,
+  deliveryOperationId: queuedInputSummarySchema.shape.deliveryOperationId,
+  createdAt: z.iso.datetime(),
+  state: z.enum([
+    "pending",
+    "retry_wait",
+    "dispatching",
+    "accepted",
+    "uncertain",
+    "failed",
+    "cancelled",
+  ]),
+  resolvedDeliveryMode: queuedInputSummarySchema.shape.resolvedDeliveryMode,
+  origin: queuedInputSummarySchema.shape.origin,
+  inputOrigin: deliveryInputOriginSchema.optional(),
+  content: z.array(messageContentPartSchema)
+    .min(1)
+    .max(MAXIMUM_USER_MESSAGE_CONTENT_PARTS),
+}).superRefine((input, context) => {
+  const expectedOrigin = input.origin === "agent_result"
+    ? "agent_result"
+    : input.origin === "agent_control"
+      ? "agent_message"
+      : input.origin === "user" && input.inputOrigin?.kind === "question_response"
+        ? "question_response"
+        : undefined;
+  if (input.inputOrigin?.kind !== expectedOrigin) {
+    context.addIssue({
+      code: "custom",
+      message: "Input provenance must match its delivery origin.",
+      path: ["inputOrigin"],
+    });
+  }
+  requireSerializedByteLimit(
+    input,
+    context,
+    MAXIMUM_MESSAGE_ITEM_BYTES,
+    "Queued input presentation exceeds the serialized byte limit.",
+  );
+});
+export type QueuedInputPresentation = z.infer<typeof queuedInputPresentationSchema>;
+
+export const queuedInputRouteParametersSchema = z.strictObject({
+  threadId: threadIdSchema,
+  queuedInputId: queuedInputSummarySchema.shape.id,
 });
 
 export const threadQueueMutationResultSchema = z.discriminatedUnion("status", [

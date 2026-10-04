@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import type { BackendCapabilityDocument } from "../../shared/protocol/backend.js";
 import type { BackendEffectiveSettings } from "../../shared/protocol/backend.js";
 import type {
+  QueuedInputPresentation,
   ThreadApplicationMutationResult,
   ThreadApplicationOperation,
 } from "../../shared/protocol/api.js";
@@ -165,6 +166,12 @@ export class ActorBackedThreadApplicationConversationReader implements ThreadApp
 }
 
 export interface ThreadApplicationQueueReader {
+  /** Scoped retained input read; no runtime acquisition or delivery side effects. */
+  read(
+    scope: RequestScope,
+    applicationThreadId: string,
+    queuedInputId: string,
+  ): Promise<QueuedInputPresentation>;
   list(
     scope: RequestScope,
     applicationThreadId: string,
@@ -827,6 +834,14 @@ export class ThreadApplicationService {
   readInputReceipt(scope: RequestScope, mutationId: string): DirectInputReceiptLookup {
     if (!this.#mutations) throw new Error("thread_application_mutations_unavailable");
     return this.#mutations.readInputReceipt(scope, mutationId);
+  }
+
+  readQueuedInput(
+    scope: RequestScope,
+    applicationThreadId: string,
+    queuedInputId: string,
+  ): Promise<QueuedInputPresentation> {
+    return this.#queue.read(scope, applicationThreadId, queuedInputId);
   }
 
   inputContext(scope: RequestScope, applicationThreadId: string): Promise<ThreadInputContext> {

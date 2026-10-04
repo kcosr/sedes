@@ -421,6 +421,86 @@ function emitMaterializedSteer(
 }
 
 describe("ThreadClientStore normalized operations", () => {
+  const serverQueueRow = (state: QueuedInputSummary["state"] = "pending"): QueuedInputSummary => ({
+    id: "voice-queue", deliveryOperationId: "voice-send", sequence: 1, origin: "user",
+    isHead: true, state, resolvedDeliveryMode: "submit", attachmentCount: 0, taskCount: 0,
+    preview: { text: "Spoken message" }, createdAt: "2026-10-04T04:00:00.000Z",
+  });
+
+  function emitServerQueue(transport: FakeTransport, sequence: number, items: QueuedInputSummary[]): void {
+    transport.thread!.onEnvelope({
+      eventId: `${hubId}.${sequence}`, projectionGeneration: "projection-1",
+      event: { type: "queue_changed", generation: "projection-1", threadRevision: 7 + sequence, items },
+    });
+  }
+
+  it("bridges a server send through acceptance without changing the composer draft", async () => {
+    const readQueuedInput = vi.fn(async () => ({
+      threadId: "thread-1", threadRevision: 9, queuedInputId: "voice-queue",
+      deliveryOperationId: "voice-send", state: "accepted", origin: "user",
+      resolvedDeliveryMode: "submit", createdAt: "2026-10-04T04:00:00.000Z",
+      content: [{ kind: "text", text: { text: "Spoken message in full" } }],
+    }));
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", { readQueuedInput } as unknown as ApiClient, transport);
+    try {
+      await store.start();
+      const initial = snapshotWithDeliveryModes("idle");
+      installSnapshot(transport, initial);
+      emitServerQueue(transport, 1, [serverQueueRow()]);
+      // Both queue events can arrive in one animation frame, before rendering.
+      emitServerQueue(transport, 2, []);
+      await vi.waitFor(() => expect(store.getSnapshot().pendingServerSubmissions).toMatchObject([{
+        operationId: "voice-send", phase: "accepted",
+        content: [{ kind: "text", text: { text: "Spoken message in full" } }],
+      }]));
+      expect(store.getSnapshot().pendingComposerTransfers).toEqual([]);
+      expect(store.getSnapshot().snapshot?.draft).toEqual(initial.draft);
+      emitMaterializedSteer(transport, "voice-send", 3);
+      await vi.waitFor(() => expect(store.getSnapshot().pendingServerSubmissions).toEqual([]));
+      expect(store.getSnapshot().snapshot?.draft).toEqual(initial.draft);
+    } finally { store.dispose(); }
+  });
+
+  it("keeps a failed server send in the strip after a retry within the same envelope batch", async () => {
+    const readQueuedInput = vi.fn(() => new Promise(() => {}));
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", { readQueuedInput } as unknown as ApiClient, transport);
+    try {
+      await store.start();
+      installSnapshot(transport, snapshotWithDeliveryModes("idle"));
+      emitServerQueue(transport, 1, [serverQueueRow()]);
+      await vi.waitFor(() => expect(store.getSnapshot().pendingServerSubmissions).toHaveLength(1));
+      emitServerQueue(transport, 2, [serverQueueRow("failed")]);
+      emitServerQueue(transport, 3, [serverQueueRow()]);
+      await vi.waitFor(() => expect(store.getSnapshot().snapshot?.thread.threadRevision).toBe(10));
+      expect(store.getSnapshot().pendingServerSubmissions).toEqual([]);
+      expect(store.getSnapshot().snapshot?.queue).toEqual([serverQueueRow()]);
+    } finally { store.dispose(); }
+  });
+
+  it.each(["server", "composer"] as const)("preserves cross-source order when the earlier %s send materializes", async (first) => {
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", {
+      readQueuedInput: () => new Promise(() => {}),
+    } as unknown as ApiClient, transport);
+    try {
+      await store.start();
+      installSnapshot(transport, snapshotWithDeliveryModes("idle"));
+      if (first === "composer") store.stageComposerTransfer("typed-send", "submit", composerDraft("Typed"));
+      emitServerQueue(transport, 1, [serverQueueRow()]);
+      await vi.waitFor(() => expect(store.getSnapshot().pendingServerSubmissions).toHaveLength(1));
+      if (first === "server") store.stageComposerTransfer("typed-send", "submit", composerDraft("Typed"));
+      emitMaterializedSteer(transport, first === "server" ? "voice-send" : "typed-send", 2);
+      await vi.waitFor(() => {
+        const remaining = first === "server"
+          ? store.getSnapshot().pendingComposerTransfers
+          : store.getSnapshot().pendingServerSubmissions;
+        expect(remaining[0]?.baselineTailItemId).toBe("user-2");
+      });
+    } finally { store.dispose(); }
+  });
+
   it("retains explicit question opening intent until the thread panel can consume it", () => {
     const store = new ThreadClientStore("thread-1", {} as ApiClient, new FakeTransport());
     const listener = vi.fn();

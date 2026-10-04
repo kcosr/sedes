@@ -420,7 +420,7 @@ function createService(input?: {
     usage: { registerVisibleTurns: () => undefined },
     inventory: { getAuthorized },
     conversations: { capture },
-    queue: { list },
+    queue: { list, read: vi.fn(async () => { throw new Error("unexpected_queued_input_read"); }) },
     presentation: {
       read: readPresentation,
       readCached: readCachedPresentation,

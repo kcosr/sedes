@@ -19,7 +19,10 @@ import type {
 import type { RequestScope } from "../identity/identity-provider.js";
 import { environmentAdmitsForegroundOperation } from "../domain/environment-operational-state.js";
 import { boundDisplayText, DEFAULT_PAYLOAD_LIMITS } from "./payload-policy.js";
-import { projectQueuedInputSummaries } from "./queued-input-projection.js";
+import {
+  projectQueuedInputPresentation,
+  projectQueuedInputSummaries,
+} from "./queued-input-projection.js";
 import type { AcquireConversationActorInput } from "./conversation-actor-manager.js";
 import type {
   ConversationLifecycleTargetResolver,
@@ -621,6 +624,20 @@ export class DatabaseThreadApplicationQueueReader implements ThreadApplicationQu
   async list(scope: RequestScope, applicationThreadId: string) {
     return projectQueuedInputSummaries(
       this.queue.list(scope, applicationThreadId),
+    );
+  }
+
+  async read(
+    scope: RequestScope,
+    applicationThreadId: string,
+    queuedInputId: string,
+  ) {
+    const { record, threadRevision, deliveryOperationId } =
+      this.queue.readInputProjectionState(scope, applicationThreadId, queuedInputId);
+    return projectQueuedInputPresentation(
+      record,
+      threadRevision,
+      deliveryOperationId,
     );
   }
 }
