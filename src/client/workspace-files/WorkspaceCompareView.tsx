@@ -108,6 +108,7 @@ import {
 } from "../components/ui/select.js";
 import { WorkspaceRevisionPicker } from "./WorkspaceRevisionPicker.js";
 import { WorkspaceChangedFileNavigator } from "./WorkspaceChangedFileNavigator.js";
+import { sortWorkspaceChangedFiles } from "./workspace-compare-file-order.js";
 import {
   compareEndpointIntent,
   compareEndpointSelection,
@@ -813,6 +814,9 @@ export function WorkspaceCompareView({
         activeComparisonRef.current = nextComparison;
         let after: WorkspaceDiffFileId | undefined;
         const accumulated: WorkspaceDiffChangedFileSummary[] = [];
+        // Pages arrive in server order; everything displayed, navigated, or
+        // loaded uses the canonical order instead.
+        let ordered: readonly WorkspaceDiffChangedFileSummary[] = [];
         let truncated = false;
         const seenCursors = new Set<string>();
         const seenFiles = new Set<string>();
@@ -851,8 +855,9 @@ export function WorkspaceCompareView({
               return true;
             }),
           );
-          setChangedFiles([...accumulated]);
-          changedFilesRef.current = [...accumulated];
+          ordered = sortWorkspaceChangedFiles(accumulated);
+          setChangedFiles(ordered);
+          changedFilesRef.current = ordered;
           truncated ||= page.truncated;
           after = page.nextCursor;
           if (after && seenCursors.has(after))
@@ -903,7 +908,7 @@ export function WorkspaceCompareView({
             setRestoreNotice(
               "The previously viewed file is no longer in this comparison.",
             );
-          const first = accumulated[0];
+          const first = ordered[0];
           anchorRef.current = first
             ? {
                 oldPath: first.oldPath,

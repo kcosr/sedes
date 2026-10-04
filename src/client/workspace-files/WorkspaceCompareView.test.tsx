@@ -730,6 +730,56 @@ describe("WorkspaceCompareView", () => {
     expect(onOpenFile).toHaveBeenCalledWith("src/file-1.ts");
   });
 
+  it("orders files canonically in the navigator, the diff, previous/next, and loading", async () => {
+    // The server sends full-path order.
+    const dataSource = createDataSource(0, {
+      paths: ["README.md", "src/a.ts", "src/b/c.ts", "src-x/d.ts", "zeta.md"],
+    });
+    render(<WorkspaceCompareView rootId="primary" dataSource={dataSource} />);
+    const compare = await configureComparison();
+    await waitFor(() => expect(compare).toBeEnabled());
+    fireEvent.click(compare);
+    const canonical = ["README.md", "zeta.md", "src/a.ts", "src/b/c.ts", "src-x/d.ts"];
+    await waitFor(() => expect(dataSource.loadPatch).toHaveBeenCalledTimes(5));
+    expect(
+      vi.mocked(dataSource.loadPatch).mock.calls.map(([request]) => request.fileId),
+    ).toEqual(canonical);
+    expect(
+      (capturedCodeViewProps?.items as readonly { id: string }[]).map(
+        (item) => item.id,
+      ),
+    ).toEqual(canonical);
+    const basenames = ["README.md", "zeta.md", "a.ts", "c.ts", "d.ts"];
+    expect(
+      within(screen.getByRole("tree", { name: "Changed file tree" }))
+        .getAllByRole("treeitem")
+        .flatMap((row) =>
+          basenames.filter((name) => row.textContent?.includes(name)),
+        ),
+    ).toEqual(basenames);
+
+    fireEvent.click(
+      within(screen.getByTestId("code-view")).getByRole("button", {
+        name: "Next changed file after README.md",
+      }),
+    );
+    await waitFor(() =>
+      expect(scrollTo).toHaveBeenLastCalledWith(
+        expect.objectContaining({ id: "zeta.md" }),
+      ),
+    );
+    fireEvent.click(
+      within(screen.getByTestId("code-view")).getByRole("button", {
+        name: "Previous changed file before src/a.ts",
+      }),
+    );
+    await waitFor(() =>
+      expect(scrollTo).toHaveBeenLastCalledWith(
+        expect.objectContaining({ id: "zeta.md" }),
+      ),
+    );
+  });
+
   it("loads every visible short-file entry without requiring a scroll event", async () => {
     const dataSource = createDataSource(20);
     viewportViewer = {
@@ -1220,6 +1270,8 @@ function createDataSource(
       file: WorkspaceDiffChangedFileSummary,
     ) => Promise<WorkspaceDiffPatchResult>;
     readonly truncated?: boolean;
+    /** Changed-file paths in server order; each path is also its file ID. */
+    readonly paths?: readonly string[];
   } = {},
 ): WorkspaceCompareDataSource {
   const repository = {
@@ -1248,11 +1300,17 @@ function createDataSource(
     head: { kind: "working_tree" },
     fingerprint: "fingerprint_123456789",
   } as WorkspaceDiffComparisonDescriptor;
-  const files = Array.from({ length: fileCount }, (_, index) => ({
-    fileId: `file-${index + 1}`,
+  const files = (
+    options.paths?.map((path) => ({ fileId: path, path })) ??
+    Array.from({ length: fileCount }, (_, index) => ({
+      fileId: `file-${index + 1}`,
+      path: `src/file-${index + 1}.ts`,
+    }))
+  ).map(({ fileId, path }) => ({
+    fileId,
     changeKind: "modified",
-    oldPath: `src/file-${index + 1}.ts`,
-    newPath: `src/file-${index + 1}.ts`,
+    oldPath: path,
+    newPath: path,
     additions: 1,
     deletions: 1,
     binary: false,
