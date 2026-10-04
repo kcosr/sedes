@@ -1489,6 +1489,39 @@ describe("application endpoint startup", () => {
     ).toBe(drawer);
   });
 
+  it("keeps the voice dock outside the mobile drawer and leaves focus on it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(applicationBootstrap)),
+    );
+    stubMediaQueries(true);
+    render(<App />);
+    await screen.findByRole("heading", {
+      name: "What should the agent work on?",
+    });
+    const view = document.querySelector(".application-view")!;
+    // jsdom has no layout: no card renders, so the band is empty.
+    expect(document.documentElement.style.getPropertyValue("--voice-dock-height")).toBe("0px");
+    const trigger = screen.getByRole("button", { name: "Open thread navigation" });
+    fireEvent.click(trigger);
+    await screen.findByRole("dialog", { name: "Thread navigation" });
+    expect(view).toHaveAttribute("data-drawer-open");
+
+    // The card's place: the main column's band under the view.
+    const dock = document.createElement("div");
+    dock.className = "voice-dock";
+    dock.innerHTML = '<button type="button">Start voice recording</button>';
+    view.after(dock);
+    const record = within(dock).getByRole("button");
+    act(() => record.focus());
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Thread navigation" })).not.toBeInTheDocument(),
+    );
+    expect(view).not.toHaveAttribute("data-drawer-open");
+    expect(record).toHaveFocus();
+    dock.remove();
+  });
+
   it("opens packaged server settings from the mobile drawer", async () => {
     platform.native = true;
     platform.name = "android";

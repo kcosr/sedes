@@ -22,7 +22,11 @@ async function renderPage(state: NativeVoiceState | Error, setup?: (fake: Return
   await act(async () => { await store.initialize(); });
   return { fake, store, view };
 }
-afterEach(() => { cleanup(); });
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+  act(() => { window.dispatchEvent(new StorageEvent("storage", { key: null })); });
+});
 
 describe("voice settings page", () => {
   it("shows connecting while native hydrates, then the unavailable state with Retry", async () => {
@@ -51,6 +55,26 @@ describe("voice settings page", () => {
     await waitFor(() => expect(screen.queryByText("Release review")).toBeNull());
     fireEvent.click(screen.getByRole("button", { name: "Resume input" }));
     await waitFor(() => expect(fake.plugin.resumeInput).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, mutationId: resumed }));
+    store.dispose();
+  });
+  it("enables voice in Response only once an adapter URL is saved", async () => {
+    const { fake, store } = await renderPage(voiceSnapshot());
+    expect(screen.getByRole("button", { name: "Enable voice" })).toBeDisabled();
+    act(() => fake.emit("settingsChanged", voiceSnapshot({ stateRevision: 2, settingsRevision: 1, settings: voiceSettings({ adapterUrl: "https://voice.test" }) })));
+    fake.plugin.getState.mockResolvedValue(voiceSnapshot({ stateRevision: 2, settingsRevision: 1, settings: voiceSettings({ adapterUrl: "https://voice.test" }) }));
+    fireEvent.click(screen.getByRole("button", { name: "Enable voice" }));
+    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 1, patch: { audioMode: "response" } }));
+    store.dispose();
+  });
+  it("keeps Show voice bar when off on this device, without a native write", async () => {
+    const { fake, store } = await renderPage(voiceSnapshot());
+    const toggle = screen.getByRole("switch", { name: "Show voice bar when off" });
+    expect(toggle).toHaveAccessibleDescription("Keep a dimmed bar under the composer while Audio mode is Off. Otherwise Off hides it.");
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(Object.entries(localStorage)).toEqual([[`sedes-voice-bar-when-off:${JSON.stringify(Object.values(VOICE_CONNECTION))}`, "true"]]);
+    expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
     store.dispose();
   });
   it("resumes voice with the refreshed native audio mode rather than the rendered one", async () => {
@@ -87,6 +111,11 @@ describe("voice settings page", () => {
     expect(fake.plugin.updateSettings.mock.lastCall).toEqual([{ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { voiceThreadId: "untitled", voiceThreadTitle: null } }]);
     act(() => fake.emit("settingsChanged", voiceSnapshot({ stateRevision: 3, settingsRevision: 2, settings: voiceSettings({ voiceThreadId: "untitled", voiceThreadTitle: null }) })));
     expect(screen.getByRole("button", { name: "Voice thread Untitled thread" })).toBeInTheDocument();
+    // The saved Voice thread leads the picker under its label; the rest keep their order without a duplicate.
+    fireEvent.click(screen.getByRole("button", { name: "Voice thread Untitled thread" }));
+    const pinned = await screen.findByRole("list", { name: "Voice threads" });
+    expect(within(pinned).getAllByRole("listitem").map(item => item.textContent)).toEqual(["Current Voice threadUntitled thread", "T".repeat(600), "Release review"]);
+    expect(within(pinned).getByRole("button", { name: "Untitled thread" })).toHaveAccessibleDescription("Current Voice thread");
     store.dispose();
   });
   it("tells microphones with the same product name apart", async () => {

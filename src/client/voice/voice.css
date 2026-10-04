@@ -1,0 +1,447 @@
+/* Voice card (voice/VoiceControls.tsx): a now-playing card under the
+   composer with a state tile, two lines and a round primary action. Tokens
+   only; radii from the ramp (--radius-lg card, --radius-ctl tile, 999px
+   pills). Colour is reserved for the tile, the phase word and the card edge
+   while recording. */
+
+/* The dock sits at the composer's own inline inset, so the card lines up
+   with the composer card. Without a composer above it (Settings, Home,
+   Archived, a read-only thread, a collapsed chat) it is the bottom band: its
+   own top inset, hairline and bottom safe area. */
+.voice-dock {
+  --voice-dock-inset: clamp(14px, 4vw, 48px);
+  flex: 0 0 auto;
+  padding: 8px var(--voice-dock-inset) calc(8px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border-soft);
+  background: var(--card);
+}
+
+/* Under a rendered composer the dock continues the composer-wrap's band; the
+   composer-wrap's bottom padding (safe area included) is the gap above the
+   card. Settings keeps the inactive workspace mounted and a collapsed chat
+   stays parked, so only a composer in the active workspace's layout counts.
+   The open mobile drawer covers the composer, so the card stands alone. */
+.application-view:not([data-drawer-open]):has(> .application-workspace[data-active="true"] .composer-wrap:not(.workspace-panel-parking *)) + .voice-dock {
+  padding-top: 0;
+  padding-bottom: 8px;
+  border-top: 0;
+}
+
+/* A TUI composer's band is the terminal background. */
+.application-view:not([data-drawer-open]):has(> .application-workspace[data-active="true"] .composer-wrap.tui-dock:not(.workspace-panel-parking *)) + .voice-dock {
+  background: var(--terminal-background);
+}
+
+.voice-card {
+  position: relative;
+  display: flex;
+  max-width: var(--measure);
+  min-height: 60px;
+  align-items: center;
+  gap: var(--space-2);
+  margin-inline: auto;
+  padding-right: 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--secondary);
+  box-shadow: var(--shadow-small);
+  color: var(--foreground);
+}
+
+.voice-card[data-tone="destructive"] {
+  border-color: var(--destructive-border);
+}
+
+/* The body: tile and two lines at the card's full height. When the card
+   names a thread other than the visible one, a button stretched over it
+   opens that thread; the retarget chip sits above that button. */
+.voice-card-body {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-self: stretch;
+  align-items: center;
+  gap: var(--space-3);
+  padding-left: 7px;
+}
+
+.voice-card-open {
+  position: absolute;
+  z-index: var(--z-sticky);
+  inset: 0;
+  border-radius: calc(var(--radius-lg) - 1px) 0 0 calc(var(--radius-lg) - 1px);
+}
+
+.voice-card-open:focus-visible {
+  outline-offset: -2px;
+}
+
+.voice-card-open:active,
+.voice-card-caret:active {
+  background: var(--accent-soft);
+}
+
+@media (hover: hover) {
+  .voice-card-open:hover {
+    background: var(--accent-soft);
+  }
+
+  .voice-card-caret:hover,
+  .voice-card-button[data-variant="ghost"]:hover:not(:disabled) {
+    background: var(--hover);
+  }
+}
+
+/* The state tile. */
+.voice-card-tile {
+  position: relative;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  place-items: center;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-ctl);
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+.voice-card-tile svg {
+  width: var(--icon-lg);
+  height: var(--icon-lg);
+}
+
+.voice-card-tile[data-tone="info"] {
+  border-color: var(--info-border);
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.voice-card-tile[data-tone="destructive"] {
+  border-color: var(--destructive-border);
+  background: var(--destructive-soft);
+  color: var(--destructive);
+}
+
+.voice-card-tile[data-tone="warning"] {
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.voice-card-tile[data-tone="muted"] {
+  background: transparent;
+  color: var(--muted-foreground);
+}
+
+/* The recording dot on the listening tile. */
+.voice-card-rec {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--destructive);
+  box-shadow: 0 0 0 2px var(--secondary);
+}
+
+/* The speaking waveform: five bars in the tile's info tone. */
+.voice-card-wave {
+  display: flex;
+  height: 24px;
+  align-items: center;
+  gap: 3px;
+}
+
+.voice-card-wave i {
+  display: block;
+  width: 3px;
+  height: 9px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.voice-card-wave i:nth-child(2) { height: 17px; animation-delay: -300ms; }
+.voice-card-wave i:nth-child(3) { height: 24px; animation-delay: -600ms; }
+.voice-card-wave i:nth-child(4) { height: 14px; animation-delay: -150ms; }
+.voice-card-wave i:nth-child(5) { height: 8px; animation-delay: -450ms; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .voice-card-wave i {
+    animation: voice-card-level 900ms var(--ease-emphasis) infinite alternate;
+    transform-origin: center;
+  }
+
+  /* The recording dot breathes; reduced motion keeps it solid. */
+  .voice-card-rec {
+    animation: voice-card-pulse 1400ms ease-in-out infinite;
+  }
+}
+
+@keyframes voice-card-level {
+  from { transform: scaleY(0.45); }
+  to { transform: scaleY(1); }
+}
+
+@keyframes voice-card-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px var(--secondary), 0 0 0 2px var(--destructive-soft); }
+  50% { box-shadow: 0 0 0 2px var(--secondary), 0 0 0 6px var(--destructive-soft); }
+}
+
+/* Two lines. */
+/* A size container, so line 2 drops its optional part when the column is
+   narrow (a phone with Skip and Stop beside it). */
+.voice-card-text {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  container: voice-card-text / inline-size;
+}
+
+@container voice-card-text (max-width: 239px) {
+  .voice-card-optional {
+    display: none;
+  }
+}
+
+.voice-card-title,
+.voice-card-sub {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-card-title {
+  font-size: var(--text-title);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  letter-spacing: -0.005em;
+}
+
+.voice-card-sub {
+  color: var(--muted-foreground);
+  font-size: var(--text-ui);
+  line-height: var(--leading-snug);
+}
+
+.voice-card-dot {
+  margin-inline: 3px;
+  color: var(--muted-foreground-2);
+}
+
+.voice-card-phase {
+  font-weight: var(--weight-medium);
+}
+
+.voice-card-phase[data-tone="info"] { color: var(--info); }
+.voice-card-phase[data-tone="destructive"] { color: var(--destructive); }
+.voice-card-phase[data-tone="warning"] { color: var(--warning); }
+
+/* Line 1 names the card's thread, next to the message-square glyph. */
+.voice-card-title[data-thread] {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.voice-card-title[data-thread] svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+  flex: none;
+  color: var(--muted-foreground);
+}
+
+.voice-card-title[data-thread] > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.voice-card-title[data-empty] {
+  color: var(--muted-foreground);
+  font-weight: var(--weight-regular);
+}
+
+/* The caret: the only way into the quick sheet, in every state. A 44px
+   target around the 16px glyph. */
+.voice-card-caret {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--muted-foreground-2);
+}
+
+.voice-card-caret svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+
+/* Listening: line 2 ends with the retarget chip ("Change", or "Choose"
+   without a target). It shrinks before the phase word and keeps a 44px hit
+   area. */
+.voice-card-sub[data-chip] {
+  display: flex;
+  align-items: center;
+  overflow: visible;
+}
+
+.voice-card-sub[data-chip] > :not(.voice-card-chip) {
+  flex: none;
+}
+
+.voice-card-chip {
+  position: relative;
+  z-index: calc(var(--z-sticky) + 1);
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  height: 26px;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--foreground);
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+}
+
+.voice-card-chip::before {
+  position: absolute;
+  inset: -9px 0;
+  content: "";
+}
+
+.voice-card-chip:active:not([aria-disabled="true"]) {
+  background: var(--accent);
+}
+
+.voice-card-chip svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+  flex: none;
+  color: var(--muted-foreground);
+}
+
+.voice-card-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Actions: a 48px round primary and a 44px ghost Skip, 8px apart. */
+.voice-card-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.voice-card-button,
+.voice-card-retry {
+  display: inline-flex;
+  height: 48px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--foreground);
+  transition: transform 100ms ease;
+}
+
+.voice-card-button:active:not(:disabled),
+.voice-card-retry:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.voice-card-button {
+  width: 48px;
+}
+
+.voice-card-button svg {
+  width: var(--icon-lg);
+  height: var(--icon-lg);
+}
+
+.voice-card-button[data-variant="ghost"] {
+  width: 44px;
+  height: 44px;
+  border-color: transparent;
+  background: transparent;
+}
+
+/* A filled square reads as media Stop; neutral, so it is never confused
+   with the composer's destructive-tinted Stop. */
+.voice-card-stop {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-check);
+  background: currentColor;
+}
+
+/* Resume: a labelled pill, kept compact so "Voice needs to resume" fits
+   beside it and the caret at phone width. */
+.voice-card-retry {
+  gap: var(--space-1-5);
+  padding: 0 var(--space-3) 0 11px;
+  font-size: var(--text-ui);
+  font-weight: var(--weight-medium);
+}
+
+.voice-card-retry svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+}
+
+.voice-card-button:disabled,
+.voice-card-retry:disabled {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--muted-foreground-2);
+  opacity: var(--disabled-opacity);
+  cursor: not-allowed;
+}
+
+/* Off: the same card, de-emphasized. Flat on the --card band, muted text
+   and tile, the Mic disabled; the body stays a live button that opens the
+   sheet, where Manual or Response turns voice back on. */
+.voice-card[data-off] {
+  border-color: var(--border-soft);
+  background: var(--card);
+  box-shadow: none;
+}
+
+.voice-card[data-off] .voice-card-tile {
+  border-color: var(--border-soft);
+  background: transparent;
+  color: var(--muted-foreground-2);
+}
+
+.voice-card[data-off] .voice-card-title {
+  color: var(--muted-foreground);
+}
+
+.voice-card[data-off] .voice-card-sub {
+  color: var(--muted-foreground-2);
+}
+
+@media (max-width: 819px) {
+  .voice-dock {
+    --voice-dock-inset: 9px;
+  }
+}

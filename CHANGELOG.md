@@ -203,6 +203,13 @@
   Codex, Pi, and Claude provide live progress announcements.
   ([#45](https://github.com/kcosr/sedes/pull/45))
 
+- Android voice shows a card under the composer that always names its thread,
+  with the current state and large Skip, Stop, and record controls. Tapping
+  the card opens that thread when another is on screen; its caret opens a
+  Voice sheet for audio mode and Auto-listen. **Show voice bar when off** keeps
+  a dimmed card while voice is off.
+  ([#48](https://github.com/kcosr/sedes/pull/48))
+
 - Codex threads can use **Ultrafast** speed when the account's Codex model
   catalog offers it. When a model offers both Fast and Ultrafast, the
   composer's lightning button opens a **Speed** menu, and a rocket marks

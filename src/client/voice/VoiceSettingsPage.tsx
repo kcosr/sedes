@@ -13,6 +13,8 @@ import { useVoiceState } from "./VoiceProvider.js";
 import { recentVoiceErrors, type NativeVoiceStore } from "./NativeVoiceStore.js";
 import { nativeThreadTitle, type NativeVoiceSettings } from "./native-voice-plugin.js";
 import { VoiceThreadPicker } from "./VoiceThreadPicker.js";
+import { useShowVoiceBarWhenOff } from "./voice-bar-preference.js";
+import { canEnableVoice, resumeVoice } from "./voice-session.js";
 
 const toggles = [
   ["autoListen", "Auto-listen", "Allow eligible notifications to reopen the microphone. Explicit recording stays available."],
@@ -38,6 +40,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
   const state = useVoiceState(store);
   const application = useApplicationStore(applicationStore);
   const [picker, setPicker] = useState(false);
+  const [showBarWhenOff, setShowBarWhenOff] = useShowVoiceBarWhenOff(store);
   const [devices, setDevices] = useState<Array<{ id: string; label: string; type: number }>>([]);
   useEffect(() => { void store.plugin.listInputDevices().then(result => setDevices(result.devices)).catch(() => undefined); }, [store]);
   const native = state.native;
@@ -60,12 +63,13 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
           <option value="off">Off</option><option value="manual">Manual</option><option value="response">Response</option>
         </NativeSelect>
       </SettingsField>
+      <SwitchField label="Show voice bar when off" description="Keep a dimmed bar under the composer while Audio mode is Off. Otherwise Off hides it."
+        checked={showBarWhenOff} onCheckedChange={setShowBarWhenOff} />
       <VoiceTextSetting label="Adapter URL" value={settings.adapterUrl} disabled={state.pending}
         description="Address of your agent-voice-adapter on a trusted network. It is separate from the Sedes server."
         onSave={adapterUrl => store.update({ adapterUrl })} />
-      {settings.audioMode === "off" ? <Button disabled={state.pending || !settings.adapterUrl} onClick={() => update({ audioMode: "response" })}>Enable voice</Button>
-        : native.actions.canResume ? <Button disabled={state.pending} onClick={() => { void store.update(current =>
-          current.settings.audioMode !== "off" && current.actions.canResume ? { audioMode: current.settings.audioMode } : null).catch(() => undefined); }}>Resume voice</Button> : null}
+      {settings.audioMode === "off" ? <Button disabled={state.pending || !canEnableVoice(settings)} onClick={() => update({ audioMode: "response" })}>Enable voice</Button>
+        : native.actions.canResume ? <Button disabled={state.pending} onClick={() => { void resumeVoice(store).catch(() => undefined); }}>Resume voice</Button> : null}
       <p role="status">{voiceReadiness(native.readiness)}</p>
     </SettingsSection>
     <SettingsSection title="Targets and behavior" card>
@@ -104,7 +108,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
     </SettingsSection> : null}
     {native.queue.droppedCount ? <Callout>{native.queue.droppedCount} automatic voice items were dropped because the queue was full or the item became ineligible.</Callout> : null}
     <VoiceThreadPicker threads={application.snapshot?.threads ?? []} open={picker} onOpenChange={setPicker}
-      onSelect={thread => update({ voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) })} />
+      pinned={{ threadId: settings.voiceThreadId, label: "Current Voice thread" }} onSelect={thread => update({ voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) })} />
   </SettingsPage>;
 }
 

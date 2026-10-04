@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { App as CapacitorApp } from "@capacitor/app";
 import type { ClientOrigin } from "../../shared/protocol/thread-input.js";
-import { navigate, threadPath } from "../app/router.js";
+import { configuredPanelPresentation, openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 import { NativeVoiceStore } from "./NativeVoiceStore.js";
 import { hasNativeVoice, nativeVoice } from "./native-voice-plugin.js";
 
@@ -44,7 +44,7 @@ function BrowserOriginProvider({ profileId, serverOrigin, identity, children }: 
   return <OriginContext.Provider value={origin}>{children}</OriginContext.Provider>;
 }
 function createStore(profileId: string, serverOrigin: string, identity: string): NativeVoiceStore {
-  return new NativeVoiceStore(nativeVoice, { profileId, serverOrigin, identity }, id => navigate(threadPath(id)));
+  return new NativeVoiceStore(nativeVoice, { profileId, serverOrigin, identity }, id => openThreadRoute(id, configuredPanelPresentation()));
 }
 /** The application renders at once; voice hydrates beside it and the origin is absent until native connects. */
 function AndroidVoiceProvider({ profileId, serverOrigin, identity, children }: { profileId: string; serverOrigin: string; identity: string; children: ReactNode }) {

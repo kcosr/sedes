@@ -1,0 +1,55 @@
+/* Voice quick sheet (voice/VoiceQuickSheet.tsx): the Dialog sheet with a
+   sheet-size title, a status dot and a raised Audio mode thumb. Rows and
+   controls are the ui primitives. Tokens only. */
+.voice-sheet {
+  --dialog-title-line: calc(var(--text-sheet-title) * var(--leading-snug));
+  padding-top: 18px;
+}
+
+.voice-sheet [data-slot="dialog-title"] {
+  font-size: var(--text-sheet-title);
+}
+
+.voice-sheet > [data-slot="dialog-close"] {
+  top: calc(18px + (var(--dialog-title-line) - var(--dialog-close-size)) / 2);
+}
+
+/* The dot sits on the first line when a readiness message wraps. */
+.voice-sheet-status {
+  display: flex;
+  gap: var(--space-1-5);
+}
+
+.voice-sheet-status::before {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  margin-top: calc((1lh - 7px) / 2);
+  border-radius: 999px;
+  background: var(--success);
+  content: "";
+}
+
+.voice-sheet-status[data-tone="warning"]::before {
+  background: var(--warning);
+}
+
+.voice-sheet-status[data-tone="muted"]::before {
+  background: var(--muted-foreground-2);
+}
+
+/* On the dark popover the --popover thumb would vanish into the sheet. */
+:root[data-theme="dark"] .voice-sheet-modes > [data-state="on"] {
+  background: color-mix(in oklch, var(--foreground) 10%, var(--popover));
+}
+
+.voice-sheet-help {
+  color: var(--muted-foreground);
+  font-size: var(--text-ui);
+  line-height: var(--leading-snug);
+}
+
+.voice-sheet-help strong {
+  color: var(--foreground);
+  font-weight: var(--weight-medium);
+}
