@@ -4,15 +4,9 @@
 
 ### Breaking Changes
 
-- Client protocol 137 adds direct text admission, live voice notifications, and
-  per-event Script/Voice delivery. Upgrade packaged clients with the server.
-  Notification script payloads use schema version 4; reinstall separately copied
-  hooks. The database upgrade replaces the old event-list settings contract. It
-  preserves response phases and script selections, except that disabled
-  settings without a script path keep no script events, and sets every event's
-  Voice action to Speak, or Speak then listen for Turn completed. Fresh
-  notification settings select no script events and include Final and
-  Unclassified response text.
+- Native voice requires client protocol 137 and notification script payload
+  version 4. Upgrade packaged clients and separately copied notification hooks
+  with the server, and review the migrated per-event Script/Voice settings.
 
 - Codex Speed is provider feature `codex.fast_mode@2`, which replaces the
   Fast mode enable/disable actions with `set_standard`, `set_fast`, and
@@ -198,16 +192,10 @@
 
 ### Added
 
-- Android native voice speaks selected notifications, records explicitly or
-  after a notification, and sends recognized text directly to a thread without
-  changing its composer draft. Live progress is available for Codex, Pi, and
-  Claude; other backends keep completion announcements. **Settings → Voice**
-  shows readiness, including the adapter and notification connections, and
-  recent errors. Input whose delivery is uncertain stays in recovery, where
-  voice rechecks it automatically without resending; **Resume input** retries
-  the same message and **Discard** removes it. Enabled voice resumes when the
-  app opens, and adapter URLs may include a reverse-proxy path. Device storage
-  read failures preserve saved input and credentials for recovery.
+- Android native voice supports spoken notifications, explicit and automatic
+  recording, thread targeting, background controls, and recoverable input
+  without changing composer drafts. Choose Script and Voice delivery per event;
+  Codex, Pi, and Claude provide live progress announcements.
 
 - Codex threads can use **Ultrafast** speed when the account's Codex model
   catalog offers it. When a model offers both Fast and Ultrafast, the
@@ -393,12 +381,9 @@
 
 ### Changed
 
-- The Android app now trusts CA certificates installed by the user or by
-  device management (MDM), in addition to system CAs, for all of its HTTPS and
-  secure WebSocket traffic. This includes Sedes connections that carry the
-  paired credential, so anyone able to install a CA on the device can intercept
-  that traffic. Certificate and hostname validation still apply. Review the
-  device's user certificates before pairing.
+- Android HTTPS and secure WebSocket connections now trust user- and
+  MDM-installed certificate authorities, including for authenticated Sedes
+  traffic. Certificate and hostname checks remain enabled.
 
 - Codex Fast mode is now called **Speed** in the composer, docs, and saved
   Agent settings. Changing to a model that doesn't offer the selected speed
@@ -723,11 +708,7 @@
 - Claude availability probes wait for complete process output, avoiding
   intermittent false unavailable errors.
 
-- Android voice preserves specific field-validation errors for invalid titles,
-  composer modes, and settings without exposing platform exception details.
-
-- Electron managed Local accepts the server's health response, which includes
-  the server version, and ignores additional fields.
+- Electron managed Local accepts the server's versioned health response.
 
 - Changing a thread setting right after Codex confirmed a Fast mode change
   no longer fails with "The Codex thread or settings changed in another
