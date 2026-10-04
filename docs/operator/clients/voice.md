@@ -10,6 +10,27 @@ HTTP speech. For local Parakeet transcription and Kokoro speech, use the
 [OpenAI-Compatible Speech Server](https://github.com/kcosr/openai-speech-server).
 Model setup and server operation are documented in that repository.
 
+## Agent controls
+
+Enable the **Client controls** group in a thread's Agent tools settings to let
+its agent inspect basic voice settings, change the mode/default voice thread,
+finish an interaction without follow-up listening, or switch to another thread.
+The current device is the client that started the turn. Steering from a second
+device does not transfer ownership. The agent targets another listed client only
+when you explicitly request it.
+
+Registration also works when server pairing is disabled and remains connected
+while Audio mode is Off. Basic settings stay local to the Android profile and
+user. Enabling voice through an agent cannot grant Android permissions or supply
+missing speech configuration; the result reports any local step still needed.
+
+An end-interaction or thread switch waits until the reply finishes playing.
+Switching can request one listen even with Auto-listen disabled, but it does not
+turn voice on or change the default/pin. Manual actions, a closed or replaced
+connection, or two minutes without completion supersede pending actions. Navigation
+requires the app to remain in the foreground. Browser and Electron clients support
+navigation and report voice controls as unavailable.
+
 ## Configure a session
 
 1. Pair the Android app with Sedes as described in [Android](android.md).

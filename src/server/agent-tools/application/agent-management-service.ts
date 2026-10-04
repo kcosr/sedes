@@ -87,6 +87,7 @@ export type AgentThreadSummary = {
   };
   readonly backend: BackendKind;
   readonly lifecycle: "active" | "snoozed" | "settled" | "archived";
+  readonly pinned: boolean;
   readonly activity: AgentThreadActivity;
   readonly automation: NormalizedThreadSummary["automation"];
 };
@@ -404,7 +405,7 @@ export class AgentManagementService {
     ) {
       throw new Error("agent_thread_last_activity_after_invalid");
     }
-    const fingerprint = queryFingerprint("thread.list@5", [
+    const fingerprint = queryFingerprint("thread.list@6", [
       scope.tenantId,
       scope.principalId,
       requestedScope.kind,
@@ -467,7 +468,7 @@ export class AgentManagementService {
     const rows = this.input.database
       .prepare(
         `
-          SELECT thread.id, thread.last_activity_at AS sort,
+          SELECT thread.id, thread.last_activity_at AS sort, principal.pinned,
             thread.workspace_id AS workspaceId,
             thread.environment_id AS environmentId,
             backend.kind AS backend, workspace.display_name AS workspaceLabel,
@@ -501,6 +502,7 @@ export class AgentManagementService {
       .all(...parameters, request.pageSize + 1) as Array<{
       readonly id: string;
       readonly sort: number;
+      readonly pinned: number;
       readonly backend: BackendKind;
       readonly workspaceId: string;
       readonly environmentId: string;
@@ -546,6 +548,7 @@ export class AgentManagementService {
           },
           backend: row.backend,
           lifecycle: summary.inventoryState,
+          pinned: row.pinned === 1,
           activity: activity(runState),
           automation: summary.automation,
         };

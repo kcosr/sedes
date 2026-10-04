@@ -24,8 +24,8 @@ export const nativeSpeechCatalogSchema = z.strictObject({
 });
 export type NativeSpeechCatalog = z.infer<typeof nativeSpeechCatalogSchema>;
 export const nativeVoiceStateSchema = z.strictObject({
-  version: z.literal(3), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
-  profileId: z.string().nullable(), serverOrigin: z.string().nullable(), identity: z.string().nullable(), originClientId: z.uuid().nullable(),
+  version: z.literal(4), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
+  profileId: z.string().nullable(), serverOrigin: z.string().nullable(), identity: z.string().nullable(), originClientId: z.uuid().nullable(), clientConnectionToken: z.string().nullable(),
   settingsRevision: z.number().int().nonnegative(), settings: nativeVoiceSettingsSchema,
   speech: z.strictObject({ credentialConfigured: z.boolean(), catalogStatus: z.enum(["idle", "loading", "ready", "error"]),
     catalog: nativeSpeechCatalogSchema.nullable(), error: z.string().nullable() }),

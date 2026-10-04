@@ -71,6 +71,8 @@ test.describe.serial("agent tool policy", () => {
     await expect(
       settings.getByRole("checkbox", { name: "Agent context" }),
     ).toBeEnabled();
+    await expect(settings.getByText("Client controls", { exact: true })).toBeVisible();
+    await expect(settings.getByRole("checkbox", { name: "Read client settings", exact: true })).toBeEnabled();
     await capture(page, testInfo, "agent-tools-idle.png");
 
     await secondPage.getByRole("button", { name: "Thread actions" }).click();

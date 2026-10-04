@@ -425,7 +425,7 @@ describe("HTTP security middleware", () => {
       .set("Access-Control-Request-Method", "POST")
       .set(
         "Access-Control-Request-Headers",
-        "content-type, last-event-id, x-csrf-token, authorization",
+        "content-type, last-event-id, x-csrf-token, x-sedes-client, authorization",
       )
       .expect(204);
 
@@ -436,7 +436,7 @@ describe("HTTP security middleware", () => {
       "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS",
     );
     expect(response.headers["access-control-allow-headers"]).toBe(
-      "Content-Type, Last-Event-ID, X-CSRF-Token, Authorization",
+      "Content-Type, Last-Event-ID, X-CSRF-Token, X-Sedes-Client, Authorization",
     );
     expect(response.headers["access-control-max-age"]).toBe("600");
     expect(

@@ -207,7 +207,7 @@ public class NativeVoiceRuntimeTest {
             assertFalse(f.store.journal(f.binding).getJSONObject(0).getBoolean("cancelled"));
             f.refreshed(session);
             assertEquals(2, f.inputAttempts.get()); assertEquals(1, f.sessionReads.get()); assertEquals(0, f.receiptReads.get());
-            assertEquals(f.request.toString(), f.lastRequest.get().toString());
+            assertEquals(f.externalRequest().toString(), f.lastRequest.get().toString());
         }
     }
 
@@ -299,7 +299,7 @@ public class NativeVoiceRuntimeTest {
             assertEquals(1, f.inputAttempts.get());
             assertNull(f.command("resumeInput", NativeVoiceJson.object("mutationId", f.mutation)));
             NativeVoiceHttp.Result retry = f.inputs.poll(10, TimeUnit.SECONDS); assertNotNull(retry);
-            assertEquals(2, f.inputAttempts.get()); assertEquals(f.request.toString(), f.lastRequest.get().toString());
+            assertEquals(2, f.inputAttempts.get()); assertEquals(f.externalRequest().toString(), f.lastRequest.get().toString());
             retry.done(200, f.receipt("queued"), null); f.flush();
             assertEquals(0, f.store.journal(f.binding).length()); assertEquals(0, f.runtime.snapshot().getJSONArray("recovery").length());
         }
@@ -1243,7 +1243,7 @@ public class NativeVoiceRuntimeTest {
             f.refreshed(session);
             assertEquals(2, f.inputAttempts.get()); assertEquals(1, f.sessionReads.get());
             assertEquals(0, f.receiptReads.get());
-            assertEquals(f.request.toString(), f.lastRequest.get().toString());
+            assertEquals(f.externalRequest().toString(), f.lastRequest.get().toString());
             assertFalse(f.store.journal(f.binding).getJSONObject(0).getBoolean("cancelled"));
         }
     }
@@ -1326,6 +1326,7 @@ public class NativeVoiceRuntimeTest {
             });
             runtime.observe(submissionObserver);
         }
+        JSONObject externalRequest() { JSONObject body = NativeVoiceJson.copy(request); body.remove("origin"); return body; }
         void foreground(String threadId) throws Exception {
             runtime.nativeVisibility(true);
             assertNull(command("setForegroundContext", NativeVoiceJson.object("visible", true, "threadId", threadId)));

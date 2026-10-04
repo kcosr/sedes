@@ -265,11 +265,59 @@ The canonical catalog groups operations under:
   preference selection;
 - **Threads** — inventory, status, messages, creation, send, fork,
   archive/restore, and related controls;
+- **Client controls** — current-client navigation, interaction completion, and
+  revision-checked basic voice settings;
 - **Agents** — saved Agent discovery and revision-checked management;
 - **Tasks** — bounded reads and revision-checked mutation; and
 - **Automations** — definition/history reads and guarded scheduling controls;
 - **Research** — current public information through an installation-owned
   provider process.
+
+`thread.status@3` and `thread.list@6` include the current principal's read-only
+`pinned` flag. There is no thread-pin mutation tool.
+
+### Client controls
+
+`client.list`, `client.end_interaction`, `client.switch_thread`,
+`client.settings.get`, and `client.settings.update` are thread-agent tools on
+Pi, Codex, Claude, Grok, and OpenCode through their supported native and CLI
+surfaces. Standalone Tool clients cannot invoke them. Their group and individual
+controls use the existing agent-tool policy UI.
+
+The source facade captures the active normalized turn and starting client before
+approval or execution. Later Steer input does not retarget it. The provider's
+current-input lease is checked even when no environment approval is needed.
+Unavailable or replaced turn authority fails closed. Omit `clientId` for the
+current device. List clients or specify another `clientId` only for an explicit
+user request; never select another online device as a fallback.
+
+The registry, command acknowledgements, and completion correlations are
+principal scoped, transient, and bounded. A paired client retains its authenticated
+ID; an anonymous registration receives a temporary ID without pairing. Connection
+replacement invalidates pending commands. Silent registrations expire after
+45 seconds. Actions expire after two minutes and are never persisted for replay.
+
+Settings reads identify the client and return capabilities, readiness, and a
+revision. Updates require `expectedRevision` and `patch.voice`, limited to
+`audioMode`, `voiceThreadId`, `pinDefaultVoiceThread`, `autoListen`,
+`onlyVoiceThread`, `ignoreOtherDevices`, and `followComposerMode`. Credentials,
+providers, models, hardware selection, timing, and notification policy are outside
+this API. Destination/default threads pass normal environment authority checks,
+including nested default-thread patches. Android persists through its existing
+profile/identity settings store. An enabling edit can persist while foreground,
+permission, or speech setup prevents service start; the response reports that
+condition and the actual state. Off stops immediately.
+
+End-interaction suppresses only this turn's automatic follow-up; it does not
+cancel the agent or change preferences. Switch-thread defaults to `listen: false`.
+With `listen: true`, Android requests one exact-target listen even with auto-listen
+disabled, while retaining voice-mode, permission, setup, and foreground gates.
+Neither operation changes the pinned/default voice thread. Accepted deferred
+actions are acknowledged before turn completion, then wait for the matching reply's
+actual audio drain. Silent replies do not require audio. Failed/interrupted turns,
+playback failure, manual supersession, background navigation, expiry, and connection
+loss prevent deferred navigation/listening. Browser/Electron navigation works;
+voice and voice settings report unsupported with a successful no-op.
 
 `research.web_search` is provider-neutral. Its initial Grok CLI provider may
 use general web search, page fetch, and public X search, while Sedes removes

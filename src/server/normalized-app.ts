@@ -1,3 +1,5 @@
+import { registerClientSchema, clientPollRequestSchema } from "../shared/protocol/client-controls.js";
+import type { ClientControlService } from "./domain/client-control-service.js";
 import { usageAnalyticsRequestSchema } from "../shared/protocol/usage-analytics.js";
 import { usageAvailabilityRequestSchema } from "../shared/protocol/usage-accounting.js";
 import type { UsageService } from "./usage/usage-service.js";
@@ -365,6 +367,7 @@ export interface NormalizedAppDependencies {
   readonly environmentVariables?: EnvironmentVariablesService;
   /** Production always supplies admission; isolated service fixtures may omit it. */
   readonly authentication?: AuthenticationAdmission;
+  readonly clientControls?: ClientControlService;
   readonly hostPairingAdmin?: HostPairingAdministration;
   readonly outboundArtifact?: () => Promise<SidecarArtifactRegistration>;
   readonly outboundConnectorDirectory?: string;
@@ -929,6 +932,28 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     delete: (routePath: string, ...handlers: RequestHandler[]) =>
       register("delete", routePath, handlers),
   };
+  const clientIdentity = (request: Request) => dependencies.authentication?.required
+    ? dependencies.authentication.clientForRequest(request) : undefined;
+  const registeredOrigin = (request: Request, requestScope: RequestScope, required = false) => {
+    const token = request.get("X-Sedes-Client");
+    if (!token && !required) return undefined;
+    if (!dependencies.clientControls) throw new ApiError(503, "client_controls_unavailable", "Client registration is unavailable.");
+    return dependencies.clientControls.origin(requestScope, token, clientIdentity(request)?.id);
+  };
+  routes.post("/api/client-registration", async (request, response) => {
+    if (!dependencies.clientControls) throw new ApiError(503, "client_controls_unavailable", "Client registration is unavailable.");
+    response.setHeader("Cache-Control", "no-store");
+    response.json(dependencies.clientControls.register(await scope(request), clientIdentity(request), registerClientSchema.parse(request.body)));
+  });
+  routes.post("/api/client-controls/poll", longLived(async (request, response) => {
+    if (!dependencies.clientControls) throw new ApiError(503, "client_controls_unavailable", "Client controls are unavailable.");
+    response.setHeader("Cache-Control", "no-store");
+    const untrack = dependencies.longLivedConnections?.track(response);
+    try {
+      response.json(await dependencies.clientControls.poll(await scope(request), request.get("X-Sedes-Client"),
+        clientIdentity(request)?.id, clientPollRequestSchema.parse(request.body), workspaceFileRequestSignal(request, response)));
+    } finally { untrack?.(); }
+  }));
   const attachmentRouteParametersSchema = z.strictObject({
     threadId: z.uuid(),
     attachmentId: z.uuid(),
@@ -1470,7 +1495,8 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
   routes.post("/api/threads/:threadId/inputs", async (request, response) => {
     const requestScope = await scope(request);
     const { threadId } = threadRouteParametersSchema.parse(request.params);
-    const input = directInputRequestSchema.parse(request.body);
+    const external = directInputRequestSchema.omit({ origin: true }).parse(request.body);
+    const input = { ...external, origin: registeredOrigin(request, requestScope, true)! };
     response.setHeader("Cache-Control", "no-store");
     response.json(await dependencies.threads.admitInput(requestScope, threadId, input));
   });
@@ -1728,7 +1754,9 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     async (request, response) => {
       const requestScope = await scope(request);
       const { threadId } = threadRouteParametersSchema.parse(request.params);
-      const operation = threadApplicationOperationSchema.parse(request.body);
+      if (request.body?.origin !== undefined) throw new ApiError(400, "bad_request", "Input attribution comes from client registration.");
+      const operation = threadApplicationOperationSchema.parse(request.body?.kind === "deliver"
+        ? { ...request.body, origin: registeredOrigin(request, requestScope) } : request.body);
       const result = await dependencies.threads.mutate(
         requestScope,
         threadId,

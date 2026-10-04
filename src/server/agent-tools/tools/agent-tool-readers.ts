@@ -14,6 +14,7 @@ export interface ThreadStatusResult {
   readonly threadId: string;
   readonly backend: BackendKind;
   readonly lifecycle: "active" | "snoozed" | "settled" | "archived";
+  readonly pinned: boolean;
   readonly activity: "idle" | "running" | "waiting_for_input";
 }
 

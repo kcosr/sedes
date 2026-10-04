@@ -2,7 +2,7 @@ import { z } from "zod";
 import { mutationIdSchema, threadIdSchema, applicationTurnIdSchema } from "./domain.js";
 import { steerTargetSchema, threadRunStateSchema } from "./conversation.js";
 
-/** Advisory playback attribution. Authentication never comes from this value. */
+/** Server-stamped input attribution from the registered client connection. This ID is never authentication. */
 export const clientOriginSchema = z.strictObject({
   clientId: z.string().uuid(),
 });

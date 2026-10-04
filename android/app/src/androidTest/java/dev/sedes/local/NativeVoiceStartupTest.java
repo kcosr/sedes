@@ -358,6 +358,8 @@ public class NativeVoiceStartupTest {
                 public boolean before(String method, String path, JSONObject body, NativeVoiceHttp.Result result) {
                     if (method.equals("GET") && path.equals("/api/auth/status")) auth.add(result);
                     else if (method.equals("GET") && path.equals("/api/application/session")) sessions.add(result);
+                    else if (path.equals("/api/client-registration")) result.done(200, NativeVoiceJson.object("clientId", UUID.randomUUID().toString(), "connectionToken", "startup-registered-connection-token"), null);
+                    else if (path.equals("/api/client-controls/poll")) { /* Retain the idle poll until disconnect. */ }
                     else throw new AssertionError("Unexpected startup request: " + method + " " + path);
                     return true;
                 }
@@ -368,7 +370,7 @@ public class NativeVoiceStartupTest {
             Reply reply = new Reply(); runtime.command("setConnection", NativeVoiceJson.object("profileId", selectedProfile,
                 "serverOrigin", origin, "identity", IDENTITY), false, reply); return reply;
         }
-        void connect() throws Exception { Reply reply = beginConnection(profile); authenticate(); session(); reply.await(); }
+        void connect() throws Exception { Reply reply = beginConnection(profile); authenticate(); session(); reply.await(); ownerBarrier(); }
         JSONObject authenticated() { return NativeVoiceJson.object("required", true, "authenticated", true, "navigationNamespace", IDENTITY); }
         void authenticate() throws Exception { take(auth).done(200, authenticated(), null); }
         void session() throws Exception { take(sessions).done(200, NativeVoiceJson.object("clientProtocolVersion", BuildConfig.SEDES_CLIENT_PROTOCOL_VERSION, "csrfToken", "startup-test"), null); }

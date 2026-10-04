@@ -1,3 +1,5 @@
+import type { ClientControlToolService } from "../tools/client-control-tools.js";
+import type { TrustedClientTurn } from "../contracts/agent-tool-contracts.js";
 import type {
   BackendAgentToolFacade,
   BackendAgentToolInvocationInput,
@@ -57,6 +59,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
     readonly sources: AgentToolSourceRevalidator,
     readonly approvalAuthority: AgentToolApprovalAuthorityProvider,
     readonly approvals: AgentToolApprovalRequester,
+    readonly clientControls?: ClientControlToolService,
   ) {}
 
   eligibleCatalog(
@@ -136,6 +139,13 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
     try {
       const source = this.#resolveSource(input.source, input.signal);
       const admitted = this.#admit(input, source);
+      let clientTurn: TrustedClientTurn | undefined;
+      if (input.request.toolId.startsWith("client.")) {
+        sourceAuthority = await input.accessDecisionAuthority?.acquire(input.signal);
+        if (sourceAuthority && !sourceAuthority.isCurrent()) throw this.#unavailable();
+        if (!this.clientControls) throw this.#unavailable();
+        clientTurn = this.clientControls.capture(source.scope, source.sourceThreadId);
+      }
       const needsApproval = admitted.policy.accessBoundary === "thread"
         ? !isWithinSourceThread(admitted.resolved, source.sourceThreadId,
             admitted.definition.environmentAuthority.kind)
@@ -145,7 +155,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
           ) ||
             reachesOutsideEveryEnvironment(admitted.resolved));
       if (needsApproval) {
-        sourceAuthority = await input.accessDecisionAuthority?.acquire(input.signal);
+        sourceAuthority ??= await input.accessDecisionAuthority?.acquire(input.signal);
         if (sourceAuthority && !sourceAuthority.isCurrent()) throw new CanonicalAgentToolRequestError(
           "cancelled", "The input authority changed before approval could be requested.");
         approvalAuthority =
@@ -224,6 +234,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
           refreshed.policy.revision,
           refreshed.resolved,
           signal,
+          clientTurn,
         );
       }
       return await this.#execute<Output>(
@@ -232,7 +243,8 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
         admitted.defaults,
         admitted.policy.revision,
         admitted.resolved,
-        input.signal,
+        sourceAuthority ? AbortSignal.any([input.signal, sourceAuthority.signal]) : input.signal,
+        clientTurn,
       );
     } catch (error) {
       if (
@@ -356,6 +368,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
     policyRevision: number,
     resolved: ResolvedEnvironmentAuthority,
     signal: AbortSignal,
+    clientTurn?: TrustedClientTurn,
   ) {
     const environmentAuthority = createTrustedEnvironmentAuthorityGrant({
       ...resolved,
@@ -377,6 +390,7 @@ export class SourceScopedAgentToolService implements BackendAgentToolFacade {
     });
     return this.canonical.invoke<Output>(input.request, {
       scope: source.scope,
+      ...(clientTurn ? { clientTurn } : {}),
       environmentAuthority,
       adapter: input.adapter,
       subject: Object.freeze({

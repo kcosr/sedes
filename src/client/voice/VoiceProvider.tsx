@@ -1,31 +1,19 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { App as CapacitorApp } from "@capacitor/app";
-import type { ClientOrigin } from "../../shared/protocol/thread-input.js";
+import type { RegisteredClient } from "../../shared/protocol/client-controls.js";
+import { ClientControlConnection } from "./ClientControlConnection.js";
 import { configuredPanelPresentation, openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
 import { NativeVoiceStore } from "./NativeVoiceStore.js";
 import { hasNativeVoice, nativeVoice } from "./native-voice-plugin.js";
 
-/** Reads the advisory client origin when a request is sent. Its identity is stable, so consumers never rebuild when the origin arrives or changes. */
-export type ClientOriginSource = () => ClientOrigin | undefined;
+/** Reads the registered client connection when a request is sent. Its identity is stable, so consumers never rebuild when the origin arrives or changes. */
+export type ClientOriginSource = () => RegisteredClient | undefined;
 const noOrigin: ClientOriginSource = () => undefined;
 const VoiceContext = createContext<NativeVoiceStore | null>(null);
 const OriginContext = createContext<ClientOriginSource>(noOrigin);
 export const useNativeVoice = () => useContext(VoiceContext);
 export const useClientOrigin = () => useContext(OriginContext);
 export const useVoiceState = (store: NativeVoiceStore) => useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
-
-function browserOrigin(profileId: string | undefined, serverOrigin: string, identity: string | undefined): ClientOrigin | undefined {
-  if (!identity) return undefined;
-  const key = `sedes-client-origin:${JSON.stringify([profileId ?? "browser", serverOrigin, identity])}`;
-  try {
-    let clientId = localStorage.getItem(key);
-    if (!clientId || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(clientId)) {
-      clientId = crypto.randomUUID();
-      localStorage.setItem(key, clientId);
-    }
-    return { clientId };
-  } catch { return undefined; }
-}
 
 /** Authenticate first; the Android bridge obtains the same identity using its stored credential. */
 export function VoiceProvider({ profileId, serverOrigin, identity, children }: {
@@ -40,7 +28,15 @@ export function VoiceProvider({ profileId, serverOrigin, identity, children }: {
 function BrowserOriginProvider({ profileId, serverOrigin, identity, children }: {
   profileId?: string; serverOrigin: string; identity?: string; children: ReactNode;
 }) {
-  const origin = useMemo<ClientOriginSource>(() => { const value = browserOrigin(profileId, serverOrigin, identity); return () => value; }, [profileId, serverOrigin, identity]);
+  const current = useRef<ClientControlConnection | null>(null);
+  const [origin] = useState<ClientOriginSource>(() => () => current.current?.registration);
+  useEffect(() => {
+    if (!identity) return;
+    const connection = new ClientControlConnection({ baseUrl: serverOrigin }, id => openThreadRoute(id, configuredPanelPresentation()));
+    current.current = connection;
+    void connection.run();
+    return () => { connection.close(); if (current.current === connection) current.current = null; };
+  }, [profileId, serverOrigin, identity]);
   return <OriginContext.Provider value={origin}>{children}</OriginContext.Provider>;
 }
 function createStore(profileId: string, serverOrigin: string, identity: string): NativeVoiceStore {
@@ -51,8 +47,9 @@ function AndroidVoiceProvider({ profileId, serverOrigin, identity, children }: {
   const [store, setStore] = useState(() => createStore(profileId, serverOrigin, identity));
   const active = useRef(store);
   const [origin] = useState<ClientOriginSource>(() => () => {
-    const clientId = active.current.getSnapshot().native?.originClientId;
-    return clientId ? { clientId } : undefined;
+    const state = active.current.getSnapshot().native;
+    return state?.originClientId && state.clientConnectionToken
+      ? { clientId: state.originClientId, connectionToken: state.clientConnectionToken } : undefined;
   });
   useEffect(() => {
     // An effect replay (StrictMode) replaces the store it disposed instead of reviving it.

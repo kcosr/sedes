@@ -358,7 +358,7 @@ import type {
   ThreadAutomationSchedulePreview,
 } from "../types.js";
 import type { AutomationSchedule } from "../../shared/protocol/automation.js";
-import type { ClientOrigin } from "../../shared/protocol/thread-input.js";
+import type { RegisteredClient } from "../../shared/protocol/client-controls.js";
 import type {
   AutomationMisfirePolicy,
   AutomationRunMode,
@@ -501,18 +501,22 @@ export class ApiClient {
   #appliedSessionSequence = 0;
   #sessionPromise?: Promise<NormalizedApplicationSession>;
 
-  readonly #clientOrigin: () => ClientOrigin | undefined;
+  readonly #clientOrigin: () => RegisteredClient | undefined;
 
   /** `clientOrigin` is read at each delivery, so an origin that arrives or changes later never requires a new client. */
   constructor(endpoint: SedesServerEndpoint = sameOriginSedesServer, credentialOverride?: string | null,
-    clientOrigin: () => ClientOrigin | undefined = () => undefined) {
+    clientOrigin: () => RegisteredClient | undefined = () => undefined) {
     this.#endpoint = endpoint;
     this.#credentialOverride = credentialOverride;
     this.#clientOrigin = clientOrigin;
   }
 
   #fetch(path: string, init: RequestInit): Promise<Response> {
-    return authenticatedFetch(this.#endpoint, path, init, this.#credentialOverride);
+    const client = this.#clientOrigin();
+    if (!client) return authenticatedFetch(this.#endpoint, path, init, this.#credentialOverride);
+    const headers = new Headers(init.headers);
+    headers.set("X-Sedes-Client", client.connectionToken);
+    return authenticatedFetch(this.#endpoint, path, { ...init, headers }, this.#credentialOverride);
   }
 
   session(options?: {
@@ -1652,10 +1656,10 @@ export class ApiClient {
 
   operateThread(
     threadId: string,
-    rawOperation: ThreadApplicationOperation,
+    rawOperation: Exclude<ThreadApplicationOperation, { kind: "deliver" }> | Omit<Extract<ThreadApplicationOperation, { kind: "deliver" }>, "origin">,
   ): Promise<ThreadApplicationMutationResult> {
-    const origin = rawOperation.kind === "deliver" && !rawOperation.origin ? this.#clientOrigin() : undefined;
-    const operation = threadApplicationOperationSchema.parse(origin ? { ...rawOperation, origin } : rawOperation);
+    if ("origin" in rawOperation) return Promise.reject(new ApiError(400, "bad_request", "Input attribution comes from client registration.", false));
+    const operation = threadApplicationOperationSchema.parse(rawOperation);
     return this.#mutation<ThreadApplicationMutationResult>(
       `/api/threads/${encodeURIComponent(threadId)}/operations`,
       operation.kind === "deliver"

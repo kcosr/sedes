@@ -61,11 +61,15 @@ test("idle direct input becomes one complete transcript message while active que
   const session = normalizedApplicationSessionSchema.parse(
     await (await page.request.get("/api/application/session")).json(),
   );
-  const clientId = randomUUID();
+  const registration = await page.request.post("/api/client-registration", { headers: { "X-CSRF-Token": session.csrfToken },
+    data: { platform: "android", capabilities: { navigate: true, voice: true, voiceSettings: true },
+      state: { runtime: { foreground: true, voiceReady: false, interactionActive: false }, settings: null } } });
+  expect(registration.ok()).toBe(true);
+  const { connectionToken } = await registration.json();
   const submit = async (text: string, runningPolicy: DirectInputRequest["runningPolicy"]) => {
     const response = await page.request.post(`/api/threads/${threadId}/inputs`, {
-      headers: { "X-CSRF-Token": session.csrfToken },
-      data: { mutationId: randomUUID(), text, origin: { clientId }, runningPolicy },
+      headers: { "X-CSRF-Token": session.csrfToken, "X-Sedes-Client": connectionToken },
+      data: { mutationId: randomUUID(), text, runningPolicy },
     });
     expect(response.status(), await response.text()).toBe(200);
     return directInputReceiptSchema.parse(await response.json());

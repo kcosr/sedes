@@ -19,7 +19,6 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
-import java.util.UUID;
 import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
@@ -143,7 +142,7 @@ final class NativeVoiceStore {
             if (target.getBaseFile().exists()) throw new IllegalStateException("voice_storage_unavailable");
         }
     }
-    /** Deletes every native voice record for the profile: settings, origin IDs, journals and quarantined copies. */
+    /** Deletes every native voice record for the profile: settings, journals and quarantined copies. */
     void removeProfile(String profileId) throws Exception {
         synchronized (LOCK) {
             Iterator<String> cached = journals.keySet().iterator();
@@ -188,21 +187,6 @@ final class NativeVoiceStore {
             AtomicFile record = file(binding, "speech-catalog"); record.delete();
             if (!missing(record.getBaseFile()) || !missing(new File(record.getBaseFile().getPath() + ".bak")) ||
                 !missing(new File(record.getBaseFile().getPath() + ".new"))) throw new IllegalStateException("voice_storage_unavailable");
-        }
-    }
-    String originId(String binding) throws Exception {
-        synchronized (LOCK) {
-            JSONObject value = read(binding, "origin");
-            if (value != null) {
-                try {
-                    NativeVoiceJson.keys(value, "version", "clientId");
-                    NativeVoiceJson.integer(value, "version", 1, 1);
-                    return NativeVoiceJson.string(value, "clientId", 160);
-                } catch (RuntimeException error) { throw new CorruptRecord("origin", error); }
-            }
-            String id = UUID.randomUUID().toString();
-            write(binding, "origin", NativeVoiceJson.object("version", 1, "clientId", id));
-            return id;
         }
     }
     private JSONArray entries(String binding) throws Exception {

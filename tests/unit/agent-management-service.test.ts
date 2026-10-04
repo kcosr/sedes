@@ -409,6 +409,8 @@ describe("AgentManagementService discovery", () => {
   it("searches all principal workspaces by default in fixed activity order", async () => {
     const current = discoveryFixture();
     try {
+      current.database.prepare("UPDATE thread_principal_state SET pinned = 1 WHERE tenant_id = ? AND principal_id = ? AND thread_id = ?")
+        .run(current.scope.tenantId, current.scope.principalId, current.newer.id);
       expect(
         current.database
           .prepare(
@@ -428,12 +430,14 @@ describe("AgentManagementService discovery", () => {
         items: [
           expect.objectContaining({
             id: current.newer.id,
+            pinned: true,
             lastActivityAt: new Date(4_000).toISOString(),
             workspace: { id: current.workspaceB.id, label: "Other project" },
             environment: current.environment,
           }),
           expect.objectContaining({
             id: current.older.id,
+            pinned: false,
             lastActivityAt: new Date(3_000).toISOString(),
             workspace: { id: current.workspaceA.id, label: "Same project" },
             environment: current.environment,

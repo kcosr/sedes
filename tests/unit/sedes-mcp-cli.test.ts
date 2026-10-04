@@ -145,7 +145,7 @@ describe("sedes mcp command", () => {
       (listed as { result: { tools: { name: string }[] } }).result.tools.map(
         ({ name }) => name,
       ),
-    ).toEqual(["sedes_agent_context", "sedes_thread_status"]);
+    ).toEqual(["sedes_agent_context", "sedes_thread_status", "sedes_client_list", "sedes_client_end_interaction", "sedes_client_switch_thread", "sedes_client_settings_get", "sedes_client_settings_update"]);
     expect(called).toMatchObject({
       id: 3,
       result: {

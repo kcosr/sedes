@@ -24,6 +24,7 @@ const capabilityPattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const adapterNamePattern = /^[A-Za-z][A-Za-z0-9_.-]{0,127}$/;
 const concurrencyClassPattern = /^[a-z][a-z0-9_-]{0,63}$/;
 const groupIds = new Set([
+  "client",
   "context",
   "files",
   "threads",
@@ -252,7 +253,7 @@ function validateEnvironmentAuthority(definition: AgentToolDefinition): void {
         authority.resource,
       ) ||
       (authority.inputField !== undefined &&
-        !/^[a-z][A-Za-z0-9]{0,63}$/.test(authority.inputField)) ||
+        !/^[a-z][A-Za-z0-9]{0,63}(?:\.[a-z][A-Za-z0-9]{0,63}){0,3}$/.test(authority.inputField)) ||
       (authority.defaultToSource !== undefined &&
         typeof authority.defaultToSource !== "boolean") ||
       // Only an environment resource may also name a project the operation targets.

@@ -331,6 +331,7 @@ describe("SourceScopedAgentToolService", () => {
         threadId: "thread-2",
         backend: "pi" as const,
         lifecycle: "active" as const,
+        pinned: false,
         activity: "idle" as const,
       }));
       const current = new SourceScopedAgentToolService(
@@ -384,7 +385,7 @@ describe("SourceScopedAgentToolService", () => {
         adapter: "cli",
         request: {
           toolId: "thread.status",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: `cross-environment-${accessBoundary}`,
           input: { threadId: "thread-2" },
         },
@@ -410,6 +411,7 @@ describe("SourceScopedAgentToolService", () => {
       threadId: "thread-2",
       backend: "pi" as const,
       lifecycle: "active" as const,
+      pinned: false,
       activity: "idle" as const,
     }));
     const policy = {
@@ -463,7 +465,7 @@ describe("SourceScopedAgentToolService", () => {
         adapter: "cli",
         request: {
           toolId: "thread.status",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "approved-cross-environment",
           input: { threadId: "thread-2" },
         },
@@ -478,7 +480,7 @@ describe("SourceScopedAgentToolService", () => {
         generation: "generation-1",
         presentation: expect.objectContaining({
           title: { text: "Allow Thread status?" },
-          code: { text: "thread.status@2 · read" },
+          code: { text: "thread.status@3 · read" },
           message: {
             text: 'This tool wants to access Remote for Remote thread. Arguments: {"threadId":"thread-2"}.',
           },
@@ -504,6 +506,7 @@ describe("SourceScopedAgentToolService", () => {
         threadId: "thread-2",
         backend: "pi" as const,
         lifecycle: "active" as const,
+        pinned: false,
         activity: "idle" as const,
       }));
       const canonical = new CanonicalInlineAgentToolService({
@@ -593,7 +596,7 @@ describe("SourceScopedAgentToolService", () => {
           adapter: "cli",
           request: {
             toolId: "thread.status",
-            schemaVersion: 2,
+            schemaVersion: 3,
             requestId: `post-approval-${drift.replaceAll(" ", "-")}`,
             input: { threadId: "thread-2" },
           },
@@ -873,7 +876,7 @@ describe("SourceScopedAgentToolService", () => {
         adapter: "cli",
         request: {
           toolId: "thread.status",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "approval-capacity",
           input: { threadId: "thread-2" },
         },
@@ -934,7 +937,7 @@ describe("SourceScopedAgentToolService", () => {
         adapter: "cli",
         request: {
           toolId: "thread.status",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "approval-force-reset",
           input: { threadId: "thread-2" },
         },
@@ -1313,7 +1316,7 @@ describe("provider current-input access decision authority", () => {
   it.each(["current", "stale", "aborted"] as const)("checks the %s lease around interactive approval", async state => {
     const controller = new AbortController(); let current = true;
     const release = vi.fn();
-    const readThreadStatus = vi.fn(async () => ({ threadId: "thread-2", backend: "pi" as const, lifecycle: "active" as const, activity: "idle" as const }));
+    const readThreadStatus = vi.fn(async () => ({ threadId: "thread-2", backend: "pi" as const, lifecycle: "active" as const, pinned: false, activity: "idle" as const }));
     const requestApplicationDecision = vi.fn(async () => {
       if (state === "stale") current = false;
       if (state === "aborted") controller.abort();
@@ -1328,7 +1331,7 @@ describe("provider current-input access decision authority", () => {
         listEnvironments: () => [{ id: "environment-1", environmentId: "environment-1", label: "Local" }, { id: "environment-2", environmentId: "environment-2", label: "Other" }] }),
       sourceRevalidator, approvalAuthority, { requestApplicationDecision });
     const result = gate.invoke({ source, adapter: "cli", signal: new AbortController().signal,
-      request: { toolId: "thread.status", schemaVersion: 2, requestId: `current-${state}`, input: { threadId: "thread-2" } },
+      request: { toolId: "thread.status", schemaVersion: 3, requestId: `current-${state}`, input: { threadId: "thread-2" } },
       accessDecisionAuthority: { acquire: async () => ({ signal: controller.signal, isCurrent: () => current, release }) } });
     if (state === "current") { await expect(result).resolves.toMatchObject({ state: "completed" }); expect(readThreadStatus).toHaveBeenCalledOnce(); }
     else { await expect(result).rejects.toMatchObject({ toolError: { code: "cancelled" } }); expect(readThreadStatus).not.toHaveBeenCalled(); }
