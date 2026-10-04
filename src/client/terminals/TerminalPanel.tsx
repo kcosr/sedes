@@ -447,6 +447,11 @@ function TerminalPanel({
       const unsubscribeInput = emulator.onInput((data) => {
         if (activeRef.current) session.sendInput(data);
       });
+      // The code font arrived after the canvas measured with a fallback. The
+      // emulator has remeasured; a controller refits the grid to the new cells.
+      const unsubscribeFontMetrics = emulator.onFontMetricsChange(() =>
+        fitAndResize(),
+      );
       const observer = new ResizeObserver(() => {
         window.clearTimeout(layoutResizeTimer);
         layoutResizeTimer = undefined;
@@ -470,6 +475,7 @@ function TerminalPanel({
         document.removeEventListener("visibilitychange", handleVisibilityChange);
         window.removeEventListener("pageshow", handlePageShow);
         unsubscribeInput();
+        unsubscribeFontMetrics();
         unsubscribe();
         session.close();
       };

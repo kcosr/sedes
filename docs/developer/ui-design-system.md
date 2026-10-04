@@ -67,7 +67,7 @@ Consume tokens rather than literals, and add a token when a value has a role.
 | --- | --- |
 | Color contract | shadcn semantics (`--background`, `--foreground`, `--card`, `--popover`, `--primary`, `--secondary`, `--muted`, `--accent`, `--destructive`, `--border`, `--input`, `--ring`) plus `--muted-foreground-2`, `--border-soft`, `--code`, `--success`, `--info`, `--warning`, `--scrim`, `--sidebar-*`, `--syntax-*`, `--terminal-*`, environment tint |
 | Status pairs | `--{success,info,warning,destructive}-{soft,border}`, mixed in oklab so the hue holds |
-| Type | `--text-micro` 10, `--text-label` 11, `--text-meta` 12, `--text-ui` 13, `--text-body` 14.5, `--text-title` 15, `--text-sheet-title` 17, `--text-page` 20, `--text-display` 24, `--text-transcript-meta` 12.5, `--text-input`; `--weight-*`, `--leading-*`, `--tracking-label` |
+| Type | `--font-sans` (bundled Inter); `--font-mono`, the bundled JetBrains Mono code font, always set with `font-feature-settings: var(--font-mono-features)` so code shows no ligatures (canvas terminals take the same list from `code-font.ts`); `--text-micro` 10, `--text-label` 11, `--text-meta` 12, `--text-ui` 13, `--text-body` 14.5, `--text-title` 15, `--text-sheet-title` 17, `--text-page` 20, `--text-display` 24, `--text-transcript-meta` 12.5, `--text-input`; `--weight-*`, `--leading-*`, `--tracking-label` |
 | Spacing | `--space-0-5` 2 through `--space-8` 32, on a 4px grid with 2px half steps |
 | Controls and icons | `--control-xs/sm/md/lg` 24/28/32/36, `--control-touch` 44, `--control-default`; `--icon-xs/sm/md/lg` 12/14/16/20; `--workbench-bar-height`, `--bar-control`, `--bar-icon` |
 | Shape | `--radius-inline` 6 (only inside another rounded box), `--radius-ctl` 8, `--radius-card` 12, `--radius-lg` 16 |

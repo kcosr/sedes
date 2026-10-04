@@ -732,6 +732,7 @@ span.tasks-row-title {
   background: var(--code);
   color: var(--foreground);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: var(--text-meta);
   outline: none;
 }
@@ -1090,6 +1091,7 @@ button.tasks-file-chip:hover {
   border-radius: var(--radius-inline);
   background: var(--code);
   font-family: var(--font-mono);
+  font-feature-settings: var(--font-mono-features);
   font-size: var(--text-meta);
   white-space: nowrap;
 }

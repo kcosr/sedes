@@ -108,6 +108,39 @@ async function verifySyncedAssets() {
     );
   }
 
+  // The packaged CSP admits fonts only from 'self': every face must be a
+  // bundled file, and the code font must ship with the client.
+  const fontSources = [];
+  for (const stylesheet of (await filesBelow(publicRoot)).filter((file) =>
+    file.endsWith(".css"),
+  )) {
+    const css = await readFile(stylesheet, "utf8");
+    for (const [face] of css.matchAll(/@font-face\s*\{[^}]*\}/gu)) {
+      for (const [, source] of face.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gu))
+        fontSources.push({ stylesheet, source });
+    }
+  }
+  assert(
+    fontSources.some(({ source }) =>
+      source.includes("jetbrains-mono-latin-wght-normal"),
+    ),
+    "packaged_code_font_missing",
+  );
+  for (const { stylesheet, source } of fontSources) {
+    assert(
+      !source.startsWith("//") && !/^[a-z][a-z0-9+.-]*:/iu.test(source),
+      `packaged_font_not_bundled:${source.slice(0, 48)}`,
+    );
+    const target = source.startsWith("/")
+      ? path.resolve(publicRoot, source.slice(1))
+      : path.resolve(path.dirname(stylesheet), source);
+    assert(
+      target.startsWith(`${publicRoot}${path.sep}`) &&
+        (await stat(target)).isFile(),
+      `packaged_font_missing:${source}`,
+    );
+  }
+
   const sourceManifest = await readFile(
     path.join(androidRoot, "app/src/main/AndroidManifest.xml"),
     "utf8",

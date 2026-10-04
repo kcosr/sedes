@@ -710,12 +710,15 @@ function CodexTuiTerminal({
       })
       .catch((error: unknown) => setDiagnostic(messageFrom(error)));
     let cleanupInput: (() => void) | undefined;
-    const observer = new ResizeObserver(() => {
+    const refit = () => {
       if (!visibleRef.current) return;
       const size = renderer.fit();
       if (size) transport.resize(size.cols, size.rows);
-    });
+    };
+    const observer = new ResizeObserver(refit);
     observer.observe(host);
+    // The code font arrived after the renderer measured with a fallback.
+    const removeMetricsChange = renderer.onMetricsChange(refit);
     const handleVisibility = () => {
       if (!visibleRef.current || document.visibilityState !== "visible") return;
       const size = renderer.fit();
@@ -726,6 +729,7 @@ function CodexTuiTerminal({
       disposed = true;
       document.removeEventListener("visibilitychange", handleVisibility);
       observer.disconnect();
+      removeMetricsChange();
       if (outputTimer !== undefined) window.clearTimeout(outputTimer);
       cleanupInput?.();
       transport.close();

@@ -928,6 +928,15 @@ try {
   await page
     .getByRole("heading", { name: "Choose a Sedes connection" })
     .waitFor();
+  // Bundled fonts must load from the packaged origin under its CSP.
+  const codeFontLoaded = await page.evaluate(async () => {
+    const faces = await document.fonts
+      .load('16px "JetBrains Mono Variable"')
+      .catch(() => []);
+    return faces.some((face) => face.status === "loaded");
+  });
+  if (!codeFontLoaded) throw new Error("electron_smoke_code_font_unavailable");
+  progress("bundled code font loaded from the packaged origin");
   const capabilities = await page.evaluate(() => window.Capacitor.Plugins.ElectronConnectionRuntime.getCapabilities());
   if (capabilities.localServer !== full) throw new Error('electron_smoke_profile_capability_mismatch');
   if (!full) {

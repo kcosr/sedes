@@ -28,6 +28,7 @@ const fixture = vi.hoisted(() => ({
   setCursorBlink: vi.fn(),
   setColorScheme: vi.fn(),
   resizeObservers: [] as TestResizeObserver[],
+  fontMetricsListeners: [] as Array<() => void>,
 }));
 
 vi.mock("./ghostty-emulator.js", () => ({
@@ -35,6 +36,13 @@ vi.mock("./ghostty-emulator.js", () => ({
     mount = fixture.mount;
     dispose = fixture.dispose;
     onInput() { return () => undefined; }
+    onFontMetricsChange(listener: () => void) {
+      fixture.fontMetricsListeners.push(listener);
+      return () => {
+        const index = fixture.fontMetricsListeners.indexOf(listener);
+        if (index >= 0) fixture.fontMetricsListeners.splice(index, 1);
+      };
+    }
     setController() {}
     fit = fixture.fit;
     refreshMetrics = fixture.refreshMetrics;
@@ -123,6 +131,7 @@ beforeEach(() => {
   fixture.hasFocus.mockReset().mockReturnValue(true);
   fixture.mobile = false;
   fixture.resizeObservers.length = 0;
+  fixture.fontMetricsListeners.length = 0;
   window.localStorage.clear();
 });
 
@@ -428,6 +437,37 @@ describe("TerminalPanel renderer lifecycle", () => {
 
     expect(fixture.sessionResize).toHaveBeenCalledExactlyOnceWith(120, 30);
     expect(fixture.connect).toHaveBeenCalledOnce();
+  });
+
+  it("refits a controller to the code font when it loads after mount", async () => {
+    fixture.mount.mockResolvedValue({ columns: 80, rows: 24 });
+    fixture.sessionResize.mockReturnValue(true);
+    const view = render(
+      <TerminalPanel terminal={terminal} producerId="producer" api={api} visible />,
+    );
+    await waitFor(() => expect(fixture.connect).toHaveBeenCalledOnce());
+    expect(fixture.fontMetricsListeners).toHaveLength(1);
+
+    // An observer keeps the controller's grid: the emulator has already
+    // remeasured its canvas, and the panel publishes no size.
+    act(() => fixture.sessionListeners[0]?.({
+      ...readySnapshot,
+      role: "observer",
+      inputAvailable: false,
+    }));
+    fixture.fit.mockClear();
+    act(() => fixture.fontMetricsListeners[0]?.());
+    expect(fixture.fit).not.toHaveBeenCalled();
+    expect(fixture.sessionResize).not.toHaveBeenCalled();
+
+    act(() => fixture.sessionListeners[0]?.(readySnapshot));
+    fixture.sessionResize.mockClear();
+    fixture.fit.mockReturnValue({ columns: 96, rows: 21 });
+    act(() => fixture.fontMetricsListeners[0]?.());
+    expect(fixture.sessionResize).toHaveBeenCalledExactlyOnceWith(96, 21);
+
+    view.unmount();
+    expect(fixture.fontMetricsListeners).toHaveLength(0);
   });
 
   it("takes control on a visible observer attach before publishing its size", async () => {

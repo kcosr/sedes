@@ -652,6 +652,30 @@ describe("CodexTuiThreadPresentation", () => {
     expect(renderer.value.dispose).not.toHaveBeenCalled();
   });
 
+  it("refits the grid when the code font changes the renderer's metrics", async () => {
+    const renderer = fakeRenderer();
+    const transport = fakeTransport();
+    const view = renderPresentation(snapshot("available", { lifecycle: "running" }), {
+      rendererFactory: () => renderer.value,
+      transportFactory: () => transport.value,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "TUI" }));
+    await waitFor(() => expect(transport.value.connect).toHaveBeenCalled());
+
+    vi.mocked(renderer.value.fit).mockReturnValue({ cols: 92, rows: 27 });
+    act(() => renderer.changeMetrics());
+    expect(transport.value.resize).toHaveBeenLastCalledWith(92, 27);
+
+    // A hidden TUI refits when it is shown again, not while hidden.
+    fireEvent.click(screen.getByRole("button", { name: "Chat" }));
+    vi.mocked(transport.value.resize).mockClear();
+    act(() => renderer.changeMetrics());
+    expect(transport.value.resize).not.toHaveBeenCalled();
+
+    view.unmount();
+    expect(renderer.metricsChanges.size).toBe(0);
+  });
+
   it("uses compact icon actions to refit and stop immediately", async () => {
     const perform = vi.fn(async (_input: unknown) => ({
       status: "accepted" as const,
@@ -875,6 +899,7 @@ function boundedValue(value: unknown): BoundedValue {
 }
 
 function fakeRenderer() {
+  const metricsChanges = new Set<() => void>();
   const value: CodexTuiRenderer = {
     mount: vi.fn(async () => ({ cols: 80, rows: 24 })),
     write: vi.fn(),
@@ -885,9 +910,19 @@ function fakeRenderer() {
     setTheme: vi.fn(),
     setCursorBlink: vi.fn(),
     onInput: vi.fn(() => vi.fn()),
+    onMetricsChange: vi.fn((callback: () => void) => {
+      metricsChanges.add(callback);
+      return () => metricsChanges.delete(callback);
+    }),
     dispose: vi.fn(),
   };
-  return { value };
+  return {
+    value,
+    metricsChanges,
+    changeMetrics: () => {
+      for (const callback of metricsChanges) callback();
+    },
+  };
 }
 
 function fakeTransport() {

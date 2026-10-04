@@ -183,6 +183,22 @@ vi.mock("ghostty-web", () => {
   return { Terminal, FitAddon, Ghostty };
 });
 
+const codeFont = vi.hoisted(() => ({
+  ready: Promise.resolve(true) as Promise<boolean>,
+  lateListeners: [] as Array<() => void>,
+  cancelLate: vi.fn(),
+}));
+
+vi.mock("../code-font.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../code-font.js")>()),
+  waitForCodeFont: vi.fn(() => codeFont.ready),
+  onCodeFontLoaded: vi.fn((listener: () => void) => {
+    codeFont.lateListeners.push(listener);
+    return codeFont.cancelLate;
+  }),
+}));
+
+import { CODE_FONT_FAMILY, onCodeFontLoaded } from "../code-font.js";
 import { GHOSTTY_THEMES, GhosttyEmulator, terminalBufferLines } from "./ghostty-emulator.js";
 import { GHOSTTY_WASM_THEME } from "./ghostty-live-theme.js";
 
@@ -204,6 +220,8 @@ type FakeTerminal = {
 
 afterEach(() => {
   document.body.replaceChildren();
+  codeFont.ready = Promise.resolve(true);
+  codeFont.lateListeners.length = 0;
   fake.terminals.length = 0;
   fake.ghosttyInstances.length = 0;
   fake.fitCalls = 0;
@@ -458,6 +476,69 @@ describe("GhosttyEmulator", () => {
     expect(terminal.renderer.resize).toHaveBeenCalledWith(104, 33);
     expect(terminal.renderer.render).toHaveBeenCalledOnce();
     emulator.dispose();
+  });
+
+  it("opens the terminal with the code font only once the font is ready", async () => {
+    let fontReady!: (loaded: boolean) => void;
+    codeFont.ready = new Promise((resolve) => { fontReady = resolve; });
+    const emulator = new GhosttyEmulator({ cursorBlink: true, fontSize: 13, scrollback: 100, colorScheme: "dark" });
+    const mounted = emulator.mount(document.createElement("div"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Ghostty measures its cells when the terminal is created and opened.
+    expect(fake.terminals).toHaveLength(0);
+
+    fontReady(true);
+    await mounted;
+    const terminal = fake.terminals[0] as FakeTerminal;
+    expect(terminal.options.fontFamily).toBe(CODE_FONT_FAMILY);
+    expect(onCodeFontLoaded).not.toHaveBeenCalled();
+    emulator.dispose();
+  });
+
+  it("remeasures without refitting when the code font loads after a timed-out wait", async () => {
+    codeFont.ready = Promise.resolve(false);
+    const emulator = new GhosttyEmulator({ cursorBlink: true, fontSize: 13, scrollback: 100, colorScheme: "dark" });
+    await emulator.mount(document.createElement("div"));
+    const terminal = fake.terminals[0] as FakeTerminal & {
+      readonly cols: number;
+      readonly rows: number;
+      readonly renderer: {
+        readonly remeasureFont: ReturnType<typeof vi.fn>;
+        readonly resize: ReturnType<typeof vi.fn>;
+        readonly render: ReturnType<typeof vi.fn>;
+      };
+    };
+    expect(codeFont.lateListeners).toHaveLength(1);
+    const metricsChanged = vi.fn();
+    emulator.onFontMetricsChange(metricsChanged);
+    terminal.renderer.resize.mockClear();
+    terminal.renderer.render.mockClear();
+    const fitCalls = fake.fitCalls;
+
+    codeFont.lateListeners[0]!();
+
+    expect(terminal.renderer.remeasureFont).toHaveBeenCalledOnce();
+    expect(terminal.renderer.resize).toHaveBeenCalledWith(terminal.cols, terminal.rows);
+    expect(terminal.renderer.render).toHaveBeenCalledOnce();
+    // Only a controlling panel may change the grid; it refits from the listener.
+    expect(fake.fitCalls).toBe(fitCalls);
+    expect(metricsChanged).toHaveBeenCalledOnce();
+    emulator.dispose();
+    expect(codeFont.cancelLate).not.toHaveBeenCalled();
+  });
+
+  it("stops waiting for a late code font when disposed", async () => {
+    codeFont.ready = Promise.resolve(false);
+    const emulator = new GhosttyEmulator({ cursorBlink: true, fontSize: 13, scrollback: 100, colorScheme: "dark" });
+    await emulator.mount(document.createElement("div"));
+    const metricsChanged = vi.fn();
+    emulator.onFontMetricsChange(metricsChanged);
+
+    emulator.dispose();
+
+    expect(codeFont.cancelLate).toHaveBeenCalledOnce();
+    codeFont.lateListeners[0]!();
+    expect(metricsChanged).not.toHaveBeenCalled();
   });
 
   it("blur and dispose cancel delayed terminal refocus", async () => {
