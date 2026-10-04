@@ -75,6 +75,7 @@ import {
   DialogTitle,
 } from "../components/ui/dialog.js";
 import { DiscardChangesDialog } from "../components/ui/discard-changes-dialog.js";
+import { EmptyState } from "../components/ui/empty-state.js";
 import { Field } from "../components/ui/field.js";
 import { Input } from "../components/ui/input.js";
 import { NativeSelect } from "../components/ui/native-select.js";
@@ -3648,6 +3649,26 @@ export function WorkspaceFilesPanel({
               <PanelMessage text={`Loading ${activePath ?? "file"}…`} />
             )}
           </main>
+        )}
+        {mode === "browse" && !fileTabPanelVisible && !treeOpen && (
+          <EmptyState
+            className="m-auto"
+            icon={<FolderTree />}
+            title="No file is open"
+            description="Choose a file in the file browser."
+            action={
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setTreeOpen(true);
+                  treeToggleRef.current?.focus();
+                }}
+              >
+                Open file browser
+              </Button>
+            }
+          />
         )}
         {compareOpened && compareDataSource && (
           <div

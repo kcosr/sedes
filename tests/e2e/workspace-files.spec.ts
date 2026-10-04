@@ -351,6 +351,15 @@ test.describe.serial("workspace file browser and editor", () => {
     await expect(
       panel.getByRole("separator", { name: "Resize file browser" }),
     ).toHaveCount(0);
+    // Dismissing it leaves an empty state that can reopen it.
+    await page.getByRole("button", { name: "Toggle file browser" }).click();
+    await expect(panel.getByText("No file is open")).toBeVisible();
+    await capture(page, testInfo, "workspace-files-empty-state.png");
+    await panel.getByRole("button", { name: "Open file browser" }).click();
+    await expect(
+      page.getByRole("button", { name: "Toggle file browser" }),
+    ).toHaveAttribute("aria-expanded", "true");
+    await expect(panel.getByText("No file is open")).toHaveCount(0);
     await fileItem(panel, "src").click();
     await expect(fileItem(panel, "example.ts")).toBeVisible();
     await expect(fileItem(panel, "status.ts")).toBeVisible();

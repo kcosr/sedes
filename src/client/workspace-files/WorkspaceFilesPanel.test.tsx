@@ -1076,10 +1076,20 @@ describe("WorkspaceFilesPanel", () => {
       name: "Toggle file browser",
     });
     expect(treeToggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.queryByText("No file is open")).not.toBeInTheDocument();
     fireEvent.click(treeToggle);
     expect(treeToggle).toHaveAttribute("aria-expanded", "false");
 
+    // Dismissing the browser leaves a way back instead of a blank panel.
+    expect(screen.getByText("No file is open")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Open file browser" }));
+    expect(treeToggle).toHaveAttribute("aria-expanded", "true");
+    expect(treeToggle).toHaveFocus();
+    expect(screen.queryByText("No file is open")).not.toBeInTheDocument();
+    fireEvent.click(treeToggle);
+
     fireEvent.click(screen.getByRole("tab", { name: "Changes" }));
+    expect(screen.queryByText("No file is open")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Browse" }));
 
     expect(treeToggle).toHaveAttribute("aria-expanded", "true");
