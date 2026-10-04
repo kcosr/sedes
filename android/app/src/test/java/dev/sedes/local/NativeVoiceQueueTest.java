@@ -135,6 +135,15 @@ public class NativeVoiceQueueTest {
         assertEquals(expected, String.join("", NativeVoiceQueue.chunks(item.speech, 24)));
         assertEquals(source.toString(), item.envelope.toString());
     }
+    @Test public void leadingIndentedCodeKeepsItsSymbolsAndLineBreaks() {
+        String markdown = "    x = a*b*c\n    y = foo_bar**2**\n\nDone.";
+        JSONObject source = envelope("indented", "turn.completed", markdown, null);
+        NativeVoiceSettings clean = settings("response").patch(1, NativeVoiceJson.object("readNotificationContext", false));
+        NativeVoiceQueue.Item item = new NativeVoiceQueue.Item(source, clean);
+        assertEquals("x = a*b*c\ny = foo_bar**2**\n\nDone.", item.speech);
+        assertEquals(source.toString(), item.envelope.toString());
+        assertEquals(markdown.trim(), new NativeVoiceQueue.Item(source, clean.patch(2, NativeVoiceJson.object("cleanSpeechText", false))).speech);
+    }
     // Server JSON.stringify text. Android org.json adds a byte per '/'; JVM org.json per "</" and U+2014.
     private static final String ESCAPED_PREFIX = "a/b </c> d\u2014e \\\"q\\\" \\\\ \\n\\t\\u0001 \u00e9\u0085 \u20ac\u2000\u2028\u2029 \ud83e\udda6 lone\\ud800 ";
     private static String payloadJson(String escapedText) {

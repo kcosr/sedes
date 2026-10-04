@@ -156,7 +156,8 @@ final class NativeVoiceQueue {
         // Each notification part is an independent document. An unfinished fence in a
         // truncated section must not consume context, its truncation notice, or later results.
         for (String part : parts) {
-            String prepared = NativeSpeechText.prepare(part, cleanup);
+            // Leading indentation is Markdown syntax; only raw assembly keeps the old trim.
+            String prepared = NativeSpeechText.prepare(cleanup ? part : part.trim(), cleanup);
             if (prepared.isEmpty()) continue;
             if (speech.length() > 0) speech.append(cleanup ? "\n\n" : "\n");
             speech.append(prepared);
@@ -168,7 +169,7 @@ final class NativeVoiceQueue {
         add(parts, text.optString("text", ""));
         if (text.optJSONObject("truncation") != null) parts.add("The remaining response was truncated.");
     }
-    private static void add(List<String> parts, String text) { if (text != null && !text.trim().isEmpty()) parts.add(text.trim()); }
+    private static void add(List<String> parts, String text) { if (text != null && !text.trim().isEmpty()) parts.add(text); }
     static List<String> chunks(String input, int limit) {
         if (limit < 2) throw new IllegalArgumentException("voice_text_limit_invalid");
         ArrayList<String> result = new ArrayList<>();
