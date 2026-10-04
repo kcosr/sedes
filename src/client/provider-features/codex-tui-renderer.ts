@@ -3,6 +3,11 @@ import { isWindowsClient } from "../terminals/client-platform.js";
 import type { ITheme, Terminal } from "ghostty-web";
 import type { TerminalPreferences } from "../app/settings.js";
 import { installTerminalTouchScroll } from "./codex-tui-touch-scroll.js";
+import {
+  CODE_FONT_FAMILY,
+  onCodeFontLoaded,
+  waitForCodeFont,
+} from "../code-font.js";
 
 export interface CodexTuiRenderer {
   mount(
@@ -16,6 +21,11 @@ export interface CodexTuiRenderer {
   setTheme(theme: CodexTuiTheme): void;
   setCursorBlink(enabled: boolean): void;
   onInput(callback: (data: string) => void): () => void;
+  /**
+   * Called when the code font loaded after the renderer measured with a
+   * fallback; the canvas is remeasured and the caller refits the grid.
+   */
+  onMetricsChange(callback: () => void): () => void;
   dispose(): void;
 }
 
@@ -73,9 +83,6 @@ export const CODEX_TUI_PALETTES: Readonly<Record<CodexTuiTheme, ITheme>> =
     }),
   });
 
-const FONT_FAMILY =
-  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace';
-
 export function browserCodexTuiRendererFactory(
   preferences: {
     readonly fontSize: number;
@@ -96,6 +103,8 @@ class GhosttyCodexTuiRenderer implements CodexTuiRenderer {
   #inputCallback?: (data: string) => void;
   #inputDisposable?: { dispose(): void };
   #touchScrollCleanup?: () => void;
+  #stopLateCodeFont?: () => void;
+  #metricsCallback?: () => void;
   #disposed = false;
   #cursorBlink = !isWindowsClient();
   #renderScheduling: ReturnType<typeof installGhosttyRenderScheduling> | undefined;
@@ -108,8 +117,12 @@ class GhosttyCodexTuiRenderer implements CodexTuiRenderer {
   async mount(
     container: HTMLElement,
   ): Promise<{ readonly cols: number; readonly rows: number }> {
+    const codeFont = waitForCodeFont();
     const ghostty = await import("ghostty-web");
     await ghostty.init();
+    // Ghostty measures its cell size from the canvas font when the terminal
+    // is created, so create it once the code font is ready (or timed out).
+    const codeFontReady = await codeFont;
     if (this.#disposed) throw new Error("The terminal renderer was disposed.");
     this.#ghostty = ghostty;
     this.#container = container;
@@ -117,7 +130,23 @@ class GhosttyCodexTuiRenderer implements CodexTuiRenderer {
     const terminal = this.#terminal;
     if (!terminal)
       throw new Error("The terminal renderer could not be initialized.");
+    if (!codeFontReady)
+      this.#stopLateCodeFont = onCodeFontLoaded(() => this.#remeasureLateCodeFont());
     return this.fit() ?? { cols: terminal.cols, rows: terminal.rows };
+  }
+
+  #remeasureLateCodeFont(): void {
+    this.#stopLateCodeFont = undefined;
+    const terminal = this.#terminal;
+    const renderer = terminal?.renderer;
+    if (this.#disposed || !terminal || !renderer) return;
+    renderer.remeasureFont();
+    // fit() skips an unchanged grid, so size and repaint the canvas for the
+    // new cells here; the callback then refits the grid.
+    renderer.resize(terminal.cols, terminal.rows);
+    if (terminal.wasmTerm)
+      renderer.render(terminal.wasmTerm, true, terminal.viewportY, terminal, 0);
+    this.#metricsCallback?.();
   }
 
   #createTerminal(): void {
@@ -128,7 +157,7 @@ class GhosttyCodexTuiRenderer implements CodexTuiRenderer {
     const terminal = new ghostty.Terminal({
       convertEol: false,
       cursorBlink: this.#cursorBlink,
-      fontFamily: FONT_FAMILY,
+      fontFamily: CODE_FONT_FAMILY,
       fontSize: this.#preferences.fontSize,
       scrollback: this.#preferences.scrollback,
       smoothScrollDuration: 0,
@@ -225,6 +254,13 @@ class GhosttyCodexTuiRenderer implements CodexTuiRenderer {
     if (hadFocus) this.focus();
   }
 
+  onMetricsChange(callback: () => void): () => void {
+    this.#metricsCallback = callback;
+    return () => {
+      if (this.#metricsCallback === callback) this.#metricsCallback = undefined;
+    };
+  }
+
   onInput(callback: (data: string) => void): () => void {
     this.#inputDisposable?.dispose();
     this.#inputCallback = callback;
@@ -239,6 +275,9 @@ class GhosttyCodexTuiRenderer implements CodexTuiRenderer {
 
   dispose(): void {
     this.#disposed = true;
+    this.#stopLateCodeFont?.();
+    this.#stopLateCodeFont = undefined;
+    this.#metricsCallback = undefined;
     this.#renderScheduling?.dispose();
     this.#renderScheduling = undefined;
     this.#touchScrollCleanup?.();

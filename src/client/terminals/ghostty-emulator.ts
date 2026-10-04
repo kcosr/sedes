@@ -20,9 +20,11 @@ import {
   type TerminalImeState,
 } from "./terminal-ime-input.js";
 import { installTerminalTouchScroll } from "../provider-features/codex-tui-touch-scroll.js";
-
-const FONT_FAMILY =
-  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace';
+import {
+  CODE_FONT_FAMILY,
+  onCodeFontLoaded,
+  waitForCodeFont,
+} from "../code-font.js";
 
 export type TerminalColorScheme = "light" | "dark";
 
@@ -131,6 +133,8 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
   #delayedFocus?: number;
   #applyingOutput = false;
   #disposed = false;
+  #stopLateCodeFont?: () => void;
+  #fontMetricsListener?: () => void;
   #lastSearch = "";
   #lastSearchOffset = -1;
 
@@ -143,15 +147,22 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
   async mount(
     container: HTMLElement,
   ): Promise<{ readonly columns: number; readonly rows: number }> {
+    const codeFont = waitForCodeFont();
     const ghostty = await loadGhostty();
     const wasm = await ghostty.Ghostty.load();
+    // Ghostty measures its cell size from the canvas font when the terminal
+    // opens, so open it once the code font is ready (or the wait timed out).
+    const codeFontReady = await codeFont;
     if (this.#disposed) throw new Error("The terminal renderer was disposed.");
     // A renderer host belongs to exactly one terminal incarnation. Clear any
     // stale canvas/textarea left by a prior renderer before Ghostty opens.
     this.#ghostty = ghostty;
     this.#wasm = wasm;
     this.#container = container;
-    return this.#mountTerminal();
+    const size = this.#mountTerminal();
+    if (!codeFontReady)
+      this.#stopLateCodeFont = onCodeFontLoaded(() => this.#remeasureLateCodeFont());
+    return size;
   }
 
   async reset(): Promise<void> {
@@ -193,7 +204,7 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
       ghostty: wasm,
       convertEol: false,
       cursorBlink: this.#cursorBlink,
-      fontFamily: FONT_FAMILY,
+      fontFamily: CODE_FONT_FAMILY,
       fontSize: this.#options.fontSize,
       scrollback: this.#options.scrollback,
       smoothScrollDuration: 0,
@@ -314,20 +325,24 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
     const terminal = this.#requireTerminal();
     terminal.renderer?.remeasureFont();
     const size = this.fit();
-    if (terminal.renderer && terminal.wasmTerm) {
-      // fit() intentionally skips a terminal resize when the grid dimensions
-      // did not change. Font metrics can still change the grid's pixel size,
-      // so refresh the canvas even for the same rows and columns.
-      terminal.renderer.resize(terminal.cols, terminal.rows);
-      terminal.renderer.render(
-        terminal.wasmTerm,
-        true,
-        terminal.viewportY,
-        terminal,
-        0,
-      );
-    }
+    // fit() intentionally skips a terminal resize when the grid dimensions
+    // did not change. Font metrics can still change the grid's pixel size,
+    // so refresh the canvas even for the same rows and columns.
+    this.#repaintCanvas(terminal);
     return size;
+  }
+
+  /**
+   * Listens for the code font loading after the terminal opened with a
+   * fallback. The canvas is already remeasured and repainted at its current
+   * grid when the listener runs; a controller refits its grid from there.
+   */
+  onFontMetricsChange(listener: () => void): () => void {
+    this.#fontMetricsListener = listener;
+    return () => {
+      if (this.#fontMetricsListener === listener)
+        this.#fontMetricsListener = undefined;
+    };
   }
 
   setFontSize(fontSize: number): {
@@ -452,6 +467,9 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
 
   dispose(): void {
     this.#disposed = true;
+    this.#stopLateCodeFont?.();
+    this.#stopLateCodeFont = undefined;
+    this.#fontMetricsListener = undefined;
     this.#cancelDelayedFocus();
     this.#disposeTerminal();
     if (this.#container) {
@@ -494,6 +512,29 @@ export class GhosttyEmulator implements TerminalEmulatorSink {
     this.#inputDisposable = terminal.onData((data) => {
       if (!this.#applyingOutput) callback(data);
     });
+  }
+
+  #remeasureLateCodeFont(): void {
+    this.#stopLateCodeFont = undefined;
+    const terminal = this.#terminal;
+    if (this.#disposed || !terminal) return;
+    // Remeasure without fitting: only a controller may change the grid, and
+    // the panel decides that through the metrics listener.
+    terminal.renderer?.remeasureFont();
+    this.#repaintCanvas(terminal);
+    this.#fontMetricsListener?.();
+  }
+
+  #repaintCanvas(terminal: Terminal): void {
+    if (!terminal.renderer || !terminal.wasmTerm) return;
+    terminal.renderer.resize(terminal.cols, terminal.rows);
+    terminal.renderer.render(
+      terminal.wasmTerm,
+      true,
+      terminal.viewportY,
+      terminal,
+      0,
+    );
   }
 
   #paintCanvasBackground(terminal: Terminal): void {
@@ -629,7 +670,7 @@ export function installGhosttyImeBridge(input: {
     if (preedit) {
       overlay.style.left = textarea.style.left;
       overlay.style.top = textarea.style.top;
-      overlay.style.fontFamily = FONT_FAMILY;
+      overlay.style.fontFamily = CODE_FONT_FAMILY;
       overlay.style.fontSize = `${input.terminal.options.fontSize}px`;
       overlay.style.lineHeight = textarea.style.height;
     }
@@ -820,7 +861,7 @@ function positionGhosttyTextarea(
     background: "transparent",
     caretColor: "transparent",
     overflow: "hidden",
-    fontFamily: FONT_FAMILY,
+    fontFamily: CODE_FONT_FAMILY,
     fontSize: `${terminal.options.fontSize}px`,
     lineHeight: `${height}px`,
     zIndex: "calc(var(--z-sticky) + 4)",
