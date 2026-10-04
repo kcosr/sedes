@@ -169,6 +169,7 @@ const agentToolContractArtifactBaseSchema = z.strictObject({
   exposure: z.strictObject({ adapters: z.array(adapterSchema).min(1).max(5) }),
   catalog: z.strictObject({
     groupId: z.enum([
+      "client",
       "context",
       "files",
       "threads",

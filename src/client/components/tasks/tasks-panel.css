@@ -275,9 +275,15 @@
   white-space: nowrap;
 }
 
-.tasks-add-details {
+.tasks-add-details,
+.tasks-add-pin {
   flex: none;
   color: var(--muted-foreground);
+}
+
+.tasks-add-pin[aria-pressed="true"] {
+  color: var(--primary);
+  background: var(--accent);
 }
 
 @container tasks-content (max-width: 379px) {
@@ -343,7 +349,8 @@
   box-shadow: var(--focus-ring);
 }
 
-.tasks-content[data-touch] .tasks-add-details {
+.tasks-content[data-touch] .tasks-add-details,
+.tasks-content[data-touch] .tasks-add-pin {
   width: var(--control-touch);
   height: var(--control-touch);
 }

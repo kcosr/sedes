@@ -98,7 +98,7 @@ describe("CanonicalInlineAgentToolService", () => {
       application: { readThreadStatus: async () => undefined },
     });
     expect(service.catalog("http", "thread_agent").map(({ id }) => id)).toEqual(
-      ["agent.context", "thread.status"],
+      ["agent.context", "thread.status", "client.list", "client.end_interaction", "client.switch_thread", "client.settings.get", "client.settings.update"],
     );
     expect(
       service
@@ -226,6 +226,7 @@ describe("CanonicalInlineAgentToolService", () => {
       threadId: "target-thread",
       backend: "codex_app_server" as const,
       lifecycle: "snoozed" as const,
+      pinned: false,
       activity: "waiting_for_input" as const,
     }));
     const service = new CanonicalInlineAgentToolService({
@@ -236,7 +237,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "thread.status",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "request-3",
           input: { threadId: "target-thread" },
         },
@@ -247,6 +248,7 @@ describe("CanonicalInlineAgentToolService", () => {
       output: {
         threadId: "target-thread",
         lifecycle: "snoozed",
+        pinned: false,
         activity: "waiting_for_input",
       },
     });
@@ -266,7 +268,7 @@ describe("CanonicalInlineAgentToolService", () => {
       service.invoke(
         {
           toolId: "thread.status",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "missing",
           input: { threadId: "missing-thread" },
         },
@@ -308,7 +310,7 @@ describe("CanonicalInlineAgentToolService", () => {
     const invocation = service.invoke(
       {
         toolId: "thread.status",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "in-flight-cancel",
         input: { threadId: "target-thread" },
       },
@@ -392,7 +394,7 @@ describe("CanonicalInlineAgentToolService", () => {
       const invocation = service.invoke(
         {
           toolId: "thread.status",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "deadline",
           input: { threadId: "target-thread" },
         },

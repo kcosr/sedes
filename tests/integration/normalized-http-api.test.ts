@@ -1,3 +1,4 @@
+import { ClientControlService } from "../../src/server/domain/client-control-service.js";
 import { scriptDelivery } from "../support/notification-settings.js";
 import { UsageService } from "../../src/server/usage/usage-service.js";
 import { ScopedThreadEventHubRegistry } from "../../src/server/events/thread-runtime-coordinator.js";
@@ -1243,7 +1244,9 @@ async function fixture(
     publish: () => undefined,
     onOpened: () => undefined,
   });
+  const clientControls = new ClientControlService();
   const app = createNormalizedApp({
+    clientControls,
     ...(options.terminals ? { terminals: options.terminals } : {}),
     usage: new UsageService(database, {enabled: options.experimentalUsageEnabled ?? false}),
     workpads: {} as never,
@@ -1700,6 +1703,7 @@ async function fixture(
     withHost,
     mutate,
     close() {
+      clientControls.close();
       inputActivity.close();
       execution.close();
       database.close();
@@ -4813,17 +4817,25 @@ describe("normalized HTTP application contract", () => {
       const unboundThreadId = await createThread("Unbound direct input");
       current.bindThread(threadId);
       current.bindThread(otherThreadId);
-      const input = (text = "Spoken input"): DirectInputRequest => ({
-        mutationId: randomUUID(), text, origin: { clientId: randomUUID() }, runningPolicy: { mode: "queue" },
+      const registration = { platform: "android", capabilities: { navigate: true, voice: true, voiceSettings: true },
+        state: { runtime: { foreground: true, voiceReady: false, interactionActive: false }, settings: null } };
+      const register = async () => (await current.mutate(request(current.app).post("/api/client-registration")).send(registration).expect(200)).body;
+      const client = await register();
+      const input = (text = "Spoken input"): Omit<DirectInputRequest, "origin"> => ({
+        mutationId: randomUUID(), text, runningPolicy: { mode: "queue" },
       });
-      const post = (target: string, body: DirectInputRequest) =>
-        current.mutate(request(current.app).post(`/api/threads/${target}/inputs`)).send(body);
+      const post = (target: string, body: Omit<DirectInputRequest, "origin">) =>
+        current.mutate(request(current.app).post(`/api/threads/${target}/inputs`)).set("X-Sedes-Client", client.connectionToken).send(body);
       const receipt = (mutationId: string, foreign = false) => {
         const read = current.withHost(request(current.app).get(`/api/input-receipts/${mutationId}`));
         return foreign ? read.set("X-Test-Foreign-Principal", "yes") : read;
       };
 
       const unprotected = input();
+      const unregistered = input();
+      await current.mutate(request(current.app).post(`/api/threads/${threadId}/inputs`)).send(unregistered)
+        .expect(409).expect(({ body }) => expect(body.error).toMatchObject({ code: "client_registration_required", retryable: true }));
+      expect((await receipt(unregistered.mutationId).expect(200)).body).toEqual({ status: "notObserved" });
       await current
         .withHost(request(current.app).post(`/api/threads/${threadId}/inputs`))
         .send(unprotected)
@@ -4843,13 +4855,19 @@ describe("normalized HTTP application contract", () => {
       expect((await post(threadId, first).expect(200)).body).toEqual(admitted.body);
       for (const [target, changed] of [
         [threadId, { ...first, text: "Different spoken input" }],
-        [threadId, { ...first, origin: { clientId: randomUUID() } }],
         [otherThreadId, first],
       ] as const) {
         await post(target, changed)
           .expect(409)
           .expect(({ body }) => expect(body.error.code).toBe("conflict"));
       }
+      const otherClient = await register();
+      await current.mutate(request(current.app).post(`/api/threads/${threadId}/inputs`))
+        .set("X-Sedes-Client", otherClient.connectionToken).send(first).expect(409);
+      await current.mutate(request(current.app).post(`/api/threads/${threadId}/inputs`))
+        .set("X-Sedes-Client", client.connectionToken).send({ ...input(), origin: { clientId: otherClient.clientId } }).expect(400);
+      await current.mutate(request(current.app).post(`/api/threads/${threadId}/inputs`)).send(input())
+        .expect(409).expect(({ body }) => expect(body.error.code).toBe("client_registration_required"));
       const found = await receipt(first.mutationId).expect(200);
       expect(found.headers["cache-control"]).toBe("no-store");
       expect(found.body).toEqual({ status: "found", receipt: admitted.body });

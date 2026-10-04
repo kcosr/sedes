@@ -41,7 +41,7 @@ function ShowWhenOff({ value }: { value: boolean }) {
   return null;
 }
 function renderControls(showWhenOff?: boolean) {
-  const tree = (show?: boolean) => <VoiceProvider profileId={VOICE_CONNECTION.profileId} serverOrigin={VOICE_CONNECTION.serverOrigin} identity={VOICE_IDENTITY}>
+  const tree = (show?: boolean) => <VoiceProvider profileId={VOICE_CONNECTION.profileId} endpoint={{ baseUrl: VOICE_CONNECTION.serverOrigin }} identity={VOICE_IDENTITY}>
     {show === undefined ? null : <ShowWhenOff value={show} />}<VoiceControls threads={threads} /></VoiceProvider>;
   const view = render(tree(showWhenOff));
   return { ...view, setShowWhenOff: (show: boolean) => view.rerender(tree(show)) };
@@ -124,7 +124,7 @@ describe("voice controls card", () => {
     expect(lines()[0]).toBe(longTitle);
     expect(status).toHaveTextContent(/^Ready · Response · Auto-listen on$/u);
     const renamed = threads.map(value => value.id === "long" ? { ...value, title: { ...value.title, text: "Renamed review" } } : value);
-    view.rerender(<VoiceProvider profileId={VOICE_CONNECTION.profileId} serverOrigin={VOICE_CONNECTION.serverOrigin} identity={VOICE_IDENTITY}>
+    view.rerender(<VoiceProvider profileId={VOICE_CONNECTION.profileId} endpoint={{ baseUrl: VOICE_CONNECTION.serverOrigin }} identity={VOICE_IDENTITY}>
       <VoiceControls threads={renamed} /></VoiceProvider>);
     expect(lines()[0]).toBe("Renamed review");
     expect(status).toHaveTextContent(/^Ready · Response · Auto-listen on$/u);

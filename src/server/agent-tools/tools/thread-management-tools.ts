@@ -182,8 +182,9 @@ const threadItemSchema = Type.Object(
       maxLength: 17,
     }),
     automation: automationSchema,
+    pinned: Type.Boolean({ description: "Whether this thread is pinned for the current user." }),
   },
-  { additionalProperties: false, maxProperties: 9 },
+  { additionalProperties: false, maxProperties: 10 },
 );
 
 const threadListScopeSchema = Type.Union(

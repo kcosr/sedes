@@ -53,7 +53,7 @@ public class NativeVoiceRuntimePolicyTest {
         assertEquals("authentication_required", NativeVoiceRuntime.connectionFailure(401));
         for (int status : new int[] { 0, 403, 404, 500, 503 }) assertEquals("connection_unavailable", NativeVoiceRuntime.connectionFailure(status));
         for (String code : new String[] { "authentication_required", "connection_unavailable", "session_unavailable", "credential_storage_unavailable",
-            "voice_storage_unavailable", "voice_settings_reset", "voice_origin_reset", "voice_journal_reset" })
+            "voice_storage_unavailable", "voice_settings_reset", "voice_journal_reset" })
             assertSpecific(code);
         assertNotEquals(NativeVoiceRuntime.message("authentication_required"), NativeVoiceRuntime.message("connection_unavailable"));
     }

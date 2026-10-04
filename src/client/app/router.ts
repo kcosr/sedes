@@ -305,12 +305,14 @@ export function sameRoute(a: Route, b: Route): boolean {
   return routePath(a) === routePath(b);
 }
 
+export function subscribeRoute(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
 export function useRoute(): Route {
   return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribeRoute,
     () => currentRoute,
     () => currentRoute,
   );

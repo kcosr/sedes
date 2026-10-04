@@ -275,6 +275,7 @@ function fixture() {
         threadId,
         backend: "pi" as const,
         lifecycle: "active" as const,
+        pinned: false,
         activity: "idle" as const,
       };
     },
@@ -629,7 +630,7 @@ describe("agent control tools through canonical adapters", () => {
       )
       .send({
         toolId: "thread.status",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "status-parent",
         input: { threadId: targetThreadId },
       })

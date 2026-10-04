@@ -16,7 +16,7 @@ const CORS_METHODS = new Set([
   "DELETE",
   "OPTIONS",
 ]);
-const CORS_HEADERS = new Set(["content-type", "last-event-id", "x-csrf-token", "authorization"]);
+const CORS_HEADERS = new Set(["content-type", "last-event-id", "x-csrf-token", "x-sedes-client", "authorization"]);
 
 function isLoopbackAddress(value: string | undefined): boolean {
   return (
@@ -417,7 +417,7 @@ export function packagedClientCors(config: AppConfig) {
     );
     response.setHeader(
       "Access-Control-Allow-Headers",
-      "Content-Type, Last-Event-ID, X-CSRF-Token, Authorization",
+      "Content-Type, Last-Event-ID, X-CSRF-Token, X-Sedes-Client, Authorization",
     );
     response.setHeader("Access-Control-Max-Age", "600");
     response.status(204).end();

@@ -109,7 +109,8 @@ export const agentToolCatalogSummarySchema: z.ZodType<AgentToolCatalogSummary> =
     description: z.string().min(1).max(2_000),
     group: z.strictObject({
       id: z.enum([
-        "context",
+        "client",
+      "context",
         "threads",
         "agents",
         "tasks",

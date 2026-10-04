@@ -3,6 +3,10 @@
 Tasks remember work outside a transcript. Automations start work on a schedule.
 They complement provider conversations but do not replace them.
 
+Use **Pin new task** in the add row to choose the new task's pin state. The
+paste-many dialog has an independent **Pin these tasks** switch. A pinned-only
+view starts with pinning enabled, and either control can override that default.
+
 ## Track work with Tasks
 
 A Task contains:

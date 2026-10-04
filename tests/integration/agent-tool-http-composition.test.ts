@@ -71,6 +71,7 @@ function createCrossEnvironmentApprovalComposition() {
     threadId: "remote-thread",
     backend: "pi" as const,
     lifecycle: "active" as const,
+    pinned: false,
     activity: "idle" as const,
   }));
   const canonical = new CanonicalInlineAgentToolService({
@@ -160,7 +161,7 @@ function invokeRemoteThreadStatus(
     adapter: "cli",
     request: {
       toolId: "thread.status",
-      schemaVersion: 2,
+      schemaVersion: 3,
       requestId: "cross-environment-request",
       input: { threadId: "remote-thread" },
     },
@@ -313,7 +314,7 @@ describe("agent-tool HTTP production composition", () => {
         adapter: "http",
         request: {
           toolId: "thread.status",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "pre-restart-active-work",
           input: { threadId: thread.thread.id },
         },
@@ -593,6 +594,7 @@ describe("agent-tool HTTP production composition", () => {
         "thread.fork",
         "thread.archive",
         "thread.restore",
+        "client.list", "client.end_interaction", "client.switch_thread", "client.settings.get", "client.settings.update",
       ]);
       expect(providerTools.eligibleCatalog("cli").map(({ id }) => id)).toEqual(
         providerTools.eligibleCatalog("pi_sdk").map(({ id }) => id),
@@ -727,7 +729,7 @@ describe("agent-tool HTTP production composition", () => {
       await associated(request(app).post("/api/agent-tool-invocations"))
         .send({
           toolId: "thread.status",
-          schemaVersion: 2,
+          schemaVersion: 3,
           requestId: "status-request",
           input: { threadId: thread.thread.id },
         })
@@ -738,6 +740,7 @@ describe("agent-tool HTTP production composition", () => {
             backend: "pi",
             lifecycle: "settled",
             activity: "waiting_for_input",
+            pinned: false,
           }),
         );
       expect(snapshot).toHaveBeenCalledWith(scope, thread.thread.id);

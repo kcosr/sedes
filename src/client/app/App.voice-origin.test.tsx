@@ -23,7 +23,7 @@ vi.mock("../voice/native-voice-plugin.js", async (importOriginal) => ({
 vi.mock("../authentication/AuthenticationGate.js", async () => {
   const { VoiceProvider } = await import("../voice/VoiceProvider.js");
   return { AuthenticationGate: ({ children }: { children: React.ReactNode }) =>
-    <VoiceProvider profileId={VOICE_CONNECTION.profileId} serverOrigin={VOICE_CONNECTION.serverOrigin} identity={voice.identity}>{children}</VoiceProvider> };
+    <VoiceProvider profileId={VOICE_CONNECTION.profileId} endpoint={{ baseUrl: voice.available ? VOICE_CONNECTION.serverOrigin : null }} identity={voice.identity}>{children}</VoiceProvider> };
 });
 vi.mock("../api/ApiClient.js", () => ({ ApiClient: class {
   constructor(_endpoint: unknown, _credential: unknown, readonly readOrigin: () => unknown) { graph.clients.push(this); }
@@ -58,7 +58,7 @@ beforeEach(() => {
   voice.disconnect.mockClear(); preferences.get.mockReset(); preferences.set.mockReset();
   localStorage.clear();
 });
-afterEach(() => { cleanup(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("application client origin", () => {
   it("renders before native voice connects and keeps one API client and store graph while the origin arrives, drops, and returns", async () => {
@@ -71,13 +71,13 @@ describe("application client origin", () => {
     const client = graph.clients[0]!;
     expect(client.readOrigin()).toBeUndefined();
     await act(async () => { connect(voiceSnapshot()); });
-    expect(client.readOrigin()).toEqual({ clientId: VOICE_ORIGIN_ID });
+    expect(client.readOrigin()).toEqual({ clientId: VOICE_ORIGIN_ID, connectionToken: "a".repeat(43) });
     act(() => voice.fake.emit("stateChanged", disconnectedVoiceSnapshot(2)));
     expect(client.readOrigin()).toBeUndefined();
     const reconnected = "44612c41-0bbb-455f-a5af-725bfc7ae768";
     voice.fake.plugin.setConnection.mockResolvedValueOnce(voiceSnapshot({ connectionGeneration: 3, originClientId: reconnected }));
     await act(async () => { window.dispatchEvent(new Event("online")); });
-    await waitFor(() => expect(client.readOrigin()).toEqual({ clientId: reconnected }));
+    await waitFor(() => expect(client.readOrigin()).toEqual({ clientId: reconnected, connectionToken: "a".repeat(43) }));
     expect(graph.clients).toHaveLength(1);
     expect(graph.stores).toBe(1);
     expect(graph.disposed).toBe(0);
@@ -86,7 +86,7 @@ describe("application client origin", () => {
   it("connects native voice once through the StrictMode effect replay", async () => {
     render(<StrictMode><App /></StrictMode>);
     await screen.findByText("Application ready");
-    await waitFor(() => expect(graph.clients.at(-1)!.readOrigin()).toEqual({ clientId: VOICE_ORIGIN_ID }));
+    await waitFor(() => expect(graph.clients.at(-1)!.readOrigin()).toEqual({ clientId: VOICE_ORIGIN_ID, connectionToken: "a".repeat(43) }));
     expect(voice.fake.plugin.setConnection).toHaveBeenCalledTimes(1);
   });
   it("sends no WebView-generated origin on Android before the identity is known", async () => {
@@ -97,13 +97,20 @@ describe("application client origin", () => {
     expect(voice.fake.plugin.setConnection).not.toHaveBeenCalled();
     expect(originKeys()).toEqual([]);
   });
-  it("keeps a browser profile's own stored origin", async () => {
+  it("uses the server registration for a browser connection without a stored advisory origin", async () => {
     voice.available = false;
+    const registration = { clientId: VOICE_ORIGIN_ID, connectionToken: "a".repeat(43), resumeToken: "b".repeat(43) };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith("/api/application/session")) return new Response(JSON.stringify({ csrfToken: "csrf-test" }));
+      if (path.endsWith("/api/client-registration")) return new Response(JSON.stringify(registration));
+      return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true }));
+    }));
     render(<App />);
     await screen.findByText("Application ready");
-    const origin = graph.clients[0]!.readOrigin() as { clientId: string };
-    expect(origin.clientId).toMatch(/^[0-9a-f-]{36}$/u);
-    expect(originKeys().map(key => localStorage.getItem(key))).toEqual([origin.clientId]);
+    await waitFor(() => expect(graph.clients[0]!.readOrigin()).toEqual({ clientId: registration.clientId, connectionToken: registration.connectionToken }));
+    expect(fetch).toHaveBeenCalledWith("/api/client-registration", expect.objectContaining({ credentials: "same-origin" }));
+    expect(originKeys()).toEqual([]);
     expect(voice.fake.plugin.setConnection).not.toHaveBeenCalled();
   });
   it("stops the departing profile's native voice only after the server switch is saved", async () => {

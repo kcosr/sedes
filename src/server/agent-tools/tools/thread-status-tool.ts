@@ -48,11 +48,12 @@ export const threadStatusToolContract = {
           maxLength: 17,
           enum: ["idle", "running", "waiting_for_input"],
         }),
+        pinned: Type.Boolean({ description: "Whether this thread is pinned for the current user." }),
       },
       {
         $schema: AGENT_TOOL_JSON_SCHEMA_DIALECT,
         additionalProperties: false,
-        maxProperties: 4,
+        maxProperties: 5,
       },
     ),
   ),

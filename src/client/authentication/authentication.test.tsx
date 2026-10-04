@@ -15,9 +15,10 @@ describe("connection authentication", () => {
     let finishCredentials!: (credential: string) => void;
     native.get.mockReturnValue(new Promise<string>((resolve) => { finishCredentials = resolve; }));
     const endpoint = configuredSedesServer("https://scope-reset.example");
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(Response.json({ required: false, authenticated: false, navigationNamespace: "a".repeat(64) }))
-      .mockResolvedValueOnce(Response.json({ required: false, authenticated: false, navigationNamespace: "b".repeat(64) }));
+    let statusReads = 0;
+    const fetchMock = vi.fn(async (url: string) => url.endsWith("/api/auth/status")
+      ? Response.json({ required: false, authenticated: false, navigationNamespace: (++statusReads === 1 ? "a" : "b").repeat(64) })
+      : Response.json({}, { status: 503 }));
     vi.stubGlobal("fetch", fetchMock);
     function Draft() { return <><output data-testid="scope">{useContext(NavigationScopeContext)}</output><input aria-label="Local draft" defaultValue="" /></>; }
     render(<AuthenticationGate endpoint={endpoint} profileId="profile"><Draft /></AuthenticationGate>);

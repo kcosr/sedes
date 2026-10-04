@@ -265,11 +265,71 @@ The canonical catalog groups operations under:
   preference selection;
 - **Threads** — inventory, status, messages, creation, send, fork,
   archive/restore, and related controls;
+- **Client controls** — current-client navigation, interaction completion, and
+  revision-checked basic voice settings;
 - **Agents** — saved Agent discovery and revision-checked management;
 - **Tasks** — bounded reads and revision-checked mutation; and
 - **Automations** — definition/history reads and guarded scheduling controls;
 - **Research** — current public information through an installation-owned
   provider process.
+
+`thread.status@3` and `thread.list@6` include the current principal's read-only
+`pinned` flag. There is no thread-pin mutation tool.
+
+### Client controls
+
+`client.list`, `client.end_interaction`, `client.switch_thread`,
+`client.settings.get`, and `client.settings.update` are thread-agent tools on
+Pi, Codex, Claude, Grok, and OpenCode through their supported native and CLI
+surfaces. Standalone Tool clients cannot invoke them. Their group and individual
+controls use the existing agent-tool policy UI.
+
+The source facade captures the active normalized turn and starting client at
+Sedes invocation admission, before any asynchronous check, approval, or execution.
+Later Steer input does not retarget it. OpenCode additionally supplies a provider
+current-input lease, checked even without an environment approval. Pi, Codex,
+Claude, and Grok use normalized turn/owner-generation revalidation and their
+existing invocation cancellation. CLI/MCP source references identify a thread;
+they do not carry a historical issuing turn before Sedes receives the request.
+Unavailable or replaced admitted turn authority fails closed. Omit `clientId` for the
+current device. List clients or specify another `clientId` only for an explicit
+user request; never select another online device as a fallback.
+Discovery returns `defaultClientId` separately from its live client list, so an
+offline starting client cannot be mistaken for another connected recipient.
+
+The registry, command acknowledgements, and completion correlations are
+principal scoped, transient, and bounded. A paired client retains its authenticated
+ID; an anonymous registration receives a temporary ID without pairing. Connection
+replacement invalidates pending commands. A server-issued resume secret keeps
+the same identity across reconnects within five minutes; old connection tokens
+are fenced. Windows sharing a paired credential have one active recipient:
+the newest registration wins, and replaced windows offer an explicit reconnect
+instead of repeatedly replacing each other. Silent registrations expire after
+45 seconds. Deferred actions wait for their exact turn for at most 24 hours,
+then receive a separate one-hour playback deadline at settlement. Commands are
+never persisted for replay. An unacknowledged write reports an uncertain outcome.
+
+Settings reads identify the client and return capabilities, readiness, and a
+revision. Updates require `expectedRevision` and `patch.voice`, limited to
+`audioMode`, `voiceThreadId`, `pinDefaultVoiceThread`, `autoListen`,
+`onlyVoiceThread`, `ignoreOtherDevices`, and `followComposerMode`. Credentials,
+providers, models, hardware selection, timing, and notification policy are outside
+this API. Destination/default threads pass normal environment authority checks,
+including nested default-thread patches. Android persists through its existing
+profile/identity settings store. An enabling edit can persist while foreground,
+permission, or speech setup prevents service start; the response reports that
+condition and the actual state. Off stops immediately.
+
+End-interaction suppresses only this turn's automatic follow-up; it does not
+cancel the agent or change preferences. Switch-thread defaults to `listen: false`.
+With `listen: true`, Android requests one exact-target listen even with auto-listen
+disabled, while retaining voice-mode, permission, setup, and foreground gates.
+Neither operation changes the pinned/default voice thread. Accepted deferred
+actions are acknowledged before turn completion, then wait for the matching reply's
+actual audio drain. Silent replies do not require audio. Failed/interrupted turns,
+playback failure, manual supersession, background navigation, expiry, and connection
+loss prevent deferred navigation/listening. Browser/Electron navigation works;
+voice and voice settings report unsupported with a successful no-op.
 
 `research.web_search` is provider-neutral. Its initial Grok CLI provider may
 use general web search, page fetch, and public X search, while Sedes removes

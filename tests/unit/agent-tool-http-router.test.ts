@@ -55,6 +55,7 @@ function fixture(
           threadId,
           backend: "codex_app_server",
           lifecycle: "active",
+          pinned: false,
           activity: "idle",
         };
       },
@@ -402,7 +403,7 @@ describe("agent tool HTTP router", () => {
     await associated(request(value.app).post("/api/agent-tool-invocations"))
       .send({
         toolId: "thread.status",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "request-1",
         input: { threadId: targetThreadId },
       })
@@ -418,7 +419,7 @@ describe("agent tool HTTP router", () => {
     await associated(request(value.app).post("/api/agent-tool-invocations"))
       .send({
         toolId: "thread.status",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "request-2",
         input: { threadId: targetThreadId },
       })
@@ -431,6 +432,7 @@ describe("agent tool HTTP router", () => {
             threadId: targetThreadId,
             backend: "codex_app_server",
             lifecycle: "active",
+            pinned: false,
             activity: "idle",
           },
         });
@@ -451,7 +453,7 @@ describe("agent tool HTTP router", () => {
     await associated(request(value.app).post("/api/agent-tool-invocations"))
       .send({
         toolId: "thread.status",
-        schemaVersion: 2,
+        schemaVersion: 3,
         requestId: "request-2",
         input: {},
       })

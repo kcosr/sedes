@@ -183,6 +183,7 @@ import { DatabaseApplicationLineageSummaryReader } from "../../src/server/applic
 import { AutomationService } from "../../src/server/domain/automation-service.js";
 import { NotificationRepository } from "../../src/server/db/repositories/notification-repository.js";
 import { NotificationService } from "../../src/server/domain/notification-service.js";
+import { ClientControlService } from "../../src/server/domain/client-control-service.js";
 import { NotificationLifecycleObserver } from "../../src/server/domain/notification-lifecycle-observer.js";
 import { InventoryService } from "../../src/server/domain/inventory-service.js";
 import { ConversationTurnBookmarkService } from "../../src/server/domain/conversation-turn-bookmark-service.js";
@@ -3648,6 +3649,7 @@ async function main(): Promise<void> {
   const notifications = new NotificationService({
     repository: new NotificationRepository(database),
   });
+  const clientControls = new ClientControlService();
   const identity = new SingleUserIdentityProvider(database);
   const scope = identity.getScope();
   const composerAttachmentRepository = new ComposerAttachmentRepository(
@@ -4209,13 +4211,16 @@ async function main(): Promise<void> {
     (eventScope, payload, eventKey, assistantResult, recognitionThreadId) => {
       // Same wiring as production: voice context is captured only after dedup,
       // policy and recipient checks admit voice delivery.
-      notifications.emit(eventScope, payload, eventKey, assistantResult, () => {
+      const publication = notifications.emit(eventScope, payload, eventKey, assistantResult, () => {
         const target = recognitionThreadId === undefined ? payload.thread?.id : recognitionThreadId;
         const context = target ? mutationsForSubmissions?.activity.notificationContext(eventScope, target, payload.turn?.id) : undefined;
         const subjectId = payload.interaction?.id ?? payload.question?.id ??
           (payload.event === "thread.woke" ? payload.occurredAt : undefined);
         return { ...context, ...(subjectId ? { subjectId } : {}) };
       });
+      if (payload.turn && payload.thread && ["turn.completed", "turn.failed", "turn.interrupted"].includes(payload.event)) {
+        clientControls.observeNotification(eventScope, payload.thread.id, payload.turn.id, publication);
+      }
     },
   );
   const threadGroupRepository = new ThreadGroupRepository(database);
@@ -4909,6 +4914,7 @@ async function main(): Promise<void> {
     );
     if (!observed) return;
     notificationLifecycle.completion(eventScope, observed);
+    if (observed.applicationTurnId) void clientControls.complete(eventScope, applicationThreadId, observed.applicationTurnId, observed.completionOutcome ?? "interrupted");
     authoritativeCompletionFollowUp.defer(async () => {
       const failures: unknown[] = [];
       try {
@@ -5992,6 +5998,7 @@ async function main(): Promise<void> {
       environmentVariables,
       ...{ configurationAdmin, hostPairingAdmin },
       notifications,
+      clientControls,
       questions,
       cannedPrompts: new CannedPromptService(
         new CannedPromptRepository(database),
@@ -6106,6 +6113,7 @@ async function main(): Promise<void> {
       await terminalService.close();
       execution.close();
       await notifications.close();
+      clientControls.close();
       database.close();
     })();
     await closing;

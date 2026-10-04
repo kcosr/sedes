@@ -838,6 +838,35 @@ describe("TasksPanel add row", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("creates a pinned task from the add row and resets the choice for the next task", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    renderPanel(store);
+    const pin = screen.getByRole("button", { name: "Pin new task" });
+    await user.click(pin);
+    expect(pin).toHaveAttribute("aria-pressed", "true");
+    await user.click(addInput());
+    await user.keyboard("Keep this handy{Enter}");
+    expect(store.createTask).toHaveBeenCalledWith("Keep this handy", { kind: "thread", threadId: "thread-9" }, undefined, { pinned: true, backlog: false });
+    expect(pin).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("lets the paste dialog override the add row's pin choice", async () => {
+    const user = userEvent.setup();
+    const store = seededStore();
+    renderPanel(store);
+    await user.click(screen.getByRole("button", { name: "Pin new task" }));
+    await user.click(addInput());
+    await user.paste("First task\nSecond task");
+    const dialog = screen.getByRole("dialog", { name: "Create 2 tasks?" });
+    const pin = within(dialog).getByRole("switch", { name: "Pin these tasks" });
+    expect(pin).toBeChecked();
+    await user.click(pin);
+    await user.click(within(dialog).getByRole("button", { name: "Create 2 tasks" }));
+    await waitFor(() => expect(store.createTask).toHaveBeenCalledTimes(2));
+    for (const call of vi.mocked(store.createTask).mock.calls) expect(call[3]).toEqual({ pinned: false, backlog: false });
+  });
+
   it("gives the title back and explains when creation fails", async () => {
     const user = userEvent.setup();
     const store = seededStore();

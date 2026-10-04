@@ -36,6 +36,7 @@ export interface ToolExposurePolicy {
 }
 
 export type AgentToolGroupId =
+  | "client"
   | "context"
   | "threads"
   | "agents"
@@ -304,7 +305,12 @@ function samePolicyIdentity(
   );
 }
 
+export interface TrustedClientTurn {
+  readonly threadId: string; readonly turnId: string; readonly ownerGeneration: string; readonly clientId?: string;
+}
+
 export interface TrustedToolInvocationContext {
+  readonly clientTurn?: TrustedClientTurn;
   readonly invocationId: string;
   /** Fresh per execution and never exposed as transport retry identity. */
   readonly mutationId: string;

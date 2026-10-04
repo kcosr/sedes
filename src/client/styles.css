@@ -9851,6 +9851,25 @@ tr.diff-hunk td {
   padding: var(--space-2);
 }
 
+.client-controls-replaced {
+  position: fixed;
+  z-index: var(--z-floating);
+  inset: auto var(--space-3) var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--card);
+  color: var(--foreground);
+  font-size: var(--text-ui);
+}
+
+.client-controls-replaced button { text-decoration: underline; }
+
 .agent-tool-group-nav-row {
   display: flex;
   min-height: var(--control-md);
@@ -10139,6 +10158,8 @@ tr.diff-hunk td {
 
   .agent-tool-group-nav {
     position: static;
+    min-width: 0;
+    align-self: stretch;
     flex-direction: row;
     overflow-x: auto;
     border-bottom: 1px solid var(--border-soft);

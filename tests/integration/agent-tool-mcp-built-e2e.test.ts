@@ -366,7 +366,7 @@ describe("built Sedes MCP server", () => {
         name: "sedes_read",
         arguments: {
           toolId: "thread.status",
-          schemaVersion: 2,
+          schemaVersion: 3,
           input: { threadId: source.thread.id },
         },
       });

@@ -83,6 +83,7 @@ export const CANONICAL_AGENT_TOOL_GROUPS = Object.freeze([
     description: "Inspect, read, create, and control Sedes threads.",
     order: 20,
   }),
+  Object.freeze({ id: "client" as const, label: "Client controls", description: "Control the user’s current Sedes client and its basic voice settings.", order: 30 }),
   Object.freeze({
     id: "agents" as const,
     label: "Agents",
@@ -116,6 +117,36 @@ export const CANONICAL_AGENT_TOOL_GROUPS = Object.freeze([
 ] satisfies readonly CanonicalAgentToolGroup[]);
 
 export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
+  "client.list": threadOnlyManifestEntry({
+    id: "client.list", schemaVersion: 1, environmentAuthority: { kind: "source_only" },
+    description: "List connected Sedes clients only when the user asks to list devices or explicitly target another device. Never automatically choose another client.",
+    catalog: { groupId: "client", label: "List clients", order: 10 },
+    effects: { application: "read", modelUsage: "none", external: "none" },
+  }),
+  "client.end_interaction": threadOnlyManifestEntry({
+    id: "client.end_interaction", schemaVersion: 1, environmentAuthority: { kind: "source_only" },
+    description: "Finish this turn\u2019s spoken reply, then suppress its follow-up listening on the current client. Does not cancel the turn or change voice settings. Current client means the client that started this turn; later Steer input never changes it. Set clientId only when the user explicitly requests another client.",
+    catalog: { groupId: "client", label: "End interaction", order: 20 },
+    effects: { application: "write", modelUsage: "none", external: "none" },
+  }),
+  "client.switch_thread": threadOnlyManifestEntry({
+    id: "client.switch_thread", schemaVersion: 1, environmentAuthority: { kind: "direct_resource", resource: "thread" },
+    description: "After this turn\u2019s spoken reply drains, navigate the current client to the exact thread. listen defaults to false; true requests one listen even with autoListen off, but cannot enable voice mode. Current client means the client that started this turn; later Steer input never changes it. Set clientId only when the user explicitly requests another client.",
+    catalog: { groupId: "client", label: "Switch thread", order: 30 },
+    effects: { application: "write", modelUsage: "none", external: "none" },
+  }),
+  "client.settings.get": threadOnlyManifestEntry({
+    id: "client.settings.get", schemaVersion: 1, environmentAuthority: { kind: "source_only" },
+    description: "Read the current client\u2019s basic voice settings, revision, capabilities and readiness. Current client means the client that started this turn; later Steer input never changes it. Set clientId only when the user explicitly requests another client.",
+    catalog: { groupId: "client", label: "Read client settings", order: 40 },
+    effects: { application: "read", modelUsage: "none", external: "none" },
+  }),
+  "client.settings.update": threadOnlyManifestEntry({
+    id: "client.settings.update", schemaVersion: 1, environmentAuthority: { kind: "direct_resource", resource: "thread", inputField: "patch.voice.voiceThreadId", defaultToSource: true },
+    description: "Update the current client\u2019s basic voice settings using the revision from settings.get. Persists immediately; Off stops voice immediately. Setting the default thread does not navigate or listen. Current client means the client that started this turn; later Steer input never changes it. Set clientId only when the user explicitly requests another client.",
+    catalog: { groupId: "client", label: "Update client settings", order: 50 },
+    effects: { application: "write", modelUsage: "none", external: "none" },
+  }),
   "agent.context": threadOnlyManifestEntry({
     environmentAuthority: { kind: "source_only" },
     id: "agent.context",
@@ -186,18 +217,18 @@ export const CANONICAL_AGENT_TOOL_MANIFEST = Object.freeze({
   "thread.status": manifestEntry({
     environmentAuthority: { kind: "direct_resource", resource: "thread" },
     id: "thread.status",
-    schemaVersion: 2,
+    schemaVersion: 3,
     description:
-      "Returns bounded lifecycle and activity state for a Sedes thread.",
+      "Returns bounded lifecycle, activity, and read-only pin state for a Sedes thread.",
     catalog: { groupId: "threads", label: "Thread status", order: 10 },
     effects: { application: "read", modelUsage: "none", external: "none" },
   }),
   "thread.list": manifestEntry({
     environmentAuthority: { kind: "scoped_query", resource: "thread" },
     id: "thread.list",
-    schemaVersion: 5,
+    schemaVersion: 6,
     description:
-      "Searches admitted principal-owned Sedes threads, defaulting to the caller's configured environment, with newest activity first.",
+      "Searches admitted principal-owned Sedes threads, including read-only pin state, defaulting to the caller's configured environment with newest activity first.",
     catalog: { groupId: "threads", label: "List threads", order: 20 },
     effects: { application: "read", modelUsage: "none", external: "none" },
   }),

@@ -161,7 +161,13 @@ test.describe.serial("Tasks panel", () => {
       "placeholder",
       "Add a global task…",
     );
+    const pinNewTask = tasks.getByRole("button", { name: "Pin new task" });
+    await expect(pinNewTask).toHaveAttribute("aria-pressed", "false");
+    await pinNewTask.click();
+    const createPinnedTask = page.waitForRequest(request => request.method() === "POST" && request.url().endsWith("/api/tasks"));
     await addTask(tasks, "Global errand");
+    expect((await createPinnedTask).postDataJSON()).toMatchObject({ pinned: true });
+    await expect(pinNewTask).toHaveAttribute("aria-pressed", "false");
     await expect(taskRow(tasks, "Global errand")).toBeVisible({
       timeout: TASK_MUTATION_TIMEOUT_MS,
     });
