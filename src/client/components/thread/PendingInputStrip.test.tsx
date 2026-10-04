@@ -16,6 +16,7 @@ import type {
 } from "../../../shared/index.js";
 import type {
   PendingComposerTransfer,
+  PendingServerSubmission,
   ThreadClientState,
   ThreadClientStore,
 } from "../../stores/ThreadClientStore.js";
@@ -158,6 +159,7 @@ class FakeStripStore {
       authoritative: true,
       actionPending: false,
       pendingComposerTransfers: [],
+      pendingServerSubmissions: [],
       pendingQueuedSteers: [],
       historyLoading: false,
       forkAttempts: {},
@@ -218,6 +220,11 @@ class FakeStripStore {
     for (const listener of this.#listeners) listener();
   }
 
+  setServerSubmissions(submissions: readonly PendingServerSubmission[]): void {
+    this.state = { ...this.state, pendingServerSubmissions: submissions };
+    for (const listener of this.#listeners) listener();
+  }
+
   replaceSnapshot(patch: Partial<NormalizedThreadSnapshot>): void {
     this.state = {
       ...this.state,
@@ -225,6 +232,22 @@ class FakeStripStore {
     };
     for (const listener of this.#listeners) listener();
   }
+}
+
+function serverSubmission(item: QueuedInputSummary): PendingServerSubmission {
+  return {
+    kind: "server",
+    operationId: item.deliveryOperationId,
+    queuedInputId: item.id,
+    createdAt: item.createdAt,
+    preview: item.preview,
+    attachmentCount: item.attachmentCount,
+    taskCount: item.taskCount,
+    phase: "sending",
+    presentationSequence: item.sequence,
+    baselineOrderedTurnIds: [],
+    baselineTailTurnItemIds: [],
+  };
 }
 
 function renderStrip(
@@ -506,6 +529,52 @@ describe("PendingInputStrip", () => {
     expect(
       document.querySelector('[data-delivery-operation-id="submit-operation"]'),
     ).toHaveTextContent("Sending");
+  });
+
+  it.each(["pending", "dispatching"] as const)(
+    "replaces an externally admitted %s Submit row with its transcript presentation",
+    (state) => {
+      const item = queued("voice-input", 1, state, {
+        resolvedDeliveryMode: "submit",
+        ...(state === "dispatching" ? { deliveryMode: "submit" as const } : {}),
+      });
+      const store = new FakeStripStore(snapshot([item]));
+      store.setServerSubmissions([serverSubmission(item)]);
+      renderStrip(store);
+      expect(screen.queryByTestId("pending-input-strip")).not.toBeInTheDocument();
+    },
+  );
+
+  it("keeps externally admitted Submit input visible when the transcript is showing a historical turn", () => {
+    const item = queued("voice-input", 1, "dispatching", {
+      resolvedDeliveryMode: "submit", deliveryMode: "submit",
+    });
+    const store = new FakeStripStore(snapshot([item]));
+    store.setServerSubmissions([serverSubmission(item)]);
+    renderStrip(store, false, {}, false);
+    expect(document.querySelector('[data-queued-input-id="voice-input"]')).toHaveTextContent("Sending");
+  });
+
+  it.each([
+    { state: "retry_wait", label: "Retry scheduled" },
+    { state: "uncertain", deliveryMode: "submit", label: "Delivery unconfirmed" },
+    { state: "failed", label: "Failed" },
+  ] as const)("reveals an external Submit's $state status instead of retaining a stale sending bubble", ({ state, label, ...patch }) => {
+    const item = queued("voice-input", 1, state, { resolvedDeliveryMode: "submit", ...patch });
+    const store = new FakeStripStore(snapshot([item]));
+    store.setServerSubmissions([serverSubmission(item)]);
+    renderStrip(store);
+    expect(document.querySelector('[data-queued-input-id="voice-input"]')).toHaveTextContent(label);
+  });
+
+  it.each(["queue", "steer"] as const)("preserves explicit %s rows despite a stale Submit presentation", (mode) => {
+    const item = queued("voice-input", 1, "dispatching", {
+      resolvedDeliveryMode: mode, deliveryMode: mode === "steer" ? "steer" : "submit",
+    });
+    const store = new FakeStripStore(snapshot([item]));
+    store.setServerSubmissions([serverSubmission(item)]);
+    renderStrip(store);
+    expect(document.querySelector('[data-queued-input-id="voice-input"]')).toHaveTextContent(mode === "steer" ? "Steering" : "Sending");
   });
 
   it.each([

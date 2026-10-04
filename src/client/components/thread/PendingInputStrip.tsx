@@ -6,6 +6,7 @@ import {
   type PendingComposerTransfer,
   type ThreadClientStore,
 } from "../../stores/ThreadClientStore.js";
+import { selectTranscriptSubmissions } from "./submission-presentation.js";
 
 type RowAction = "delete" | "restore" | "steer" | "dismiss";
 
@@ -207,29 +208,25 @@ export function PendingInputStrip({
   );
   const hiddenAuthoritativeOperationIds = useMemo(() => {
     const hidden = new Set<string>();
-    for (const transfer of liveTransfers) {
+    if (!optimisticTranscriptPresentationVisible) return hidden;
+    for (const submission of selectTranscriptSubmissions(state)) {
+      const matching = authoritativeQueue.find(
+        (item) => item.deliveryOperationId === submission.operationId,
+      );
       if (
-        optimisticTranscriptPresentationVisible &&
-        transfer.mode === "submit" &&
-        transfer.presentation === "transcript" &&
-        transfer.authorityState === "client_only"
+        matching &&
+        (matching.state === "pending" || matching.state === "dispatching")
       ) {
-        const matching = authoritativeQueue.find(
-          (item) => item.deliveryOperationId === transfer.operationId,
-        );
-        if (
-          matching &&
-          (matching.state === "pending" || matching.state === "dispatching")
-        ) {
-          hidden.add(transfer.operationId);
-        }
+        hidden.add(submission.operationId);
       }
     }
     return hidden;
   }, [
     authoritativeQueue,
-    liveTransfers,
     optimisticTranscriptPresentationVisible,
+    state.pendingComposerTransfers,
+    state.pendingServerSubmissions,
+    state.snapshot,
   ]);
   const queue = useMemo(
     () =>

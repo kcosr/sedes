@@ -164,6 +164,7 @@ class FakeComposerStore {
       authoritative: true,
       actionPending: false,
       pendingComposerTransfers: [],
+      pendingServerSubmissions: [],
       pendingQueuedSteers: [],
       historyLoading: false,
       forkAttempts: {},

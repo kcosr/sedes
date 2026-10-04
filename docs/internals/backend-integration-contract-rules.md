@@ -2439,6 +2439,26 @@ prove rejection and must not retire the client-owned correlation bridge.
 Replacement snapshots and incremental events have the same reconciliation
 obligation.
 
+Ordinary user inputs admitted as Submit outside the current composer use the
+same provisional transcript presentation. Eligibility follows the immutable
+resolved admission mode, ordinary user origin, and healthy queue state;
+dispatching a queued input with the provider's Submit operation does not turn
+it into a provisional Send. Attributed inputs, Queue, Steer, retry-wait,
+failure, and uncertainty retain their existing cards and controls. Presentation
+state is separate from composer ownership and must never clear, restore, or
+overwrite a draft.
+
+The authenticated principal/thread-scoped queued-input detail read exposes
+full normalized content and retained status with a consistent thread revision,
+without runtime attachment, mutation, or provider calls. It verifies the
+application-owned acceptance correlation before exposing an accepted operation
+identity. The browser uses exact operation identity for deduplication and
+retirement, fences stale reads, and bounds retained content and retries. Queue
+absence alone is ambiguous; acceptance keeps the provisional message until its
+exact user item arrives, while proven cancellation removes it. These shared
+application rules apply unchanged to Pi, Codex, Claude, Grok, and OpenCode and
+introduce no new backend capability or provider-specific submission path.
+
 Codex and Pi implement this contract through their existing exact-target Steer
 operations, pre-boundary stale-target classifications, and authenticated
 delivery correlation. Active Submit may therefore resolve to Steer for these

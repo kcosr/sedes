@@ -2132,6 +2132,43 @@ export class QueuedInputRepository {
     }))();
   }
 
+  /** Reads one retained row and the exact revision against which it was observed. */
+  readInputProjectionState(
+    scope: RequestScope,
+    applicationThreadId: string,
+    id: string,
+  ): {
+    readonly threadRevision: number;
+    readonly record: QueuedInputRecord;
+    readonly deliveryOperationId: string;
+  } {
+    return this.database.transaction(() => {
+      const threadRevision = this.#threadRevision(scope, applicationThreadId);
+      const record = this.get(scope, applicationThreadId, id);
+      let deliveryOperationId =
+        record.deliveryMode === "steer"
+          ? record.reconciliationToken
+          : record.mutationId;
+      if (record.state === "accepted") {
+        // Dispatch correlates acceptance to an application operation. Verify
+        // its scoped durable anchor before exposing that ID; the correlation
+        // field itself is not presentation authority. A manual Steer can have
+        // accepted the row under a different operation from its admission.
+        const accepted = record.backendCorrelation === null
+          ? undefined
+          : this.#completion.find(scope, applicationThreadId, record.backendCorrelation);
+        if (!accepted || accepted.backendCorrelation !== record.backendCorrelation) {
+          throw new Error("queued_input_acceptance_identity_missing");
+        }
+        deliveryOperationId = accepted.operationId;
+      }
+      if (deliveryOperationId === null) {
+        throw new Error("queued_input_delivery_identity_missing");
+      }
+      return { threadRevision, record, deliveryOperationId };
+    })();
+  }
+
   #getDraft(scope: RequestScope, applicationThreadId: string): RestoredDraft {
     const row = this.database
       .prepare(

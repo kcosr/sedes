@@ -71,6 +71,8 @@ import {
   previewAutomationScheduleRequestSchema,
   putComposerAttachmentQuerySchema,
   putComposerAttachmentResultSchema,
+  queuedInputPresentationSchema,
+  queuedInputRouteParametersSchema,
   resolveAutomationRunRequestSchema,
   restoreStashRequestSchema,
   runAutomationNowRequestSchema,
@@ -1478,6 +1480,17 @@ export function createNormalizedApp(dependencies: NormalizedAppDependencies) {
     const mutationId = mutationIdSchema.parse(request.params.mutationId);
     response.setHeader("Cache-Control", "no-store");
     response.json(dependencies.threads.readInputReceipt(requestScope, mutationId));
+  });
+
+  routes.get("/api/threads/:threadId/queued-inputs/:queuedInputId", async (request, response) => {
+    const requestScope = await scope(request);
+    const { threadId, queuedInputId } = queuedInputRouteParametersSchema.parse(request.params);
+    const presentation = queuedInputPresentationSchema.safeParse(
+      await dependencies.threads.readQueuedInput(requestScope, threadId, queuedInputId),
+    );
+    if (!presentation.success) throw new Error("queued_input_presentation_unpresentable", { cause: presentation.error });
+    response.setHeader("Cache-Control", "no-store");
+    response.json(presentation.data);
   });
 
   routes.get(

@@ -23,7 +23,12 @@ import {
   type CreateWorkpadRequest, type UpdateWorkpadRequest, type ListWorkpadsRequest,
   type SaveWorkpadDraftRequest, type CommitWorkpadDraftRequest,
 } from "../../shared/protocol/workpads.js";
-import { respondToQuestionResultSchema, type RespondToQuestionResult } from "../../shared/protocol/api.js";
+import {
+  queuedInputPresentationSchema,
+  respondToQuestionResultSchema,
+  type QueuedInputPresentation,
+  type RespondToQuestionResult,
+} from "../../shared/protocol/api.js";
 import {
   questionRequestsResultSchema,
   questionStatusesResultSchema,
@@ -1660,6 +1665,18 @@ export class ApiClient {
           ? threadQueueMutationResultSchema
           : threadApplicationMutationResultSchema,
       { method: "POST", body: JSON.stringify(operation) },
+    );
+  }
+
+  readQueuedInput(
+    threadId: string,
+    queuedInputId: string,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<QueuedInputPresentation> {
+    return this.#request(
+      `/api/threads/${encodeURIComponent(threadId)}/queued-inputs/${encodeURIComponent(queuedInputId)}`,
+      { signal: options?.signal },
+      queuedInputPresentationSchema,
     );
   }
 

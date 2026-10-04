@@ -22,10 +22,12 @@ import type {
   ConversationItem,
   HistoryPage,
   NormalizedThreadSnapshot,
+  QueuedInputSummary,
   ThreadHistorySeekResult,
 } from "../../../shared/index.js";
 import type {
   PendingComposerTransfer,
+  PendingServerSubmission,
   ThreadProjectionViewportAnchor,
   ThreadClientState,
   ThreadClientStore,
@@ -104,6 +106,7 @@ class FakeTranscriptStore {
       bookmarkStatus: "ready",
       pendingBookmarkTurnIds: [],
       pendingComposerTransfers: [],
+      pendingServerSubmissions: [],
       pendingQueuedSteers: [],
       snapshot,
       stashes: [],
@@ -192,6 +195,11 @@ class FakeTranscriptStore {
     for (const listener of this.#listeners) listener();
   }
 
+  replaceServerSubmissions(submissions: readonly PendingServerSubmission[]): void {
+    this.#state = { ...this.#state, pendingServerSubmissions: submissions };
+    for (const listener of this.#listeners) listener();
+  }
+
   replaceBookmarkState(
     changes: Partial<
       Pick<
@@ -259,6 +267,26 @@ function makePendingSubmitTransfer(
     rollbackApplied: false,
     lateMaterializationRequiresComposerReconciliation: false,
     retainTombstoneAfterRollback: false,
+    ...overrides,
+  };
+}
+
+function makeServerSubmission(
+  snapshot: NormalizedThreadSnapshot,
+  overrides: Partial<PendingServerSubmission> = {},
+): PendingServerSubmission {
+  return {
+    kind: "server",
+    operationId: "66666666-6666-4666-8666-666666666666",
+    queuedInputId: "server-input",
+    createdAt: "2026-10-03T12:00:00.000Z",
+    preview: { text: "Spoken message" },
+    attachmentCount: 0,
+    taskCount: 0,
+    phase: "sending",
+    presentationSequence: 1,
+    baselineOrderedTurnIds: [...snapshot.orderedTurnIds],
+    baselineTailTurnItemIds: [],
     ...overrides,
   };
 }
@@ -1705,6 +1733,149 @@ describe("Transcript history positioning", () => {
     act(() => fake.replaceSnapshot(makeSnapshot(["turn-1"], false)));
     act(flushFrames);
     expect(focus).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Transcript server-admitted submissions", () => {
+  it("shows voice input in the ordinary user bubble while its queue row is sending", () => {
+    const snapshot = makeSnapshot([], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    const submission = makeServerSubmission(snapshot);
+    fake.replaceServerSubmissions([submission]);
+
+    const { container } = render(<Transcript store={fake as unknown as ThreadClientStore} />);
+
+    const row = container.querySelector(`[data-delivery-operation-id="${submission.operationId}"]`);
+    expect(row).toHaveAttribute("data-client-provisional", "true");
+    expect(row?.querySelector(".message-row.user")).toHaveTextContent("Spoken message");
+    expect(row).toHaveTextContent("Sending…");
+    expect(screen.queryByText("This thread is ready")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Bookmark turn" })).not.toBeInTheDocument();
+  });
+
+  it("marks a bounded preview and replaces it with the full submitted content", () => {
+    const snapshot = makeSnapshot([], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    const submission = makeServerSubmission(snapshot, {
+      preview: {
+        text: "The first part of a long spoken message",
+        truncation: { truncated: true, reason: "byte_limit", originalBytes: 500, retainedBytes: 240 },
+      },
+      attachmentCount: 2,
+      taskCount: 1,
+    });
+    fake.replaceServerSubmissions([submission]);
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+
+    const row = screen.getByText("The first part of a long spoken message…").closest(".conversation-item");
+    expect(row).toHaveTextContent("Message preview");
+    expect(row).toHaveTextContent("2 attachments · 1 task");
+
+    act(() => fake.replaceServerSubmissions([{
+      ...submission,
+      content: [{ kind: "text", text: { text: "The full spoken message, including everything after the preview." } }],
+    }]));
+
+    expect(row).toHaveTextContent("The full spoken message, including everything after the preview.");
+    expect(row).not.toHaveTextContent("Message preview");
+    expect(row).not.toHaveTextContent("2 attachments");
+  });
+
+  it("keeps the pending bubble anchored ahead of later assistant output", () => {
+    const snapshot = makeSnapshot(["turn-1"], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    fake.replaceServerSubmissions([makeServerSubmission(snapshot, {
+      baselineTailTurnId: "turn-1",
+      baselineTailItemId: "turn-1-message",
+      baselineTailTurnItemIds: ["turn-1-message"],
+    })]);
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+
+    const later = makeSnapshot(["turn-1", "turn-2"], false);
+    act(() => fake.replaceSnapshot(later));
+
+    const previous = screen.getByText("Message for turn-1");
+    const pending = screen.getByText("Spoken message");
+    const response = screen.getByText("Message for turn-2");
+    expect(previous.compareDocumentPosition(pending) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pending.compareDocumentPosition(response) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("prefers the composer's complete local content and reconciles by exact operation identity", () => {
+    const snapshot = makeSnapshot([], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    const local = makePendingSubmitTransfer(snapshot);
+    const submission = makeServerSubmission(snapshot, { operationId: local.operationId });
+    fake.replaceTransfers([local]);
+    fake.replaceServerSubmissions([submission]);
+    const { container } = render(<Transcript store={fake as unknown as ThreadClientStore} />);
+
+    expect(screen.getAllByText("Immediate prompt")).toHaveLength(1);
+    expect(screen.queryByText("Spoken message")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sending…")).not.toBeInTheDocument();
+
+    const authoritative = makeSnapshot(["turn-1"], false);
+    authoritative.itemsById["turn-1-message"] = {
+      id: "turn-1-message", turnId: "turn-1", kind: "user_message", status: "completed", revision: 1,
+      deliveryOperationId: local.operationId,
+      content: [{ kind: "text", text: { text: "Immediate prompt" } }],
+    };
+    // Keep both stale presentation records: exact authoritative identity must win.
+    act(() => fake.replaceSnapshot(authoritative));
+    expect(container.querySelectorAll(`[data-delivery-operation-id="${local.operationId}"]`)).toHaveLength(1);
+    expect(screen.getByText("Immediate prompt").closest(".conversation-item")).not.toHaveAttribute("data-client-provisional");
+  });
+
+  it("keeps identical submissions distinct and changes status while awaiting exact materialization", () => {
+    const snapshot = makeSnapshot([], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    const first = makeServerSubmission(snapshot);
+    const second = makeServerSubmission(snapshot, {
+      operationId: "77777777-7777-4777-8777-777777777777", queuedInputId: "second-input", presentationSequence: 2,
+    });
+    fake.replaceServerSubmissions([first, second]);
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    expect(screen.getAllByText("Spoken message")).toHaveLength(2);
+
+    act(() => fake.replaceServerSubmissions([{ ...first, phase: "confirming" }, { ...second, phase: "accepted" }]));
+    expect(screen.getByText("Checking delivery…")).toBeInTheDocument();
+    expect(screen.getByText("Sent")).toBeInTheDocument();
+    expect(screen.getAllByText("Spoken message")).toHaveLength(2);
+
+    act(() => fake.replaceServerSubmissions([{ ...first, phase: "unconfirmed" }, { ...second, phase: "accepted" }]));
+    expect(screen.getByText("Delivery unconfirmed")).toBeInTheDocument();
+    expect(screen.queryByText("Checking delivery…")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Spoken message")).toHaveLength(2);
+  });
+
+  it.each([
+    { state: "retry_wait", resolvedDeliveryMode: "submit" },
+    { state: "uncertain", resolvedDeliveryMode: "submit", deliveryMode: "submit" },
+    { state: "failed", resolvedDeliveryMode: "submit" },
+    { state: "pending", resolvedDeliveryMode: "queue" },
+    { state: "dispatching", resolvedDeliveryMode: "steer", deliveryMode: "steer" },
+  ] satisfies Partial<QueuedInputSummary>[])("does not cover the queue's $state/$resolvedDeliveryMode presentation", (patch) => {
+    const snapshot = makeSnapshot([], false);
+    const submission = makeServerSubmission(snapshot);
+    snapshot.queue = [{
+      id: submission.queuedInputId, deliveryOperationId: submission.operationId, sequence: 1,
+      origin: "user", isHead: true, attachmentCount: 0, taskCount: 0,
+      createdAt: submission.createdAt, preview: submission.preview,
+      ...patch,
+    } as QueuedInputSummary];
+    const fake = new FakeTranscriptStore(snapshot);
+    fake.replaceServerSubmissions([submission]);
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    expect(screen.queryByText("Spoken message")).not.toBeInTheDocument();
+  });
+
+  it("leaves historical turn views free of live server submissions", () => {
+    const snapshot = makeSnapshot(["turn-1"], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    fake.replaceServerSubmissions([makeServerSubmission(snapshot)]);
+    render(<Transcript store={fake as unknown as ThreadClientStore} focusTurnId="turn-1" />);
+    expect(screen.queryByText("Spoken message")).not.toBeInTheDocument();
+    expect(screen.getByText("Message for turn-1")).toBeInTheDocument();
   });
 });
 

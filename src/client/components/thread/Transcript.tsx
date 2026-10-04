@@ -56,6 +56,11 @@ import { ActivityGroup } from "./ActivityGroup.js";
 import { ViewedImageGroup } from "./ViewedImageGroup.js";
 import { isActivityItem, type ActivityItem } from "./activity-groups.js";
 import { navigationScrollBehavior } from "./navigation-scroll.js";
+import {
+  isServerSubmission,
+  selectTranscriptSubmissions,
+  type TranscriptSubmission,
+} from "./submission-presentation.js";
 
 /**
  * Armed by ThreadView when the composer delivers a message while the
@@ -123,6 +128,7 @@ export function Transcript({
   findContentRef,
   findViewportRef,
 }: TranscriptProps): React.JSX.Element {
+  const state = useThreadStore(store);
   const {
     snapshot,
     pendingComposerTransfers,
@@ -133,7 +139,7 @@ export function Transcript({
     bookmarks,
     bookmarkStatus,
     pendingBookmarkTurnIds,
-  } = useThreadStore(store);
+  } = state;
   const activityDetail = store.activityDetail;
   const ownedViewport = useRef<HTMLDivElement>(null);
   const ownedContent = useRef<HTMLDivElement>(null);
@@ -245,12 +251,7 @@ export function Transcript({
   const optimisticTransfers =
     focusTurnId || selectedFocusPage
       ? []
-      : pendingComposerTransfers
-          .filter(isVisibleOptimisticSubmit)
-          .sort(
-            (left, right) =>
-              left.presentationSequence - right.presentationSequence,
-          );
+      : selectTranscriptSubmissions(state);
   const optimisticByPlacement = optimisticTransfersByPlacement(
     optimisticTransfers,
     pendingComposerTransfers,
@@ -1985,7 +1986,7 @@ export function Transcript({
                       );
                     };
                     const appendTransfer = (
-                      transfer: PendingComposerTransfer,
+                      transfer: TranscriptSubmission,
                     ) => {
                       flushActivity();
                       presentation.push(
@@ -2198,14 +2199,6 @@ function isActiveRun(runState: ThreadRunState): boolean {
 const provisionalItemId = (operationId: string): string =>
   `client-delivery:${operationId}`;
 
-function isVisibleOptimisticSubmit(transfer: PendingComposerTransfer): boolean {
-  return (
-    transfer.mode === "submit" &&
-    transfer.presentation === "transcript" &&
-    transfer.authorityState === "client_only"
-  );
-}
-
 const optimisticStartPlacement = "start";
 const optimisticBeforeItemPlacement = (itemId: string): string =>
   `before-item:${itemId}`;
@@ -2215,13 +2208,13 @@ const optimisticAfterTurnPlacement = (turnId: string): string =>
   `after-turn:${turnId}`;
 
 function optimisticTransfersByPlacement(
-  visibleTransfers: readonly PendingComposerTransfer[],
+  visibleTransfers: readonly TranscriptSubmission[],
   allTransfers: readonly PendingComposerTransfer[],
   authoritativeItemIds: ReadonlySet<string>,
   orderedTurnIds: readonly string[],
   turnsById: Readonly<Record<string, ConversationTurn>> | undefined,
-): Map<string, PendingComposerTransfer[]> {
-  const result = new Map<string, PendingComposerTransfer[]>();
+): Map<string, TranscriptSubmission[]> {
+  const result = new Map<string, TranscriptSubmission[]>();
   for (const transfer of visibleTransfers) {
     let anchor = transfer.baselineTailItemId;
     for (const predecessor of allTransfers) {
@@ -2250,7 +2243,7 @@ function optimisticTransfersByPlacement(
 }
 
 function missingAnchorPlacement(
-  transfer: PendingComposerTransfer,
+  transfer: TranscriptSubmission,
   orderedTurnIds: readonly string[],
   turnsById: Readonly<Record<string, ConversationTurn>> | undefined,
 ): string {
@@ -2288,7 +2281,7 @@ function missingAnchorPlacement(
 }
 
 function hasIrreduciblyMissingAnchor(
-  transfer: PendingComposerTransfer,
+  transfer: TranscriptSubmission,
   orderedTurnIds: readonly string[],
   turnsById: Readonly<Record<string, ConversationTurn>> | undefined,
 ): boolean {
@@ -2325,8 +2318,20 @@ function placementAfterTurnBoundary(
 }
 
 function optimisticUserContent(
-  transfer: PendingComposerTransfer,
+  transfer: TranscriptSubmission,
 ): readonly UserMessagePresentationPart[] {
+  if (isServerSubmission(transfer)) {
+    return transfer.content ?? [
+      {
+        kind: "text",
+        text: {
+          text: transfer.preview.truncation
+            ? `${transfer.preview.text}…`
+            : transfer.preview.text,
+        },
+      },
+    ];
+  }
   const content: UserMessagePresentationPart[] = [];
   const skillLabel = transfer.capturedPresentation.selectedSkillLabel;
   if (skillLabel) {
@@ -2367,7 +2372,7 @@ const TranscriptUserMessage = memo(function TranscriptUserMessage({
   bookmarkStore,
 }: {
   readonly item?: UserMessageItem;
-  readonly transfer?: PendingComposerTransfer;
+  readonly transfer?: TranscriptSubmission;
   readonly suppressLiveAnnouncement?: boolean;
   readonly context?: ItemRenderContext;
   readonly bookmarkTurnId?: string;
@@ -2382,6 +2387,12 @@ const TranscriptUserMessage = memo(function TranscriptUserMessage({
   if (!item && !transfer) return null;
   const operationId = item?.deliveryOperationId ?? transfer?.operationId;
   const provisional = transfer !== undefined;
+  const serverSubmission =
+    transfer && isServerSubmission(transfer) ? transfer : undefined;
+  const truncated =
+    serverSubmission &&
+    !serverSubmission.content &&
+    serverSubmission.preview.truncation !== undefined;
   return (
     <div
       className="conversation-item"
@@ -2411,6 +2422,35 @@ const TranscriptUserMessage = memo(function TranscriptUserMessage({
               }
             : {})}
         />
+        {serverSubmission && (
+          <div
+            className="mt-1 text-right text-xs text-muted-foreground"
+            data-submission-phase={serverSubmission.phase}
+            role="status"
+          >
+            {serverSubmission.phase === "accepted"
+              ? "Sent"
+              : serverSubmission.phase === "confirming"
+                ? "Checking delivery…"
+                : serverSubmission.phase === "unconfirmed"
+                  ? "Delivery unconfirmed"
+                  : "Sending…"}
+            {truncated && " · Message preview"}
+            {!serverSubmission.content &&
+              serverSubmission.attachmentCount > 0 && (
+                <>
+                  {" · "}{serverSubmission.attachmentCount}{" "}
+                  {serverSubmission.attachmentCount === 1 ? "attachment" : "attachments"}
+                </>
+              )}
+            {!serverSubmission.content && serverSubmission.taskCount > 0 && (
+              <>
+                {" · "}{serverSubmission.taskCount}{" "}
+                {serverSubmission.taskCount === 1 ? "task" : "tasks"}
+              </>
+            )}
+          </div>
+        )}
         {bookmarkTurnId &&
           bookmarkStore &&
           bookmarkUserPreview !== undefined &&

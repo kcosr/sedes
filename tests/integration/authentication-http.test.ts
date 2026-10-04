@@ -102,6 +102,7 @@ describe("authentication HTTP admission", () => {
     await api.post("/api/threads/thread/inputs").set("Host", "127.0.0.1").expect(401);
     await api.get("/api/threads/thread/input-context").set("Host", "127.0.0.1").expect(401);
     await api.get("/api/input-receipts/mutation").set("Host", "127.0.0.1").expect(401);
+    await api.get("/api/threads/thread/queued-inputs/input").set("Host", "127.0.0.1").expect(401);
     await api.get("/api/application/events").set("Host", "127.0.0.1").expect(401);
     await api.get("/api/agent-tools").set("Host", "127.0.0.1").expect(418);
     await api.get("/api/agent-tools/other").set("Host", "127.0.0.1").expect(401);

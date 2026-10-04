@@ -41,6 +41,7 @@ const initialThreadState: ThreadClientState = {
   authoritative: false,
   actionPending: false,
   pendingComposerTransfers: [],
+  pendingServerSubmissions: [],
   pendingQueuedSteers: [],
   historyLoading: false,
   stashes: [],

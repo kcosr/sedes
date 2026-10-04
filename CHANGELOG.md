@@ -4,6 +4,9 @@
 
 ### Breaking Changes
 
+- Browser and packaged clients require client protocol 138 for pending Send
+  presentation. Upgrade clients together with the server.
+
 - Native voice requires client protocol 137 and notification script payload
   version 4. Upgrade packaged clients and separately copied notification hooks
   with the server, and review the migrated per-event Script/Voice settings.
@@ -707,6 +710,9 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Idle voice submissions appear as ordinary chat messages while delivery
+  completes, without briefly flashing a pending-input bar or changing the draft.
 
 - Claude availability probes wait for complete process output, avoiding
   intermittent false unavailable errors.
