@@ -55,6 +55,14 @@ function queued(
 }
 
 describe("queued input projection", () => {
+  it.each([65_536, 65_537, 262_144])("projects truthful composer restoration availability for %i UTF-8 bytes", bytes => {
+    const text = "é".repeat(Math.floor(bytes / 2)) + (bytes % 2 ? "x" : "");
+    const [summary] = projectQueuedInputSummaries([queued({ id: "large-input", sequence: 1, text })]);
+    expect(summary?.restoreUnavailableReason).toEqual(bytes === 65_536 ? undefined : {
+      text: "This input is too large to restore to the composer (64 KiB limit).",
+    });
+  });
+
   it("preserves full input and normalizes attached context without disclosing stored delivery details", () => {
     const text = `  ${"A longer spoken message. ".repeat(100)}\nEnd with emoji 🎤.  `;
     const item = queued({

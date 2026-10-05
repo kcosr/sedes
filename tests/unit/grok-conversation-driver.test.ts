@@ -1,3 +1,4 @@
+import { largeDirectInputText, largeDirectInputWithPrefix } from "../support/large-direct-input.js";
 // Shared immutable operation deadline keeps replays identical throughout this local suite.
 const interruptDeadlineAt = Date.now() + 3_600_000;
 import { createHash } from "node:crypto";
@@ -275,7 +276,7 @@ describe("normalized Grok conversation driver", () => {
           mutationId: "steer-mutation",
           reconciliationToken: "steer-reconciliation-token",
           target: { kind: "turn", turnId: "grok-turn:active" },
-          text: "change direction",
+          text: largeDirectInputText,
           contextExcerpts: [],
           taskContexts: [],
           attachments: [],
@@ -285,11 +286,13 @@ describe("normalized Grok conversation driver", () => {
         backendCode: "grok_operation_unsupported",
         crossedSubmissionBoundary: false,
       });
-      await expect(
-        handle.submit({ ...submitInput(), text: "/rename unsafe" }),
-      ).rejects.toMatchObject({
-        backendCode: "grok_slash_command_unsupported",
-      });
+      for (const [prefix, backendCode] of [[" \n/rename ", "grok_slash_command_unsupported"],
+        ["\u0000", "grok_submission_text_invalid"]]) {
+        await expect(handle.submit({ ...submitInput(), text: largeDirectInputWithPrefix(prefix!) })).rejects.toMatchObject({
+          backendCode, crossedSubmissionBoundary: false,
+        });
+      }
+      expect((await readState(fixtureState.workspace.canonicalPath)).sessions[0]?.promptCalls ?? 0).toBe(0);
       await handle.close();
       expect(
         (await readState(fixtureState.workspace.canonicalPath)).sessions[0],
@@ -1111,12 +1114,12 @@ describe("normalized Grok conversation driver", () => {
     }
   });
 
-  it("recovers an authenticated Sedes prompt abandoned by restart as interrupted", async () => {
+  it("recovers a 256 KiB Sedes prompt abandoned by restart and submits another intact", async () => {
     const sessionId = "e1e1e1e1-e1e1-41e1-81e1-e1e1e1e1e1e1";
     const fixtureState = await openDriver([
       session(sessionId, "Interrupted by restart"),
     ]);
-    const original = submitInput();
+    const original = { ...submitInput(), text: largeDirectInputText };
     const promptId = fixtureState.submissionPromptId(
       sessionId,
       original.applicationOperationId,
@@ -1149,6 +1152,9 @@ describe("normalized Grok conversation driver", () => {
         endedBy: "interrupted",
         completionCorrelations: [original.applicationOperationId],
       });
+      expect(Object.values(recovered.snapshot.itemsById)).toContainEqual(expect.objectContaining({
+        semanticKind: "user_message", content: [{ kind: "text", text: { text: largeDirectInputText } }],
+      }));
       const originalTurnIds = [...recovered.snapshot.orderedBackendTurnIds];
       const originalItemIds = Object.keys(recovered.snapshot.itemsById);
 
@@ -1175,7 +1181,7 @@ describe("normalized Grok conversation driver", () => {
         applicationOperationId: "submit-after-restart",
         mutationId: "submit-after-restart-mutation",
         reconciliationToken: "submit-after-restart-token",
-        text: "continue after restart",
+        text: largeDirectInputText,
       };
       await expect(handle.submit(next)).resolves.toMatchObject({
         accepted: true,
@@ -1238,7 +1244,7 @@ describe("normalized Grok conversation driver", () => {
     }
   });
 
-  it("accepts correlated text before completion, streams incrementally, and replays durably", async () => {
+  it("accepts correlated 256 KiB text before completion, streams incrementally, and replays durably", async () => {
     const sessionId = "44444444-4444-4444-8444-444444444444";
     const fixtureState = await openDriver([
       { ...session(sessionId, "Submit"), promptDelayMs: 150 },
@@ -1261,7 +1267,7 @@ describe("normalized Grok conversation driver", () => {
       const events: string[] = [];
       baseline.subscribeFromNext((event) => events.push(event.event.type));
 
-      const input = submitInput();
+      const input = { ...submitInput(), text: largeDirectInputText };
       const accepted = await handle.submit(input);
       expect(accepted).toMatchObject({
         accepted: true,

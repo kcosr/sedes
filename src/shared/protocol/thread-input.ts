@@ -8,8 +8,9 @@ export const clientOriginSchema = z.strictObject({
 });
 export type ClientOrigin = z.infer<typeof clientOriginSchema>;
 
-export const MAX_DIRECT_INPUT_TEXT_BYTES = 65_536;
-export const MAX_DIRECT_INPUT_REQUEST_BYTES = 524_288;
+export const MAX_DIRECT_INPUT_TEXT_BYTES = 262_144;
+// Every admitted byte may need six JSON bytes (for example, a control character).
+export const MAX_DIRECT_INPUT_REQUEST_BYTES = 2_097_152;
 
 export const directInputRequestSchema = z.strictObject({
   mutationId: mutationIdSchema,

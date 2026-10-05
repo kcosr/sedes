@@ -34,16 +34,22 @@ public final class ClientCredentialsPlugin extends Plugin {
             removeProfileCredentials(getContext(), call.getString("profileId"),
                 profile -> NativeVoiceRuntime.get(getContext()).profileRemoved(profile));
             call.resolve();
-        } catch (Exception error) { call.reject("The credentials could not be removed.", "credential_storage_unavailable"); }
+        } catch (Exception error) {
+            if (error instanceof VoiceProfileCleanupFailure) call.reject("Saved recordings could not be removed. Retry removing this profile.", "voice_profile_cleanup_failed");
+            else call.reject("The credentials could not be removed.", "credential_storage_unavailable");
+        }
     }
     interface VoiceProfileCleanup { void remove(String profileId) throws Exception; }
+    private static final class VoiceProfileCleanupFailure extends Exception {
+        VoiceProfileCleanupFailure(Exception cause) { super("voice_profile_cleanup_failed", cause); }
+    }
     static void removeProfileCredentials(Context context, String profileId, VoiceProfileCleanup cleanup) throws Exception {
-        // Owner-thread disconnect fences queued dialog actions. Voice records are best-effort and may finish after a timeout.
-        try { cleanup.remove(profileId); } catch (Exception ignored) {}
-        // Both secret stores are mandatory and independent: neither failure may skip the other store or report success.
+        // Disconnect fences queued actions; a failed or timed-out recording deletion must reach the caller.
         Exception failure = null;
+        try { cleanup.remove(profileId); } catch (Exception error) { failure = new VoiceProfileCleanupFailure(error); }
+        // Both secret stores are mandatory and independent, even when recording cleanup failed.
         try { new ClientCredentialStore(context).removeProfileCredentials(profileId); }
-        catch (Exception error) { failure = error; }
+        catch (Exception error) { if (failure == null) failure = error; else failure.addSuppressed(error); }
         try { new SpeechCredentialStore(context).removeProfileCredentials(profileId); }
         catch (Exception error) { if (failure == null) failure = error; else failure.addSuppressed(error); }
         if (failure != null) throw failure;

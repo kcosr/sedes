@@ -2344,16 +2344,7 @@ function optimisticUserContent(
   transfer: TranscriptSubmission,
 ): readonly UserMessagePresentationPart[] {
   if (isServerSubmission(transfer)) {
-    return transfer.content ?? [
-      {
-        kind: "text",
-        text: {
-          text: transfer.preview.truncation
-            ? `${transfer.preview.text}…`
-            : transfer.preview.text,
-        },
-      },
-    ];
+    return transfer.content ?? [];
   }
   const content: UserMessagePresentationPart[] = [];
   const skillLabel = transfer.capturedPresentation.selectedSkillLabel;
@@ -2412,32 +2403,9 @@ const TranscriptUserMessage = memo(function TranscriptUserMessage({
   const provisional = transfer !== undefined;
   const serverSubmission =
     transfer && isServerSubmission(transfer) ? transfer : undefined;
-  const truncated =
-    serverSubmission &&
-    !serverSubmission.content &&
-    serverSubmission.preview.truncation !== undefined;
   const submissionNotices: string[] = [];
   if (serverSubmission?.phase === "unconfirmed") {
     submissionNotices.push("Delivery unconfirmed");
-  }
-  if (serverSubmission && !serverSubmission.content) {
-    if (
-      truncated ||
-      serverSubmission.attachmentCount > 0 ||
-      serverSubmission.taskCount > 0
-    ) {
-      submissionNotices.push("Message preview");
-    }
-    if (serverSubmission.attachmentCount > 0) {
-      submissionNotices.push(
-        `${serverSubmission.attachmentCount} ${serverSubmission.attachmentCount === 1 ? "attachment" : "attachments"}`,
-      );
-    }
-    if (serverSubmission.taskCount > 0) {
-      submissionNotices.push(
-        `${serverSubmission.taskCount} ${serverSubmission.taskCount === 1 ? "task" : "tasks"}`,
-      );
-    }
   }
   return (
     <div

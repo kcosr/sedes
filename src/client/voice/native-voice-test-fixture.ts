@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { NativeVoicePlugin, NativeVoiceSettings, NativeVoiceState } from "./native-voice-plugin.js";
+import type { NativeRecordingRecovery, NativeVoicePlugin, NativeVoiceSettings, NativeVoiceState } from "./native-voice-plugin.js";
 
 /** Native binds voice to the authenticated navigation namespace, which is always 64 lowercase hex digits. */
 export const VOICE_IDENTITY = "0123456789abcdef".repeat(4);
@@ -7,20 +7,29 @@ export const VOICE_CONNECTION = { profileId: "profile", serverOrigin: "https://s
 export const VOICE_ORIGIN_ID = "34612c41-0bbb-455f-a5af-725bfc7ae768";
 
 export function voiceSettings(patch: Partial<NativeVoiceSettings> = {}): NativeVoiceSettings {
-  return { audioMode: "off", autoListen: true, ignoreOtherDevices: true, readNotificationContext: true, cleanSpeechText: true,
+  return { audioMode: "off", autoListen: true, keepListeningByDefault: false, ignoreOtherDevices: true, readNotificationContext: true, cleanSpeechText: true,
     speechProvider: "openai", speechEndpoint: "https://api.openai.com/v1", sttModel: "gpt-live-transcribe",
     ttsModel: "gpt-4o-mini-tts", ttsVoice: "coral", ttsSpeed: 1, speechTextLimit: 4096, voiceThreadId: null, voiceThreadTitle: null, pinDefaultVoiceThread: false, onlyVoiceThread: false, followComposerMode: false,
-    inputDeviceId: null, recognitionStartTimeoutMs: 30000, recognitionCompletionTimeoutMs: 60000, recognitionEndSilenceMs: 1200, recognitionResultTimeoutMs: 60000,
+    inputDeviceId: null, recognitionStartTimeoutMs: 30000, recognitionCompletionTimeoutMs: 60000, recognitionEndSilenceMs: 1200, recognitionResultTimeoutMs: 60000, longDictationTimeoutMs: 3_600_000,
     recognizeStopCommand: true, recognitionCues: true, cueGain: 100, startupPreRollMs: 512, ttsGain: 100, headsetControls: true, ...patch };
 }
 export function voiceSnapshot(patch: Partial<NativeVoiceState> = {}): NativeVoiceState {
   return {
-    version: 5, stateRevision: 1, connectionGeneration: 1, ...VOICE_CONNECTION, originClientId: VOICE_ORIGIN_ID, clientConnectionToken: "a".repeat(43), settingsRevision: 0,
+    version: 8, stateRevision: 1, connectionGeneration: 1, ...VOICE_CONNECTION, originClientId: VOICE_ORIGIN_ID, clientConnectionToken: "a".repeat(43), settingsRevision: 0,
     settings: voiceSettings(), phase: "off", ready: false, readiness: "off", foreground: { visible: false, threadId: null, threadTitle: null }, active: null,
-    queue: { count: 0, bytes: 0, droppedCount: 0, droppedReasons: {} },
+    nextRecordingTarget: null, queue: { count: 0, bytes: 0, droppedCount: 0, droppedReasons: {} },
     speech: { credentialConfigured: false, catalogStatus: "idle", catalog: null, error: null },
-    actions: { canStart: false, canStop: false, canSkip: false, canRetarget: false, canResume: false }, recovery: [], errors: [], ...patch,
+    actions: voiceActions(), recordingRecovery: null, recovery: [], errors: [], ...patch,
   };
+}
+export function voiceActions(patch: Partial<NativeVoiceState["actions"]> = {}): NativeVoiceState["actions"] {
+  return { canStart: false, canStop: false, canSkip: false, canRetarget: false, canResume: false,
+    canSetKeepListening: false, canSend: false, keepListeningBlockedReason: "not_capturing", ...patch };
+}
+export function recordingRecovery(patch: Partial<NativeRecordingRecovery> = {}): NativeRecordingRecovery {
+  return { recordingId: "saved-recording", revision: 1, threadId: "named", threadTitle: "Release review", stage: "interrupted",
+    reason: null, hasUnrecognizedAudio: true, captureIncomplete: false, canRetryRecognition: true, canSend: false,
+    canCopyRecognizedText: false, canDiscard: true, admission: null, ...patch };
 }
 /** A snapshot native publishes after disconnecting, or while bound to another connection. */
 export function disconnectedVoiceSnapshot(connectionGeneration: number): NativeVoiceState {
@@ -33,7 +42,9 @@ export function fakeVoicePlugin() {
   const state = () => vi.fn(async (): Promise<NativeVoiceState> => voiceSnapshot());
   const plugin = {
     setConnection: state(), getState: state(), updateSettings: state(), disconnect: state(), setForegroundContext: state(),
-    startManualListen: state(), retargetActiveRecognition: state(), skipCurrentPlayback: state(), stopCurrentInteraction: state(),
+    startManualListen: state(), setNextRecordingTarget: state(), retargetActiveRecognition: state(), skipCurrentPlayback: state(), stopCurrentInteraction: state(),
+    setKeepListening: state(), sendRecording: state(), retryRecordingRecognition: state(), sendRecoveredRecording: state(),
+    copyRecognizedRecordingText: state(), discardRecording: state(),
     resumeInput: state(), discardInput: state(), refreshSpeechCatalog: state(), openSpeechCredentialDialog: state(),
     listInputDevices: vi.fn(async (): Promise<Awaited<ReturnType<NativeVoicePlugin["listInputDevices"]>>> => ({ devices: [], selectedId: null })),
     addListener: vi.fn(async (event: string, listener: (value: unknown) => void) => { listeners.set(event, listener); return { remove }; }),

@@ -21,8 +21,12 @@ import type {
   ThreadClientStore,
 } from "../../stores/ThreadClientStore.js";
 import { PendingInputStrip } from "./PendingInputStrip.js";
+import { largeDirectInputText } from "../../../../tests/support/large-direct-input.js";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -34,6 +38,29 @@ beforeEach(() => {
     })),
   );
 });
+
+function mockClipboard() {
+  vi.stubGlobal("ClipboardItem", class {
+    constructor(private readonly data: Record<string, Promise<Blob>>) {}
+    getType(type: string) { return this.data[type]!; }
+  });
+  const write = vi.fn(async (items: ClipboardItem[]) => {
+    await items[0]!.getType("text/plain");
+  });
+  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { write } });
+  return write;
+}
+
+async function clipboardText(items: ClipboardItem[]): Promise<string> {
+  const blob = await items[0]!.getType("text/plain");
+  expect(blob.type).toBe("text/plain");
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(blob);
+  });
+}
 
 function queued(
   id: string,
@@ -136,6 +163,7 @@ function transfer(
 
 class FakeStripStore {
   state: ThreadClientState;
+  readonly readQueuedInputText = vi.fn(async (_id: string) => largeDirectInputText);
   readonly cancelQueuedInput = vi.fn(async (id: string) => {
     this.replaceQueue(
       this.state.snapshot!.queue.filter((item) => item.id !== id),
@@ -241,6 +269,7 @@ function serverSubmission(item: QueuedInputSummary): PendingServerSubmission {
     queuedInputId: item.id,
     createdAt: item.createdAt,
     preview: item.preview,
+    content: [{ kind: "text", text: { text: item.preview.text } }],
     attachmentCount: item.attachmentCount,
     taskCount: item.taskCount,
     phase: "sending",
@@ -553,6 +582,15 @@ describe("PendingInputStrip", () => {
     store.setServerSubmissions([serverSubmission(item)]);
     renderStrip(store, false, {}, false);
     expect(document.querySelector('[data-queued-input-id="voice-input"]')).toHaveTextContent("Sending");
+  });
+
+  it("keeps queue controls reachable until a Submit's full transcript content is available", () => {
+    const item = queued("voice-input", 1, "pending", { resolvedDeliveryMode: "submit" });
+    const store = new FakeStripStore(snapshot([item]));
+    store.setServerSubmissions([{ ...serverSubmission(item), content: undefined }]);
+    renderStrip(store);
+    expect(document.querySelector('[data-queued-input-id="voice-input"]')).toHaveTextContent("Prompt voice-input");
+    expect(screen.getByRole("button", { name: /^Delete queued input:/ })).toBeEnabled();
   });
 
   it.each([
@@ -1003,6 +1041,92 @@ describe("PendingInputStrip", () => {
       "title",
       "Clear the composer before restoring a queued input.",
     );
+  });
+
+  it.each(["pending", "retry_wait", "failed"] as const)("disables oversized %s restoration even when the composer is empty", state => {
+    const reason = "This input is too large to restore to the composer (64 KiB limit).";
+    const store = new FakeStripStore(snapshot([queued("large", 1, state, { restoreUnavailableReason: { text: reason } })]));
+    const { onRestore } = renderStrip(store, false, { available: true });
+    const restore = screen.getByRole("button", { name: "Restore queued input to composer: Prompt large" });
+    expect(restore).toBeDisabled();
+    expect(restore).toHaveAttribute("title", reason);
+    fireEvent.click(restore);
+    expect(onRestore).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "not_sent"] as const)("copies every byte of a failed 256 KiB input (%s) without restoring or dismissing it", async failureReason => {
+    const write = mockClipboard();
+    const item = queued("large", 1, "failed", {
+      failureReason, preview: { text: "A bounded preview", truncation: { truncated: true, reason: "byte_limit", retainedBytes: 17, originalBytes: 262_144 } },
+      restoreUnavailableReason: { text: "This input is too large to restore to the composer (64 KiB limit)." },
+    });
+    const store = new FakeStripStore(snapshot([item]));
+    let read!: (text: string) => void;
+    store.readQueuedInputText.mockImplementationOnce(() => new Promise(resolve => { read = resolve; }));
+    const { onRestore, input } = renderStrip(store, false, { available: true });
+    input.value = "Keep this composer text";
+    const copy = screen.getByRole("button", { name: "Copy full text: A bounded preview" });
+    copy.focus();
+    fireEvent.click(copy);
+    fireEvent.click(copy);
+    expect(copy).toBeDisabled();
+    expect(store.readQueuedInputText).toHaveBeenCalledExactlyOnceWith("large");
+    // Clipboard permission must be requested synchronously, before the GET resolves.
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Copied full text of queued input 1.")).toBeNull();
+    await act(async () => read(largeDirectInputText));
+    const copiedText = await clipboardText(write.mock.calls[0]![0]);
+    expect(copiedText).toBe(largeDirectInputText);
+    expect(new TextEncoder().encode(copiedText)).toHaveLength(262_144);
+    expect(screen.getByRole("button", { name: "Copied full text: A bounded preview" })).toBeEnabled();
+    expect(screen.getByText("Copied full text of queued input 1.")).toHaveClass("sr-only");
+    expect(screen.getByRole("button", { name: "Restore queued input to composer: A bounded preview" })).toBeDisabled();
+    expect(store.state.snapshot!.queue).toEqual([item]);
+    expect(input.value).toBe("Keep this composer text");
+    expect(input).not.toHaveFocus();
+    expect(onRestore).not.toHaveBeenCalled();
+    expect(store.dismissQueueFailure).not.toHaveBeenCalled();
+    expect(store.cancelQueuedInput).not.toHaveBeenCalled();
+    write.mockRejectedValueOnce(new Error("Clipboard access denied."));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Copied full text: A bounded preview" })));
+    expect(screen.getByRole("button", { name: "Copy full text: A bounded preview" })).toBeEnabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("Clipboard access denied.");
+  });
+
+  it.each(["read", "clipboard"] as const)("keeps oversized text available after a %s error and permits Copy retry", async failure => {
+    const write = mockClipboard();
+    const item = queued("large", 1, "failed", { failureReason: "not_sent", restoreUnavailableReason: { text: "Too large to restore." } });
+    const store = new FakeStripStore(snapshot([item]));
+    if (failure === "read") store.readQueuedInputText.mockRejectedValueOnce(new Error("Input could not be read."));
+    else write.mockRejectedValueOnce(new Error("Clipboard access denied."));
+    renderStrip(store);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Copy full text: Prompt large" })));
+    expect(screen.getByRole("alert")).toHaveTextContent(failure === "read" ? "Input could not be read." : "Clipboard access denied.");
+    expect(store.state.snapshot!.queue).toEqual([item]);
+    expect(store.dismissQueueFailure).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Copy full text: Prompt large" })));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(await clipboardText(write.mock.lastCall![0])).toBe(largeDirectInputText);
+    expect(screen.getByRole("button", { name: "Copied full text: Prompt large" })).toBeEnabled();
+  });
+
+  it("handles a late read rejection after clipboard permission is denied and permits retry", async () => {
+    const write = mockClipboard();
+    write.mockRejectedValueOnce(new Error("Clipboard access denied."));
+    const item = queued("large", 1, "failed", { restoreUnavailableReason: { text: "Too large to restore." } });
+    const store = new FakeStripStore(snapshot([item]));
+    let rejectRead!: (error: Error) => void;
+    store.readQueuedInputText.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRead = reject; }));
+    renderStrip(store);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Copy full text: Prompt large" })));
+    expect(screen.getByRole("alert")).toHaveTextContent("Clipboard access denied.");
+    await act(async () => rejectRead(new Error("Network unavailable.")));
+    expect(screen.getByRole("alert")).toHaveTextContent("Clipboard access denied.");
+    expect(store.state.snapshot!.queue).toEqual([item]);
+    expect(store.dismissQueueFailure).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Copy full text: Prompt large" })));
+    expect(await clipboardText(write.mock.lastCall![0])).toBe(largeDirectInputText);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("keeps pending and failure feedback row-scoped", async () => {

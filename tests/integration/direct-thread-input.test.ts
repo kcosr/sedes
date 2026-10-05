@@ -1,7 +1,9 @@
+import { largeDirectInputText, largeDirectInputWithPrefix } from "../support/large-direct-input.js";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { directInputRequestSchema, type DirectInputRequest } from "../../src/shared/protocol/thread-input.js";
+import { MAX_DIRECT_INPUT_TEXT_BYTES, directInputRequestSchema, type DirectInputRequest } from "../../src/shared/protocol/thread-input.js";
 import { DirectInputRepository } from "../../src/server/db/repositories/direct-input-repository.js";
+import { BackendError } from "../../src/server/backends/contracts.js";
 import { ThreadActivityService } from "../../src/server/conversations/thread-activity-service.js";
 import { ThreadMutationGateway } from "../../src/server/conversations/thread-mutation-gateway.js";
 import { ConversationActor } from "../../src/server/conversations/conversation-actor.js";
@@ -26,6 +28,74 @@ async function settled(harness: Harness, threadId: string) {
 }
 
 describe("direct thread input admission", { timeout: 30_000 }, () => {
+  it("dispatches a bound 256 KiB input through its immutable snapshot and retained receipt", async () => {
+    const h = await createInMemoryThreadRuntimeHarness({ retentionMilliseconds: 60_000, persistDeliveryInputSnapshots: true });
+    try {
+      const id = (await draft(h)).applicationThreadId;
+      await h.mutations.admitInput(h.scope, id, request("Bind before the large recording"));
+      await settled(h, id);
+      const before = h.inventoryRepository.getDraft(h.scope, id);
+      const input = request(largeDirectInputText);
+      const admitted = await h.mutations.admitInput(h.scope, id, input);
+      await vi.waitFor(() => expect(h.mutations.readInputReceipt(h.scope, input.mutationId)).toMatchObject({
+        status: "found", receipt: { status: "accepted" },
+      }));
+      await settled(h, id);
+      expect(admitted.queuedInputId).toBeDefined();
+      expect(h.database.prepare("SELECT text FROM queued_inputs WHERE id = ?").get(admitted.queuedInputId!))
+        .toEqual({ text: largeDirectInputText });
+      expect(h.database.prepare("SELECT original_text AS text FROM delivery_input_snapshots WHERE application_operation_id = ?")
+        .get(input.mutationId)).toEqual({ text: largeDirectInputText });
+      expect(h.inventoryRepository.getDraft(h.scope, id)).toEqual(before);
+      expect(new DirectInputRepository(h.database).lookup(h.scope, input.mutationId))
+        .toMatchObject({ status: "found", receipt: { status: "accepted", queuedInputId: admitted.queuedInputId } });
+      await expect(h.mutations.admitInput(h.scope, id, input)).resolves.toMatchObject({ status: "accepted" });
+    } finally { await h.close(); }
+  });
+
+  it.each((["first", "bound"] as const).flatMap(mode => [
+    { mode, backendCode: "claude_slash_commands_unavailable", category: "unavailable" as const, prefix: " \n/not-supported " },
+    { mode, backendCode: "grok_slash_command_unsupported", category: "rejected" as const, prefix: " \n/rename " },
+    { mode, backendCode: "grok_submission_text_invalid", category: "rejected" as const, prefix: "\u0000" },
+  ]))("keeps a rejected 256 KiB $mode delivery server-owned for $backendCode", async ({ mode, backendCode, category, prefix }) => {
+    const h = await createInMemoryThreadRuntimeHarness({ retentionMilliseconds: 60_000, persistDeliveryInputSnapshots: true });
+    // Native driver tests establish these content restrictions. This shared
+    // admission layer must retain ownership regardless of the rejection code.
+    const submit = vi.fn(async () => { throw new BackendError({ category, retryable: false,
+      crossedSubmissionBoundary: false, backendCode, safeMessage: "Provider rejected this input." }); });
+    const attach = h.driver.attach.bind(h.driver);
+    let handle: Awaited<ReturnType<typeof attach>> | undefined;
+    vi.spyOn(h.driver, "attach").mockImplementation(async input => {
+      handle = await attach(input);
+      if (mode === "first") vi.spyOn(handle, "submit").mockImplementation(submit);
+      return handle;
+    });
+    try {
+      const id = (await draft(h)).applicationThreadId;
+      if (mode === "bound") {
+        await h.mutations.admitInput(h.scope, id, request("Bind before rejection"));
+        await settled(h, id);
+        vi.spyOn(handle!, "submit").mockImplementation(submit);
+      }
+      const before = h.inventoryRepository.getDraft(h.scope, id);
+      const input = request(largeDirectInputWithPrefix(prefix));
+      expect(directInputRequestSchema.parse(input).text).toBe(input.text);
+      const admitted = await h.mutations.admitInput(h.scope, id, input);
+      expect(admitted.mutationId).toBe(input.mutationId);
+      const status = mode === "first" ? "recovery_required" : "failed";
+      await vi.waitFor(() => expect(h.mutations.readInputReceipt(h.scope, input.mutationId)).toMatchObject({
+        status: "found", receipt: { status, diagnostic: "Provider rejected this input." },
+      }));
+      const replayed = await h.mutations.admitInput(h.scope, id, input);
+      expect(replayed).toMatchObject({ status, mutationId: input.mutationId, operationId: admitted.operationId });
+      expect(new DirectInputRepository(h.database).lookup(h.scope, input.mutationId)).toEqual({ status: "found", receipt: replayed });
+      expect(h.inventoryRepository.getDraft(h.scope, id)).toEqual(before);
+      expect(submit).toHaveBeenCalledOnce();
+      expect(h.database.prepare("SELECT COUNT(*) AS count FROM direct_input_receipts WHERE mutation_id = ?").get(input.mutationId))
+        .toEqual({ count: 1 });
+    } finally { vi.restoreAllMocks(); await h.close(); }
+  });
+
   it("observes a composer first send without requiring an open thread view", async () => {
     const contexts: ReturnType<ThreadActivityService["notificationContext"]>[] = [];
     const h = await createInMemoryThreadRuntimeHarness({ retentionMilliseconds: 60_000,
@@ -55,14 +125,15 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
   });
 
   it("submits an unopened unbound thread, preserves the draft, and binds principal-wide replay and initiating origin", async () => {
-    const h = await createInMemoryThreadRuntimeHarness({ retentionMilliseconds: 60_000 });
+    const h = await createInMemoryThreadRuntimeHarness({ retentionMilliseconds: 60_000, persistDeliveryInputSnapshots: true });
     try {
       const first = await draft(h);
       const second = await draft(h);
       const id = first.applicationThreadId;
       const originalDraft = h.inventoryRepository.getDraft(h.scope, id);
-      const input = request("Voice content distinct from the composer");
+      const input = request(largeDirectInputText);
       const receipt = await h.mutations.admitInput(h.scope, id, input);
+      expect(receipt.diagnostic).toBeUndefined();
       expect(receipt).toMatchObject({ mutationId: input.mutationId, threadId: id, admittedMode: "submit", status: "accepted" });
       expect(h.inventoryRepository.getDraft(h.scope, id)).toEqual(originalDraft);
       await settled(h, id);
@@ -71,8 +142,10 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       expect(await h.mutations.inputContext(h.scope, id)).toMatchObject({ authority: "current", automaticListenEligible: true });
       expect(await h.mutations.admitInput(h.scope, id, input)).toEqual(receipt);
       expect(h.mutations.readInputReceipt(h.scope, input.mutationId)).toEqual({ status: "found", receipt });
+      expect(h.database.prepare("SELECT original_text AS text FROM delivery_input_snapshots WHERE application_operation_id = ?")
+        .get(input.mutationId)).toEqual({ text: largeDirectInputText });
       for (const changed of [
-        { ...input, text: input.text + "!" },
+        { ...input, text: input.text.replace("Recording", "recording") },
         { ...input, origin: { clientId: randomUUID() } },
         { ...input, runningPolicy: { mode: "steer" as const, target: { kind: "conversation" as const }, onUnavailable: "queue" as const } },
       ]) await expect(h.mutations.admitInput(h.scope, id, changed)).rejects.toMatchObject({ code: "conflict" });
@@ -176,7 +249,7 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       vi.spyOn(h.driver, "deliverScriptedAssistantStage").mockImplementation((_text, stage, deliver) => {
         if (stage === "settled") held.push(deliver); else deliver();
       });
-      const initial = request("Initial voice turn");
+      const initial = request(largeDirectInputText);
       await h.mutations.admitInput(h.scope, id, initial);
       await vi.waitFor(async () => expect((await h.mutations.inputContext(h.scope, id)).steer.availability).toBe("available"), { timeout: 15_000 });
       const active = await h.mutations.inputContext(h.scope, id);
@@ -193,11 +266,15 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       const before = h.inventoryRepository.getDraft(h.scope, id);
       await expect(h.mutations.admitInput(h.scope, id, { ...request(), runningPolicy: { mode: "steer", target: { kind: "conversation" }, onUnavailable: "queue" } })).rejects.toMatchObject({ code: "invalid_transition" });
       vi.spyOn(h.queueDispatcher, "dispatchAdmitted").mockResolvedValue();
-      const exact = { ...request("Steer this voice input"), runningPolicy: { mode: "steer" as const, target: active.steer.target, onUnavailable: "queue" as const } };
+      const exact = { ...request(largeDirectInputText), runningPolicy: { mode: "steer" as const, target: active.steer.target, onUnavailable: "queue" as const } };
       await expect(h.mutations.admitInput(h.scope, id, exact)).resolves.toMatchObject({ admittedMode: "steer" });
-      const queue = request("Queue this voice input");
+      const queue = request(largeDirectInputText);
       const queued = await h.mutations.admitInput(h.scope, id, queue);
       expect(queued).toMatchObject({ admittedMode: "queue", currentMode: "queue" });
+      for (const admitted of [exact, queue]) {
+        expect(h.database.prepare("SELECT text FROM queued_inputs WHERE mutation_id = ?").get(admitted.mutationId))
+          .toEqual({ text: largeDirectInputText });
+      }
       const stale = { ...request("Stale steer queues"), runningPolicy: { mode: "steer" as const, target: { kind: "turn" as const, turnId: randomUUID() }, onUnavailable: "queue" as const } };
       await expect(h.mutations.admitInput(h.scope, id, stale)).resolves.toMatchObject({ admittedMode: "queue" });
       expect(h.inventoryRepository.getDraft(h.scope, id)).toEqual(before);
@@ -277,7 +354,7 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       vi.spyOn(h.driver, "deliverScriptedAssistantStage").mockImplementation((_text, stage, deliver) => {
         if (stage === "settled") held.push(deliver); else deliver();
       });
-      await h.mutations.admitInput(h.scope, id, request("Initial voice turn"));
+      await h.mutations.admitInput(h.scope, id, request(largeDirectInputText));
       await vi.waitFor(async () => expect((await h.mutations.inputContext(h.scope, id)).steer.availability).toBe("available"), { timeout: 15_000 });
       const active = await h.mutations.inputContext(h.scope, id);
       if (active.steer.availability !== "available") throw new Error("missing_test_steer");
@@ -320,12 +397,12 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
     }
   });
 
-  it("fails Steer closed for unbound threads and backends without Steer", async () => {
+  it("fails Steer closed for unbound and submit-only backends while preserving their 256 KiB queue path", async () => {
     const h = await createInMemoryThreadRuntimeHarness({ retentionMilliseconds: 60_000 });
     const held: (() => void)[] = [];
     try {
       const unbound = (await draft(h)).applicationThreadId;
-      const turnSteer = (turnId: string): DirectInputRequest => ({ ...request(), runningPolicy: { mode: "steer", target: { kind: "turn", turnId }, onUnavailable: "queue" } });
+      const turnSteer = (turnId: string): DirectInputRequest => ({ ...request(largeDirectInputText), runningPolicy: { mode: "steer", target: { kind: "turn", turnId }, onUnavailable: "queue" } });
       const attempt = turnSteer(randomUUID());
       await expect(h.mutations.admitInput(h.scope, unbound, attempt)).rejects.toMatchObject({ code: "invalid_transition" });
       expect(h.mutations.readInputReceipt(h.scope, attempt.mutationId)).toEqual({ status: "notObserved" });
@@ -344,9 +421,17 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       const unsupported = turnSteer(running.sourceTurnId!);
       await expect(h.mutations.admitInput(h.scope, id, unsupported)).rejects.toMatchObject({ code: "invalid_transition" });
       expect(h.mutations.readInputReceipt(h.scope, unsupported.mutationId)).toEqual({ status: "notObserved" });
+      const queued = request(largeDirectInputText);
+      const admitted = await h.mutations.admitInput(h.scope, id, queued);
+      expect(admitted).toMatchObject({ status: "queued" });
+      expect(h.database.prepare("SELECT text FROM queued_inputs WHERE id = ?").get(admitted.queuedInputId!))
+        .toEqual({ text: largeDirectInputText });
       vi.restoreAllMocks();
       for (const release of held.splice(0)) release();
       await settled(h, id);
+      await vi.waitFor(() => expect(h.mutations.readInputReceipt(h.scope, queued.mutationId)).toMatchObject({
+        status: "found", receipt: { status: "accepted" },
+      }));
     } finally {
       vi.restoreAllMocks();
       for (const release of held) release();
@@ -622,7 +707,7 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
   });
 
   it("enforces text bytes independently of JSON escaping and rejects extra authority fields", () => {
-    const valid = request("é".repeat(32_768));
+    const valid = request("é".repeat(MAX_DIRECT_INPUT_TEXT_BYTES / 2));
     expect(directInputRequestSchema.safeParse(valid).success).toBe(true);
     expect(directInputRequestSchema.safeParse({ ...valid, text: valid.text + "é" }).success).toBe(false);
     expect(directInputRequestSchema.safeParse({ ...valid, text: " \n\t" }).success).toBe(false);

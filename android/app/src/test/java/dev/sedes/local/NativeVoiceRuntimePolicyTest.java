@@ -5,6 +5,38 @@ import org.junit.Test;
 
 /** Pure runtime policy: blank input, definitive rejection, reconnect backoff and user-facing failure messages. */
 public class NativeVoiceRuntimePolicyTest {
+    @Test public void manualTargetPrefersExplicitThenPendingBeforePinnedOrForegroundDefaults() {
+        org.json.JSONObject settings = NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("pinDefaultVoiceThread", true,
+            "voiceThreadId", "default", "voiceThreadTitle", "Saved default")).value;
+        org.json.JSONObject foreground = NativeVoiceJson.object("visible", true, "threadId", "foreground", "threadTitle", "Open thread");
+        org.json.JSONObject pending = NativeVoiceJson.object("threadId", "next", "threadTitle", "Chosen next");
+        org.json.JSONObject explicit = NativeVoiceJson.object("threadId", "explicit", "threadTitle", null);
+        org.json.JSONObject selected = NativeVoiceRuntime.manualTarget(explicit, pending, settings, foreground);
+        assertEquals("explicit", selected.optString("threadId")); assertTrue(selected.isNull("threadTitle"));
+        assertEquals("next", NativeVoiceRuntime.manualTarget(null, pending, settings, foreground).optString("threadId"));
+        assertEquals("default", NativeVoiceRuntime.manualTarget(null, null, settings, foreground).optString("threadId"));
+        NativeVoiceJson.put(settings, "pinDefaultVoiceThread", false);
+        assertEquals("next", NativeVoiceRuntime.manualTarget(null, pending, settings, foreground).optString("threadId"));
+        assertEquals("foreground", NativeVoiceRuntime.manualTarget(null, null, settings, foreground).optString("threadId"));
+        NativeVoiceJson.put(foreground, "visible", false);
+        assertEquals("default", NativeVoiceRuntime.manualTarget(null, null, settings, foreground).optString("threadId"));
+        NativeVoiceJson.put(settings, "pinDefaultVoiceThread", true); NativeVoiceJson.put(settings, "voiceThreadId", null);
+        assertEquals("explicit", NativeVoiceRuntime.manualTarget(explicit, pending, settings, foreground).optString("threadId"));
+        assertEquals("next", NativeVoiceRuntime.manualTarget(null, pending, settings, foreground).optString("threadId"));
+        assertTrue(NativeVoiceRuntime.manualTarget(null, null, settings, foreground).isNull("threadId"));
+        assertEquals("Chosen next", pending.optString("threadTitle"));
+    }
+    @Test public void backgroundStartUsesOnlySavedDefaultRegardlessOfPin() {
+        for (boolean pinned : new boolean[] { false, true }) {
+            org.json.JSONObject settings = NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("pinDefaultVoiceThread", pinned,
+                "voiceThreadId", "default", "voiceThreadTitle", "Saved default")).value;
+            org.json.JSONObject target = NativeVoiceRuntime.defaultRecordingTarget(settings);
+            assertEquals("default", target.optString("threadId")); assertEquals("Saved default", target.optString("threadTitle"));
+            NativeVoiceJson.put(settings, "voiceThreadId", null);
+            target = NativeVoiceRuntime.defaultRecordingTarget(settings);
+            assertTrue(target.isNull("threadId")); assertTrue(target.isNull("threadTitle"));
+        }
+    }
     @Test public void fieldValidationPreservesSchemaNamesWithoutExposingExceptionText() {
         assertEquals("invalid_threadTitle", NativeVoiceRuntime.code(new NativeVoiceJson.InvalidFieldException("threadTitle")));
         assertEquals("invalid_composerMode", NativeVoiceRuntime.code(new NativeVoiceJson.InvalidFieldException("composerMode")));
@@ -40,11 +72,11 @@ public class NativeVoiceRuntimePolicyTest {
     @Test public void catalogOwnershipDependsOnAccountAndSelectedSpeechModel() {
         NativeVoiceSettings current = NativeVoiceSettings.defaults();
         for (org.json.JSONObject patch : new org.json.JSONObject[] {
-            NativeVoiceJson.object("ttsVoice", "alloy"), NativeVoiceJson.object("ttsSpeed", 1.5),
-            NativeVoiceJson.object("sttModel", "another-transcription-model") })
+            NativeVoiceJson.object("ttsVoice", "alloy"), NativeVoiceJson.object("ttsSpeed", 1.5) })
             assertFalse(NativeVoiceRuntime.catalogConfigurationChanged(current, current.patch(0, patch)));
         for (org.json.JSONObject patch : new org.json.JSONObject[] {
             NativeVoiceJson.object("ttsModel", "another-speech-model"),
+            NativeVoiceJson.object("sttModel", "another-transcription-model"),
             NativeVoiceJson.object("speechProvider", "server"),
             NativeVoiceJson.object("speechProvider", "server", "speechEndpoint", "https://speech.example/v1") })
             assertTrue(NativeVoiceRuntime.catalogConfigurationChanged(current, current.patch(0, patch)));
@@ -63,6 +95,8 @@ public class NativeVoiceRuntimePolicyTest {
             "input_rejected", "input_outcome_uncertain", "input_recovery_not_found", "voice_journal_capacity",
             "notification_stream_rejected", "notification_policy_unavailable", "recognition_message_limit",
             "speech_configuration_required", "speech_authentication_failed", "recognition_authentication_failed",
+            "recording_changed", "recording_revision_conflict", "recording_settings_busy", "recording_recovery_required",
+            "dictation_finalization_conflict", "dictation_storage_unavailable", "speech_transcription_model_unsupported",
             "speech_rate_limited", "speech_quota_exceeded", "recognition_quota_exceeded", "recognition_network_error", "microphone_format_unavailable" })
             assertSpecific(code);
         assertFalse(NativeVoiceRuntime.message("speech_quota_exceeded").contains("Try again shortly"));
@@ -70,9 +104,39 @@ public class NativeVoiceRuntimePolicyTest {
         assertTrue(NativeVoiceRuntime.message("playback_unavailable").contains("playback_unavailable"));
         assertTrue(NativeVoiceRuntime.message("some_future_code").contains("some_future_code"));
     }
+    @Test public void everyEmittedDictationAndRecognitionFailureHasASpecificMessage() throws Exception {
+        java.util.regex.Pattern errors = java.util.regex.Pattern.compile("\"((?:dictation|recognition)_[a-z_]+)\"");
+        for (String name : new String[] { "NativeDictationStore", "NativeVoiceRecording", "NativeSpeechTransport", "NativeSpeechCapabilities", "NativeSpeechCatalog" }) {
+            java.nio.file.Path source = java.nio.file.Paths.get("src/main/java/dev/sedes/local/" + name + ".java");
+            assertTrue("Missing production error-code source " + source, java.nio.file.Files.isRegularFile(source));
+            java.util.regex.Matcher matches = errors.matcher(new String(java.nio.file.Files.readAllBytes(source), java.nio.charset.StandardCharsets.UTF_8));
+            while (matches.find()) assertSpecific(matches.group(1));
+        }
+        assertEquals("Recording storage is full. Resolve saved recordings in their original profiles or remove an unused profile.",
+            NativeVoiceRuntime.message("dictation_storage_full"));
+        assertNotEquals(NativeVoiceRuntime.message("dictation_storage_full"), NativeVoiceRuntime.message("dictation_storage_capacity"));
+    }
+    @Test public void successfulFinishingReasonsAreNeutralAndInterruptionsHaveUsefulMessages() throws Exception {
+        assertNull(NativeVoiceRuntime.recordingReason(null));
+        for (String reason : new String[] { "retry", "send", "automatic" }) assertNull(NativeVoiceRuntime.recordingReason(reason));
+        java.util.regex.Pattern reasons = java.util.regex.Pattern.compile("(?:cancelActive|cancelAutomatic|interruptRecording|journal\\.interrupt|journal\\.finish)\\([^;\\n]*?\"([a-z_]+)\"");
+        java.util.Set<String> found = new java.util.HashSet<>();
+        for (String name : new String[] { "NativeVoiceRuntime", "NativeVoiceRecording" }) {
+            java.nio.file.Path source = java.nio.file.Paths.get("src/main/java/dev/sedes/local/" + name + ".java");
+            java.util.regex.Matcher matches = reasons.matcher(new String(java.nio.file.Files.readAllBytes(source), java.nio.charset.StandardCharsets.UTF_8));
+            while (matches.find()) found.add(matches.group(1));
+        }
+        found.add("audio_focus_lost");
+        assertTrue(found.contains("voice_off")); assertTrue(found.contains("service_stopped")); assertTrue(found.contains("retry"));
+        for (String reason : found) {
+            if (java.util.Arrays.asList("retry", "send", "automatic").contains(reason)) assertNull(NativeVoiceRuntime.recordingReason(reason));
+            else assertSpecific(reason);
+        }
+        assertSpecific("auto_listen_disabled"); assertSpecific("timeout");
+    }
     private static void assertSpecific(String code) {
         String message = NativeVoiceRuntime.message(code);
-        assertFalse("Generic message for " + code, message.contains(code));
+        assertFalse("Generic message for " + code, message.contains("(" + code + ")"));
         assertFalse(message.isEmpty());
     }
     private static String escape(String value) {

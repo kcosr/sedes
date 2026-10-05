@@ -42,7 +42,7 @@ public class NativeVoiceStartupTest {
             f.store.speechCatalog(binding, new NativeSpeechCatalogCache(NativeSpeechCatalogCache.scope(binding, settings, "fixture-startup-token"),
                 System.currentTimeMillis(), catalog));
             Reply connected = f.beginConnection(f.profile); f.authenticate(); f.flush();
-            assertEquals(catalog.toString(), f.runtime.snapshot().getJSONObject("speech").getJSONObject("catalog").toString());
+            assertEquals(NativeSpeechCatalog.picker(catalog).toString(), f.runtime.snapshot().getJSONObject("speech").getJSONObject("catalog").toString());
             server.setSoTimeout(200); assertThrows(java.net.SocketTimeoutException.class, server::accept);
             f.session(); connected.await(); server.setSoTimeout(10000);
             try (Socket socket = server.accept()) {
@@ -54,7 +54,7 @@ public class NativeVoiceStartupTest {
                     if (line.equals("Authorization: Bearer fixture-startup-token")) authenticated = true;
                 assertTrue(authenticated);
                 assertEquals("loading", f.runtime.snapshot().getJSONObject("speech").getString("catalogStatus"));
-                assertEquals(catalog.toString(), f.runtime.snapshot().getJSONObject("speech").getJSONObject("catalog").toString());
+                assertEquals(NativeSpeechCatalog.picker(catalog).toString(), f.runtime.snapshot().getJSONObject("speech").getJSONObject("catalog").toString());
                 f.runtime.nativeVisibility(true); f.beginConnection(f.profile).await(); f.flush();
                 assertTrue(f.starts.isEmpty()); assertEquals("off", f.runtime.snapshot().getString("phase"));
                 byte[] response = "{\"object\":\"list\",\"data\":[{\"id\":\"kokoro-local\",\"task\":\"speech\",\"voices\":[{\"id\":\"fresh-voice\"}]}]}".getBytes(StandardCharsets.UTF_8);
@@ -74,7 +74,9 @@ public class NativeVoiceStartupTest {
         }
     }
     @Test public void modeEditsDuringDelayedBootstrapWaitForTheAuthenticatedSession() throws Exception {
-        try (Fixture f = new Fixture("response", true, true)) {
+        // Keep discovery pending so its success/failure cannot accidentally publish the service-start state.
+        try (ServerSocket catalog = new ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"));
+             Fixture f = new Fixture("response", true, true, "http://127.0.0.1:" + catalog.getLocalPort() + "/v1")) {
             f.runtime.nativeVisibility(true);
             Reply connection = f.beginConnection(f.profile);
             f.authenticate(); f.flush();
@@ -90,6 +92,7 @@ public class NativeVoiceStartupTest {
             assertTrue("Mode edits and lifecycle events cannot start voice before bootstrap", f.starts.isEmpty());
             f.session(); connection.await();
             Intent start = f.start(); assertTrue(f.accepted(start));
+            assertEquals("loading", f.runtime.snapshot().getJSONObject("speech").getString("catalogStatus"));
             assertEquals("starting", f.runtime.snapshot().getString("phase"));
             assertFalse(f.runtime.snapshot().getJSONObject("actions").getBoolean("canResume"));
             f.runtime.nativeVisibility(true); f.beginConnection(f.profile).await(); f.flush();

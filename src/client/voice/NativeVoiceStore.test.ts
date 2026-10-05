@@ -13,7 +13,7 @@ const openEvent = (threadId: string, profileId = "profile") => ({ threadId, prof
   serverOrigin: "https://sedes.test", identity: VOICE_IDENTITY, connectionGeneration: 1 });
 const runtimeError = (message: string, connectionGeneration = 1) => ({ code: "voice_error", message, connectionGeneration, ...VOICE_CONNECTION });
 const submittedEvent = (patch = {}) => ({ ...VOICE_CONNECTION, connectionGeneration: 1,
-  threadId: "c61b5d8b-4a77-43c6-bd72-12e23fe42e38", operationId: "618f73db-b94d-4538-8ed9-7566313eb807", ...patch });
+  threadId: "c61b5d8b-4a77-43c6-bd72-12e23fe42e38", operationId: "618f73db-b94d-4538-8ed9-7566313eb807", text: "Finalized voice transcript", queuedInputId: "queue-1", ...patch });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("local voice submission events", () => {
@@ -49,7 +49,8 @@ describe("local voice submission events", () => {
     for (const patch of [
       { profileId: "other" }, { serverOrigin: "https://other.test" }, { identity: "f".repeat(64) },
       { connectionGeneration: 0 }, { connectionGeneration: 2 }, { threadId: "not-a-uuid" },
-      { operationId: "not-a-uuid" }, { unexpected: true },
+      { operationId: "not-a-uuid" }, { unexpected: true }, { text: undefined }, { text: " " }, { text: "é".repeat(131073) },
+      { queuedInputId: undefined }, { queuedInputId: "" }, { queuedInputId: "a".repeat(129) },
     ]) listeners.get("inputSubmitted")!(submittedEvent(patch));
     expect(receive).not.toHaveBeenCalled();
     listeners.get("inputSubmitted")!(submittedEvent());
@@ -263,7 +264,7 @@ describe("native voice state authority", () => {
     await store.initialize();
     const resume = (current: NativeVoiceState) => current.settings.audioMode !== "off" && current.actions.canResume ? { audioMode: current.settings.audioMode } : null;
     plugin.getState.mockResolvedValue(snapshot({ stateRevision: 4, settingsRevision: 3, settings: voiceSettings({ audioMode: "manual" }),
-      actions: { canStart: false, canStop: false, canSkip: false, canRetarget: false, canResume: true } }));
+      actions: { ...snapshot().actions, canResume: true } }));
     await store.update(resume);
     expect(plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 3, patch: { audioMode: "manual" } });
     plugin.getState.mockResolvedValue(snapshot({ stateRevision: 5, settingsRevision: 4 }));

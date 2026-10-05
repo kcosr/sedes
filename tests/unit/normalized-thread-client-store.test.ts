@@ -8,6 +8,7 @@ import type {
   ThreadLoadStreamDiagnostics,
 } from "../../src/client/api/EventStreamTransport.js";
 import { BrowserEventStreamTransport } from "../../src/client/api/EventStreamTransport.js";
+import { largeDirectInputText } from "../support/large-direct-input.js";
 import {
   DeliveryRecoveryRequiredError,
   ThreadClientStore,
@@ -421,6 +422,33 @@ function emitMaterializedSteer(
 }
 
 describe("ThreadClientStore normalized operations", () => {
+  it("reads the exact retained 256 KiB user text without changing client state or the composer", async () => {
+    const readQueuedInput = vi.fn(async () => ({
+      threadId: "thread-1", queuedInputId: "large-input", origin: "user", state: "failed",
+      content: [{ kind: "text", text: { text: largeDirectInputText } }],
+    }));
+    const store = new ThreadClientStore("thread-1", { readQueuedInput } as unknown as ApiClient, new FakeTransport());
+    try {
+      const before = store.getSnapshot();
+      await expect(store.readQueuedInputText("large-input")).resolves.toBe(largeDirectInputText);
+      expect(readQueuedInput).toHaveBeenCalledExactlyOnceWith("thread-1", "large-input");
+      expect(store.getSnapshot()).toBe(before);
+    } finally { store.dispose(); }
+  });
+
+  it.each([
+    { threadId: "another-thread" }, { queuedInputId: "another-input" },
+    { origin: "automation" }, { content: [] },
+  ])("refuses mismatched or missing retained text: %j", async override => {
+    const readQueuedInput = vi.fn(async () => ({
+      threadId: "thread-1", queuedInputId: "large-input", origin: "user", state: "failed",
+      content: [{ kind: "text", text: { text: largeDirectInputText } }], ...override,
+    }));
+    const store = new ThreadClientStore("thread-1", { readQueuedInput } as unknown as ApiClient, new FakeTransport());
+    try { await expect(store.readQueuedInputText("large-input")).rejects.toThrow("The queued input did not return its full text."); }
+    finally { store.dispose(); }
+  });
+
   const serverQueueRow = (state: QueuedInputSummary["state"] = "pending"): QueuedInputSummary => ({
     id: "voice-queue", deliveryOperationId: "voice-send", sequence: 1, origin: "user",
     isHead: true, state, resolvedDeliveryMode: "submit", attachmentCount: 0, taskCount: 0,
@@ -433,6 +461,36 @@ describe("ThreadClientStore normalized operations", () => {
       event: { type: "queue_changed", generation: "projection-1", threadRevision: 7 + sequence, items },
     });
   }
+
+  it("shows the full local native receipt before queue traffic without touching the composer", async () => {
+    const text = "Complete spoken café transcript. ".repeat(100);
+    const readQueuedInput = vi.fn(() => new Promise(() => {}));
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", { readQueuedInput } as unknown as ApiClient, transport);
+    const receipt = { profileId: "profile", serverOrigin: "https://sedes.test", identity: "a".repeat(64),
+      connectionGeneration: 1, threadId: "thread-1", operationId: "voice-send", queuedInputId: "voice-queue", text };
+    try {
+      await store.start();
+      const initial = snapshotWithDeliveryModes("idle");
+      installSnapshot(transport, initial);
+      store.acceptNativeVoiceSubmission({ ...receipt, threadId: "other-thread" });
+      expect(store.getSnapshot().pendingServerSubmissions).toEqual([]);
+      store.acceptNativeVoiceSubmission(receipt);
+      expect(store.getSnapshot().pendingServerSubmissions).toMatchObject([{
+        operationId: "voice-send", content: [{ kind: "text", text: { text } }],
+      }]);
+      expect(store.getSnapshot().pendingComposerTransfers).toEqual([]);
+      expect(store.getSnapshot().snapshot?.draft).toEqual(initial.draft);
+      emitServerQueue(transport, 1, [serverQueueRow()]);
+      await vi.waitFor(() => expect(store.getSnapshot().snapshot?.queue).toHaveLength(1));
+      expect(store.getSnapshot().pendingServerSubmissions).toHaveLength(1);
+      emitMaterializedSteer(transport, "voice-send", 2);
+      await vi.waitFor(() => expect(store.getSnapshot().pendingServerSubmissions).toEqual([]));
+      store.acceptNativeVoiceSubmission(receipt);
+      expect(store.getSnapshot().pendingServerSubmissions).toEqual([]);
+      expect(store.getSnapshot().snapshot?.draft).toEqual(initial.draft);
+    } finally { store.dispose(); }
+  });
 
   it("bridges a server send through acceptance without changing the composer draft", async () => {
     const readQueuedInput = vi.fn(async () => ({
@@ -476,6 +534,47 @@ describe("ThreadClientStore normalized operations", () => {
       await vi.waitFor(() => expect(store.getSnapshot().snapshot?.thread.threadRevision).toBe(10));
       expect(store.getSnapshot().pendingServerSubmissions).toEqual([]);
       expect(store.getSnapshot().snapshot?.queue).toEqual([serverQueueRow()]);
+    } finally { store.dispose(); }
+  });
+
+  it.each(["cancel", "restore"] as const)("retires the captured %s operation outside the presentation limit without retargeting a later replacement", async kind => {
+    const rows = Array.from({ length: 65 }, (_, index) => ({ ...serverQueueRow(),
+      id: `queue-${index}`, deliveryOperationId: `send-${index}`, sequence: index + 1, isHead: index === 0 }));
+    const initial = snapshotWithDeliveryModes("idle");
+    initial.queue = rows;
+    initial.thread.queuedInputCount = rows.length;
+    const cancelledQueue = rows.slice(0, 64).map((row, index) => index === 0 ? { ...row, state: "failed" as const } : row);
+    const replacement = { ...rows[64]!, deliveryOperationId: "replacement-send" };
+    const restored = { ...initial.draft, text: "Restored voice input", revision: initial.draft.revision + 1 };
+    let finish!: () => void;
+    const operateThread = vi.fn((_threadId: string, operation: ThreadApplicationOperation) => new Promise(resolve => {
+      if (operation.kind !== "cancel_queued_input" && operation.kind !== "restore_queued_input") throw new Error("Unexpected operation");
+      finish = () => resolve({ status: kind === "cancel" ? "queue_cancelled" : "queue_restored",
+        queuedInputId: operation.queuedInputId, mutationId: operation.mutationId, threadRevision: 8,
+        queue: cancelledQueue, ...(kind === "restore" ? { draft: restored } : {}) });
+    }));
+    const transport = new FakeTransport();
+    const store = new ThreadClientStore("thread-1", {
+      operateThread, readQueuedInput: () => new Promise(() => {}),
+    } as unknown as ApiClient, transport);
+    try {
+      await store.start();
+      installSnapshot(transport, initial);
+      expect(store.getSnapshot().pendingServerSubmissions).toHaveLength(64);
+      const mutation = kind === "cancel" ? store.cancelQueuedInput("queue-64")
+        : store.restoreQueuedInput("queue-64", initial.draft);
+      await vi.waitFor(() => expect(operateThread).toHaveBeenCalledOnce());
+      emitServerQueue(transport, 1, cancelledQueue);
+      emitServerQueue(transport, 2, [...cancelledQueue, replacement]);
+      await vi.waitFor(() => expect(store.getSnapshot().snapshot?.thread.threadRevision).toBe(9));
+      expect(store.getSnapshot().pendingServerSubmissions.some(item => item.operationId === "replacement-send")).toBe(true);
+      finish();
+      await mutation;
+      store.acceptNativeVoiceSubmission({ profileId: "profile", serverOrigin: "https://sedes.test", identity: "a".repeat(64),
+        connectionGeneration: 1, threadId: "thread-1", operationId: "send-64", queuedInputId: null, text: "Late cancelled text" });
+      const operations = store.getSnapshot().pendingServerSubmissions.map(item => item.operationId);
+      expect(operations).not.toContain("send-64");
+      expect(operations).toContain("replacement-send");
     } finally { store.dispose(); }
   });
 

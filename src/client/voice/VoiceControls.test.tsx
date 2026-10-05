@@ -6,7 +6,7 @@ import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/a
 import { navigate, threadPath } from "../app/router.js";
 import { setPanelPresentation } from "../app/settings.js";
 import type { NativeVoiceState } from "./native-voice-plugin.js";
-import { disconnectedVoiceSnapshot, fakeVoicePlugin, VOICE_CONNECTION, VOICE_IDENTITY, voiceSettings, voiceSnapshot } from "./native-voice-test-fixture.js";
+import { disconnectedVoiceSnapshot, fakeVoicePlugin, recordingRecovery, VOICE_CONNECTION, VOICE_IDENTITY, voiceActions, voiceSettings, voiceSnapshot } from "./native-voice-test-fixture.js";
 
 const voice = vi.hoisted(() => ({ fake: undefined as unknown as ReturnType<typeof fakeVoicePlugin> }));
 vi.mock("@capacitor/app", () => ({ App: { addListener: vi.fn(async () => ({ remove: vi.fn(async () => undefined) })) } }));
@@ -26,14 +26,15 @@ const longTitle = "L".repeat(600);
 const thread = (id: string, title: string) => ({ id, title: { text: title }, available: true, inventoryState: "active" }) as unknown as NormalizedApplicationThreadSummary;
 const threads = [thread("long", longTitle), thread("untitled", "  "), thread("named", "Release review"),
   { ...thread("archived", "Archived notes"), inventoryState: "archived" }, { ...thread("offline", "Offline review"), available: false }] as NormalizedApplicationThreadSummary[];
-const idleActions = { canStart: true, canStop: false, canSkip: false, canRetarget: false, canResume: false };
+const idleActions = voiceActions({ canStart: true });
 const ready = (patch: Partial<NativeVoiceState> = {}) => voiceSnapshot({ ready: true, readiness: "ready", phase: "idle", settings: voiceSettings({ audioMode: "response" }),
   speech: { ...voiceSnapshot().speech, credentialConfigured: true }, actions: idleActions, ...patch });
-const item = (active: Partial<Active>): Active => ({ id: "item", eventKind: null, threadId: null, threadTitle: null, recognitionThreadId: null, recognitionThreadTitle: null, automatic: false, ...active });
+const item = (active: Partial<Active>): Active => ({ id: "item", eventKind: null, threadId: null, threadTitle: null, recognitionThreadId: null, recognitionThreadTitle: null, automatic: false, recording: null, ...active });
 const listening = (active: Partial<Active>) => ready({ phase: "listening",
-  actions: { canStart: false, canStop: true, canSkip: false, canRetarget: true, canResume: false }, active: item(active) });
+  actions: voiceActions({ canStop: true, canRetarget: true, canSetKeepListening: true, keepListeningBlockedReason: null }),
+  active: item({ recording: { id: "recording", keepListening: false, reconnecting: false }, ...active }) });
 const speaking = (active: Partial<Active>, patch: Partial<NativeVoiceState> = {}) => ready({ phase: "speaking",
-  actions: { canStart: false, canStop: true, canSkip: true, canRetarget: false, canResume: false }, active: item({ automatic: true, ...active }), ...patch });
+  actions: voiceActions({ canStop: true, canSkip: true }), active: item({ automatic: true, ...active }), ...patch });
 /** Sets the device preference through its hook, as Settings → Voice does. */
 function ShowWhenOff({ value }: { value: boolean }) {
   const [, setShow] = useShowVoiceBarWhenOff(useNativeVoice()!);
@@ -102,8 +103,7 @@ describe("voice controls card", () => {
     await screen.findByRole("group", { name: "Voice controls" });
     expect(lines()).toEqual(["Release review", "Ready · Response · Auto-listen on"]);
     expect(card().querySelector(".voice-card-title[data-thread]")).toHaveTextContent("Release review");
-    // The visible thread is already open, so the body is not a button.
-    expect(buttons()).toEqual(["Open voice controls", "Start voice recording"]);
+    expect(buttons()).toEqual(["Open voice controls", "Choose target thread: Release review", "Start voice recording"]);
     expect(within(card()).getByRole("button", { name: "Open voice controls" })).toHaveAccessibleDescription("Release review. Ready · Response · Auto-listen on");
     act(() => voice.fake.emit("stateChanged", ready({ stateRevision: 2, settings: voiceSettings({ audioMode: "manual", autoListen: false }) })));
     expect(lines()).toEqual(["Release review", "Ready · Manual · Auto-listen off"]);
@@ -139,11 +139,11 @@ describe("voice controls card", () => {
     await screen.findByRole("group", { name: "Voice controls" });
     expect(lines()).toEqual(["Release review", "Ready · Response · Auto-listen on"]);
     expect(card().querySelector(".voice-card-title[data-thread]")).toHaveTextContent("Release review");
-    expect(buttons()).toEqual(["Open thread: Release review", "Open voice controls", "Start voice recording"]);
+    expect(buttons()).toEqual(["Open voice controls", "Open thread: Release review", "Choose target thread: Release review", "Start voice recording"]);
     act(() => voice.fake.emit("stateChanged", ready({ stateRevision: 2, ready: false, readiness: "notificationsConnecting" })));
     expect(lines()).toEqual(["Choose a thread", "Connecting to Sedes notifications…"]);
     expect(card().querySelector(".voice-card-title[data-empty]")).toHaveTextContent("Choose a thread");
-    expect(buttons()).toEqual(["Open voice controls", "Start voice recording"]);
+    expect(buttons()).toEqual(["Open voice controls", "Choose target thread", "Start voice recording"]);
     // Without a visible or saved thread the Mic asks for a target first.
     fireEvent.click(within(card()).getByRole("button", { name: "Start voice recording" }));
     expect(await screen.findByRole("list", { name: "Voice threads" })).toBeInTheDocument();
@@ -165,56 +165,85 @@ describe("voice controls card", () => {
     await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, threadId: target, threadTitle: title.slice(0, 512) }));
     expect(voice.fake.plugin.updateSettings).not.toHaveBeenCalled();
   });
-  it.each([null, "offline", "archived", "deleted"])("chooses and saves a new default before starting when the pinned default %s is unavailable", async voiceThreadId => {
-    const native = ready({ settings: voiceSettings({ audioMode: "response", pinDefaultVoiceThread: true, voiceThreadId }) });
-    const saved = { ...native, stateRevision: 2, settingsRevision: 1, settings: { ...native.settings, voiceThreadId: "long", voiceThreadTitle: "L".repeat(512) } };
-    let save!: (value: NativeVoiceState) => void;
+  it.each([false, true])("uses the idle start glyph for Keep listening by default=%s without making Start a toggle", async keepListeningByDefault => {
+    const native = ready({ settings: voiceSettings({ audioMode: "response", keepListeningByDefault }) });
     voice.fake.plugin.setConnection.mockResolvedValue(native);
-    voice.fake.plugin.getState.mockResolvedValue(native);
-    voice.fake.plugin.updateSettings.mockImplementationOnce(() => new Promise(resolve => { save = resolve; }));
-    voice.fake.plugin.startManualListen.mockResolvedValue(saved);
+    voice.fake.plugin.startManualListen.mockResolvedValue(native);
+    navigate(threadPath("named"), { replace: true });
+    renderControls();
+    const label = keepListeningByDefault ? "Start recording with Keep listening" : "Start voice recording";
+    const start = await screen.findByRole("button", { name: label });
+    expect(start).toHaveAttribute("title", label);
+    expect(start).not.toHaveAttribute("aria-pressed");
+    expect(start.querySelector(keepListeningByDefault ? ".lucide-infinity" : ".lucide-mic")).not.toBeNull();
+    fireEvent.click(start);
+    await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenCalledExactlyOnceWith({
+      expectedConnectionGeneration: 1, threadId: "named", threadTitle: "Release review" }));
+    expect(voice.fake.plugin.setKeepListening).not.toHaveBeenCalled();
+    expect(voice.fake.plugin.updateSettings).not.toHaveBeenCalled();
+  });
+  it.each([false, true])("chooses the next recording independently of navigation and the saved default (pinned: %s)", async pinDefaultVoiceThread => {
+    const initial = ready({ settings: voiceSettings({ audioMode: "response", pinDefaultVoiceThread, voiceThreadId: "named", voiceThreadTitle: "Release review" }) });
+    const chosen = { ...initial, stateRevision: 2, nextRecordingTarget: { threadId: "untitled", threadTitle: null } };
+    voice.fake.plugin.setConnection.mockResolvedValue(initial);
+    voice.fake.plugin.setNextRecordingTarget.mockResolvedValue(chosen);
+    voice.fake.plugin.startManualListen.mockResolvedValue(chosen);
+    navigate(threadPath("named"), { replace: true });
+    renderControls();
+    fireEvent.click(await screen.findByRole("button", { name: "Choose target thread: Release review" }));
+    const picker = await screen.findByRole("dialog", { name: "Choose target thread" });
+    fireEvent.click(within(picker).getByRole("button", { name: "Untitled thread" }));
+    await waitFor(() => expect(voice.fake.plugin.setNextRecordingTarget).toHaveBeenCalledExactlyOnceWith({
+      expectedConnectionGeneration: 1, threadId: "untitled", threadTitle: undefined }));
+    await screen.findByRole("button", { name: "Choose target thread: Untitled thread" });
+    expect(window.location.pathname).toBe(threadPath("named"));
+    expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
+    expect(voice.fake.plugin.updateSettings).not.toHaveBeenCalled();
+    act(() => navigate(threadPath("long")));
+    expect(lines()[0]).toBe("Untitled thread");
+    fireEvent.click(screen.getByRole("button", { name: "Start voice recording" }));
+    await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenCalledExactlyOnceWith({
+      expectedConnectionGeneration: 1, threadId: "untitled", threadTitle: undefined }));
+    // A native admission consumes the one-recording choice; the following idle state uses policy again.
+    act(() => voice.fake.emit("stateChanged", { ...initial, stateRevision: 3 }));
+    expect(lines()[0]).toBe(pinDefaultVoiceThread ? "Release review" : longTitle);
+  });
+  it.each(["connection", "interaction", "off"])("closes an idle target picker when the %s changes", async change => {
+    const initial = ready();
+    voice.fake.plugin.setConnection.mockResolvedValue(initial);
+    renderControls();
+    fireEvent.click(await screen.findByRole("button", { name: "Choose target thread" }));
+    await screen.findByRole("dialog", { name: "Choose target thread" });
+    const changed = change === "connection" ? ready({ connectionGeneration: 2 })
+      : change === "interaction" ? { ...listening({ recognitionThreadId: "named" }), stateRevision: 2 }
+      : voiceSnapshot({ stateRevision: 2 });
+    act(() => voice.fake.emit("stateChanged", changed));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Choose target thread" })).toBeNull());
+    expect(voice.fake.plugin.setNextRecordingTarget).not.toHaveBeenCalled();
+    expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
+  });
+  it.each([null, "offline", "archived", "deleted"])("chooses a recording target without saving the unavailable pinned default %s", async voiceThreadId => {
+    const native = ready({ settings: voiceSettings({ audioMode: "response", pinDefaultVoiceThread: true, voiceThreadId }) });
+    voice.fake.plugin.setConnection.mockResolvedValue(native);
+    voice.fake.plugin.startManualListen.mockResolvedValue(native);
     navigate(threadPath("named"), { replace: true });
     renderControls();
     await screen.findByRole("group", { name: "Voice controls" });
-    expect(lines()[0]).toBe("Choose default voice thread");
+    expect(lines()[0]).toBe("Choose a thread");
     fireEvent.click(within(card()).getByRole("button", { name: "Start voice recording" }));
-    const picker = await screen.findByRole("dialog", { name: "Choose default voice thread" });
-    expect(picker).toHaveAccessibleDescription("Save this default and start recording.");
-    expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
+    const picker = await screen.findByRole("dialog", { name: "Choose target thread" });
+    expect(picker).toHaveAccessibleDescription("Choose a thread and start recording.");
     fireEvent.click(within(picker).getByRole("button", { name: longTitle }));
-    await waitFor(() => expect(voice.fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0,
-      patch: { voiceThreadId: "long", voiceThreadTitle: "L".repeat(512) } }));
-    expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
-    await act(async () => { save(saved); });
     await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, threadId: "long", threadTitle: "L".repeat(512) }));
+    expect(voice.fake.plugin.updateSettings).not.toHaveBeenCalled();
     expect(window.location.pathname).toBe(threadPath("named"));
   });
-  it("does not start recording when saving the selected pinned default fails", async () => {
-    const native = ready({ settings: voiceSettings({ audioMode: "response", pinDefaultVoiceThread: true }) });
-    voice.fake.plugin.setConnection.mockResolvedValue(native);
-    voice.fake.plugin.getState.mockResolvedValue(native);
-    voice.fake.plugin.updateSettings.mockRejectedValue(new Error("Could not save default voice thread."));
-    navigate(threadPath("long"), { replace: true });
+  it("keeps an unavailable explicit target from silently falling back to another thread", async () => {
+    voice.fake.plugin.setConnection.mockResolvedValue(ready({ nextRecordingTarget: { threadId: "offline", threadTitle: "Offline review" } }));
+    navigate(threadPath("named"), { replace: true });
     renderControls();
     fireEvent.click(await screen.findByRole("button", { name: "Start voice recording" }));
-    fireEvent.click(within(await screen.findByRole("dialog", { name: "Choose default voice thread" })).getByRole("button", { name: "Release review" }));
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Could not save default voice thread."));
-    expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
-  });
-  it("does not start a recording after the connection changes while saving its new default", async () => {
-    const native = ready({ settings: voiceSettings({ audioMode: "response", pinDefaultVoiceThread: true }) });
-    let save!: (value: NativeVoiceState) => void;
-    voice.fake.plugin.setConnection.mockResolvedValue(native);
-    voice.fake.plugin.getState.mockResolvedValue(native);
-    voice.fake.plugin.updateSettings.mockImplementationOnce(() => new Promise(resolve => { save = resolve; }));
-    navigate(threadPath("long"), { replace: true });
-    renderControls();
-    fireEvent.click(await screen.findByRole("button", { name: "Start voice recording" }));
-    fireEvent.click(within(await screen.findByRole("dialog", { name: "Choose default voice thread" })).getByRole("button", { name: "Release review" }));
-    await waitFor(() => expect(voice.fake.plugin.updateSettings).toHaveBeenCalledTimes(1));
-    act(() => voice.fake.emit("stateChanged", ready({ connectionGeneration: 2, settings: voiceSettings({ audioMode: "response", pinDefaultVoiceThread: true, voiceThreadId: "untitled" }) })));
-    await act(async () => { save({ ...native, stateRevision: 2, settingsRevision: 1, settings: { ...native.settings, voiceThreadId: "named", voiceThreadTitle: "Release review" } }); });
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Voice connection changed. Start recording again."));
+    await screen.findByRole("dialog", { name: "Choose target thread" });
     expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
   });
   it("keeps the actual active recording target and allows retargeting while the default is pinned", async () => {
@@ -225,10 +254,10 @@ describe("voice controls card", () => {
     renderControls();
     await screen.findByRole("group", { name: "Voice controls" });
     expect(lines()[0]).toBe(longTitle);
-    fireEvent.click(within(card()).getByRole("button", { name: `Change recording target: ${longTitle}` }));
-    const picker = await screen.findByRole("dialog", { name: "Choose voice thread" });
+    fireEvent.click(within(card()).getByRole("button", { name: `Change recording thread: ${longTitle}` }));
+    const picker = await screen.findByRole("dialog", { name: "Choose target thread" });
     fireEvent.click(within(picker).getByRole("button", { name: "Untitled thread" }));
-    await waitFor(() => expect(voice.fake.plugin.retargetActiveRecognition).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, threadId: "untitled", threadTitle: undefined }));
+    await waitFor(() => expect(voice.fake.plugin.retargetActiveRecognition).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, recordingId: "recording", threadId: "untitled", threadTitle: undefined }));
     expect(voice.fake.plugin.updateSettings).not.toHaveBeenCalled();
     expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
   });
@@ -241,6 +270,7 @@ describe("voice controls card", () => {
     expect(lines()).toEqual(["Release review", "Ready · Response · Auto-listen on"]);
     expect(card().querySelector(".voice-card-title[data-thread]")).toHaveTextContent("Release review");
     expect(within(card()).getByRole("button", { name: "Open thread: Release review" })).toBeInTheDocument();
+    expect(card().querySelector(".voice-card-target")).not.toBeNull();
     fireEvent.click(within(card()).getByRole("button", { name: "Start voice recording" }));
     await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenCalledWith({ expectedConnectionGeneration: 1, threadId: "named", threadTitle: "Release review" }));
     // A saved default voice thread that is unavailable or deleted is not a target, so it is not named.
@@ -254,7 +284,7 @@ describe("voice controls card", () => {
     expect(lines()).toEqual(["Release review", "Ready · Response · Auto-listen on"]);
     expect(within(card()).queryByRole("button", { name: /^Open thread/u })).toBeNull();
   });
-  it("opens the quick sheet only from the caret", async () => {
+  it("opens the quick sheet from the restored status tile with a visible menu affordance", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(ready());
     navigate(threadPath("named"), { replace: true });
     renderControls();
@@ -263,6 +293,8 @@ describe("voice controls card", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     const caret = within(card()).getByRole("button", { name: "Open voice controls" });
     expect(caret).toHaveAttribute("aria-haspopup", "dialog");
+    expect(caret).toHaveClass("voice-card-tile");
+    expect(caret.querySelector(".voice-card-menu-mark")).not.toBeNull();
     fireEvent.click(caret);
     const sheet = await screen.findByRole("dialog", { name: "Voice" });
     expect(within(sheet).getByRole("radiogroup", { name: "Audio mode" })).toBeInTheDocument();
@@ -352,7 +384,7 @@ describe("voice controls card", () => {
     await waitFor(() => expect(within(card()).getByRole("button", { name: "Stop voice interaction" })).toBeEnabled());
     expect(lines()).toEqual(["Release review", "Speaking"]);
     fireEvent.click(within(card()).getByRole("button", { name: "Stop voice interaction" }));
-    await waitFor(() => expect(voice.fake.plugin.stopCurrentInteraction).toHaveBeenCalledWith({ expectedConnectionGeneration: 1 }));
+    await waitFor(() => expect(voice.fake.plugin.stopCurrentInteraction).toHaveBeenCalledWith({ expectedConnectionGeneration: 1, interactionId: "item" }));
     expect(await within(card()).findByRole("button", { name: "Start voice recording" })).toBeInTheDocument();
   });
   it("names another thread's speech and labels the native event kind", async () => {
@@ -362,7 +394,7 @@ describe("voice controls card", () => {
     await screen.findByRole("group", { name: "Voice controls" });
     expect(lines()).toEqual(["Release review", "Speaking · Response"]);
     expect(card().querySelector(".voice-card-title[data-thread]")).toHaveTextContent("Release review");
-    expect(buttons()).toEqual(["Open thread: Release review", "Open voice controls", "Skip voice playback", "Stop voice interaction"]);
+    expect(buttons()).toEqual(["Open voice controls", "Open thread: Release review", "Skip voice playback", "Stop voice interaction"]);
     const kinds = [["turn.progress", "Speaking · Progress"], ["question.requested", "Speaking · Question"], ["automation.started", "Speaking · Automation"],
       ["future.kind", "Speaking"], [null, "Speaking"]] as const;
     for (const [index, [eventKind, line]] of kinds.entries()) {
@@ -377,38 +409,51 @@ describe("voice controls card", () => {
     expect(card().querySelector(".voice-card-phase")).toHaveAttribute("data-tone", "warning");
     expect(within(card()).getByRole("button", { name: "Stop voice interaction" })).toBeEnabled();
   });
-  it("names the recording target with its visible title and retargets through a list of threads", async () => {
+  it("separates body navigation from the recording chevron's independent retarget action", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(listening({ recognitionThreadId: "long", recognitionThreadTitle: "L".repeat(512) }));
     voice.fake.plugin.retargetActiveRecognition.mockResolvedValue(listening({ recognitionThreadId: "untitled" }));
+    navigate(threadPath("named"), { replace: true });
     renderControls();
-    const chip = await screen.findByRole("button", { name: `Change recording target: ${"L".repeat(512)}` });
-    // Line 1 names the target like any other thread and opens it; the chip on line 2 retargets.
-    expect(chip).toHaveTextContent(/^Change$/u);
-    expect(lines()).toEqual(["L".repeat(512), "Listening · Change"]);
+    const chip = await screen.findByRole("button", { name: `Change recording thread: ${"L".repeat(512)}` });
+    expect(chip.textContent).toBe("");
+    expect(chip.querySelector(".lucide-chevron-down")).not.toBeNull();
+    expect(chip).toHaveAttribute("aria-haspopup", "dialog");
+    expect(lines()).toEqual(["L".repeat(512), "Listening"]);
     expect(card().querySelector(".voice-card-title[data-thread]")).toHaveTextContent("L".repeat(512));
-    expect(buttons()).toEqual([`Open thread: ${"L".repeat(512)}`, `Change recording target: ${"L".repeat(512)}`, "Open voice controls", "Cancel voice recording"]);
+    expect(buttons()).toEqual(["Open voice controls", `Open thread: ${"L".repeat(512)}`, `Change recording thread: ${"L".repeat(512)}`, "Keep listening", "Cancel voice recording"]);
     expect(within(card()).getByRole("status")).toHaveTextContent("Listening");
     expect(card()).toHaveAttribute("data-tone", "destructive");
+    fireEvent.click(within(card()).getByRole("button", { name: `Open thread: ${"L".repeat(512)}` }));
+    expect(window.location.pathname).toBe(threadPath("long"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(voice.fake.plugin.retargetActiveRecognition).not.toHaveBeenCalled();
     fireEvent.click(chip);
     const list = await screen.findByRole("list", { name: "Voice threads" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(3);
     fireEvent.click(within(list).getByRole("button", { name: "Untitled thread" }));
     await waitFor(() => expect(voice.fake.plugin.retargetActiveRecognition).toHaveBeenCalledTimes(1));
-    expect(voice.fake.plugin.retargetActiveRecognition.mock.lastCall).toEqual([{ expectedConnectionGeneration: 1, threadId: "untitled", threadTitle: undefined }]);
-    expect(await screen.findByRole("button", { name: "Change recording target: Untitled thread" })).toBeInTheDocument();
+    expect(voice.fake.plugin.retargetActiveRecognition.mock.lastCall).toEqual([{ expectedConnectionGeneration: 1, recordingId: "recording", threadId: "untitled", threadTitle: undefined }]);
+    expect(await screen.findByRole("button", { name: "Change recording thread: Untitled thread" })).toBeInTheDocument();
+    expect(window.location.pathname).toBe(threadPath("long"));
+    // Once native freezes retargeting, the select affordance disappears and the
+    // existing thread navigation remains available without implying a change.
+    act(() => voice.fake.emit("stateChanged", { ...listening({ recognitionThreadId: "untitled" }), stateRevision: 3,
+      actions: voiceActions({ canStop: true }) }));
+    expect(card().querySelector(".voice-card-target")).toBeNull();
     fireEvent.click(within(card()).getByRole("button", { name: "Open thread: Untitled thread" }));
     expect(window.location.pathname).toBe(threadPath("untitled"));
     expect(voice.fake.plugin.retargetActiveRecognition).toHaveBeenCalledTimes(1);
   });
-  it("names the visible thread while recording for it, retargets from its chip, and Cancel discards", async () => {
+  it("retargets only from the visible recording chevron and Cancel discards", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(listening({ recognitionThreadId: "named", recognitionThreadTitle: "Release review" }));
     voice.fake.plugin.stopCurrentInteraction.mockResolvedValue(ready({ stateRevision: 2 }));
     navigate(threadPath("named"), { replace: true });
     renderControls();
-    const chip = await screen.findByRole("button", { name: "Change recording target: Release review" });
-    expect(lines()).toEqual(["Release review", "Listening · Change"]);
-    expect(chip).toHaveTextContent(/^Change$/u);
-    expect(buttons()).toEqual(["Change recording target: Release review", "Open voice controls", "Cancel voice recording"]);
+    const chip = await screen.findByRole("button", { name: "Change recording thread: Release review" });
+    expect(lines()).toEqual(["Release review", "Listening"]);
+    expect(chip.textContent).toBe("");
+    expect(card().querySelector(".voice-card-title")).toHaveTextContent("Release review");
+    expect(buttons()).toEqual(["Open voice controls", "Change recording thread: Release review", "Keep listening", "Cancel voice recording"]);
     expect(card()).not.toHaveTextContent("This thread");
     expect(within(card()).getByRole("status")).toHaveTextContent(/^Release review\. Listening$/u);
     expect(card().querySelector(".voice-card-tile")).toHaveAttribute("data-tone", "destructive");
@@ -422,14 +467,14 @@ describe("voice controls card", () => {
     const cancel = within(card()).getByRole("button", { name: "Cancel voice recording" });
     expect(cancel).toHaveAttribute("title", "Cancel");
     fireEvent.click(cancel);
-    await waitFor(() => expect(voice.fake.plugin.stopCurrentInteraction).toHaveBeenCalledWith({ expectedConnectionGeneration: 1 }));
+    await waitFor(() => expect(voice.fake.plugin.stopCurrentInteraction).toHaveBeenCalledWith({ expectedConnectionGeneration: 1, interactionId: "item" }));
   });
   it("labels the primary action for each phase", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(ready());
     navigate(threadPath("named"), { replace: true });
     renderControls();
     await screen.findByRole("button", { name: "Start voice recording" });
-    const busy = { canStart: false, canStop: true, canSkip: false, canRetarget: false, canResume: false };
+    const busy = voiceActions({ canStop: true });
     const phases = [["synthesizing", "Stop voice interaction", "Preparing speech…"], ["arming", "Cancel voice recording", "Preparing microphone…"],
       ["recognizing", "Cancel voice recording", "Recognizing…"], ["submitting", "Stop voice interaction", "Sending…"],
       ["recovering", "Stop voice interaction", "Checking submission…"]] as const;
@@ -437,17 +482,18 @@ describe("voice controls card", () => {
       act(() => voice.fake.emit("stateChanged", ready({ stateRevision: index + 2, phase, actions: busy, active: item({ threadId: "named", recognitionThreadId: "named" }) })));
       expect(within(card()).getAllByRole("button").map(button => button.getAttribute("aria-label"))).toEqual(["Open voice controls", primary]);
       expect(lines()).toEqual(["Release review", label]);
+      expect(card().querySelector(".voice-card-target")).toBeNull();
     }
   });
   it("asks for a thread when listening has no target, and leads with the phase for speech without a thread", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(listening({}));
     navigate(threadPath("named"), { replace: true });
     renderControls();
-    const chip = await screen.findByRole("button", { name: "Change recording target" });
-    expect(lines()).toEqual(["Choose a thread", "Listening · Choose"]);
+    const chip = await screen.findByRole("button", { name: "Change recording thread" });
+    expect(lines()).toEqual(["Choose a thread", "Listening"]);
     expect(card().querySelector(".voice-card-title[data-empty]")).toHaveTextContent("Choose a thread");
-    expect(chip).toHaveTextContent(/^Choose$/u);
-    expect(buttons()).toEqual(["Change recording target", "Open voice controls", "Cancel voice recording"]);
+    expect(card().querySelector(".voice-card-title")).toHaveTextContent("Choose a thread");
+    expect(buttons()).toEqual(["Open voice controls", "Change recording thread", "Keep listening", "Cancel voice recording"]);
     act(() => voice.fake.emit("stateChanged", speaking({ eventKind: "automation.started" }, { stateRevision: 2 })));
     expect(lines()).toEqual(["Speaking", "Automation"]);
     expect(buttons()).toEqual(["Open voice controls", "Skip voice playback", "Stop voice interaction"]);
@@ -488,12 +534,12 @@ describe("voice controls card", () => {
     renderControls();
     await screen.findByRole("group", { name: "Voice controls" });
     expect(lines()).toEqual(["Release review", "Voice needs to resume"]);
-    expect(within(card()).getAllByRole("button").map(button => button.getAttribute("aria-label"))).toEqual(["Open voice controls", "Resume voice"]);
+    expect(within(card()).getAllByRole("button").map(button => button.getAttribute("aria-label"))).toEqual(["Open voice controls", "Choose target thread: Release review", "Resume voice"]);
   });
   it("keeps a recording failure visible after native settles to idle", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(listening({ recognitionThreadId: "named", recognitionThreadTitle: "Release review" }));
     renderControls();
-    await screen.findByRole("button", { name: "Change recording target: Release review" });
+    await screen.findByRole("button", { name: "Change recording thread: Release review" });
     act(() => {
       voice.fake.emit("runtimeError", { code: "recognition_failed", message: "Recognition failed.", connectionGeneration: 1, ...VOICE_CONNECTION });
       voice.fake.emit("stateChanged", ready({ stateRevision: 2, errors: [{ code: "recognition_failed", message: "Recognition failed." }] }));
@@ -506,6 +552,303 @@ describe("voice controls card", () => {
     // Recording can start again; Retry is only for a voice session in error.
     expect(within(card()).getByRole("button", { name: "Start voice recording" })).toBeEnabled();
     expect(within(card()).queryByRole("button", { name: "Retry voice connection" })).toBeNull();
+  });
+});
+
+describe("Keep listening and saved dictation", () => {
+  const capture = (keepListening = false, reconnecting = false) => {
+    const state = listening({ recognitionThreadId: "named", recognitionThreadTitle: "Release review",
+      recording: { id: "recording", keepListening, reconnecting } });
+    return { ...state, actions: { ...state.actions, canSend: keepListening } };
+  };
+  it("adopts the current recording only after native confirms, keeps infinity separate from Send, and sends its identity", async () => {
+    const initial = capture();
+    let adopt!: (state: NativeVoiceState) => void;
+    voice.fake.plugin.setConnection.mockResolvedValue(initial);
+    voice.fake.plugin.setKeepListening.mockImplementationOnce(() => new Promise(resolve => { adopt = resolve; }));
+    voice.fake.plugin.sendRecording.mockResolvedValue(ready({ stateRevision: 3, phase: "recognizing", active: item({
+      recognitionThreadId: "named", recording: { id: "recording", keepListening: true, reconnecting: false } }), actions: voiceActions({ canStop: true }) }));
+    navigate(threadPath("named"), { replace: true });
+    renderControls();
+    const keep = await screen.findByRole("button", { name: "Keep listening" });
+    expect(keep).toHaveAttribute("aria-pressed", "false");
+    expect(keep).toHaveAttribute("title", "Keep listening");
+    expect(within(card()).getByRole("button", { name: "Change recording thread: Release review" })).toHaveClass("voice-card-target");
+    expect(within(card()).queryByRole("button", { name: "Send voice recording" })).toBeNull();
+    expect(within(card()).getByRole("button", { name: "Cancel voice recording" }).querySelector("svg.lucide-x")).not.toBeNull();
+    keep.focus();
+    fireEvent.click(keep);
+    expect(voice.fake.plugin.setKeepListening).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, recordingId: "recording", enabled: true });
+    expect(keep).toHaveAttribute("aria-pressed", "false");
+    expect(keep).toHaveAttribute("aria-disabled", "true");
+    expect(keep).toHaveFocus();
+    expect(within(card()).getByRole("button", { name: "Cancel voice recording" })).toBeEnabled();
+    fireEvent.click(keep);
+    expect(voice.fake.plugin.setKeepListening).toHaveBeenCalledTimes(1);
+    await act(async () => { adopt({ ...capture(true), stateRevision: 2 }); });
+    expect(keep).toHaveAttribute("aria-pressed", "true");
+    expect(keep).toHaveFocus();
+    expect(buttons()).toEqual(["Open voice controls", "Change recording thread: Release review", "Keep listening", "Cancel voice recording", "Send voice recording"]);
+    expect(lines()).toEqual(["Release review", "Listening"]);
+    fireEvent.click(within(card()).getByRole("button", { name: "Send voice recording" }));
+    await waitFor(() => expect(voice.fake.plugin.sendRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, recordingId: "recording" }));
+    expect(within(card()).queryByRole("button", { name: "Keep listening" })).toBeNull();
+    expect(within(card()).queryByRole("button", { name: "Send voice recording" })).toBeNull();
+    expect(voice.fake.plugin.updateSettings).not.toHaveBeenCalled();
+  });
+  it("switches Keep listening off for the same recording and starts the next recording unselected", async () => {
+    voice.fake.plugin.setConnection.mockResolvedValue(capture(true));
+    voice.fake.plugin.setKeepListening.mockResolvedValue({ ...capture(), stateRevision: 2 });
+    renderControls();
+    fireEvent.click(await screen.findByRole("button", { name: "Keep listening" }));
+    await waitFor(() => expect(voice.fake.plugin.setKeepListening).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, recordingId: "recording", enabled: false }));
+    expect(screen.getByRole("button", { name: "Keep listening" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("button", { name: "Send voice recording" })).toBeNull();
+    act(() => voice.fake.emit("stateChanged", { ...capture(true), stateRevision: 3 }));
+    act(() => voice.fake.emit("stateChanged", { ...listening({ recognitionThreadId: "long",
+      recording: { id: "next-recording", keepListening: false, reconnecting: false } }), stateRevision: 4 }));
+    expect(screen.getByRole("button", { name: "Keep listening" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.queryByRole("button", { name: "Send voice recording" })).toBeNull();
+    expect(voice.fake.plugin.updateSettings).not.toHaveBeenCalled();
+  });
+  it("keeps ordinary Stop during a live held Send admission, preserving any resulting saved dictation", async () => {
+    const initial = capture(true);
+    voice.fake.plugin.setConnection.mockResolvedValue(initial);
+    const submitting = ready({ stateRevision: 2, phase: "submitting", active: initial.active,
+      actions: voiceActions({ canStop: true }), recordingRecovery: null });
+    voice.fake.plugin.sendRecording.mockResolvedValue(submitting);
+    const saved = recordingRecovery({ recordingId: "recording", stage: "admitting", hasUnrecognizedAudio: false,
+      canRetryRecognition: false, admission: { mutationId: "original-input", status: "uncertain", cancelled: true } });
+    voice.fake.plugin.stopCurrentInteraction.mockResolvedValue(ready({ stateRevision: 3, phase: "recordingRecovery",
+      actions: voiceActions(), recordingRecovery: saved }));
+    navigate(threadPath("named"), { replace: true });
+    renderControls();
+    fireEvent.click(await screen.findByRole("button", { name: "Send voice recording" }));
+    const stop = await screen.findByRole("button", { name: "Stop voice interaction" });
+    expect(lines()).toEqual(["Release review", "Sending…"]);
+    expect(buttons()).toEqual(["Open voice controls", "Stop voice interaction"]);
+    expect(card()).not.toHaveAttribute("data-saved");
+    fireEvent.click(stop);
+    await waitFor(() => expect(voice.fake.plugin.stopCurrentInteraction).toHaveBeenCalledExactlyOnceWith({
+      expectedConnectionGeneration: 1, interactionId: "item" }));
+    await waitFor(() => expect(lines()).toEqual(["Saved dictation · Release review", "Stopped; checking delivery"]));
+    expect(screen.getByRole("button", { name: "Discard saved dictation" })).not.toHaveAttribute("aria-disabled");
+    expect(voice.fake.plugin.discardRecording).not.toHaveBeenCalled();
+  });
+  it.each(["manual", "response"] as const)("keeps Listening and Send during a transient outage in %s mode without replacing them with recovery", async audioMode => {
+    const state = { ...capture(true, true), settings: voiceSettings({ audioMode }) };
+    voice.fake.plugin.setConnection.mockResolvedValue(state);
+    renderControls();
+    await screen.findByRole("button", { name: "Keep listening" });
+    expect(lines()).toEqual(["Release review", "Listening · Reconnecting"]);
+    expect(card().querySelector(".voice-card-reconnecting")).toHaveTextContent("Reconnecting");
+    expect(screen.getByRole("button", { name: "Send voice recording" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel voice recording" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Retry saved dictation" })).toBeNull();
+    expect(card()).not.toHaveTextContent(/segment|elapsed|\d+:\d+/iu);
+    act(() => voice.fake.emit("stateChanged", { ...state, stateRevision: 2, active: { ...state.active!, recording: { ...state.active!.recording!, reconnecting: false } } }));
+    expect(lines()).toEqual(["Release review", "Listening"]);
+    expect(screen.getByRole("button", { name: "Keep listening" })).toHaveAttribute("aria-pressed", "true");
+  });
+  it("dismisses a recording picker when a newer recording or connection replaces it", async () => {
+    voice.fake.plugin.setConnection.mockResolvedValue(capture());
+    voice.fake.plugin.retargetActiveRecognition.mockRejectedValue(new Error("That recording has ended."));
+    renderControls();
+    fireEvent.click(await screen.findByRole("button", { name: "Change recording thread: Release review" }));
+    const picker = await screen.findByRole("dialog", { name: "Choose target thread" });
+    const next = { ...listening({ recognitionThreadId: "named", recording: { id: "new-recording", keepListening: false, reconnecting: false } }), connectionGeneration: 2 };
+    act(() => voice.fake.emit("stateChanged", next));
+    expect(picker).not.toBeInTheDocument();
+    expect(voice.fake.plugin.retargetActiveRecognition).not.toHaveBeenCalled();
+    expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Change recording thread: Release review" })).toBeInTheDocument();
+  });
+  it("lets Cancel stop capture while Keep listening awaits durable acknowledgement", async () => {
+    let failAdoption!: (error: Error) => void;
+    voice.fake.plugin.setConnection.mockResolvedValue(capture());
+    voice.fake.plugin.setKeepListening.mockImplementationOnce(() => new Promise((_resolve, reject) => { failAdoption = reject; }));
+    voice.fake.plugin.stopCurrentInteraction.mockResolvedValue(ready({ stateRevision: 3 }));
+    renderControls();
+    fireEvent.click(await screen.findByRole("button", { name: "Keep listening" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel voice recording" }));
+    await waitFor(() => expect(voice.fake.plugin.stopCurrentInteraction).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, interactionId: "item" }));
+    expect(await screen.findByRole("button", { name: "Start voice recording" })).toBeDisabled();
+    await act(async () => { failAdoption(new Error("That recording has ended.")); });
+    expect(screen.getByRole("button", { name: "Start voice recording" })).toBeEnabled();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(voice.fake.plugin.sendRecording).not.toHaveBeenCalled();
+  });
+  it("keeps saved dictation in the same toolbar while Off and after remount, with native recovery eligibility", async () => {
+    const saved = recordingRecovery({ canRetryRecognition: false, captureIncomplete: true, reason: "Voice was turned off." });
+    const state = voiceSnapshot({ recordingRecovery: saved });
+    voice.fake.plugin.setConnection.mockResolvedValue(state);
+    const view = renderControls(false);
+    await screen.findByRole("group", { name: "Voice controls" });
+    expect(lines()).toEqual(["Saved dictation · Release review", "Voice was turned off."]);
+    expect(card().querySelector(".voice-card-sub")).toHaveAttribute("title", "Voice was turned off.");
+    expect(card()).not.toHaveAttribute("data-off");
+    expect(screen.getByRole("button", { name: "Retry saved dictation" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: "Discard saved dictation" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Start voice recording" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel voice recording" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open voice controls" }));
+    const sheet = await screen.findByRole("dialog", { name: "Voice" });
+    expect(sheet).toHaveTextContent("The end of this dictation may be missing.");
+    expect(within(sheet).getByRole("button", { name: "Retry recognition" })).toHaveAttribute("aria-disabled", "true");
+    expect(within(sheet).queryByRole("button", { name: /restore|composer/iu })).toBeNull();
+    view.unmount();
+    renderControls(false);
+    await screen.findByRole("group", { name: "Voice controls" });
+    expect(lines()[0]).toBe("Saved dictation · Release review");
+    expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
+    expect(voice.fake.plugin.retryRecordingRecognition).not.toHaveBeenCalled();
+  });
+  it("retries saved audio with its revision, then offers Send separately when recognition completes", async () => {
+    const saved = recordingRecovery({ revision: 7 });
+    voice.fake.plugin.setConnection.mockResolvedValue(ready({ phase: "recordingRecovery", actions: voiceActions(), recordingRecovery: saved }));
+    const recognizing = ready({ stateRevision: 2, phase: "recognizing", actions: voiceActions(),
+      active: item({ recording: { id: saved.recordingId, keepListening: false, reconnecting: false } }),
+      recordingRecovery: { ...saved, revision: 8, stage: "recognizing", canRetryRecognition: false, canDiscard: true } });
+    voice.fake.plugin.retryRecordingRecognition.mockResolvedValue(recognizing);
+    renderControls();
+    fireEvent.click(await screen.findByRole("button", { name: "Retry saved dictation" }));
+    await waitFor(() => expect(voice.fake.plugin.retryRecordingRecognition).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, recordingId: "saved-recording", expectedRecoveryRevision: 7 }));
+    await waitFor(() => expect(lines()).toEqual(["Saved dictation · Release review", "Recognizing saved audio…"]));
+    expect(screen.queryByRole("button", { name: "Cancel voice recording" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Discard saved dictation" })).not.toHaveAttribute("aria-disabled");
+    expect(voice.fake.plugin.sendRecoveredRecording).not.toHaveBeenCalled();
+    const complete = voiceSnapshot({ stateRevision: 3, recordingRecovery: { ...saved, revision: 9, stage: "ready", hasUnrecognizedAudio: false, canRetryRecognition: false, canSend: true } });
+    act(() => voice.fake.emit("stateChanged", complete));
+    expect(lines()).toEqual(["Ready to send · Release review", "Not sent"]);
+    expect(buttons()).toEqual(["Open voice controls", "Open thread: Release review", "Discard saved dictation", "Send saved dictation"]);
+    voice.fake.plugin.sendRecoveredRecording.mockResolvedValue(voiceSnapshot({ stateRevision: 4 }));
+    fireEvent.click(screen.getByRole("button", { name: "Send saved dictation" }));
+    await waitFor(() => expect(voice.fake.plugin.sendRecoveredRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, recordingId: "saved-recording", expectedRecoveryRevision: 9, acknowledgeIncomplete: false }));
+    expect(screen.queryByRole("group", { name: "Voice controls" })).toBeNull();
+    expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
+    expect(voice.fake.plugin.resumeInput).not.toHaveBeenCalled();
+  });
+  it("keeps an older saved dictation accessible during new capture and explains its Keep listening restriction", async () => {
+    const saved = recordingRecovery({ stage: "ready", hasUnrecognizedAudio: false, canRetryRecognition: false, canSend: true,
+      admission: { mutationId: "original-input", status: "uncertain", cancelled: false } });
+    const state = { ...capture(), recordingRecovery: saved,
+      actions: { ...capture().actions, canSetKeepListening: false, keepListeningBlockedReason: "saved_recording_pending" as const } };
+    voice.fake.plugin.setConnection.mockResolvedValue(state);
+    renderControls();
+    const keep = await screen.findByRole("button", { name: "Keep listening" });
+    expect(keep).toHaveAttribute("aria-disabled", "true");
+    expect(keep).toHaveAccessibleDescription("Resolve saved dictation first");
+    expect(keep).toHaveAttribute("title", "Resolve saved dictation first");
+    fireEvent.click(keep);
+    expect(voice.fake.plugin.setKeepListening).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Saved dictation" }));
+    const sheet = await screen.findByRole("dialog", { name: "Voice" });
+    expect(sheet).toHaveTextContent("Resolve saved dictation first to enable Keep listening for the current recording.");
+    voice.fake.plugin.discardRecording.mockResolvedValue({ ...capture(), stateRevision: 2 });
+    fireEvent.click(within(sheet).getByRole("button", { name: "Discard saved dictation" }));
+    await waitFor(() => expect(voice.fake.plugin.discardRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, recordingId: "saved-recording", expectedRecoveryRevision: 1 }));
+    expect(voice.fake.plugin.stopCurrentInteraction).not.toHaveBeenCalled();
+    fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
+    expect(screen.getByRole("button", { name: "Keep listening" })).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByRole("button", { name: "Cancel voice recording" })).toBeEnabled();
+  });
+  it("opens the missing-end notice and requires explicit acknowledgment before sending incomplete saved text", async () => {
+    const saved = recordingRecovery({ stage: "ready", revision: 6, captureIncomplete: true, hasUnrecognizedAudio: false,
+      canRetryRecognition: false, canSend: true });
+    const native = voiceSnapshot({ recordingRecovery: saved });
+    voice.fake.plugin.setConnection.mockResolvedValue(native);
+    voice.fake.plugin.sendRecoveredRecording.mockResolvedValue({ ...native, stateRevision: 2,
+      recordingRecovery: { ...saved, revision: 7, stage: "admitting", canSend: false } });
+    renderControls(false);
+    const toolbarSend = await screen.findByRole("button", { name: "Send saved dictation" });
+    expect(lines()).toEqual(["Ready to send · Release review", "End may be missing"]);
+    expect(toolbarSend).toHaveAttribute("aria-haspopup", "dialog");
+    fireEvent.click(toolbarSend);
+    const sheet = await screen.findByRole("dialog", { name: "Voice" });
+    expect(sheet).toHaveTextContent("The end of this dictation may be missing. Sending uses the saved portion.");
+    const send = within(sheet).getByRole("button", { name: "Send saved dictation" });
+    expect(send).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(send);
+    expect(voice.fake.plugin.sendRecoveredRecording).not.toHaveBeenCalled();
+    fireEvent.click(within(sheet).getByRole("checkbox", { name: "Send the saved portion even if the end is missing" }));
+    expect(send).not.toHaveAttribute("aria-disabled");
+    fireEvent.click(send);
+    await waitFor(() => expect(voice.fake.plugin.sendRecoveredRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
+      recordingId: saved.recordingId, expectedRecoveryRevision: 6, acknowledgeIncomplete: true }));
+  });
+  it.each(["retry", "send"] as const)("allows explicit Discard during recovered %s without an ordinary Stop or Cancel delete path", async operation => {
+    const retry = operation === "retry";
+    const saved = recordingRecovery({ stage: retry ? "interrupted" : "ready", revision: 2, hasUnrecognizedAudio: retry,
+      canRetryRecognition: retry, canSend: !retry });
+    voice.fake.plugin.setConnection.mockResolvedValue(voiceSnapshot({ recordingRecovery: saved }));
+    const working = voiceSnapshot({ stateRevision: 2, phase: retry ? "recognizing" : "submitting", active: item({
+      recording: { id: saved.recordingId, keepListening: false, reconnecting: false } }),
+      actions: voiceActions(), recordingRecovery: { ...saved, revision: 3, stage: retry ? "recognizing" : "admitting",
+        canRetryRecognition: false, canSend: false, canDiscard: true } });
+    voice.fake.plugin[retry ? "retryRecordingRecognition" : "sendRecoveredRecording"].mockResolvedValue(working);
+    voice.fake.plugin.discardRecording.mockResolvedValue(voiceSnapshot({ stateRevision: 3 }));
+    renderControls();
+    fireEvent.click(await screen.findByRole("button", { name: retry ? "Retry saved dictation" : "Send saved dictation" }));
+    await waitFor(() => expect(lines()).toEqual(["Saved dictation · Release review", retry ? "Recognizing saved audio…" : "Sending…"]));
+    expect(screen.queryByRole("button", { name: /Stop voice interaction|Cancel voice recording/ })).toBeNull();
+    const discard = screen.getByRole("button", { name: "Discard saved dictation" });
+    expect(discard).not.toHaveAttribute("aria-disabled");
+    fireEvent.click(discard);
+    await waitFor(() => expect(voice.fake.plugin.discardRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
+      recordingId: saved.recordingId, expectedRecoveryRevision: 3 }));
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Voice controls" })).toBeNull());
+    expect(voice.fake.plugin.stopCurrentInteraction).not.toHaveBeenCalled();
+  });
+  it("does not invent a navigation target for an unavailable saved recording", async () => {
+    voice.fake.plugin.setConnection.mockResolvedValue(voiceSnapshot({ recordingRecovery: recordingRecovery({ stage: "unavailable",
+      threadId: null, threadTitle: null, hasUnrecognizedAudio: false, canRetryRecognition: false }) }));
+    renderControls();
+    await screen.findByRole("group", { name: "Voice controls" });
+    expect(lines()).toEqual(["Saved dictation · Unknown thread", "Saved dictation unavailable"]);
+    expect(screen.queryByRole("button", { name: /^Open thread:/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Discard saved dictation" })).toBeInTheDocument();
+  });
+  it("shows storage failure with explicit reconnect instead of a phantom saved-recording spinner while Off", async () => {
+    voice.fake.plugin.setConnection.mockResolvedValue(voiceSnapshot({ phase: "recordingRecovery", readiness: "storageUnavailable" }));
+    renderControls(false);
+    const retry = await screen.findByRole("button", { name: "Retry voice connection" });
+    expect(card()).not.toHaveTextContent("Saved dictation");
+    expect(card().querySelector(".lucide-loader-circle")).toBeNull();
+    expect(card()).toHaveTextContent("Needs attention");
+    fireEvent.click(retry);
+    await waitFor(() => expect(voice.fake.plugin.setConnection).toHaveBeenLastCalledWith({ ...VOICE_CONNECTION, reconnect: true }));
+  });
+  it("offers Resume and its readiness reason while saved recognition is blocked", async () => {
+    const saved = recordingRecovery({ canRetryRecognition: false });
+    const native = ready({ phase: "recordingRecovery", ready: false, readiness: "needsResume",
+      actions: voiceActions({ canResume: true }), recordingRecovery: saved });
+    voice.fake.plugin.setConnection.mockResolvedValue(native);
+    voice.fake.plugin.getState.mockResolvedValue(native);
+    voice.fake.plugin.updateSettings.mockResolvedValue({ ...native, stateRevision: 2, settingsRevision: 1, ready: true, readiness: "ready",
+      actions: voiceActions(), recordingRecovery: { ...saved, revision: 2, canRetryRecognition: true } });
+    renderControls();
+    const resume = await screen.findByRole("button", { name: "Resume voice" });
+    expect(lines()).toEqual(["Saved dictation · Release review", "Voice needs to resume"]);
+    expect(screen.queryByRole("button", { name: "Retry saved dictation" })).toBeNull();
+    fireEvent.click(resume);
+    await waitFor(() => expect(voice.fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
+      expectedRevision: 0, patch: { audioMode: "response" } }));
+    await screen.findByRole("button", { name: "Retry saved dictation" });
+    expect(voice.fake.plugin.retryRecordingRecognition).not.toHaveBeenCalled();
+  });
+  it("keeps Listening while visibly reporting a failed recording action", async () => {
+    voice.fake.plugin.setConnection.mockResolvedValue(capture());
+    voice.fake.plugin.retargetActiveRecognition.mockRejectedValue(new Error("The recording target could not be changed."));
+    renderControls();
+    fireEvent.click(await screen.findByRole("button", { name: "Change recording thread: Release review" }));
+    const picker = await screen.findByRole("dialog", { name: "Choose target thread" });
+    fireEvent.click(within(picker).getByRole("button", { name: "Untitled thread" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("The recording target could not be changed.");
+    expect(card().querySelector(".voice-card-title")).toHaveTextContent("The recording target could not be changed.");
+    expect(card().querySelector(".voice-card-title")).toHaveAttribute("title", "The recording target could not be changed.");
+    expect(lines()[1]).toBe("Listening");
+    expect(screen.getByRole("button", { name: "Cancel voice recording" })).toBeEnabled();
   });
 });
 
@@ -593,7 +936,7 @@ describe("voice controls card lifecycle", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Open voice controls" }));
     const sheet = await screen.findByRole("dialog", { name: "Voice" });
     fireEvent.click(within(sheet).getByRole("button", { name: "Default voice thread" }));
-    await screen.findByRole("dialog", { name: "Choose default voice thread" });
+    await screen.findByRole("dialog", { name: "Default voice thread" });
     act(() => voice.fake.emit("stateChanged", disconnectedVoiceSnapshot(2)));
     expect(screen.queryByRole("group", { name: "Voice controls" })).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -609,13 +952,13 @@ describe("voice controls card lifecycle", () => {
     expect(card()).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
-  it("keeps focus on the retarget chip while a retarget is pending, and as it moves from the visible thread to another", async () => {
+  it("keeps focus on the separate chevron while retargeting without moving the viewed thread", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(listening({ recognitionThreadId: "named", recognitionThreadTitle: "Release review" }));
     let settle: (state: NativeVoiceState) => void = () => undefined;
     voice.fake.plugin.retargetActiveRecognition.mockImplementation(() => new Promise(resolve => { settle = resolve; }));
     navigate(threadPath("named"), { replace: true });
     renderControls();
-    const chip = await screen.findByRole("button", { name: "Change recording target: Release review" });
+    const chip = await screen.findByRole("button", { name: "Change recording thread: Release review" });
     chip.focus();
     fireEvent.click(chip);
     fireEvent.click(within(await screen.findByRole("list", { name: "Voice threads" })).getByRole("button", { name: "Untitled thread" }));
@@ -627,11 +970,13 @@ describe("voice controls card lifecycle", () => {
     fireEvent.click(chip);
     expect(screen.queryByRole("list", { name: "Voice threads" })).toBeNull();
     await act(async () => { settle({ ...listening({ recognitionThreadId: "untitled" }), stateRevision: 2 }); });
-    expect(lines()).toEqual(["Untitled thread", "Listening · Change"]);
-    expect(screen.getByRole("button", { name: "Change recording target: Untitled thread" })).toBe(chip);
+    expect(lines()).toEqual(["Untitled thread", "Listening"]);
+    expect(screen.getByRole("button", { name: "Change recording thread: Untitled thread" })).toBe(chip);
     expect(within(card()).getByRole("status")).toHaveTextContent(/^Untitled thread\. Listening$/u);
     expect(chip).not.toHaveAttribute("aria-disabled");
     expect(chip).toHaveFocus();
+    expect(window.location.pathname).toBe(threadPath("named"));
+    expect(screen.getByRole("button", { name: "Open thread: Untitled thread" })).toBeInTheDocument();
   });
   it("stays quiet on Settings → Voice, which announces readiness and errors itself", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(ready({ ready: false, readiness: "starting" }));

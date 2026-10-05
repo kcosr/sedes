@@ -148,7 +148,7 @@ export async function openSedesWorkspace(
   await openWorkspaceDirectory(page, repositoryRoot, options);
 }
 
-export async function createDraftThread(page: Page): Promise<string> {
+export async function createDraftThread(page: Page, title?: string): Promise<string> {
   const created = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
@@ -164,6 +164,7 @@ export async function createDraftThread(page: Page): Promise<string> {
     page.getByRole("textbox", { name: "Thread name" }),
   ).toBeVisible();
   await selectCustomNewThreadTarget(page, "Pi SDK");
+  if (title !== undefined) await page.getByRole("textbox", { name: "Thread name" }).fill(title);
   await page.getByRole("button", { name: "Create thread" }).click();
   await created;
   await expect(page).toHaveURL(/\/threads\/[0-9a-f-]+$/);

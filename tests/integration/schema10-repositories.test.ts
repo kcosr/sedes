@@ -4541,6 +4541,38 @@ describe("inactive schema-10 repositories", () => {
     }
   });
 
+  it.each([65_536, 65_537, 262_144])("enforces the composer text budget when restoring %i-byte direct input", bytes => {
+    const fixture = createFixture();
+    try {
+      bindDiscovered(fixture);
+      const queue = new QueuedInputRepository(fixture.database);
+      const drafts = new ConversationDraftRepository(fixture.database);
+      const initialDraft = drafts.get(fixture.scope, fixture.threadId);
+      drafts.save(fixture.scope, fixture.threadId, { text: "", contextExcerpts: [], attachmentIds: [], taskReferenceIds: [],
+        expectedRevision: initialDraft.revision, now: 590 });
+      const text = "é".repeat(Math.floor(bytes / 2)) + (bytes % 2 ? "x" : "");
+      const queued = queue.enqueue(fixture.scope, fixture.threadId, {
+        mutationId: randomUUID(), text, contextExcerpts: [], attachmentIds: [], taskReferences: [],
+        source: { kind: "direct_input", resolvedDeliveryMode: "queue", expectedThreadRevision: threadRevision(fixture) }, now: 600,
+      }).item;
+      const before = drafts.get(fixture.scope, fixture.threadId);
+      const revision = threadRevision(fixture);
+      const mutationId = randomUUID();
+      const restore = () => queue.restoreIdempotently(fixture.scope, fixture.threadId, queued.id, {
+        mutationId, expectedThreadRevision: revision, expectedDraftRevision: before.revision, now: 610,
+      });
+      if (bytes === 65_536) {
+        expect(restore()).toMatchObject({ item: { state: "cancelled" }, draft: { text } });
+      } else {
+        expect(restore).toThrow("This input is too large to restore to the composer (64 KiB limit).");
+        expect(drafts.get(fixture.scope, fixture.threadId)).toEqual(before);
+        expect(queue.get(fixture.scope, fixture.threadId, queued.id)).toEqual(queued);
+        expect(threadRevision(fixture)).toBe(revision);
+        expect(fixture.database.prepare("SELECT 1 FROM mutation_receipts WHERE mutation_id = ?").get(mutationId)).toBeUndefined();
+      }
+    } finally { fixture.database.close(); }
+  });
+
   it("atomically restores the complete queued composer payload and replays its receipt", () => {
     const fixture = createFixture();
     try {

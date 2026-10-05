@@ -1,3 +1,4 @@
+import { largeDirectInputText } from "../support/large-direct-input.js";
 import { readConversationHistory } from "../helpers/read-conversation-history.js";
 import { historyConversationHandle } from "../../src/server/conversations/history-conversation-handle.js";
 import { usageSubagentRecoveryIndexesMigration } from "../../src/server/db/migrations/114-usage-subagent-recovery-indexes.js";
@@ -3362,7 +3363,7 @@ describe("CodexConversationBackendDriver", () => {
     },
   );
 
-  it("reconciles submissions by durable client identity without blind retry", async () => {
+  it("reconciles 256 KiB submissions after a fresh driver attaches without blind retry", async () => {
     const harness = new RpcHarness();
     const target = driver(harness);
     const baseline = nativeThread();
@@ -3397,13 +3398,15 @@ describe("CodexConversationBackendDriver", () => {
         nativeTurn(0),
         {
           ...nativeTurn(1),
-          items: [{ ...nativeTurn(1).items[0], clientId }],
+          items: [{ ...nativeTurn(1).items[0], clientId,
+            content: [{ type: "text", text: largeDirectInputText, text_elements: [] }] }],
         },
       ],
     });
+    const recovered = driver(harness);
     enqueueCompleteLegacyRead(harness, accepted);
     const terminalReconciliation =
-      await target.reconcileSubmission(reconcileInput);
+      await recovered.reconcileSubmission(reconcileInput);
     expect(terminalReconciliation).toMatchObject({
       status: "accepted",
       backendTurn: { status: "completed" },
@@ -3418,9 +3421,17 @@ describe("CodexConversationBackendDriver", () => {
       completionIdentity: `${terminalReconciliation.backendTurn.backendTurnId}:completed`,
     });
     enqueueCompleteLegacyRead(harness, accepted);
-    await expect(target.reconcileSubmission(reconcileInput)).resolves.toEqual(
+    await expect(recovered.reconcileSubmission(reconcileInput)).resolves.toEqual(
       terminalReconciliation,
     );
+
+    enqueueCompleteLegacyRead(harness, accepted);
+    const history = await readConversationHistory(recovered, attachInput());
+    expect(Object.values(history.snapshot.itemsById)).toContainEqual(expect.objectContaining({
+      semanticKind: "user_message", deliveryOperationId: reconcileInput.applicationOperationId,
+      content: [{ kind: "text", text: { text: largeDirectInputText } }],
+    }));
+    expect(harness.calls.some(call => call.method === "turn/start" || call.method === "turn/steer")).toBe(false);
 
     const active = nativeThread({
       status: { type: "active", activeFlags: [] },
@@ -3431,13 +3442,14 @@ describe("CodexConversationBackendDriver", () => {
           status: "inProgress",
           completedAt: null,
           durationMs: null,
-          items: [{ ...nativeTurn(1).items[0], clientId }],
+          items: [{ ...nativeTurn(1).items[0], clientId,
+            content: [{ type: "text", text: largeDirectInputText, text_elements: [] }] }],
         },
       ],
     });
     enqueueCompleteLegacyRead(harness, active);
     const activeReconciliation =
-      await target.reconcileSubmission(reconcileInput);
+      await recovered.reconcileSubmission(reconcileInput);
     expect(activeReconciliation).toMatchObject({
       status: "accepted",
       backendTurn: { status: "in_progress" },
@@ -3472,7 +3484,7 @@ describe("CodexConversationBackendDriver", () => {
       }),
     );
     await expect(
-      target.reconcileSubmission(reconcileInput),
+      recovered.reconcileSubmission(reconcileInput),
     ).resolves.toMatchObject({
       status: "unresolved",
       diagnostic: expect.objectContaining({
@@ -3485,7 +3497,7 @@ describe("CodexConversationBackendDriver", () => {
       nativeThread({ turns: [nativeTurn(0), nativeTurn(2)] }),
     );
     await expect(
-      target.reconcileSubmission(reconcileInput),
+      recovered.reconcileSubmission(reconcileInput),
     ).resolves.toMatchObject({
       status: "unresolved",
       diagnostic: expect.objectContaining({
@@ -12220,7 +12232,7 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
-  it("merges an identity-only turn/start receipt over earlier user-item notifications", async () => {
+  it("preserves 256 KiB input across a racing turn/start receipt and user-item projection", async () => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
     const established = await establish(harness, handle);
@@ -12250,7 +12262,7 @@ describe("CodexConversationHandle", () => {
             type: "userMessage",
             id: "own-user-live",
             clientId: clientUserMessageId,
-            content: [{ type: "text", text: "hello", text_elements: [] }],
+            content: [{ type: "text", text: largeDirectInputText, text_elements: [] }],
           },
           startedAtMs: 1_700_000_002_000,
         });
@@ -12266,7 +12278,7 @@ describe("CodexConversationHandle", () => {
       taskContexts: [],
       contextExcerpts: [],
       attachments: [],
-      text: "hello",
+      text: largeDirectInputText,
     });
 
     const current = (await handle.readCurrent()).snapshot;
@@ -12275,7 +12287,7 @@ describe("CodexConversationHandle", () => {
     );
     expect(userItems).toHaveLength(2);
     expect(userItems.at(-1)).toMatchObject({
-      content: [{ kind: "text", text: { text: "hello" } }],
+      content: [{ kind: "text", text: { text: largeDirectInputText } }],
     });
     expect(events.filter(({ type }) => type === "turn_started")).toHaveLength(
       1,
@@ -13972,7 +13984,7 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
-  it("submits, steers, interrupts, renames, and compacts with durable correlation", async () => {
+  it("submits and steers 256 KiB input with durable correlation and conversation controls", async () => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
     const established = await establish(harness, handle);
@@ -14001,7 +14013,7 @@ describe("CodexConversationHandle", () => {
       taskContexts: [],
       contextExcerpts: [],
       attachments: [],
-      text: "hello",
+      text: largeDirectInputText,
     });
     expect(submitted).toMatchObject({
       accepted: true,
@@ -14024,7 +14036,7 @@ describe("CodexConversationHandle", () => {
         applicationOperationId: "submit-operation",
         reconciliationToken: "submit-token",
       }),
-      input: [{ type: "text", text: "hello", text_elements: [] }],
+      input: [{ type: "text", text: largeDirectInputText, text_elements: [] }],
       model: "gpt-5.6",
       effort: "low",
       approvalPolicy: "never",
@@ -14042,7 +14054,7 @@ describe("CodexConversationHandle", () => {
       taskContexts: [],
       contextExcerpts: [],
       attachments: [],
-      text: "clarification",
+      text: largeDirectInputText,
     };
     // The response only admits the input to Codex's pending input.
     await expect(handle.steer(steerInput)).resolves.toMatchObject({
@@ -14066,7 +14078,7 @@ describe("CodexConversationHandle", () => {
           applicationOperationId: "steer-operation",
           reconciliationToken: "steer-token",
         }),
-        content: [{ type: "text", text: "clarification", text_elements: [] }],
+        content: [{ type: "text", text: largeDirectInputText, text_elements: [] }],
       },
       startedAtMs: 1_700_000_002_000,
     });

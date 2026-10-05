@@ -42,6 +42,41 @@ public class NativeVoiceStoreTest {
         } finally { store.removeProfile(profile); }
     }
 
+    @Test public void maximalEscapedDictationFitsTheExistingAdmissionJournal() throws Exception {
+        String profile = "voice-test-" + UUID.randomUUID(), binding = NativeVoiceStore.binding(profile, ORIGIN, IDENTITY_A);
+        String mutation = UUID.randomUUID().toString(), text = ("x" + Character.toString((char) 1)).repeat(131071) + "x";
+        NativeVoiceStore store = new NativeVoiceStore(context);
+        JSONObject entry = entry(mutation, text);
+        assertEquals(262143, NativeVoiceJson.bytes(text));
+        assertTrue(NativeVoiceJson.bytes(entry.getJSONObject("request").toString()) > 512 * 1024);
+        try {
+            store.saveEntry(binding, entry);
+            assertEquals(text, new NativeVoiceStore(context).entry(binding, mutation).getJSONObject("request").getString("text"));
+        } finally { store.removeProfile(profile); }
+    }
+
+    @Test public void adoptedRecordingLinkIsIndependentDurableAndImmutable() throws Exception {
+        String profile = "voice-test-" + UUID.randomUUID(), binding = NativeVoiceStore.binding(profile, ORIGIN, IDENTITY_A);
+        String mutation = UUID.randomUUID().toString(); NativeVoiceStore store = new NativeVoiceStore(context);
+        JSONObject adopted = entry(mutation, "private dictated input"); NativeVoiceJson.put(adopted, "recordingId", "saved-recording");
+        try {
+            store.saveEntry(binding, adopted);
+            NativeVoiceStore reader = new NativeVoiceStore(context);
+            assertEquals("saved-recording", reader.entry(binding, mutation).getString("recordingId"));
+            assertEquals("saved-recording", reader.summaries(binding).getJSONObject(0).getString("recordingId"));
+            JSONObject stripped = NativeVoiceJson.copy(adopted); stripped.remove("recordingId");
+            assertThrows(IllegalStateException.class, () -> store.saveEntry(binding, stripped));
+            JSONObject changed = NativeVoiceJson.copy(adopted); NativeVoiceJson.put(changed, "recordingId", "different-recording");
+            assertThrows(IllegalStateException.class, () -> store.saveEntry(binding, changed));
+            JSONObject duplicateOwner = entry(UUID.randomUUID().toString(), "different mutation"); NativeVoiceJson.put(duplicateOwner, "recordingId", "saved-recording");
+            assertThrows(IllegalStateException.class, () -> store.saveEntry(binding, duplicateOwner));
+            JSONObject ordinary = entry(UUID.randomUUID().toString(), "ordinary input"); store.saveEntry(binding, ordinary);
+            JSONArray summaries = new NativeVoiceStore(context).summaries(binding);
+            assertEquals(2, summaries.length()); assertFalse(summaries.getJSONObject(1).has("recordingId"));
+            assertEquals("saved-recording", new NativeVoiceStore(context).entry(binding, mutation).getString("recordingId"));
+        } finally { store.removeProfile(profile); }
+    }
+
     @Test public void absentRecordsDoNotCreateDirectories() throws Exception {
         String profile = "voice-test-" + UUID.randomUUID();
         String binding = NativeVoiceStore.binding(profile, ORIGIN, IDENTITY_A);

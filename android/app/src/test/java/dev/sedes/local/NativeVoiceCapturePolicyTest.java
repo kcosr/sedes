@@ -44,12 +44,45 @@ public class NativeVoiceCapturePolicyTest {
         assertEquals(NativeVoiceCapturePolicy.End.SILENCE, policy.accept(frame(0)));
         assertEquals(4800, policy.samples());
     }
-    @Test public void absoluteCaptureBoundAppliesEvenAfterALateSpeechStart() {
-        NativeVoiceCapturePolicy policy = policy(300000, 300000, 30000);
-        for (int i = 0; i < 2999; i++) assertEquals(NativeVoiceCapturePolicy.End.CONTINUE, policy.accept(frame(0)));
-        for (int i = 2999; i < 5999; i++) assertEquals(NativeVoiceCapturePolicy.End.CONTINUE, policy.accept(frame(1000)));
-        assertEquals(NativeVoiceCapturePolicy.End.MAX_DURATION, policy.accept(frame(1000)));
-        assertEquals(NativeVoiceCapturePolicy.MAX_CAPTURE_SAMPLES, policy.samples());
+    @Test public void heldCaptureHasNoTenMinuteOrSilenceEndpoint() {
+        NativeVoiceCapturePolicy policy = policy(1000, 5000, 500);
+        policy.setHeld(true);
+        byte[] quiet = frame(0);
+        for (int i = 0; i < 6001; i++) assertEquals(NativeVoiceCapturePolicy.End.CONTINUE, policy.accept(quiet));
+        assertEquals(6001L * NativeVoiceCapturePolicy.FRAME_SAMPLES, policy.samples());
+        assertFalse(policy.sawSpeech());
+        policy.setHeld(false);
+        for (int i = 0; i < 9; i++) assertEquals(NativeVoiceCapturePolicy.End.CONTINUE, policy.accept(quiet));
+        assertEquals(NativeVoiceCapturePolicy.End.NO_SPEECH, policy.accept(quiet));
+    }
+    @Test public void leavingHeldStartsFreshSilenceAndCompletionClocksWithoutLosingSpeechEvidence() {
+        NativeVoiceCapturePolicy policy = policy(100, 600, 300);
+        policy.accept(frame(1000));
+        policy.setHeld(true);
+        for (int i = 0; i < 20; i++) assertEquals(NativeVoiceCapturePolicy.End.CONTINUE, policy.accept(frame(0)));
+        long previous = policy.samples();
+        policy.setHeld(false);
+        for (int i = 0; i < 2; i++) assertEquals(NativeVoiceCapturePolicy.End.CONTINUE, policy.accept(frame(0)));
+        assertEquals(NativeVoiceCapturePolicy.End.SILENCE, policy.accept(frame(0)));
+        assertEquals(previous + 3L * NativeVoiceCapturePolicy.FRAME_SAMPLES, policy.samples());
+        assertTrue(policy.sawSpeech());
+    }
+    @Test public void recognizedQuietSpeechCanSeedAFreshCompletionInterval() {
+        NativeVoiceCapturePolicy policy = policy(100, 600, 300);
+        policy.setHeld(true);
+        policy.accept(frame(200));
+        policy.setHeld(false);
+        policy.resetTiming(true);
+        assertEquals(NativeVoiceCapturePolicy.End.CONTINUE, policy.accept(frame(0)));
+        assertEquals(NativeVoiceCapturePolicy.End.CONTINUE, policy.accept(frame(0)));
+        assertEquals(NativeVoiceCapturePolicy.End.SILENCE, policy.accept(frame(0)));
+        assertFalse("Recognized text does not fabricate RMS evidence", policy.sawSpeech());
+    }
+    @Test public void anEndedRecordingCannotBeRevivedByAToggle() {
+        NativeVoiceCapturePolicy policy = policy(100, 100, 100);
+        assertEquals(NativeVoiceCapturePolicy.End.NO_SPEECH, policy.accept(frame(0)));
+        try { policy.setHeld(true); fail("Revived ended capture"); }
+        catch (IllegalStateException expected) { assertEquals("capture_already_ended", expected.getMessage()); }
     }
     @Test public void malformedSamplesAreRejected() {
         try { policy(1000, 1000, 100).accept(new byte[3]); fail("Accepted half a sample"); }

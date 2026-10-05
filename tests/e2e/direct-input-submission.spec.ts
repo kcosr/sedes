@@ -10,6 +10,8 @@ import {
   type DirectInputRequest,
 } from "../../src/shared/protocol/thread-input.js";
 import { expect, test } from "./fixtures";
+import { largeDirectInputText } from "../support/large-direct-input.js";
+import { installVoiceFixture } from "./voice-controls-fixture.js";
 import {
   capture,
   expectNoPageOverflow,
@@ -18,6 +20,8 @@ import {
   selectCustomNewThreadTarget,
   sendCurrentDraft,
 } from "./helpers";
+
+declare global { interface Window { __directInputPresentations: string[] } }
 
 async function createBoundCodexThread(page: Page): Promise<string> {
   await openSedesWorkspace(page);
@@ -53,6 +57,7 @@ test.afterEach(async ({ request }) => {
 test("idle direct input becomes one complete transcript message while active queue and steer retain their cards", async ({
   page,
 }, testInfo) => {
+  await installVoiceFixture(page);
   await page.setViewportSize({ width: 1280, height: 800 });
   const threadId = await createBoundCodexThread(page);
   const composer = page.getByRole("textbox", { name: "Message Codex" });
@@ -99,6 +104,28 @@ test("idle direct input becomes one complete transcript message while active que
     "This final sentence must remain visible beyond the abbreviated queue preview.",
   ].join(" ");
   expect(new TextEncoder().encode(spokenText).byteLength).toBeGreaterThan(240);
+  // Queue traffic can precede the local native receipt. Hold its scoped full
+  // content read so this checks the first DOM presentation, not eventual hydration.
+  let detailReadEntered = false;
+  let releaseDetail!: () => void;
+  const detailGate = new Promise<void>(resolve => { releaseDetail = resolve; });
+  const detailPattern = `**/api/threads/${threadId}/queued-inputs/*`;
+  const holdDetail: Parameters<Page["route"]>[1] = async route => {
+    detailReadEntered = true;
+    await detailGate;
+    await route.continue();
+  };
+  await page.route(detailPattern, holdDetail);
+  await page.evaluate(() => {
+    const observed: string[] = [];
+    window.__directInputPresentations = observed;
+    new MutationObserver(() => {
+      for (const message of document.querySelectorAll('[data-client-provisional="true"][data-message-role="user"]')) {
+        const text = message.querySelector(".message-row.user .message-body")?.textContent ?? "";
+        if (observed.at(-1) !== text) observed.push(text);
+      }
+    }).observe(document.body, { childList: true, subtree: true, characterData: true });
+  });
   const receipt = await submit(spokenText, { mode: "queue" });
   expect(receipt.admittedMode).toBe("submit");
   const messages = page.getByRole("region", { name: "Messages" });
@@ -106,6 +133,24 @@ test("idle direct input becomes one complete transcript message while active que
     `[data-message-role="user"][data-delivery-operation-id="${receipt.operationId}"]`,
   );
   const strip = page.getByRole("region", { name: "Pending inputs" });
+  try {
+    await expect.poll(() => detailReadEntered).toBe(true);
+    await expect(message).toHaveCount(0);
+    await page.evaluate(({ threadId, operationId, queuedInputId, text }) => {
+      const { profileId, serverOrigin, identity, connectionGeneration } = window.__voiceFixture.state;
+      window.__voiceFixture.emitInputSubmitted({ profileId: profileId!, serverOrigin: serverOrigin!, identity: identity!,
+        connectionGeneration, threadId, operationId, queuedInputId, text });
+    }, { threadId, operationId: receipt.operationId, queuedInputId: receipt.queuedInputId ?? null, text: spokenText });
+    await expect(message).toHaveCount(1);
+    await expect(message).toContainText(spokenText);
+    await expect(message.locator("[data-submission-phase]")).toHaveCount(0);
+    const presentations = await page.evaluate(() => window.__directInputPresentations);
+    expect(presentations.length).toBeGreaterThan(0);
+    expect(presentations).toEqual([spokenText]);
+  } finally {
+    releaseDetail();
+    await page.unroute(detailPattern, holdDetail);
+  }
   await expect(message).toHaveCount(1);
   await expect(message).toHaveAttribute("data-client-provisional", "true");
   await expect(message).toContainText(spokenText);
@@ -139,18 +184,26 @@ test("idle direct input becomes one complete transcript message while active que
   // The same API still represents genuinely queued or steering input in the
   // strip while this turn is active.
   await expect.poll(async () => (await inputContext()).runState).toBe("running");
-  const queuedText = "Queue this spoken follow-up until the current turn finishes.";
+  const queuedText = largeDirectInputText;
   const queued = await submit(queuedText, { mode: "queue" });
   expect(queued.admittedMode).toBe("queue");
   const queuedRow = strip.locator(`[data-queued-input-id="${queued.queuedInputId}"]`);
-  await expect(queuedRow).toContainText(queuedText);
+  await expect(queuedRow).toContainText("Recording transcript:");
   await expect(messages.locator(`[data-delivery-operation-id="${queued.operationId}"]`)).toHaveCount(0);
+  await expect(composer).toHaveValue(retainedDraft);
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await expect(queuedRow.getByRole("button", { name: /^Restore queued input to composer:/ })).toBeDisabled();
+  await queuedRow.getByRole("button", { name: /^Copy full text:/ }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(queuedText);
+  await expect(queuedRow.getByRole("button", { name: /^Copied full text:/ })).toBeVisible();
   await expect(composer).toHaveValue(retainedDraft);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "direct-input-active-queue-mobile.png");
   // An ordinary queued input ahead would correctly make Steer unavailable.
-  await queuedRow.getByRole("button", { name: `Delete queued input: ${queuedText}` }).click();
+  await queuedRow.getByRole("button", { name: /^Delete queued input:/ }).click();
   await expect(queuedRow).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
 
   expect(
     (await page.request.post(`/__e2e/codex/steer-materialization/arm/${threadId}`)).status(),

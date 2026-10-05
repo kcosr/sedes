@@ -21,9 +21,9 @@ final class NativeSpeechCatalogCache {
     }
 
     static String scope(String binding, NativeVoiceSettings settings, String credential) {
-        // Voice choices belong to the selected synthesis model. Neither selected voice nor speed changes the catalog.
+        // Separate exact recognition/synthesis choices and credentials; this remains advisory, never a preflight.
         JSONArray values = new JSONArray().put(binding).put(settings.text("speechProvider")).put(settings.text("speechEndpoint"))
-            .put(settings.text("ttsModel")).put(credential == null ? JSONObject.NULL : credential);
+            .put(settings.text("sttModel")).put(settings.text("ttsModel")).put(credential == null ? JSONObject.NULL : credential);
         try {
             StringBuilder result = new StringBuilder();
             for (byte value : MessageDigest.getInstance("SHA-256").digest(values.toString().getBytes(StandardCharsets.UTF_8)))
@@ -33,16 +33,16 @@ final class NativeSpeechCatalogCache {
     }
 
     boolean fresh(long now) { return now >= fetchedAt && now - fetchedAt < FRESH_MS; }
-    JSONObject record() { return NativeVoiceJson.object("version", 1, "scope", scope, "fetchedAt", fetchedAt, "catalog", NativeVoiceJson.copy(catalog)); }
+    JSONObject record() { return NativeVoiceJson.object("version", 2, "scope", scope, "fetchedAt", fetchedAt, "catalog", NativeVoiceJson.copy(catalog)); }
     static NativeSpeechCatalogCache fromRecord(JSONObject record) {
         NativeVoiceJson.keys(record, "version", "scope", "fetchedAt", "catalog");
-        NativeVoiceJson.integer(record, "version", 1, 1);
+        NativeVoiceJson.integer(record, "version", 2, 2);
         return new NativeSpeechCatalogCache(NativeVoiceJson.string(record, "scope", 64),
             NativeVoiceJson.integer(record, "fetchedAt", 0, Long.MAX_VALUE), NativeVoiceJson.requiredObject(record, "catalog"));
     }
 
     private static void validate(JSONObject catalog) {
-        NativeVoiceJson.keys(catalog, "source", "sttModels", "ttsModels", "voices", "speed", "formats");
+        NativeVoiceJson.keys(catalog, "source", "sttModels", "ttsModels", "voices", "speed", "formats", "realtime");
         String source = NativeVoiceJson.string(catalog, "source", 6);
         if (!source.equals("openai") && !source.equals("server")) throw new IllegalArgumentException("speech_catalog_invalid");
         for (String key : new String[] { "sttModels", "ttsModels", "voices", "formats" }) {
@@ -56,6 +56,23 @@ final class NativeSpeechCatalogCache {
                     throw new IllegalArgumentException("speech_catalog_invalid");
             }
         }
+        JSONObject realtime = NativeVoiceJson.requiredObject(catalog, "realtime");
+        java.util.Set<String> models = new java.util.HashSet<>();
+        JSONArray stt = catalog.optJSONArray("sttModels");
+        for (int index = 0; index < stt.length(); index++) {
+            String model = stt.optString(index);
+            if (!models.add(model)) throw new IllegalArgumentException("speech_catalog_invalid");
+            NativeSpeechCatalog.validateRealtime(realtime.optJSONObject(model), source.equals("openai"));
+            if (source.equals("openai")) {
+                JSONObject expected = NativeSpeechCapabilities.hosted(model).realtime();
+                for (java.util.Iterator<String> keys = expected.keys(); keys.hasNext();) {
+                    String key = keys.next();
+                    if (expected.optLong(key) != realtime.optJSONObject(model).optLong(key)) throw new IllegalArgumentException("speech_catalog_invalid");
+                }
+            }
+        }
+        for (java.util.Iterator<String> keys = realtime.keys(); keys.hasNext();) if (!models.contains(keys.next()))
+            throw new IllegalArgumentException("speech_catalog_invalid");
         if (!catalog.has("speed")) throw new IllegalArgumentException("speech_catalog_invalid");
         if (!catalog.isNull("speed")) {
             JSONObject speed = NativeVoiceJson.requiredObject(catalog, "speed");

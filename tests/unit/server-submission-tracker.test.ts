@@ -45,6 +45,167 @@ function fixture(read = vi.fn<(_: string, signal: AbortSignal) => Promise<Queued
 async function flush() { for (let index = 0; index < 8; index += 1) await Promise.resolve(); }
 
 describe("server submission presentation", () => {
+  const nativeReceipt = (queuedInputId: string | null = "queue-1", text = "Spoken message") => ({
+    operationId: "send-1", queuedInputId, text,
+  });
+
+  it("presents a native receipt's complete text before either its queue row or detail read arrives", async () => {
+    const pending = deferred<QueuedInputPresentation>();
+    const f = fixture(vi.fn(() => pending.promise));
+    const empty = snapshot([]);
+    f.observe(empty);
+    const text = "First segment.\nThe café review continues. ".repeat(100) + "Final segment.";
+    f.tracker.acceptNativeSubmission(nativeReceipt("queue-1", text), empty, new Set());
+    const view = f.tracker.getSnapshot()[0]!;
+    expect(view).toMatchObject({ operationId: "send-1", queuedInputId: "queue-1", phase: "confirming",
+      content: [{ kind: "text", text: { text } }], baselineTailItemId: "previous" });
+    expect(f.read).not.toHaveBeenCalled();
+    await flush();
+    expect(f.read).toHaveBeenCalledExactlyOnceWith("queue-1", expect.any(AbortSignal));
+    f.observe(snapshot());
+    expect(f.tracker.getSnapshot()).toHaveLength(1);
+    expect(f.tracker.getSnapshot()[0]?.presentationSequence).toBe(view.presentationSequence);
+    f.observe(snapshot([], 2, [userItem()]));
+    pending.resolve(detail({ state: "accepted", content: [{ kind: "text", text: { text } }] }));
+    await flush();
+    expect(f.tracker.getSnapshot()).toEqual([]);
+    f.tracker.acceptNativeSubmission(nativeReceipt("queue-1", text), snapshot([]), new Set());
+    expect(f.tracker.getSnapshot()).toEqual([]);
+  });
+
+  it("fills a queue-first entry without changing its original transcript anchors or sequence", () => {
+    const f = fixture(vi.fn(() => new Promise(() => {})));
+    f.observe();
+    const initial = f.tracker.getSnapshot()[0]!;
+    const fullText = "Beyond the preview. ".repeat(40);
+    f.tracker.acceptNativeSubmission(nativeReceipt("queue-1", fullText), snapshot(), new Set());
+    expect(f.tracker.getSnapshot()).toHaveLength(1);
+    expect(f.tracker.getSnapshot()[0]).toMatchObject({
+      presentationSequence: initial.presentationSequence, baselineTailItemId: initial.baselineTailItemId,
+      content: [{ kind: "text", text: { text: fullText } }],
+    });
+    f.tracker.acceptNativeSubmission(nativeReceipt("queue-1", "Changed duplicate"), snapshot(), new Set());
+    expect(f.tracker.getSnapshot()[0]?.content).toEqual([{ kind: "text", text: { text: fullText } }]);
+  });
+
+  it("waits for a real queue ID while immediately showing full native content", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const empty = snapshot([]);
+    f.observe(empty);
+    f.tracker.acceptNativeSubmission(nativeReceipt(null), empty, new Set());
+    expect(f.tracker.getSnapshot()[0]).toMatchObject({ content: detail().content, phase: "confirming" });
+    expect(f.tracker.getSnapshot()[0]?.queuedInputId).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(f.read).not.toHaveBeenCalled();
+    expect(f.tracker.getSnapshot()[0]?.phase).toBe("unconfirmed");
+    f.observe(snapshot());
+    await flush();
+    expect(f.read).toHaveBeenCalledExactlyOnceWith("queue-1", expect.any(AbortSignal));
+    expect(f.tracker.getSnapshot()[0]).toMatchObject({ queuedInputId: "queue-1", phase: "sending", content: detail().content });
+  });
+
+  it.each([true, false])("rejects a contradictory receipt queue ID while preserving the original entry (row present: %s)", (present) => {
+    const f = fixture(vi.fn(() => new Promise(() => {})));
+    f.observe();
+    const current = snapshot(present ? [queued()] : [], 2);
+    f.observe(current);
+    f.tracker.acceptNativeSubmission(nativeReceipt("different-queue", "Unrelated text"), current, new Set());
+    expect(f.tracker.getSnapshot()).toMatchObject([{ queuedInputId: "queue-1", operationId: "send-1" }]);
+    expect(f.tracker.getSnapshot()[0]?.content).toBeUndefined();
+    f.tracker.acceptNativeSubmission(nativeReceipt(), current, new Set());
+    expect(f.tracker.getSnapshot()[0]?.content).toEqual(detail().content);
+  });
+
+  it("reconciles a native receipt with no queue identity directly to its canonical operation", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.observe(snapshot([]));
+    f.tracker.acceptNativeSubmission(nativeReceipt(null), snapshot([]), new Set());
+    f.observe(snapshot([], 2, [userItem()]));
+    await vi.runAllTimersAsync();
+    expect(f.tracker.getSnapshot()).toEqual([]);
+    expect(f.read).not.toHaveBeenCalled();
+  });
+
+  it("remembers materialization seen before the native receipt even after a projection replaces it", () => {
+    const f = fixture();
+    f.observe(snapshot([], 2, [userItem()]));
+    f.observe(snapshot([], 3));
+    f.tracker.acceptNativeSubmission(nativeReceipt(), snapshot([], 3), new Set());
+    expect(f.tracker.getSnapshot()).toEqual([]);
+  });
+
+  it.each(["failed", "retry_wait", "uncertain"] as const)("cannot resurrect a %s operation from a delayed receipt", (state) => {
+    const f = fixture();
+    f.observe(snapshot([queued({ state })]));
+    f.tracker.acceptNativeSubmission(nativeReceipt(), snapshot([]), new Set());
+    expect(f.tracker.getSnapshot()).toEqual([]);
+  });
+
+  it("rejects receipts for composer operations, materialized operations, or a replaced queue identity", () => {
+    for (const [state, composer] of [
+      [snapshot([]), new Set(["send-1"])],
+      [snapshot([], 2, [userItem()]), new Set<string>()],
+      [snapshot([queued({ deliveryOperationId: "replacement" })]), new Set<string>()],
+      [snapshot([queued({ id: "wrong-queue" })]), new Set<string>()],
+    ] as const) {
+      const f = fixture();
+      f.tracker.acceptNativeSubmission(nativeReceipt(), state, composer);
+      expect(f.tracker.getSnapshot()).toEqual([]);
+    }
+  });
+
+  it("retains immutable native text and reports unconfirmed delivery if scoped content disagrees", async () => {
+    vi.useFakeTimers();
+    const f = fixture(vi.fn(async () => detail({ state: "accepted", content: [{ kind: "text", text: { text: "Different text" } }] })));
+    f.observe(snapshot([]));
+    f.tracker.acceptNativeSubmission(nativeReceipt(), snapshot([]), new Set());
+    await vi.runAllTimersAsync();
+    expect(f.read).toHaveBeenCalledTimes(8);
+    expect(f.tracker.getSnapshot()[0]).toMatchObject({ phase: "unconfirmed", content: detail().content });
+  });
+
+  it("validates finalized text by UTF-8 bytes without trimming its exact content", () => {
+    const f = fixture();
+    for (const text of [" ", "é".repeat(131_073)]) {
+      f.tracker.acceptNativeSubmission(nativeReceipt(null, text), snapshot([]), new Set());
+      expect(f.tracker.getSnapshot()).toEqual([]);
+    }
+    const text = `  ${"é".repeat(131_069)}\n `;
+    f.tracker.acceptNativeSubmission(nativeReceipt(null, text), snapshot([]), new Set());
+    expect(f.tracker.getSnapshot()[0]?.content).toEqual([{ kind: "text", text: { text } }]);
+  });
+
+  it("bounds native entries and releases their identity timers on disposal", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    for (let index = 0; index < 70; index += 1) {
+      f.tracker.acceptNativeSubmission({ ...nativeReceipt(null), operationId: `send-${index}` }, snapshot([]), new Set());
+    }
+    expect(f.tracker.getSnapshot()).toHaveLength(64);
+    f.tracker.dispose();
+    await vi.runAllTimersAsync();
+    expect(f.tracker.getSnapshot()).toEqual([]);
+    expect(f.read).not.toHaveBeenCalled();
+  });
+
+  it.each(["queue-64", null])("retires a locally cancelled or restored operation outside the presentation limit (receipt queue ID: %s)", (queuedInputId) => {
+    const f = fixture(vi.fn(() => new Promise(() => {})));
+    const queue = Array.from({ length: 65 }, (_, index) => queued({
+      id: `queue-${index}`, deliveryOperationId: `send-${index}`, sequence: index,
+    }));
+    f.observe(snapshot(queue));
+    expect(f.tracker.getSnapshot()).toHaveLength(64);
+    expect(f.tracker.getSnapshot().some(item => item.operationId === "send-64")).toBe(false);
+    f.tracker.retireOperation(queue[64]!.deliveryOperationId);
+    f.tracker.retireOperation(queue[0]!.deliveryOperationId);
+    f.observe(snapshot([], 2));
+    f.tracker.acceptNativeSubmission({ ...nativeReceipt(queuedInputId), operationId: "send-64" }, snapshot([], 2), new Set());
+    expect(f.tracker.getSnapshot()).toHaveLength(63);
+    expect(f.tracker.getSnapshot().some(item => item.operationId === "send-64")).toBe(false);
+  });
+
   it("presents an ordinary send immediately and hydrates its full immutable content", async () => {
     const pending = deferred<QueuedInputPresentation>();
     const f = fixture(vi.fn(() => pending.promise));
@@ -188,7 +349,7 @@ describe("server submission presentation", () => {
     const f = fixture(vi.fn(() => pending.promise));
     f.observe();
     await flush();
-    f.tracker.retireQueuedInput("queue-1");
+    f.tracker.retireOperation("send-1");
     expect(f.read.mock.calls[0]![1].aborted).toBe(true);
     pending.resolve(detail({ state: "accepted" }));
     await flush();

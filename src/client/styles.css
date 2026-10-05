@@ -8811,6 +8811,7 @@ tr.diff-hunk td {
 }
 
 .pending-input-restore,
+.pending-input-copy,
 .pending-input-steer {
   width: 28px;
   padding: 0;
@@ -11064,6 +11065,7 @@ tr.diff-hunk td {
 
   .pending-input-delete,
   .pending-input-restore,
+  .pending-input-copy,
   .pending-input-steer {
     width: 28px;
     min-width: 28px;

@@ -281,6 +281,7 @@ function makeServerSubmission(
     queuedInputId: "server-input",
     createdAt: "2026-10-03T12:00:00.000Z",
     preview: { text: "Spoken message" },
+    content: [{ kind: "text", text: { text: "Spoken message" } }],
     attachmentCount: 0,
     taskCount: 0,
     phase: "sending",
@@ -1754,7 +1755,7 @@ describe("Transcript server-admitted submissions", () => {
     expect(screen.queryByRole("button", { name: "Bookmark turn" })).not.toBeInTheDocument();
   });
 
-  it("marks a bounded preview and replaces it with the full submitted content", () => {
+  it("withholds a bounded queue preview so the first bubble contains the complete submitted text", () => {
     const snapshot = makeSnapshot([], false);
     const fake = new FakeTranscriptStore(snapshot);
     const submission = makeServerSubmission(snapshot, {
@@ -1764,35 +1765,33 @@ describe("Transcript server-admitted submissions", () => {
       },
       attachmentCount: 2,
       taskCount: 1,
+      content: undefined,
     });
     fake.replaceServerSubmissions([submission]);
     render(<Transcript store={fake as unknown as ThreadClientStore} />);
 
-    const row = screen.getByText("The first part of a long spoken message…").closest(".conversation-item");
-    expect(row).toHaveTextContent("Message preview");
-    expect(row).toHaveTextContent("2 attachments · 1 task");
-    expect(row).not.toHaveTextContent("Sending…");
+    expect(screen.queryByText(/The first part of a long spoken message/)).not.toBeInTheDocument();
+    expect(document.querySelector(`[data-delivery-operation-id="${submission.operationId}"]`)).toBeNull();
 
     act(() => fake.replaceServerSubmissions([{
       ...submission,
       content: [{ kind: "text", text: { text: "The full spoken message, including everything after the preview." } }],
     }]));
 
-    expect(row).toHaveTextContent("The full spoken message, including everything after the preview.");
+    const row = screen.getByText("The full spoken message, including everything after the preview.").closest(".conversation-item");
     expect(row).not.toHaveTextContent("Message preview");
     expect(row).not.toHaveTextContent("2 attachments");
     expect(row?.querySelector('[role="status"]')).toBeNull();
   });
 
-  it("marks missing attachment content as a preview even when the text is complete", () => {
+  it("waits for complete attachment content before showing an externally submitted message", () => {
     const snapshot = makeSnapshot([], false);
     const fake = new FakeTranscriptStore(snapshot);
-    const submission = makeServerSubmission(snapshot, { attachmentCount: 1 });
+    const submission = makeServerSubmission(snapshot, { attachmentCount: 1, content: undefined });
     fake.replaceServerSubmissions([submission]);
     render(<Transcript store={fake as unknown as ThreadClientStore} />);
 
-    const row = screen.getByText("Spoken message").closest(".conversation-item");
-    expect(row).toHaveTextContent("Message preview · 1 attachment");
+    expect(screen.queryByText("Spoken message")).not.toBeInTheDocument();
 
     act(() => fake.replaceServerSubmissions([{
       ...submission,
@@ -1802,6 +1801,7 @@ describe("Transcript server-admitted submissions", () => {
       ],
     }]));
 
+    const row = screen.getByText("Spoken message").closest(".conversation-item");
     expect(row).toHaveTextContent("notes.txt");
     expect(row?.querySelector('[role="status"]')).toBeNull();
   });
@@ -1872,6 +1872,16 @@ describe("Transcript server-admitted submissions", () => {
     expect(screen.getByRole("status")).toHaveTextContent(/^Delivery unconfirmed$/);
     expect(screen.queryByText("Checking delivery…")).not.toBeInTheDocument();
     expect(screen.getAllByText("Spoken message")).toHaveLength(2);
+  });
+
+  it("preserves a delivery failure notice when full content could not be retrieved", () => {
+    const snapshot = makeSnapshot([], false);
+    const fake = new FakeTranscriptStore(snapshot);
+    fake.replaceServerSubmissions([makeServerSubmission(snapshot, { content: undefined, phase: "unconfirmed" })]);
+    render(<Transcript store={fake as unknown as ThreadClientStore} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/^Delivery unconfirmed$/);
+    expect(screen.queryByText("Spoken message")).not.toBeInTheDocument();
+    expect(screen.queryByText("Message preview")).not.toBeInTheDocument();
   });
 
   it.each([

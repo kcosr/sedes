@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { notificationSettingsSchema, voiceNotificationSchema } from "../../src/shared/protocol/notification.js";
-import { directInputReceiptSchema, threadInputContextSchema } from "../../src/shared/protocol/thread-input.js";
+import { directInputReceiptSchema, MAX_DIRECT_INPUT_REQUEST_BYTES, MAX_DIRECT_INPUT_TEXT_BYTES, threadInputContextSchema } from "../../src/shared/protocol/thread-input.js";
 import { clientPollResultSchema, registeredClientSchema } from "../../src/shared/protocol/client-controls.js";
 import { startOpenAiSpeechFixture, waitForSpeech } from "../support/openai-speech-fixture.js";
 import { OpenCodeProductionFixture } from "../support/opencode-production-fixture.js";
@@ -140,13 +140,16 @@ describe("native voice production pipeline with loopback providers", () => {
         expect(reconnected.frames.filter(frame => frame.event === "notification")).toEqual([]);
       } finally { await reconnected.close(); }
 
-      // JSON expansion may exceed the application's ordinary 256 KiB parser,
-      // while the exact unescaped content still fits the 64 KiB contract.
-      const escaped = { ...input, mutationId: randomUUID(), text: "\u0001".repeat(50_000) };
+      // The full direct-input text limit still fits its dedicated request parser after JSON escaping.
+      const escaped = { ...input, mutationId: randomUUID(), text: "\u0001".repeat(MAX_DIRECT_INPUT_TEXT_BYTES) };
       expect(JSON.stringify(escaped).length).toBeGreaterThan(256 * 1024);
-      const oversizedText = { ...input, mutationId: randomUUID(), text: "é".repeat(32_769) };
+      expect(Buffer.byteLength(escaped.text)).toBe(MAX_DIRECT_INPUT_TEXT_BYTES);
+      expect(Buffer.byteLength(JSON.stringify(escaped))).toBeLessThan(MAX_DIRECT_INPUT_REQUEST_BYTES);
+      const oversizedText = { ...input, mutationId: randomUUID(), text: "é".repeat(MAX_DIRECT_INPUT_TEXT_BYTES / 2 + 1) };
+      expect(Buffer.byteLength(oversizedText.text)).toBeGreaterThan(MAX_DIRECT_INPUT_TEXT_BYTES);
       expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", oversizedText, clientHeaders)).status).toBe(400);
-      const overParser = { ...input, mutationId: randomUUID(), text: "\u0001".repeat(90_000) };
+      const overParser = { ...input, mutationId: randomUUID(), text: "\u0001".repeat(Math.floor(MAX_DIRECT_INPUT_REQUEST_BYTES / 6) + 1) };
+      expect(Buffer.byteLength(JSON.stringify(overParser))).toBeGreaterThan(MAX_DIRECT_INPUT_REQUEST_BYTES);
       expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", overParser, clientHeaders)).status).toBe(413);
       expect((await app.request(`/api/threads/${threadId}/inputs`, "POST", escaped, clientHeaders)).status).toBe(200);
     } finally { await feed.close(); }
@@ -203,14 +206,40 @@ describe("native voice production pipeline with loopback providers", () => {
     } finally { await feed.close(); }
   });
 
-  it.skipIf(!androidSerial)("validates Android Keystore recovery, cancellation, and real AudioRecord/AudioTrack", async () => {
-    const result = await adb(["shell", "am", "instrument", "-w", "-r", "-e", "class",
-      "dev.sedes.local.NativeVoiceStoreTest,dev.sedes.local.ClientCredentialStoreTest,dev.sedes.local.SpeechCredentialStoreTest,dev.sedes.local.NativeVoiceQueueDeviceTest," +
-      "dev.sedes.local.NativeVoiceRuntimeTest,dev.sedes.local.NativeVoiceStartupTest,dev.sedes.local.NativeVoiceAudioTest", "dev.sedes.local.test/androidx.test.runner.AndroidJUnitRunner"], 180_000);
-    await writeFile(path.join(artifactDirectory, "android-native-smoke.log"), result.stdout + result.stderr);
-    expect(result.stdout).toContain("OK (");
-    expect(result.stdout).not.toMatch(/FAILURES|INSTRUMENTATION_FAILED/u);
-  });
+  it.skipIf(!androidSerial).each([
+    "NativeVoiceStoreTest", "ClientCredentialStoreTest", "SpeechCredentialStoreTest", "NativeVoiceQueueDeviceTest",
+    "NativeDictationStoreDeviceTest", "NativeVoiceOwnershipTest", "NativeVoiceRuntimeTest", "NativeVoiceStartupTest", "NativeVoiceAudioTest",
+  ])("validates Android native %s", async nativeClass => {
+    // Each independent class has its own bounded invocation and log, so one slow or failed class cannot hide the rest.
+    let output = "";
+    const errors: unknown[] = [];
+    const cleanup = async (action: () => Promise<unknown>) => {
+      try { await action(); } catch (error) { errors.push(error); }
+    };
+    try {
+      await adb(["shell", "pm", "clear", "dev.sedes.local"]);
+      const result = await adb(["shell", "am", "instrument", "-w", "-r", "-e", "class",
+        `dev.sedes.local.${nativeClass}`, "dev.sedes.local.test/androidx.test.runner.AndroidJUnitRunner"], 180_000);
+      output = result.stdout + result.stderr;
+      expect(result.stdout).toMatch(/OK \([1-9]\d* tests?\)/u);
+      expect(result.stdout).not.toMatch(/FAILURES|INSTRUMENTATION_FAILED/u);
+    } catch (error) {
+      if (!output && error && typeof error === "object") {
+        const result = error as { stdout?: unknown; stderr?: unknown };
+        output = [result.stdout, result.stderr].filter(value => typeof value === "string").join("");
+      }
+      errors.push(error);
+    } finally {
+      await cleanup(() => writeFile(path.join(artifactDirectory, `android-native-${nativeClass}.log`), output));
+      await cleanup(async () => {
+        const logcat = await adb(["logcat", "-d", "-t", "1500"], 10_000);
+        await writeFile(path.join(artifactDirectory, `android-native-${nativeClass}-logcat.log`), logcat.stdout);
+      });
+      // Killing a timed-out adb client does not stop instrumentation on the emulator.
+      await cleanup(() => adb(["shell", "am", "force-stop", "dev.sedes.local"], 10_000));
+    }
+    if (errors.length) throw new AggregateError(errors, `Android native ${nativeClass} failed`);
+  }, 250_000);
 
   for (const [mode, scenario] of [["response", "cycle"], ["manual", "cycle"], ["response", "background"],
     ["response", "startup"], ["manual", "startup"],

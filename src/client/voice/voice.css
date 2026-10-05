@@ -14,6 +14,7 @@
   padding: 8px var(--voice-dock-inset) calc(8px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--border-soft);
   background: var(--card);
+  container: voice-dock / inline-size;
 }
 
 /* Under a rendered composer the dock continues the composer-wrap's band; the
@@ -36,11 +37,12 @@
   position: relative;
   display: flex;
   max-width: var(--measure);
+  height: 60px;
   min-height: 60px;
   align-items: center;
   gap: var(--space-2);
   margin-inline: auto;
-  padding-right: 5px;
+  padding-inline: 7px 5px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--secondary);
@@ -52,9 +54,8 @@
   border-color: var(--destructive-border);
 }
 
-/* The body: tile and two lines at the card's full height. When the card
-   names a thread other than the visible one, a button stretched over it
-   opens that thread; the retarget chip sits above that button. */
+/* The title and status open the named thread. The adjacent chevron is a
+   separate 44px target, so choosing a voice target never changes this action. */
 .voice-card-body {
   position: relative;
   display: flex;
@@ -62,8 +63,6 @@
   flex: 1 1 auto;
   align-self: stretch;
   align-items: center;
-  gap: var(--space-3);
-  padding-left: 7px;
 }
 
 .voice-card-open {
@@ -78,7 +77,7 @@
 }
 
 .voice-card-open:active,
-.voice-card-caret:active {
+.voice-card-target:active:not([aria-disabled="true"]) {
   background: var(--accent-soft);
 }
 
@@ -87,13 +86,14 @@
     background: var(--accent-soft);
   }
 
-  .voice-card-caret:hover,
+  .voice-card-target:hover:not([aria-disabled="true"]),
   .voice-card-button[data-variant="ghost"]:hover:not(:disabled) {
     background: var(--hover);
   }
 }
 
-/* The state tile. */
+/* The original state tile also opens the quick controls. Its small menu
+   caret makes that action visible without reserving another touch target. */
 .voice-card-tile {
   position: relative;
   display: grid;
@@ -110,6 +110,28 @@
 .voice-card-tile svg {
   width: var(--icon-lg);
   height: var(--icon-lg);
+}
+
+.voice-card-tile .voice-card-menu-mark {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 10px;
+  height: 10px;
+}
+
+.voice-card-tile[data-saved-access] {
+  border-color: var(--warning-border);
+}
+
+.voice-card-saved-indicator {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--warning);
 }
 
 .voice-card-tile[data-tone="info"] {
@@ -243,7 +265,8 @@
 .voice-card-phase[data-tone="destructive"] { color: var(--destructive); }
 .voice-card-phase[data-tone="warning"] { color: var(--warning); }
 
-/* Line 1 names the card's thread, next to the message-square glyph. */
+/* Line 1 names the card's thread. The only leading glyph is a transient
+   reconnecting indicator when the wider status hint cannot fit. */
 .voice-card-title[data-thread] {
   display: flex;
   align-items: center;
@@ -257,6 +280,10 @@
   color: var(--muted-foreground);
 }
 
+.voice-card-title[data-thread] .voice-card-title-reconnecting {
+  display: none;
+}
+
 .voice-card-title[data-thread] > span {
   min-width: 0;
   overflow: hidden;
@@ -268,78 +295,81 @@
   font-weight: var(--weight-regular);
 }
 
-/* The caret: the only way into the quick sheet, in every state. A 44px
-   target around the 16px glyph. */
-.voice-card-caret {
+.voice-card-target {
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: var(--control-touch);
+  height: var(--control-touch);
   flex: none;
   place-items: center;
-  border-radius: 999px;
-  color: var(--muted-foreground-2);
+  border-radius: var(--radius-ctl);
 }
 
-.voice-card-caret svg {
+.voice-card-target svg {
   width: var(--icon-md);
   height: var(--icon-md);
+  color: var(--muted-foreground);
+  transform: translateY(-9px);
 }
 
-/* Listening: line 2 ends with the retarget chip ("Change", or "Choose"
-   without a target). It shrinks before the phase word and keeps a 44px hit
-   area. */
-.voice-card-sub[data-chip] {
-  display: flex;
-  align-items: center;
-  overflow: visible;
-}
-
-.voice-card-sub[data-chip] > :not(.voice-card-chip) {
+.voice-card-keep {
+  display: grid;
+  width: 48px;
+  height: 48px;
   flex: none;
-}
-
-.voice-card-chip {
-  position: relative;
-  z-index: calc(var(--z-sticky) + 1);
-  display: inline-flex;
-  min-width: 0;
-  max-width: 100%;
-  height: 26px;
-  flex: 0 1 auto;
-  align-items: center;
-  gap: 5px;
-  padding: 0 7px 0 8px;
-  border: 1px solid var(--border);
+  place-items: center;
+  border: 1px solid var(--border-soft);
   border-radius: 999px;
-  background: var(--card);
+  background: var(--accent);
   color: var(--foreground);
-  font-size: var(--text-ui);
-  font-weight: var(--weight-medium);
-  line-height: 1;
 }
 
-.voice-card-chip::before {
-  position: absolute;
-  inset: -9px 0;
-  content: "";
+.voice-card-keep svg {
+  width: var(--icon-lg);
+  height: var(--icon-lg);
 }
 
-.voice-card-chip:active:not([aria-disabled="true"]) {
+.voice-card-keep[aria-pressed="true"] {
+  border-color: var(--info-border);
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.voice-card-keep:active:not([aria-disabled="true"]) {
   background: var(--accent);
 }
 
-.voice-card-chip svg {
-  width: var(--icon-sm);
-  height: var(--icon-sm);
-  flex: none;
-  color: var(--muted-foreground);
+.voice-card-keep[aria-disabled="true"],
+.voice-card-target[aria-disabled="true"] {
+  opacity: var(--disabled-opacity);
+  cursor: not-allowed;
 }
 
-.voice-card-chip-label {
+.voice-card-reconnecting {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted-foreground);
+  font-size: var(--text-ui);
+}
+
+.voice-card-reconnecting svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.voice-card-title[data-saved] {
+  display: flex;
+  align-items: center;
+}
+
+.voice-card-saved-label {
+  flex: none;
+}
+
+.voice-card-saved-thread {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* Actions: a 48px round primary and a 44px ghost Skip, 8px apart. */
@@ -364,13 +394,21 @@
   transition: transform 100ms ease;
 }
 
-.voice-card-button:active:not(:disabled),
-.voice-card-retry:active:not(:disabled) {
+.voice-card-button:active:not(:disabled, [aria-disabled="true"]),
+.voice-card-retry:active:not(:disabled, [aria-disabled="true"]) {
   transform: scale(0.94);
 }
 
 .voice-card-button {
   width: 48px;
+}
+
+/* Reserve Send's space from input preparation through admission. Neither a
+   repeated Start/Send tap nor toggling Keep listening can land on Cancel. */
+.voice-card-send-slot {
+  width: 48px;
+  height: 48px;
+  flex: none;
 }
 
 .voice-card-button svg {
@@ -395,12 +433,17 @@
 }
 
 /* Resume: a labelled pill, kept compact so "Voice needs to resume" fits
-   beside it and the caret at phone width. */
+   beside it and the status tile at phone width. */
 .voice-card-retry {
   gap: var(--space-1-5);
   padding: 0 var(--space-3) 0 11px;
   font-size: var(--text-ui);
   font-weight: var(--weight-medium);
+}
+
+.voice-card-retry-placeholder {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .voice-card-retry svg {
@@ -409,7 +452,9 @@
 }
 
 .voice-card-button:disabled,
-.voice-card-retry:disabled {
+.voice-card-retry:disabled,
+.voice-card-button[aria-disabled="true"],
+.voice-card-retry[aria-disabled="true"] {
   border-color: transparent;
   background: var(--accent-soft);
   color: var(--muted-foreground-2);
@@ -418,8 +463,8 @@
 }
 
 /* Off: the same card, de-emphasized. Flat on the --card band, muted text
-   and tile, the Mic disabled; the body stays a live button that opens the
-   sheet, where Manual or Response turns voice back on. */
+   and tile, Start disabled. The tile opens the sheet, where Manual or
+   Response turns voice back on. */
 .voice-card[data-off] {
   border-color: var(--border-soft);
   background: var(--card);
@@ -444,4 +489,116 @@
   .voice-dock {
     --voice-dock-inset: 9px;
   }
+}
+
+/* Fit the controls to the dock's available width, including narrow desktop
+   panels. Titles yield before the original tile and 44px controls. */
+@container voice-dock (max-width: 599px) {
+  .voice-card {
+    gap: 6px;
+  }
+
+  .voice-card-tile {
+    margin-inline-end: 2px;
+  }
+
+  .voice-card[data-input-actions],
+  .voice-card[data-saved] {
+    gap: 4px;
+    padding-inline-end: 3px;
+  }
+
+  /* Keep the tile and both text lines at their Ready-state positions. Only
+     the gaps between the controls yield as recording adds more actions. */
+  .voice-card[data-input-actions] .voice-card-tile,
+  .voice-card[data-saved] .voice-card-tile {
+    margin-inline-end: 4px;
+  }
+
+  .voice-card[data-input-actions] .voice-card-actions,
+  .voice-card[data-saved] .voice-card-actions {
+    gap: 6px;
+  }
+
+  .voice-card[data-input-actions] .voice-card-button,
+  .voice-card[data-input-actions] .voice-card-send-slot,
+  .voice-card[data-input-actions] .voice-card-keep,
+  .voice-card[data-saved] .voice-card-send-slot,
+  .voice-card[data-saved] .voice-card-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .voice-card[data-input-actions] .voice-card-sub > .voice-card-dot {
+    display: none;
+  }
+
+  .voice-card[data-input-actions] .voice-card-reconnecting {
+    display: none;
+  }
+
+  .voice-card-title[data-thread] .voice-card-title-reconnecting {
+    display: block;
+  }
+
+  .voice-card[data-saved] .voice-card-retry {
+    min-width: 44px;
+    height: 44px;
+    padding-inline: 7px;
+  }
+
+  .voice-card[data-saved] .voice-card-retry svg {
+    display: none;
+  }
+
+}
+
+/* Six distinct touch regions fit a 320px phone with full-size Listening
+   text. Use the right gutter only, so the Ready-state left inset stays fixed. */
+@container voice-dock (max-width: 315px) {
+  .voice-card[data-input-actions],
+  .voice-card[data-saved] {
+    width: calc(100% + 8px);
+    margin-inline: 0 -8px;
+  }
+
+  /* Reduce only the two 4px gaps beside the chooser to 1px. Keep listening
+     stays 4px from Cancel, including while the chooser is unavailable. */
+  .voice-card[data-input-actions] .voice-card-target {
+    margin-inline: -3px;
+  }
+
+  .voice-card[data-saved] .voice-card-actions {
+    gap: 4px;
+  }
+}
+
+@container voice-dock (max-width: 335px) {
+  .voice-card[data-saved] > .voice-card-retry {
+    margin-inline-start: -3px;
+  }
+
+  /* Keep the recovery status fully readable without taking space from the
+     gaps on either side of Discard. Thread titles still truncate first. */
+  .voice-card-saved-label {
+    font-size: var(--text-ui);
+  }
+}
+
+@container voice-dock (max-width: 359px) {
+  /* Preserve the complete saved-state label beside Retry and the two fixed
+     action slots without reducing any touch target. */
+  .voice-card[data-saved] > .voice-card-retry {
+    width: 44px;
+    padding-inline: 0;
+  }
+
+  .voice-card[data-saved] > .voice-card-retry span {
+    display: none;
+  }
+
+  .voice-card[data-saved] > .voice-card-retry svg {
+    display: block;
+  }
+
 }

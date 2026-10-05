@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Forward, Trash2, Undo } from "lucide-react";
+import { Check, Copy, Forward, Trash2, Undo } from "lucide-react";
 import type { QueuedInputSummary } from "../../../shared/index.js";
 import {
   useThreadStore,
@@ -8,7 +8,7 @@ import {
 } from "../../stores/ThreadClientStore.js";
 import { selectTranscriptSubmissions } from "./submission-presentation.js";
 
-type RowAction = "delete" | "restore" | "steer" | "dismiss";
+type RowAction = "delete" | "restore" | "steer" | "dismiss" | "copy";
 
 const STATE_LABELS: Readonly<Record<QueuedInputSummary["state"], string>> = {
   pending: "Queued",
@@ -289,6 +289,7 @@ export function PendingInputStrip({
     {},
   );
   const [announcement, setAnnouncement] = useState("");
+  const [copiedInputs, setCopiedInputs] = useState<ReadonlySet<string>>(new Set());
   const rows = useRef(new Map<string, HTMLLIElement>());
   const previousQueue = useRef(queue);
   const focusAfterRemoval = useRef<
@@ -301,6 +302,10 @@ export function PendingInputStrip({
 
   useEffect(() => {
     const existingIds = new Set(queue.map(({ id }) => id));
+    setCopiedInputs(current => {
+      const next = new Set([...current].filter(id => existingIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
     setRowErrors((current) => {
       const next = Object.fromEntries(
         Object.entries(current).filter(([id]) => existingIds.has(id)),
@@ -354,7 +359,7 @@ export function PendingInputStrip({
   ): Promise<void> => {
     if (pendingItems.current.has(item.id)) return;
     pendingItems.current.add(item.id);
-    if (action !== "restore" && document.activeElement === control) {
+    if (action !== "restore" && action !== "copy" && document.activeElement === control) {
       focusAfterRemoval.current = {
         itemId: item.id,
         previousIndex: previousQueue.current.findIndex(
@@ -363,6 +368,14 @@ export function PendingInputStrip({
       };
     }
     setPendingActions((current) => ({ ...current, [item.id]: action }));
+    if (action === "copy") {
+      setAnnouncement("");
+      setCopiedInputs(current => {
+        const next = new Set(current);
+        next.delete(item.id);
+        return next;
+      });
+    }
     setRowErrors((current) => {
       const { [item.id]: _removed, ...remaining } = current;
       return remaining;
@@ -383,6 +396,15 @@ export function PendingInputStrip({
         setAnnouncement(
           `Steered queued input ${item.sequence} into the active turn: ${item.preview.text}`,
         );
+      } else if (action === "copy") {
+        if (!navigator.clipboard?.write || typeof ClipboardItem !== "function") throw new Error("Clipboard unavailable. The queued input is still saved.");
+        const text = store.readQueuedInputText(item.id).then(value => new Blob([value], { type: "text/plain" }));
+        // The read can reject after clipboard permission or item construction fails.
+        void text.catch(() => undefined);
+        // Start the write during the click gesture; WebKit awaits the item's data.
+        await navigator.clipboard.write([new ClipboardItem({ "text/plain": text })]);
+        setCopiedInputs(current => new Set([...current, item.id]));
+        setAnnouncement(`Copied full text of queued input ${item.sequence}.`);
       } else {
         await store.dismissQueueFailure(item.id);
         setAnnouncement(
@@ -449,8 +471,8 @@ export function PendingInputStrip({
 
   const renderQueueItem = (item: QueuedInputSummary): React.JSX.Element => {
     // Delete cancels queued work that has not been sent. A failed row was
-    // never delivered either, so it offers Restore and Dismiss instead; each
-    // failed row is dismissed on its own.
+    // never delivered either, so it offers Restore and Dismiss instead; large
+    // user inputs offer full-text Copy without using the composer's budget.
     const userMutable =
       item.origin === "user" &&
       (item.state === "pending" || item.state === "retry_wait");
@@ -555,16 +577,30 @@ export function PendingInputStrip({
               className="pending-input-action pending-input-restore"
               aria-label={`Restore queued input to composer: ${item.preview.text}`}
               title={
-                restoreAvailable ? "Restore to composer" : restoreUnavailableReason
+                item.restoreUnavailableReason?.text ?? (restoreAvailable ? "Restore to composer" : restoreUnavailableReason)
               }
               disabled={
-                disabled || awaitingProjection || rowPending || !restoreAvailable
+                disabled || awaitingProjection || rowPending || !restoreAvailable || item.restoreUnavailableReason !== undefined
               }
               onClick={(event) =>
                 void runAction(item, "restore", event.currentTarget)
               }
             >
               <Undo size={15} strokeWidth={1.9} aria-hidden="true" />
+            </button>
+          )}
+          {userRestorable && item.restoreUnavailableReason && (
+            <button
+              type="button"
+              className="pending-input-action pending-input-copy"
+              aria-label={`${copiedInputs.has(item.id) ? "Copied full text" : "Copy full text"}: ${item.preview.text}`}
+              title={copiedInputs.has(item.id) ? "Copied full text" : "Copy full text"}
+              disabled={awaitingProjection || rowPending}
+              onClick={(event) => void runAction(item, "copy", event.currentTarget)}
+            >
+              {copiedInputs.has(item.id)
+                ? <Check size={15} strokeWidth={1.9} aria-hidden="true" />
+                : <Copy size={15} strokeWidth={1.9} aria-hidden="true" />}
             </button>
           )}
           {canOfferSteer && steerCapability && (

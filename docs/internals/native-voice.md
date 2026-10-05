@@ -2,12 +2,30 @@
 
 The Android `NativeVoice` Capacitor plugin exposes settings, snapshots, and
 actions. `NativeVoiceRuntime` owns the state machine on one handler thread.
-Native snapshot version 5 includes the `cleanSpeechText` setting and the registered
-`clientConnectionToken` alongside `originClientId`. The `pinDefaultVoiceThread` setting is scoped to the
-device/profile/identity with the other voice settings and defaults to false. When true, new explicit recordings and idle control targets use the
-saved default thread regardless of foreground navigation. A missing default
-does not fall back to the foreground thread. Automatic notification targeting
-and active retargeting keep their existing rules.
+Native snapshot version 8 includes `active.recording` (ID, Keep listening and
+Reconnecting), native-authoritative `canSetKeepListening`/`canSend` actions, the
+Keep listening blocked reason, and an independent `recordingRecovery` item.
+Recovery exposes identity, revision, target, stage, incomplete/unrecognized
+flags, eligible actions, and optional admission identity; it carries no PCM or
+transcript. It remains visible when Off and across restart. Commands use the
+expected connection generation plus recording ID and, for recovery, expected
+recovery revision. Retarget takes the recording ID; Stop takes the interaction
+ID. The strict bridge accepts only this version. The snapshot also includes
+`cleanSpeechText` and registered `clientConnectionToken` alongside `originClientId`. The `pinDefaultVoiceThread` setting is scoped to the
+device/profile/identity with the other voice settings and defaults to false.
+Pinning supplies the initial in-app target from the saved default without
+falling back to the foreground. The nullable native `nextRecordingTarget`
+contains a thread ID/title chosen through generation-fenced
+`setNextRecordingTarget`. This transient state is independent of navigation and
+saved settings. Explicit start arguments take priority, then this pending
+choice, then the pin/foreground/default policy. In-app starts consume it when
+the interaction is admitted, before asynchronous target validation. Headset and
+notification Start always use the saved default, regardless of pinning or the
+foreground thread, and preserve the pending in-app choice. Their idle notification
+label uses the same default target. A missing default cannot fall back to the
+foreground or pending choice. Local readiness rejection preserves it; Off and
+connection changes clear it. The setter rejects an active interaction or Off.
+Automatic notification replies preserve it and retain their own targets.
 `NativeVoiceRuntimeService` supplies Android foreground execution and controls;
 it does not run a WebView. `NativeSpeechTransport` connects directly to OpenAI
 or the OpenAI-Compatible Speech Server. `NativeVoiceHttp` owns authenticated
@@ -94,7 +112,7 @@ registration remain live while voice is Off. Old advisory origins retained in
 historical inputs do not become live client authority.
 
 The settings record carries an explicit `RECORD_VERSION` and validates strictly
-against it. Version 4 includes speech cleanup and the recording pin along with provider, endpoint,
+against it. Version 5 adds `longDictationTimeoutMs` to speech cleanup and the recording pin, provider, endpoint,
 model, voice, speed, text-limit, and result-timeout settings. Older settings
 records are not migrated; an upgrade resets them with voice Off. Speech
 credentials are stored separately and remain intact. A
@@ -279,7 +297,7 @@ unbound thread or for a backend without Steer is rejected with
 `invalid_transition`, as are unsupported target shapes. Idle delivery submits
 immediately under normal backend capabilities.
 
-Text has a 65,536-byte UTF-8 limit. The route's 524,288-byte JSON parser runs
+Text has a 262,144-byte UTF-8 limit. The route's 2,097,152-byte JSON parser runs
 before the ordinary smaller parser so JSON escaping cannot reject otherwise
 valid bounded text. Both limits are enforced. Admission is serialized with
 other thread mutations and rechecks runtime generation and inventory inside
@@ -290,9 +308,10 @@ ordinary creation coordinator; bound threads use the ordinary durable queue.
 Neither path reads, consumes, or overwrites the composer draft.
 
 For a bound thread, the browser presents an admitted ordinary user `submit`
-as a provisional transcript message instead of a queue row. This presentation
-is shared with other out-of-composer user submissions; it does not require a
-native bridge callback or change delivery semantics. The thread-scoped
+as a provisional transcript message once its complete content is available.
+This presentation is shared with other out-of-composer user submissions; it
+does not change delivery semantics. Incomplete queue summaries are never rendered
+as truncated transcript bubbles. The thread-scoped
 `GET /api/threads/:threadId/queued-inputs/:queuedInputId` reads immutable full
 content and retained delivery state under the authenticated principal. It is
 read-only and does not attach a runtime. A missing queue row alone does not
@@ -301,18 +320,27 @@ message until an exact delivery-operation match or authoritative retained
 state resolves it. Queue, Steer, attributed inputs, and failed or uncertain
 deliveries retain their existing presentation and controls.
 
-Local **Seek on send** uses a separate transient `inputSubmitted` bridge event.
+Local full-text presentation and **Seek on send** use the transient
+`inputSubmitted` bridge event.
 Only a current, uncancelled ordinary Submit from the active interaction may
 emit it while its target is the visible foreground thread. The event carries
-the receipt's exact operation/thread IDs and the native binding/generation;
-it contains no message content and is neither journaled nor replayed. Native
+the receipt's exact operation/thread IDs, its queued-input ID when present,
+the native binding/generation, and the exact finalized text from the authenticated
+request before journal cleanup. Text is nonblank and bounded by the 256 KiB
+direct-input limit. The event is neither journaled nor replayed, and routine
+snapshots continue to omit transcript content. Native
 rechecks visibility and ownership before dispatch, and the WebView rejects
 stale, duplicate, unhydrated, or foreign events. Hidden Chat, targeted history,
 late receipt recovery, and submissions from another device do not trigger a
-seek. Typed Send and this local event share the same animation and pinning
+seek. The handoff seeds or enriches the exact operation's complete provisional
+content, including when the receipt precedes the queue event. An already
+materialized or retired operation cannot be resurrected. Native content is
+presentation data, not proof of provider acceptance. Typed Send and this local
+event share the same animation and pinning
 path, including when the user item appeared before the receipt. Routine
-sending states stay internal; an incomplete preview or unresolved delivery
-can still carry its required indication.
+sending states stay internal; complete provisional bubbles have no preview label.
+Unresolved delivery still carries its required indication, and failed inputs
+retain their recovery controls.
 
 A first send to an unbound thread requires interactive presentation and the
 thread's required first-submission settings, as the composer does. If the
@@ -409,52 +437,221 @@ cancels only media-dependent work; a usable finalized transcript, including its
 success cue, submission, or admission continues. Failure cues and pending
 recognition retries are cancelled.
 
-## Speech protocol and local recording
+## Recording coordinator and recovery
+
+`NativeVoiceRecording` owns both ordinary and held dictation; there is no separate
+one-recording/one-transcription path. Interaction, recording, physical capture,
+segment, recognition attempt and admission mutation identities are distinct.
+The audio callback feeds a bounded 64-frame/307,200-byte queue. Storage and
+recognition run off the runtime actor and microphone callback. Queue overflow
+stops capture and retains the accepted prefix; it never silently drops PCM.
+`finishRecord` unblocks AudioRecord without invalidating its generation and
+publishes capture-ended only after accepted callbacks return and hardware cleanup.
+Cancel invalidates the generation instead.
+
+The device/profile/identity-scoped `keepListeningByDefault` setting defaults to
+false and is shared by the quick sheet and Settings → Voice. Each new manual or
+automatic recording freezes that preference. When enabled, durable adoption and
+held capture policy must succeed before the microphone starts; unavailable
+storage or a saved recording occupying the slot blocks capture. Preference
+edits affect future recordings, while the infinity control changes only the
+current recording. Strict settings record version 6 requires the field.
+Freezing an enabled default immediately clears automatic-policy and client-action
+authority, before asynchronous preflight or adoption can race a policy change.
+An unresolved retained dictation blocks default-held manual and automatic starts
+before target validation or the start cue, and makes `actions.canStart` false.
+
+The first accepted Keep listening enable adopts the complete recording,
+suppresses ordinary endpoints while adoption becomes durable, and
+makes automatic notification policy changes unable to cancel it. A late command
+cannot revive an ended recording. Turning it off retains the audio/results and
+resets ordinary speech-wait, completion, and silence clocks. Prior detected speech
+or recognized text chooses the fresh clock phase. Frozen `longDictationTimeoutMs`
+defaults to 3,600,000 and accepts whole minutes from 60,000 through 86,400,000.
+The first adoption starts a `SystemClock.elapsedRealtime()` deadline, including
+suspend; no toggle resets it. Expiration drains recognition into a retained ready
+draft without admission. Recording settings edits apply to future recordings.
+
+The voice toolbar preserves its existing 60 px row at normal text scale, including
+320 px layouts. The left status icon opens the quick sheet and carries a small
+caret. The title/status area opens the voice target thread; a separate chevron
+opens an anchored **Choose target thread** popup for native retargeting or the
+next manual recording, regardless of pinning. Choosing a target does not navigate
+or save a default. Quick and full settings share its search/list presentation in
+a **Default voice thread** modal or mobile sheet. On mobile, initial picker focus
+stays outside its search input to avoid opening the keyboard. Infinity is a full-size button
+beside the title/status area, and the right-side Cancel and Send controls are separated.
+Touch regions remain distinct and at least 44 px. Reconnecting and error details
+use the existing status line. An older saved draft marks the quick-controls icon
+and opens the same recovery sheet without adding another row.
+The title and status retain the Ready state's left alignment and gap from the
+status icon when recording controls appear, including narrow layouts. The
+icon-to-text gap is 8 px in every state. Input preparation, capture, recognition,
+and admission reserve the Send button's space and preserve the action sizes
+and right inset. Neither toggling Keep listening nor a repeated Start/Send tap
+moves Cancel/Stop under the user's last tap. The extra right-gutter space is
+limited to docks at most 315 px wide; 360 px phones keep their normal inset and
+control gaps. Every saved-dictation stage reserves Retry and Send space so
+Discard never moves into their former hit regions, and an old Retry tap cannot
+navigate through the expanded title. At the narrowest width,
+Retry/Resume uses its icon and the saved-state label uses the standard control
+text size. Retry-to-Discard and Discard-to-Send gaps remain at least 4 px with
+distinct 44 px touch targets; 360 px phones keep their normal gaps.
+
+`NativeVoiceSegmenter` counts real 24 kHz samples and analyzes absolute 100 ms
+frames. RMS 0.012 identifies likely pauses, never disposable audio. A 1,200 ms
+quiet run after speech seals a segment; after `min(30 seconds, hard limit / 2)`,
+200 ms quiet is sufficient. Hard limits are at most 60 seconds, rounded down to
+100 ms frames against provider capacity, and must allow at least five seconds.
+One second remains local for a hard cut at the lowest-energy eligible frame in
+that tail, with ties choosing the latest frame. Cuts cannot retract uploaded
+samples. Silence without detected speech reaches the hard limit. Every accepted
+real sample belongs to exactly one segment; a short final tail is zero-padded
+to 100 ms with padding tracked separately. No overlap, word deduplication, or
+text rewriting is applied. Results remain verbatim in storage; assembly trims
+outer whitespace per result and joins nonblank segments with one space.
+
+Only whole-recording completion produces feedback or input. Explicit Send is
+literal, including a spoken stop command, and blank Send does not rearm. Ordinary
+automatic completion applies the existing whole-utterance stop-command rule and
+speech-detected blank retry. Send freezes the target and waits for every accepted
+sample to resolve before preparing one immutable ordinary direct input.
+
+`NativeDictationStore` owns encrypted, backup-excluded recording files under the
+profile and authenticated Sedes binding. Independent one-second PCM blocks,
+checkpoint watermarks, bounded metadata, and recognized-prefix records use
+AES-GCM with owner/type/identity authenticated data. The serial storage executor
+orders adoption, accepted PCM, result persistence, reclamation, and tombstones.
+Successful text is durable before corresponding audio is deleted. Each recording
+allows 32 MiB unresolved PCM and 128 unresolved segments; the global 64 MiB disk
+budget includes ciphertext, metadata, temporary writes and reserved staging.
+Complete direct input allows 256 KiB UTF-8; individual results allow 64 KiB.
+Overflow retains the bounded recognized prefix and offending result for Copy
+and Discard. Nothing is silently truncated to make Send succeed.
+
+Interrupted adopted recordings release hardware and block new capture/queue drain
+before admission handoff. An interruption with no retained audio samples,
+recognized text or send request releases its empty slot after serialized
+settlement; it reports the interruption without publishing an empty ready draft.
+Audio that failed to reach storage does not keep an otherwise empty record alive
+only until restart. Startup cancellation settles its never-captured journal
+directly, without an intermediate interruption write.
+Unreadable storage remains preserved. Restart restores only the draft and immutable admission
+request; it cannot resume the microphone, recognition, or POST automatically.
+Missing interior audio blocks Send. An explicit recovery Send can accept a
+reported incomplete trailing watermark only with `acknowledgeIncomplete: true`
+from the recovery control that displays the warning. The toolbar opens that
+control for an incomplete capture. Key, corruption, and disk failures
+preserve recording files and expose unavailable recovery, rather than resetting
+them. Unknown targets are null and cannot open a thread. A bootstrap storage
+failure without a recoverable item reports storage readiness with an explicit
+reconnect action; it does not invent a saved-dictation phase. Profile removal
+revokes its write generation before serialized deletion and reports deletion
+failures even when credential cleanup succeeds.
+
+Recognition Retry uses the frozen provider/endpoint/model and fresh effective
+limits. It needs an enabled, ready voice session (including that service's
+microphone permission prerequisite) but opens no microphone and sends no message.
+Copy and Discard need no speech readiness. Complete recovery Send needs Sedes
+admission readiness. A recognition failure after Send revokes automatic admission,
+even when recognition later succeeds; the user presses Send again.
+Normal finish intents (Send, automatic completion, and Retry) are not presented
+as failure reasons. The original live Send keeps its live controls, including
+Stop during admission; an active recovery Retry or Send uses the recovery controls.
+
+The recording and final-input journal merge into one recovery item as soon as
+an immutable mutation is allocated. Adopted input entries independently authenticate
+their recording ID, preserving ownership if the recording manifest becomes unreadable.
+Startup checks the recording, mutation, target, and request identities and repairs
+a crash between journal save and handoff before publishing state. Generic
+`resumeInput`/`discardInput` reject a recording-owned mutation with
+`recording_recovery_required`. Recovery
+Send first looks up the receipt and reuses the immutable request only when
+eligible; Discard also works during an active recovery Retry or Send. It fences
+matching callbacks and stops matching work, then durably records retirement
+before removing the linked admission entry and recording files. Failure before
+durable retirement preserves the draft for recovery. Startup completes interrupted
+retirement before exposing generic recovery. A definitive pre-admission rejection
+retains adopted text for Copy/Discard with Send disabled. A found receipt releases
+the local recording and journal: subsequent dispatch belongs to the thread.
+After handoff, uncertain admission releases the active slot for ordinary capture
+and playback, while the older draft still blocks adoption of another recording.
+Its callbacks cannot change a newer interaction's phase or resources. Stop during
+recovered Send or recognition Retry preserves the draft; only its explicit
+Discard action deletes it. First-handoff preparation excludes concurrent receipt
+reconciliation. Never-adopted recordings release their spool as soon as the
+durable input journal owns the request.
+
+## Speech protocol and capability discovery
 
 `NativeSpeechTransport` is a pure-Java OkHttp client shared by host tests and the
-Android runtime. A recognition attempt owns one WebSocket at
-`/realtime?intent=transcription` under the configured API base. It uses the GA
-transcription session shape, requests mono signed PCM16 little-endian at 24 kHz,
-and disables provider turn detection and noise reduction. Capture begins only
-after the provider acknowledges the configuration with `session.updated`.
+Android runtime. It opens `/realtime?intent=transcription` beneath the configured
+API base, uses the GA session shape with PCM16LE mono at 24 kHz, and disables
+provider turn detection/noise reduction. Capture starts only after the matching
+`session.updated` acknowledgment. A connection is reusable across segments and
+renews at a safe boundary before its monotonic lifetime expires.
 
-Android streams Base64 PCM through `input_audio_buffer.append` while
-`NativeVoiceCapturePolicy` evaluates fixed 100 ms frames. Its normalized RMS
-threshold is 0.012. Sample counts measure waiting for speech, maximum recording
-after speech begins, and trailing silence; a separate watchdog bounds a stalled
-microphone. Ending capture after detected speech stops the microphone and
-commits once. Without detected speech, the runtime cancels the uncommitted
-session and ends the item; it does not request a transcript of that silence.
-A separate
-recognition result timeout bounds processing after commit. The committed item
-ID identifies the final transcription event. Optional deltas do not submit
-partial input, and reconnecting never replays recorded audio.
+At most one committed job and one following upload buffer exist on the provider.
+The next buffer opens only after the previous commit acknowledgment. Match
+results by connection, segment attempt and item ID, and track `previous_item_id`
+within each connection. Persist commit intent before transmission; the per-job
+result deadline includes the acknowledgment wait. Deltas never submit partial
+input. The upload pump retains unsent PCM in the spool and pauses at the 512 KiB
+WebSocket queue bound. Buffer accounting resets after acknowledged commits;
+there is no ten-minute cumulative recognition cap. Synthesis keeps its separate
+limits.
 
-Stop cancels the actual WebSocket or HTTP call, including a request waiting for
-headers. A new attempt has a fresh request identity. There is no persistent
-speech-provider socket whose connection state determines idle voice readiness.
-Provider configuration and credentials are required; network/model failures
-belong to individual operations and catalog requests.
+An adopted recording continues capture during allowlisted transient network,
+timeout, model-busy and retryable provider failures. It retries unresolved work
+at delays of 1, 2, 4, 8 and 16 seconds, bounded by 60 seconds from the first
+failure through recovery, including handshakes. An affected prepared or committed
+segment requires a durably saved matching result. When only an open upload was
+affected, a ready replacement session that accepts that upload ends the episode;
+the next segment boundary does not extend an already recovered outage. A fresh
+connection/attempt fences stale responses. Possibly committed recognition can
+repeat and incur provider cost; providers offer no durable recognition receipt
+or idempotent replay key. Already resolved audio is never replayed. Permanent
+failure, exhausted recovery, configuration or queue/storage failure interrupts
+capture and retains the draft. Never-adopted recordings use ordinary failure
+behavior. Transport cancellation closes the actual socket/call, including a
+request waiting for headers.
 
-`NativeSpeechCatalog` uses `/models` for OpenAI account availability hints and
-maintained metadata for known model voices and controls. The server preset uses
-its own `/audio/capabilities`. Model IDs stay configurable; model-list entries
-alone do not establish a model's audio capabilities. Unknown or unavailable
-catalog information is reported without fabricating supported controls.
+`NativeSpeechCatalog` keeps advisory picker discovery separate from capture
+preflight. Its encrypted one-hour cache is scoped to the binding, provider,
+endpoint, credential and selected STT/TTS models. Refresh never rewrites choices,
+requests microphone permission or starts capture. Authentication rejection
+invalidates the catalog; temporary refresh errors retain matching choices.
 
-Catalog discovery is independent of audio-session readiness. Native restores
-the last successful catalog from encrypted, backup-excluded device storage for
-the authenticated binding, speech provider, endpoint, credential, and selected
-speech model. It revalidates at startup and after relevant configuration changes.
-Opening Voice settings or enabling voice refreshes an absent catalog or one
-older than one hour; explicit Refresh bypasses that freshness check. Concurrent
-requests share the current fetch, and bridge calls return promptly while state
-events report loading and completion. A temporary refresh failure preserves the
-matching cached choices; an authentication rejection removes them. Changing the
-endpoint or credential invalidates the old catalog, and stale callbacks cannot
-publish into another configuration.
-Catalog refresh never rewrites selected model or voice IDs, requests microphone
-permission, or starts recording.
+Every own-server recording start and explicit recognition Retry makes a fresh
+authenticated `/audio/capabilities` request. Its selected transcription entry
+must include the required numeric `realtime` fields: `max_buffer_bytes`,
+`max_message_bytes`, `max_output_bytes`, `idle_timeout_seconds`, and
+`max_session_seconds`. Require at least 8,192 message bytes, 524,288 output
+bytes, 40 idle seconds, and five seconds of PCM after rounding. Byte limits are integers; finite positive timeout seconds may be fractional and
+are conservatively rounded down to milliseconds. Buffer capacity is the
+server/model effective minimum. Fresh-session timing must fit 30 seconds of
+microphone arming, 1.1 seconds before the first upload, the greater of the hard
+segment and full previous result deadline, a new result deadline, and a
+30-second margin. Frozen capabilities, not picker data,
+authorize the operation. Retry refuses immutable saved ranges that no longer fit
+lowered limits.
+
+Hosted transcription supports exactly `gpt-live-transcribe`, `gpt-transcribe`,
+`gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, and `whisper-1`. Each start/Retry
+opens and validates a fresh configured session without depending on `/models`.
+The hosted policy uses at most 60-second segments and a one-hour session ceiling.
+A valid upgrade Date and session expiry establish a conservative monotonic
+deadline; own-server deadlines use the advertised lifetime from the instant
+before connection creation. Lifetime checks use an injected suspend-inclusive
+clock and leave enough time for committed and buffered work. Model-list hints
+cannot authorize unlisted models or substitute missing expiry information.
+
+Fixture coverage does not establish live provider compatibility or segmentation
+quality. The default and every enabled hosted model require real repeated-commit,
+Date/expiry, session-renewal and audio-corpus validation before release, including
+quiet speech, names, repeated words, long pauses and forced boundaries. Do not
+work around failed validation with transcript deduplication or disabled default
+voice.
 
 ## Audio output and focus
 
@@ -496,13 +693,14 @@ transient focus. One focus entry is held across consecutive chunks, cues, and
 capture, and released 1.4 seconds after the last request ends unless another
 starts. Changing between playback and capture requests the new focus before
 abandoning the old entry. Callbacks from a replaced entry are ignored. A
-ducking loss lowers playback volume; any other loss ends the current audio
-request with `audio_focus_lost`. The runtime treats this as a quiet external
-stop of the current item, without an error, failure cue, or recognition retry.
-The held focus entry retains its latest request identity, so loss after capture
-stops still cancels recognition waiting for its result. The active item retains
-that identity while automatic listening revalidates its target, including when
-cues are disabled; a late validation response cannot restart interrupted capture.
+ducking loss lowers playback volume. Every capture focus loss, including ducking,
+interrupts microphone input; other playback focus loss ends playback. Adopted
+recordings retain their accepted audio and results, with a best-effort failure
+cue only when it can play without reclaiming lost focus. Ordinary playback or
+never-adopted capture keeps its quiet external-stop behavior. Focus loss after
+graceful capture finish cannot discard recognition already draining. The active
+item retains its identity while automatic listening revalidates its target;
+a late validation response cannot restart interrupted capture.
 If usable text was already captured and only its success cue was interrupted,
 the runtime continues
 submitting that text exactly once. An unrelated error awaiting its failure cue
@@ -518,18 +716,27 @@ Recording waits up to five seconds for the route, then fails with
 fallback `playback_failed`. Capture failures report
 `microphone_permission_required`, `audio_focus_unavailable`,
 `microphone_device_unavailable`, `microphone_route_failed`,
-`microphone_limit_reached`, or the fallback `microphone_failed`. Failure to
+`microphone_silenced`, `microphone_format_unavailable`,
+`microphone_read_failed`, or the fallback `microphone_failed`. Failure to
 obtain focus (`audio_focus_unavailable`) remains an error; losing focus after
-acquiring it does not report an error.
+acquiring it interrupts an adopted recording with recovery. Routing is monitored
+on every supported API (24+): allow initial establishment, validate an explicitly
+selected input, then freeze the actual route and interrupt on loss/change.
+On API 29+, AudioRecordingCallback plus the initial active recording configuration
+detect Android client silencing even while zero PCM continues. API 24–28 lack
+that signal and retain route/focus/read/progress checks. Quiet PCM alone is not
+microphone failure. Callbacks are capture-generation fenced and unregistered on
+cleanup. The service renews its bounded ten-minute wake lock every five minutes
+only during active capture/drain; a retained draft holds no wake lock.
 
 Speech synthesis sends one complete bounded text chunk to `/audio/speech` and
 consumes its raw 24 kHz PCM response incrementally. Outgoing transcription
 buffers, request deadlines, and streamed audio bytes are bounded. The incoming
-WebSocket message limit is checked before JSON parsing; OkHttp has already
+WebSocket message limit is the smaller of 512 KiB and the provider output limit,
+checked before JSON parsing; OkHttp has already
 buffered that message before delivering it to the listener. Local Skip/Stop
 intent remains authoritative even if a provider completes concurrently.
-The transport does not reconnect a transcription session or replay captured
-audio. OkHttp may repeat a pre-upgrade WebSocket GET after HTTP 503 with
+Recognition reconnection and replay follow the coordinator's bounded policy above. OkHttp may repeat a pre-upgrade WebSocket GET after HTTP 503 with
 `Retry-After: 0`; no session or audio has been sent at that point.
 
 Return to [Internals](index.md).

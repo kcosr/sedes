@@ -13,7 +13,7 @@ import {
 } from "../../../shared/protocol/backend.js";
 import type { UsageSnapshot } from "../../../shared/protocol/conversation.js";
 import type { ContextExcerpt } from "../../../shared/protocol/context-excerpts.js";
-import { boundText } from "../../conversations/payload-policy.js";
+import { boundText, preserveMessageText } from "../../conversations/payload-policy.js";
 import type { ValidatedWorkspace } from "../../execution/contracts.js";
 import { presentMessageTaskContext } from "../../domain/materialized-task-contexts.js";
 import {
@@ -1057,7 +1057,7 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
         const item = {
           ...assistantBase,
           status: "streaming" as const,
-          markdown: boundText(partialText),
+          markdown: preserveMessageText(partialText),
         } satisfies BackendItem;
         record.snapshot.itemsById[item.backendItemId] = item;
         this.emit(record, { type: "item_updated", item });
@@ -1067,7 +1067,7 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
         const item = {
           ...assistantBase,
           status: "streaming" as const,
-          markdown: boundText(completeText),
+          markdown: preserveMessageText(completeText),
         } satisfies BackendItem;
         record.snapshot.itemsById[item.backendItemId] = item;
         this.emit(record, { type: "item_updated", item });
@@ -1079,7 +1079,7 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
           ...assistantBase,
           status: "completed" as const,
           completedAt,
-          markdown: boundText(completeText),
+          markdown: preserveMessageText(completeText),
         } satisfies BackendItem;
         record.snapshot.itemsById[item.backendItemId] = item;
         this.emit(record, { type: "item_completed", item });
@@ -1363,7 +1363,7 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
       const item = {
         ...assistantBase,
         status: "streaming" as const,
-        markdown: boundText(partialText),
+        markdown: preserveMessageText(partialText),
       } satisfies BackendItem;
       this.#appendItem(record, turn.backendTurnId, item);
       this.emit(record, { type: "item_started", item });
@@ -1373,7 +1373,7 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
       const item = {
         ...assistantBase,
         status: "streaming" as const,
-        markdown: boundText(completeText),
+        markdown: preserveMessageText(completeText),
       } satisfies BackendItem;
       record.snapshot.itemsById[item.backendItemId] = item;
       this.emit(record, { type: "item_updated", item });
@@ -1422,7 +1422,7 @@ export class InMemoryConformanceDriver implements ConversationBackendDriver {
         ...assistantBase,
         status: "completed" as const,
         completedAt,
-        markdown: boundText(completeText),
+        markdown: preserveMessageText(completeText),
       } satisfies BackendItem;
       record.snapshot.itemsById[item.backendItemId] = item;
       this.emit(record, { type: "item_completed", item });
@@ -2300,7 +2300,7 @@ class InMemoryConversationHandle implements ConversationHandle {
           excerpt: structuredClone(excerpt),
         })),
         ...(input.text.length > 0
-          ? [{ kind: "text" as const, text: boundText(input.text) }]
+          ? [{ kind: "text" as const, text: preserveMessageText(input.text) }]
           : []),
       ],
     } satisfies Extract<BackendItem, { semanticKind: "user_message" }>;

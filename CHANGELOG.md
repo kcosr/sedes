@@ -4,24 +4,29 @@
 
 ### Breaking Changes
 
-- Client protocol 139 replaces browser-supplied input origin IDs with server
-  registration. Upgrade browser and packaged clients with the server; native
-  voice shares its registered connection with the WebView.
-  ([#50](https://github.com/kcosr/sedes/pull/50))
+- Browser and packaged clients require client protocol 140. Direct inputs accept
+  up to 256 KiB of text and 2 MiB per JSON request; input origins use server
+  registration shared by Android native voice and its WebView. Upgrade clients
+  together with the server.
+  ([#50](https://github.com/kcosr/sedes/pull/50), [#53](https://github.com/kcosr/sedes/pull/53))
 
-- Android voice now uses OpenAI-compatible Realtime transcription and streamed
-  HTTP speech in place of the direct-media adapter. Upgrading resets local voice
-  settings with Audio mode Off; reconfigure the provider, endpoint, and models.
+- Android voice uses OpenAI-compatible Realtime transcription and streamed HTTP
+  speech, with snapshot version 8 and settings record version 6. Older local
+  voice settings reset to Off; reconfigure the provider, endpoint, and models.
   Separately stored speech credentials remain on the device.
-  ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51))
+  ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51), [#53](https://github.com/kcosr/sedes/pull/53))
 
-- Browser and packaged clients require client protocol 138 for pending Send
-  presentation. Upgrade clients together with the server.
-  ([#46](https://github.com/kcosr/sedes/pull/46))
+- Self-hosted speech servers must advertise per-model `realtime` capabilities.
+  Hosted recognition accepts only the supported base model IDs, excluding dated
+  and custom IDs.
+  ([#53](https://github.com/kcosr/sedes/pull/53))
 
-- Native voice requires client protocol 137 and notification script payload
-  version 4. Upgrade packaged clients and separately copied notification hooks
-  with the server, and review the migrated per-event Script/Voice settings.
+- Database migrations 133–134 raise direct-input storage limits while preserving
+  existing inputs and receipts. Back up the database before this one-way upgrade.
+  ([#53](https://github.com/kcosr/sedes/pull/53))
+
+- Notification scripts require payload version 4. Upgrade separately copied
+  hooks with the server and review the migrated per-event Script/Voice settings.
   ([#45](https://github.com/kcosr/sedes/pull/45))
 
 - Codex Speed is provider feature `codex.fast_mode@2`, which replaces the
@@ -208,6 +213,12 @@
 
 ### Added
 
+- Android **Keep listening** records through pauses until Send, with an optional
+  default for new recordings and a configurable limit of one hour by default. Interrupted
+  dictation is saved encrypted for Retry, Send, Copy, or Discard; timed-out or
+  interrupted recordings never submit silently.
+  ([#53](https://github.com/kcosr/sedes/pull/53))
+
 - Android voice can clean up Markdown before speaking, preserving link labels,
   code contents, and reading pauses. The device-local setting defaults to on.
   ([#51](https://github.com/kcosr/sedes/pull/51))
@@ -215,27 +226,23 @@
 - Agent client controls manage basic voice settings, end interactions, and switch
   threads after reply playback, defaulting to the client that started the turn.
   ([#50](https://github.com/kcosr/sedes/pull/50))
+
 - Task creation supports pinning in the add row and paste-many dialog.
   ([#50](https://github.com/kcosr/sedes/pull/50))
 
-- Android voice connects directly to OpenAI or a self-hosted
+- Android native voice provides spoken notifications, manual and automatic
+  recording, and background controls through OpenAI or a self-hosted
   [OpenAI-Compatible Speech Server](https://github.com/kcosr/openai-speech-server),
-  with native encrypted credentials, automatic model and voice discovery, and
-  device-owned recording, silence detection, and playback.
-  ([#49](https://github.com/kcosr/sedes/pull/49))
+  with encrypted device credentials and model discovery. Script and Voice
+  delivery are selected per event; Codex, Pi, and Claude support live progress
+  announcements. Recording preserves composer drafts.
+  ([#45](https://github.com/kcosr/sedes/pull/45), [#49](https://github.com/kcosr/sedes/pull/49))
 
-- Android native voice supports spoken notifications, explicit and automatic
-  recording, thread targeting, background controls, and recoverable input
-  without changing composer drafts. Choose Script and Voice delivery per event;
-  Codex, Pi, and Claude provide live progress announcements.
-  ([#45](https://github.com/kcosr/sedes/pull/45))
-
-- Android voice shows a card under the composer that always names its thread,
-  with the current state and large Skip, Stop, and record controls. Tapping
-  the card opens that thread when another is on screen; its caret opens a
-  Voice sheet for audio mode and Auto-listen. **Show voice bar when off** keeps
-  a dimmed card while voice is off.
-  ([#48](https://github.com/kcosr/sedes/pull/48))
+- The Android voice card shows its thread, current state, and playback or
+  recording controls, with thread navigation and quick Voice settings. Large
+  controls remain usable on narrow screens.
+  **Show voice bar when off** keeps the card available while voice is disabled.
+  ([#48](https://github.com/kcosr/sedes/pull/48), [#53](https://github.com/kcosr/sedes/pull/53))
 
 - Codex threads can use **Ultrafast** speed when the account's Codex model
   catalog offers it. When a model offers both Fast and Ultrafast, the
@@ -421,26 +428,24 @@
 
 ### Changed
 
-- Workpads has a new layout that matches Tasks and Files. Search and View
-  options (nested scopes, archived, browsing another thread or project) sit in
-  the panel header; the list has one scope control, a New workpad row, and
-  quiet rows with a ⋯ menu for Rename, Move to, and Archive. An open workpad
-  keeps the panel header's back arrow and ⋯ menu and gets one toolbar for
-  attribution, revision history, Edit, and Save (Ctrl/⌘S); Discard draft asks
-  first. It first opens at 40% of the stage, from 320 to 480px.
+- Voice settings offer searchable models, voices, and threads, with separate
+  default recording targets and playback filters. The voice card can choose a
+  current or next target without changing the default; headset and notification
+  Start use the saved default, while automatic replies keep their source thread.
+  ([#49](https://github.com/kcosr/sedes/pull/49), [#53](https://github.com/kcosr/sedes/pull/53))
 
-- Workpads now follows the active thread in Thread view and its project in
-  Project view, while Global view retains its selection. Switching scopes
-  protects unsynced drafts and pending changes, and preserves the panel layout.
+- Mobile Prompts supports search, and voice thread pickers open without raising
+  the keyboard.
+  ([#53](https://github.com/kcosr/sedes/pull/53))
+
+- Workpads shares the Tasks and Files panel layout, with header search and view
+  options, scope navigation, row actions, and one editing and revision toolbar.
+  Thread and Project views follow the active thread; Global retains its selection.
+  Scope changes protect unsaved drafts and preserve the panel layout.
   ([#52](https://github.com/kcosr/sedes/pull/52))
 
 - `thread.status@3` and `thread.list@6` expose read-only thread pin state.
   ([#50](https://github.com/kcosr/sedes/pull/50))
-
-- Android voice settings and quick controls provide searchable speech choices,
-  a default recording thread with optional pinning, and an independent automatic
-  playback filter. Off, Manual, and Response modes control the voice session.
-  ([#49](https://github.com/kcosr/sedes/pull/49))
 
 - Android HTTPS and secure WebSocket connections now trust user- and
   MDM-installed certificate authorities, including for authenticated Sedes
@@ -767,30 +772,31 @@
 
 ### Fixed
 
+- macOS desktop packages include the local-network permission description.
+  ([#53](https://github.com/kcosr/sedes/pull/53))
+
+- Database upgrades preserve the deployed migration 133 checksum and correct
+  input admission checks without changing stored messages or receipts.
+  ([#53](https://github.com/kcosr/sedes/pull/53))
+
+- Voice submissions show their full text immediately, honor **Seek on send**,
+  and preserve the typed draft. Failed or unsent inputs larger than the composer's
+  64 KiB limit offer **Copy full text**.
+  ([#46](https://github.com/kcosr/sedes/pull/46), [#53](https://github.com/kcosr/sedes/pull/53))
+
 - Agent tool groups scroll horizontally on narrow screens, keeping the rightmost
   groups reachable by touch.
   ([#50](https://github.com/kcosr/sedes/pull/50))
 
 - Android voice startup and Resume recover the current activity and thread
-  context after configuration changes. Silent recordings end locally without
-  submitting audio for transcription.
-  ([#49](https://github.com/kcosr/sedes/pull/49))
+  context after configuration changes and immediately show a pending service
+  start. Silent recordings end locally without submitting audio for transcription.
+  ([#49](https://github.com/kcosr/sedes/pull/49), [#53](https://github.com/kcosr/sedes/pull/53))
 
-- Native voice recognition that captures audio but returns no transcript
-  (`empty_transcript`) now re-arms and listens again instead of reporting a
-  recognition error, matching the Assistant client. Stop, Off, adapter changes,
-  and external audio interruptions cancel pending retries.
+- Android voice retries empty transcripts and handles audio-focus interruptions
+  without spurious errors or loss of recognized text. Stop and Off cancel pending
+  retries; failure to acquire audio focus remains an error.
   ([#47](https://github.com/kcosr/sedes/pull/47))
-- The Android keyboard's dictation microphone and other apps taking audio
-  focus quietly stop the current voice interaction without flashing a red
-  error. Already recognized text still submits if its success tone is
-  interrupted; failure to acquire audio focus remains an error.
-  ([#47](https://github.com/kcosr/sedes/pull/47))
-
-- Idle voice submissions appear as ordinary chat messages while delivery
-  completes, honor **Seek on send**, and preserve the typed draft. Routine
-  delivery labels stay hidden, matching typed Send.
-  ([#46](https://github.com/kcosr/sedes/pull/46))
 
 - Claude availability probes wait for complete process output, avoiding
   intermittent false unavailable errors.

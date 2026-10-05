@@ -20,29 +20,46 @@ then your saved default voice thread, or asks you to choose one. Voice sends a s
 message and preserves the unsent composer draft. It can also make the first send to an
 empty thread.
 
-Enable **Pin default voice thread** to keep the idle bar and new recordings on
-your default thread while browsing elsewhere. If that thread is missing or
-unavailable, the record button asks for a new default before recording.
+Enable **Pin default voice thread** to use your default thread as the initial
+recording target while browsing elsewhere. The row picker can override it for
+one recording. If the initial target is missing or unavailable, Start asks you
+to choose a target without changing the saved default.
 
 The card's first line always names its thread, using its title or **Untitled
 thread**: the thread being spoken or recorded to, or, when idle, the thread a
-recording would use. When pinned, that is the default thread. Otherwise it is
-the visible thread when it can take a recording, then the default. With neither,
+recording would use. An explicit choice takes priority. Otherwise, pinning uses
+the default thread; without pinning, the visible available thread leads, then
+the default. With no available target,
 the card asks you to choose a thread.
 The second line is the state, such as **Ready · Response · Auto-listen on**,
 **Speaking** with the notice kind and queued count, or **Listening**. If voice
 needs to resume, the card offers **Resume**.
 
-Tap the card to open its thread when another thread is on screen. While
-listening, tap **Change** (or **Choose** without a target) to change the
-recording target before recognition finishes; the picker lists the visible
-thread first. Navigating to another thread alone does not redirect a recording.
+Tap the title and status area to open the voice target thread. Its separate
+chevron opens **Choose target thread**, a popup available with pinning on or off.
+While idle, it chooses the next recording started in the app; while listening,
+it changes the current recording target.
+The choice leaves the viewed thread and saved default unchanged, and navigation
+does not redirect it. The choice is consumed when a new in-app recording
+starts, and clears when voice is turned Off or the connection changes.
+Headset and notification Start always use the saved default voice thread,
+regardless of pinning or the viewed thread, and preserve your pending in-app
+choice. Automatic notification replies keep their own targets.
+The popup lists the visible thread first. On mobile, search stays visible and
+the keyboard stays closed until you tap it. **Default voice thread** in quick
+or full settings uses the same search and rows inside a modal or mobile sheet.
 Once recognition finishes, its target and delivery policy stay fixed through
-any connection recovery. The caret on the card opens the **Voice** sheet with
-**Audio mode**, **Auto-listen**, **Follow composer mode**, **Pin default voice
+any connection recovery. The left status icon opens the **Voice** sheet with
+**Audio mode**, **Auto-listen**, **Keep listening by default**, **Follow composer mode**, **Pin default voice
 thread**, **Only play from default voice thread**, **Default voice thread**, and
 **All voice settings**. The playback filter limits automatic playback to the default thread; it does not change
 where explicit recordings go.
+
+**Keep listening by default** is initially off. Enable it in either voice settings
+menu to start new manual and auto-listen recordings in infinity mode. The infinity
+button changes only the current recording; changing the saved preference takes
+effect on the next recording. The idle Start button shows infinity when that
+default is on and a microphone when it is off.
 
 Spoken input queues while a thread is running. Enable **Follow composer's
 selected mode** to use the client's Queue/Steer preference instead. When
@@ -63,7 +80,7 @@ never types an answer into an approval or question form.
 other queued notices may continue. While voice is recording or recognizing,
 Stop becomes **Cancel**, which discards the recording unsent. **Off** clears
 the voice queue and hides the card unless **Show voice bar when off** is on in
-**Settings → Voice**; then a dimmed card stays, and its caret opens the Voice
+**Settings → Voice**; then a dimmed card stays, and its status icon opens the Voice
 sheet to turn voice back on. The notification silence bell suppresses
 automatic voice and script delivery, while explicit recording remains
 available. The card shows the latest voice error until your next voice action
@@ -298,8 +315,8 @@ If **Show Prompts tab** is enabled, open **Prompts** above the composer.
 - Use the row's **Add to composer** icon to insert the text at the caret and
   keep editing.
 
-The desktop picker is searchable. The compact mobile picker keeps the saved
-order but omits search. If another client changes the prompt library while the
+The picker is searchable on desktop and mobile. Mobile search leaves the
+keyboard closed until you tap it; an empty search keeps the saved order. If another client changes the prompt library while the
 picker is open, use its refresh control or reopen it.
 
 ### Add a Task
@@ -378,7 +395,10 @@ bookmarkable, forkable, or eligible for context capture.
 An idle voice submission also appears as a normal chat message once Sedes
 admits it. It leaves any typed draft intact and honors **Seek on send** on the
 device where you spoke. Routine sending labels stay hidden for both typed and
-spoken messages; a marked preview can appear while the full text loads.
+spoken messages. Local voice supplies the complete recognized text for the first
+submitted bubble, without truncation or a preview label. Other server-owned
+submissions appear as bubbles once their full content is available. The provider's
+matching transcript message replaces that presentation without creating a duplicate.
 Voice input admitted as Queue or Steer still uses the pending-input rows, as do
 failed or uncertain deliveries that need attention.
 
@@ -390,6 +410,11 @@ dispatching or uncertain, Sedes cannot safely retract it and does not offer a
 cosmetic dismiss action. A failed or not-sent entry offers **Restore**, which
 returns its text to an empty composer without sending, and **Dismiss**, which
 removes it; each entry clears on its own.
+
+Restore is disabled for user input above the composer's 64 KiB limit. Use
+**Copy full text** to preserve the complete text, including failed or not-sent
+input. Copy leaves the queued entry and current composer unchanged. Copy it
+before dismissing the entry if you want to keep it.
 
 When Steer is supported, you can convert the user-created queue head to
 **Steer** without changing the current draft. An ordinary Queue entry already

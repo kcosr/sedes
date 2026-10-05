@@ -6,13 +6,13 @@ import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/a
 import type { ApplicationClientStore } from "../stores/ApplicationClientStore.js";
 import { NativeVoiceStore } from "./NativeVoiceStore.js";
 import type { NativeVoiceState } from "./native-voice-plugin.js";
-import { fakeVoicePlugin, VOICE_CONNECTION, voiceSettings, voiceSnapshot } from "./native-voice-test-fixture.js";
+import { fakeVoicePlugin, recordingRecovery, VOICE_CONNECTION, voiceActions, voiceSettings, voiceSnapshot } from "./native-voice-test-fixture.js";
 import { inputDeviceLabels, VoiceSettingsPage } from "./VoiceSettingsPage.js";
 
 const thread = (id: string, title: string) => ({ id, title: { text: title }, available: true, inventoryState: "active" }) as unknown as NormalizedApplicationThreadSummary;
 const application = { snapshot: { threads: [thread("long", "T".repeat(600)), thread("untitled", ""), thread("named", "Release review")] } };
 const applicationStore = { subscribe: () => () => undefined, getSnapshot: () => application } as unknown as ApplicationClientStore;
-const actions = { canStart: false, canStop: false, canSkip: false, canRetarget: false, canResume: false };
+const actions = voiceActions();
 async function renderPage(state: NativeVoiceState | Error, setup?: (fake: ReturnType<typeof fakeVoicePlugin>) => void) {
   const fake = fakeVoicePlugin();
   if (state instanceof Error) fake.plugin.setConnection.mockRejectedValue(state);
@@ -42,9 +42,72 @@ afterEach(() => {
 });
 
 describe("voice settings page", () => {
+  it("saves the long dictation limit in whole minutes and rejects values outside one minute through one day", async () => {
+    const native = voiceSnapshot();
+    const { fake, store } = await renderPage(native, fake => fake.plugin.updateSettings.mockResolvedValue({ ...native,
+      stateRevision: 2, settingsRevision: 1, settings: { ...native.settings, longDictationTimeoutMs: 120_000 } }));
+    const limit = screen.getByRole("spinbutton", { name: "Long dictation timeout (minutes)" });
+    const save = screen.getByRole("button", { name: "Save Long dictation timeout (minutes)" });
+    expect(limit).toHaveValue(60);
+    for (const value of ["0", "1441", "1.5", ""]) {
+      fireEvent.change(limit, { target: { value } });
+      fireEvent.click(save);
+      expect(limit).toHaveAccessibleDescription(/Enter a whole number from 1 to 1440\./);
+    }
+    expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
+    fireEvent.change(limit, { target: { value: "2" } });
+    fireEvent.click(save);
+    await waitFor(() => expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
+      expectedRevision: 0, patch: { longDictationTimeoutMs: 120_000 } }));
+    await waitFor(() => expect(save).toBeDisabled());
+    expect(limit).toHaveValue(2);
+    store.dispose();
+  });
+  it.each(["capture", "saved-recognition"])("locks recognition configuration during %s while keeping Audio mode available", async work => {
+    const active = { id: "interaction", threadId: "named", threadTitle: "Release review", eventKind: "manual", automatic: false,
+      recognitionThreadId: "named", recognitionThreadTitle: "Release review", recording: { id: "recording", keepListening: true, reconnecting: false } };
+    const { store } = await renderPage(voiceSnapshot({ phase: work === "capture" ? "listening" : "recognizing",
+      settings: voiceSettings({ audioMode: "response", speechProvider: "server", speechEndpoint: "https://voice.test/v1" }), active: work === "capture" ? active : null,
+      recordingRecovery: work === "saved-recognition" ? recordingRecovery({ stage: "recognizing", canRetryRecognition: false }) : null }));
+    expect(screen.getByRole("combobox", { name: "Provider" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Speech API endpoint" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Manage speech credential" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Recognition model" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Microphone input" })).toBeDisabled();
+    expect(screen.getByRole("spinbutton", { name: "Long dictation timeout (minutes)" })).toBeDisabled();
+    expect(screen.getByRole("spinbutton", { name: "Recognition result timeout (ms)" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Audio mode" })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "Speech model" })).toBeEnabled();
+    expect(screen.getByRole("switch", { name: "Keep listening by default" })).toBeEnabled();
+    store.dispose();
+  });
+  it("keeps ready saved dictation available in settings while Off with revision-bound Send and Discard", async () => {
+    const saved = recordingRecovery({ revision: 8, stage: "ready", hasUnrecognizedAudio: false, canRetryRecognition: false,
+      canSend: true, canCopyRecognizedText: true });
+    const native = voiceSnapshot({ recordingRecovery: saved });
+    const { fake, store } = await renderPage(native, fake => fake.plugin.sendRecoveredRecording.mockResolvedValue({ ...native, stateRevision: 2,
+      recordingRecovery: { ...saved, revision: 9, stage: "admitting", canSend: false } }));
+    expect(screen.getByRole("heading", { name: "Ready to send · Release review" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy recognized text" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Send saved dictation" }));
+    await waitFor(() => expect(fake.plugin.sendRecoveredRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
+      recordingId: saved.recordingId, expectedRecoveryRevision: 8, acknowledgeIncomplete: false }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Discard saved dictation" })).not.toHaveAttribute("aria-disabled"));
+    fireEvent.click(screen.getByRole("button", { name: "Discard saved dictation" }));
+    await waitFor(() => expect(fake.plugin.discardRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
+      recordingId: saved.recordingId, expectedRecoveryRevision: 9 }));
+    store.dispose();
+  });
   it("offers explicit client reconnect while the native voice binding still exists", async () => {
     const { fake, store } = await renderPage(voiceSnapshot({ clientConnectionToken: null, readiness: "connecting" }));
     fireEvent.click(screen.getByRole("button", { name: "Retry client connection" }));
+    await waitFor(() => expect(fake.plugin.setConnection).toHaveBeenLastCalledWith({ ...VOICE_CONNECTION, reconnect: true }));
+    store.dispose();
+  });
+  it("offers storage retry while Off without requiring a missing client connection", async () => {
+    const { fake, store } = await renderPage(voiceSnapshot({ readiness: "storageUnavailable", phase: "error" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Recording storage is unavailable. Retry the voice connection.");
+    fireEvent.click(screen.getByRole("button", { name: "Retry voice connection" }));
     await waitFor(() => expect(fake.plugin.setConnection).toHaveBeenLastCalledWith({ ...VOICE_CONNECTION, reconnect: true }));
     store.dispose();
   });
@@ -143,7 +206,7 @@ describe("voice settings page", () => {
     const { fake, store } = await renderPage(voiceSnapshot());
     expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Requires a default voice thread.");
     fireEvent.click(screen.getByRole("button", { name: "Default voice thread Choose thread" }));
-    expect(await screen.findByRole("dialog", { name: "Choose default voice thread" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Default voice thread" })).toBeInTheDocument();
     const list = await screen.findByRole("list", { name: "Voice threads" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(3);
     fireEvent.click(within(list).getByRole("button", { name: "T".repeat(600) }));
@@ -170,7 +233,7 @@ describe("voice settings page", () => {
       settings: { ...native.settings, pinDefaultVoiceThread: true } }));
     const pin = screen.getByRole("switch", { name: "Pin default voice thread" });
     expect(pin).not.toBeChecked();
-    expect(pin).toHaveAccessibleDescription("Start manual recordings here while viewing other threads.");
+    expect(pin).toHaveAccessibleDescription("Use this as the initial recording target while viewing other threads.");
     fireEvent.click(pin);
     await waitFor(() => expect(pin).toBeChecked());
     expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { pinDefaultVoiceThread: true } });
@@ -187,6 +250,35 @@ describe("voice settings page", () => {
     fireEvent.click(toggle);
     await waitFor(() => expect(toggle).not.toBeChecked());
     expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { cleanSpeechText: false } });
+    store.dispose();
+  });
+  it.each([false, true])("round-trips the future Keep listening preference while the current recording stays %s", async keepListening => {
+    let native = voiceSnapshot({ phase: "listening", settings: voiceSettings({ audioMode: "response" }), active: {
+      id: "interaction", threadId: "named", threadTitle: "Release review", eventKind: "manual", automatic: false,
+      recognitionThreadId: "named", recognitionThreadTitle: "Release review", recording: { id: "recording", keepListening, reconnecting: false },
+    } });
+    const { fake, store } = await renderPage(native, fake => {
+      fake.plugin.getState.mockImplementation(async () => native);
+      vi.mocked(fake.asPlugin.updateSettings).mockImplementation(async ({ patch }) => (native = { ...native,
+        stateRevision: native.stateRevision + 1, settingsRevision: native.settingsRevision + 1, settings: { ...native.settings, ...patch } }));
+    });
+    const preference = screen.getByRole("switch", { name: "Keep listening by default" });
+    expect(preference).not.toBeChecked();
+    expect(preference).toBeEnabled();
+    expect(preference).toHaveAccessibleDescription("Use Keep listening for new manual and auto-listen recordings. The ∞ control changes only the current recording.");
+    fireEvent.click(preference);
+    await waitFor(() => expect(preference).toBeChecked());
+    await waitFor(() => expect(preference).toBeEnabled());
+    expect(store.getSnapshot().native?.active?.recording?.keepListening).toBe(keepListening);
+    fireEvent.click(preference);
+    await waitFor(() => expect(preference).not.toBeChecked());
+    expect(vi.mocked(fake.asPlugin.updateSettings).mock.calls.map(([input]) => input)).toEqual([
+      { expectedConnectionGeneration: 1, expectedRevision: 0, patch: { keepListeningByDefault: true } },
+      { expectedConnectionGeneration: 1, expectedRevision: 1, patch: { keepListeningByDefault: false } },
+    ]);
+    expect(store.getSnapshot().native?.active?.recording?.keepListening).toBe(keepListening);
+    expect(fake.plugin.setKeepListening).not.toHaveBeenCalled();
+    expect(screen.getByRole("switch", { name: "Auto-listen" })).toBeChecked();
     store.dispose();
   });
   it("opens credential management with only a connection fence and never creates a web password field", async () => {

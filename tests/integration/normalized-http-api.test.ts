@@ -1,5 +1,6 @@
 import { ClientControlService } from "../../src/server/domain/client-control-service.js";
 import { scriptDelivery } from "../support/notification-settings.js";
+import { largeDirectInputText } from "../support/large-direct-input.js";
 import { UsageService } from "../../src/server/usage/usage-service.js";
 import { ScopedThreadEventHubRegistry } from "../../src/server/events/thread-runtime-coordinator.js";
 import { NotificationRepository } from "../../src/server/db/repositories/notification-repository.js";
@@ -12,7 +13,7 @@ import { SubmissionCompletionRepository } from "../../src/server/db/repositories
 import { ConversationDraftRepository } from "../../src/server/db/repositories/conversation-draft-repository.js";
 import { DirectInputRepository } from "../../src/server/db/repositories/direct-input-repository.js";
 import { ThreadActivityService } from "../../src/server/conversations/thread-activity-service.js";
-import { MAX_DIRECT_INPUT_TEXT_BYTES, type DirectInputRequest } from "../../src/shared/protocol/thread-input.js";
+import { MAX_DIRECT_INPUT_REQUEST_BYTES, MAX_DIRECT_INPUT_TEXT_BYTES, type DirectInputRequest } from "../../src/shared/protocol/thread-input.js";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import type { Server } from "node:http";
@@ -4874,13 +4875,13 @@ describe("normalized HTTP application contract", () => {
       await receipt(first.mutationId, true).expect(200, { status: "notObserved" });
       await receipt("not-a-mutation-id").expect(400);
 
-      // JSON escaping may exceed the ordinary 256 KiB parser while the exact text fits 64 KiB.
-      const escaped = input("\u0001".repeat(50_000));
+      // Worst-case JSON escaping still admits every byte of a 256 KiB recording.
+      const escaped = input("\u0001".repeat(MAX_DIRECT_INPUT_TEXT_BYTES));
       expect(Buffer.byteLength(JSON.stringify(escaped))).toBeGreaterThan(256 * 1024);
-      expect(Buffer.byteLength(JSON.stringify(escaped))).toBeLessThan(512 * 1024);
+      expect(Buffer.byteLength(JSON.stringify(escaped))).toBeLessThan(MAX_DIRECT_INPUT_REQUEST_BYTES);
       expect((await post(threadId, escaped).expect(200)).body).toMatchObject({ mutationId: escaped.mutationId, status: "queued" });
-      const overParser = input("\u0001".repeat(90_000));
-      expect(Buffer.byteLength(JSON.stringify(overParser))).toBeGreaterThan(512 * 1024);
+      const overParser = input("\u0001".repeat(350_000));
+      expect(Buffer.byteLength(JSON.stringify(overParser))).toBeGreaterThan(MAX_DIRECT_INPUT_REQUEST_BYTES);
       await post(threadId, overParser)
         .expect(413)
         .expect(({ body }) => expect(body.error.code).toBe("bad_request"));
@@ -4918,7 +4919,7 @@ describe("normalized HTTP application contract", () => {
     }
   });
 
-  it("reads full scoped queued input and distinguishes acceptance from cancellation without attaching a runtime", async () => {
+  it("reads full scoped 256 KiB queued input, including not-sent failure, without attaching a runtime", async () => {
     const current = await fixture();
     try {
       const workspace = await current
@@ -4933,7 +4934,7 @@ describe("normalized HTTP application contract", () => {
       current.bindThread(threadId);
       const queue = new QueuedInputRepository(current.database);
       const originalDraft = current.repository.getDraft(current.owner, threadId);
-      const text = `  ${"A long spoken input 🎤. ".repeat(100)}\nFinal sentence.  `;
+      const text = largeDirectInputText;
       const enqueue = () => queue.enqueue(current.owner, threadId, {
         mutationId: randomUUID(), text, contextExcerpts: [], attachmentIds: [], taskReferences: [],
         source: { kind: "direct_input", resolvedDeliveryMode: "submit",
@@ -4996,6 +4997,21 @@ describe("normalized HTTP application contract", () => {
         steerOperationId, expectedState: "dispatching", backendCorrelation: steerOperationId, acceptedAt,
       });
       expect((await read(steered.id).expect(200)).body).toMatchObject({ state: "accepted", deliveryOperationId: steerOperationId });
+
+      const failed = enqueue();
+      queue.claimHead(current.owner, threadId, "private-failure-anchor", Date.now());
+      queue.handleCleanFailure(current.owner, threadId, failed.id, {
+        expectedState: "dispatching", retryable: false, failureReason: "not_sent",
+        diagnostic: "No input reached the provider.", now: Date.now(),
+        retryPolicy: { maximumRetries: 0, baseDelayMilliseconds: 100, maximumDelayMilliseconds: 100 },
+      });
+      const beforeFailedRead = totalChanges();
+      expect((await read(failed.id).expect(200)).body).toMatchObject({ state: "failed",
+        content: [{ kind: "text", text: { text } }] });
+      expect(queue.get(current.owner, threadId, failed.id)).toMatchObject({ state: "failed", failureReason: "not_sent", text });
+      expect(totalChanges()).toEqual(beforeFailedRead);
+      expect(current.runtimeEstablishmentCaptures).toHaveLength(0);
+      expect(current.operationCalls).toHaveLength(0);
 
       // A stored provider correlation alone cannot become a browser operation identity.
       current.database.prepare("UPDATE queued_inputs SET backend_correlation = ? WHERE id = ?")

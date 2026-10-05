@@ -16,14 +16,28 @@ import okhttp3.ResponseBody;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
-/** Discovery is advisory: account model availability and maintained speech metadata have separate authority. */
+/** Picker discovery is advisory. Every server recording separately fetches fresh selected-model limits. */
 final class NativeSpeechCatalog {
     interface Result { void done(JSONObject catalog, String errorCode); }
+    interface PreflightResult { void done(NativeSpeechCapabilities capabilities, String errorCode); }
     private static final int MAX_BYTES = 1024 * 1024;
     private static final OkHttpClient HTTP = new OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
         .connectTimeout(15, TimeUnit.SECONDS).readTimeout(30, TimeUnit.SECONDS).callTimeout(45, TimeUnit.SECONDS).build();
     static Call fetch(NativeVoiceSettings settings, String credential, Result callback) {
         return request(settings, credential, settings.text("speechProvider").equals("openai") ? "/models" : "/audio/capabilities", false, callback);
+    }
+    /** No picker cache participates. Runtime fences this result by binding, configuration and credential revision. */
+    static Call preflight(NativeVoiceSettings settings, String credential, PreflightResult callback) {
+        if (settings.text("speechProvider").equals("openai")) {
+            try { callback.done(NativeSpeechCapabilities.hosted(settings.text("sttModel")), null); }
+            catch (IllegalArgumentException unsupported) { callback.done(null, "speech_transcription_model_unsupported"); }
+            return null;
+        }
+        return request(settings, credential, "/audio/capabilities", false, (catalog, error) -> {
+            if (error != null) { callback.done(null, error.equals("speech_discovery_invalid") ? "speech_server_configuration_unsupported" : error); return; }
+            try { callback.done(serverCapabilities(catalog, settings.text("sttModel")), null); }
+            catch (IllegalArgumentException unsupported) { callback.done(null, unsupported.getMessage()); }
+        });
     }
     /** Credential tests use a standard authenticated endpoint and do not generate billable audio. */
     static Call test(NativeVoiceSettings settings, String credential, Result callback) {
@@ -33,7 +47,7 @@ final class NativeSpeechCatalog {
         final Call call;
         try {
             if (settings.text("speechEndpoint").isEmpty()) throw new IllegalArgumentException("speech_configuration_required");
-            if (credential != null) SpeechCredentialStore.validateCredential(credential);
+            if (credential != null && !credential.matches("[\\x21-\\x7e]{1,4096}")) throw new IllegalArgumentException("speech_discovery_invalid");
             Request.Builder request = new Request.Builder().url(settings.text("speechEndpoint") + path).get().header("Accept", "application/json");
             if (credential != null) request.header("Authorization", "Bearer " + credential);
             call = HTTP.newCall(request.build());
@@ -44,7 +58,8 @@ final class NativeSpeechCatalog {
                 try (Response owned = response) {
                     int status = response.code();
                     if (status < 200 || status >= 300) {
-                        callback.done(null, status == 401 || status == 403 ? "speech_authentication_failed" : "speech_discovery_unavailable"); return;
+                        callback.done(null, status == 401 || status == 403 ? "speech_authentication_failed" :
+                            status == 404 && path.equals("/audio/capabilities") ? "speech_server_configuration_unsupported" : "speech_discovery_unavailable"); return;
                     }
                     ResponseBody body = response.body();
                     if (body == null || body.contentLength() > MAX_BYTES) throw new IOException("invalid_catalog");
@@ -59,14 +74,23 @@ final class NativeSpeechCatalog {
                     if (!"list".equals(value.optString("object")) || value.optJSONArray("data") == null) throw new IOException("invalid_catalog");
                     callback.done(test && !settings.text("speechProvider").equals("openai") ? empty("server") :
                         settings.text("speechProvider").equals("openai") ? openai(value, settings.text("ttsModel")) : server(value, settings.text("ttsModel")), null);
-                } catch (Exception error) { callback.done(null, "speech_discovery_invalid"); }
+                } catch (Exception error) { callback.done(null, "speech_server_configuration_unsupported".equals(error.getMessage()) ?
+                    "speech_server_configuration_unsupported" : "speech_discovery_invalid"); }
             }
         });
         return call;
     }
     static JSONObject empty(String source) {
         return NativeVoiceJson.object("source", source, "sttModels", new JSONArray(), "ttsModels", new JSONArray(),
-            "voices", new JSONArray(), "speed", null, "formats", new JSONArray());
+            "voices", new JSONArray(), "speed", null, "formats", new JSONArray(), "realtime", new JSONObject());
+    }
+    /** The bridge exposes choices only; recognition authority stays in the native fresh-preflight result. */
+    static JSONObject picker(JSONObject catalog) {
+        if (catalog == null) return null;
+        JSONObject result = new JSONObject();
+        for (String key : new String[] { "source", "sttModels", "ttsModels", "voices", "speed", "formats" })
+            NativeVoiceJson.put(result, key, catalog.opt(key));
+        return NativeVoiceJson.copy(result);
     }
     static JSONObject openai(JSONObject listing, String speechModel) {
         JSONObject catalog = empty("openai");
@@ -77,7 +101,9 @@ final class NativeSpeechCatalog {
             JSONObject entry = data.optJSONObject(i);
             if (entry == null) throw new IllegalArgumentException("speech_discovery_invalid");
             String id = identifier(entry, "id");
-            if (id.matches("(?:gpt-live-transcribe|gpt-transcribe|gpt-4o-transcribe|gpt-4o-mini-transcribe)(?:-\\d{4}-\\d{2}-\\d{2})?") || id.equals("whisper-1")) stt.add(id);
+            if (NativeSpeechCapabilities.HOSTED_MODELS.contains(id)) {
+                stt.add(id); NativeVoiceJson.put(catalog.optJSONObject("realtime"), id, NativeSpeechCapabilities.hosted(id).realtime());
+            }
             if (knownSpeechModel(id)) tts.add(id);
         }
         NativeVoiceJson.put(catalog, "sttModels", array(stt)); NativeVoiceJson.put(catalog, "ttsModels", array(tts));
@@ -106,7 +132,12 @@ final class NativeSpeechCatalog {
             JSONObject model = data.optJSONObject(i);
             if (model == null) throw new IllegalArgumentException("speech_discovery_invalid");
             String id = identifier(model, "id"), task = model.optString("task");
-            if (task.equals("transcription")) stt.add(id);
+            if (task.equals("transcription")) {
+                if (!stt.add(id)) throw new IllegalArgumentException("speech_server_configuration_unsupported");
+                JSONObject realtime = model.optJSONObject("realtime");
+                validateRealtime(realtime, false);
+                NativeVoiceJson.put(catalog.optJSONObject("realtime"), id, NativeVoiceJson.copy(realtime));
+            }
             if (!task.equals("speech")) continue;
             tts.add(id);
             if (!id.equals(speechModel)) continue;
@@ -127,6 +158,24 @@ final class NativeSpeechCatalog {
         }
         NativeVoiceJson.put(catalog, "sttModels", array(stt)); NativeVoiceJson.put(catalog, "ttsModels", array(tts));
         return catalog;
+    }
+    static NativeSpeechCapabilities serverCapabilities(JSONObject catalog, String model) {
+        JSONObject realtime = catalog == null ? null : catalog.optJSONObject("realtime");
+        if (catalog == null || !"server".equals(catalog.optString("source")) || realtime == null || !realtime.has(model))
+            throw new IllegalArgumentException("speech_transcription_model_unsupported");
+        return NativeSpeechCapabilities.server(model, realtime.optJSONObject(model));
+    }
+    /** Preserve truthful low limits for other picker entries; support thresholds apply to the selected model. */
+    static void validateRealtime(JSONObject realtime, boolean hosted) {
+        try {
+            NativeVoiceJson.keys(realtime, "max_buffer_bytes", "max_message_bytes", "max_output_bytes", "idle_timeout_seconds", "max_session_seconds");
+            long bytes = NativeVoiceJson.integer(realtime, "max_buffer_bytes", 0, 9007199254740991L);
+            if ((bytes & 1) != 0) throw new IllegalArgumentException();
+            NativeVoiceJson.integer(realtime, "max_message_bytes", 1, 9007199254740991L);
+            NativeVoiceJson.integer(realtime, "max_output_bytes", 1, 9007199254740991L);
+            NativeSpeechCapabilities.timeoutMs(realtime, "idle_timeout_seconds", hosted);
+            NativeSpeechCapabilities.timeoutMs(realtime, "max_session_seconds", false);
+        } catch (Exception invalid) { throw new IllegalArgumentException("speech_server_configuration_unsupported"); }
     }
     private static String identifier(JSONObject entry, String key) {
         if (entry == null) throw new IllegalArgumentException("speech_discovery_invalid");

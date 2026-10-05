@@ -1,5 +1,5 @@
 import type { PluginListenerHandle } from "@capacitor/core";
-import { nativeVoiceInputSubmittedSchema, nativeVoiceStateSchema, type NativeVoiceCommandContext, type NativeVoiceInputSubmitted, type NativeVoicePlugin, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
+import { nativeVoiceInputSubmittedSchema, nativeVoiceStateSchema, type NativeVoiceCommandContext, type NativeVoiceInputSubmitted, type NativeVoiceInteractionCommandContext, type NativeVoicePlugin, type NativeVoiceSettings, type NativeVoiceState } from "./native-voice-plugin.js";
 
 type NativeVoiceError = NativeVoiceState["errors"][number];
 export interface VoiceClientState {
@@ -33,6 +33,9 @@ export class NativeVoiceStore {
   #pendingOpenThread: string | undefined;
   #generation = -1;
   #revision = -1;
+  #pendingActions = 0;
+  #actionSequence = 0;
+  #stopping = new Map<string, Promise<void>>();
   constructor(readonly plugin: NativeVoicePlugin, readonly connection: { profileId: string; serverOrigin: string; identity: string }, readonly openThread: (threadId: string) => void) {}
   getSnapshot = (): VoiceClientState => this.#state;
   subscribe = (listener: () => void): (() => void) => { this.#listeners.add(listener); return () => { this.#listeners.delete(listener); }; };
@@ -161,12 +164,27 @@ export class NativeVoiceStore {
     });
   }
   async run(action: () => Promise<NativeVoiceState>): Promise<void> {
+    return this.#perform(action, false);
+  }
+  /** Cancel may stop capture while a durable Keep listening write is pending. Native fences both commands by identity. */
+  stopInteraction(context: NativeVoiceInteractionCommandContext): Promise<void> {
+    const key = JSON.stringify([context.expectedConnectionGeneration, context.interactionId]);
+    const pending = this.#stopping.get(key);
+    if (pending) return pending;
+    const stopping = this.#perform(() => this.plugin.stopCurrentInteraction(context), true)
+      .finally(() => { if (this.#stopping.get(key) === stopping) this.#stopping.delete(key); });
+    this.#stopping.set(key, stopping);
+    return stopping;
+  }
+  async #perform(action: () => Promise<NativeVoiceState>, interrupt: boolean): Promise<void> {
     if (this.#disposed) throw new Error("This voice connection is no longer active.");
-    if (this.#state.pending) throw new Error("A voice action is already in progress.");
+    if (this.#state.pending && !interrupt) throw new Error("A voice action is already in progress.");
+    const sequence = ++this.#actionSequence;
+    this.#pendingActions++;
     this.#set({ ...this.#state, pending: true, error: undefined });
     try { this.#accept(await action()); }
-    catch (error) { this.#error(error); throw error; }
-    finally { this.#set({ ...this.#state, pending: false }); }
+    catch (error) { if (sequence === this.#actionSequence) this.#error(error); throw error; }
+    finally { this.#pendingActions--; this.#set({ ...this.#state, pending: this.#pendingActions > 0 }); }
   }
   /** Hides the current native errors on this device until native reports a newer one. Native state is unchanged. */
   dismissErrors(): void {
