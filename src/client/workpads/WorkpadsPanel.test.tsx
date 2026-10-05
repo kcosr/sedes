@@ -835,11 +835,13 @@ describe("WorkpadsPanel", () => {
     expect(await screen.findByRole("button", { name: "Integration" })).toHaveTextContent(/^Integration$/);
     viewOptions();
     fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Include nested scopes" }));
+    // View options stay open for another pick.
+    closeMenu();
     // Mixed scopes name each row's own, a project by its label.
     const row = await screen.findByRole("button", { name: "IntegrationProject · docs · Build host" });
     fireEvent.click(row);
     await screen.findByRole("button", { name: "Edit workpad" });
-    expect(document.querySelector(".workpads-doc-meta")).toHaveTextContent(/^Project · docs · Build host · Revision 1 · You · /);
+    expect(document.querySelector(".workpads-doc-meta")).toHaveTextContent(/^Revision 1 · .+ · You · Project · docs · Build host$/);
     expect(context.host.setSubtitle).toHaveBeenLastCalledWith("Integration");
     expect(header()).toHaveTextContent(/^WorkpadsIntegration$/);
   });
@@ -940,6 +942,8 @@ describe("WorkpadsPanel", () => {
       // Archived workpads are not created; the row goes away.
       viewOptions();
       fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Archived" }));
+      // View options stay open for another pick.
+      closeMenu();
       expect(screen.queryByRole("textbox", { name: "New workpad title" })).not.toBeInTheDocument();
     });
 
@@ -979,14 +983,16 @@ describe("WorkpadsPanel", () => {
       await waitFor(() => expect(api.updateWorkpad).toHaveBeenCalledWith("pad", { expectedRevision: 1, archived: false }));
     });
 
-    it("names a row's author only when it is not you", async () => {
+    it("marks a row last edited by someone else, never by you", async () => {
       const agent = { kind: "agent" as const, threadId: "thread-agent", clientId: null, name: "Planner", nameSnapshot: "Planner" };
       const { store } = fixture({ listWorkpads: vi.fn(async () => ({ items: [pad, { ...pad, id: "agent-pad", title: "Agent notes", author: agent }] })) });
       render(<Panel context={panelContext(store)} />);
       const meta = (title: string) => screen.getByRole("button", { name: title }).closest("li")!.querySelector(".workpads-row-meta");
       await screen.findByRole("button", { name: "Agent notes" });
-      expect(meta("Agent notes")).toHaveTextContent(/^Planner · \S/);
-      expect(meta("Integration")).not.toHaveTextContent("You");
+      expect(within(meta("Agent notes") as HTMLElement).getByLabelText("Last edited by Planner")).toBeInTheDocument();
+      expect(meta("Agent notes")).toHaveAttribute("title", expect.stringMatching(/^Last edited by Planner · /));
+      expect(meta("Integration")!.querySelector(".workpads-row-agent")).toBeNull();
+      expect(meta("Integration")).toHaveAttribute("title", expect.stringMatching(/^Last edited by you · /));
     });
 
     it("moves the open workpad to Global from the header ⋯", async () => {
@@ -1010,7 +1016,7 @@ describe("WorkpadsPanel", () => {
       fireEvent.click(within(move).getByRole("menuitem", { name: "Global" }));
       await waitFor(() => expect(api.updateWorkpad).toHaveBeenCalledWith("pad", { expectedRevision: 1, scope: { kind: "global" } }));
       // The open workpad reloads with the result.
-      await waitFor(() => expect(document.querySelector(".workpads-doc-meta")).toHaveTextContent(/^Global · Revision 2 · /));
+      await waitFor(() => expect(document.querySelector(".workpads-doc-meta")).toHaveTextContent(/^Revision 2 · .+ · Global$/));
       expect(api.getWorkpad).toHaveBeenCalledTimes(2);
     });
 
@@ -1053,11 +1059,15 @@ describe("WorkpadsPanel", () => {
       await screen.findByRole("button", { name: "Integration" });
       viewOptions();
       fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Include nested scopes" }));
+      // View options stay open for another pick.
+      closeMenu();
       await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scopeMode: "subtree", archived: false })));
       expect(screen.getByRole("button", { name: "Remove filter: Nested scopes" })).toBeInTheDocument();
       viewOptions();
       expect(screen.getByRole("menuitemcheckbox", { name: "Include nested scopes" })).toHaveAttribute("aria-checked", "true");
       fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Archived" }));
+      // View options stay open for another pick.
+      closeMenu();
       await waitFor(() => expect(api.listWorkpads).toHaveBeenLastCalledWith(expect.objectContaining({ scopeMode: "subtree", archived: true })));
       expect(screen.getByRole("button", { name: "Remove filter: Archived" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "View options" })).toHaveAttribute("data-filtering", "true");
@@ -1118,7 +1128,7 @@ describe("WorkpadsPanel", () => {
       fireEvent.click(within(history).getByRole("menuitemradio", { name: /^Revision 1/ }));
       await screen.findByText("Historical document");
       expect(screen.getByText("Viewing revision 1. The latest is revision 2.")).toBeInTheDocument();
-      expect(document.querySelector(".workpads-doc-meta")).toHaveTextContent(/^Global · Revision 1 · You · /);
+      expect(document.querySelector(".workpads-doc-meta")).toHaveTextContent(/^Revision 1 · .+ · You · Global$/);
       fireEvent.click(screen.getByRole("button", { name: "Back to latest" }));
       await screen.findByText("Current document");
       expect(screen.queryByRole("button", { name: "Back to latest" })).not.toBeInTheDocument();

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Archive, ArchiveRestore, Check, Ellipsis, FilePenLine, FolderInput, Highlighter, History, ListFilter, LoaderCircle, Pencil, Plus, Save, Search, Trash2, X } from "lucide-react";
+import { Archive, Bot, Check, Ellipsis, FilePenLine, FolderInput, Highlighter, History, Layers, ListFilter, LoaderCircle, Pencil, Plus, Search, Trash2, X, ArchiveRestore } from "lucide-react";
 import type { UpdateWorkpadRequest, Workpad, WorkpadScope, WorkpadSummary, WorkpadRevision, WorkpadRevisionSummary } from "../../shared/protocol/workpads.js";
 import { WORKPAD_CONTENT_MAX_CHARACTERS } from "../../shared/protocol/workpads.js";
 import { describeProjectLocations } from "../app/project-locations.js";
@@ -468,8 +468,13 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" aria-label="View options" sheetTitle="View options">
-        <DropdownMenuCheckboxItem disabled={busy} checked={nested} onCheckedChange={value => setNested(value === true)}>Include nested scopes</DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem disabled={busy} checked={archived} onCheckedChange={value => setArchived(value === true)}>Archived</DropdownMenuCheckboxItem>
+        <DropdownMenuLabel>Show</DropdownMenuLabel>
+        <DropdownMenuCheckboxItem disabled={busy} checked={nested} onCheckedChange={value => setNested(value === true)} onSelect={keepOpen}>
+          <Layers />Include nested scopes
+        </DropdownMenuCheckboxItem>
+        <DropdownMenuCheckboxItem disabled={busy} checked={archived} onCheckedChange={value => setArchived(value === true)} onSelect={keepOpen}>
+          <Archive />Archived
+        </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem disabled={busy} onSelect={() => setBrowsing(true)}><Search /><span>Browse another thread or project…</span></DropdownMenuItem>
       </DropdownMenuContent>
@@ -484,7 +489,9 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   const addPlaceholder = scope.kind === "global" ? "New global workpad…"
     : scope.kind === "project" ? (browsedProject ? `New workpad in ${destinations.label(scope)}…` : "New workpad in this project…")
     : browsedThread ? `New workpad in ${destinations.label(scope)}…` : "New workpad in this thread…";
-  const scopeNoun = scope.kind === "global" ? "global workpads" : scope.kind === "project" ? "workpads in this project" : "workpads in this thread";
+  const scopeNoun = scope.kind === "global" ? "global workpads"
+    : browsedThread || browsedProject ? `workpads in ${destinations.label(scope)}`
+    : scope.kind === "project" ? "workpads in this project" : "workpads in this thread";
   const emptyTitle = loading ? "Loading…"
     : !scopeValid ? (scope.kind === "thread" ? "Open a thread to see its workpads" : "Choose a project to see its workpads")
     : query.trim() ? `No workpads match “${query.trim()}”`
@@ -529,8 +536,9 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
             <span className="workpads-row-name">{item.title}</span>
             {nested && <span className="workpads-row-scope"><ScopeIcon kind={item.scope.kind} />{scopeLabel(item.scope)}</span>}
           </button>
-          <span className="workpads-row-meta" title={new Date(item.updatedAt).toLocaleString()}>
-            {item.author.kind === "user" ? "" : `${item.author.name} · `}{shortRelativeTime(item.updatedAt)}
+          <span className="workpads-row-meta" title={`Last edited by ${item.author.kind === "user" ? "you" : item.author.name} · ${new Date(item.updatedAt).toLocaleString()}`}>
+            {item.author.kind !== "user" && <Bot className="workpads-row-agent" aria-label={`Last edited by ${item.author.name}`} />}
+            {shortRelativeTime(item.updatedAt)}
           </span>
           <DropdownMenu presentation={touch ? "sheet" : "menu"}>
             <DropdownMenuTrigger asChild>
@@ -561,11 +569,9 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
 
   const revisionLabel = (value: { revision: number }) => value.revision === 0 ? "Created" : `Revision ${value.revision}`;
   const syncLabel = draft.saving ? "Syncing draft…" : draft.editor?.remote ? "Draft conflict" : hasUnsynced ? "Draft not synced" : noChanges ? "No changes" : "Draft synced";
-  const meta = revision && [
-    scopeLabel(revision.scope),
-    revision.revision === 0 ? `Created by ${revision.author.name}` : `${revisionLabel(revision)} · ${revision.author.name}`,
-    relativeTime(revision.createdAt),
-  ].join(" · ");
+  const meta = revision && (revision.revision === 0
+    ? [`Created ${relativeTime(revision.createdAt)} by ${revision.author.name}`, scopeLabel(revision.scope)]
+    : [revisionLabel(revision), relativeTime(revision.createdAt), revision.author.name, scopeLabel(revision.scope)]).join(" · ");
   const orderedRevisions = useMemo(() => [...revisions].sort((left, right) => right.revision - left.revision), [revisions]);
 
   const documentView = selected && <>
@@ -604,15 +610,16 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
             </>}
           </DropdownMenuContent>
         </DropdownMenu>}
-        <Button variant={editing ? "secondary" : "ghost"} size="icon-sm"
+        <Button variant="ghost" size="icon-sm"
           aria-label={editing ? "Done editing" : "Edit workpad"} title={editing ? "Done editing" : "Edit workpad"}
           disabled={busy || (editing ? Boolean(draft.editor?.remote) : Boolean(selected.archivedAt))}
           onClick={() => { if (editing) finishEditing(); else void run(beginEditing); }}>
           {editing ? <Check aria-hidden="true" /> : <FilePenLine aria-hidden="true" />}
         </Button>
-        {editing && <Button variant="ghost" size="icon-sm" aria-label="Save workpad" title="Save as a new revision (Ctrl+S)" aria-busy={(busy && operationMutating.current) || undefined}
+        {editing && <Button size="sm" className="workpads-save" aria-label="Save workpad" title="Save as a new revision (Ctrl+S)" aria-busy={(busy && operationMutating.current) || undefined}
           disabled={!canSave} onClick={() => { void run(saveDocument, true); }}>
-          {busy && operationMutating.current ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Save aria-hidden="true" />}
+          {busy && operationMutating.current && <LoaderCircle className="animate-spin" data-icon="inline-start" aria-hidden="true" />}
+          Save
         </Button>}
       </div>
     </div>
@@ -738,6 +745,8 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
     />
   </section>;
 }
+
+const keepOpen = (event: Event) => event.preventDefault();
 
 /** This thread · This project · Global · Choose…, the current one disabled. */
 function MoveToItems({ current, threadId, projectId, onMove, onChoose }: {

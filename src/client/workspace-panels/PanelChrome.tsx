@@ -143,9 +143,9 @@ function PanelChromeActions({
   const [menuOpen, setMenuOpen] = useState(false);
   const docking = !useMediaQuery(SINGLE_PANE_QUERY);
   const hasMenu = docking || Boolean(controls.renderMenuItems);
-  // The Dock group plus a tenant's own items can run past six rows, which
-  // touch presents as a sheet.
-  const sheet = useTouchDensity() && docking && Boolean(controls.renderMenuItems);
+  // A tenant's own items (with the Dock group, or nested choices such as
+  // Move to ›) are a sheet under touch density.
+  const sheet = useTouchDensity() && Boolean(controls.renderMenuItems);
   return (
     <div className="workspace-panel-actions">
       <Button

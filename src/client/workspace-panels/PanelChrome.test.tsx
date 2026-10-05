@@ -340,7 +340,7 @@ describe("PanelChrome", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("keeps the panel menu for tenant items on single-pane layouts, without docking", () => {
+  it("keeps the panel menu for tenant items on single-pane layouts, as a sheet without docking", () => {
     singlePane = true;
     const onRename = vi.fn();
     render(
@@ -355,12 +355,11 @@ describe("PanelChrome", () => {
       />,
     );
 
-    fireEvent.pointerDown(
-      screen.getByRole("button", { name: "Workpads panel actions" }),
-      { button: 0, ctrlKey: false },
-    );
-    // Nothing to dock beside, so no Dock group or separator: just the items.
-    expect(menuRows(screen.getByRole("menu"))).toEqual(["Rename…"]);
+    // A sheet opens on click, as a button does.
+    fireEvent.click(screen.getByRole("button", { name: "Workpads panel actions" }));
+    // Nothing to dock beside, so no Dock group or separator: just the items,
+    // in the touch sheet a single-pane layout always uses.
+    expect(menuRows(screen.getByRole("dialog", { name: "Workpads panel" }))).toEqual(["Rename…"]);
     expect(screen.queryByRole("group", { name: "Dock" })).toBeNull();
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
     expect(onRename).toHaveBeenCalledOnce();
