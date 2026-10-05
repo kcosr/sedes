@@ -445,8 +445,10 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
   }, [hasSelection, editing, draftSaving, selectedScope, selectedArchived, threadId, contextProjectId]);
   useEffect(() => { host.setMenuItems(menuItems); }, [host, menuItems]);
   useEffect(() => () => { host.setBack(undefined); host.setMenuItems(undefined); }, [host]);
-  useEffect(() => { host.setSubtitle(selected ? (draft.editor ? selected.title : revision?.title ?? selected.title) : undefined); },
-    [host, selected, draft.editor, revision?.title]);
+  // The open document's title, as the revision on screen names it. Only a
+  // changed string is published: each publish re-renders the panel layout.
+  const subtitle = selected ? (editing ? selected.title : revision?.title ?? selected.title) : undefined;
+  useEffect(() => { host.setSubtitle(subtitle); }, [host, subtitle]);
 
   const errorText = error || refreshError;
   const errorCallout = errorText && <div className="workpads-alert">
@@ -608,9 +610,9 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
           onClick={() => { if (editing) finishEditing(); else void run(beginEditing); }}>
           {editing ? <Check aria-hidden="true" /> : <FilePenLine aria-hidden="true" />}
         </Button>
-        {editing && <Button variant="ghost" size="icon-sm" aria-label="Save workpad" title="Save as a new revision (Ctrl+S)" aria-busy={busy || undefined}
+        {editing && <Button variant="ghost" size="icon-sm" aria-label="Save workpad" title="Save as a new revision (Ctrl+S)" aria-busy={(busy && operationMutating.current) || undefined}
           disabled={!canSave} onClick={() => { void run(saveDocument, true); }}>
-          {busy ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Save aria-hidden="true" />}
+          {busy && operationMutating.current ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <Save aria-hidden="true" />}
         </Button>}
       </div>
     </div>
@@ -700,7 +702,7 @@ export function WorkpadsPanel({ context }: { context: WorkspacePanelContext }) {
           searchLabel="Search threads and projects"
           emptyLabel="No matching threads or projects."
           value={destinationKey(moveTarget ? moveTarget.scope : scope)}
-          options={destinations.options(moveTarget ? moveTarget.scope : scope)}
+          options={destinations.options(moveTarget ? moveTarget.scope : scopeValid ? scope : undefined)}
           initialDirection="first"
           onValueChange={value => {
             const destination = parseScopeKey(value);
