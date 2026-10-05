@@ -3,6 +3,13 @@ import { z } from "zod";
 import { isAndroidClient } from "../app/client-platform.js";
 import { directInputRequestSchema } from "../../shared/protocol/thread-input.js";
 
+export const nativeVoiceInputSchema = z.strictObject({
+  type: z.number().int().min(0).max(2147483647), address: z.string().min(1).max(512).nullable(), name: z.string().min(1).max(512),
+});
+export type NativeVoiceInput = z.infer<typeof nativeVoiceInputSchema>;
+export interface NativeVoiceInputDevice { id: string; label: string; type: number; address: string | null }
+export interface NativeVoiceInputDevices { devices: NativeVoiceInputDevice[] }
+
 export const nativeVoiceSettingsSchema = z.strictObject({
   audioMode: z.enum(["off", "manual", "response"]),
   autoListen: z.boolean(), keepListeningByDefault: z.boolean(), ignoreOtherDevices: z.boolean(), readNotificationContext: z.boolean(), cleanSpeechText: z.boolean(),
@@ -10,7 +17,7 @@ export const nativeVoiceSettingsSchema = z.strictObject({
   sttModel: z.string().max(160), ttsModel: z.string().max(160), ttsVoice: z.string().max(160),
   ttsSpeed: z.number().min(0.25).max(4), speechTextLimit: z.number().int().min(2).max(4096),
   voiceThreadId: z.string().nullable(), voiceThreadTitle: z.string().nullable(),
-  pinDefaultVoiceThread: z.boolean(), onlyVoiceThread: z.boolean(), followComposerMode: z.boolean(), inputDeviceId: z.string().nullable(),
+  pinDefaultVoiceThread: z.boolean(), onlyVoiceThread: z.boolean(), followComposerMode: z.boolean(), inputDevice: nativeVoiceInputSchema.nullable(),
   recognitionStartTimeoutMs: z.number().int().positive(), recognitionCompletionTimeoutMs: z.number().int().positive(),
   recognitionResultTimeoutMs: z.number().int().min(1000).max(300000),
   longDictationTimeoutMs: z.number().int().min(60_000).max(86_400_000).multipleOf(60_000),
@@ -35,7 +42,7 @@ export const nativeRecordingRecoverySchema = z.strictObject({
 });
 export type NativeRecordingRecovery = z.infer<typeof nativeRecordingRecoverySchema>;
 export const nativeVoiceStateSchema = z.strictObject({
-  version: z.literal(8), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
+  version: z.literal(9), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
   profileId: z.string().nullable(), serverOrigin: z.string().nullable(), identity: z.string().nullable(), originClientId: z.uuid().nullable(), clientConnectionToken: z.string().nullable(),
   settingsRevision: z.number().int().nonnegative(), settings: nativeVoiceSettingsSchema,
   speech: z.strictObject({ credentialConfigured: z.boolean(), catalogStatus: z.enum(["idle", "loading", "ready", "error"]),
@@ -91,7 +98,8 @@ export interface NativeVoicePlugin {
   refreshSpeechCatalog(input: NativeVoiceCommandContext & { force: boolean }): Promise<NativeVoiceState>;
   /** Opens native masked credential entry. Secrets are never bridge arguments or results. */
   openSpeechCredentialDialog(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
-  listInputDevices(): Promise<{ devices: Array<{ id: string; label: string; type: number }>; selectedId: string | null }>;
+  listInputDevices(): Promise<NativeVoiceInputDevices>;
+  addListener(event: "inputDevicesChanged", listener: (event: NativeVoiceInputDevices) => void): Promise<PluginListenerHandle>;
   addListener(event: "stateChanged" | "settingsChanged", listener: (state: NativeVoiceState) => void): Promise<PluginListenerHandle>;
   addListener(event: "runtimeError", listener: (error: { code: string; message: string; connectionGeneration: number;
     profileId: string | null; serverOrigin: string | null; identity: string | null }) => void): Promise<PluginListenerHandle>;

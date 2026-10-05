@@ -566,7 +566,7 @@ public class NativeVoiceRuntimeTest {
             });
             String activeId = f.runtime.snapshot().getJSONObject("active").getString("id");
             f.settings(NativeVoiceJson.object("recognitionStartTimeoutMs", 1000, "recognitionCompletionTimeoutMs", 2000,
-                "recognitionResultTimeoutMs", 90000, "recognitionEndSilenceMs", 100, "inputDeviceId", "changed-microphone"));
+                "recognitionResultTimeoutMs", 90000, "recognitionEndSilenceMs", 100, "inputDevice", NativeVoiceJson.object("type", 7, "address", null, "name", "Changed headset")));
             assertEquals(activeId, f.runtime.snapshot().getJSONObject("active").getString("id"));
             assertEquals("speaking", f.runtime.snapshot().getString("phase")); assertFalse(speech.cancelled);
             assertTrue((boolean) field(item, "followUp"));
@@ -625,6 +625,48 @@ public class NativeVoiceRuntimeTest {
             } finally {
                 assertTrue(retained.delete()); assertTrue(blocked.delete()); pairing.removeProfileCredentials(f.profile);
             }
+        }
+    }
+
+    @Test public void equivalentMicrophonePreferenceCanBeSavedDuringRecordingButChangingItIsRejected() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.recognizing(false); RecognitionJob recording = f.synthetic;
+            f.onOwner(() -> {
+                NativeVoiceSettings previous = (NativeVoiceSettings) field(f.runtime, "settings");
+                NativeVoiceSettings selected = previous.patch(previous.revision, NativeVoiceJson.object("inputDevice",
+                    NativeVoiceJson.object("type", 7, "address", null, "name", "Headset")));
+                set(f.runtime, "settings", selected); set(field(f.runtime, "active"), "recordingSettings", selected); f.invoke("publish", new Class<?>[0]);
+            });
+            f.settings(NativeVoiceJson.object("ttsGain", 80, "inputDevice", NativeVoiceJson.object("name", "Headset", "address", null, "type", 7)));
+            assertEquals("recording_settings_busy", f.command("updateSettings", NativeVoiceJson.object("expectedRevision",
+                f.runtime.snapshot().getLong("settingsRevision"), "patch", NativeVoiceJson.object("inputDevice", null))));
+            assertFalse(recording.cancelled); assertFalse(f.runtime.snapshot().isNull("active"));
+            assertEquals("Headset", f.runtime.snapshot().getJSONObject("settings").getJSONObject("inputDevice").getString("name"));
+        }
+    }
+
+    @Test public void audioDeviceCallbacksPublishFreshInventoryWithoutStartingOrReplacingCapture() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.recognizing(false);
+            JSONObject before = f.runtime.snapshot();
+            BlockingQueue<JSONObject> inventories = new LinkedBlockingQueue<>();
+            NativeVoiceRuntime.Observer observer = (name, value) -> { if (name.equals("inputDevicesChanged")) inventories.add(value); };
+            f.runtime.observe(observer);
+            try {
+                NativeVoiceAudio audio = (NativeVoiceAudio) field(f.runtime, "audio");
+                android.media.AudioDeviceCallback callback = (android.media.AudioDeviceCallback) field(audio, "deviceCallback");
+                callback.onAudioDevicesRemoved(new android.media.AudioDeviceInfo[0]);
+                JSONObject removed = inventories.poll(10, TimeUnit.SECONDS); assertNotNull(removed);
+                assertEquals(audio.devices().toString(), removed.getJSONArray("devices").toString());
+                callback.onAudioDevicesAdded(new android.media.AudioDeviceInfo[0]);
+                JSONObject added = inventories.poll(10, TimeUnit.SECONDS); assertNotNull(added);
+                assertEquals(audio.devices().toString(), added.getJSONArray("devices").toString());
+                f.flush(); JSONObject after = f.runtime.snapshot();
+                assertEquals(before.getJSONObject("active").getString("id"), after.getJSONObject("active").getString("id"));
+                assertEquals(before.getString("phase"), after.getString("phase"));
+                assertEquals(before.getJSONObject("settings").toString(), after.getJSONObject("settings").toString());
+                assertNull(field(audio, "recorder"));
+            } finally { f.runtime.unobserve(observer); }
         }
     }
 

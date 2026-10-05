@@ -4,12 +4,12 @@ import type { NativeVoiceInputSubmitted, NativeVoiceState } from "../../src/clie
 const profileId = "c61b5d8b-4a77-43c6-bd72-12e23fe42e38";
 export function voiceFixtureState(): NativeVoiceState {
   return {
-    version: 8, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
+    version: 9, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
     originClientId: "34612c41-0bbb-455f-a5af-725bfc7ae768", clientConnectionToken: null, settingsRevision: 0,
     settings: { audioMode: "response", autoListen: true, keepListeningByDefault: false, ignoreOtherDevices: true, readNotificationContext: true, cleanSpeechText: true,
       speechProvider: "openai", speechEndpoint: "https://api.openai.com/v1", sttModel: "gpt-live-transcribe", ttsModel: "gpt-4o-mini-tts",
       ttsVoice: "coral", ttsSpeed: 1, speechTextLimit: 4096, voiceThreadId: null, voiceThreadTitle: null, pinDefaultVoiceThread: false,
-      onlyVoiceThread: false, followComposerMode: false, inputDeviceId: null, recognitionStartTimeoutMs: 30000, recognitionCompletionTimeoutMs: 60000,
+      onlyVoiceThread: false, followComposerMode: false, inputDevice: null, recognitionStartTimeoutMs: 30000, recognitionCompletionTimeoutMs: 60000,
       recognitionResultTimeoutMs: 60000, longDictationTimeoutMs: 3_600_000, recognitionEndSilenceMs: 1200, recognizeStopCommand: true,
       recognitionCues: true, cueGain: 100, startupPreRollMs: 512, ttsGain: 100, headsetControls: true },
     speech: { credentialConfigured: true, catalogStatus: "idle", catalog: null, error: null }, phase: "idle", ready: true, readiness: "ready",
@@ -133,7 +133,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
             if (method === "discardRecording") fixture.publish({ recordingRecovery: null,
               ...current.active && current.active.recording?.id !== saved.recordingId ? {} : { active: null,
                 phase: current.settings.audioMode === "off" ? "off" : "idle", actions: { ...initial.actions, canStart: current.settings.audioMode !== "off" } } });
-          } else if (method === "listInputDevices") return { devices: [], selectedId: null };
+          } else if (method === "listInputDevices") return { devices: [] };
           return snapshot();
         },
       },

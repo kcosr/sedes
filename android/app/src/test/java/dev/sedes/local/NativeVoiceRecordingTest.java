@@ -340,7 +340,7 @@ public class NativeVoiceRecordingTest {
         javax.crypto.KeyGenerator generator = javax.crypto.KeyGenerator.getInstance("AES"); generator.init(256);
         SecretKey key = generator.generateKey();
         JSONObject defaults = NativeVoiceSettings.defaults().value, config = new JSONObject();
-        for (String field : new String[] {"speechProvider", "speechEndpoint", "sttModel", "inputDeviceId", "recognitionStartTimeoutMs",
+        for (String field : new String[] {"speechProvider", "speechEndpoint", "sttModel", "inputDevice", "recognitionStartTimeoutMs",
                 "recognitionCompletionTimeoutMs", "recognitionEndSilenceMs", "recognitionResultTimeoutMs", "longDictationTimeoutMs",
                 "recognizeStopCommand", "recognitionCues", "cueGain", "followComposerMode"})
             NativeVoiceJson.put(config, field, defaults.opt(field));
@@ -410,7 +410,7 @@ public class NativeVoiceRecordingTest {
         String binding = "profile\nhttps://sedes.example\n" + "a".repeat(64);
         javax.crypto.KeyGenerator generator = javax.crypto.KeyGenerator.getInstance("AES"); generator.init(256); SecretKey key = generator.generateKey();
         File directory = temporary.newFolder(); JSONObject config = new JSONObject(), defaults = NativeVoiceSettings.defaults().value;
-        for (String field : new String[] {"speechProvider", "speechEndpoint", "sttModel", "inputDeviceId", "recognitionStartTimeoutMs",
+        for (String field : new String[] {"speechProvider", "speechEndpoint", "sttModel", "inputDevice", "recognitionStartTimeoutMs",
                 "recognitionCompletionTimeoutMs", "recognitionEndSilenceMs", "recognitionResultTimeoutMs", "longDictationTimeoutMs",
                 "recognizeStopCommand", "recognitionCues", "cueGain", "followComposerMode"}) NativeVoiceJson.put(config, field, defaults.opt(field));
         try (NativeDictationStore store = new NativeDictationStore(directory, () -> key, new NativeDictationStore.Disk(), NativeDictationStore.Limits.defaults())) {
@@ -458,7 +458,7 @@ public class NativeVoiceRecordingTest {
         };
         File directory = temporary.newFolder("runtime-discard");
         JSONObject defaults = NativeVoiceSettings.defaults().value, config = new JSONObject();
-        for (String field : new String[] {"speechProvider", "speechEndpoint", "sttModel", "inputDeviceId", "recognitionStartTimeoutMs",
+        for (String field : new String[] {"speechProvider", "speechEndpoint", "sttModel", "inputDevice", "recognitionStartTimeoutMs",
                 "recognitionCompletionTimeoutMs", "recognitionEndSilenceMs", "recognitionResultTimeoutMs", "longDictationTimeoutMs",
                 "recognizeStopCommand", "recognitionCues", "cueGain", "followComposerMode"}) NativeVoiceJson.put(config, field, defaults.opt(field));
         try (NativeDictationStore store = new NativeDictationStore(directory, () -> key, disk, NativeDictationStore.Limits.defaults())) {

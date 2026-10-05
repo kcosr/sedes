@@ -172,8 +172,9 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         publish();
     }
     JSONObject snapshot() { return NativeVoiceJson.copy(state); }
-    void observe(Observer observer) { observers.add(observer); handler.post(this::deliverPendingOpen); }
-    void unobserve(Observer observer) { observers.remove(observer); }
+    void observe(Observer observer) { observers.add(observer); audio.monitorDevices(true); handler.post(this::deliverPendingOpen); }
+    void unobserve(Observer observer) { observers.remove(observer); if (observers.isEmpty()) audio.monitorDevices(false); }
+    @Override public void inputDevicesChanged() { handler.post(() -> emit("inputDevicesChanged", NativeVoiceJson.object("devices", audio.devices()))); }
     void setTestSessionStarter(SessionStarter starter) {
         if (!BuildConfig.DEBUG) throw new IllegalStateException("test_session_starter_unavailable");
         testSessionStarter = starter;
@@ -221,7 +222,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                         requireInteraction(NativeVoiceJson.string(args, "interactionId", 160)); stopInteraction(); break;
                     case "resumeInput": NativeVoiceJson.keys(args, "mutationId"); resumeInput(NativeVoiceJson.string(args, "mutationId", 160)); break;
                     case "discardInput": NativeVoiceJson.keys(args, "mutationId"); discardInput(NativeVoiceJson.string(args, "mutationId", 160)); break;
-                    case "listInputDevices": NativeVoiceJson.keys(args); reply.done(NativeVoiceJson.object("devices", audio.devices(), "selectedId", settings.text("inputDeviceId"))); return;
+                    case "listInputDevices": NativeVoiceJson.keys(args); reply.done(NativeVoiceJson.object("devices", audio.devices())); return;
                     case "getState": NativeVoiceJson.keys(args); reply.done(snapshot()); return;
                     default: throw new IllegalArgumentException("unknown_voice_action");
                 }
@@ -696,7 +697,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         return speech;
     }
     private static boolean captureSettingsChanged(NativeVoiceSettings previous, NativeVoiceSettings next) {
-        for (String key : new String[] { "speechProvider", "speechEndpoint", "sttModel", "inputDeviceId", "recognitionStartTimeoutMs", "recognitionCompletionTimeoutMs",
+        if (!Objects.equals(NativeVoiceInput.read(previous.value), NativeVoiceInput.read(next.value))) return true;
+        for (String key : new String[] { "speechProvider", "speechEndpoint", "sttModel", "recognitionStartTimeoutMs", "recognitionCompletionTimeoutMs",
             "recognitionEndSilenceMs", "recognitionResultTimeoutMs", "longDictationTimeoutMs" })
             if (!Objects.equals(previous.value.opt(key), next.value.opt(key))) return true;
         return false;
@@ -920,7 +922,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                 public void ready(String recordingId) { handler.post(() -> {
                     if (!ownsRecording(item, recordingId) || retry || !phase.equals("arming")) return;
                     item.lastAudioId = item.captureId; captureOwner = item;
-                    audio.record(item.captureId, item.recordingSettings.text("inputDeviceId"));
+                    audio.record(item.captureId, NativeVoiceInput.read(item.recordingSettings.value));
                 }); }
                 public void changed(String recordingId, boolean reconnecting) { handler.post(() -> {
                     if (!ownsRecording(item, recordingId)) return;
@@ -947,7 +949,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     private static JSONObject recordingConfig(NativeVoiceSettings settings) {
         JSONObject config = new JSONObject();
-        for (String key : new String[] { "speechProvider", "speechEndpoint", "sttModel", "inputDeviceId", "recognitionStartTimeoutMs",
+        for (String key : new String[] { "speechProvider", "speechEndpoint", "sttModel", "inputDevice", "recognitionStartTimeoutMs",
             "recognitionCompletionTimeoutMs", "recognitionEndSilenceMs", "recognitionResultTimeoutMs", "longDictationTimeoutMs",
             "recognizeStopCommand", "recognitionCues", "cueGain", "followComposerMode" }) NativeVoiceJson.put(config, key, settings.value.opt(key));
         return config;
@@ -2271,7 +2273,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             "recognitionThreadTitle", active.targetTitle, "automatic", active.automatic, "recording", recording);
         String readiness = readiness(), blocked = keepListeningBlockedReason();
         boolean ready = readiness.equals("ready");
-        JSONObject next = NativeVoiceJson.object("version", 8, "connectionGeneration", connectionGeneration,
+        JSONObject next = NativeVoiceJson.object("version", 9, "connectionGeneration", connectionGeneration,
             "profileId", profileId, "serverOrigin", origin, "identity", identity, "originClientId", originId, "clientConnectionToken", clientConnectionToken,
             "settingsRevision", settings.revision, "settings", settings.value, "phase", phase, "ready", ready,
             "speech", NativeVoiceJson.object("credentialConfigured", speechCredential != null, "catalogStatus", catalogStatus,

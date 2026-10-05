@@ -29,6 +29,7 @@ describe("native voice bridge helpers", () => {
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 5 }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 6 }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, version: 7 }).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, version: 8 }).success).toBe(false);
     const { nextRecordingTarget: _target, ...missingTarget } = state;
     expect(nativeVoiceStateSchema.safeParse(missingTarget).success).toBe(false);
     expect(nativeVoiceStateSchema.parse({ ...state, nextRecordingTarget: { threadId: "thread", threadTitle: null } }).nextRecordingTarget?.threadId).toBe("thread");
@@ -40,7 +41,15 @@ describe("native voice bridge helpers", () => {
     expect(nativeVoiceStateSchema.safeParse({ ...state, speech: { ...state.speech, credential: "must-never-cross" } }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, adapterUrl: "https://old.test" } }).success).toBe(false);
   });
-  it("requires the strict v8 recording and recovery identities without exposing audio or transcript text", () => {
+  it("requires persistent microphone identity and rejects transient device IDs", () => {
+    const state = voiceSnapshot();
+    expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings,
+      inputDevice: { type: 7, address: null, name: "Headset" } } }).success).toBe(true);
+    for (const inputDevice of ["42", { type: 7, name: "Headset" }, { type: 7, address: null, name: "Headset", id: "42" }])
+      expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, inputDevice } }).success).toBe(false);
+    expect(nativeVoiceStateSchema.safeParse({ ...state, settings: { ...state.settings, inputDeviceId: null } }).success).toBe(false);
+  });
+  it("requires the strict v9 recording and recovery identities without exposing audio or transcript text", () => {
     const state = voiceSnapshot({ phase: "listening", active: { id: "interaction", eventKind: "manual", threadId: "thread", threadTitle: "Thread",
       recognitionThreadId: "thread", recognitionThreadTitle: "Thread", automatic: false,
       recording: { id: "recording", keepListening: true, reconnecting: true } },

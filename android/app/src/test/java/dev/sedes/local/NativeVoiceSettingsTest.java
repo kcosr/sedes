@@ -14,7 +14,7 @@ public class NativeVoiceSettingsTest {
     @Test public void longDictationTimeoutIsAWholeMinuteSettingWithNoOldRecordFallback() {
         NativeVoiceSettings defaults = NativeVoiceSettings.defaults();
         assertEquals(3600000, defaults.number("longDictationTimeoutMs"));
-        assertEquals(6, NativeVoiceSettings.RECORD_VERSION);
+        assertEquals(7, NativeVoiceSettings.RECORD_VERSION);
         for (int duration : new int[] { 60000, 3600000, 86400000 }) {
             NativeVoiceSettings configured = defaults.patch(0, NativeVoiceJson.object("longDictationTimeoutMs", duration));
             assertEquals(duration, restore(record(configured)).number("longDictationTimeoutMs"));

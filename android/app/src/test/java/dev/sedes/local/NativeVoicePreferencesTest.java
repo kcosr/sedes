@@ -15,13 +15,15 @@ public class NativeVoicePreferencesTest {
         prefs = prefs.update(A, prefs.settings(A).patch(0, NativeVoiceJson.object("audioMode", "response", "autoListen", false,
             "speechProvider", "server", "speechEndpoint", "https://speech.example/v1", "sttModel", "local-stt",
             "ttsModel", "local-tts", "ttsVoice", "local-voice", "voiceThreadId", "thread-a", "voiceThreadTitle", "Private A",
-            "inputDeviceId", "headset", "recognitionCues", false, "longDictationTimeoutMs", 120000, "pinDefaultVoiceThread", true)));
+            "inputDevice", NativeVoiceJson.object("type", 7, "address", "AA:BB:CC:DD:EE:FF", "name", "Headset"),
+            "recognitionCues", false, "longDictationTimeoutMs", 120000, "pinDefaultVoiceThread", true)));
         for (String other : new String[] { B, ACCOUNT, PROFILE }) {
             NativeVoiceSettings settings = prefs.settings(other);
             assertEquals("response", settings.mode()); assertFalse(settings.flag("autoListen"));
             assertEquals("https://speech.example/v1", settings.text("speechEndpoint"));
             assertEquals("local-stt", settings.text("sttModel")); assertEquals("local-tts", settings.text("ttsModel"));
-            assertEquals("local-voice", settings.text("ttsVoice")); assertEquals("headset", settings.text("inputDeviceId"));
+            assertEquals("local-voice", settings.text("ttsVoice"));
+            assertEquals(new NativeVoiceInput(7, "AA:BB:CC:DD:EE:FF", "Headset"), NativeVoiceInput.read(settings.value));
             assertFalse(settings.flag("recognitionCues")); assertEquals(120000, settings.number("longDictationTimeoutMs"));
             assertTrue(settings.flag("pinDefaultVoiceThread")); assertNull(settings.text("voiceThreadId")); assertNull(settings.text("voiceThreadTitle"));
         }
