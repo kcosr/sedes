@@ -74,7 +74,7 @@ final class NativeVoiceRecording {
     private final AtomicBoolean terminal = new AtomicBoolean();
     private final AtomicBoolean discarded = new AtomicBoolean();
     private volatile NativeDictationStore.Recording recording;
-    private volatile boolean adoptionIntent, sendRevoked, acceptedAudio;
+    private volatile boolean adoptionIntent, sendRevoked;
     private volatile FinishReason finishRequested;
     private volatile long outageGeneration;
     private int queuedBytes;
@@ -169,7 +169,6 @@ final class NativeVoiceRecording {
                 for (int offset = 0; offset < pcm.length; offset += NativeSpeechTransport.PCM_PACKET_BYTES)
                     input.addLast(Arrays.copyOfRange(pcm, offset, Math.min(pcm.length, offset + NativeSpeechTransport.PCM_PACKET_BYTES)));
                 queuedBytes += pcm.length;
-                acceptedAudio = true;
                 if (!drainScheduled) { drainScheduled = true; schedule = true; }
             }
         }
@@ -177,9 +176,6 @@ final class NativeVoiceRecording {
         if (schedule) execute(this::drain);
         return true;
     }
-    /** Monotonic even if an interruption cannot checkpoint its first accepted packet. */
-    boolean hasAcceptedAudio() { return acceptedAudio; }
-
     void setKeepListening(boolean keepListening, Completion completion) {
         if (keepListening) adoptionIntent = true;
         execute(() -> {
@@ -301,7 +297,6 @@ final class NativeVoiceRecording {
     private void update(NativeDictationStore.Recording value) {
         NativeDictationStore.Recording before = recording;
         recording = value;
-        if (value.acceptedSamples > 0 || value.durableSamples > 0) acceptedAudio = true;
         if (value.adopted) adoptionIntent = true;
         if (before == null || before.revision != value.revision || before.durableSamples != value.durableSamples)
             listener.journalChanged(id, value);

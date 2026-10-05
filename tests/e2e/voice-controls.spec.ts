@@ -23,13 +23,21 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   const composer = page.getByRole("textbox", { name: "Message Scripted agent", exact: true });
   const toolbar = page.getByRole("group", { name: "Voice controls", exact: true });
   const heights: Record<string, number> = {};
+  const leftOffsets: Record<string, { tile: number; title: number; status: number; tileTextGap: number }> = {};
   const measureRow = async (state: string) => {
     heights[state] = (await toolbar.boundingBox())!.height;
     expect(heights[state], `${state} preserves the original 60px row`).toBe(60);
+    const [tile, title, status] = await Promise.all([
+      toolbar.locator(".voice-card-tile").boundingBox(), toolbar.locator(".voice-card-title").boundingBox(), toolbar.locator(".voice-card-sub").boundingBox(),
+    ]);
+    leftOffsets[state] = { tile: tile!.x, title: title!.x, status: status!.x, tileTextGap: title!.x - tile!.x - tile!.width };
+    expect(leftOffsets[state], `${state} preserves the Ready-state icon and text positions`).toEqual(leftOffsets.idleBeforeRecording);
+    expect(leftOffsets[state].tileTextGap, `${state} preserves the Ready-state icon/text gap`).toBe(6);
   };
   await page.setViewportSize({ width: 320, height: 780 });
   await expect(toolbar).toBeVisible();
   await measureRow("idleBeforeRecording");
+  await capture(page, testInfo, "voice-ready-spacing-narrow.png");
   const base = voiceFixtureState();
   await expect(toolbar.locator(".voice-card-target")).toHaveCount(0);
   await toolbar.locator(".voice-card-title").click();
@@ -105,10 +113,10 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await expect(tile.locator(".lucide-mic")).toBeVisible();
   const body = toolbar.getByRole("button", { name: `Open thread: ${title}` });
   const [tileBox, bodyBox, changeBox, keepBox, cancelBox, sendBox] = await Promise.all([tile.boundingBox(), body.boundingBox(), change.boundingBox(), keep.boundingBox(), cancel.boundingBox(), send.boundingBox()]);
-  expect(tileBox!.x + tileBox!.width + 4).toBeLessThanOrEqual(bodyBox!.x);
-  expect(bodyBox!.x + bodyBox!.width + 4).toBeLessThanOrEqual(changeBox!.x);
-  expect(changeBox!.x + changeBox!.width + 4).toBeLessThanOrEqual(keepBox!.x);
-  expect(keepBox!.x + keepBox!.width + 4).toBeLessThanOrEqual(cancelBox!.x);
+  expect(tileBox!.x + tileBox!.width + 6).toBe(bodyBox!.x);
+  expect(bodyBox!.x + bodyBox!.width + 2).toBeLessThanOrEqual(changeBox!.x);
+  expect(changeBox!.x + changeBox!.width + 2).toBeLessThanOrEqual(keepBox!.x);
+  expect(keepBox!.x + keepBox!.width + 2).toBeLessThanOrEqual(cancelBox!.x);
   expect(sendBox!.x - cancelBox!.x - cancelBox!.width).toBeGreaterThanOrEqual(6);
   expect(sendBox!.x - cancelBox!.x - cancelBox!.width).toBeLessThanOrEqual(12);
   const phaseBox = (await toolbar.locator(".voice-card-phase").boundingBox())!;
@@ -254,4 +262,5 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await capture(page, testInfo, "voice-saved-access-during-recording-narrow.png");
   await expect(composer).toHaveValue(draft);
   await testInfo.attach("voice-row-heights", { body: JSON.stringify({ viewport: 320, originalRowHeight: 60, heights }, null, 2), contentType: "application/json" });
+  await testInfo.attach("voice-row-left-offsets", { body: JSON.stringify({ viewport: 320, leftOffsets }, null, 2), contentType: "application/json" });
 });

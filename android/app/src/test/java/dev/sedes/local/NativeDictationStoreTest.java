@@ -110,19 +110,85 @@ public class NativeDictationStoreTest {
         }
     }
 
-    @Test public void emptySettlementPreservesKnownCapturedAudioWhenItsFirstCheckpointFailed() throws Exception {
-        NativeDictationStore.Disk disk = new NativeDictationStore.Disk() {
-            @Override void fault(String phase, File file) throws IOException {
-                if (phase.equals("before_write") && file.getName().startsWith("pcm-")) throw new IOException("first_audio_write_failed");
+    @Test public void failedFlushClearsEmptyRecordingButPreservesPriorDurableAudioAndText() throws Exception {
+        for (String content : new String[] { "empty", "audio", "text" }) {
+            root = temporary.newFolder("failed-flush-" + content); AtomicBoolean failing = new AtomicBoolean();
+            NativeDictationStore.Disk disk = new NativeDictationStore.Disk() {
+                @Override void fault(String phase, File file) throws IOException {
+                    if (failing.get() && phase.equals("before_write") && file.getName().startsWith("pcm-")) throw new IOException("audio_write_failed");
+                }
+            };
+            try (NativeDictationStore store = open(disk, limits(1024, 128, 4 * 1024 * 1024))) {
+                NativeDictationStore.Journal journal = create(store, "captured"); journal.adopt(true);
+                if (content.equals("audio")) { journal.append(0, pcm(2)); journal.checkpoint(); }
+                if (content.equals("text")) completedSegment(journal, 0, "Saved words");
+                long durable = journal.load().durableSamples; failing.set(true); journal.append(durable, pcm(2));
+                failure("dictation_storage_unavailable", journal::checkpoint);
+                journal.interrupt("dictation_storage_unavailable");
+                NativeDictationStore.Recording settled = store.settleInterruption(BINDING, "captured");
+                if (content.equals("empty")) { assertNull(settled); assertTrue(files().isEmpty()); }
+                else { assertNotNull(settled); assertEquals(1, settled.durableSamples); assertEquals(content.equals("text") ? "Saved words" : "", settled.text); }
+                assertTrue(store.pendingRetirements(BINDING).isEmpty()); assertEquals(0, reserved(store));
             }
-        };
+            try (NativeDictationStore store = open()) {
+                NativeDictationStore.Recording restored = store.recover(BINDING);
+                if (content.equals("empty")) assertNull(restored);
+                else { assertNotNull(restored); assertEquals(1, restored.durableSamples); assertEquals(content.equals("text") ? "Saved words" : "", restored.text); }
+            }
+        }
+    }
+
+    @Test public void neverCapturedStartupSettlementDoesNotNeedAnInterruptionWrite() throws Exception {
+        FaultDisk disk = new FaultDisk();
         try (NativeDictationStore store = open(disk, limits(1024, 128, 4 * 1024 * 1024))) {
-            NativeDictationStore.Journal journal = create(store, "captured"); journal.adopt(true); journal.append(0, pcm(2));
-            assertEquals(1, journal.load().acceptedSamples); assertEquals(0, journal.load().durableSamples);
-            journal.interrupt("dictation_storage_unavailable");
-            assertTrue(journal.load().empty());
-            assertNotNull("A failed flush cannot reclassify known captured audio as unused startup", store.settleInterruption(BINDING, "captured", true));
-            assertTrue(store.pendingRetirements(BINDING).isEmpty());
+            create(store, "startup").adopt(true); assertTrue(reserved(store) > 0);
+            disk.arm("before_write", "manifest.enc");
+            assertNull(store.settleInterruption(BINDING, "startup")); assertTrue(files().isEmpty()); assertEquals(0, reserved(store));
+            assertEquals("Settlement must not write an unused interruption", "before_write", disk.phase);
+        }
+    }
+
+    @Test public void settlementReloadFailureKeepsStoppedClassificationAndRetainedWork() throws Exception {
+        for (String content : new String[] { "empty", "audio", "text", "tail", "unreadable" }) {
+            root = temporary.newFolder("settle-reload-" + content);
+            java.util.ArrayDeque<String> faults = new java.util.ArrayDeque<>();
+            NativeDictationStore.Disk disk = new NativeDictationStore.Disk() {
+                @Override void fault(String phase, File file) throws IOException {
+                    if ((phase + ":" + file.getName()).equals(faults.peek())) { faults.remove(); throw new IOException("injected_settlement_fault"); }
+                }
+            };
+            try (NativeDictationStore store = open(disk, limits(1024, 128, 4 * 1024 * 1024))) {
+                NativeDictationStore.Journal journal = create(store, "stopped"); journal.adopt(true);
+                if (content.equals("audio")) { journal.append(0, pcm(2)); journal.checkpoint(); }
+                if (content.equals("text")) completedSegment(journal, 0, "Saved words");
+                if (content.equals("tail")) { journal.append(0, pcm(2)); faults.add("before_write:pcm-0.enc"); }
+                faults.add("before_write:manifest.enc"); faults.add("before_read:manifest.enc");
+                failure("dictation_storage_unavailable", () -> journal.interrupt("voice_off"));
+                failure("dictation_storage_unavailable", () -> store.settleInterruption(BINDING, "stopped"));
+                assertTrue(faults.isEmpty()); assertEquals(0, reserved(store));
+                // A second control failure after reload must preserve the stopped marker on the replacement Live.
+                faults.add("before_write:manifest.enc");
+                assertEquals("unavailable", store.recover(BINDING).stage);
+                if (content.equals("unreadable")) {
+                    File manifest = file("manifest.enc"); byte[] bytes = Files.readAllBytes(manifest.toPath()); bytes[bytes.length - 1] ^= 1;
+                    Files.write(manifest.toPath(), bytes);
+                }
+                NativeDictationStore.Recording restored = store.recover(BINDING);
+                if (content.equals("empty")) { assertNull(restored); assertTrue(files().isEmpty()); }
+                else if (content.equals("unreadable")) { assertNotNull(restored); assertEquals("unavailable", restored.stage); assertFalse(files().isEmpty()); }
+                else {
+                    assertNotNull(restored); assertEquals(1, restored.durableSamples); assertEquals(1, restored.endSample);
+                    assertEquals(content.equals("text") ? "Saved words" : "", restored.text);
+                    if (!content.equals("text")) assertArrayEquals(pcm(2), store.journal(BINDING, "stopped").read(0, 2));
+                }
+                assertEquals(0, reserved(store));
+            }
+            try (NativeDictationStore store = open()) {
+                NativeDictationStore.Recording restored = store.recover(BINDING);
+                if (content.equals("empty")) assertNull(restored);
+                else if (content.equals("unreadable")) assertEquals("unavailable", restored.stage);
+                else { assertNotNull(restored); assertEquals(1, restored.durableSamples); assertEquals(content.equals("text") ? "Saved words" : "", restored.text); }
+            }
         }
     }
 
@@ -132,7 +198,7 @@ public class NativeDictationStoreTest {
             try (NativeDictationStore store = open()) { create(store, "startup").adopt(true); }
             FaultDisk disk = new FaultDisk(); disk.arm(beforeMarker ? "before_write" : "before_delete", beforeMarker ? "terminal.enc" : "manifest.enc");
             try (NativeDictationStore store = open(disk, limits(1024, 128, 4 * 1024 * 1024))) {
-                failure("dictation_storage_unavailable", () -> { if (bootstrap) store.recover(BINDING); else store.settleInterruption(BINDING, "startup", false); });
+                failure("dictation_storage_unavailable", () -> { if (bootstrap) store.recover(BINDING); else store.settleInterruption(BINDING, "startup"); });
                 assertEquals(beforeMarker ? 0 : 1, store.pendingRetirements(BINDING).size());
                 assertNull(store.recover(BINDING)); assertTrue(files().isEmpty());
             }

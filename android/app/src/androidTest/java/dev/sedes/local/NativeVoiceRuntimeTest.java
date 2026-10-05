@@ -1333,7 +1333,8 @@ public class NativeVoiceRuntimeTest {
 
     @Test public void heldStartupCancellationSettlesCreationBeforeRecoveryAndDistinguishesExplicitDiscard() throws Exception {
         for (boolean adoptedBeforeCancellation : new boolean[] { false, true }) {
-            for (String action : new String[] { "off", "disconnect", "focus", "cancel" }) {
+            for (String action : new String[] { "off", "disconnect", "focus", "cancel" }) for (String fault : new String[] { "none", "manifest", "terminal" }) {
+                if (!adoptedBeforeCancellation && !fault.equals("none")) continue;
                 try (Fixture f = new Fixture(false, false)) {
                     f.recognizing(false); assertNull(f.command("stopCurrentInteraction", new JSONObject()));
                     f.settings(NativeVoiceJson.object("keepListeningByDefault", true)); f.holdRecordingPreflight = true;
@@ -1346,6 +1347,7 @@ public class NativeVoiceRuntimeTest {
                     NativeSpeechCatalog.PreflightResult preflight = f.preflights.poll(10, TimeUnit.SECONDS); assertNotNull(preflight);
                     Object pending = field(f.runtime, "active"); String id = (String) field(pending, "recordingId");
                     AtomicReference<NativeDictationStore.Recording> restored = new AtomicReference<>();
+                    StorageFaults storage = f.storageFaults();
                     try (WorkerBlock writing = new WorkerBlock(f)) {
                         preflight.done(NativeSpeechCapabilities.hosted("gpt-live-transcribe"), null); f.onOwner(() -> {});
                         assertNotNull(field(pending, "recordingStart"));
@@ -1361,7 +1363,10 @@ public class NativeVoiceRuntimeTest {
                             }
                             if (adoptedBeforeCancellation) {
                                 // Disk adoption finishes while the runtime callback is held behind the queued interruption.
-                                writing.close(); f.onStore(() -> assertTrue(f.dictations.get(f.binding, id).adopted));
+                                writing.close(); f.onStore(() -> {
+                                    assertTrue(f.dictations.get(f.binding, id).adopted);
+                                    if (!fault.equals("none")) storage.arm("before_write", fault + ".enc");
+                                });
                                 try (WorkerBlock cleanup = new WorkerBlock(f)) {
                                     callbacks.close(); assertNull(cancellation.await()); f.onOwner(() -> {});
                                     assertTrue(f.runtime.snapshot().isNull("active"));
@@ -1381,9 +1386,13 @@ public class NativeVoiceRuntimeTest {
                     assertNull("Empty startup has no work for reconnect recovery", restored.get());
                     f.onStore(() -> assertNull(f.dictations.recover(f.binding)));
                     assertTrue(f.runtime.snapshot().isNull("recordingRecovery"));
-                    if (adoptedBeforeCancellation && !action.equals("cancel") && !action.equals("disconnect")) {
-                        String reason = action.equals("off") ? "voice_off" : "audio_focus_lost";
-                        assertEquals(1, f.errors(reason)); assertFalse(f.lastError().getString("message").contains("saved"));
+                    assertEquals(fault.equals("terminal") ? 1 : 0, storage.failures.get());
+                    if (adoptedBeforeCancellation && !action.equals("disconnect")) {
+                        if (fault.equals("terminal")) assertEquals(1, f.errors("dictation_storage_unavailable"));
+                        else if (!action.equals("cancel")) {
+                            String reason = action.equals("off") ? "voice_off" : "audio_focus_lost";
+                            assertEquals(1, f.errors(reason)); assertFalse(f.lastError().getString("message").contains("saved"));
+                        }
                     }
                     assertFalse((boolean) field(f.runtime, "dictationStorageError"));
                     assertFalse((boolean) field(f.runtime, "dictationOperationPending"));
@@ -1455,6 +1464,23 @@ public class NativeVoiceRuntimeTest {
                     if (captured) { assertNotNull(restored); assertEquals(2400, restored.durableSamples); }
                     else assertNull(restored);
                 });
+            }
+        }
+    }
+
+    @Test public void failedFirstAudioWriteReportsStorageErrorWithoutLeavingAnEmptyRecoveryCard() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            NativeVoiceAudioTest.grant(f.context, "android.permission.RECORD_AUDIO");
+            f.recognizing(false, true); Object active = field(f.runtime, "active");
+            StorageFaults storage = f.storageFaults(); storage.failPcm = true;
+            f.onOwner(() -> assertTrue(((NativeVoiceRecording) field(active, "recording")).accept(new byte[NativeDictationStore.SAMPLE_RATE * 2])));
+            f.flush(); assertTrue(storage.failures.get() > 0); assertEquals(1, f.errors("dictation_storage_unavailable"));
+            assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.runtime.snapshot().isNull("recordingRecovery"));
+            assertTrue(f.runtime.snapshot().getJSONObject("actions").getBoolean("canStart"));
+            assertFalse((boolean) field(f.runtime, "dictationOperationPending")); assertFalse((boolean) field(f.runtime, "dictationStorageError"));
+            f.onStore(() -> assertNull(f.dictations.recover(f.binding)));
+            try (NativeDictationStore reopened = new NativeDictationStore(f.context)) {
+                f.onStore(() -> assertNull(reopened.recover(f.binding)));
             }
         }
     }
@@ -1879,6 +1905,23 @@ public class NativeVoiceRuntimeTest {
         public void failed(String code, String message) { error = code; done.countDown(); }
         String await() throws Exception { assertTrue(done.await(10, TimeUnit.SECONDS)); return error; }
     }
+    private static final class StorageFaults extends NativeDictationStore.Disk {
+        final NativeDictationStore.Disk delegate;
+        final AtomicInteger failures = new AtomicInteger();
+        volatile String phase, name;
+        volatile boolean failPcm;
+        StorageFaults(NativeDictationStore.Disk delegate) { this.delegate = delegate; }
+        void arm(String phase, String name) { this.phase = phase; this.name = name; }
+        @Override void fault(String phase, File file) throws java.io.IOException {
+            if (failPcm && phase.equals("before_write") && file.getName().startsWith("pcm-")) {
+                failures.incrementAndGet(); throw new java.io.IOException("injected_pcm_write_failure");
+            }
+            if (phase.equals(this.phase) && file.getName().equals(name)) {
+                this.phase = null; failures.incrementAndGet(); throw new java.io.IOException("injected_startup_storage_failure");
+            }
+        }
+        @Override void syncDirectory(File directory) throws Exception { delegate.syncDirectory(directory); }
+    }
     private static final class WorkerBlock implements AutoCloseable {
         final CountDownLatch release = new CountDownLatch(1);
         WorkerBlock(Fixture f) throws Exception { this(f, true); }
@@ -2034,6 +2077,11 @@ public class NativeVoiceRuntimeTest {
             CountDownLatch done = new CountDownLatch(1); AtomicReference<Throwable> failure = new AtomicReference<>();
             dictations.executor().execute(() -> { try { action.run(); } catch (Throwable error) { failure.set(error); } finally { done.countDown(); } });
             assertTrue(done.await(10, TimeUnit.SECONDS)); if (failure.get() != null) throw new AssertionError(failure.get());
+        }
+        StorageFaults storageFaults() throws Exception {
+            AtomicReference<StorageFaults> result = new AtomicReference<>();
+            onStore(() -> { StorageFaults disk = new StorageFaults((NativeDictationStore.Disk) field(dictations, "disk")); set(dictations, "disk", disk); result.set(disk); });
+            return result.get();
         }
         NativeDictationStore.Recording savedRecording(boolean complete, boolean incomplete) throws Exception { return savedRecording(complete, incomplete, true); }
         NativeDictationStore.Recording savedRecording(boolean complete, boolean incomplete, boolean withIntent) throws Exception {

@@ -50,14 +50,6 @@ public class NativeVoiceRecordingTest {
         assertNull(h.listener.error);
     }
 
-    @Test public void firstQueuedPacketIsKnownAsCapturedBeforeTheWorkerCanFlushIt() {
-        Harness h = new Harness(); h.journal.adopt(true); h.recording.start(true); h.flush();
-        assertFalse(h.recording.hasAcceptedAudio()); assertTrue(h.recording.accept(pcm(2400, 2100)));
-        assertTrue(h.recording.hasAcceptedAudio()); assertEquals(0, h.journal.accepted);
-        h.journal.failCheckpoint = true; h.recording.interrupt("voice_off"); h.flush();
-        assertTrue(h.recording.hasAcceptedAudio()); assertTrue(h.listener.retained);
-    }
-
     @Test public void aJournalAdoptedBeforeStartupHasHeldRetryAndRetentionSemanticsImmediately() {
         Harness h = new Harness(); h.journal.adopt(true); h.recording.start(true); h.flush();
         assertTrue(h.journal.keep); h.feedFrames(1);
@@ -437,7 +429,7 @@ public class NativeVoiceRecordingTest {
             }
             worker.run(); time.advance(60000); worker.run();
             assertTrue(time.closed); assertTrue(listener.retained); assertEquals(reason, listener.error); assertNull(listener.text);
-            NativeDictationStore.Recording retained = store.settleInterruption(binding, "recording", recording.hasAcceptedAudio());
+            NativeDictationStore.Recording retained = store.settleInterruption(binding, "recording");
             if (retry) {
                 assertNotNull(retained); assertTrue(retained.adopted); assertEquals("interrupted", retained.stage);
                 assertEquals("Saved prefix", retained.text); assertEquals(4800, retained.durableSamples);

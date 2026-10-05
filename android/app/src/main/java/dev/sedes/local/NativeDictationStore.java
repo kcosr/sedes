@@ -177,7 +177,7 @@ final class NativeDictationStore implements AutoCloseable {
         final ByteArrayOutputStream tail = new ByteArrayOutputStream();
         long durableSamples, acceptedSamples, nextBlock, captureReservedBytes;
         String text, pendingInterruption;
-        boolean captureReserved, drainOnly, reloadNeeded, adoptionRequested;
+        boolean captureReserved, drainOnly, reloadNeeded, adoptionRequested, inactive;
         Live(String binding, String id, long profileGeneration, JSONObject manifest, String text) {
             this.binding = binding; this.id = id; this.profileGeneration = profileGeneration;
             this.manifest = manifest; this.text = text;
@@ -349,11 +349,19 @@ final class NativeDictationStore implements AutoCloseable {
         synchronized (LOCK) { return snapshot(require(binding, id)); }
     }
 
-    /** Called after accepted PCM has drained and the interruption boundary has settled. */
-    Recording settleInterruption(String binding, String id, boolean capturedAudio) throws Exception {
+    /** Called only after capture has stopped and queued PCM/interruption work has drained. */
+    Recording settleInterruption(String binding, String id) throws Exception {
         synchronized (LOCK) {
-            Recording record = get(binding, id);
-            if (capturedAudio || !record.empty()) return record;
+            Live cached = live.get(cacheKey(binding, id));
+            // A failed reload must not make this stopped recording look like a live startup on recovery.
+            // Keep its tail and pending interruption so a later healthy read can still drain retained PCM.
+            if (cached != null) { cached.inactive = true; releaseCapture(cached); }
+            Live item = require(binding, id); item.inactive = true; releaseCapture(item);
+            if (item.pendingInterruption != null) {
+                interruptRecording(binding, id, item.pendingInterruption); item = require(binding, id);
+            }
+            Recording record = snapshot(item);
+            if (!record.empty()) return record;
             discardEmptyStartup(binding, id); return null;
         }
     }
@@ -379,7 +387,8 @@ final class NativeDictationStore implements AutoCloseable {
                 if (!directory.isDirectory()) continue;
                 String id = directory.getName();
                 if (!isId(id)) throw new Failure("dictation_storage_corrupt", true);
-                boolean cached = live.containsKey(cacheKey(binding, id));
+                Live existing = live.get(cacheKey(binding, id));
+                boolean cached = existing != null && !existing.inactive;
                 Recording candidate; boolean retired = false;
                 try {
                     Retirement retirement = retirement(binding, id);
@@ -825,6 +834,7 @@ final class NativeDictationStore implements AutoCloseable {
             item.tail.write(tail, acknowledged, tail.length - acknowledged); item.acceptedSamples = cached.acceptedSamples;
             item.captureReserved = cached.captureReserved; item.captureReservedBytes = cached.captureReservedBytes;
             item.drainOnly = cached.drainOnly; item.pendingInterruption = cached.pendingInterruption; item.adoptionRequested = cached.adoptionRequested;
+            item.inactive = cached.inactive;
         }
         live.put(cacheKey, item); return item;
     }

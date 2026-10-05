@@ -782,10 +782,13 @@
   Cancel, and Send have distinct spacing. Submitted
   voice messages show their complete text immediately without a preview label.
   Opening the voice thread picker on mobile leaves the keyboard closed.
+  Recording preserves the Ready state's title and status spacing beside the icon.
 
 - Interrupted voice startup no longer leaves an empty saved dictation blocking
   recording. Default-held recordings survive automatic-policy changes during
   startup, and an unresolved saved dictation disables unavailable held starts.
+  If an audio write leaves nothing recoverable, the empty slot is released
+  consistently before and after restart.
 
 - Oversized queued user input offers **Copy full text**, preserving access to
   failed or not-sent dictation without exceeding the composer's 64 KiB limit.

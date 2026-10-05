@@ -486,8 +486,14 @@
   }
 
   .voice-card[data-recording] {
-    gap: 4px;
-    padding-inline: 3px;
+    gap: 2px;
+    padding-inline-end: 3px;
+  }
+
+  /* Keep the tile and both text lines at their Ready-state positions. Only
+     the gaps between the controls yield as recording adds more actions. */
+  .voice-card[data-recording] .voice-card-tile {
+    margin-inline-end: 4px;
   }
 
   .voice-card[data-recording] .voice-card-actions,
@@ -527,10 +533,10 @@
 }
 
 /* Six distinct touch regions fit a 320px phone with full-size Listening
-   text by using three more pixels of the existing gutter on each side. */
+   text. Use the right gutter only, so the Ready-state left inset stays fixed. */
 @container voice-dock (max-width: 359px) {
   .voice-card[data-recording]:has(.voice-card-target) {
     width: calc(100% + 6px);
-    margin-inline: -3px;
+    margin-inline: 0 -6px;
   }
 }

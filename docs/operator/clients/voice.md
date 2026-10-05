@@ -375,8 +375,10 @@ Use **Start new recording** in the Voice sheet when that older item permits it;
 the new recording uses the normal visible/default thread selection.
 With **Keep listening by default** enabled, resolve the older saved dictation
 first; new manual and automatic recordings cannot start, and no start cue plays.
-An interrupted startup that captured no audio or text reports its interruption
-without keeping an empty draft or blocking the next recording.
+An interruption that leaves no saved audio or text reports its cause without
+keeping an empty draft or blocking the next recording. This also applies when
+the first audio buffer could not be saved; there is no empty draft to restore
+after restarting the app.
 
 Recording storage is encrypted, device-local, and excluded from backups. Each
 recording permits 32 MiB of unresolved PCM and 128 unresolved segments; all

@@ -472,6 +472,8 @@ beside the title/status area, and the right-side Cancel and Send controls are se
 Touch regions remain distinct and at least 44 px. Reconnecting and error details
 use the existing status line. An older saved draft marks the quick-controls icon
 and opens the same recovery sheet without adding another row.
+The title and status retain the Ready state's left alignment and gap from the
+status icon when recording controls appear, including narrow layouts.
 
 `NativeVoiceSegmenter` counts real 24 kHz samples and analyzes absolute 100 ms
 frames. RMS 0.012 identifies likely pauses, never disposable audio. A 1,200 ms
@@ -505,9 +507,12 @@ Overflow retains the bounded recognized prefix and offending result for Copy
 and Discard. Nothing is silently truncated to make Send succeed.
 
 Interrupted adopted recordings release hardware and block new capture/queue drain
-before admission handoff. An interrupted startup with no accepted or durable
-audio samples and no recognized text releases its empty slot after serialized
+before admission handoff. An interruption with no retained audio samples,
+recognized text or send request releases its empty slot after serialized
 settlement; it reports the interruption without publishing an empty ready draft.
+Audio that failed to reach storage does not keep an otherwise empty record alive
+only until restart. Startup cancellation settles its never-captured journal
+directly, without an intermediate interruption write.
 Unreadable storage remains preserved. Restart restores only the draft and immutable admission
 request; it cannot resume the microphone, recognition, or POST automatically.
 Missing interior audio blocks Send. An explicit recovery Send can accept a

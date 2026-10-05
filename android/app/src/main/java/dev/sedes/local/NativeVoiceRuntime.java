@@ -121,7 +121,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         Call preflight;
         volatile NativeVoiceCapturePolicy capturePolicy;
         final Object captureLock = new Object();
-        boolean adopted, defaultHeld, interruptedAudio, keepListening, reconnecting, recordingMutationPending, recoveryRecognition, recoverySend;
+        boolean adopted, defaultHeld, keepListening, reconnecting, recordingMutationPending, recoveryRecognition, recoverySend;
         volatile boolean captureStopping, captureEnded, endpointReached;
         boolean finishIntentSaved, finishQueued;
         boolean frozenSteer;
@@ -857,7 +857,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (defaultHeld) { item.automatic = false; clientActions.clear(); inputSubmissionContext = new Object(); }
         item.recordingId = UUID.randomUUID().toString(); item.captureId = UUID.randomUUID().toString();
         item.recordingBinding = binding; item.recordingSettings = settings; phase = "arming";
-        item.adopted = false; item.interruptedAudio = false; item.keepListening = false; item.reconnecting = false; item.longDictationDeadline = 0;
+        item.adopted = false; item.keepListening = false; item.reconnecting = false; item.longDictationDeadline = 0;
         item.captureStopping = false; item.captureEnded = false; item.endpointReached = false; item.endpoint = null;
         item.finishReason = null; item.finishIntentSaved = false; item.finishQueued = false; item.completionReceived = false; item.recognitionFinalized = false;
         item.record = null; item.completedText = null; item.mutationId = null;
@@ -1122,7 +1122,6 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     private void recordingFailed(Active item, String reason, boolean retained) {
         if (active != item) return;
-        if (item.recording != null) item.interruptedAudio |= item.recording.hasAcceptedAudio();
         item.recording = null; closeRecordingTransport(item);
         if (retained || item.adopted) interruptRecording(item, reason);
         else failActive(reason);
@@ -1141,16 +1140,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         phase = sessionStarted ? "idle" : "off"; publish();
         dictationWork(() -> {
             if (starting.journal == null) return null;
-            NativeDictationStore.Recording record = starting.adopted;
-            if (!discard && record == null) record = starting.journal.load();
-            if (!discard && record.adopted) {
-                starting.adopted = record;
-                boolean capturedAudio = record.acceptedSamples > 0 || record.durableSamples > 0;
-                starting.journal.interrupt(reason);
-                return dictations.settleInterruption(owner, item.recordingId, capturedAudio);
-            }
-            // Failed/unadopted creation has no captured audio; explicit Cancel also intentionally removes adoption.
-            starting.journal.discard(); return null;
+            // No transport or microphone ran. Settlement can remove empty creation without an interruption write.
+            return dictations.settleInterruption(owner, item.recordingId);
         }, (record, error) -> {
             if (generation != connectionGeneration || !Objects.equals(owner, binding)) return;
             if (error != null) {
@@ -1172,10 +1163,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         final String owner = item.recordingBinding, id = item.recordingId;
         final long generation = connectionGeneration;
         item.completedMaySubmit = false; item.longDictationDeadline = 0;
-        synchronized (item.captureLock) {
-            item.captureStopping = true;
-            item.interruptedAudio |= item.capturePolicy != null && item.capturePolicy.samples() > 0 || item.recording != null && item.recording.hasAcceptedAudio();
-        }
+        synchronized (item.captureLock) { item.captureStopping = true; }
         if (captureOwner == item) captureOwner = null;
         audio.stop();
         if (item.preflight != null) item.preflight.cancel();
@@ -1192,10 +1180,10 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             audio.cue(UUID.randomUUID().toString(), NativeVoiceCue.Kind.FAILURE, settings.number("cueGain"));
         report(reason); publish();
         if (id == null || owner == null) { endDictationOperation(operation); publish(); return; }
-        dictationWork(() -> dictations.settleInterruption(owner, id, item.interruptedAudio), (record, error) -> {
+        dictationWork(() -> dictations.settleInterruption(owner, id), (record, error) -> {
             if (generation != connectionGeneration || !owner.equals(binding)) return;
             if (error != null) {
-                if (!item.interruptedAudio && retainedDictation != null && retainedDictation.id.equals(id) && retainedDictation.empty()) retainedDictation = null;
+                if (retainedDictation != null && retainedDictation.id.equals(id) && retainedDictation.empty()) retainedDictation = null;
                 dictationStorageError = true; report(code(error));
                 restoreDictation(generation, () -> { endDictationOperation(operation); publish(); drain(); });
                 return;
