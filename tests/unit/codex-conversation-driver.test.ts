@@ -1,3 +1,4 @@
+import { largeDirectInputText } from "../support/large-direct-input.js";
 import { readConversationHistory } from "../helpers/read-conversation-history.js";
 import { historyConversationHandle } from "../../src/server/conversations/history-conversation-handle.js";
 import { usageSubagentRecoveryIndexesMigration } from "../../src/server/db/migrations/114-usage-subagent-recovery-indexes.js";
@@ -12220,7 +12221,7 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
-  it("merges an identity-only turn/start receipt over earlier user-item notifications", async () => {
+  it("preserves 256 KiB input across a racing turn/start receipt and user-item projection", async () => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
     const established = await establish(harness, handle);
@@ -12250,7 +12251,7 @@ describe("CodexConversationHandle", () => {
             type: "userMessage",
             id: "own-user-live",
             clientId: clientUserMessageId,
-            content: [{ type: "text", text: "hello", text_elements: [] }],
+            content: [{ type: "text", text: largeDirectInputText, text_elements: [] }],
           },
           startedAtMs: 1_700_000_002_000,
         });
@@ -12266,7 +12267,7 @@ describe("CodexConversationHandle", () => {
       taskContexts: [],
       contextExcerpts: [],
       attachments: [],
-      text: "hello",
+      text: largeDirectInputText,
     });
 
     const current = (await handle.readCurrent()).snapshot;
@@ -12275,7 +12276,7 @@ describe("CodexConversationHandle", () => {
     );
     expect(userItems).toHaveLength(2);
     expect(userItems.at(-1)).toMatchObject({
-      content: [{ kind: "text", text: { text: "hello" } }],
+      content: [{ kind: "text", text: { text: largeDirectInputText } }],
     });
     expect(events.filter(({ type }) => type === "turn_started")).toHaveLength(
       1,
@@ -13972,7 +13973,7 @@ describe("CodexConversationHandle", () => {
     await handle.close();
   });
 
-  it("submits, steers, interrupts, renames, and compacts with durable correlation", async () => {
+  it("submits and steers 256 KiB input with durable correlation and conversation controls", async () => {
     const harness = new RpcHarness();
     const handle = await attachIdle(harness);
     const established = await establish(harness, handle);
@@ -14001,7 +14002,7 @@ describe("CodexConversationHandle", () => {
       taskContexts: [],
       contextExcerpts: [],
       attachments: [],
-      text: "hello",
+      text: largeDirectInputText,
     });
     expect(submitted).toMatchObject({
       accepted: true,
@@ -14024,7 +14025,7 @@ describe("CodexConversationHandle", () => {
         applicationOperationId: "submit-operation",
         reconciliationToken: "submit-token",
       }),
-      input: [{ type: "text", text: "hello", text_elements: [] }],
+      input: [{ type: "text", text: largeDirectInputText, text_elements: [] }],
       model: "gpt-5.6",
       effort: "low",
       approvalPolicy: "never",
@@ -14042,7 +14043,7 @@ describe("CodexConversationHandle", () => {
       taskContexts: [],
       contextExcerpts: [],
       attachments: [],
-      text: "clarification",
+      text: largeDirectInputText,
     };
     // The response only admits the input to Codex's pending input.
     await expect(handle.steer(steerInput)).resolves.toMatchObject({
@@ -14066,7 +14067,7 @@ describe("CodexConversationHandle", () => {
           applicationOperationId: "steer-operation",
           reconciliationToken: "steer-token",
         }),
-        content: [{ type: "text", text: "clarification", text_elements: [] }],
+        content: [{ type: "text", text: largeDirectInputText, text_elements: [] }],
       },
       startedAtMs: 1_700_000_002_000,
     });

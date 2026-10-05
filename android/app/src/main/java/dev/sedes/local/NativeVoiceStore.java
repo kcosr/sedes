@@ -17,8 +17,10 @@ import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Set;
 import javax.crypto.AEADBadTagException;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
@@ -200,7 +202,12 @@ final class NativeVoiceStore {
             NativeVoiceJson.integer(value, "version", 1, 1);
             entries = value.optJSONArray("entries");
             if (entries == null || entries.length() > 64) throw new IllegalStateException("voice_journal_invalid");
-            for (int i = 0; i < entries.length(); i++) validateEntry(entries.getJSONObject(i));
+            Set<String> mutations = new HashSet<>(), recordings = new HashSet<>();
+            for (int i = 0; i < entries.length(); i++) {
+                JSONObject entry = entries.getJSONObject(i); validateEntry(entry);
+                if (!mutations.add(entry.getString("mutationId")) || entry.has("recordingId") && !recordings.add(entry.getString("recordingId")))
+                    throw new IllegalStateException("voice_journal_ownership_conflict");
+            }
         } catch (RuntimeException | JSONException error) { throw new CorruptRecord("journal", error); }
         journals.put(binding, entries);
         return entries;
@@ -226,8 +233,10 @@ final class NativeVoiceStore {
             JSONArray entries = entries(binding), result = new JSONArray();
             for (int i = 0; i < entries.length(); i++) {
                 JSONObject value = entries.getJSONObject(i);
-                result.put(NativeVoiceJson.object("mutationId", value.optString("mutationId"), "threadId", value.optString("threadId"),
-                    "stage", value.optString("stage"), "cancelled", value.optBoolean("cancelled")));
+                JSONObject summary = NativeVoiceJson.object("mutationId", value.optString("mutationId"), "threadId", value.optString("threadId"),
+                    "stage", value.optString("stage"), "cancelled", value.optBoolean("cancelled"));
+                if (value.has("recordingId")) NativeVoiceJson.put(summary, "recordingId", value.getString("recordingId"));
+                result.put(summary);
             }
             return result;
         }
@@ -239,8 +248,14 @@ final class NativeVoiceStore {
             boolean replaced = false;
             for (int i = 0; i < entries.length(); i++) {
                 JSONObject old = entries.getJSONObject(i);
-                if (old.getString("mutationId").equals(entry.getString("mutationId"))) { next.put(NativeVoiceJson.copy(entry)); replaced = true; }
-                else next.put(old);
+                String owner = NativeVoiceJson.nullableString(entry, "recordingId", 160), oldOwner = NativeVoiceJson.nullableString(old, "recordingId", 160);
+                if (old.getString("mutationId").equals(entry.getString("mutationId"))) {
+                    if (!java.util.Objects.equals(owner, oldOwner)) throw new IllegalStateException("voice_journal_ownership_conflict");
+                    next.put(NativeVoiceJson.copy(entry)); replaced = true;
+                } else {
+                    if (owner != null && owner.equals(oldOwner)) throw new IllegalStateException("voice_journal_ownership_conflict");
+                    next.put(old);
+                }
             }
             if (!replaced) next.put(NativeVoiceJson.copy(entry));
             if (next.length() > 64 || NativeVoiceJson.bytes(next.toString()) > 8 * 1024 * 1024)
@@ -264,8 +279,14 @@ final class NativeVoiceStore {
             journals.put(binding, next);
         }
     }
-    private static void validateEntry(JSONObject entry) {
-        NativeVoiceJson.keys(entry, "mutationId", "threadId", "request", "stage", "cancelled", "createdAt");
+    static void validateEntry(JSONObject entry) {
+        NativeVoiceJson.keys(entry, "mutationId", "threadId", "request", "stage", "cancelled", "createdAt", "recordingId");
+        // Field presence is the ownership discriminator: ordinary entries omit it; adopted entries carry one safe ID.
+        if (entry.has("recordingId")) {
+            String recording = NativeVoiceJson.string(entry, "recordingId", 160);
+            if (!recording.matches("[A-Za-z0-9._:-]{1,160}") || recording.equals(".") || recording.equals(".."))
+                throw new IllegalArgumentException("voice_journal_recording_invalid");
+        }
         String id = NativeVoiceJson.string(entry, "mutationId", 160);
         NativeVoiceJson.string(entry, "threadId", 512);
         JSONObject request = NativeVoiceJson.requiredObject(entry, "request");
@@ -274,6 +295,7 @@ final class NativeVoiceStore {
         NativeVoiceJson.integer(entry, "createdAt", 0, Long.MAX_VALUE);
         String stage = NativeVoiceJson.string(entry, "stage", 32);
         if (!stage.equals("prepared") && !stage.equals("possiblySubmitted")) throw new IllegalArgumentException("voice_journal_stage");
-        if (NativeVoiceJson.bytes(request.toString()) > 512 * 1024) throw new IllegalArgumentException("voice_input_too_large");
+        // A legal 256 KiB transcript can expand sixfold when JSON escapes control characters.
+        if (NativeVoiceJson.bytes(request.toString()) > 2 * 1024 * 1024) throw new IllegalArgumentException("voice_input_too_large");
     }
 }

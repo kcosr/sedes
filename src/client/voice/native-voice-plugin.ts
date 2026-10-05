@@ -12,6 +12,7 @@ export const nativeVoiceSettingsSchema = z.strictObject({
   pinDefaultVoiceThread: z.boolean(), onlyVoiceThread: z.boolean(), followComposerMode: z.boolean(), inputDeviceId: z.string().nullable(),
   recognitionStartTimeoutMs: z.number().int().positive(), recognitionCompletionTimeoutMs: z.number().int().positive(),
   recognitionResultTimeoutMs: z.number().int().min(1000).max(300000),
+  longDictationTimeoutMs: z.number().int().min(60_000).max(86_400_000).multipleOf(60_000),
   recognitionEndSilenceMs: z.number().int().positive(), recognizeStopCommand: z.boolean(),
   recognitionCues: z.boolean(), cueGain: z.number().nonnegative(), startupPreRollMs: z.number().int().nonnegative(),
   ttsGain: z.number().nonnegative(), headsetControls: z.boolean(),
@@ -23,20 +24,33 @@ export const nativeSpeechCatalogSchema = z.strictObject({
   formats: z.array(z.string()),
 });
 export type NativeSpeechCatalog = z.infer<typeof nativeSpeechCatalogSchema>;
+export const nativeRecordingRecoverySchema = z.strictObject({
+  recordingId: z.string().min(1), revision: z.number().int().nonnegative(), threadId: z.string().min(1), threadTitle: z.string().nullable(),
+  stage: z.enum(["interrupted", "recognizing", "ready", "admitting", "rejected", "overflow", "unavailable"]),
+  reason: z.string().nullable(), hasUnrecognizedAudio: z.boolean(), captureIncomplete: z.boolean(),
+  canRetryRecognition: z.boolean(), canSend: z.boolean(), canCopyRecognizedText: z.boolean(), canDiscard: z.boolean(),
+  admission: z.strictObject({ mutationId: z.string().min(1),
+    status: z.enum(["prepared", "possiblySubmitted", "reconciling", "uncertain", "rejected"]), cancelled: z.boolean() }).nullable(),
+});
+export type NativeRecordingRecovery = z.infer<typeof nativeRecordingRecoverySchema>;
 export const nativeVoiceStateSchema = z.strictObject({
-  version: z.literal(5), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
+  version: z.literal(6), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
   profileId: z.string().nullable(), serverOrigin: z.string().nullable(), identity: z.string().nullable(), originClientId: z.uuid().nullable(), clientConnectionToken: z.string().nullable(),
   settingsRevision: z.number().int().nonnegative(), settings: nativeVoiceSettingsSchema,
   speech: z.strictObject({ credentialConfigured: z.boolean(), catalogStatus: z.enum(["idle", "loading", "ready", "error"]),
     catalog: nativeSpeechCatalogSchema.nullable(), error: z.string().nullable() }),
-  phase: z.enum(["off", "starting", "idle", "synthesizing", "speaking", "validating", "arming", "listening", "recognizing", "submitting", "cancelling", "recovering", "error"]),
+  phase: z.enum(["off", "starting", "idle", "synthesizing", "speaking", "validating", "arming", "listening", "recognizing", "submitting", "cancelling", "recovering", "recordingRecovery", "error"]),
   ready: z.boolean(), readiness: z.string(),
   foreground: z.strictObject({ visible: z.boolean(), threadId: z.string().nullable(), threadTitle: z.string().nullable() }),
   active: z.strictObject({ id: z.string(), eventKind: z.string().nullable(), threadId: z.string().nullable(), threadTitle: z.string().nullable(),
-    recognitionThreadId: z.string().nullable(), recognitionThreadTitle: z.string().nullable(), automatic: z.boolean() }).nullable(),
+    recognitionThreadId: z.string().nullable(), recognitionThreadTitle: z.string().nullable(), automatic: z.boolean(),
+    recording: z.strictObject({ id: z.string().min(1), keepListening: z.boolean(), reconnecting: z.boolean() }).nullable() }).nullable(),
   queue: z.strictObject({ count: z.number().int().nonnegative(), bytes: z.number().int().nonnegative(), droppedCount: z.number().int().nonnegative(),
     droppedReasons: z.record(z.string(), z.number().int().nonnegative()) }),
-  actions: z.strictObject({ canStart: z.boolean(), canStop: z.boolean(), canSkip: z.boolean(), canRetarget: z.boolean(), canResume: z.boolean() }),
+  actions: z.strictObject({ canStart: z.boolean(), canStop: z.boolean(), canSkip: z.boolean(), canRetarget: z.boolean(), canResume: z.boolean(),
+    canSetKeepListening: z.boolean(), canSend: z.boolean(),
+    keepListeningBlockedReason: z.enum(["not_capturing", "operation_pending", "saved_recording_pending", "configuration_unavailable", "storage_unavailable"]).nullable() }),
+  recordingRecovery: nativeRecordingRecoverySchema.nullable(),
   recovery: z.array(z.strictObject({ mutationId: z.string(), threadId: z.string(),
     status: z.enum(["prepared", "possiblySubmitted", "reconciling", "uncertain"]), cancelled: z.boolean() })),
   errors: z.array(z.strictObject({ code: z.string(), message: z.string() })),
@@ -49,6 +63,9 @@ export const nativeVoiceInputSubmittedSchema = z.strictObject({
 });
 export type NativeVoiceInputSubmitted = z.infer<typeof nativeVoiceInputSubmittedSchema>;
 export type NativeVoiceCommandContext = { expectedConnectionGeneration: number };
+export type NativeRecordingCommandContext = NativeVoiceCommandContext & { recordingId: string };
+export type NativeRecordingRecoveryCommandContext = NativeRecordingCommandContext & { expectedRecoveryRevision: number };
+export type NativeVoiceInteractionCommandContext = NativeVoiceCommandContext & { interactionId: string };
 export interface NativeVoicePlugin {
   setConnection(input: { profileId: string; serverOrigin: string; identity: string; reconnect?: boolean }): Promise<NativeVoiceState>;
   disconnect(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
@@ -56,9 +73,15 @@ export interface NativeVoicePlugin {
   updateSettings(input: NativeVoiceCommandContext & { expectedRevision: number; patch: Partial<NativeVoiceSettings> }): Promise<NativeVoiceState>;
   setForegroundContext(input: NativeVoiceCommandContext & { visible: boolean; threadId?: string | null; threadTitle?: string | null; composerMode?: "queue" | "steer" }): Promise<NativeVoiceState>;
   startManualListen(input: NativeVoiceCommandContext & { threadId?: string; threadTitle?: string }): Promise<NativeVoiceState>;
-  retargetActiveRecognition(input: NativeVoiceCommandContext & { threadId: string; threadTitle?: string }): Promise<NativeVoiceState>;
+  retargetActiveRecognition(input: NativeRecordingCommandContext & { threadId: string; threadTitle?: string }): Promise<NativeVoiceState>;
+  setKeepListening(input: NativeRecordingCommandContext & { enabled: boolean }): Promise<NativeVoiceState>;
+  sendRecording(input: NativeRecordingCommandContext): Promise<NativeVoiceState>;
   skipCurrentPlayback(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
-  stopCurrentInteraction(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
+  stopCurrentInteraction(input: NativeVoiceInteractionCommandContext): Promise<NativeVoiceState>;
+  retryRecordingRecognition(input: NativeRecordingRecoveryCommandContext): Promise<NativeVoiceState>;
+  sendRecoveredRecording(input: NativeRecordingRecoveryCommandContext): Promise<NativeVoiceState>;
+  copyRecognizedRecordingText(input: NativeRecordingRecoveryCommandContext): Promise<NativeVoiceState>;
+  discardRecording(input: NativeRecordingRecoveryCommandContext): Promise<NativeVoiceState>;
   resumeInput(input: NativeVoiceCommandContext & { mutationId: string }): Promise<NativeVoiceState>;
   discardInput(input: NativeVoiceCommandContext & { mutationId: string }): Promise<NativeVoiceState>;
   refreshSpeechCatalog(input: NativeVoiceCommandContext & { force: boolean }): Promise<NativeVoiceState>;

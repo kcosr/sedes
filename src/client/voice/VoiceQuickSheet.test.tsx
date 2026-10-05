@@ -3,16 +3,16 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { useState, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
-import { navigate, settingsPath } from "../app/router.js";
+import { navigate, settingsPath, threadPath } from "../app/router.js";
 import { NativeVoiceStore } from "./NativeVoiceStore.js";
 import type { NativeVoiceState } from "./native-voice-plugin.js";
-import { fakeVoicePlugin, VOICE_CONNECTION, voiceSettings, voiceSnapshot } from "./native-voice-test-fixture.js";
+import { fakeVoicePlugin, recordingRecovery, VOICE_CONNECTION, voiceActions, voiceSettings, voiceSnapshot } from "./native-voice-test-fixture.js";
 import { useVoiceState } from "./VoiceProvider.js";
 import { VoiceQuickSheet } from "./VoiceQuickSheet.js";
 
 const speechEndpoint = "https://voice.test/v1";
 const configuredSpeech: NativeVoiceState["speech"] = { ...voiceSnapshot().speech, credentialConfigured: true };
-const actions = { canStart: true, canStop: false, canSkip: false, canRetarget: false, canResume: false };
+const actions = voiceActions({ canStart: true });
 const thread = (id: string, title: string) => ({ id, title: { text: title }, available: true, inventoryState: "active" }) as unknown as NormalizedApplicationThreadSummary;
 const longTitle = "L".repeat(600);
 const threads = [thread("long", longTitle), thread("untitled", "  "), thread("standup", "Daily standup notes"),
@@ -227,6 +227,81 @@ describe("voice quick sheet", () => {
     fireEvent.click(within(sheet).getByRole("button", { name: "All voice settings" }));
     expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
     expect(window.location.pathname).toBe(settingsPath("voice"));
+    store.dispose();
+  });
+  it("copies saved text while Off only after native succeeds, retaining the recording after copy and failure", async () => {
+    const saved = recordingRecovery({ revision: 4, captureIncomplete: true, canRetryRecognition: false, canCopyRecognizedText: true });
+    const native = voiceSnapshot({ recordingRecovery: saved });
+    const { fake, store, sheet } = await renderSheet(native);
+    const copy = within(sheet).getByRole("button", { name: "Copy recognized text" });
+    let release!: (value: NativeVoiceState) => void;
+    fake.plugin.copyRecognizedRecordingText.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    expect(sheet).toHaveTextContent("The end of this dictation may be missing");
+    expect(within(sheet).getByRole("button", { name: "Retry recognition" })).toBeDisabled();
+    fireEvent.click(copy);
+    expect(copy).toBeDisabled();
+    expect(sheet).not.toHaveTextContent("Recognized text copied.");
+    expect(fake.plugin.copyRecognizedRecordingText).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, recordingId: saved.recordingId, expectedRecoveryRevision: 4 });
+    await act(async () => release({ ...native, stateRevision: 2 }));
+    await waitFor(() => expect(sheet).toHaveTextContent("Recognized text copied. The saved dictation remains on this device."));
+    expect(store.getSnapshot().native?.recordingRecovery).toEqual(saved);
+    fake.plugin.copyRecognizedRecordingText.mockRejectedValueOnce(new Error("Clipboard unavailable."));
+    fireEvent.click(copy);
+    await waitFor(() => expect(sheet).toHaveTextContent("Clipboard unavailable."));
+    expect(sheet).not.toHaveTextContent("Recognized text copied.");
+    expect(store.getSnapshot().native?.recordingRecovery).toEqual(saved);
+    expect(within(sheet).queryByRole("button", { name: /restore|composer/i })).toBeNull();
+    store.dispose();
+  });
+  it("does not report a stale copy as a copy of the current saved dictation", async () => {
+    const saved = recordingRecovery({ canCopyRecognizedText: true });
+    const native = voiceSnapshot({ recordingRecovery: saved });
+    const { fake, store, sheet } = await renderSheet(native);
+    let release!: (value: NativeVoiceState) => void;
+    fake.plugin.copyRecognizedRecordingText.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    fireEvent.click(within(sheet).getByRole("button", { name: "Copy recognized text" }));
+    act(() => fake.emit("stateChanged", { ...native, stateRevision: 3, recordingRecovery: { ...saved, revision: 2 } }));
+    await act(async () => release({ ...native, stateRevision: 2 }));
+    expect(sheet).not.toHaveTextContent("Recognized text copied.");
+    expect(store.getSnapshot().native?.recordingRecovery?.revision).toBe(2);
+    store.dispose();
+  });
+  it.each([false, true])("starts a new recording during older admission using the visible or pinned target (pinned: %s)", async pinned => {
+    navigate(threadPath("long"));
+    const saved = recordingRecovery({ stage: "admitting", hasUnrecognizedAudio: false, admission: {
+      mutationId: "50000000-0000-4000-8000-000000000001", status: "uncertain", cancelled: false } });
+    const native = { ...ready({ pinDefaultVoiceThread: pinned, voiceThreadId: "standup" }), recordingRecovery: saved };
+    const { fake, store, sheet, onOpenChange } = await renderSheet(native);
+    fake.plugin.startManualListen.mockResolvedValue({ ...native, stateRevision: 2 });
+    fireEvent.click(within(sheet).getByRole("button", { name: "Start new recording" }));
+    await waitFor(() => expect(fake.plugin.startManualListen).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
+      threadId: pinned ? "standup" : "long", threadTitle: pinned ? "Daily standup notes" : "L".repeat(512) }));
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(fake.plugin.updateSettings).not.toHaveBeenCalled();
+    expect(store.getSnapshot().native?.recordingRecovery).toEqual(saved);
+    store.dispose();
+  });
+  it("saves an unavailable pin before starting a new recording and retains older admission", async () => {
+    navigate(threadPath("long"));
+    const saved = recordingRecovery({ stage: "admitting", hasUnrecognizedAudio: false, admission: {
+      mutationId: "50000000-0000-4000-8000-000000000001", status: "reconciling", cancelled: false } });
+    const native = { ...ready({ pinDefaultVoiceThread: true, voiceThreadId: "offline" }), recordingRecovery: saved };
+    const { fake, store, sheet, onOpenChange } = await renderSheet(native);
+    fake.plugin.startManualListen.mockResolvedValue({ ...native, stateRevision: 3 });
+    const release = holdNextWrite(fake);
+    fireEvent.click(within(sheet).getByRole("button", { name: "Start new recording" }));
+    const picker = await screen.findByRole("dialog", { name: "Choose default voice thread" });
+    expect(picker).toHaveAccessibleDescription("Save this default and start recording.");
+    expect(within(picker).queryByRole("button", { name: "Offline review" })).toBeNull();
+    fireEvent.click(within(picker).getByRole("button", { name: "Daily standup notes" }));
+    expect(fake.plugin.startManualListen).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+    await release();
+    await waitFor(() => expect(fake.plugin.startManualListen).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
+      threadId: "standup", threadTitle: "Daily standup notes" }));
+    expect(patches(fake)).toEqual([{ voiceThreadId: "standup", voiceThreadTitle: "Daily standup notes" }]);
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+    expect(store.getSnapshot().native?.recordingRecovery).toEqual(saved);
     store.dispose();
   });
 });

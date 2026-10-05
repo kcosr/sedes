@@ -66,11 +66,15 @@ for its Sedes connections, which carry the paired credential. See
 [Android HTTPS connections](android.md#connect-through-a-private-https-boundary).
 
 The OpenAI preset starts with `gpt-live-transcribe`, `gpt-4o-mini-tts`, and
-`coral`. The model catalog supplies availability hints; you can enter another
-model ID. Known OpenAI models have maintained voice/control metadata. Your
-speech server publishes its available models, voices, and controls through its
-capability endpoint. A failed catalog lookup is reported; it does not fabricate
-supported models or settings.
+`coral`. Hosted recognition accepts exactly `gpt-live-transcribe`, `gpt-transcribe`,
+`gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, and `whisper-1`; dated or custom
+recognition IDs are unsupported. The catalog supplies availability hints and
+maintained voice/control metadata. Your speech server publishes available models,
+voices, controls, and required per-model Realtime limits at `/audio/capabilities`.
+Upgrade it to a version publishing the `realtime` capability object before using
+this client. Each recording and recognition retry reads fresh server limits;
+the saved picker catalog cannot authorize capture. Failed or incompatible
+capabilities report an error without starting the microphone.
 
 The app keeps the last successful model and voice catalog on this device and
 refreshes it in the background at startup and after speech configuration changes.
@@ -162,7 +166,7 @@ view is open. Reading readiness does not start or reconnect a conversation.
 With pinning off, explicit recording uses the visible foreground thread, then the saved
 **Default voice thread**, then a picker. It can target a running thread. While
 voice is listening, the target chip on the voice card changes the target before
-recognition finishes. Pickers list the visible thread first as **This thread**;
+finishing starts. Pickers list the visible thread first as **This thread**;
 when choosing a default, the saved thread comes first as **Current default
 voice thread**. Ordinary navigation does not change an active target. **Only play
 from default voice thread** filters automatic playback; choose a default first,
@@ -191,7 +195,7 @@ Claude and OpenCode a conversation target, and Grok has no steering. Spoken
 input never edits or clears the composer draft.
 
 The voice card under the composer appears while voice is connected and set to
-Manual or Response. Wherever no composer is shown, including read-only threads
+Manual or Response, and whenever the selected connection has saved dictation. Wherever no composer is shown, including read-only threads
 and pages without a thread, it sits on its own with a top margin and divider.
 A state tile and two lines show the card's thread and its state. The first
 line always names the thread: the one being spoken, the recording target, or,
@@ -212,6 +216,21 @@ connection hides the card; **Settings → Voice** then shows the error and
 When the card's thread is not the one on screen, tapping the card opens it.
 While listening, the state line ends with a **Change** chip (**Choose** when
 there is no target), which opens the thread picker instead.
+Beside **Change**, the infinity button toggles **Keep listening** for the current
+recording. It starts off each time. Turn it on to keep recording through pauses;
+turn it off to restore ordinary silence and completion limits with fresh clocks.
+All audio and text already collected remain part of the same message. While
+selected, the right-side **Send** arrow stops capture, finishes recognition, and
+sends one message. The X **Cancel** discards the unsent recording. Explicit Send
+is literal, including “stop”; it does not open a review step or change the composer.
+Ordinary navigation never retargets the recording; **Change** does, until finishing.
+
+**Long dictation timeout** defaults to 60 minutes and accepts 1–1,440 whole minutes.
+The value is frozen for each recording. Its clock starts the first time Keep
+listening is accepted, includes screen-off time, and never resets when toggled.
+At the limit, capture stops and recognition finishes into **Ready to send**;
+it does not send automatically. There is no on-screen timer or live transcript.
+
 The caret button opens the **Voice** sheet in every state. The sheet has
 **Audio mode**, **Auto-listen**, **Follow composer mode**, **Pin default voice
 thread**, **Only play from default voice thread**, **Default voice thread**, and
@@ -225,7 +244,8 @@ voice** when a session needs it.
   other queued notices in place. While the microphone is preparing, listening,
   or recognizing, Stop becomes **Cancel** and discards the recording unsent.
 - **Off** clears queued audio, stops voice, and hides the service notification.
-  It hides the voice card too, unless **Show voice bar when off** is on in
+  An adopted recording is saved when interrupted by Off. The voice card stays
+  visible for saved dictation; otherwise it hides unless **Show voice bar when off** is on in
   **Settings → Voice**; then the card stays dimmed with its microphone disabled,
   and its caret still opens the Voice sheet. That choice is saved only on this
   device.
@@ -242,7 +262,9 @@ thread, then the default. Its actions are **Stop** during an interaction,
 **Start** when recording can begin and that target is available, a mode button labelled **Manual** or **Response**
 that switches to the other mode, and **Rearm on** or **Rearm off**, which
 toggles Auto-listen. While speech plays, the expanded notification shows Stop,
-Skip, the mode button, and Rearm.
+Skip, the mode button, and Rearm. During Keep listening, it offers **Cancel** and
+**Send**. Headset pause/stop interrupts and saves an adopted recording; it never
+sends it. Explicit Cancel still discards it.
 Headset controls apply only during an active voice session. Android controls
 lock-screen visibility and any promoted presentation; these are not guaranteed.
 Opening the app restores the saved Manual or Response mode after its Sedes
@@ -263,18 +285,29 @@ speech-start timeout, 60-second maximum recording after speech starts,
 timing, cues, gain, and headset controls can be changed in Voice settings.
 Microphones that share a product name are labelled with their input type and,
 if still identical, a number. Android detects speech and trailing silence
-locally while uploading audio. After speech is detected, it commits that audio
-when capture ends and waits for the final transcript. If no speech is detected
-before the start timeout, it cancels the uncommitted recording, plays the
-failure tone, and ends that listening attempt. Each recording has a separate connection;
-failed recordings are not automatically replayed.
+locally while uploading audio. Ordinary listening still ends at the configured
+speech-wait, completion, or silence boundary. Keep listening suspends these
+endpoints. Both modes divide audio at likely pauses and bounded hard cuts, usually
+at most 60 seconds, and assemble final transcripts in order. Quiet audio is kept;
+long silent thinking can still consume recognition requests. Recognition accuracy
+at forced boundaries depends on the selected model. The result timeout applies
+to each segment. Ordinary no-speech timeout ends without sending or restarting.
+
+During transient recognition failures, an adopted recording keeps the microphone
+open and shows **Reconnecting** while accepted audio accumulates in encrypted
+local storage. Recovery is bounded to five retries and a 60-second failure window;
+recognizing the same audio again can repeat provider cost. Permanent errors,
+exhausted retries, or storage limits stop capture and keep a saved draft. If an
+error occurs after Send, successful recognition leaves the text ready for another
+explicit Send instead of submitting automatically.
 
 Startup pre-roll warms the output only after audio has been idle. Voice holds
 audio focus across consecutive speech, cues, and recording, so other media
 resumes about 1.4 seconds after voice audio ends. Another app taking focus,
 including the keyboard's dictation microphone, quietly ends the current speech
-or recording without a red error or another listening attempt. Text already
-recognized still submits if only its success tone is interrupted. A Bluetooth
+or ordinary recording without another listening attempt. An adopted recording
+is retained as saved dictation. Text already recognized still submits if only its
+success tone is interrupted. A Bluetooth
 headset microphone is used once Android connects its voice link; recording
 waits up to 5 seconds for that route and otherwise reports that the microphone
 could not be routed.
@@ -286,7 +319,8 @@ controls all three independently of speech volume. Completion tones play after
 microphone capture stops. Success confirms recognition, not agent delivery;
 input recovery still reports any later delivery problem. Turning voice Off or
 switching connections cancels pending cues without another tone.
-If speech was detected but the provider returns a blank transcript, voice plays
+For ordinary automatic completion, if speech was detected but the complete
+recording has a blank transcript, voice plays
 the failure tone and listens again. This can repeat while speech is detected
 but no transcript is returned. Stop, Off, a provider change, or another app
 taking audio focus cancels that pending retry. A new attempt that reaches its
@@ -312,13 +346,36 @@ thread/event/subject identity may coalesce. Distinct progress and completion
 items remain distinct. Overflow drops incoming progress first; other arrivals
 can evict old pending progress. Dropped counts appear in Voice settings.
 
+Interrupted adopted recordings appear in the existing toolbar as **Saved dictation**
+with their target and **Retry**/**Discard** actions. Fully recognized text appears
+as **Ready to send** with **Send**/**Discard**. The caret opens the same recovery
+item with **Copy recognized text**. Saved dictation remains visible with voice
+Off and after restarting the app. Retry recognizes only unresolved audio and
+requires an enabled, configured voice session; it never opens the microphone or
+sends. Sending complete text needs only the Sedes connection. An interrupted tail
+may be incomplete; the notice remains until an explicit Send accepts that ending.
+An older input whose admission is uncertain stays accessible while ordinary
+recording continues, but must be resolved before adopting another recording.
+Use **Start new recording** in the Voice sheet when that older item permits it;
+the new recording uses the normal visible/default thread selection.
+
+Recording storage is encrypted, device-local, and excluded from backups. Each
+recording permits 32 MiB of unresolved PCM and 128 unresolved segments; all
+recordings together fit a 64 MiB device budget. Successfully recognized audio is
+reclaimed after its text is safely saved. Reaching a limit stops and preserves
+the recording. Complete messages are limited to 256 KiB of UTF-8 text; overflow
+remains available through Copy and Discard, without truncation. Removing a server
+profile deletes its saved recordings. Corrupt or inaccessible recording storage
+is preserved and reported, never replaced with an empty draft.
+
 Recognized input is journaled atomically in encrypted, backup-excluded native
 storage before sending. It carries one immutable mutation ID and original
 target. When Sedes accepts it, or a later receipt read finds it, the journal
 entry is removed and delivery follows the thread's normal queue. When Sedes
 definitively rejects it, for example because the thread is archived or does
-not support the requested Steer, the entry is removed and Voice settings
-reports that it was not delivered, with Sedes's reason.
+not support the requested Steer, an ordinary input entry is removed and Voice
+settings reports the reason. An adopted recording retains its text for Copy or
+Discard; Send is disabled for a definitive rejection.
 
 When the outcome is unknown, such as after a lost reply or a server error,
 voice reads the server receipt without resending. A temporary refusal is
@@ -333,7 +390,10 @@ times, and starts again after reconnecting to Sedes. It never resends
 automatically. **Resume input** checks again and resends the same input
 identity only if Sedes has no record of it. **Discard** deletes the saved input
 from this device and stops checking; it cannot withdraw input Sedes already
-received.
+received. For an adopted recording, these actions are merged into its saved
+dictation item: **Send** checks the receipt before any retry, and **Discard**
+coordinates the recording and admission records. There is no duplicate Resume
+input entry for that recording.
 
 Once a receipt shows that Sedes has the input, voice treats it as delivered,
 including a first send whose new conversation is still being created. If that

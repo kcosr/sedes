@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { DeliveryInputSnapshotRepository } from "../../src/server/db/repositories/delivery-input-snapshot-repository.js";
 import { UsageService } from "../../src/server/usage/usage-service.js";
 import {
   APPLICATION_ASSIGNED_CREATION_IDENTITY,
@@ -211,6 +212,7 @@ const presentationProvider: ThreadBackendPresentationProvider = {
  */
 export async function createInMemoryThreadRuntimeHarness(options: {
   readonly retentionMilliseconds?: number;
+  readonly persistDeliveryInputSnapshots?: boolean;
   readonly onCompletion?: (scope: RequestScope, threadId: string, turnId: string) => void;
 } = {}) {
   const database = openOverlayDatabase(":memory:");
@@ -344,6 +346,7 @@ export async function createInMemoryThreadRuntimeHarness(options: {
   let observeCompletion: AuthoritativeCompletionObserver | undefined;
   const actors = new ConversationActorManager({
     environments,
+    ...(options.persistDeliveryInputSnapshots ? { deliveryInputSnapshots: new DeliveryInputSnapshotRepository(database) } : {}),
     attachmentDelivery: {} as never,
     retentionMilliseconds: options.retentionMilliseconds ?? 0,
     runtimeBudget: 8,

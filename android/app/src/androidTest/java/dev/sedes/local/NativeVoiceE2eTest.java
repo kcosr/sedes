@@ -193,7 +193,7 @@ public class NativeVoiceE2eTest {
             }
             if (scenario.equals("stop")) {
                 await(() -> runtime.snapshot().optString("phase").equals("listening"), 45000, "recognition before Stop");
-                stopRequested.set(true); notificationAction(context, "Stop");
+                stopRequested.set(true); notificationAction(context, "Cancel");
                 // A released item can no longer submit; wait for that terminal state instead of a fixed delay.
                 await(stoppedItemReleased::get, 15000, "stopped recognition released its item");
                 assertFalse(phases.contains("submitting"));

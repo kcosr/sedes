@@ -12,6 +12,8 @@ import android.media.AudioFocusRequest;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioRecord;
+import android.media.AudioRecordingConfiguration;
+import android.media.AudioRouting;
 import android.media.AudioTrack;
 import android.media.MediaRecorder;
 import android.os.Build;
@@ -23,6 +25,7 @@ import androidx.core.content.ContextCompat;
 import java.io.File;
 import java.io.RandomAccessFile;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -59,7 +62,6 @@ final class NativeVoiceAudio {
     private static final AtomicLong FOCUS_IDS = new AtomicLong();
     static final int SAMPLE_RATE = NativeVoiceCapturePolicy.SAMPLE_RATE;
     private static final int PUMP_BYTES = 64 * 1024;
-    private static final long MAX_CAPTURE = NativeVoiceCapturePolicy.MAX_CAPTURE_SAMPLES * 2;
     private static boolean staleSpoolsRemoved;
     private final Context context;
     private final AudioManager manager;
@@ -75,7 +77,7 @@ final class NativeVoiceAudio {
     private String request;
     private int rate, previousMode;
     private long frames;
-    private boolean capture, communication;
+    private boolean capture, captureFinishing, communication;
     private File spool;
     private RandomAccessFile spoolWriter, spoolReader;
     private long spoolWritten, spoolRead;
@@ -99,14 +101,17 @@ final class NativeVoiceAudio {
         long current; String id;
         synchronized (lock) {
             if (entry != focus) return;
-            if (change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK || change == AudioManager.AUDIOFOCUS_GAIN) {
+            if (change == AudioManager.AUDIOFOCUS_GAIN ||
+                change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK && !entry.recording) {
                 entry.ducked = change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK;
                 if (track != null) track.setVolume(entry.ducked ? 0.35f : 1f);
                 return;
             }
-            if (change != AudioManager.AUDIOFOCUS_LOSS && change != AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) return;
+            if (change != AudioManager.AUDIOFOCUS_LOSS && change != AudioManager.AUDIOFOCUS_LOSS_TRANSIENT &&
+                change != AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) return;
             current = generation;
-            // Capture may have stopped while its recognition result is still pending.
+            // Recognition drain after a graceful microphone stop does not own audio focus.
+            if (entry.recording && (!capture || captureFinishing)) { abandonFocus(); return; }
             id = request == null ? entry.ownerRequestId : request;
             abandonFocus();
         }
@@ -271,11 +276,36 @@ final class NativeVoiceAudio {
     void record(String id, String inputDeviceId) {
         stop();
         final long current;
-        synchronized (lock) { request = id; capture = true; current = generation; focusRelease++; }
+        synchronized (lock) { request = id; capture = true; captureFinishing = false; current = generation; focusRelease++; }
         new Thread(() -> capture(current, id, inputDeviceId), "sedes-voice-capture").start();
+    }
+    /**
+     * Closes physical capture without invalidating its generation. The capture worker delivers captureEnded only
+     * after any in-progress captured callback has returned and the recorder is released. The recording coordinator
+     * closes its own queue acceptance at the user's finish boundary and drains already accepted PCM separately.
+     */
+    void finishRecord(String id) {
+        AudioRecord input;
+        synchronized (lock) {
+            if (!capture || !id.equals(request) || captureFinishing) return;
+            captureFinishing = true;
+            input = recorder;
+            lock.notifyAll();
+        }
+        // Stop unblocks a native blocking read. Its expected abort is handled by the capture worker.
+        if (input != null) try { input.stop(); } catch (Exception ignored) {}
+    }
+    private boolean acceptingCapture(long current) {
+        synchronized (lock) { return current == generation && capture && !captureFinishing; }
+    }
+    private boolean finishingCapture(long current) {
+        synchronized (lock) { return current == generation && capture && captureFinishing; }
     }
     private void capture(long current, String id, String inputDeviceId) {
         AudioRecord local = null;
+        CaptureHealth health = null;
+        boolean ended = false;
+        String failure = null;
         try {
             if (!hasPermission()) throw new SecurityException("microphone_permission_required");
             TestSource fixture = BuildConfig.DEBUG ? testSource : null;
@@ -283,7 +313,7 @@ final class NativeVoiceAudio {
                 AudioDeviceInfo preferred = null, route = null;
                 boolean bluetooth;
                 synchronized (lock) {
-                    if (current != generation) return;
+                    if (!acceptingCapture(current)) { ended = finishingCapture(current); return; }
                     if (!requestFocus(true)) throw new IllegalStateException("audio_focus_unavailable");
                     if (inputDeviceId != null) {
                         for (AudioDeviceInfo device : manager.getDevices(AudioManager.GET_DEVICES_INPUTS))
@@ -302,9 +332,9 @@ final class NativeVoiceAudio {
                         }
                     }
                 }
-                if (bluetooth && !awaitRoute(current, route)) return;
+                if (bluetooth && !awaitRoute(current, route)) { ended = finishingCapture(current); return; }
                 synchronized (lock) {
-                    if (current != generation) return;
+                    if (!acceptingCapture(current)) { ended = finishingCapture(current); return; }
                     int minimum = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
                     if (minimum <= 0) throw new IllegalStateException("microphone_format_unavailable");
                     if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED)
@@ -316,33 +346,111 @@ final class NativeVoiceAudio {
                         local.getAudioFormat() != AudioFormat.ENCODING_PCM_16BIT)
                         throw new IllegalStateException("microphone_format_unavailable");
                     if (preferred != null && !local.setPreferredDevice(preferred)) throw new IllegalStateException("microphone_route_failed");
-                    recorder = local; local.startRecording();
+                    recorder = local;
+                    health = new CaptureHealth(local, current, id, inputDeviceId);
+                    health.register();
+                    local.startRecording();
                     if (local.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) throw new IllegalStateException("microphone_start_failed");
                 }
+                if (!health.awaitInitialRoute()) { ended = finishingCapture(current); return; }
             }
-            listener.captureStarted(id);
-            byte[] buffer = new byte[NativeVoiceCapturePolicy.FRAME_SAMPLES * 2]; long total = 0;
-            while (current(current)) {
+            if (acceptingCapture(current)) listener.captureStarted(id);
+            byte[] buffer = new byte[NativeVoiceCapturePolicy.FRAME_SAMPLES * 2];
+            while (acceptingCapture(current)) {
                 byte[] chunk;
                 if (fixture != null) { chunk = fixture.next(); if (chunk == null) break; Thread.sleep(10); }
-                else { int count = local.read(buffer, 0, buffer.length, AudioRecord.READ_BLOCKING); if (count <= 0) throw new IllegalStateException("microphone_read_failed"); chunk = Arrays.copyOf(buffer, count); }
-                if (!current(current)) return;
+                else {
+                    int count;
+                    try { count = local.read(buffer, 0, buffer.length, AudioRecord.READ_BLOCKING); }
+                    catch (RuntimeException stopped) { if (finishingCapture(current)) break; throw stopped; }
+                    if (count <= 0) {
+                        if (finishingCapture(current)) break;
+                        throw new IllegalStateException("microphone_read_failed");
+                    }
+                    chunk = Arrays.copyOf(buffer, count);
+                }
+                if (!acceptingCapture(current)) break;
                 if ((chunk.length & 1) != 0) throw new IllegalStateException("microphone_format_unavailable");
-                total += chunk.length;
-                if (total > MAX_CAPTURE) throw new IllegalStateException("microphone_limit_reached");
-                listener.captured(id, chunk);
+                if (chunk.length > 0) listener.captured(id, chunk);
             }
-            if (current(current)) listener.captureEnded(id);
+            ended = current(current);
         } catch (Exception error) {
-            if (current(current)) listener.failed(id, error instanceof SecurityException ? "microphone_permission_required" :
-                code(error, "microphone_failed", "audio_focus_unavailable", "microphone_device_unavailable", "microphone_route_failed", "microphone_limit_reached", "microphone_format_unavailable"));
+            if (current(current)) failure = error instanceof SecurityException ? "microphone_permission_required" :
+                code(error, "microphone_failed", "audio_focus_unavailable", "microphone_device_unavailable", "microphone_route_failed",
+                    "microphone_silenced", "microphone_format_unavailable", "microphone_read_failed");
         }
         finally {
+            if (health != null) health.close();
             synchronized (lock) {
                 if (recorder == local) recorder = null;
                 if (local != null) { try { local.stop(); } catch (Exception ignored) {} local.release(); }
-                if (current == generation) { capture = false; request = null; releaseCommunication(); releaseFocusLater(); }
+                if (current == generation) { capture = false; captureFinishing = false; request = null; releaseCommunication(); releaseFocusLater(); }
             }
+            if (current(current)) {
+                if (failure != null) listener.failed(id, failure);
+                else if (ended) listener.captureEnded(id);
+            }
+        }
+    }
+
+    /** Routing exists on every supported API; explicit silencing is observable from API 29. */
+    private final class CaptureHealth implements AutoCloseable {
+        final AudioRecord input;
+        final long token;
+        final String id, preferredId;
+        final AudioRouting.OnRoutingChangedListener routing = ignored -> check();
+        AudioManager.AudioRecordingCallback recording;
+        int routeId = -1;
+        boolean armed;
+        CaptureHealth(AudioRecord input, long token, String id, String preferredId) {
+            this.input = input; this.token = token; this.id = id; this.preferredId = preferredId;
+        }
+        void register() {
+            input.addOnRoutingChangedListener(routing, main);
+            if (Build.VERSION.SDK_INT >= 29) registerRecording();
+        }
+        @RequiresApi(29) private void registerRecording() {
+            recording = new AudioManager.AudioRecordingCallback() {
+                @Override public void onRecordingConfigChanged(List<AudioRecordingConfiguration> configurations) { check(); }
+            };
+            input.registerAudioRecordingCallback(command -> main.post(command), recording);
+        }
+        boolean awaitInitialRoute() throws InterruptedException {
+            long deadline = SystemClock.elapsedRealtime() + ROUTE_TIMEOUT_MS;
+            while (acceptingCapture(token)) {
+                AudioDeviceInfo routed = input.getRoutedDevice();
+                if (routed != null) {
+                    if (preferredId != null && !preferredId.equals(Integer.toString(routed.getId())))
+                        throw new IllegalStateException("microphone_route_failed");
+                    synchronized (lock) { routeId = routed.getId(); armed = true; }
+                    if (silenced()) throw new IllegalStateException("microphone_silenced");
+                    return true;
+                }
+                if (SystemClock.elapsedRealtime() >= deadline) throw new IllegalStateException("microphone_route_failed");
+                Thread.sleep(10);
+            }
+            return false;
+        }
+        private boolean silenced() {
+            if (Build.VERSION.SDK_INT < 29) return false;
+            AudioRecordingConfiguration configuration = input.getActiveRecordingConfiguration();
+            return configuration != null && configuration.isClientSilenced();
+        }
+        void check() {
+            String reason = null;
+            synchronized (lock) {
+                if (!armed || !acceptingCapture(token) || recorder != input) return;
+                AudioDeviceInfo actual = input.getRoutedDevice();
+                if (actual == null || actual.getId() != routeId) reason = "microphone_device_unavailable";
+                else if (silenced()) reason = "microphone_silenced";
+            }
+            if (reason != null) failCurrent(token, id, reason);
+        }
+        @Override public void close() {
+            synchronized (lock) { armed = false; }
+            try { input.removeOnRoutingChangedListener(routing); } catch (Exception ignored) {}
+            if (Build.VERSION.SDK_INT >= 29 && recording != null)
+                try { input.unregisterAudioRecordingCallback(recording); } catch (Exception ignored) {}
         }
     }
     /** Waits outside the lock for the Bluetooth voice route; false when the request was replaced meanwhile. */
@@ -359,14 +467,14 @@ final class NativeVoiceAudio {
             context.registerReceiver(receiver, new IntentFilter(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED), null, main);
         }
         try {
-            if (receiver != null) synchronized (lock) { if (current != generation) return false; manager.startBluetoothSco(); }
+            if (receiver != null) synchronized (lock) { if (!acceptingCapture(current)) return false; manager.startBluetoothSco(); }
             long deadline = SystemClock.elapsedRealtime() + ROUTE_TIMEOUT_MS;
             while (!(Build.VERSION.SDK_INT >= 31 ? routed(route) : connected.getCount() == 0)) {
-                if (!current(current)) return false;
+                if (!acceptingCapture(current)) return false;
                 if (SystemClock.elapsedRealtime() >= deadline) throw new IllegalStateException("microphone_route_failed");
                 connected.await(50, TimeUnit.MILLISECONDS);
             }
-            return current(current);
+            return acceptingCapture(current);
         } finally { if (receiver != null) context.unregisterReceiver(receiver); }
     }
     // Android reports a Bluetooth SCO communication device only once its audio link is connected.
@@ -451,7 +559,7 @@ final class NativeVoiceAudio {
     }
     void stop() {
         synchronized (lock) {
-            generation++; request = null; capture = false;
+            generation++; request = null; capture = false; captureFinishing = false;
             if (recorder != null) { try { recorder.stop(); } catch (Exception ignored) {} }
             releaseTrack(); releaseSpool(); releaseCommunication(); releaseFocusLater(); lock.notifyAll();
         }

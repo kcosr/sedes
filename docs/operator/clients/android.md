@@ -258,6 +258,21 @@ network path and at least the following:
    microphone and notification prompts should accompany voice enablement. The
    voice service and output-image provider must remain non-exported.
 
+For native voice, test Keep listening beyond 95 seconds and ten minutes on built-in
+and Bluetooth microphones, including screen off, planned session renewal, Send,
+Cancel, and retargeting. Verify the one-hour default with a shorter configured
+limit: toggling must not reset it and expiration must leave Ready to send. Inject
+network loss while speaking; transient failures should keep capturing with
+Reconnecting, and exhausted recovery should retain the accepted audio. Exercise
+process death, Off, profile switches, audio-focus loss, device removal/rerouting,
+Android 12+ microphone privacy toggles, and concurrent-capture silencing. API
+24–28 cannot report Android's explicit silenced flag; they retain route, focus,
+read, and no-progress checks. Confirm saved dictation remains visible while Off,
+Retry never opens the microphone or sends, and a new explicit Send is required
+after a failed Send. Check complete clipboard copies and injected copy failures,
+storage limits, and narrow-screen infinity/Cancel/Send controls. Real-device and
+live-model checks are separate from the build-only verification above.
+
 For an eligible Codex thread, additionally verify a complete initial terminal
 repaint, input and resize, composed Unicode text, Backspace/navigation controls,
 touch selection/copy, keyboard behavior, rotation, resume, and network

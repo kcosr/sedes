@@ -17,6 +17,7 @@ import { nativeThreadTitle, type NativeVoiceSettings, type NativeVoiceState } fr
 import { VoiceThreadPicker } from "./VoiceThreadPicker.js";
 import { useShowVoiceBarWhenOff } from "./voice-bar-preference.js";
 import { canEnableVoice, resumeVoice } from "./voice-session.js";
+import { savedRecording, VoiceRecordingRecovery } from "./VoiceRecordingRecovery.js";
 
 const toggles = [
   ["pinDefaultVoiceThread", "Pin default voice thread", "Start manual recordings here while viewing other threads."],
@@ -52,6 +53,8 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
   if (!native || !native.identity) return <SettingsPage title="Voice"><Callout tone="danger">{state.error ?? "Voice could not connect to this server."}</Callout>
     <Button disabled={state.pending} onClick={() => { void store.reconnect().catch(() => undefined); }}>Retry voice connection</Button></SettingsPage>;
   const settings = native.settings;
+  const recordingWork = (native.active?.recording != null && ["arming", "listening", "recognizing"].includes(native.phase)) ||
+    native.recordingRecovery?.stage === "recognizing";
   const blocked = settings.audioMode === "off" && !canEnableVoice(settings, native.speech.credentialConfigured);
   const setupHelp = !settings.speechEndpoint ? "Add a speech endpoint below." : !native.speech.credentialConfigured ? "Add a speech credential below." : "Choose speech models and a voice below.";
   const update = (patch: Partial<NativeVoiceSettings>) => { void store.update(patch).catch(() => undefined); };
@@ -78,7 +81,10 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
       <p role="status">{voiceReadiness(native.readiness)}</p>
       {!native.clientConnectionToken && <Button disabled={state.pending} onClick={() => { void store.reconnect().catch(() => undefined); }}>Retry client connection</Button>}
     </SettingsSection>
-    <SpeechProviderSettings store={store} native={native} pending={state.pending} />
+    {savedRecording(native) ? <SettingsSection title="Saved dictation" card>
+      <VoiceRecordingRecovery store={store} threads={application.snapshot?.threads ?? []} />
+    </SettingsSection> : null}
+    <SpeechProviderSettings store={store} native={native} pending={state.pending} recordingWork={recordingWork} />
     <SettingsSection title="Speech text" card>
       <SwitchField label="Clean up formatting for speech" checked={settings.cleanSpeechText} disabled={state.pending}
         description="Read Markdown as text, including link labels and code contents. Applies to queued and future speech."
@@ -96,14 +102,17 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
     </SettingsSection>
     <SettingsSection title="Audio and timing" card>
       <SettingsField label="Microphone input">
-        <NativeSelect value={settings.inputDeviceId ?? ""} disabled={state.pending} onChange={event => update({ inputDeviceId: event.target.value || null })}>
+        <NativeSelect value={settings.inputDeviceId ?? ""} disabled={state.pending || recordingWork} onChange={event => update({ inputDeviceId: event.target.value || null })}>
           <option value="">System default</option>
           {devices.map(device => <option key={device.id} value={device.id}>{deviceLabels.get(device.id)}</option>)}
           {settings.inputDeviceId && !devices.some(device => device.id === settings.inputDeviceId) ? <option value={settings.inputDeviceId}>Selected input (unavailable)</option> : null}
         </NativeSelect>
       </SettingsField>
+      <VoiceTextSetting label="Long dictation timeout (minutes)" description="Maximum time after Keep listening is first enabled. Pauses and toggling it do not restart this limit."
+        value={String(settings.longDictationTimeoutMs / 60_000)} min={1} max={1440} disabled={state.pending || recordingWork}
+        onSave={value => store.update({ longDictationTimeoutMs: Number(value) * 60_000 })} />
       {numbers.map(([key, label, min, max, description]) => <VoiceTextSetting key={key} label={label} description={description} value={String(settings[key])} min={min} max={max}
-        disabled={state.pending} onSave={value => store.update({ [key]: Number(value) })} />)}
+        disabled={state.pending || (recordingWork && key.startsWith("recognition"))} onSave={value => store.update({ [key]: Number(value) })} />)}
     </SettingsSection>
     {native.recovery.length ? <SettingsSection title="Pending input recovery" card>
       {native.recovery.some(input => input.status === "prepared") && <p>Inputs waiting for a client connection send automatically when it returns.</p>}
@@ -128,7 +137,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
   </SettingsPage>;
 }
 
-function SpeechProviderSettings({ store, native, pending }: { store: NativeVoiceStore; native: NativeVoiceState; pending: boolean }) {
+function SpeechProviderSettings({ store, native, pending, recordingWork }: { store: NativeVoiceStore; native: NativeVoiceState; pending: boolean; recordingWork: boolean }) {
   const settings = native.settings, speech = native.speech, catalog = speech.catalog;
   useEffect(() => {
     if (settings.speechEndpoint && speech.credentialConfigured) {
@@ -140,18 +149,18 @@ function SpeechProviderSettings({ store, native, pending }: { store: NativeVoice
   const speed = catalog?.speed;
   return <SettingsSection title="Speech provider" description="Voices are AI-generated." card>
     <SettingsField label="Provider">
-      <NativeSelect value={settings.speechProvider} disabled={pending} onChange={event => {
+      <NativeSelect value={settings.speechProvider} disabled={pending || recordingWork} onChange={event => {
         const provider = event.target.value as NativeVoiceSettings["speechProvider"];
         void update(provider === "openai" ? { speechProvider: provider, speechEndpoint: "https://api.openai.com/v1", sttModel: "gpt-live-transcribe", ttsModel: "gpt-4o-mini-tts", ttsVoice: "coral", ttsSpeed: 1 }
           : { speechProvider: provider, speechEndpoint: "", sttModel: "", ttsModel: "", ttsVoice: "", ttsSpeed: 1 }).catch(() => undefined);
       }}><option value="openai">OpenAI</option><option value="server">Own speech server</option></NativeSelect>
     </SettingsField>
     {settings.speechProvider === "openai" ? <p className="text-sm text-muted-foreground">OpenAI API · https://api.openai.com/v1</p> :
-      <VoiceTextSetting label="Speech API endpoint" type="url" value={settings.speechEndpoint} disabled={pending}
+      <VoiceTextSetting label="Speech API endpoint" type="url" value={settings.speechEndpoint} disabled={pending || recordingWork}
         description="API URL including /v1. Use HTTP only on a trusted network."
         onSave={speechEndpoint => update({ speechEndpoint })} />}
     <SettingsField label="Speech credential" description={speech.credentialConfigured ? "Saved securely on this device." : settings.speechProvider === "openai" ? "Add an OpenAI API key." : "Add your server's bearer token."}>
-      <Button variant="outline" disabled={pending || !settings.speechEndpoint} onClick={() => {
+      <Button variant="outline" disabled={pending || recordingWork || !settings.speechEndpoint} onClick={() => {
         void store.run(() => store.plugin.openSpeechCredentialDialog(store.commandContext())).catch(() => undefined);
       }}>Manage speech credential</Button>
     </SettingsField>
@@ -161,7 +170,7 @@ function SpeechProviderSettings({ store, native, pending }: { store: NativeVoice
       }}>{speech.catalogStatus === "loading" ? "Refreshing…" : "Refresh"}</Button>
       {speech.catalogStatus === "error" ? <p role="status">{speech.error ?? "Couldn’t refresh."}</p> : null}
     </div>
-    <VoiceChoiceSetting label="Recognition model" value={settings.sttModel} disabled={pending} options={catalog?.sttModels} onSave={sttModel => update({ sttModel })} />
+    <VoiceChoiceSetting label="Recognition model" value={settings.sttModel} disabled={pending || recordingWork} options={catalog?.sttModels} onSave={sttModel => update({ sttModel })} />
     <VoiceChoiceSetting label="Speech model" value={settings.ttsModel} disabled={pending} options={catalog?.ttsModels} onSave={ttsModel => update({ ttsModel })} />
     <VoiceChoiceSetting label="Speech voice" value={settings.ttsVoice} disabled={pending} options={catalog?.voices} onSave={ttsVoice => update({ ttsVoice })} />
     <VoiceTextSetting label="Speech speed" value={String(settings.ttsSpeed)} disabled={pending} min={Math.max(0.25, speed?.min ?? 0.25)} max={Math.min(4, speed?.max ?? 4)} step={0.05}

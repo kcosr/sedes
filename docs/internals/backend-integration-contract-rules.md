@@ -666,6 +666,17 @@ add backend-specific smaller frame or string overrides. Expose effective
 carrier capacity to protocol peers, and reject a binding limit that exceeds
 its carrier.
 
+Direct input admits up to 262,144 UTF-8 text bytes independently of JSON
+escaping; its HTTP envelope is bounded at 2 MiB. First-send creation storage,
+bound-thread queues, and immutable delivery snapshots must preserve that exact
+text, including whitespace and multibyte characters. This uses the existing
+256 KiB materialized input budget; composer, attachment, message, turn, and
+session limits remain independent. Backend fixtures must cover native delivery,
+history or durable reconciliation, and exact replay at this boundary for every
+enabled backend, including supported steering. Once admission creates a receipt,
+provider refusal or uncertain delivery remains owned by server recovery and does
+not authorize the recording client to submit a fresh copy.
+
 An agent-to-client notification with no active consumer dependency—an exact
 registered descriptor, active profile, and registered handler—may be treated as
 unused protocol traffic rather than an unsupported operation. Apply generic

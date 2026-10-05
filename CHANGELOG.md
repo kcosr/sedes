@@ -4,6 +4,14 @@
 
 ### Breaking Changes
 
+- Client protocol 140 raises direct-input text to 256 KiB and its JSON request
+  limit to 2 MiB. Upgrade clients with the server. Android native voice uses
+  snapshot version 6 and settings record version 5; older local settings reset
+  with voice Off, preserving separately stored speech credentials.
+- Own speech servers must publish per-model `realtime` capabilities. Hosted
+  recognition accepts the five supported base model IDs; dated and custom
+  recognition IDs are rejected.
+
 - Client protocol 139 replaces browser-supplied input origin IDs with server
   registration. Upgrade browser and packaged clients with the server; native
   voice shares its registered connection with the WebView.
@@ -207,6 +215,12 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Android Keep listening extends the current recording through pauses and sends
+  its ordered recognition segments as one message. It includes a configurable
+  one-hour default limit, bounded recovery while capturing through transient
+  failures, and encrypted saved dictation with Retry, Send, Copy, and Discard
+  in the voice controls. Expiration and interrupted Send never submit silently.
 
 - Android voice can clean up Markdown before speaking, preserving link labels,
   code contents, and reading pauses. The device-local setting defaults to on.

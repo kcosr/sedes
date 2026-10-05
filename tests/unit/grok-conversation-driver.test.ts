@@ -1,3 +1,4 @@
+import { largeDirectInputText } from "../support/large-direct-input.js";
 // Shared immutable operation deadline keeps replays identical throughout this local suite.
 const interruptDeadlineAt = Date.now() + 3_600_000;
 import { createHash } from "node:crypto";
@@ -1111,12 +1112,12 @@ describe("normalized Grok conversation driver", () => {
     }
   });
 
-  it("recovers an authenticated Sedes prompt abandoned by restart as interrupted", async () => {
+  it("recovers a 256 KiB Sedes prompt abandoned by restart and submits another intact", async () => {
     const sessionId = "e1e1e1e1-e1e1-41e1-81e1-e1e1e1e1e1e1";
     const fixtureState = await openDriver([
       session(sessionId, "Interrupted by restart"),
     ]);
-    const original = submitInput();
+    const original = { ...submitInput(), text: largeDirectInputText };
     const promptId = fixtureState.submissionPromptId(
       sessionId,
       original.applicationOperationId,
@@ -1175,7 +1176,7 @@ describe("normalized Grok conversation driver", () => {
         applicationOperationId: "submit-after-restart",
         mutationId: "submit-after-restart-mutation",
         reconciliationToken: "submit-after-restart-token",
-        text: "continue after restart",
+        text: largeDirectInputText,
       };
       await expect(handle.submit(next)).resolves.toMatchObject({
         accepted: true,

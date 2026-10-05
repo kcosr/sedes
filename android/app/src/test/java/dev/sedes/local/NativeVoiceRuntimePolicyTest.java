@@ -40,11 +40,11 @@ public class NativeVoiceRuntimePolicyTest {
     @Test public void catalogOwnershipDependsOnAccountAndSelectedSpeechModel() {
         NativeVoiceSettings current = NativeVoiceSettings.defaults();
         for (org.json.JSONObject patch : new org.json.JSONObject[] {
-            NativeVoiceJson.object("ttsVoice", "alloy"), NativeVoiceJson.object("ttsSpeed", 1.5),
-            NativeVoiceJson.object("sttModel", "another-transcription-model") })
+            NativeVoiceJson.object("ttsVoice", "alloy"), NativeVoiceJson.object("ttsSpeed", 1.5) })
             assertFalse(NativeVoiceRuntime.catalogConfigurationChanged(current, current.patch(0, patch)));
         for (org.json.JSONObject patch : new org.json.JSONObject[] {
             NativeVoiceJson.object("ttsModel", "another-speech-model"),
+            NativeVoiceJson.object("sttModel", "another-transcription-model"),
             NativeVoiceJson.object("speechProvider", "server"),
             NativeVoiceJson.object("speechProvider", "server", "speechEndpoint", "https://speech.example/v1") })
             assertTrue(NativeVoiceRuntime.catalogConfigurationChanged(current, current.patch(0, patch)));
@@ -63,6 +63,8 @@ public class NativeVoiceRuntimePolicyTest {
             "input_rejected", "input_outcome_uncertain", "input_recovery_not_found", "voice_journal_capacity",
             "notification_stream_rejected", "notification_policy_unavailable", "recognition_message_limit",
             "speech_configuration_required", "speech_authentication_failed", "recognition_authentication_failed",
+            "recording_changed", "recording_revision_conflict", "recording_settings_busy", "recording_recovery_required",
+            "dictation_finalization_conflict", "dictation_storage_unavailable", "speech_transcription_model_unsupported",
             "speech_rate_limited", "speech_quota_exceeded", "recognition_quota_exceeded", "recognition_network_error", "microphone_format_unavailable" })
             assertSpecific(code);
         assertFalse(NativeVoiceRuntime.message("speech_quota_exceeded").contains("Try again shortly"));

@@ -12,7 +12,7 @@ import { SubmissionCompletionRepository } from "../../src/server/db/repositories
 import { ConversationDraftRepository } from "../../src/server/db/repositories/conversation-draft-repository.js";
 import { DirectInputRepository } from "../../src/server/db/repositories/direct-input-repository.js";
 import { ThreadActivityService } from "../../src/server/conversations/thread-activity-service.js";
-import { MAX_DIRECT_INPUT_TEXT_BYTES, type DirectInputRequest } from "../../src/shared/protocol/thread-input.js";
+import { MAX_DIRECT_INPUT_REQUEST_BYTES, MAX_DIRECT_INPUT_TEXT_BYTES, type DirectInputRequest } from "../../src/shared/protocol/thread-input.js";
 import { createHash, randomUUID } from "node:crypto";
 import { execFile as execFileCallback } from "node:child_process";
 import type { Server } from "node:http";
@@ -4874,13 +4874,13 @@ describe("normalized HTTP application contract", () => {
       await receipt(first.mutationId, true).expect(200, { status: "notObserved" });
       await receipt("not-a-mutation-id").expect(400);
 
-      // JSON escaping may exceed the ordinary 256 KiB parser while the exact text fits 64 KiB.
-      const escaped = input("\u0001".repeat(50_000));
+      // Worst-case JSON escaping still admits every byte of a 256 KiB recording.
+      const escaped = input("\u0001".repeat(MAX_DIRECT_INPUT_TEXT_BYTES));
       expect(Buffer.byteLength(JSON.stringify(escaped))).toBeGreaterThan(256 * 1024);
-      expect(Buffer.byteLength(JSON.stringify(escaped))).toBeLessThan(512 * 1024);
+      expect(Buffer.byteLength(JSON.stringify(escaped))).toBeLessThan(MAX_DIRECT_INPUT_REQUEST_BYTES);
       expect((await post(threadId, escaped).expect(200)).body).toMatchObject({ mutationId: escaped.mutationId, status: "queued" });
-      const overParser = input("\u0001".repeat(90_000));
-      expect(Buffer.byteLength(JSON.stringify(overParser))).toBeGreaterThan(512 * 1024);
+      const overParser = input("\u0001".repeat(350_000));
+      expect(Buffer.byteLength(JSON.stringify(overParser))).toBeGreaterThan(MAX_DIRECT_INPUT_REQUEST_BYTES);
       await post(threadId, overParser)
         .expect(413)
         .expect(({ body }) => expect(body.error.code).toBe("bad_request"));

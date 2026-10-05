@@ -59,28 +59,32 @@ public class NativeVoiceSpeechIntegrationTest {
         assertEquals(1, observations().getJSONArray("speech").length());
     }
 
-    @Test(timeout = 20000) public void localCommitIsExplicitAndEachFreshRecordingCompletesOnceWithoutReplay() throws Exception {
+    @Test(timeout = 20000) public void localReusableConnectionCommitsEachSegmentOnceAndBuffersTheNextDuringRecognition() throws Exception {
         localOnly();
-        control(NativeVoiceJson.object("transcripts", new org.json.JSONArray().put("first result").put("second result")));
+        control(NativeVoiceJson.object("transcripts", new org.json.JSONArray().put("first result").put("second result"), "asrDelayMs", 500));
         NativeSpeechTransport transport = transport();
-        RecognitionRecorder first = new RecognitionRecorder();
-        NativeSpeechTransport.Transcription one = transport.transcribe("first", WAIT_MS, first);
-        first.expect("ready");
-        append(one, prerecordedPcm());
-        assertNull("Appending must not finalize recognition", first.events.poll(200, TimeUnit.MILLISECONDS));
+        RecognitionRecorder recorder = new RecognitionRecorder();
+        NativeSpeechTransport.RecognitionSession session = transport.openRecognition("reusable", capabilities(), WAIT_MS, recorder);
+        Event ready = recorder.expect("ready"); assertEquals("reusable", ready.id);
+        assertTrue("The server advertises enough lifetime to assign a full segment", session.canAssign(60000));
+        append(session, "first", prerecordedPcm());
+        assertNull("Appending must not finalize recognition", recorder.events.poll(100, TimeUnit.MILLISECONDS));
         assertEquals(0, observations().getJSONArray("transcriptions").length());
-        assertTrue(one.commit());
-        Event result = first.expect("completed");
-        assertEquals("first", result.id); assertEquals("first result", result.text);
-        assertFalse("Finished recording must reject more audio", one.append(prerecordedPcm()));
-        assertFalse("Finished recording must reject another commit", one.commit());
-        RecognitionRecorder second = new RecognitionRecorder();
-        NativeSpeechTransport.Transcription two = transport.transcribe("second", WAIT_MS, second);
-        second.expect("ready");
-        assertNull("A fresh session must not replay the preceding transcript", second.events.poll(200, TimeUnit.MILLISECONDS));
-        append(two, prerecordedPcm()); assertTrue(two.commit());
-        assertEquals("second result", second.expect("completed").text);
-        assertNull("A completed recording finalized twice", first.events.poll(100, TimeUnit.MILLISECONDS));
+        assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, session.commit("first"));
+        Event firstAck = recorder.acknowledged("first");
+        append(session, "second", prerecordedPcm());
+        assertEquals("Only one committed recognition job may run", NativeSpeechTransport.SendResult.WAITING, session.commit("second"));
+        Event first = recorder.expect("completed");
+        assertEquals("first", first.id); assertEquals("first result", first.text); assertEquals(firstAck.itemId, first.itemId);
+        assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, session.commit("second"));
+        Event secondAck = recorder.acknowledged("second");
+        Event second = recorder.expect("completed");
+        assertEquals("second", second.id); assertEquals("second result", second.text); assertEquals(secondAck.itemId, second.itemId);
+        assertNotEquals("Each commit has a separate server item", first.itemId, second.itemId);
+        assertNull("A completed segment finalized twice", recorder.events.poll(100, TimeUnit.MILLISECONDS));
+        assertTrue("Successful results preserve the reusable connection", session.canAssign(60000));
+        session.cancel();
+        assertEquals(NativeSpeechTransport.SendResult.ENDED, session.append("third", prerecordedPcm()));
         JSONObject observations = observations();
         assertEquals(2, observations.getJSONArray("transcriptions").length());
         for (int i = 0; i < 2; i++) {
@@ -96,8 +100,8 @@ public class NativeVoiceSpeechIntegrationTest {
         control(NativeVoiceJson.object("asrDelayMs", 700));
         RecognitionRecorder recorder = new RecognitionRecorder();
         NativeSpeechTransport transport = transport();
-        NativeSpeechTransport.Transcription request = transport.transcribe("cancel-committed", WAIT_MS, recorder);
-        recorder.expect("ready"); append(request, prerecordedPcm()); assertTrue(request.commit());
+        NativeSpeechTransport.RecognitionSession request = transport.openRecognition("cancel-committed", capabilities(), WAIT_MS, recorder);
+        recorder.expect("ready"); append(request, "cancel-attempt", prerecordedPcm()); assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, request.commit("cancel-attempt"));
         awaitTranscriptions(1);
         request.cancel(); recorder.events.clear();
         assertNull("Cancelled inference leaked a completion or failure", recorder.events.poll(900, TimeUnit.MILLISECONDS));
@@ -136,7 +140,7 @@ public class NativeVoiceSpeechIntegrationTest {
         assertEquals("failed", http.type); assertEquals(NativeSpeechTransport.Kind.AUTHENTICATION, http.failure.kind);
         assertEquals(401, http.failure.httpStatus);
         RecognitionRecorder stt = new RecognitionRecorder();
-        invalid.transcribe("unauthorized-ws", WAIT_MS, stt);
+        invalid.openRecognition("unauthorized-ws", capabilities(), WAIT_MS, stt);
         Event ws = stt.expect("failed");
         assertEquals(NativeSpeechTransport.Kind.AUTHENTICATION, ws.failure.kind); assertEquals(401, ws.failure.httpStatus);
         assertEquals(0, observations().getJSONArray("speech").length());
@@ -148,8 +152,8 @@ public class NativeVoiceSpeechIntegrationTest {
         control(NativeVoiceJson.object("asrDelayMs", 700));
         NativeSpeechTransport old = transport();
         RecognitionRecorder abandoned = new RecognitionRecorder();
-        NativeSpeechTransport.Transcription pending = old.transcribe("old-provider", WAIT_MS, abandoned);
-        abandoned.expect("ready"); append(pending, prerecordedPcm()); assertTrue(pending.commit()); awaitTranscriptions(1);
+        NativeSpeechTransport.RecognitionSession pending = old.openRecognition("old-provider", capabilities(), WAIT_MS, abandoned);
+        abandoned.expect("ready"); append(pending, "old-attempt", prerecordedPcm()); assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, pending.commit("old-attempt")); awaitTranscriptions(1);
         old.close(); abandoned.events.clear();
         NativeSpeechTransport replacement = transport(env("SEDES_SPEECH_TEST_REPLACEMENT_ENDPOINT"), env("SEDES_SPEECH_TEST_REPLACEMENT_TOKEN"));
         assertEquals("test transcript", recognize(replacement, "new-provider", prerecordedPcm()).text);
@@ -168,9 +172,9 @@ public class NativeVoiceSpeechIntegrationTest {
         byte[] prerecorded = speech.bytes();
         assertTrue("Smoke audio must be nonempty and at most ten seconds", prerecorded.length >= 4800 && prerecorded.length <= 480000);
         RecognitionRecorder recognized = new RecognitionRecorder();
-        NativeSpeechTransport.Transcription transcription = transport.transcribe("live-transcription", 30000, recognized);
+        NativeSpeechTransport.RecognitionSession transcription = transport.openRecognition("live-transcription", capabilities(), 30000, recognized);
         recognized.expect("ready");
-        append(transcription, prerecorded); assertTrue(transcription.commit());
+        append(transcription, "live-attempt", prerecorded); assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, transcription.commit("live-attempt"));
         Event result = recognized.expect("completed", 35000);
         String text = result.text.toLowerCase(java.util.Locale.ROOT);
         int recognizedWords = 0;
@@ -184,16 +188,31 @@ public class NativeVoiceSpeechIntegrationTest {
     private NativeSpeechTransport transport(String endpoint, String token) {
         NativeSpeechTransport transport = new NativeSpeechTransport(new NativeSpeechTransport.Config(endpoint, token,
             env("SEDES_SPEECH_TEST_STT_MODEL"), env("SEDES_SPEECH_TEST_TTS_MODEL"), env("SEDES_SPEECH_TEST_VOICE"), 1), client,
-            new NativeSpeechTransport.Limits(live ? 15000 : 5000, live ? 30000 : 5000, live ? 45000 : 15000, 480000));
+            new NativeSpeechTransport.Limits(live ? 15000 : 5000, live ? 30000 : 5000, live ? 45000 : 15000, 480000),
+            () -> TimeUnit.NANOSECONDS.toMillis(System.nanoTime()));
         transports.add(transport); return transport;
     }
     private Event recognize(NativeSpeechTransport transport, String id, byte[] pcm) throws Exception {
         RecognitionRecorder recorder = new RecognitionRecorder();
-        NativeSpeechTransport.Transcription request = transport.transcribe(id, WAIT_MS, recorder);
-        recorder.expect("ready"); append(request, pcm); assertTrue(request.commit()); return recorder.expect("completed");
+        NativeSpeechTransport.RecognitionSession request = transport.openRecognition(id, capabilities(), WAIT_MS, recorder);
+        recorder.expect("ready"); append(request, id + "-attempt", pcm);
+        assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, request.commit(id + "-attempt"));
+        Event completed = recorder.expect("completed"); request.cancel(); return completed;
     }
-    private static void append(NativeSpeechTransport.Transcription request, byte[] pcm) {
-        for (int offset = 0; offset < pcm.length; offset += 4800) assertTrue("PCM append was rejected", request.append(Arrays.copyOfRange(pcm, offset, Math.min(pcm.length, offset + 4800))));
+    private NativeSpeechCapabilities capabilities() throws Exception {
+        if (live) return NativeSpeechCapabilities.hosted(env("SEDES_SPEECH_TEST_STT_MODEL"));
+        Request request = new Request.Builder().url(env("SEDES_SPEECH_TEST_ENDPOINT") + "/audio/capabilities")
+            .header("Authorization", "Bearer " + env("SEDES_SPEECH_TEST_TOKEN")).build();
+        try (Response response = client.newCall(request).execute()) {
+            assertEquals("Fresh server capabilities status", 200, response.code()); assertNotNull(response.body());
+            JSONObject catalog = NativeSpeechCatalog.server(new JSONObject(response.body().string()), env("SEDES_SPEECH_TEST_TTS_MODEL"));
+            return NativeSpeechCatalog.serverCapabilities(catalog, env("SEDES_SPEECH_TEST_STT_MODEL"));
+        }
+    }
+    private static void append(NativeSpeechTransport.RecognitionSession request, String attemptId, byte[] pcm) {
+        for (int offset = 0; offset < pcm.length; offset += 4800)
+            assertEquals("PCM append was rejected", NativeSpeechTransport.SendResult.ACCEPTED,
+                request.append(attemptId, Arrays.copyOfRange(pcm, offset, Math.min(pcm.length, offset + 4800))));
     }
     /** A prerecorded deterministic mono PCM fixture; no host or Android audio device is opened. */
     private static byte[] prerecordedPcm() {
@@ -220,8 +239,11 @@ public class NativeVoiceSpeechIntegrationTest {
         StringBuilder hash = new StringBuilder(); for (byte value : MessageDigest.getInstance("SHA-256").digest(bytes)) hash.append(String.format("%02x", value & 255)); return hash.toString();
     }
     private static class Event {
-        final String type, id, text; final NativeSpeechTransport.Failure failure;
-        Event(String type, String id, String text, NativeSpeechTransport.Failure failure) { this.type = type; this.id = id; this.text = text; this.failure = failure; }
+        final String type, id, itemId, text; final NativeSpeechTransport.Failure failure;
+        Event(String type, String id, String text, NativeSpeechTransport.Failure failure) { this(type, id, null, text, failure); }
+        Event(String type, String id, String itemId, String text, NativeSpeechTransport.Failure failure) {
+            this.type = type; this.id = id; this.itemId = itemId; this.text = text; this.failure = failure;
+        }
     }
     private static class Recorder {
         final BlockingQueue<Event> events = new LinkedBlockingQueue<>();
@@ -232,10 +254,23 @@ public class NativeVoiceSpeechIntegrationTest {
             assertEquals("Unexpected callback" + (event.failure == null ? "" : ": " + event.failure.code), type, event.type); return event;
         }
     }
-    private static final class RecognitionRecorder extends Recorder implements NativeSpeechTransport.TranscriptionListener {
-        public void ready(String id) { add("ready", id); }
-        public void completed(String id, String text) { events.add(new Event("completed", id, text, null)); }
-        public void failed(String id, NativeSpeechTransport.Failure failure) { events.add(new Event("failed", id, null, failure)); }
+    private static final class RecognitionRecorder extends Recorder implements NativeSpeechTransport.RecognitionListener {
+        final BlockingQueue<Event> acknowledgements = new LinkedBlockingQueue<>();
+        public void ready(String connectionId, long deadlineMs) { add("ready", connectionId); }
+        public void committed(String connectionId, String attemptId, String itemId) {
+            acknowledgements.add(new Event("committed", attemptId, itemId, null, null));
+        }
+        public void completed(String connectionId, String attemptId, String itemId, String text) {
+            events.add(new Event("completed", attemptId, itemId, text, null));
+        }
+        public void failed(String connectionId, String attemptId, NativeSpeechTransport.Failure failure) {
+            events.add(new Event("failed", attemptId, null, failure));
+        }
+        Event acknowledged(String attemptId) throws Exception {
+            Event event = acknowledgements.poll(WAIT_MS, TimeUnit.MILLISECONDS);
+            assertNotNull("No commit acknowledgement", event); assertEquals(attemptId, event.id);
+            assertNotNull(event.itemId); return event;
+        }
     }
     private static final class SpeechRecorder extends Recorder implements NativeSpeechTransport.SpeechListener {
         final ByteArrayOutputStream audio = new ByteArrayOutputStream(); int sampleRate, chunks;

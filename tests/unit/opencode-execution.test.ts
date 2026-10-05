@@ -1,3 +1,4 @@
+import { largeDirectInputText } from "../support/large-direct-input.js";
 import { createOpenCodeExecutionFixture, modelA, modelB, nativeModel } from "../support/opencode-execution-fixture.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
@@ -34,6 +35,20 @@ function withImages(input: SubmitTurnInput, count: number, imageBytes: number) {
 }
 
 describe("OpenCode execution settings and explicit actions", () => {
+  it.each(["submit", "steer"] as const)("preserves 256 KiB %s input through native delivery, history evidence, and replay", async mode => {
+    const f = fixture();
+    const input = { ...f.submit("large-direct-input", largeDirectInputText), target: { kind: "conversation" as const } };
+    const deliver = () => mode === "submit" ? f.delivery.submit(input) : f.delivery.steer(input);
+    await deliver();
+    expect(f.posts("/prompt")[0]!.body).toMatchObject({ text: largeDirectInputText,
+      delivery: mode === "submit" ? "queue" : "steer" });
+    expect(f.wire.messages).toContainEqual(expect.objectContaining({ type: "user", text: largeDirectInputText }));
+    await expect(f.observer.reconcile(input.applicationOperationId, mode)).resolves.toMatchObject({ status: "accepted" });
+    await deliver();
+    expect(f.posts("/prompt")).toHaveLength(1);
+    expect(f.evidence.get(scope, threadID, input.applicationOperationId, mode).consumedFingerprint).not.toBeNull();
+  });
+
   it("reclaims repeated unconfirmed actions instead of exhausting the ordinary journal lane", async () => {
     const f = fixture({ native: modelB }); f.state.modelUpdate = false;
     for (let index = 0; index < 132; index++) {

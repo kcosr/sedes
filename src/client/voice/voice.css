@@ -14,6 +14,7 @@
   padding: 8px var(--voice-dock-inset) calc(8px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--border-soft);
   background: var(--card);
+  container: voice-dock / inline-size;
 }
 
 /* Under a rendered composer the dock continues the composer-wrap's band; the
@@ -342,6 +343,93 @@
   white-space: nowrap;
 }
 
+.voice-card-recording-tools {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.voice-card-recording-tools .voice-card-chip {
+  min-width: 72px;
+  flex: none;
+}
+
+.voice-card-keep {
+  position: relative;
+  z-index: calc(var(--z-sticky) + 1);
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--muted-foreground);
+}
+
+.voice-card-keep svg {
+  width: var(--icon-lg);
+  height: var(--icon-lg);
+}
+
+.voice-card-keep[aria-pressed="true"] {
+  border-color: var(--info-border);
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.voice-card-keep:active:not([aria-disabled="true"]) {
+  background: var(--accent);
+}
+
+.voice-card-keep[aria-disabled="true"],
+.voice-card-chip[aria-disabled="true"] {
+  opacity: var(--disabled-opacity);
+  cursor: not-allowed;
+}
+
+.voice-card-reconnecting {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted-foreground);
+  font-size: var(--text-ui);
+}
+
+.voice-card-reconnecting svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.voice-card-title[data-saved] {
+  display: flex;
+  align-items: center;
+}
+
+.voice-card-saved-label {
+  flex: none;
+}
+
+.voice-card-saved-thread {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.voice-card-saved-access {
+  position: relative;
+  z-index: calc(var(--z-sticky) + 1);
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--warning);
+  font-size: var(--text-ui);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 /* Actions: a 48px round primary and a 44px ghost Skip, 8px apart. */
 .voice-card-actions {
   display: flex;
@@ -443,5 +531,67 @@
 @media (max-width: 819px) {
   .voice-dock {
     --voice-dock-inset: 9px;
+  }
+}
+
+/* Fit the controls to the dock's available width, including narrow desktop
+   panels. The title yields before Change/Keep listening and Cancel/Send. */
+@container voice-dock (max-width: 599px) {
+  .voice-card[data-recording],
+  .voice-card[data-saved] {
+    gap: 4px;
+  }
+
+  .voice-card[data-recording] .voice-card-tile,
+  .voice-card[data-saved] .voice-card-tile {
+    display: none;
+  }
+
+  .voice-card[data-recording] .voice-card-body,
+  .voice-card[data-saved] .voice-card-body {
+    padding-block: 5px;
+  }
+
+  .voice-card[data-recording] .voice-card-actions,
+  .voice-card[data-saved] .voice-card-actions {
+    gap: 4px;
+  }
+
+  .voice-card[data-recording] .voice-card-button,
+  .voice-card[data-saved] .voice-card-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .voice-card[data-recording] .voice-card-sub[data-chip] {
+    flex-wrap: wrap;
+    gap: 0 6px;
+  }
+
+  .voice-card[data-recording] .voice-card-sub > .voice-card-dot {
+    display: none;
+  }
+
+  .voice-card[data-recording] .voice-card-recording-tools {
+    flex-basis: 100%;
+  }
+
+  .voice-card-title[data-saved] {
+    flex-wrap: wrap;
+  }
+
+  .voice-card[data-saved] .voice-card-retry {
+    gap: 4px;
+    padding-inline: 8px;
+  }
+
+  .voice-card-title[data-saved] .voice-card-dot {
+    display: none;
+  }
+
+  .voice-card-title[data-saved] .voice-card-saved-thread {
+    flex-basis: 100%;
+    font-size: var(--text-ui);
+    font-weight: var(--weight-regular);
   }
 }

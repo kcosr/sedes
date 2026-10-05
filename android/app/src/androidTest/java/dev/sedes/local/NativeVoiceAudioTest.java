@@ -65,6 +65,62 @@ public class NativeVoiceAudioTest {
             int stoppedBytes = bytes.get(); SystemClock.sleep(250); assertEquals(stoppedBytes, bytes.get());
         } finally { audio.stop(); InstrumentationRegistry.getInstrumentation().runOnMainSync(activity::finish); }
     }
+    @Test public void gracefulCaptureFinishWaitsForTheAcceptedCallback() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        grant(context, "android.permission.RECORD_AUDIO");
+        CountDownLatch accepted = new CountDownLatch(1), release = new CountDownLatch(1), ended = new CountDownLatch(1);
+        AtomicReference<String> failure = new AtomicReference<>();
+        AtomicInteger callbacks = new AtomicInteger(), completions = new AtomicInteger();
+        NativeVoiceAudio.setTestSource(() -> new byte[4800]);
+        NativeVoiceAudio audio = new NativeVoiceAudio(context, new Listener() {
+            @Override public void captured(String id, byte[] pcm) {
+                callbacks.incrementAndGet(); accepted.countDown();
+                try { if (!release.await(5, TimeUnit.SECONDS)) failure.set("callback_release_timeout"); }
+                catch (InterruptedException error) { Thread.currentThread().interrupt(); failure.set("interrupted"); }
+            }
+            @Override public void captureEnded(String id) { completions.incrementAndGet(); ended.countDown(); }
+            @Override public void failed(String id, String reason) { failure.set(reason); ended.countDown(); }
+        });
+        try {
+            audio.record("graceful-capture", null);
+            assertTrue(accepted.await(5, TimeUnit.SECONDS));
+            audio.finishRecord("stale-id");
+            audio.finishRecord("graceful-capture");
+            audio.finishRecord("graceful-capture");
+            assertFalse("Capture ended before its accepted callback returned", ended.await(100, TimeUnit.MILLISECONDS));
+            release.countDown();
+            assertTrue(ended.await(5, TimeUnit.SECONDS));
+            assertNull(failure.get()); assertEquals(1, callbacks.get()); assertEquals(1, completions.get());
+        } finally { release.countDown(); audio.stop(); NativeVoiceAudio.setTestSource(null); }
+    }
+    @Test public void cancelledCaptureCannotPublishAnEndIntoItsReplacement() throws Exception {
+        Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
+        grant(context, "android.permission.RECORD_AUDIO");
+        CountDownLatch accepted = new CountDownLatch(1), release = new CountDownLatch(1), returned = new CountDownLatch(1);
+        BlockingQueue<String> ended = new LinkedBlockingQueue<>();
+        AtomicReference<String> failure = new AtomicReference<>();
+        NativeVoiceAudio.setTestSource(() -> new byte[4800]);
+        NativeVoiceAudio audio = new NativeVoiceAudio(context, new Listener() {
+            @Override public void captured(String id, byte[] pcm) {
+                accepted.countDown();
+                try { if (!release.await(5, TimeUnit.SECONDS)) failure.set("callback_release_timeout"); }
+                catch (InterruptedException error) { Thread.currentThread().interrupt(); failure.set("interrupted"); }
+                finally { returned.countDown(); }
+            }
+            @Override public void captureEnded(String id) { ended.add(id); }
+            @Override public void failed(String id, String reason) { failure.set(reason); ended.add(id); }
+        });
+        try {
+            audio.record("cancelled-capture", null);
+            assertTrue(accepted.await(5, TimeUnit.SECONDS));
+            audio.stop(); release.countDown();
+            assertTrue(returned.await(5, TimeUnit.SECONDS));
+            NativeVoiceAudio.setTestSource(() -> null);
+            audio.record("replacement-capture", null);
+            assertEquals("replacement-capture", ended.poll(5, TimeUnit.SECONDS));
+            assertNull(ended.poll(100, TimeUnit.MILLISECONDS)); assertNull(failure.get());
+        } finally { release.countDown(); audio.stop(); NativeVoiceAudio.setTestSource(null); }
+    }
     @Test public void realAudioTrackDrainsBeforeCompletion() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         MainActivity activity = (MainActivity) InstrumentationRegistry.getInstrumentation().startActivitySync(

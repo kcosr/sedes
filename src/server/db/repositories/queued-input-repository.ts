@@ -437,6 +437,11 @@ export class QueuedInputRepository {
       readonly now: number;
     },
   ): { readonly item: QueuedInputRecord; readonly replayed: boolean } {
+    // Direct input uses the full materialized-input budget. Other entry points
+    // retain the raw-text bound previously enforced by this shared table.
+    if (input.source.kind !== "direct_input" && Buffer.byteLength(input.text, "utf8") > 65_536) {
+      throw new DomainError("bad_request", "Queued input exceeds the text byte limit.");
+    }
     if (
       input.source.kind !== "composer" &&
       (input.contextExcerpts.length > 0 ||

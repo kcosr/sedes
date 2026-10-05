@@ -5,6 +5,21 @@ import org.json.JSONObject;
 import org.junit.Test;
 
 public class NativeVoiceNotificationTargetTest {
+    @Test public void aBlockingSavedRecordingUsesItsOwnTargetWithoutHoldingTheWakeLock() {
+        JSONObject state = idle(false, false);
+        NativeVoiceJson.put(state, "phase", "recordingRecovery");
+        NativeVoiceJson.put(state, "recordingRecovery", NativeVoiceJson.object("threadId", "saved", "threadTitle", "Saved thread"));
+        assertEquals("saved", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
+        assertFalse(NativeVoiceRuntimeService.wakeLockNeeded(state));
+        NativeVoiceJson.put(state, "phase", "idle");
+        assertEquals("foreground", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
+        NativeVoiceJson.put(state, "active", NativeVoiceJson.object("recognitionThreadId", "new", "recognitionThreadTitle", "New thread"));
+        NativeVoiceJson.put(state, "phase", "listening");
+        assertEquals("new", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
+        assertTrue(NativeVoiceRuntimeService.wakeLockNeeded(state));
+        NativeVoiceJson.put(state, "phase", "recognizing");
+        assertTrue(NativeVoiceRuntimeService.wakeLockNeeded(state));
+    }
     @Test public void idleNotificationUsesPinnedDefaultInsteadOfTheForegroundThread() {
         for (boolean filtered : new boolean[] { false, true }) {
             JSONObject state = idle(true, filtered);

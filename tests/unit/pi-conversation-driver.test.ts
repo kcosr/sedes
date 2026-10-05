@@ -1,3 +1,4 @@
+import { largeDirectInputText } from "../support/large-direct-input.js";
 import { readConversationHistory } from "../helpers/read-conversation-history.js";
 // Shared immutable operation deadline keeps replays identical throughout this local suite.
 const interruptDeadlineAt = Date.now() + 3_600_000;
@@ -1847,6 +1848,59 @@ describe("Pi interaction bridge", () => {
 });
 
 describe("Pi conversation backend driver", () => {
+  it("preserves 256 KiB direct input through submission, immutable history, and reconciliation", async () => {
+    const fixture = await workspace();
+    const prompts: string[] = [];
+    const driver = new PiConversationBackendDriver({
+      instance, connection, usage: NO_USAGE_SINK,
+      nativeDiscoveryNamespaceKey: "pi-test-native-namespace", toolProvenanceKey,
+      agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy,
+      sessionDirectory: fixture.sessions,
+      sessionFactory: fakeSessionFactory(1, false, undefined, 0, undefined, 0, undefined,
+        text => { prompts.push(text); return [text]; }),
+    });
+    const created = await driver.create({ scope, workspace: fixture.workspace,
+      applicationThreadId: "large-direct-input", applicationOperationId: "large-direct-create", source: { kind: "user" } });
+    const target = { scope, workspace: fixture.workspace, binding: binding(created.backendConversationId),
+      opaqueBindingDetail: created.opaqueBindingDetail };
+    const handle = await driver.attach(target);
+    const input = { applicationOperationId: "large-direct-submit", mutationId: "large-direct-submit",
+      reconciliationToken: "large-direct-submit", source: { kind: "user" as const },
+      text: largeDirectInputText, contextExcerpts: [], attachments: [], taskContexts: [] };
+    try {
+      await handle.establishProjection({ signal: new AbortController().signal });
+      await expect(handle.submit(input)).resolves.toMatchObject({ accepted: true });
+      expect(prompts).toEqual([largeDirectInputText]);
+      await vi.waitFor(async () => expect((await handle.establishProjection({ signal: new AbortController().signal })).snapshot.runState).toBe("idle"));
+    } finally { await handle.close(); }
+    const history = await readConversationHistory(driver, target);
+    expect(Object.values(history.snapshot.itemsById)).toContainEqual(expect.objectContaining({
+      semanticKind: "user_message", deliveryOperationId: input.applicationOperationId,
+      content: [{ kind: "text", text: { text: largeDirectInputText } }],
+    }));
+    await expect(driver.reconcileSubmission({ ...target, applicationOperationId: input.applicationOperationId,
+      reconciliationToken: input.reconciliationToken })).resolves.toMatchObject({ status: "accepted" });
+    expect(prompts).toHaveLength(1);
+  });
+
+  it("preserves 256 KiB steering through native input, history, and replay", async () => {
+    const prompts: string[] = [];
+    const current = await activeSteerConversation("large-direct", fakeSessionFactory(1, false, undefined, 0,
+      text => { prompts.push(text); return [text]; }));
+    const input = { ...current.steerInput(1), text: largeDirectInputText };
+    try {
+      await current.handle.establishProjection({ signal: new AbortController().signal });
+      await expect(current.handle.steer(input)).resolves.toMatchObject({ status: "accepted" });
+      await expect(current.handle.steer(input)).resolves.toMatchObject({ status: "accepted" });
+      expect(prompts).toEqual([largeDirectInputText]);
+      expect(await current.userItems()).toContainEqual(expect.objectContaining({
+        deliveryOperationId: input.applicationOperationId,
+        content: JSON.stringify([{ kind: "text", text: { text: largeDirectInputText } }]),
+      }));
+      await expect(current.reconcile(input)).resolves.toMatchObject({ status: "accepted" });
+    } finally { await current.handle.close(); }
+  });
+
   it.each(["local", "remote", "removed_isolated"] as const)(
     "reads immutable %s history without agent credentials, SDK resources, or a worker",
     async (topology) => {

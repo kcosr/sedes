@@ -1,3 +1,4 @@
+import { largeDirectInputText } from "../support/large-direct-input.js";
 import { readConversationHistory } from "../helpers/read-conversation-history.js";
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import type { ClaudeConversationHandle } from "../../src/server/backends/claude/claude-conversation-handle.js";
@@ -306,11 +307,11 @@ describe("ClaudeConversationBackendDriver", () => {
     ).rejects.toThrow("cancelled");
   });
 
-  it("reads projected history and reconciles exactly by the user UUID", async () => {
+  it("reads 256 KiB projected history and reconciles exactly by the user UUID", async () => {
     const sdk = fakeSdk();
     sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
     exposeSessionMessages(sdk, [
-      user(operationId, "hello"),
+      user(operationId, largeDirectInputText),
       assistant("33333333-3333-4333-8333-333333333333", "hello back"),
     ]);
     const driver = createDriver(sdk);
@@ -321,6 +322,9 @@ describe("ClaudeConversationBackendDriver", () => {
       opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }),
     });
     expect(read.snapshot.orderedBackendTurnIds).toHaveLength(1);
+    expect(Object.values(read.snapshot.itemsById)).toContainEqual(expect.objectContaining({
+      semanticKind: "user_message", content: [{ kind: "text", text: { text: largeDirectInputText } }],
+    }));
     expect(read.usage).toMatchObject({
       counters: { userMessages: 1, assistantMessages: 1 },
     });
@@ -690,7 +694,25 @@ describe("ClaudeConversationBackendDriver", () => {
     await expect(driver.releaseConversationResidency(residency)).resolves.toBe("undelivered");
   });
 
-  it.each(["local", "not_sent", "session_ended"] as const)("reconciles an ordinary retained waiter using %s authority without inferring absence from the old anchor", async authority => {
+  it("preserves 256 KiB conversation steering through the native input queue", async () => {
+    const sdk = fakeSdk();
+    sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId, cwd: workspace.canonicalPath });
+    sdk.getSessionMessages.mockResolvedValue([]);
+    const driver = createDriver(sdk, { confirmSettings: true, steerOperations: new Map([[operationId, null]]) });
+    const target = { scope, workspace, binding: binding(), opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) };
+    const handle = await driver.attach(target);
+    try {
+      await handle.establishProjection({ signal: new AbortController().signal });
+      await handle.steer({ applicationOperationId: operationId, mutationId: "large-steer", reconciliationToken: "large-steer",
+        target: { kind: "conversation" }, text: largeDirectInputText, contextExcerpts: [], attachments: [], taskContexts: [] });
+      const queue = sdk.createQuery.mock.calls.at(-1)![0].prompt as ClaudeInputQueue<unknown>;
+      const iterator = queue[Symbol.asyncIterator]();
+      await iterator.next(); // The SDK startup probe precedes user input.
+      expect((await iterator.next()).value).toMatchObject({ type: "user", message: { content: largeDirectInputText } });
+    } finally { await driver.close(); }
+  });
+
+  it.each(["local", "not_sent", "session_ended"] as const)("reconciles a 256 KiB retained waiter using %s authority without inferring absence from the old anchor", async authority => {
     const sdk = fakeSdk();
     sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId, cwd: workspace.canonicalPath });
     sdk.getSessionMessages.mockResolvedValue([]);
@@ -701,7 +723,7 @@ describe("ClaudeConversationBackendDriver", () => {
     const handle = await driver.attach(attachment);
     await handle.establishProjection({ signal: new AbortController().signal });
     const input = { applicationOperationId: operationId, mutationId: "ordinary-retained", reconciliationToken: "ordinary-receipt",
-      source: { kind: "user" as const }, text: "Ordinary request", contextExcerpts: [], attachments: [], taskContexts: [] };
+      source: { kind: "user" as const }, text: largeDirectInputText, contextExcerpts: [], attachments: [], taskContexts: [] };
     vi.useFakeTimers();
     try {
       const submitted = expect(handle.submit(input)).rejects.toMatchObject({ category: "submission_unknown" });

@@ -263,7 +263,7 @@ describe("native voice state authority", () => {
     await store.initialize();
     const resume = (current: NativeVoiceState) => current.settings.audioMode !== "off" && current.actions.canResume ? { audioMode: current.settings.audioMode } : null;
     plugin.getState.mockResolvedValue(snapshot({ stateRevision: 4, settingsRevision: 3, settings: voiceSettings({ audioMode: "manual" }),
-      actions: { canStart: false, canStop: false, canSkip: false, canRetarget: false, canResume: true } }));
+      actions: { ...snapshot().actions, canResume: true } }));
     await store.update(resume);
     expect(plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 3, patch: { audioMode: "manual" } });
     plugin.getState.mockResolvedValue(snapshot({ stateRevision: 5, settingsRevision: 4 }));

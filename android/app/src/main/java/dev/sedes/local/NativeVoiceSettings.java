@@ -9,7 +9,7 @@ import org.json.JSONObject;
 final class NativeVoiceSettings {
     static final String[] FIELDS = { "audioMode", "autoListen", "ignoreOtherDevices", "readNotificationContext", "cleanSpeechText",
         "speechProvider", "speechEndpoint", "sttModel", "ttsModel", "ttsVoice", "ttsSpeed", "speechTextLimit", "voiceThreadId", "voiceThreadTitle", "pinDefaultVoiceThread", "onlyVoiceThread", "followComposerMode",
-        "inputDeviceId", "recognitionStartTimeoutMs", "recognitionCompletionTimeoutMs", "recognitionResultTimeoutMs", "recognitionEndSilenceMs",
+        "inputDeviceId", "recognitionStartTimeoutMs", "recognitionCompletionTimeoutMs", "recognitionResultTimeoutMs", "recognitionEndSilenceMs", "longDictationTimeoutMs",
         "recognizeStopCommand", "recognitionCues", "cueGain", "startupPreRollMs", "ttsGain", "headsetControls" };
     /**
      * Stored records carry this explicit schema version and validate strictly against it. Adding, removing or changing a
@@ -17,7 +17,7 @@ final class NativeVoiceSettings {
      * aliasing or tolerance of missing fields. A record that fails validation is quarantined by the runtime and replaced
      * with defaults, so an unreadable or newer record cannot block voice.
      */
-    static final int RECORD_VERSION = 4;
+    static final int RECORD_VERSION = 5;
     static final String OPENAI_ENDPOINT = "https://api.openai.com/v1";
     final long revision;
     final JSONObject value;
@@ -34,7 +34,7 @@ final class NativeVoiceSettings {
             "ttsModel", "gpt-4o-mini-tts", "ttsVoice", "coral", "ttsSpeed", 1.0, "speechTextLimit", 4096, "voiceThreadId", null, "voiceThreadTitle", null,
             "pinDefaultVoiceThread", false, "onlyVoiceThread", false, "followComposerMode", false, "inputDeviceId", null,
             "recognitionStartTimeoutMs", 30000, "recognitionCompletionTimeoutMs", 60000,
-            "recognitionResultTimeoutMs", 60000, "recognitionEndSilenceMs", 1200, "recognizeStopCommand", true, "recognitionCues", true,
+            "recognitionResultTimeoutMs", 60000, "recognitionEndSilenceMs", 1200, "longDictationTimeoutMs", 3600000, "recognizeStopCommand", true, "recognitionCues", true,
             "cueGain", 100, "startupPreRollMs", 512, "ttsGain", 100, "headsetControls", true));
     }
     NativeVoiceSettings patch(long expectedRevision, JSONObject patch) {
@@ -104,6 +104,8 @@ final class NativeVoiceSettings {
         NativeVoiceJson.integer(value, "recognitionCompletionTimeoutMs", 1000, 300000);
         NativeVoiceJson.integer(value, "recognitionResultTimeoutMs", 1000, 300000);
         NativeVoiceJson.integer(value, "recognitionEndSilenceMs", 100, 30000);
+        if (NativeVoiceJson.integer(value, "longDictationTimeoutMs", 60000, 86400000) % 60000 != 0)
+            throw new NativeVoiceJson.InvalidFieldException("longDictationTimeoutMs");
         NativeVoiceJson.integer(value, "cueGain", 0, 200);
         NativeVoiceJson.integer(value, "ttsGain", 0, 200);
         NativeVoiceJson.integer(value, "startupPreRollMs", 0, 5000);
