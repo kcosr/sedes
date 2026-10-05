@@ -118,12 +118,32 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   const keep = toolbar.getByRole("button", { name: "Keep listening", exact: true });
   await expect(keep).toHaveAttribute("aria-pressed", "false");
   await measureRow("ordinaryListening");
-  await keep.focus();
-  await keep.press("Space");
-  await expect(keep).toHaveAttribute("aria-pressed", "true");
-  await expect(keep).toBeFocused();
   const send = toolbar.getByRole("button", { name: "Send voice recording" });
   const cancel = toolbar.getByRole("button", { name: "Cancel voice recording" });
+  const assertSafeKeepToggle = async () => {
+    await expect(keep).toHaveAttribute("aria-pressed", "false");
+    await expect(send).toHaveCount(0);
+    const ordinaryKeep = (await keep.boundingBox())!;
+    const ordinaryCancel = (await cancel.boundingBox())!;
+    await keep.focus();
+    await keep.press("Space");
+    await expect(keep).toHaveAttribute("aria-pressed", "true");
+    await expect(keep).toBeFocused();
+    await expect(send).toBeVisible();
+    await expect.poll(() => keep.boundingBox()).toEqual(ordinaryKeep);
+    await expect.poll(() => cancel.boundingBox()).toEqual(ordinaryCancel);
+    // A second tap at the original infinity coordinates toggles it off;
+    // Cancel must never move into this hit region as Send appears.
+    await page.mouse.click(ordinaryKeep.x + ordinaryKeep.width / 2, ordinaryKeep.y + ordinaryKeep.height / 2);
+    await expect(keep).toHaveAttribute("aria-pressed", "false");
+    await expect(send).toHaveCount(0);
+    await expect.poll(() => keep.boundingBox()).toEqual(ordinaryKeep);
+    await expect.poll(() => cancel.boundingBox()).toEqual(ordinaryCancel);
+    expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "stopCurrentInteraction"))).toEqual([]);
+    await keep.press("Space");
+    await expect(keep).toHaveAttribute("aria-pressed", "true");
+  };
+  await assertSafeKeepToggle();
   await expect(send).toBeVisible();
   await expect(toolbar).toContainText("Listening");
   await expect(toolbar).not.toContainText(/elapsed|segment|\d+:\d+/iu);
@@ -178,6 +198,22 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   expect(await measureControlGaps("heldListening")).toEqual({ bodyTarget: 1, targetKeep: 1, bodyKeep: null, keepCancel: 4, cancelSend: 6 });
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "voice-held-listening-narrow.png");
+
+  for (const width of [360, 1280]) {
+    await page.setViewportSize({ width, height: 780 });
+    await publishVoiceState(page, { active });
+    await assertSafeKeepToggle();
+    if (width === 360) {
+      await measureRow("heldListening360");
+      const cardBox = (await toolbar.boundingBox())!;
+      expect(cardBox.x).toBe(9);
+      expect(width - cardBox.x - cardBox.width).toBe(9);
+      expect(await measureControlGaps("heldListening360")).toEqual({ bodyTarget: 4, targetKeep: 4, bodyKeep: null, keepCancel: 4, cancelSend: 6 });
+      expect(await toolbar.locator(".voice-card-sub").evaluate(status => status.scrollWidth <= status.clientWidth)).toBe(true);
+      await capture(page, testInfo, "voice-held-listening-360.png");
+    }
+    await expectNoPageOverflow(page);
+  }
 
   await page.setViewportSize({ width: 480, height: 780 });
   const widerDock = (await page.locator(".voice-dock").boundingBox())!;

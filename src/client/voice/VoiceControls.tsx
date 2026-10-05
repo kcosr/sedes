@@ -223,11 +223,12 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
             title={cancels ? "Cancel" : "Stop"} onClick={() => {
               void store.stopInteraction({ expectedConnectionGeneration: native.connectionGeneration, interactionId: active.id }).catch(() => undefined);
             }}>{cancels ? <X strokeWidth={1.8} aria-hidden="true" /> : <span className="voice-card-stop" aria-hidden="true" />}</button> : null}
-          {recordingTools && capture.keepListening ? <button type="button" className="voice-card-button" aria-label="Send voice recording" title="Send"
+          {recordingTools ? capture.keepListening ? <button type="button" className="voice-card-button" aria-label="Send voice recording" title="Send"
             disabled={state.pending || !native.actions.canSend} onClick={() => {
               const command = { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id };
               act(() => store.plugin.sendRecording(command));
-            }}><ArrowUp strokeWidth={1.8} aria-hidden="true" /></button> : null}
+            }}><ArrowUp strokeWidth={1.8} aria-hidden="true" /></button>
+            : <span className="voice-card-send-slot" aria-hidden="true" /> : null}
           </>}
         </div>
         {/* Idle navigation stays quiet; active target changes remain live so retargeting is confirmed. */}

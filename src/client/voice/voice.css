@@ -403,6 +403,14 @@
   width: 48px;
 }
 
+/* Reserve Send's space during ordinary capture so enabling Keep listening
+   cannot move Cancel under a repeated tap on the infinity button. */
+.voice-card-send-slot {
+  width: 48px;
+  height: 48px;
+  flex: none;
+}
+
 .voice-card-button svg {
   width: var(--icon-lg);
   height: var(--icon-lg);
@@ -506,6 +514,7 @@
   }
 
   .voice-card[data-recording] .voice-card-button,
+  .voice-card[data-recording] .voice-card-send-slot,
   .voice-card[data-recording] .voice-card-keep,
   .voice-card[data-saved] .voice-card-button {
     width: 44px;
@@ -538,7 +547,7 @@
 
 /* Six distinct touch regions fit a 320px phone with full-size Listening
    text. Use the right gutter only, so the Ready-state left inset stays fixed. */
-@container voice-dock (max-width: 359px) {
+@container voice-dock (max-width: 315px) {
   .voice-card[data-recording]:has(.voice-card-target) {
     width: calc(100% + 8px);
     margin-inline: 0 -8px;

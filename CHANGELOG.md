@@ -443,6 +443,9 @@
   of the saved default, with pinning on or off. Its popup and the settings default
   selectors share searchable rows. Mobile Prompts now has search without
   autofocus, and the voice bar keeps an 8 px icon-to-text gap across states.
+  Recording actions stay in place when Keep listening changes, preventing a
+  repeated tap from hitting Cancel. Only the narrowest layouts use the right
+  gutter to fit the controls; 360 px phones retain normal spacing.
 
 - Workpads has a new layout that matches Tasks and Files. Search and View
   options (nested scopes, archived, browsing another thread or project) sit in
