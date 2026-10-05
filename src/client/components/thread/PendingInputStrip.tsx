@@ -397,9 +397,12 @@ export function PendingInputStrip({
           `Steered queued input ${item.sequence} into the active turn: ${item.preview.text}`,
         );
       } else if (action === "copy") {
-        if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable. The queued input is still saved.");
-        const text = await store.readQueuedInputText(item.id);
-        await navigator.clipboard.writeText(text);
+        if (!navigator.clipboard?.write || typeof ClipboardItem !== "function") throw new Error("Clipboard unavailable. The queued input is still saved.");
+        const text = store.readQueuedInputText(item.id).then(value => new Blob([value], { type: "text/plain" }));
+        // The read can reject after clipboard permission or item construction fails.
+        void text.catch(() => undefined);
+        // Start the write during the click gesture; WebKit awaits the item's data.
+        await navigator.clipboard.write([new ClipboardItem({ "text/plain": text })]);
         setCopiedInputs(current => new Set([...current, item.id]));
         setAnnouncement(`Copied full text of queued input ${item.sequence}.`);
       } else {
