@@ -7,12 +7,13 @@ import type {
 } from "../../shared/index.js";
 import { MAXIMUM_MESSAGE_ITEM_BYTES, serializedUtf8Bytes } from "../../shared/protocol/payload.js";
 import { ApiError } from "../api/ApiClient.js";
+import { directInputRequestSchema } from "../../shared/protocol/thread-input.js";
 
 /** Presentation only. These records never participate in composer mutations. */
 export interface PendingServerSubmission {
   readonly kind: "server";
   readonly operationId: string;
-  readonly queuedInputId: string;
+  readonly queuedInputId?: string;
   readonly createdAt: string;
   readonly preview: BoundedDisplayText;
   readonly content?: readonly MessageContentPart[];
@@ -36,6 +37,8 @@ interface Entry {
   accepted: boolean;
   contentBytes: number;
   attempts: number;
+  submittedText?: string;
+  identityWait?: ReturnType<typeof setTimeout>;
   retry?: ReturnType<typeof setTimeout>;
   request?: { readonly abort: AbortController; readonly observation: number };
 }
@@ -44,6 +47,7 @@ const MAXIMUM_SUBMISSIONS = 64;
 const MAXIMUM_RETIRED_OPERATIONS = 2_048;
 const MAXIMUM_CONCURRENT_READS = 4;
 const MAXIMUM_READ_ATTEMPTS = 8;
+const QUEUE_IDENTITY_WAIT_MS = 10_000;
 
 type SubmissionSnapshot = Pick<NormalizedThreadSnapshot,
   "itemsById" | "queue" | "orderedTurnIds" | "turnsById" | "activeTurnId"> & {
@@ -80,6 +84,64 @@ export class ServerSubmissionTracker {
 
   getSnapshot(): readonly PendingServerSubmission[] { return this.#views; }
 
+  /** Full content from the live native receipt, never a delivery authority. */
+  acceptNativeSubmission(
+    receipt: { readonly operationId: string; readonly queuedInputId: string | null; readonly text: string },
+    snapshot: SubmissionSnapshot | undefined,
+    composerOperations: ReadonlySet<string>,
+  ): void {
+    if (this.#disposed || this.#retired.has(receipt.operationId) ||
+        !directInputRequestSchema.shape.text.safeParse(receipt.text).success) return;
+    const row = snapshot?.queue.find(item => item.deliveryOperationId === receipt.operationId);
+    const replacement = receipt.queuedInputId
+      ? snapshot?.queue.find(item => item.id === receipt.queuedInputId) : undefined;
+    if (composerOperations.has(receipt.operationId) ||
+        Object.values(snapshot?.itemsById ?? {}).some(item =>
+          item.kind === "user_message" && item.deliveryOperationId === receipt.operationId) ||
+        (row && !isOrdinaryPendingSubmission(row))) {
+      this.#retire(receipt.operationId);
+      this.#publish();
+      return;
+    }
+    let entry = this.#entries.get(receipt.operationId);
+    if ((entry?.view.queuedInputId && receipt.queuedInputId !== null &&
+          entry.view.queuedInputId !== receipt.queuedInputId) ||
+        (row && receipt.queuedInputId !== null && row.id !== receipt.queuedInputId) ||
+        (replacement && replacement.deliveryOperationId !== receipt.operationId)) return;
+    if (entry?.submittedText !== undefined) return;
+    if (entry?.view.content && !this.#matchesText(entry.view.content, receipt.text)) return;
+    const content: readonly MessageContentPart[] = [{ kind: "text", text: { text: receipt.text } }];
+    const bytes = serializedUtf8Bytes(content);
+    if ((!entry && this.#entries.size >= MAXIMUM_SUBMISSIONS) ||
+        this.#contentBytes - (entry?.contentBytes ?? 0) + bytes > MAXIMUM_MESSAGE_ITEM_BYTES) return;
+    if (!entry) {
+      const queuedInputId = row?.id ?? receipt.queuedInputId;
+      entry = {
+        view: {
+          kind: "server", operationId: receipt.operationId,
+          ...(queuedInputId ? { queuedInputId } : {}),
+          createdAt: row?.createdAt ?? new Date().toISOString(), preview: row?.preview ?? { text: "" },
+          attachmentCount: 0, taskCount: 0, phase: row ? "sending" : "confirming",
+          presentationSequence: this.input.nextSequence(), ...this.#anchors(snapshot),
+        },
+        signature: row ? `${row.id}:${row.state}:${row.resolvedDeliveryMode}` : "absent",
+        observedRevision: snapshot?.thread.threadRevision ?? 0, observation: 0,
+        needsRead: true, accepted: false, contentBytes: 0, attempts: 0,
+      };
+      this.#entries.set(receipt.operationId, entry);
+    }
+    this.#contentBytes += bytes - entry.contentBytes;
+    entry.contentBytes = bytes;
+    entry.submittedText = receipt.text;
+    entry.view = { ...entry.view, content };
+    if (!entry.view.queuedInputId && receipt.queuedInputId) {
+      entry.view = { ...entry.view, queuedInputId: receipt.queuedInputId };
+    }
+    this.#waitForIdentity(entry);
+    this.#publish();
+    this.#schedulePump();
+  }
+
   reanchorAfter(
     preceding: { readonly presentationSequence: number; readonly baselineTailItemId?: string },
     itemId: string,
@@ -107,6 +169,9 @@ export class ServerSubmissionTracker {
     for (const operationId of composerOperations) this.#retire(operationId);
     if (this.#entries.size === 0 && (!authoritative || !snapshot.queue.some(row =>
       isOrdinaryPendingSubmission(row) && !this.#retired.has(row.deliveryOperationId)))) {
+      for (const item of Object.values(snapshot.itemsById)) {
+        if (item.kind === "user_message" && item.deliveryOperationId) this.#retire(item.deliveryOperationId);
+      }
       for (const row of snapshot.queue) {
         if (!isOrdinaryPendingSubmission(row)) this.#retire(row.deliveryOperationId);
       }
@@ -133,13 +198,19 @@ export class ServerSubmissionTracker {
       }
       this.#retire(entry.view.operationId);
     }
+    for (const operationId of materialized.keys()) this.#retire(operationId);
     for (const entry of this.#entries.values()) {
       const row = queue.get(entry.view.operationId);
-      const replacement = queueById.get(entry.view.queuedInputId);
+      const replacement = entry.view.queuedInputId ? queueById.get(entry.view.queuedInputId) : undefined;
       if ((row && !isOrdinaryPendingSubmission(row)) ||
+          (row && entry.view.queuedInputId && row.id !== entry.view.queuedInputId) ||
           (replacement && replacement.deliveryOperationId !== entry.view.operationId)) {
         this.#retire(entry.view.operationId);
         continue;
+      }
+      if (row && !entry.view.queuedInputId) {
+        entry.view = { ...entry.view, queuedInputId: row.id };
+        this.#clearIdentityWait(entry);
       }
       const signature = row ? `${row.id}:${row.state}:${row.resolvedDeliveryMode}` : "absent";
       if (signature !== entry.signature) {
@@ -157,6 +228,7 @@ export class ServerSubmissionTracker {
         entry.needsRead = true;
         entry.attempts = 0;
       }
+      this.#waitForIdentity(entry);
     }
 
     for (const row of snapshot.queue) {
@@ -169,19 +241,13 @@ export class ServerSubmissionTracker {
       if (!authoritative || this.#entries.size >= MAXIMUM_SUBMISSIONS ||
           this.#entries.has(row.deliveryOperationId) || this.#retired.has(row.deliveryOperationId) ||
           materialized.has(row.deliveryOperationId)) continue;
-      const tailTurnId = snapshot.orderedTurnIds.at(-1);
-      const tailItems = tailTurnId ? snapshot.turnsById[tailTurnId]?.orderedItemIds ?? [] : [];
       this.#entries.set(row.deliveryOperationId, {
         view: {
           kind: "server", operationId: row.deliveryOperationId, queuedInputId: row.id,
           createdAt: row.createdAt, preview: row.preview,
           attachmentCount: row.attachmentCount, taskCount: row.taskCount,
           phase: "sending", presentationSequence: this.input.nextSequence(),
-          baselineOrderedTurnIds: [...snapshot.orderedTurnIds],
-          ...(tailTurnId ? { baselineTailTurnId: tailTurnId } : {}),
-          baselineTailTurnItemIds: [...tailItems],
-          ...(tailItems.at(-1) ? { baselineTailItemId: tailItems.at(-1)! } : {}),
-          ...(snapshot.activeTurnId ? { baselineActiveTurnId: snapshot.activeTurnId } : {}),
+          ...this.#anchors(snapshot),
         },
         signature: `${row.id}:${row.state}:${row.resolvedDeliveryMode}`,
         observedRevision: snapshot.thread.threadRevision, observation: 0,
@@ -192,10 +258,10 @@ export class ServerSubmissionTracker {
     this.#schedulePump();
   }
 
-  retireQueuedInput(queuedInputId: string): void {
-    for (const entry of this.#entries.values()) {
-      if (entry.view.queuedInputId === queuedInputId) this.#retire(entry.view.operationId);
-    }
+  retireOperation(capturedOperationId: string): void {
+    // Admission can outrun the bounded presentation cache. The mutation's
+    // captured operation must still retire even if it never had a bubble.
+    this.#retire(capturedOperationId);
     this.#publish();
   }
 
@@ -203,6 +269,7 @@ export class ServerSubmissionTracker {
     this.#disposed = true;
     this.#active = false;
     this.#suspendReads();
+    for (const entry of this.#entries.values()) this.#clearIdentityWait(entry);
     this.#entries.clear();
     this.#retired.clear();
     this.#views = [];
@@ -214,6 +281,7 @@ export class ServerSubmissionTracker {
     if (entry) {
       entry.request?.abort.abort();
       this.#clearRetry(entry);
+      this.#clearIdentityWait(entry);
       this.#contentBytes -= entry.contentBytes;
       this.#entries.delete(operationId);
     }
@@ -236,6 +304,39 @@ export class ServerSubmissionTracker {
     entry.retry = undefined;
   }
 
+  #anchors(snapshot: SubmissionSnapshot | undefined): Pick<PendingServerSubmission,
+    "baselineOrderedTurnIds" | "baselineTailTurnId" | "baselineTailTurnItemIds" |
+    "baselineTailItemId" | "baselineActiveTurnId"> {
+    const tailTurnId = snapshot?.orderedTurnIds.at(-1);
+    const tailItems = tailTurnId ? snapshot?.turnsById[tailTurnId]?.orderedItemIds ?? [] : [];
+    return {
+      baselineOrderedTurnIds: [...(snapshot?.orderedTurnIds ?? [])],
+      ...(tailTurnId ? { baselineTailTurnId: tailTurnId } : {}),
+      baselineTailTurnItemIds: [...tailItems],
+      ...(tailItems.at(-1) ? { baselineTailItemId: tailItems.at(-1)! } : {}),
+      ...(snapshot?.activeTurnId ? { baselineActiveTurnId: snapshot.activeTurnId } : {}),
+    };
+  }
+
+  #clearIdentityWait(entry: Entry): void {
+    if (entry.identityWait !== undefined) clearTimeout(entry.identityWait);
+    entry.identityWait = undefined;
+  }
+
+  #waitForIdentity(entry: Entry): void {
+    if (entry.view.queuedInputId || entry.identityWait !== undefined || entry.view.phase === "unconfirmed") return;
+    entry.identityWait = setTimeout(() => {
+      entry.identityWait = undefined;
+      if (this.#disposed || this.#entries.get(entry.view.operationId) !== entry || entry.view.queuedInputId) return;
+      entry.view = { ...entry.view, phase: "unconfirmed" };
+      this.#publish();
+    }, QUEUE_IDENTITY_WAIT_MS);
+  }
+
+  #matchesText(content: readonly MessageContentPart[], text: string): boolean {
+    return content.length === 1 && content[0]?.kind === "text" && content[0].text.text === text;
+  }
+
   #schedulePump(): void {
     if (!this.#active || this.#disposed || this.#pumpQueued) return;
     this.#pumpQueued = true;
@@ -244,13 +345,15 @@ export class ServerSubmissionTracker {
       if (!this.#active || this.#disposed) return;
       for (const entry of this.#entries.values()) {
         if (this.#inFlight >= MAXIMUM_CONCURRENT_READS) break;
-        if (entry.needsRead && !entry.request && entry.retry === undefined &&
+        if (entry.view.queuedInputId && entry.needsRead && !entry.request && entry.retry === undefined &&
             entry.attempts < MAXIMUM_READ_ATTEMPTS) void this.#read(entry);
       }
     });
   }
 
   async #read(entry: Entry): Promise<void> {
+    const queuedInputId = entry.view.queuedInputId;
+    if (!queuedInputId) return;
     const request = { abort: new AbortController(), observation: entry.observation };
     entry.request = request;
     entry.needsRead = false;
@@ -260,7 +363,7 @@ export class ServerSubmissionTracker {
     const current = () => !this.#disposed && this.#active && entry.request === request &&
       this.#entries.get(entry.view.operationId) === entry;
     try {
-      const result = await this.input.read(entry.view.queuedInputId, request.abort.signal);
+      const result = await this.input.read(queuedInputId, request.abort.signal);
       if (!current()) return;
       if (result.threadId !== this.input.threadId || result.queuedInputId !== entry.view.queuedInputId) {
         throw new Error("Queued input presentation identity mismatch.");
@@ -269,6 +372,9 @@ export class ServerSubmissionTracker {
           result.origin !== "user" || result.inputOrigin !== undefined) {
         this.#retire(entry.view.operationId);
         return;
+      }
+      if (entry.submittedText !== undefined && !this.#matchesText(result.content, entry.submittedText)) {
+        throw new Error("Queued input presentation content mismatch.");
       }
       // Content is immutable for this exact operation, even if its status read
       // raced a newer event. Retain at most one message-page budget of content.

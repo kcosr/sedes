@@ -6,7 +6,7 @@
 
 - Client protocol 140 raises direct-input text to 256 KiB and its JSON request
   limit to 2 MiB. Upgrade clients with the server. Android native voice uses
-  snapshot version 6 and settings record version 5; older local settings reset
+  snapshot version 7 and settings record version 6; older local settings reset
   with voice Off, preserving separately stored speech credentials. Database
   migration 133 rebuilds the creation and input-queue tables with the larger
   direct-input limit; back up the database before this one-way upgrade.
@@ -222,7 +222,9 @@
   its ordered recognition segments as one message. It includes a configurable
   one-hour default limit, bounded recovery while capturing through transient
   failures, and encrypted saved dictation with Retry, Send, Copy, and Discard
-  in the voice controls. Expiration and interrupted Send never submit silently.
+  in the voice controls. **Keep listening by default** is available in quick
+  controls and Voice settings for new manual and automatic recordings.
+  Expiration and interrupted Send never submit silently.
 
 - Android voice can clean up Markdown before speaking, preserving link labels,
   code contents, and reading pauses. The device-local setting defaults to on.
@@ -774,6 +776,10 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- The compact voice bar restores its left status icon and selectable thread
+  title, with spacing between Listening, infinity, Cancel, and Send. Submitted
+  voice messages show their complete text immediately without a preview label.
 
 - Oversized queued user input offers **Copy full text**, preserving access to
   failed or not-sent dictation without exceeding the composer's 64 KiB limit.

@@ -213,17 +213,25 @@ offers **Resume**, which works like **Resume voice** in Settings. A failed
 connection hides the card; **Settings → Voice** then shows the error and
 **Retry voice connection**.
 
-When the card's thread is not the one on screen, tapping the card opens it.
-While listening, the state line ends with a **Change** chip (**Choose** when
-there is no target), which opens the thread picker instead.
-Beside **Change**, the infinity button toggles **Keep listening** for the current
-recording. It starts off each time. Turn it on to keep recording through pauses;
+The thread title looks like a select when its target can be changed. While
+listening, tap it to choose another recording target. When idle, selecting a
+thread changes the visible thread, or saves the default when pinned or no thread
+is open; it does not start recording. A finishing recording keeps its destination fixed.
+Beside **Listening**, the infinity button toggles **Keep listening** for the current
+recording. **Keep listening by default**, available in the quick sheet and
+**Settings → Voice**, starts new manual and automatic recordings with it enabled.
+The preference initially defaults to off. Changing the preference affects the
+next recording; the infinity button overrides only the current recording.
+The idle Start button shows infinity when that default is enabled, and a
+microphone otherwise, so its icon indicates how the next recording will start.
+Turn it on to keep recording through pauses;
 turn it off to restore ordinary silence and completion limits with fresh clocks.
 All audio and text already collected remain part of the same message. While
 selected, the right-side **Send** arrow stops capture, finishes recognition, and
 sends one message. The X **Cancel** discards the unsent recording. Explicit Send
 is literal, including “stop”; it does not open a review step or change the composer.
-Ordinary navigation never retargets the recording; **Change** does, until finishing.
+Ordinary navigation never retargets an active recording; its title selector does,
+until finishing.
 
 **Long dictation timeout** defaults to 60 minutes and accepts 1–1,440 whole minutes.
 The value is frozen for each recording. Its clock starts the first time Keep
@@ -231,8 +239,9 @@ listening is accepted, includes screen-off time, and never resets when toggled.
 At the limit, capture stops and recognition finishes into **Ready to send**;
 it does not send automatically. There is no on-screen timer or live transcript.
 
-The caret button opens the **Voice** sheet in every state. The sheet has
-**Audio mode**, **Auto-listen**, **Follow composer mode**, **Pin default voice
+The left status icon, marked with a small caret, opens the **Voice** sheet in
+every state. The sheet has **Audio mode**, **Auto-listen**, **Keep listening by
+default**, **Follow composer mode**, **Pin default voice
 thread**, **Only play from default voice thread**, **Default voice thread**, and
 **All voice settings**, which opens
 **Settings → Voice**. The default thread can be chosen from either place.
@@ -246,8 +255,8 @@ voice** when a session needs it.
 - **Off** clears queued audio, stops voice, and hides the service notification.
   An adopted recording is saved when interrupted by Off. The voice card stays
   visible for saved dictation; otherwise it hides unless **Show voice bar when off** is on in
-  **Settings → Voice**; then the card stays dimmed with its microphone disabled,
-  and its caret still opens the Voice sheet. That choice is saved only on this
+  **Settings → Voice**; then the card stays dimmed with its Start button disabled,
+  and its status icon still opens the Voice sheet. That choice is saved only on this
   device.
   Select Manual or Response in the Voice sheet or **Settings → Voice** to
   enable voice again. Configure the speech provider and credential first.
@@ -348,7 +357,7 @@ can evict old pending progress. Dropped counts appear in Voice settings.
 
 Interrupted adopted recordings appear in the existing toolbar as **Saved dictation**
 with their target and **Retry**/**Discard** actions. Fully recognized text appears
-as **Ready to send** with **Send**/**Discard**. The caret opens the same recovery
+as **Ready to send** with **Send**/**Discard**. The status icon opens the same recovery
 item with **Copy recognized text**. Saved dictation remains visible with voice
 Off and after restarting the app. Retry recognizes only unresolved audio and
 requires an enabled, configured voice session; it never opens the microphone or

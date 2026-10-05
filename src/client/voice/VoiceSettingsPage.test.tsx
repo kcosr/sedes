@@ -78,6 +78,7 @@ describe("voice settings page", () => {
     expect(screen.getByRole("spinbutton", { name: "Recognition result timeout (ms)" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Audio mode" })).toBeEnabled();
     expect(screen.getByRole("combobox", { name: "Speech model" })).toBeEnabled();
+    expect(screen.getByRole("switch", { name: "Keep listening by default" })).toBeEnabled();
     store.dispose();
   });
   it("keeps ready saved dictation available in settings while Off with revision-bound Send and Discard", async () => {
@@ -249,6 +250,35 @@ describe("voice settings page", () => {
     fireEvent.click(toggle);
     await waitFor(() => expect(toggle).not.toBeChecked());
     expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { cleanSpeechText: false } });
+    store.dispose();
+  });
+  it.each([false, true])("round-trips the future Keep listening preference while the current recording stays %s", async keepListening => {
+    let native = voiceSnapshot({ phase: "listening", settings: voiceSettings({ audioMode: "response" }), active: {
+      id: "interaction", threadId: "named", threadTitle: "Release review", eventKind: "manual", automatic: false,
+      recognitionThreadId: "named", recognitionThreadTitle: "Release review", recording: { id: "recording", keepListening, reconnecting: false },
+    } });
+    const { fake, store } = await renderPage(native, fake => {
+      fake.plugin.getState.mockImplementation(async () => native);
+      vi.mocked(fake.asPlugin.updateSettings).mockImplementation(async ({ patch }) => (native = { ...native,
+        stateRevision: native.stateRevision + 1, settingsRevision: native.settingsRevision + 1, settings: { ...native.settings, ...patch } }));
+    });
+    const preference = screen.getByRole("switch", { name: "Keep listening by default" });
+    expect(preference).not.toBeChecked();
+    expect(preference).toBeEnabled();
+    expect(preference).toHaveAccessibleDescription("Use Keep listening for new manual and auto-listen recordings. The ∞ control changes only the current recording.");
+    fireEvent.click(preference);
+    await waitFor(() => expect(preference).toBeChecked());
+    await waitFor(() => expect(preference).toBeEnabled());
+    expect(store.getSnapshot().native?.active?.recording?.keepListening).toBe(keepListening);
+    fireEvent.click(preference);
+    await waitFor(() => expect(preference).not.toBeChecked());
+    expect(vi.mocked(fake.asPlugin.updateSettings).mock.calls.map(([input]) => input)).toEqual([
+      { expectedConnectionGeneration: 1, expectedRevision: 0, patch: { keepListeningByDefault: true } },
+      { expectedConnectionGeneration: 1, expectedRevision: 1, patch: { keepListeningByDefault: false } },
+    ]);
+    expect(store.getSnapshot().native?.active?.recording?.keepListening).toBe(keepListening);
+    expect(fake.plugin.setKeepListening).not.toHaveBeenCalled();
+    expect(screen.getByRole("switch", { name: "Auto-listen" })).toBeChecked();
     store.dispose();
   });
   it("opens credential management with only a connection fence and never creates a web password field", async () => {

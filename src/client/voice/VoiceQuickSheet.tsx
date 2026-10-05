@@ -1,6 +1,6 @@
 import "./voice-sheet.css";
 import { useId, useState, type ReactNode } from "react";
-import { ChevronRight, Ear, ListFilter, Merge, MessageSquare, Mic, MicOff, Pin, Settings2, Volume2 } from "lucide-react";
+import { ChevronRight, Ear, Infinity as InfinityIcon, ListFilter, Merge, MessageSquare, Mic, MicOff, Pin, Settings2, Volume2 } from "lucide-react";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import { navigate, settingsPath, useRoute } from "../app/router.js";
 import { Button } from "../components/ui/button.js";
@@ -95,6 +95,8 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
         <div className="-mx-3 -mt-2 flex flex-col">
           <SwitchRow icon={<Ear aria-hidden="true" />} label="Auto-listen" description="Eligible notifications reopen the mic"
             checked={settings.autoListen} locked={locked} onCheckedChange={autoListen => update({ autoListen })} />
+          <SwitchRow icon={<InfinityIcon aria-hidden="true" />} label="Keep listening by default" description="New manual and auto-listen recordings"
+            checked={settings.keepListeningByDefault} locked={locked} onCheckedChange={keepListeningByDefault => update({ keepListeningByDefault })} />
           <SwitchRow icon={<Merge aria-hidden="true" />} label="Follow composer mode" description="Use its Steer or Queue choice"
             checked={settings.followComposerMode} locked={locked} onCheckedChange={followComposerMode => update({ followComposerMode })} />
           <SwitchRow icon={<Pin aria-hidden="true" />} label="Pin default voice thread" description="Record here from any thread"

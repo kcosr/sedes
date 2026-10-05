@@ -7,16 +7,27 @@ public class NativeVoiceSettingsTest {
     @Test public void longDictationTimeoutIsAWholeMinuteSettingWithNoOldRecordFallback() {
         NativeVoiceSettings defaults = NativeVoiceSettings.defaults();
         assertEquals(3600000, defaults.number("longDictationTimeoutMs"));
-        assertEquals(5, NativeVoiceSettings.RECORD_VERSION);
+        assertEquals(6, NativeVoiceSettings.RECORD_VERSION);
         for (int duration : new int[] { 60000, 3600000, 86400000 }) {
             NativeVoiceSettings configured = defaults.patch(0, NativeVoiceJson.object("longDictationTimeoutMs", duration));
             assertEquals(duration, NativeVoiceSettings.fromRecord(configured.record()).number("longDictationTimeoutMs"));
         }
         for (Object invalid : new Object[] { 0, 59999, 60001, 86460000, 60000.5, "3600000" })
             assertThrows(IllegalArgumentException.class, () -> defaults.patch(0, NativeVoiceJson.object("longDictationTimeoutMs", invalid)));
-        org.json.JSONObject old = defaults.record(); NativeVoiceJson.put(old, "version", 4);
+        org.json.JSONObject old = defaults.record(); NativeVoiceJson.put(old, "version", 5);
         assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(old));
         org.json.JSONObject missing = defaults.record(); missing.optJSONObject("settings").remove("longDictationTimeoutMs");
+        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(missing));
+    }
+    @Test public void keepListeningDefaultIsFalseAndStrictlyPersisted() {
+        NativeVoiceSettings defaults = NativeVoiceSettings.defaults();
+        assertFalse(defaults.flag("keepListeningByDefault"));
+        NativeVoiceSettings held = defaults.patch(0, NativeVoiceJson.object("keepListeningByDefault", true));
+        assertTrue(NativeVoiceSettings.fromRecord(held.record()).flag("keepListeningByDefault"));
+        assertTrue(defaults.speechConfigurationEquals(held));
+        for (Object invalid : new Object[] { "true", 1, org.json.JSONObject.NULL })
+            assertThrows(IllegalArgumentException.class, () -> defaults.patch(0, NativeVoiceJson.object("keepListeningByDefault", invalid)));
+        org.json.JSONObject missing = held.record(); missing.optJSONObject("settings").remove("keepListeningByDefault");
         assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(missing));
     }
     @Test public void speechCleanupDefaultsOnAndPersistsAsAStrictBoolean() {

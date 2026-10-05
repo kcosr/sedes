@@ -55,6 +55,8 @@ describe("voice quick sheet", () => {
     expect(sheet).toHaveTextContent("Response speaks selected notices and responses.");
     expect(within(sheet).getByRole("switch", { name: "Auto-listen" })).toHaveAccessibleDescription("Eligible notifications reopen the mic");
     expect(within(sheet).getByRole("switch", { name: "Auto-listen" })).toBeChecked();
+    expect(within(sheet).getByRole("switch", { name: "Keep listening by default" })).toHaveAccessibleDescription("New manual and auto-listen recordings");
+    expect(within(sheet).getByRole("switch", { name: "Keep listening by default" })).not.toBeChecked();
     expect(within(sheet).getByRole("button", { name: "Default voice thread" })).toHaveAccessibleDescription("Daily standup notes");
     expect(within(sheet).getByRole("switch", { name: "Pin default voice thread" })).toHaveAccessibleDescription("Record here from any thread");
     expect(within(sheet).getByRole("switch", { name: "Pin default voice thread" })).not.toBeChecked();
@@ -156,6 +158,36 @@ describe("voice quick sheet", () => {
     await waitFor(() => expect(pin).not.toBeChecked());
     expect(patches(fake)).toEqual([{ pinDefaultVoiceThread: true }, { pinDefaultVoiceThread: false }]);
     expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).toBeChecked();
+    store.dispose();
+  });
+  it.each([false, true])("saves the future Keep listening preference while the current recording stays %s", async keepListening => {
+    const native = { ...ready(), phase: "listening" as const, active: { id: "interaction", threadId: "standup", threadTitle: "Daily standup notes",
+      eventKind: "manual", automatic: false, recognitionThreadId: "standup", recognitionThreadTitle: "Daily standup notes",
+      recording: { id: "recording", keepListening, reconnecting: false } } };
+    const { fake, store, sheet } = await renderSheet(native);
+    const preference = within(sheet).getByRole("switch", { name: "Keep listening by default" });
+    expect(preference).not.toBeChecked();
+    expect(preference).not.toHaveAttribute("aria-disabled");
+    act(() => preference.focus());
+    const release = holdNextWrite(fake);
+    fireEvent.click(preference);
+    expect(preference).toHaveAttribute("aria-disabled", "true");
+    expect(preference).toHaveFocus();
+    fireEvent.click(preference);
+    await release();
+    await waitFor(() => expect(preference).toBeChecked());
+    await waitFor(() => expect(preference).not.toHaveAttribute("aria-disabled"));
+    expect(preference).toHaveFocus();
+    expect(store.getSnapshot().native?.active?.recording?.keepListening).toBe(keepListening);
+    fireEvent.click(preference);
+    await waitFor(() => expect(preference).not.toBeChecked());
+    expect(vi.mocked(fake.asPlugin.updateSettings).mock.calls.map(([input]) => input)).toEqual([
+      { expectedConnectionGeneration: 1, expectedRevision: 0, patch: { keepListeningByDefault: true } },
+      { expectedConnectionGeneration: 1, expectedRevision: 1, patch: { keepListeningByDefault: false } },
+    ]);
+    expect(store.getSnapshot().native?.active?.recording?.keepListening).toBe(keepListening);
+    expect(fake.plugin.setKeepListening).not.toHaveBeenCalled();
+    expect(within(sheet).getByRole("switch", { name: "Auto-listen" })).toBeChecked();
     store.dispose();
   });
   it("chooses a default thread above the sheet, pins the current choice, and keeps focus while its saved title is normalized", async () => {

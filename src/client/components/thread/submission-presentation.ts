@@ -60,17 +60,18 @@ export function selectTranscriptSubmissions(
   const server = state.pendingServerSubmissions.filter((submission) => {
     if (
       localOperations.has(submission.operationId) ||
-      materialized.has(submission.operationId)
+      materialized.has(submission.operationId) ||
+      (!submission.content && submission.phase !== "unconfirmed")
     ) {
       return false;
     }
     const queued = queueByOperation.get(submission.operationId) ??
-      queueById.get(submission.queuedInputId);
+      (submission.queuedInputId ? queueById.get(submission.queuedInputId) : undefined);
     // A missing row can be an accepted submission awaiting its provider item.
     // The server-submission tracker, rather than queue absence, owns retirement.
     return (
       !queued ||
-      (queued.id === submission.queuedInputId &&
+      ((!submission.queuedInputId || queued.id === submission.queuedInputId) &&
         queued.deliveryOperationId === submission.operationId &&
         queued.origin === "user" &&
         queued.inputOrigin === undefined &&

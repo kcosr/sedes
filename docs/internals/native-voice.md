@@ -2,7 +2,7 @@
 
 The Android `NativeVoice` Capacitor plugin exposes settings, snapshots, and
 actions. `NativeVoiceRuntime` owns the state machine on one handler thread.
-Native snapshot version 6 includes `active.recording` (ID, Keep listening and
+Native snapshot version 7 includes `active.recording` (ID, Keep listening and
 Reconnecting), native-authoritative `canSetKeepListening`/`canSend` actions, the
 Keep listening blocked reason, and an independent `recordingRecovery` item.
 Recovery exposes identity, revision, target, stage, incomplete/unrecognized
@@ -298,9 +298,10 @@ ordinary creation coordinator; bound threads use the ordinary durable queue.
 Neither path reads, consumes, or overwrites the composer draft.
 
 For a bound thread, the browser presents an admitted ordinary user `submit`
-as a provisional transcript message instead of a queue row. This presentation
-is shared with other out-of-composer user submissions; it does not require a
-native bridge callback or change delivery semantics. The thread-scoped
+as a provisional transcript message once its complete content is available.
+This presentation is shared with other out-of-composer user submissions; it
+does not change delivery semantics. Incomplete queue summaries are never rendered
+as truncated transcript bubbles. The thread-scoped
 `GET /api/threads/:threadId/queued-inputs/:queuedInputId` reads immutable full
 content and retained delivery state under the authenticated principal. It is
 read-only and does not attach a runtime. A missing queue row alone does not
@@ -309,18 +310,27 @@ message until an exact delivery-operation match or authoritative retained
 state resolves it. Queue, Steer, attributed inputs, and failed or uncertain
 deliveries retain their existing presentation and controls.
 
-Local **Seek on send** uses a separate transient `inputSubmitted` bridge event.
+Local full-text presentation and **Seek on send** use the transient
+`inputSubmitted` bridge event.
 Only a current, uncancelled ordinary Submit from the active interaction may
 emit it while its target is the visible foreground thread. The event carries
-the receipt's exact operation/thread IDs and the native binding/generation;
-it contains no message content and is neither journaled nor replayed. Native
+the receipt's exact operation/thread IDs, its queued-input ID when present,
+the native binding/generation, and the exact finalized text from the authenticated
+request before journal cleanup. Text is nonblank and bounded by the 256 KiB
+direct-input limit. The event is neither journaled nor replayed, and routine
+snapshots continue to omit transcript content. Native
 rechecks visibility and ownership before dispatch, and the WebView rejects
 stale, duplicate, unhydrated, or foreign events. Hidden Chat, targeted history,
 late receipt recovery, and submissions from another device do not trigger a
-seek. Typed Send and this local event share the same animation and pinning
+seek. The handoff seeds or enriches the exact operation's complete provisional
+content, including when the receipt precedes the queue event. An already
+materialized or retired operation cannot be resurrected. Native content is
+presentation data, not proof of provider acceptance. Typed Send and this local
+event share the same animation and pinning
 path, including when the user item appeared before the receipt. Routine
-sending states stay internal; an incomplete preview or unresolved delivery
-can still carry its required indication.
+sending states stay internal; complete provisional bubbles have no preview label.
+Unresolved delivery still carries its required indication, and failed inputs
+retain their recovery controls.
 
 A first send to an unbound thread requires interactive presentation and the
 thread's required first-submission settings, as the composer does. If the
@@ -429,8 +439,16 @@ stops capture and retains the accepted prefix; it never silently drops PCM.
 publishes capture-ended only after accepted callbacks return and hardware cleanup.
 Cancel invalidates the generation instead.
 
-Keep listening is initially false. Its first accepted enable adopts the complete
-recording, suppresses ordinary endpoints while adoption becomes durable, and
+The device/profile/identity-scoped `keepListeningByDefault` setting defaults to
+false and is shared by the quick sheet and Settings → Voice. Each new manual or
+automatic recording freezes that preference. When enabled, durable adoption and
+held capture policy must succeed before the microphone starts; unavailable
+storage or a saved recording occupying the slot blocks capture. Preference
+edits affect future recordings, while the infinity control changes only the
+current recording. Strict settings record version 6 requires the field.
+
+The first accepted Keep listening enable adopts the complete recording,
+suppresses ordinary endpoints while adoption becomes durable, and
 makes automatic notification policy changes unable to cancel it. A late command
 cannot revive an ended recording. Turning it off retains the audio/results and
 resets ordinary speech-wait, completion, and silence clocks. Prior detected speech
@@ -441,10 +459,13 @@ suspend; no toggle resets it. Expiration drains recognition into a retained read
 draft without admission. Recording settings edits apply to future recordings.
 
 The voice toolbar preserves its existing 60 px row at normal text scale, including
-320 px layouts. Infinity sits beside Change within the two-line text area, with
-distinct 44 px touch regions. Reconnecting and error details use the existing
-status line. An older saved draft marks the controls caret and opens the same
-recovery sheet without adding another row.
+320 px layouts. The left status icon opens the quick sheet and carries a small
+caret. The thread title is a selector whenever the native state permits changing
+the target; there is no separate Change control. Infinity sits beside Listening
+with a visible gap, and the right-side Cancel and Send controls are separated.
+Touch regions remain distinct and at least 44 px. Reconnecting and error details
+use the existing status line. An older saved draft marks the quick-controls icon
+and opens the same recovery sheet without adding another row.
 
 `NativeVoiceSegmenter` counts real 24 kHz samples and analyzes absolute 100 ms
 frames. RMS 0.012 identifies likely pauses, never disposable audio. A 1,200 ms

@@ -1,12 +1,12 @@
 import type { Page } from "@playwright/test";
-import type { NativeVoiceState } from "../../src/client/voice/native-voice-plugin.js";
+import type { NativeVoiceInputSubmitted, NativeVoiceState } from "../../src/client/voice/native-voice-plugin.js";
 
 const profileId = "c61b5d8b-4a77-43c6-bd72-12e23fe42e38";
 export function voiceFixtureState(): NativeVoiceState {
   return {
-    version: 6, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
+    version: 7, stateRevision: 1, connectionGeneration: 1, profileId, serverOrigin: null, identity: null,
     originClientId: "34612c41-0bbb-455f-a5af-725bfc7ae768", clientConnectionToken: null, settingsRevision: 0,
-    settings: { audioMode: "response", autoListen: true, ignoreOtherDevices: true, readNotificationContext: true, cleanSpeechText: true,
+    settings: { audioMode: "response", autoListen: true, keepListeningByDefault: false, ignoreOtherDevices: true, readNotificationContext: true, cleanSpeechText: true,
       speechProvider: "openai", speechEndpoint: "https://api.openai.com/v1", sttModel: "gpt-live-transcribe", ttsModel: "gpt-4o-mini-tts",
       ttsVoice: "coral", ttsSpeed: 1, speechTextLimit: 4096, voiceThreadId: null, voiceThreadTitle: null, pinDefaultVoiceThread: false,
       onlyVoiceThread: false, followComposerMode: false, inputDeviceId: null, recognitionStartTimeoutMs: 30000, recognitionCompletionTimeoutMs: 60000,
@@ -24,6 +24,7 @@ type VoiceFixture = {
   state: NativeVoiceState;
   calls: { method: string; args: Record<string, unknown> }[];
   publish(patch: Partial<NativeVoiceState>): void;
+  emitInputSubmitted(event: NativeVoiceInputSubmitted): void;
 };
 declare global { interface Window { __voiceFixture: VoiceFixture } }
 
@@ -51,6 +52,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
         sessionStorage.setItem(retainedKey, JSON.stringify(fixture.state));
         emit("stateChanged", fixture.state);
       },
+      emitInputSubmitted(event) { emit("inputSubmitted", event); },
     };
     const snapshot = () => structuredClone(fixture.state);
     const header = (name: string, methods: readonly string[], events = false) => ({ name,

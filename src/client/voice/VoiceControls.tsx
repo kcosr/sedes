@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { ArrowUp, AudioLines, ChevronsUpDown, ChevronUp, Infinity as InfinityIcon, LoaderCircle, MessageSquare, Mic, MicOff, RotateCcw, Settings2, SkipForward, TriangleAlert, X } from "lucide-react";
+import { ArrowUp, AudioLines, ChevronDown, Infinity as InfinityIcon, LoaderCircle, Mic, MicOff, RotateCcw, Settings2, SkipForward, TriangleAlert, X } from "lucide-react";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import { navigate, settingsPath, useRoute } from "../app/router.js";
 import { configuredPanelPresentation, openThreadRoute } from "../workspace-panels/thread-panel-navigation.js";
@@ -16,10 +16,9 @@ import { recordingRecoveryContext, recordingRecoveryLabel, recordingRecoveryStat
 import { voiceRecordingTarget } from "./voice-recording-target.js";
 import "./voice.css";
 
-/** Card text: parts joined by dots (a phase word carries its tone, an alert part is the error message, an optional part gives way on a narrow card,
- * a chip retargets), a named thread, or a muted placeholder. */
+/** Card text: parts joined by dots, a named thread, or a muted placeholder. */
 type Tone = "info" | "destructive" | "warning";
-type Part = string | { phase: string; tone?: Tone } | { alert: string; tone?: Tone } | { optional: string } | { chip: string } | { reconnecting: true };
+type Part = string | { phase: string; tone?: Tone } | { alert: string; tone?: Tone } | { optional: string } | { reconnecting: true };
 type Line = { parts: Part[] } | { thread: string; reconnecting?: boolean } | { empty: string } | { saved: { label: string; thread: string } };
 
 export function VoiceControls({ threads }: { threads: readonly NormalizedApplicationThreadSummary[] }) {
@@ -31,8 +30,9 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const route = useRoute();
   const composerMode = useComposerDeliveryMode();
   const [showWhenOff] = useShowVoiceBarWhenOff(store);
-  const [picker, setPicker] = useState<"start" | "default-start" | "retarget" | null>(null);
+  const [picker, setPicker] = useState<"start" | "default-start" | "retarget" | "default" | "visible" | null>(null);
   const pickerRecording = useRef<NativeRecordingCommandContext | null>(null);
+  const pickerGeneration = useRef<number | null>(null);
   const [sheet, setSheet] = useState(false);
   const statusId = useId();
   const threadId = route.name === "thread" ? route.threadId : null;
@@ -71,6 +71,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
     act(() => store.plugin.startManualListen({ ...store.commandContext(), threadId: startTarget.id, threadTitle: nativeThreadTitle(startTarget.title.text) ?? undefined }));
   };
   const off = settings.audioMode === "off";
+  const startLabel = settings.keepListeningByDefault ? "Start recording with Keep listening" : "Start voice recording";
   const busy = !["off", "idle"].includes(phase);
   const missingRecovery = phase === "recordingRecovery" && saved === null;
   const needsStorageRetry = native.readiness === "storageUnavailable";
@@ -131,7 +132,6 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
       // Thread-less speech puts the phase on its own line, so its kind stays visible with the queue on line 2.
       status = state.error && !recording ? [phaseWord] : [phaseWord, ...kind ? [queued && cardTitle !== undefined ? { optional: kind } : kind] : [], ...queued ? [queued] : []];
       if (recording && capture?.reconnecting) status.push({ reconnecting: true });
-      if (recordingTools) status.push({ chip: cardTitle === undefined ? "Choose" : "Change" });
     }
     if (cardTitle !== undefined) { line1 = { thread: cardTitle, reconnecting: recording && capture?.reconnecting }; line2 = { parts: status }; }
     else if (!busy || retargets) { line1 = { empty: !busy && settings.pinDefaultVoiceThread ? "Choose default voice thread" : "Choose a thread" }; line2 = { parts: status }; }
@@ -146,34 +146,43 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const alerting = message !== undefined && !quiet;
   const threadDescription = !busy && "thread" in line1 ? line1.thread.replace(/\.$/u, "") : undefined;
   const describedBy = [threadDescription !== undefined ? `${statusId}-thread` : undefined, statusId, alerting ? `${statusId}-alert` : undefined].filter(Boolean).join(" ");
-  // The body opens the card's thread unless it is already on screen.
-  const opens = cardThread != null && cardThread !== threadId;
-  // A pending retarget stays focusable, so the picker returns focus to the chip after a selection.
+  // Idle choices preserve the existing target rule: a pin/default is saved;
+  // otherwise choosing a visible thread opens it without starting capture.
+  const targetPicker = retargets ? "retarget" : !off && !busy && !showingRecovery
+    ? settings.pinDefaultVoiceThread || threadId === null ? "default" : "visible" : null;
+  const targetLabel = targetPicker === "retarget" ? "Change recording thread" : targetPicker === "default" ? "Choose default voice thread" : "Choose voice thread";
+  const opens = targetPicker === null && cardThread != null && cardThread !== threadId;
   const keepBlocked = state.pending ? "A voice action is in progress" : keepListeningBlockedReason(native.actions.keepListeningBlockedReason);
-  const chip = (label: string) => <span className="voice-card-recording-tools">
-    <button type="button" className="voice-card-chip" aria-haspopup="dialog" aria-disabled={state.pending || !retargets || undefined}
-      aria-label={activeTitle ? `Change recording target: ${activeTitle}` : "Change recording target"} onClick={() => {
-        if (state.pending || !retargets || !capture) return;
-        pickerRecording.current = { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id };
-        setPicker("retarget");
-      }}><span className="voice-card-chip-label">{label}</span><ChevronsUpDown aria-hidden="true" /></button>
-    <button type="button" className="voice-card-keep" aria-label="Keep listening" title={keepBlocked ?? "Keep listening"}
-      aria-pressed={capture?.keepListening ?? false} aria-disabled={state.pending || !native.actions.canSetKeepListening || undefined}
-      aria-describedby={keepBlocked ? `${statusId}-keep-blocked` : undefined} onClick={() => {
-        if (state.pending || !native.actions.canSetKeepListening || !capture) return;
-        const command = { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id, enabled: !capture.keepListening };
-        act(() => store.plugin.setKeepListening(command));
-      }}><InfinityIcon strokeWidth={1.8} aria-hidden="true" /></button>
+  const text = <span className="voice-card-text">
+    {targetPicker ? <span className="voice-card-target-label">{renderLine(line1, "voice-card-title")}<ChevronDown aria-hidden="true" /></span> : renderLine(line1, "voice-card-title")}
+    {renderLine(line2, "voice-card-sub")}
   </span>;
   return <>
     {!off || showWhenOff || showingRecovery || needsStorageRetry ? <div className="voice-dock">
       <div className="voice-card" role="group" aria-label="Voice controls" data-tone={recording ? "destructive" : undefined}
         data-off={off && !showingRecovery ? "" : undefined} data-recording={recordingTools ? "" : undefined} data-saved={showingRecovery ? "" : undefined}>
+        <button type="button" className="voice-card-tile" data-tone={tone} aria-haspopup="dialog" aria-describedby={describedBy}
+          aria-label={savedElsewhere ? "Saved dictation" : "Open voice controls"} title={savedElsewhere ? "Saved dictation" : "Open voice controls"}
+          data-saved-access={savedElsewhere ? "" : undefined} onClick={() => setSheet(true)}>{tile}<ChevronDown className="voice-card-menu-mark" aria-hidden="true" />
+          {savedElsewhere ? <span className="voice-card-saved-indicator" aria-hidden="true" /> : null}</button>
         <div className="voice-card-body">
           {opens ? <button type="button" className="voice-card-open" aria-label={`Open thread: ${cardTitle ?? "Untitled thread"}`} onClick={() => openThreadRoute(cardThread, configuredPanelPresentation())} /> : null}
-          <span className="voice-card-tile" data-tone={tone}>{tile}</span>
-          <span className="voice-card-text">{renderLine(line1, "voice-card-title", chip)}{renderLine(line2, "voice-card-sub", chip)}</span>
+          {targetPicker ? <button type="button" className="voice-card-target" aria-haspopup="dialog" aria-expanded={picker === targetPicker}
+            aria-label={cardTitle ? `${targetLabel}: ${cardTitle}` : targetLabel} aria-disabled={state.pending || undefined} onClick={() => {
+              if (state.pending) return;
+              pickerGeneration.current = native.connectionGeneration;
+              pickerRecording.current = targetPicker === "retarget" && capture
+                ? { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id } : null;
+              setPicker(targetPicker);
+            }}>{text}</button> : text}
         </div>
+        {recordingTools ? <button type="button" className="voice-card-keep" aria-label="Keep listening" title={keepBlocked ?? "Keep listening"}
+          aria-pressed={capture.keepListening} aria-disabled={state.pending || !native.actions.canSetKeepListening || undefined}
+          aria-describedby={keepBlocked ? `${statusId}-keep-blocked` : undefined} onClick={() => {
+            if (state.pending || !native.actions.canSetKeepListening) return;
+            const command = { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id, enabled: !capture.keepListening };
+            act(() => store.plugin.setKeepListening(command));
+          }}><span className="voice-card-keep-mark"><InfinityIcon strokeWidth={1.8} aria-hidden="true" /></span></button> : null}
         {showingRecovery && (saved.hasUnrecognizedAudio || saved.canRetryRecognition) ? resumable ? <button type="button" className="voice-card-retry" aria-label="Resume voice" aria-disabled={state.pending || undefined}
           onClick={() => { if (!state.pending) void resumeVoice(store).catch(() => undefined); }}><RotateCcw aria-hidden="true" /><span>Resume</span></button>
           : <button type="button" className="voice-card-retry" aria-label="Retry saved dictation" title={!saved.canRetryRecognition ? cardReadiness(native.readiness) : "Retry recognition"}
@@ -182,11 +191,6 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
             const command = recordingRecoveryContext(native, saved);
             act(() => store.plugin.retryRecordingRecognition(command));
           }}><RotateCcw aria-hidden="true" /><span>Retry</span></button> : null}
-        {/* Only the caret opens the sheet. */}
-        <button type="button" className="voice-card-caret" aria-haspopup="dialog" aria-describedby={describedBy}
-          aria-label={savedElsewhere ? "Saved dictation" : "Open voice controls"} title={savedElsewhere ? "Saved dictation" : "Open voice controls"}
-          data-saved-access={savedElsewhere ? "" : undefined} onClick={() => setSheet(true)}><ChevronUp aria-hidden="true" />
-          {savedElsewhere ? <span className="voice-card-saved-indicator" aria-hidden="true" /> : null}</button>
         <div className="voice-card-actions">
           {showingRecovery ? <>
             <button type="button" className="voice-card-button" data-variant="ghost" aria-label="Discard saved dictation" title="Discard"
@@ -208,8 +212,9 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
             : missingRecovery ? <button type="button" className="voice-card-button" aria-label="Open voice settings" onClick={() => navigate(settingsPath("voice"))}><Settings2 aria-hidden="true" /></button>
             : resumable ? <button type="button" className="voice-card-retry" aria-label="Resume voice" disabled={state.pending}
             onClick={() => { void resumeVoice(store).catch(() => undefined); }}><RotateCcw aria-hidden="true" /><span>Resume</span></button>
-            : !busy || failed ? <button type="button" className="voice-card-button" aria-label="Start voice recording" disabled={off || state.pending} onClick={start}
-              title={off ? "Voice is off" : native.actions.canStart ? "Start voice recording" : cardReadiness(native.readiness)}><Mic strokeWidth={1.8} aria-hidden="true" /></button> : null}
+            : !busy || failed ? <button type="button" className="voice-card-button" aria-label={startLabel} disabled={off || state.pending} onClick={start}
+              title={off ? "Voice is off" : native.actions.canStart ? startLabel : cardReadiness(native.readiness)}>
+              {settings.keepListeningByDefault ? <InfinityIcon strokeWidth={1.8} aria-hidden="true" /> : <Mic strokeWidth={1.8} aria-hidden="true" />}</button> : null}
           {native.actions.canSkip ? <button type="button" className="voice-card-button" data-variant="ghost" aria-label="Skip voice playback" title="Skip"
             disabled={state.pending} onClick={() => act(() => store.plugin.skipCurrentPlayback(store.commandContext()))}><SkipForward strokeWidth={1.8} aria-hidden="true" /></button> : null}
           {native.actions.canStop && active ? <button type="button" className="voice-card-button" aria-label={cancels ? "Cancel voice recording" : "Stop voice interaction"}
@@ -232,11 +237,19 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
       </div>
     </div> : null}
     <VoiceThreadPicker threads={threads} open={picker !== null} onOpenChange={open => { if (!open) setPicker(null); }}
-      title={picker === "default-start" ? "Choose default voice thread" : "Choose voice thread"}
-      description={picker === "default-start" ? "Save this default and start recording." : "Recognized text will be sent to the thread you select."}
-      pinned={picker === "default-start" ? { threadId: settings.voiceThreadId, label: "Current default voice thread" } : { threadId, label: "This thread" }} onSelect={thread => {
+      title={picker === "default-start" || picker === "default" ? "Choose default voice thread" : "Choose voice thread"}
+      description={picker === "default-start" ? "Save this default and start recording." : picker === "default" ? "Choose the default target for new recordings."
+        : picker === "visible" ? "Open the thread to use it for your next recording." : "Recognized text will be sent to the thread you select."}
+      pinned={picker === "default-start" || picker === "default" ? { threadId: settings.voiceThreadId, label: "Current default voice thread" } : { threadId, label: "This thread" }} onSelect={thread => {
       const target = { threadId: thread.id, threadTitle: nativeThreadTitle(thread.title.text) ?? undefined };
-      if (picker === "default-start") {
+      if (picker === "visible") {
+        openThreadRoute(thread.id, configuredPanelPresentation());
+      } else if (picker === "default") {
+        void store.update(current => {
+          if (current.connectionGeneration !== pickerGeneration.current) throw new Error("Voice connection changed. Choose the thread again.");
+          return { voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) };
+        }).catch(() => undefined);
+      } else if (picker === "default-start") {
         const context = store.commandContext();
         void store.update({ voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) })
           .then(() => store.run(() => {
@@ -255,28 +268,25 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
     <VoiceQuickSheet store={store} threads={threads} open={sheet} onOpenChange={setSheet} />
   </>;
 }
-function renderLine(line: Line, className: string, chip: (label: string) => ReactNode): ReactNode {
+function renderLine(line: Line, className: string): ReactNode {
   if ("saved" in line) return <span className={className} data-saved><span className="voice-card-saved-label">{line.saved.label}</span>
     <span className="voice-card-dot" aria-hidden="true">·</span><span className="voice-card-saved-thread">{line.saved.thread}</span></span>;
   if ("thread" in line) return <span className={className} data-thread title={line.reconnecting ? `${line.thread} · Reconnecting` : line.thread}>
-    <MessageSquare className={line.reconnecting ? "voice-card-thread-icon" : undefined} strokeWidth={1.8} aria-hidden="true" />
     {line.reconnecting ? <LoaderCircle className="voice-card-title-reconnecting motion-safe:animate-spin" aria-hidden="true" /> : null}<span>{line.thread}</span></span>;
   if ("empty" in line) return <span className={className} data-empty>{line.empty}</span>;
-  const chipped = line.parts.some(part => typeof part !== "string" && "chip" in part);
   const explanation = line.parts.find((part): part is Extract<Part, { alert: string }> => typeof part !== "string" && "alert" in part)?.alert;
   const dot = <span className="voice-card-dot" aria-hidden="true">·</span>;
-  // The chip keeps one key, so a retarget that changes the line keeps the focused button.
-  return line.parts.length ? <span className={className} data-chip={chipped ? "" : undefined} title={explanation}>{line.parts.map((part, index) =>
-    <Fragment key={typeof part !== "string" && "chip" in part ? "chip" : index}>
+  return line.parts.length ? <span className={className} title={explanation}>{line.parts.map((part, index) =>
+    <Fragment key={index}>
       {typeof part !== "string" && "optional" in part ? <span className="voice-card-optional">{index ? dot : null}{part.optional}</span> : <>
         {index ? dot : null}
-        {typeof part === "string" ? part : "chip" in part ? chip(part.chip) : "reconnecting" in part ? <span className="voice-card-reconnecting"><LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" />Reconnecting</span> : "phase" in part || part.tone
+        {typeof part === "string" ? part : "reconnecting" in part ? <span className="voice-card-reconnecting"><LoaderCircle className="motion-safe:animate-spin" aria-hidden="true" />Reconnecting</span> : "phase" in part || part.tone
           ? <span className="voice-card-phase" data-tone={part.tone}>{"phase" in part ? part.phase : part.alert}</span> : part.alert}</>}</Fragment>)}</span> : null;
 }
-/** Plain text for the status region: chips are controls, and the alert region already carries an alert part. */
+/** Plain text for the status region; the alert region already carries an alert part. */
 function lineText(line: Line, alerting: boolean): string {
   return "thread" in line ? line.thread : "empty" in line ? line.empty : "saved" in line ? `${line.saved.label} · ${line.saved.thread}`
-    : line.parts.flatMap(part => typeof part === "string" ? [part] : "chip" in part ? [] : "reconnecting" in part ? ["Reconnecting"] : "optional" in part ? [part.optional] : "phase" in part ? [part.phase]
+    : line.parts.flatMap(part => typeof part === "string" ? [part] : "reconnecting" in part ? ["Reconnecting"] : "optional" in part ? [part.optional] : "phase" in part ? [part.phase]
       : alerting ? [] : [part.alert]).join(" · ");
 }
 /** The card is not Settings → Voice, so its resume hint points at the card's own Resume. */

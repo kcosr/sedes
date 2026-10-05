@@ -22,6 +22,7 @@ import { savedRecording, VoiceRecordingRecovery } from "./VoiceRecordingRecovery
 const toggles = [
   ["pinDefaultVoiceThread", "Pin default voice thread", "Start manual recordings here while viewing other threads."],
   ["autoListen", "Auto-listen", "Eligible notifications reopen the microphone."],
+  ["keepListeningByDefault", "Keep listening by default", "Use Keep listening for new manual and auto-listen recordings. The ∞ control changes only the current recording."],
   ["ignoreOtherDevices", "Ignore voice started on other devices", "Automations are still included."],
   ["readNotificationContext", "Read notification title and context", "Speak the notice, project and thread before the response."],
   ["onlyVoiceThread", "Only play from default voice thread", "Limit automatic playback to the default voice thread above."],

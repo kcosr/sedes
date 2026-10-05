@@ -52,7 +52,7 @@ public class NativeSpeechNetworkRecoveryTest {
                     });
                 }, result, caps.hardSegmentMs(), 15000, timing);
                 try {
-                    recording.start(); configure(peer); await(result.ready, "initial recognition session");
+                    recording.start(false); configure(peer); await(result.ready, "initial recognition session");
                     CountDownLatch adopted = new CountDownLatch(1); AtomicReference<String> adoptionError = new AtomicReference<>();
                     recording.setKeepListening(true, error -> { adoptionError.set(error); adopted.countDown(); });
                     await(adopted, "durable adoption"); assertNull(adoptionError.get());

@@ -269,6 +269,7 @@ function serverSubmission(item: QueuedInputSummary): PendingServerSubmission {
     queuedInputId: item.id,
     createdAt: item.createdAt,
     preview: item.preview,
+    content: [{ kind: "text", text: { text: item.preview.text } }],
     attachmentCount: item.attachmentCount,
     taskCount: item.taskCount,
     phase: "sending",
@@ -581,6 +582,15 @@ describe("PendingInputStrip", () => {
     store.setServerSubmissions([serverSubmission(item)]);
     renderStrip(store, false, {}, false);
     expect(document.querySelector('[data-queued-input-id="voice-input"]')).toHaveTextContent("Sending");
+  });
+
+  it("keeps queue controls reachable until a Submit's full transcript content is available", () => {
+    const item = queued("voice-input", 1, "pending", { resolvedDeliveryMode: "submit" });
+    const store = new FakeStripStore(snapshot([item]));
+    store.setServerSubmissions([{ ...serverSubmission(item), content: undefined }]);
+    renderStrip(store);
+    expect(document.querySelector('[data-queued-input-id="voice-input"]')).toHaveTextContent("Prompt voice-input");
+    expect(screen.getByRole("button", { name: /^Delete queued input:/ })).toBeEnabled();
   });
 
   it.each([

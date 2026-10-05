@@ -27,11 +27,35 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await expect(toolbar).toBeVisible();
   await measureRow("idleBeforeRecording");
   const base = voiceFixtureState();
+  const idleTitle = toolbar.getByRole("button", { name: /^Choose voice thread:/u });
+  await expect(idleTitle.locator(".voice-card-target-label > .lucide-chevron-down")).toBeVisible();
+  await idleTitle.click();
+  const targetPicker = page.getByRole("dialog", { name: "Choose voice thread", exact: true });
+  await expect(targetPicker).toContainText("Open the thread to use it for your next recording.");
+  await targetPicker.getByRole("list", { name: "Voice threads" }).getByRole("button").first().click();
+  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "startManualListen"))).toEqual([]);
+  await publishVoiceState(page, { settings: { ...base.settings, keepListeningByDefault: true } });
+  const heldStart = toolbar.getByRole("button", { name: "Start recording with Keep listening", exact: true });
+  await expect(heldStart.locator(".lucide-infinity")).toBeVisible();
+  await expect(heldStart).not.toHaveAttribute("aria-pressed");
+  await measureRow("idleKeepListeningDefault");
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "voice-idle-keep-listening-default-narrow.png");
   const title = "Dictation for the release checklist and the remaining deployment verification";
   const active = { id: "interaction", eventKind: "manual", threadId, threadTitle: title, recognitionThreadId: threadId,
     recognitionThreadTitle: title, automatic: false, recording: { id: "recording", keepListening: false, reconnecting: false } };
-  await publishVoiceState(page, { phase: "listening", active, actions: { ...base.actions, canStart: false, canStop: true,
+  await publishVoiceState(page, { phase: "listening", settings: base.settings, active, actions: { ...base.actions, canStart: false, canStop: true,
     canRetarget: true, canSetKeepListening: true, keepListeningBlockedReason: null } });
+  const change = toolbar.getByRole("button", { name: `Change recording thread: ${title}` });
+  await expect(change.locator(".voice-card-title")).toHaveText(title);
+  await expect(change.locator(".voice-card-target-label > .lucide-chevron-down")).toBeVisible();
+  await change.click();
+  await expect(targetPicker).toContainText("Recognized text will be sent to the thread you select.");
+  await targetPicker.getByRole("list", { name: "Voice threads" }).getByRole("button").first().click();
+  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "retargetActiveRecognition").map(call => ({
+    method: call.method, args: { expectedConnectionGeneration: call.args.expectedConnectionGeneration, recordingId: call.args.recordingId, threadId: call.args.threadId },
+  })))).toEqual([{ method: "retargetActiveRecognition", args: { expectedConnectionGeneration: 1, recordingId: "recording", threadId } }]);
+  await publishVoiceState(page, { active });
   const keep = toolbar.getByRole("button", { name: "Keep listening", exact: true });
   await expect(keep).toHaveAttribute("aria-pressed", "false");
   await measureRow("ordinaryListening");
@@ -44,19 +68,20 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await expect(send).toBeVisible();
   await expect(toolbar).toContainText("Listening");
   await expect(toolbar).not.toContainText(/elapsed|segment|\d+:\d+/iu);
-  const change = toolbar.getByRole("button", { name: `Change recording target: ${title}` });
-  const [changeBox, keepBox, cancelBox, sendBox] = await Promise.all([change.boundingBox(), keep.boundingBox(), cancel.boundingBox(), send.boundingBox()]);
-  expect(keepBox!.x).toBeGreaterThanOrEqual(changeBox!.x + changeBox!.width);
-  expect(Math.abs(keepBox!.y + keepBox!.height / 2 - changeBox!.y - changeBox!.height / 2)).toBeLessThan(1);
-  expect(sendBox!.x).toBeGreaterThanOrEqual(cancelBox!.x + cancelBox!.width);
-  const keepHitBox = await keep.evaluate(button => {
-    const rect = button.getBoundingClientRect(), pseudo = getComputedStyle(button, "::before");
-    const width = Math.max(rect.width, parseFloat(pseudo.width)), height = Math.max(rect.height, parseFloat(pseudo.height));
-    return { x: rect.x + (rect.width - width) / 2, y: rect.y + (rect.height - height) / 2, width, height };
-  });
-  const caretBox = (await toolbar.getByRole("button", { name: "Open voice controls" }).boundingBox())!;
-  expect(keepHitBox.x + keepHitBox.width).toBeLessThanOrEqual(caretBox.x);
-  for (const box of [keepHitBox, caretBox, cancelBox!, sendBox!]) {
+  const tile = toolbar.getByRole("button", { name: "Open voice controls" });
+  await expect(tile.locator(".voice-card-menu-mark")).toBeVisible();
+  await expect(tile.locator(".lucide-mic")).toBeVisible();
+  const [tileBox, changeBox, keepBox, cancelBox, sendBox] = await Promise.all([tile.boundingBox(), change.boundingBox(), keep.boundingBox(), cancel.boundingBox(), send.boundingBox()]);
+  expect(tileBox!.x + tileBox!.width + 4).toBeLessThanOrEqual(changeBox!.x);
+  expect(changeBox!.x + changeBox!.width + 4).toBeLessThanOrEqual(keepBox!.x);
+  expect(keepBox!.x + keepBox!.width + 4).toBeLessThanOrEqual(cancelBox!.x);
+  expect(sendBox!.x - cancelBox!.x - cancelBox!.width).toBeGreaterThanOrEqual(4);
+  expect(sendBox!.x - cancelBox!.x - cancelBox!.width).toBeLessThanOrEqual(12);
+  const phaseBox = (await toolbar.locator(".voice-card-phase").boundingBox())!;
+  const infinityBox = (await keep.locator("svg").boundingBox())!;
+  expect(infinityBox.x - phaseBox.x - phaseBox.width).toBeGreaterThanOrEqual(6);
+  expect(await change.locator(".voice-card-title > span").evaluate(title => title.scrollWidth > title.clientWidth)).toBe(true);
+  for (const box of [tileBox!, changeBox!, keepBox!, cancelBox!, sendBox!]) {
     expect(box.width).toBeGreaterThanOrEqual(44);
     expect(box.height).toBeGreaterThanOrEqual(44);
     expect(box.x).toBeGreaterThanOrEqual(0);
@@ -89,6 +114,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
     actions: { ...base.actions, canStart: false, canStop: true }, recordingRecovery: null });
   await expect(toolbar).toContainText("Sending…");
   await expect(toolbar.getByRole("button", { name: "Stop voice interaction" })).toBeEnabled();
+  await expect(toolbar.locator(".voice-card-target")).toHaveCount(0);
   await expect(toolbar.getByRole("button", { name: "Discard saved dictation" })).toHaveCount(0);
   await expect(toolbar).not.toContainText("Saved dictation");
   await measureRow("liveSendSubmitting");

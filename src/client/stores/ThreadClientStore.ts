@@ -54,6 +54,7 @@ import {
   type NormalizedThreadApplyResult,
 } from "./NormalizedThreadStore.js";
 import { ServerSubmissionTracker } from "./ServerSubmissionTracker.js";
+import type { NativeVoiceInputSubmitted } from "../voice/native-voice-plugin.js";
 export type { PendingServerSubmission } from "./ServerSubmissionTracker.js";
 
 export interface ThreadClientState {
@@ -393,6 +394,16 @@ export class ThreadClientStore {
   };
 
   getSnapshot = (): ThreadClientState => this.#state;
+
+  /** Receipts are binding-validated by NativeVoiceStore before the visible view forwards them. */
+  acceptNativeVoiceSubmission(receipt: NativeVoiceInputSubmitted): void {
+    if (this.#disposed || this.#paused || receipt.threadId !== this.threadId) return;
+    this.#serverSubmissions.acceptNativeSubmission(
+      receipt,
+      this.normalized.state.snapshot,
+      new Set(this.#state.pendingComposerTransfers.map(transfer => transfer.operationId)),
+    );
+  }
 
   get awaitingRunStateCapabilities(): boolean {
     return this.normalized.awaitingRunStateCapabilities;
@@ -1143,6 +1154,7 @@ export class ThreadClientStore {
 
   cancelQueuedInput(queuedInputId: string): Promise<void> {
     return this.#queueMutation(async (snapshot, generation) => {
+      const capturedOperationId = snapshot.queue.find(item => item.id === queuedInputId)?.deliveryOperationId;
       const requestKey = `cancel\0${queuedInputId}`;
       const mutationId = this.#queuedInputMutationId(requestKey);
       let result;
@@ -1167,7 +1179,7 @@ export class ThreadClientStore {
         throw new Error("Queue cancellation returned an invalid receipt.");
       }
       this.#queuedInputMutationIds.delete(requestKey);
-      this.#serverSubmissions.retireQueuedInput(queuedInputId);
+      if (capturedOperationId) this.#serverSubmissions.retireOperation(capturedOperationId);
       this.#removePendingQueuedSteersForInput(queuedInputId);
       this.#removeQueueOwnedTransfersForInput(queuedInputId);
       this.#applyQueueMutationResult(generation, result);
@@ -1179,6 +1191,7 @@ export class ThreadClientStore {
     draft: NormalizedDraft,
   ): Promise<NormalizedDraft> {
     return this.#queueMutation(async (snapshot, generation) => {
+      const capturedOperationId = snapshot.queue.find(item => item.id === queuedInputId)?.deliveryOperationId;
       const requestKey = `restore\0${queuedInputId}`;
       const mutationId = this.#queuedInputMutationId(requestKey);
       let result;
@@ -1210,7 +1223,7 @@ export class ThreadClientStore {
         throw new Error("Queue restoration returned an invalid receipt.");
       }
       this.#queuedInputMutationIds.delete(requestKey);
-      this.#serverSubmissions.retireQueuedInput(queuedInputId);
+      if (capturedOperationId) this.#serverSubmissions.retireOperation(capturedOperationId);
       this.#removePendingQueuedSteersForInput(queuedInputId);
       this.#removeQueueOwnedTransfersForInput(queuedInputId);
       this.#applyQueueMutationResult(generation, {

@@ -124,13 +124,14 @@ describe("ThreadView local voice Send", () => {
     setDiagnosticCategoryEnabled("seek", true);
     clearDiagnostics();
     return { ...native, ...state, view, threadId, operationId,
-      event: { ...VOICE_CONNECTION, threadId, operationId, connectionGeneration: 1 } };
+      event: { ...VOICE_CONNECTION, threadId, operationId, text: "Local spoken message", queuedInputId: "queue-1", connectionGeneration: 1 } };
   }
 
   it("uses Seek on send for a matching local receipt even after the message rendered", async () => {
     const f = await mountVoice();
     setSeekOnSubmit(true);
     act(() => f.emit("inputSubmitted", f.event));
+    expect(f.registry.get(f.threadId).acceptNativeVoiceSubmission).toHaveBeenCalledExactlyOnceWith(f.event);
     expect(readDiagnostics().filter(entry => entry.event === "seek_request_consumed")).toHaveLength(1);
     expect(readDiagnostics().some(entry => entry.event === "seek_requested")).toBe(true);
     act(() => f.emit("inputSubmitted", f.event));
@@ -144,6 +145,7 @@ describe("ThreadView local voice Send", () => {
     act(() => f.emit("inputSubmitted", reason === "other-thread"
       ? { ...f.event, threadId: "bfa7a392-4186-4ab4-89c4-674a31ae6743" } : f.event));
     expect(readDiagnostics().some(entry => entry.event === "seek_request_consumed")).toBe(false);
+    expect(f.registry.get(f.threadId).acceptNativeVoiceSubmission).toHaveBeenCalledTimes(reason === "disabled" ? 1 : 0);
     // Later enabling/revealing cannot replay an earlier local event.
     setSeekOnSubmit(true);
     f.view.rerender(<ThreadView threadId={f.threadId} visible automationOpen={false}
@@ -1582,6 +1584,7 @@ function fixture(
   let activityDetail: ActivityDetailMode = "full";
   let projectionViewportAnchor: ThreadProjectionViewportAnchor | undefined;
   const threadStore = {
+    acceptNativeVoiceSubmission: vi.fn(),
     usage: new UsageQueryCache(snapshot.thread.id, {getUsage:vi.fn(),getUsageAvailability:vi.fn()}),
     get activityDetail() {
       return activityDetail;

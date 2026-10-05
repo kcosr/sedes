@@ -126,9 +126,11 @@ export function ThreadView({
   useEffect(() => {
     if (!voice || !visible || focusTurnId !== undefined) return;
     return voice.subscribeInputSubmitted(event => {
-      if (event.threadId === threadId && document.visibilityState !== "hidden") seekAfterSend(event.operationId);
+      if (event.threadId !== threadId || document.visibilityState === "hidden") return;
+      store.acceptNativeVoiceSubmission(event);
+      seekAfterSend(event.operationId);
     });
-  }, [voice, visible, focusTurnId, threadId, seekAfterSend]);
+  }, [voice, visible, focusTurnId, threadId, store, seekAfterSend]);
   const [historyPresentation, setHistoryPresentation] =
     useState<TranscriptHistoryPresentation>({ entries: [] });
   const lastLoadCommitAttemptId = useRef<string | undefined>(undefined);

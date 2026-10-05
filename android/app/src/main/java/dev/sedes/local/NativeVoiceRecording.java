@@ -107,10 +107,13 @@ final class NativeVoiceRecording {
         this.listener = listener; this.hardSegmentMs = (int) hardSegmentMs; this.timing = timing;
     }
 
-    void start() {
+    /** The caller's durable adoption is known before queued startup or any concurrent interruption can run. */
+    void start(boolean durablyAdopted) {
+        if (durablyAdopted) adoptionIntent = true;
         execute(() -> {
             if (initialized || terminal.get()) return;
             initialized = true; update(journal.load());
+            if (durablyAdopted && !recording.adopted) throw new IllegalStateException("dictation_invalid_state");
             if (recording.acceptedSamples != 0 || recording.completedSamples != 0 || !recording.segments.isEmpty() || recording.endSample >= 0)
                 throw new IllegalStateException("dictation_invalid_state");
             segmenter = new NativeVoiceSegmenter(hardSegmentMs, this::seal);
@@ -122,9 +125,10 @@ final class NativeVoiceRecording {
 
     /** Recognizes retained durable audio only. This path never asks its listener to start a microphone. */
     void retry() {
+        adoptionIntent = true;
         execute(() -> {
             if (initialized || terminal.get()) return;
-            initialized = retryOnly = true; adoptionIntent = true; update(journal.load());
+            initialized = retryOnly = true; update(journal.load());
             if (!recording.adopted || recording.handedOff || recording.overflow()) throw new IllegalStateException("dictation_invalid_state");
             long end = recording.completedSamples, ordinal = recording.completedOrdinal + 1;
             for (NativeDictationStore.Segment saved : recording.segments) {

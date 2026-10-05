@@ -33,16 +33,22 @@ The second line is the state, such as **Ready · Response · Auto-listen on**,
 **Speaking** with the notice kind and queued count, or **Listening**. If voice
 needs to resume, the card offers **Resume**.
 
-Tap the card to open its thread when another thread is on screen. While
-listening, tap **Change** (or **Choose** without a target) to change the
+The thread title has a select affordance whenever the target can be changed.
+While listening, tap the title to change the
 recording target before recognition finishes; the picker lists the visible
 thread first. Navigating to another thread alone does not redirect a recording.
 Once recognition finishes, its target and delivery policy stay fixed through
-any connection recovery. The caret on the card opens the **Voice** sheet with
-**Audio mode**, **Auto-listen**, **Follow composer mode**, **Pin default voice
+any connection recovery. The left status icon opens the **Voice** sheet with
+**Audio mode**, **Auto-listen**, **Keep listening by default**, **Follow composer mode**, **Pin default voice
 thread**, **Only play from default voice thread**, **Default voice thread**, and
 **All voice settings**. The playback filter limits automatic playback to the default thread; it does not change
 where explicit recordings go.
+
+**Keep listening by default** is initially off. Enable it in either voice settings
+menu to start new manual and auto-listen recordings in infinity mode. The infinity
+button changes only the current recording; changing the saved preference takes
+effect on the next recording. The idle Start button shows infinity when that
+default is on and a microphone when it is off.
 
 Spoken input queues while a thread is running. Enable **Follow composer's
 selected mode** to use the client's Queue/Steer preference instead. When
@@ -63,7 +69,7 @@ never types an answer into an approval or question form.
 other queued notices may continue. While voice is recording or recognizing,
 Stop becomes **Cancel**, which discards the recording unsent. **Off** clears
 the voice queue and hides the card unless **Show voice bar when off** is on in
-**Settings → Voice**; then a dimmed card stays, and its caret opens the Voice
+**Settings → Voice**; then a dimmed card stays, and its status icon opens the Voice
 sheet to turn voice back on. The notification silence bell suppresses
 automatic voice and script delivery, while explicit recording remains
 available. The card shows the latest voice error until your next voice action
@@ -378,7 +384,10 @@ bookmarkable, forkable, or eligible for context capture.
 An idle voice submission also appears as a normal chat message once Sedes
 admits it. It leaves any typed draft intact and honors **Seek on send** on the
 device where you spoke. Routine sending labels stay hidden for both typed and
-spoken messages; a marked preview can appear while the full text loads.
+spoken messages. Local voice supplies the complete recognized text for the first
+submitted bubble, without truncation or a preview label. Other server-owned
+submissions appear as bubbles once their full content is available. The provider's
+matching transcript message replaces that presentation without creating a duplicate.
 Voice input admitted as Queue or Steer still uses the pending-input rows, as do
 failed or uncertain deliveries that need attention.
 

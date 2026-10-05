@@ -1,10 +1,11 @@
 import { Capacitor, registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import { z } from "zod";
 import { isAndroidClient } from "../app/client-platform.js";
+import { directInputRequestSchema } from "../../shared/protocol/thread-input.js";
 
 export const nativeVoiceSettingsSchema = z.strictObject({
   audioMode: z.enum(["off", "manual", "response"]),
-  autoListen: z.boolean(), ignoreOtherDevices: z.boolean(), readNotificationContext: z.boolean(), cleanSpeechText: z.boolean(),
+  autoListen: z.boolean(), keepListeningByDefault: z.boolean(), ignoreOtherDevices: z.boolean(), readNotificationContext: z.boolean(), cleanSpeechText: z.boolean(),
   speechProvider: z.enum(["openai", "server"]), speechEndpoint: z.string(),
   sttModel: z.string().max(160), ttsModel: z.string().max(160), ttsVoice: z.string().max(160),
   ttsSpeed: z.number().min(0.25).max(4), speechTextLimit: z.number().int().min(2).max(4096),
@@ -34,7 +35,7 @@ export const nativeRecordingRecoverySchema = z.strictObject({
 });
 export type NativeRecordingRecovery = z.infer<typeof nativeRecordingRecoverySchema>;
 export const nativeVoiceStateSchema = z.strictObject({
-  version: z.literal(6), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
+  version: z.literal(7), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
   profileId: z.string().nullable(), serverOrigin: z.string().nullable(), identity: z.string().nullable(), originClientId: z.uuid().nullable(), clientConnectionToken: z.string().nullable(),
   settingsRevision: z.number().int().nonnegative(), settings: nativeVoiceSettingsSchema,
   speech: z.strictObject({ credentialConfigured: z.boolean(), catalogStatus: z.enum(["idle", "loading", "ready", "error"]),
@@ -60,6 +61,7 @@ export type NativeVoiceState = z.infer<typeof nativeVoiceStateSchema>;
 export const nativeVoiceInputSubmittedSchema = z.strictObject({
   profileId: z.string().min(1), serverOrigin: z.url(), identity: z.string().regex(/^[a-f0-9]{64}$/u),
   connectionGeneration: z.number().int().nonnegative(), threadId: z.uuid(), operationId: z.uuid(),
+  text: directInputRequestSchema.shape.text, queuedInputId: z.string().min(1).max(128).nullable(),
 });
 export type NativeVoiceInputSubmitted = z.infer<typeof nativeVoiceInputSubmittedSchema>;
 export type NativeVoiceCommandContext = { expectedConnectionGeneration: number };

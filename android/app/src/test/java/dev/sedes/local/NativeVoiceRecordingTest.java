@@ -50,6 +50,17 @@ public class NativeVoiceRecordingTest {
         assertNull(h.listener.error);
     }
 
+    @Test public void aJournalAdoptedBeforeStartupHasHeldRetryAndRetentionSemanticsImmediately() {
+        Harness h = new Harness(); h.journal.adopt(true); h.recording.start(true); h.flush();
+        assertTrue(h.journal.keep); h.feedFrames(1);
+        h.latest().fail(NativeSpeechTransport.Kind.NETWORK, "recognition_network_error"); h.flush();
+        assertNull(h.listener.error); assertTrue(h.listener.reconnecting); assertFalse(h.journal.discarded);
+        h.advance(1000); assertEquals(2, h.sessions.size());
+        h.latest().fail(NativeSpeechTransport.Kind.AUTHENTICATION, "recognition_authentication_failed"); h.flush();
+        assertEquals("recognition_authentication_failed", h.listener.error); assertTrue(h.listener.retained);
+        assertTrue(h.journal.interrupted); assertEquals(2400, h.journal.durable); assertFalse(h.journal.discarded);
+    }
+
     @Test public void backpressureReplaysExactlyTheUnacceptedPacket() {
         Harness h = new Harness(); h.start(true); h.latest().backpressure = true;
         h.feedFrames(50);
@@ -358,7 +369,7 @@ public class NativeVoiceRecordingTest {
                         public void cancel() { ended = true; }
                     };
                 }, listener, 5000, 15000, time);
-                recording.start(); queue.run(); recording.setKeepListening(true, error -> assertNull(error)); queue.run();
+                recording.start(false); queue.run(); recording.setKeepListening(true, error -> assertNull(error)); queue.run();
                 for (int count = 0; count < 49; count++) { assertTrue(recording.accept(frame)); queue.run(); }
                 armed.set(true);
                 for (int count = 0; count < 10; count++) assertTrue(recording.accept(frame));
@@ -373,6 +384,60 @@ public class NativeVoiceRecordingTest {
                 assertEquals("interrupted", recovered.stage); assertEquals(59L * 2400, recovered.durableSamples);
                 assertArrayEquals(expected, durablePcm(store.journal(binding, "recording")));
             }
+        }
+    }
+
+    @Test public void durableAdoptionSurvivesInterruptionsBeforeTheFirstStartupWorker() throws Exception {
+        for (boolean retry : new boolean[] { false, true }) {
+            for (String reason : new String[] { "voice_off", "connection_changed", "audio_focus_lost" })
+                assertAdoptedStartupRetained(retry, reason, false);
+        }
+    }
+
+    @Test public void durableAdoptionSurvivesAnInitialJournalReadFailure() throws Exception {
+        for (boolean retry : new boolean[] { false, true })
+            assertAdoptedStartupRetained(retry, "dictation_storage_unavailable", true);
+    }
+
+    @Test public void anOrdinaryStartupInterruptionAndAnExplicitAdoptedDiscardStillDeleteTheirJournal() {
+        Harness ordinary = new Harness(); ordinary.recording.start(false); ordinary.recording.interrupt("voice_off");
+        assertFalse(ordinary.listener.retained); ordinary.flush(); assertTrue(ordinary.journal.discarded); assertTrue(ordinary.sessions.isEmpty());
+        Harness adopted = new Harness(); adopted.journal.adopt(true); adopted.recording.start(true); adopted.recording.discard();
+        adopted.flush(); assertTrue(adopted.journal.discarded); assertNull(adopted.listener.error); assertTrue(adopted.sessions.isEmpty());
+    }
+
+    private void assertAdoptedStartupRetained(boolean retry, String reason, boolean failFirstLoad) throws Exception {
+        String binding = "profile\nhttps://sedes.example\n" + "a".repeat(64);
+        javax.crypto.KeyGenerator generator = javax.crypto.KeyGenerator.getInstance("AES"); generator.init(256); SecretKey key = generator.generateKey();
+        File directory = temporary.newFolder(); JSONObject config = new JSONObject(), defaults = NativeVoiceSettings.defaults().value;
+        for (String field : new String[] {"speechProvider", "speechEndpoint", "sttModel", "inputDeviceId", "recognitionStartTimeoutMs",
+                "recognitionCompletionTimeoutMs", "recognitionEndSilenceMs", "recognitionResultTimeoutMs", "longDictationTimeoutMs",
+                "recognizeStopCommand", "recognitionCues", "cueGain", "followComposerMode"}) NativeVoiceJson.put(config, field, defaults.opt(field));
+        try (NativeDictationStore store = new NativeDictationStore(directory, () -> key, new NativeDictationStore.Disk(), NativeDictationStore.Limits.defaults())) {
+            NativeDictationStore.Journal journal = store.create(binding, "recording", "thread", "Thread", config); journal.adopt(true);
+            if (retry) {
+                journal.append(0, pcm(2400, 2100)); journal.checkpoint(); journal.seal(0, 0, 2400, 0); journal.complete(0, "Saved prefix");
+                journal.append(2400, pcm(2400, 1200)); journal.checkpoint(); journal.finish("timeout", 4800);
+            }
+            Queue worker = new Queue(); Time time = new Time(); Listener listener = new Listener();
+            NativeVoiceRecording recording = new NativeVoiceRecording("recording", onQueue(journal, worker, new AtomicBoolean(failFirstLoad)),
+                (id, events) -> { fail("Interrupted startup must not open a transport"); return null; }, listener, 5000, 15000, time);
+            if (retry) recording.retry(); else recording.start(true);
+            if (!failFirstLoad) {
+                // No queued coordinator work, including the initial journal read, has run yet.
+                recording.interrupt(reason); assertTrue(listener.retained); assertEquals(reason, listener.error);
+            }
+            worker.run(); time.advance(60000); worker.run();
+            assertTrue(time.closed); assertTrue(listener.retained); assertEquals(reason, listener.error); assertNull(listener.text);
+            NativeDictationStore.Recording retained = journal.load(); assertTrue(retained.adopted); assertEquals(retry ? "interrupted" : "ready", retained.stage);
+            assertEquals(retry ? "Saved prefix" : "", retained.text); assertEquals(retry ? 4800 : 0, retained.durableSamples);
+            if (retry) assertArrayEquals(pcm(2400, 1200), journal.read(2400, 4800));
+            assertTrue("An interruption must not create a discard marker", store.pendingRetirements(binding).isEmpty());
+        }
+        try (NativeDictationStore reopened = new NativeDictationStore(directory, () -> key, new NativeDictationStore.Disk(), NativeDictationStore.Limits.defaults())) {
+            NativeDictationStore.Recording retained = reopened.recover(binding); assertNotNull(retained); assertTrue(retained.adopted);
+            assertEquals(retry ? "Saved prefix" : "", retained.text); assertEquals(retry ? 4800 : 0, retained.durableSamples);
+            if (retry) assertArrayEquals(pcm(2400, 1200), reopened.journal(binding, "recording").read(2400, 4800));
         }
     }
 
@@ -448,9 +513,15 @@ public class NativeVoiceRecordingTest {
         return bytes.toByteArray();
     }
     private static NativeDictationStore.Journal onQueue(NativeDictationStore.Journal delegate, Queue queue) {
+        return onQueue(delegate, queue, new AtomicBoolean());
+    }
+    private static NativeDictationStore.Journal onQueue(NativeDictationStore.Journal delegate, Queue queue, AtomicBoolean failFirstLoad) {
         return new NativeDictationStore.Journal() {
             public Executor executor() { return queue; }
-            public NativeDictationStore.Recording load() throws Exception { return delegate.load(); }
+            public NativeDictationStore.Recording load() throws Exception {
+                if (failFirstLoad.getAndSet(false)) throw new IOException("injected_initial_read_failure");
+                return delegate.load();
+            }
             public void append(long start, byte[] pcm) throws Exception { delegate.append(start, pcm); }
             public NativeDictationStore.Recording checkpoint() throws Exception { return delegate.checkpoint(); }
             public NativeDictationStore.Recording seal(long ordinal, long start, long end, int padding) throws Exception { return delegate.seal(ordinal, start, end, padding); }
@@ -545,7 +616,7 @@ public class NativeVoiceRecordingTest {
                 Session session = new Session(id, events, journal); sessions.add(session); events.ready(id, Long.MAX_VALUE); return session;
             }, listener, hardSegmentMs, 15000, time);
         }
-        void start(boolean adopt) { recording.start(); flush(); if (adopt) { recording.setKeepListening(true, error -> assertNull(error)); flush(); } }
+        void start(boolean adopt) { recording.start(false); flush(); if (adopt) { recording.setKeepListening(true, error -> assertNull(error)); flush(); } }
         void feedFrames(int count) { for (int index = 0; index < count; index++) { assertTrue(recording.accept(pcm(2400, 2100))); flush(); } }
         void flush() { worker.run(); }
         void advance(long amount) { time.advance(amount); flush(); }

@@ -117,6 +117,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         NativeSpeechTransport recognitionTransport;
         NativeDictationStore.Recording record;
         NativeVoiceSettings recordingSettings;
+        RecordingStart recordingStart;
         Call preflight;
         volatile NativeVoiceCapturePolicy capturePolicy;
         final Object captureLock = new Object();
@@ -147,6 +148,12 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     /** In-memory read-only reconciliation of one journaled input for the current binding. */
     private static final class Recovery { long token; Call call; int attempts; boolean reported; }
+    private static final class RecordingStart {
+        // Journal and adopted snapshot are written/read only by the serial worker until its callback publishes them.
+        NativeDictationStore.Journal journal;
+        NativeDictationStore.Recording adopted;
+        volatile boolean cancelled;
+    }
     private NativeVoiceRuntime(Context context) {
         this(context, new RecordingBackend() {
             public Call preflight(NativeVoiceSettings settings, String credential, NativeSpeechCatalog.PreflightResult result) {
@@ -840,6 +847,9 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private void beginCapture(Active item) {
         if (active != item || item.stopped || !sessionStarted || !speechReady()) return;
         if (item.automatic && (!settings.flag("autoListen") || !eligible(item.notification))) { finishItem(item); return; }
+        // This preference belongs to the new recording; later edits affect only the next capture.
+        final boolean defaultHeld = settings.flag("keepListeningByDefault");
+        if (defaultHeld && retainedDictation != null) { failActive("saved_recording_pending"); return; }
         item.recordingId = UUID.randomUUID().toString(); item.captureId = UUID.randomUUID().toString();
         item.recordingBinding = binding; item.recordingSettings = settings; phase = "arming";
         item.adopted = false; item.keepListening = false; item.reconnecting = false; item.longDictationDeadline = 0;
@@ -855,12 +865,31 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             if (!ownsRecording(item, id) || generation != connectionGeneration) return;
             item.preflight = null;
             if (error != null) { failActive(error); return; }
-            dictationWork(() -> dictations.create(owner, id, item.targetId, item.targetTitle, recordingConfig(item.recordingSettings)), (journal, failure) -> {
+            RecordingStart starting = new RecordingStart(); item.recordingStart = starting;
+            dictationWork(() -> {
+                if (starting.cancelled) return starting;
+                starting.journal = dictations.create(owner, id, item.targetId, item.targetTitle, recordingConfig(item.recordingSettings));
+                // A held default must own its durable slot before any microphone or recognition transport starts.
+                if (defaultHeld && !starting.cancelled) starting.adopted = starting.journal.adopt(true);
+                return starting;
+            }, (prepared, failure) -> {
+                // Cancellation already queued its own cleanup directly behind creation, before any reconnect bootstrap.
+                if (starting.cancelled) return;
+                NativeDictationStore.Journal journal = prepared == null ? null : prepared.journal;
                 if (!ownsRecording(item, id) || generation != connectionGeneration) {
                     if (journal != null) dictationWork(() -> { journal.discard(); return null; }, (ignored, ignoredError) -> {});
                     return;
                 }
                 if (failure != null) { failActive(code(failure)); return; }
+                item.recordingStart = null;
+                if (defaultHeld) {
+                    item.record = prepared.adopted; acceptDictation(item.record);
+                    item.adopted = true; item.keepListening = true; item.automatic = false;
+                    item.capturePolicy.setHeld(true);
+                    item.longDictationDeadline = SystemClock.elapsedRealtime() + item.recordingSettings.number("longDictationTimeoutMs");
+                    clientActions.clear(); inputSubmissionContext = new Object();
+                    scheduleLongDictationTimeout(item);
+                }
                 startRecordingCoordinator(item, journal, capabilities, secret, false);
                 // Session configuration and microphone routing remain bounded independently of capture duration.
                 handler.postDelayed(() -> {
@@ -901,7 +930,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                     recordingFailed(item, reason, retained);
                 }); }
             }, capabilities.hardSegmentMs(), item.recordingSettings.number("recognitionResultTimeoutMs"));
-        if (retry) item.recording.retry(); else item.recording.start();
+        if (retry) item.recording.retry(); else item.recording.start(item.adopted);
     }
     private boolean ownsRecording(Active item, String id) {
         return active == item && !item.stopped && id != null && id.equals(item.recordingId);
@@ -1020,6 +1049,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     private void cancelActive(boolean cancelAdmission, String reason) {
         Active old = active; if (old == null) return;
+        if (old.recordingStart != null) { cancelRecordingStart(old, reason, false); return; }
         if (old.recoveryRecognition || old.recoverySend) {
             if (old.admission != null && cancelAdmission) cancelEntry(old.recordingBinding, old.admission.optString("mutationId"), true);
             interruptRecording(old, reason); return;
@@ -1076,6 +1106,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     }
     private void failActive(String code) {
         Active item = active;
+        if (item != null && item.recordingStart != null) { cancelRecordingStart(item, code, true); return; }
         if (item != null && item.adopted && item.recordingId != null && item.admission == null) {
             interruptRecording(item, code); return;
         }
@@ -1089,6 +1120,36 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         item.recording = null; closeRecordingTransport(item);
         if (retained || item.adopted) interruptRecording(item, reason);
         else failActive(reason);
+    }
+    /** Settle creation before reconnect/recovery can read its slot. No microphone or input admission exists yet. */
+    private void cancelRecordingStart(Active item, String reason, boolean reportFailure) {
+        RecordingStart starting = item.recordingStart;
+        if (active != item || starting == null || starting.cancelled) return;
+        starting.cancelled = true; item.recordingStart = null; item.stopped = true; active = null;
+        if (captureOwner == item) captureOwner = null;
+        audio.stop(); closeRecordingTransport(item);
+        if (item.notification != null) { queue.completed(item.id); clientActions.discardTurn(item.notification.threadId, clientTurn(item.notification)); }
+        final String owner = item.recordingBinding;
+        final long generation = connectionGeneration, operation = beginDictationOperation();
+        final boolean discard = reason.equals("stopped") || reason.equals("discarded");
+        phase = sessionStarted ? "idle" : "off"; publish();
+        dictationWork(() -> {
+            if (starting.journal == null) return null;
+            NativeDictationStore.Recording record = starting.adopted;
+            if (!discard && record == null) record = starting.journal.load();
+            if (!discard && record.adopted) return starting.journal.interrupt(reason);
+            // Failed/unadopted creation has no captured audio; explicit Cancel also intentionally removes adoption.
+            starting.journal.discard(); return null;
+        }, (record, error) -> {
+            if (generation != connectionGeneration || !Objects.equals(owner, binding)) return;
+            endDictationOperation(operation);
+            if (record != null) acceptDictation(record);
+            if (error != null) {
+                if (!discard && starting.adopted != null) acceptDictation(starting.adopted);
+                dictationStorageError = true; report(code(error));
+            } else if (reportFailure || record != null) report(reason);
+            publish(); drain();
+        });
     }
     /** Stops physical work immediately; the serialized writer publishes the preserved draft when durable. */
     private void interruptRecording(Active item, String reason) {
@@ -1791,7 +1852,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         // A found receipt, including queued or submitting, is the definitive admission. Dispatch then belongs to the thread.
         JSONObject acceptedEntry = entry(ownerBinding, id); if (acceptedEntry == null) return;
         String recordingId = recordingOwner(acceptedEntry), key = ownerBinding + "\n" + id;
-        inputSubmitted(ownerBinding, id, receipt, generation); forget(key);
+        inputSubmitted(ownerBinding, id, receipt, acceptedEntry, generation); forget(key);
         if (recordingId != null) {
             // The journal authenticates ownership independently of the recording manifest, including damaged or missing PCM.
             dictationWork(() -> { dictations.beginDiscard(ownerBinding, recordingId, id); return null; }, (ignored, error) -> {
@@ -1820,7 +1881,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             report("input_" + status, receipt.has("diagnostic") ? receipt.optString("diagnostic") : null);
     }
     /** A current local Send may move its visible transcript; journal recovery and other devices never do. */
-    private void inputSubmitted(String ownerBinding, String id, JSONObject receipt, long generation) {
+    private void inputSubmitted(String ownerBinding, String id, JSONObject receipt, JSONObject acceptedEntry, long generation) {
         final Object submittedContext = inputSubmissionContext;
         final String threadId = receipt.optString("threadId"), status = receipt.optString("status");
         if (generation != connectionGeneration || !ownerBinding.equals(binding) || !activeAdmission(id) ||
@@ -1828,9 +1889,14 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             cancelledAdmissions.contains(ownerBinding + "\n" + id) || !nativeVisible || !foregroundVisible ||
             !threadId.equals(foregroundThread) || !receipt.optString("admittedMode").equals("submit") ||
             !(status.equals("queued") || status.equals("submitting") || status.equals("accepted"))) return;
+        // Use the exact authenticated request before admission cleanup removes it; snapshots never carry this text.
+        JSONObject request = acceptedEntry.optJSONObject("request");
+        Object value = request == null ? null : request.opt("text");
+        if (!(value instanceof String) || blank((String) value) || NativeVoiceJson.bytes((String) value) > NativeDictationStore.MAX_TEXT_BYTES) return;
         active.submissionNotified = true;
         final JSONObject event = NativeVoiceJson.object("profileId", profileId, "serverOrigin", origin, "identity", identity,
-            "connectionGeneration", generation, "threadId", threadId, "operationId", receipt.optString("operationId"));
+            "connectionGeneration", generation, "threadId", threadId, "operationId", receipt.optString("operationId"),
+            "queuedInputId", receipt.has("queuedInputId") ? receipt.optString("queuedInputId") : null, "text", value);
         // Capture recipients now: a WebView opened after admission must not receive this transient event.
         final List<Observer> recipients = new ArrayList<>(observers);
         main.post(() -> {
@@ -2152,7 +2218,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             "recognitionThreadTitle", active.targetTitle, "automatic", active.automatic, "recording", recording);
         String readiness = readiness(), blocked = keepListeningBlockedReason();
         boolean ready = readiness.equals("ready");
-        JSONObject next = NativeVoiceJson.object("version", 6, "connectionGeneration", connectionGeneration,
+        JSONObject next = NativeVoiceJson.object("version", 7, "connectionGeneration", connectionGeneration,
             "profileId", profileId, "serverOrigin", origin, "identity", identity, "originClientId", originId, "clientConnectionToken", clientConnectionToken,
             "settingsRevision", settings.revision, "settings", settings.value, "phase", phase, "ready", ready,
             "speech", NativeVoiceJson.object("credentialConfigured", speechCredential != null, "catalogStatus", catalogStatus,

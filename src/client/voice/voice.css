@@ -42,7 +42,7 @@
   align-items: center;
   gap: var(--space-2);
   margin-inline: auto;
-  padding-right: 5px;
+  padding-inline: 7px 5px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--secondary);
@@ -54,9 +54,8 @@
   border-color: var(--destructive-border);
 }
 
-/* The body: tile and two lines at the card's full height. When the card
-   names a thread other than the visible one, a button stretched over it
-   opens that thread; the retarget chip sits above that button. */
+/* The title and status form one 44px target when the recording thread can
+   change. Frozen work can still open its thread without a select affordance. */
 .voice-card-body {
   position: relative;
   display: flex;
@@ -64,8 +63,6 @@
   flex: 1 1 auto;
   align-self: stretch;
   align-items: center;
-  gap: var(--space-3);
-  padding-left: 7px;
 }
 
 .voice-card-open {
@@ -80,7 +77,7 @@
 }
 
 .voice-card-open:active,
-.voice-card-caret:active {
+.voice-card-target:active:not([aria-disabled="true"]) {
   background: var(--accent-soft);
 }
 
@@ -89,13 +86,14 @@
     background: var(--accent-soft);
   }
 
-  .voice-card-caret:hover,
+  .voice-card-target:hover:not([aria-disabled="true"]),
   .voice-card-button[data-variant="ghost"]:hover:not(:disabled) {
     background: var(--hover);
   }
 }
 
-/* The state tile. */
+/* The original state tile also opens the quick controls. Its small menu
+   caret makes that action visible without reserving another touch target. */
 .voice-card-tile {
   position: relative;
   display: grid;
@@ -112,6 +110,28 @@
 .voice-card-tile svg {
   width: var(--icon-lg);
   height: var(--icon-lg);
+}
+
+.voice-card-tile .voice-card-menu-mark {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 10px;
+  height: 10px;
+}
+
+.voice-card-tile[data-saved-access] {
+  border-color: var(--warning-border);
+}
+
+.voice-card-saved-indicator {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--warning);
 }
 
 .voice-card-tile[data-tone="info"] {
@@ -245,7 +265,8 @@
 .voice-card-phase[data-tone="destructive"] { color: var(--destructive); }
 .voice-card-phase[data-tone="warning"] { color: var(--warning); }
 
-/* Line 1 names the card's thread, next to the message-square glyph. */
+/* Line 1 names the card's thread. The only leading glyph is a transient
+   reconnecting indicator when the wider status hint cannot fit. */
 .voice-card-title[data-thread] {
   display: flex;
   align-items: center;
@@ -274,123 +295,54 @@
   font-weight: var(--weight-regular);
 }
 
-/* The caret: the only way into the quick sheet, in every state. A 44px
-   target around the 16px glyph. */
-.voice-card-caret {
-  position: relative;
+.voice-card-target {
+  display: flex;
+  width: 100%;
+  min-width: var(--control-touch);
+  height: var(--control-touch);
+  align-items: center;
+  border-radius: var(--radius-ctl);
+  text-align: left;
+}
+
+.voice-card-target-label {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 4px;
+}
+
+.voice-card-target-label > svg {
+  width: var(--icon-md);
+  height: var(--icon-md);
+  flex: none;
+  color: var(--muted-foreground);
+}
+
+.voice-card-target-label > .voice-card-title {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.voice-card-keep {
   display: grid;
   width: 44px;
   height: 44px;
   flex: none;
   place-items: center;
-  border-radius: 999px;
-  color: var(--muted-foreground-2);
-}
-
-.voice-card-caret[data-saved-access] {
-  color: var(--warning);
-}
-
-.voice-card-saved-indicator {
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: var(--warning);
-}
-
-.voice-card-caret svg {
-  width: var(--icon-md);
-  height: var(--icon-md);
-}
-
-/* Listening: line 2 ends with the retarget chip ("Change", or "Choose"
-   without a target). It shrinks before the phase word and keeps a 44px hit
-   area. */
-.voice-card-sub[data-chip] {
-  display: flex;
-  align-items: center;
-  overflow: visible;
-}
-
-.voice-card-sub[data-chip] > :not(.voice-card-chip) {
-  flex: none;
-}
-
-.voice-card-chip {
-  position: relative;
-  z-index: calc(var(--z-sticky) + 1);
-  display: inline-flex;
-  min-width: 0;
-  max-width: 100%;
-  height: 26px;
-  flex: 0 1 auto;
-  align-items: center;
-  gap: 5px;
-  padding: 0 7px 0 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--card);
-  color: var(--foreground);
-  font-size: var(--text-ui);
-  font-weight: var(--weight-medium);
-  line-height: 1;
-}
-
-.voice-card-chip::before,
-.voice-card-keep::before {
-  position: absolute;
-  width: max(100%, var(--control-touch));
-  height: var(--control-touch);
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  content: "";
-}
-
-.voice-card-chip:active:not([aria-disabled="true"]) {
-  background: var(--accent);
-}
-
-.voice-card-chip svg {
-  width: var(--icon-sm);
-  height: var(--icon-sm);
-  flex: none;
+  border-radius: var(--radius-ctl);
   color: var(--muted-foreground);
 }
 
-.voice-card-chip-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.voice-card-recording-tools {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 4px;
-}
-
-.voice-card-recording-tools .voice-card-chip {
-  min-width: 72px;
-  flex: none;
-}
-
-.voice-card-keep {
-  position: relative;
-  z-index: calc(var(--z-sticky) + 1);
+.voice-card-keep-mark {
   display: grid;
   width: 44px;
   height: 26px;
-  flex: none;
   place-items: center;
   border: 1px solid transparent;
   border-radius: 999px;
-  color: var(--muted-foreground);
+  transform: translateY(8px);
 }
 
 .voice-card-keep svg {
@@ -398,18 +350,18 @@
   height: var(--icon-lg);
 }
 
-.voice-card-keep[aria-pressed="true"] {
+.voice-card-keep[aria-pressed="true"] .voice-card-keep-mark {
   border-color: var(--info-border);
   background: var(--info-soft);
   color: var(--info);
 }
 
-.voice-card-keep:active:not([aria-disabled="true"]) {
+.voice-card-keep:active:not([aria-disabled="true"]) .voice-card-keep-mark {
   background: var(--accent);
 }
 
 .voice-card-keep[aria-disabled="true"],
-.voice-card-chip[aria-disabled="true"] {
+.voice-card-target[aria-disabled="true"] {
   opacity: var(--disabled-opacity);
   cursor: not-allowed;
 }
@@ -495,7 +447,7 @@
 }
 
 /* Resume: a labelled pill, kept compact so "Voice needs to resume" fits
-   beside it and the caret at phone width. */
+   beside it and the status tile at phone width. */
 .voice-card-retry {
   gap: var(--space-1-5);
   padding: 0 var(--space-3) 0 11px;
@@ -520,8 +472,8 @@
 }
 
 /* Off: the same card, de-emphasized. Flat on the --card band, muted text
-   and tile, the Mic disabled; the body stays a live button that opens the
-   sheet, where Manual or Response turns voice back on. */
+   and tile, Start disabled. The tile opens the sheet, where Manual or
+   Response turns voice back on. */
 .voice-card[data-off] {
   border-color: var(--border-soft);
   background: var(--card);
@@ -549,29 +501,15 @@
 }
 
 /* Fit the controls to the dock's available width, including narrow desktop
-   panels. The title yields before Change/Keep listening and Cancel/Send. */
+   panels. Titles yield before the original tile and 44px controls. */
 @container voice-dock (max-width: 599px) {
-  .voice-card[data-recording],
-  .voice-card[data-saved] {
-    gap: 0;
-  }
-
-  .voice-card[data-recording] .voice-card-tile,
-  .voice-card[data-saved] .voice-card-tile {
-    display: none;
+  .voice-card {
+    gap: 6px;
   }
 
   .voice-card[data-recording] .voice-card-actions,
   .voice-card[data-saved] .voice-card-actions {
-    gap: 4px;
-  }
-
-  .voice-card[data-recording] {
-    padding-right: 2px;
-  }
-
-  .voice-card[data-recording] .voice-card-actions {
-    gap: 0;
+    gap: 6px;
   }
 
   .voice-card[data-recording] .voice-card-button,
@@ -580,33 +518,11 @@
     height: 44px;
   }
 
-  .voice-card[data-recording] .voice-card-sub[data-chip] {
-    gap: 2px;
-  }
-
-  .voice-card[data-recording] .voice-card-sub[data-chip] > .voice-card-phase {
-    min-width: 0;
-    flex: 0 1 auto;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
   .voice-card[data-recording] .voice-card-sub > .voice-card-dot {
     display: none;
   }
 
-  .voice-card[data-recording] .voice-card-recording-tools {
-    gap: 0;
-  }
-
-  .voice-card[data-recording] .voice-card-chip {
-    min-width: var(--control-touch);
-    padding-inline: 3px;
-  }
-
-  .voice-card[data-recording] .voice-card-chip svg,
-  .voice-card[data-recording] .voice-card-reconnecting,
-  .voice-card-title[data-thread] .voice-card-thread-icon {
+  .voice-card[data-recording] .voice-card-reconnecting {
     display: none;
   }
 
@@ -615,8 +531,13 @@
   }
 
   .voice-card[data-saved] .voice-card-retry {
-    gap: 4px;
-    padding-inline: 8px;
+    min-width: 44px;
+    height: 44px;
+    padding-inline: 7px;
+  }
+
+  .voice-card[data-saved] .voice-card-retry svg {
+    display: none;
   }
 
 }
