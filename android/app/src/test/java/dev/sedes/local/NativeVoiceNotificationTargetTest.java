@@ -5,11 +5,11 @@ import org.json.JSONObject;
 import org.junit.Test;
 
 public class NativeVoiceNotificationTargetTest {
-    @Test public void chosenNextTargetOwnsIdleNotificationButDoesNotRedirectActiveOrSavedWork() {
+    @Test public void nextAppTargetDoesNotRedirectIdleNotificationActiveOrSavedWork() {
         JSONObject state = idle(true, true);
         NativeVoiceJson.put(state, "nextRecordingTarget", NativeVoiceJson.object("threadId", "next", "threadTitle", "Chosen next"));
-        assertEquals("next", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
-        assertEquals("Chosen next", NativeVoiceRuntimeService.notificationTarget(state).optString("threadTitle"));
+        assertEquals("default", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
+        assertEquals("Default thread", NativeVoiceRuntimeService.notificationTarget(state).optString("threadTitle"));
         NativeVoiceJson.put(state, "active", NativeVoiceJson.object("threadId", "notice", "threadTitle", "Notice thread"));
         NativeVoiceJson.put(state, "phase", "speaking");
         assertEquals("notice", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
@@ -25,7 +25,7 @@ public class NativeVoiceNotificationTargetTest {
         assertEquals("saved", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
         assertFalse(NativeVoiceRuntimeService.wakeLockNeeded(state));
         NativeVoiceJson.put(state, "phase", "idle");
-        assertEquals("foreground", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
+        assertEquals("default", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
         NativeVoiceJson.put(state, "active", NativeVoiceJson.object("recognitionThreadId", "new", "recognitionThreadTitle", "New thread"));
         NativeVoiceJson.put(state, "phase", "listening");
         assertEquals("new", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
@@ -51,18 +51,21 @@ public class NativeVoiceNotificationTargetTest {
         }
     }
 
-    @Test public void unpinnedIdleNotificationPrefersForegroundAndFallsBackToDefault() {
+    @Test public void unpinnedIdleNotificationUsesDefaultEvenWithVisibleForeground() {
         JSONObject state = idle(false, false);
-        assertEquals("foreground", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
+        assertEquals("default", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
         NativeVoiceJson.put(state.optJSONObject("foreground"), "visible", false);
         assertEquals("default", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
     }
 
-    @Test public void aMissingPinnedDefaultCannotOpenOrStartTheForegroundThread() {
-        JSONObject state = idle(true, false);
-        NativeVoiceJson.put(state.optJSONObject("settings"), "voiceThreadId", null);
-        JSONObject target = NativeVoiceRuntimeService.notificationTarget(state);
-        assertTrue(target.isNull("threadId")); assertTrue(target.isNull("threadTitle"));
+    @Test public void aMissingDefaultCannotOpenOrStartTheForegroundOrPendingThread() {
+        for (boolean pinned : new boolean[] { false, true }) {
+            JSONObject state = idle(pinned, false);
+            NativeVoiceJson.put(state, "nextRecordingTarget", NativeVoiceJson.object("threadId", "next", "threadTitle", "Chosen next"));
+            NativeVoiceJson.put(state.optJSONObject("settings"), "voiceThreadId", null);
+            JSONObject target = NativeVoiceRuntimeService.notificationTarget(state);
+            assertTrue(target.isNull("threadId")); assertTrue(target.isNull("threadTitle"));
+        }
     }
 
     @Test public void activePlaybackAndRecordingAlwaysKeepTheirActualTargets() {

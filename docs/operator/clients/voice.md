@@ -175,12 +175,15 @@ or automatic speech stays silent. It does not change the recording target.
 and completion from another initiating client. Steering an existing turn does
 not take over its origin.
 
-**Pin default voice thread** supplies the initial target for new explicit
-recordings, including the card, headset, and service-notification Start action.
+**Pin default voice thread** supplies the initial target for new in-app
+recordings. Headset and service-notification Start always use the saved default,
+regardless of pinning, the viewed thread, or a pending row selection. Those
+controls preserve the pending in-app selection. With no saved default, they
+cannot start on a different thread.
 The row's **Choose target thread** popup overrides that initial choice for the
 next recording without editing the saved default. It remains available with
 pinning off and survives ordinary navigation. The pending choice clears when a
-manual interaction starts, on Off, or on connection change; automatic replies
+new in-app recording starts, on Off, or on connection change; automatic replies
 retain their notification targets. A missing initial target opens the target
 picker without saving a replacement default. Only **Default voice thread** in
 quick or full settings edits the saved preference. Those selectors share the

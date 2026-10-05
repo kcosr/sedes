@@ -26,6 +26,17 @@ public class NativeVoiceRuntimePolicyTest {
         assertTrue(NativeVoiceRuntime.manualTarget(null, null, settings, foreground).isNull("threadId"));
         assertEquals("Chosen next", pending.optString("threadTitle"));
     }
+    @Test public void backgroundStartUsesOnlySavedDefaultRegardlessOfPin() {
+        for (boolean pinned : new boolean[] { false, true }) {
+            org.json.JSONObject settings = NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("pinDefaultVoiceThread", pinned,
+                "voiceThreadId", "default", "voiceThreadTitle", "Saved default")).value;
+            org.json.JSONObject target = NativeVoiceRuntime.defaultRecordingTarget(settings);
+            assertEquals("default", target.optString("threadId")); assertEquals("Saved default", target.optString("threadTitle"));
+            NativeVoiceJson.put(settings, "voiceThreadId", null);
+            target = NativeVoiceRuntime.defaultRecordingTarget(settings);
+            assertTrue(target.isNull("threadId")); assertTrue(target.isNull("threadTitle"));
+        }
+    }
     @Test public void fieldValidationPreservesSchemaNamesWithoutExposingExceptionText() {
         assertEquals("invalid_threadTitle", NativeVoiceRuntime.code(new NativeVoiceJson.InvalidFieldException("threadTitle")));
         assertEquals("invalid_composerMode", NativeVoiceRuntime.code(new NativeVoiceJson.InvalidFieldException("composerMode")));

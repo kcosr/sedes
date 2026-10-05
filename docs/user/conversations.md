@@ -37,12 +37,14 @@ needs to resume, the card offers **Resume**.
 
 Tap the title and status area to open the voice target thread. Its separate
 chevron opens **Choose target thread**, a popup available with pinning on or off.
-While idle, it chooses the next manual recording, including headset and
-notification Start; while listening, it changes the current recording target.
+While idle, it chooses the next recording started in the app; while listening,
+it changes the current recording target.
 The choice leaves the viewed thread and saved default unchanged, and navigation
-does not redirect it. A next-recording choice is consumed when that interaction
+does not redirect it. The choice is consumed when a new in-app recording
 starts, and clears when voice is turned Off or the connection changes.
-Automatic notification replies keep their own targets.
+Headset and notification Start always use the saved default voice thread,
+regardless of pinning or the viewed thread, and preserve your pending in-app
+choice. Automatic notification replies keep their own targets.
 The popup lists the visible thread first. On mobile, search stays visible and
 the keyboard stays closed until you tap it. **Default voice thread** in quick
 or full settings uses the same search and rows inside a modal or mobile sheet.

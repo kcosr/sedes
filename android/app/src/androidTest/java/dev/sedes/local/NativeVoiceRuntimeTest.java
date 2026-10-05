@@ -377,15 +377,18 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
-    @Test public void explicitTargetOverridesPinnedDefaultWhileHeadsetAndNotificationKeepIt() throws Exception {
-        for (String source : new String[] { "app", "headset", "start" }) {
+    @Test public void appSelectionStaysIndependentOfHeadsetAndNotificationDefaultStarts() throws Exception {
+        for (boolean pinned : new boolean[] { false, true }) for (String source : new String[] { "app", "headset", "start" }) {
             try (Fixture f = new Fixture(false, false)) {
                 f.recognizing(false); assertNull(f.command("stopCurrentInteraction", new JSONObject()));
-                f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", true, "voiceThreadId", f.target, "voiceThreadTitle", "Pinned default"));
+                f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", pinned, "voiceThreadId", f.target, "voiceThreadTitle", "Pinned default"));
                 String other = UUID.randomUUID().toString(); f.foreground(other);
+                assertNull(f.command("setNextRecordingTarget", NativeVoiceJson.object("threadId", other, "threadTitle", "Chosen in app")));
                 if (source.equals("app")) assertNull(f.command("startManualListen", NativeVoiceJson.object("threadId", other, "threadTitle", "Explicit other")));
                 else { f.runtime.notificationAction(source, f.runtime.snapshot().getLong("connectionGeneration")); f.flush(); }
                 JSONObject active = f.runtime.snapshot().getJSONObject("active");
+                if (source.equals("app")) assertTrue(f.runtime.snapshot().isNull("nextRecordingTarget"));
+                else assertEquals(other, f.runtime.snapshot().getJSONObject("nextRecordingTarget").getString("threadId"));
                 assertEquals(source, source.equals("app") ? other : f.target, active.getString("recognitionThreadId"));
                 assertEquals(source.equals("app") ? "Explicit other" : "Pinned default", active.getString("recognitionThreadTitle"));
                 assertNotNull("The selected target still requires server validation", f.contexts.poll(10, TimeUnit.SECONDS));
@@ -398,11 +401,12 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
-    @Test public void missingPinnedDefaultAllowsExplicitTargetButDoesNotFallBackToForeground() throws Exception {
-        for (String source : new String[] { "app", "headset", "start" }) {
+    @Test public void missingDefaultAllowsAppSelectionButRefusesBackgroundStarts() throws Exception {
+        for (boolean pinned : new boolean[] { false, true }) for (String source : new String[] { "app", "headset", "start" }) {
             try (Fixture f = new Fixture(false, false)) {
                 f.recognizing(false); assertNull(f.command("stopCurrentInteraction", new JSONObject()));
-                f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", true)); f.foreground(f.target);
+                f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", pinned)); f.foreground(f.target);
+                assertNull(f.command("setNextRecordingTarget", NativeVoiceJson.object("threadId", f.target)));
                 if (source.equals("app")) {
                     assertNull(f.command("startManualListen", NativeVoiceJson.object("threadId", f.target, "threadTitle", "Explicit target")));
                     assertEquals(f.target, f.runtime.snapshot().getJSONObject("active").getString("recognitionThreadId"));

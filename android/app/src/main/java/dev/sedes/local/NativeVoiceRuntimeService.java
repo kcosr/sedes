@@ -149,7 +149,7 @@ public final class NativeVoiceRuntimeService extends Service {
             JSONObject recovery = state.optJSONObject("recordingRecovery");
             threadId = nullable(recovery, "threadId"); threadTitle = nullable(recovery, "threadTitle");
         } else if (settings != null) {
-            return NativeVoiceRuntime.manualTarget(null, state.optJSONObject("nextRecordingTarget"), settings, state.optJSONObject("foreground"));
+            return NativeVoiceRuntime.defaultRecordingTarget(settings);
         }
         return NativeVoiceJson.object("threadId", threadId, "threadTitle", threadTitle);
     }

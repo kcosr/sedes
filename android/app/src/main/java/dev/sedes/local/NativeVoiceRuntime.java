@@ -951,17 +951,23 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         return config;
     }
     private void manual(JSONObject args) {
-        clientActions.clear(); inputSubmissionContext = new Object();
         NativeVoiceJson.keys(args, "threadId", "threadTitle");
         String target = NativeVoiceJson.nullableString(args, "threadId", 512), title = NativeVoiceJson.nullableString(args, "threadTitle", 512);
+        startManualRecording(manualTarget(NativeVoiceJson.object("threadId", target, "threadTitle", title), nextRecordingTarget,
+            settings.value, NativeVoiceJson.object("visible", foregroundVisible, "threadId", foregroundThread, "threadTitle", foregroundTitle)), true);
+    }
+    /** Headset and notification Start always use the saved default, even while the app is visible. */
+    private void startDefaultRecording() {
+        startManualRecording(defaultRecordingTarget(settings.value), false);
+    }
+    private void startManualRecording(JSONObject selected, boolean consumeNextTarget) {
+        clientActions.clear(); inputSubmissionContext = new Object();
         if (!sessionStarted || !speechReady() || binding == null) throw new IllegalStateException("voice_not_ready");
         if (defaultHeldBlocked()) throw new IllegalStateException("saved_recording_pending");
         if (active != null || blockingDictation()) throw new IllegalStateException("voice_busy");
-        JSONObject selected = manualTarget(NativeVoiceJson.object("threadId", target, "threadTitle", title), nextRecordingTarget,
-            settings.value, NativeVoiceJson.object("visible", foregroundVisible, "threadId", foregroundThread, "threadTitle", foregroundTitle));
-        target = NativeVoiceJson.nullableString(selected, "threadId", 512); title = NativeVoiceJson.nullableString(selected, "threadTitle", 512);
+        String target = NativeVoiceJson.nullableString(selected, "threadId", 512), title = NativeVoiceJson.nullableString(selected, "threadTitle", 512);
         if (target == null) throw new IllegalStateException("voice_target_required");
-        nextRecordingTarget = null;
+        if (consumeNextTarget) nextRecordingTarget = null;
         active = new Active(target, title); validateTarget(active, false);
     }
     private void setNextRecordingTarget(JSONObject args) {
@@ -973,7 +979,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         clientActions.clear(); inputSubmissionContext = new Object();
         nextRecordingTarget = NativeVoiceJson.object("threadId", target, "threadTitle", title);
     }
-    /** Shared by manual capture and its idle Android notification label. */
+    /** In-app Start uses an explicit selection before its initial-target policy. */
     static JSONObject manualTarget(JSONObject supplied, JSONObject pending, JSONObject settings, JSONObject foreground) {
         String target = supplied == null ? null : NativeVoiceJson.nullableString(supplied, "threadId", 512);
         String title = supplied == null ? null : NativeVoiceJson.nullableString(supplied, "threadTitle", 512);
@@ -989,6 +995,12 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             }
         }
         return NativeVoiceJson.object("threadId", target, "threadTitle", target == null ? null : title);
+    }
+    /** Shared by background Start controls and the idle Android notification label. */
+    static JSONObject defaultRecordingTarget(JSONObject settings) {
+        String target = settings == null ? null : NativeVoiceJson.nullableString(settings, "voiceThreadId", 512);
+        String title = target == null ? null : NativeVoiceJson.nullableString(settings, "voiceThreadTitle", 512);
+        return NativeVoiceJson.object("threadId", target, "threadTitle", title);
     }
     private void retarget(JSONObject args, Reply reply) {
         clientActions.clear(); inputSubmissionContext = new Object();
@@ -2105,7 +2117,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                     !Objects.equals(interactionId, active == null ? null : active.id) ||
                     !Objects.equals(recordingId, active == null ? null : active.recordingId)) return;
                 switch (action) {
-                    case "start": manual(new JSONObject()); break;
+                    case "start": startDefaultRecording(); break;
                     case "send": sendRecording(NativeVoiceJson.object("recordingId", recordingId)); break;
                     case "stop": stopInteraction(); break;
                     case "skip": skip(); break;
@@ -2115,7 +2127,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                         "patch", NativeVoiceJson.object("autoListen", !settings.flag("autoListen"))), false); break;
                     case "headset":
                         if (!settings.flag("headsetControls")) return;
-                        if (active == null) manual(new JSONObject());
+                        if (active == null) startDefaultRecording();
                         else if (phase.equals("speaking") || phase.equals("synthesizing")) skip();
                         else headsetStop();
                         break;

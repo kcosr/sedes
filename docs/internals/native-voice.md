@@ -13,14 +13,17 @@ recovery revision. Retarget takes the recording ID; Stop takes the interaction
 ID. The strict bridge accepts only this version. The snapshot also includes
 `cleanSpeechText` and registered `clientConnectionToken` alongside `originClientId`. The `pinDefaultVoiceThread` setting is scoped to the
 device/profile/identity with the other voice settings and defaults to false.
-Pinning supplies the initial manual target from the saved default without
+Pinning supplies the initial in-app target from the saved default without
 falling back to the foreground. The nullable native `nextRecordingTarget`
 contains a thread ID/title chosen through generation-fenced
 `setNextRecordingTarget`. This transient state is independent of navigation and
 saved settings. Explicit start arguments take priority, then this pending
-choice, then the pin/foreground/default policy. Manual starts (including headset
-and notification Start) consume it when the interaction is admitted, before
-asynchronous target validation. Local readiness rejection preserves it; Off and
+choice, then the pin/foreground/default policy. In-app starts consume it when
+the interaction is admitted, before asynchronous target validation. Headset and
+notification Start always use the saved default, regardless of pinning or the
+foreground thread, and preserve the pending in-app choice. Their idle notification
+label uses the same default target. A missing default cannot fall back to the
+foreground or pending choice. Local readiness rejection preserves it; Off and
 connection changes clear it. The setter rejects an active interaction or Off.
 Automatic notification replies preserve it and retain their own targets.
 `NativeVoiceRuntimeService` supplies Android foreground execution and controls;
