@@ -103,7 +103,8 @@ preferences and speech credentials. Remove a speech credential explicitly in
 the native credential dialog.
 
 The device preference format does not import earlier per-connection settings or
-speech credentials. After upgrading, configure voice and enter the speech key or
+speech credentials. Obsolete profile-bound speech credential files are deleted
+when native voice initializes. After upgrading, configure voice and enter the speech key or
 token once. Finish, send, or copy any saved dictation before upgrading: older
 recording manifests are unsupported and remain unavailable until explicitly
 discarded. Their files are retained; the upgrade does not convert them.
@@ -177,8 +178,11 @@ voice is listening, the target picker on the voice card changes the target befor
 finishing starts. Pickers list the visible thread first as **This thread**;
 when choosing a default, the saved thread comes first as **Current default
 voice thread**. Ordinary navigation does not change an active target. **Only play
-from default voice thread** filters automatic playback; choose a default first,
-or automatic speech stays silent. It does not change the recording target.
+from default voice thread** filters automatic playback and listening. This
+preference follows the device, but each connection needs its own default thread.
+Until one is selected, the idle card says **Default thread needed** and
+the voice settings and quick sheet explain how to resume automatic voice.
+Explicit recording remains available. The filter does not change its target.
 **Ignore voice started on other devices** filters progress
 and completion from another initiating client. Steering an existing turn does
 not take over its origin.

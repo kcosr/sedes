@@ -241,6 +241,20 @@ describe("voice settings page", () => {
     expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Requires a default voice thread.");
     store.dispose();
   });
+  it("explains that the carried playback filter needs a default thread on this connection", async () => {
+    const settings = voiceSettings({ audioMode: "response", onlyVoiceThread: true });
+    const native = voiceSnapshot({ settings, ready: true, readiness: "ready", phase: "idle" });
+    const { fake, store } = await renderPage(native);
+    expect(screen.getByRole("status")).toHaveTextContent("Automatic playback and listening are paused. Choose a default voice thread for this connection");
+    expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Requires a default voice thread.");
+    act(() => fake.emit("settingsChanged", { ...native, stateRevision: 2, settingsRevision: 1,
+      settings: { ...settings, onlyVoiceThread: false } }));
+    expect(screen.getByRole("status")).toHaveTextContent(/^Voice is ready\.$/u);
+    act(() => fake.emit("settingsChanged", { ...native, stateRevision: 3, settingsRevision: 2,
+      settings: { ...settings, audioMode: "off" }, ready: false, readiness: "off", phase: "off" }));
+    expect(screen.getByRole("status")).toHaveTextContent(/^Voice is off\.$/u);
+    store.dispose();
+  });
   it("saves speech cleanup on this device and reflects the native setting", async () => {
     const native = voiceSnapshot();
     const { fake, store } = await renderPage(native, fake => fake.plugin.updateSettings.mockResolvedValue({ ...native,

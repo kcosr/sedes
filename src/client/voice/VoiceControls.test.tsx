@@ -113,6 +113,28 @@ describe("voice controls card", () => {
     expect(within(card()).getByRole("button", { name: "Start voice recording" })).toBeEnabled();
     expect(card()).not.toHaveTextContent("This thread");
   });
+  it.each(["manual", "response"] as const)("shows the missing default thread on a connection with the device playback filter in %s mode", async audioMode => {
+    const settings = voiceSettings({ audioMode, onlyVoiceThread: true });
+    voice.fake.plugin.setConnection.mockResolvedValue(ready({ settings }));
+    navigate(threadPath("named"), { replace: true });
+    renderControls();
+    await screen.findByRole("group", { name: "Voice controls" });
+    expect(lines()).toEqual(["Release review", "Default thread needed"]);
+    // Automatic voice is blocked, but explicit recording in the visible thread remains available.
+    expect(within(card()).getByRole("button", { name: "Start voice recording" })).toBeEnabled();
+    fireEvent.click(within(card()).getByRole("button", { name: "Open voice controls" }));
+    const sheet = await screen.findByRole("dialog", { name: "Voice" });
+    expect(within(sheet).getByRole("status")).toHaveTextContent("Automatic playback and listening are paused. Choose a default voice thread for this connection");
+    expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).toBeChecked();
+    // Choosing this account's default clears the warning without weakening the saved playback filter.
+    act(() => voice.fake.emit("settingsChanged", ready({ stateRevision: 2, settingsRevision: 1,
+      settings: { ...settings, voiceThreadId: "named", voiceThreadTitle: "Release review" } })));
+    expect(within(sheet).getByRole("status")).toHaveTextContent(/^Ready$/u);
+    expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).toBeChecked();
+    fireEvent.keyDown(sheet, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Voice" })).toBeNull());
+    expect(lines()[1]).toBe(`Ready · ${audioMode === "manual" ? "Manual" : "Response"} · Auto-listen on`);
+  });
   it("describes the thread without live announcements on idle navigation or renames", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(ready());
     navigate(threadPath("named"), { replace: true });

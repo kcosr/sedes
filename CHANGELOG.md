@@ -12,7 +12,8 @@
 
 - Android voice uses snapshot version 9, device preferences with settings
   version 7, and dictation manifest version 2. Earlier per-connection preferences
-  and speech credentials are not imported; configure voice and enter credentials
+  are not imported, and obsolete profile-bound speech credential files are removed;
+  configure voice and enter credentials
   once after upgrading. Finish or copy saved dictation before upgrading: older
   recording files are retained but unavailable until explicitly discarded.
   ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51), [#53](https://github.com/kcosr/sedes/pull/53))

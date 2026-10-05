@@ -10,7 +10,7 @@ import { VoiceQuickSheet } from "./VoiceQuickSheet.js";
 import { VoiceThreadPicker } from "./VoiceThreadPicker.js";
 import { voiceReadiness } from "./VoiceSettingsPage.js";
 import { useShowVoiceBarWhenOff } from "./voice-bar-preference.js";
-import { resumeVoice } from "./voice-session.js";
+import { resumeVoice, voiceThreadFilterWarning } from "./voice-session.js";
 import { nativeThreadTitle, type NativeRecordingCommandContext, type NativeVoiceState } from "./native-voice-plugin.js";
 import { recordingRecoveryContext, recordingRecoveryLabel, recordingRecoveryStatus, recordingRecoveryTitle, savedRecording } from "./VoiceRecordingRecovery.js";
 import { voiceRecordingTarget } from "./voice-recording-target.js";
@@ -72,6 +72,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
     act(() => store.plugin.startManualListen({ ...store.commandContext(), threadId: startTarget.id, threadTitle: nativeThreadTitle(startTarget.title.text) ?? undefined }));
   };
   const off = settings.audioMode === "off";
+  const filterWarning = voiceThreadFilterWarning(settings);
   const startLabel = settings.keepListeningByDefault ? "Start recording with Keep listening" : "Start voice recording";
   const busy = !["off", "idle"].includes(phase);
   const missingRecovery = phase === "recordingRecovery" && saved === null;
@@ -123,7 +124,10 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
     if (!busy) {
       tile = <AudioLines strokeWidth={1.8} aria-hidden="true" />;
       // Readiness replaces the whole state line: with the mode beside it, it would truncate.
-      status = native.ready ? ["Ready", settings.audioMode === "manual" ? "Manual" : "Response", `Auto-listen ${settings.autoListen ? "on" : "off"}`] : [cardReadiness(native.readiness)];
+      status = !native.ready ? [cardReadiness(native.readiness)] : filterWarning
+        ? [{ alert: "Default thread needed", tone: "warning" }]
+        : ["Ready", settings.audioMode === "manual" ? "Manual" : "Response", `Auto-listen ${settings.autoListen ? "on" : "off"}`];
+      if (native.ready && filterWarning) tone = "warning";
     } else {
       tile = phase === "speaking" ? <span className="voice-card-wave" aria-hidden="true"><i /><i /><i /><i /><i /></span>
         : recording ? <><Mic strokeWidth={1.8} aria-hidden="true" /><span className="voice-card-rec" aria-hidden="true" /></>

@@ -18,7 +18,7 @@ import { nativeThreadTitle, type NativeVoiceInputDevice, type NativeVoiceSetting
 import { inputPreference, selectedInputDevice } from "./native-voice-input.js";
 import { VoiceThreadPicker } from "./VoiceThreadPicker.js";
 import { useShowVoiceBarWhenOff } from "./voice-bar-preference.js";
-import { canEnableVoice, resumeVoice } from "./voice-session.js";
+import { canEnableVoice, resumeVoice, voiceThreadFilterWarning } from "./voice-session.js";
 import { savedRecording, VoiceRecordingRecovery } from "./VoiceRecordingRecovery.js";
 
 const toggles = [
@@ -101,7 +101,7 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
       <SwitchField label="Show voice bar when off" description="Keep a dimmed bar under the composer."
         checked={showBarWhenOff} onCheckedChange={setShowBarWhenOff} />
       {settings.audioMode !== "off" && native.actions.canResume ? <Button disabled={state.pending} onClick={() => { void resumeVoice(store).catch(() => undefined); }}>Resume voice</Button> : null}
-      <p role="status">{voiceReadiness(native.readiness)}</p>
+      <p role="status">{native.ready ? voiceThreadFilterWarning(settings) ?? voiceReadiness(native.readiness) : voiceReadiness(native.readiness)}</p>
       {native.readiness === "storageUnavailable" ? <Button aria-disabled={state.pending || undefined} onClick={() => { if (!state.pending) void store.reconnect().catch(() => undefined); }}>Retry voice connection</Button>
         : !native.clientConnectionToken && <Button disabled={state.pending} onClick={() => { void store.reconnect().catch(() => undefined); }}>Retry client connection</Button>}
     </SettingsSection>

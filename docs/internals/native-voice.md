@@ -99,7 +99,9 @@ Input journals and advisory speech catalogs retain their binding under
 AES-GCM key protects atomic records in the app's backup-excluded directory;
 record type and binding are authenticated associated data. Removing a profile
 prunes its default-thread selections and deletes its input journals and catalogs
-for every binding of that profile. General preferences and other profiles'
+for every binding of that profile. Both cleanup steps are attempted even when
+one fails; a device-preferences storage failure cannot prevent journal deletion.
+General preferences and other profiles'
 selections survive. The input journal holds at most 64 entries and 8 MiB.
 
 A server registration supplies the shared native/WebView client ID. Paired
@@ -126,7 +128,8 @@ historical inputs do not become live client authority.
 The device preferences envelope has format version 1 and carries the strict
 settings `RECORD_VERSION` 7. Earlier per-binding settings and profile-bound speech
 credentials are not imported; upgrades require device voice setup and credential
-entry once. A
+entry once. Native voice initialization deletes the obsolete `speech-credentials/`
+tree without decoding its records. A
 record that exists but cannot be authenticated, decoded, or validated is moved
 aside as `<name>.corrupt` and replaced with defaults. Native reports
 `voice_settings_reset` or `voice_journal_reset`. Only a
@@ -151,6 +154,11 @@ settings revisions again after the dialog and before a mutation. Changing the
 provider or endpoint cannot reuse another destination's credential. Ciphertext
 lives under `device-speech-credentials/`. Removing a Sedes profile does not remove
 device speech credentials; the native credential dialog removes a selected key.
+The device-wide `onlyVoiceThread` preference remains enabled across connections.
+If the active binding has no default thread, automatic voice remains filtered
+out, and the idle card, quick sheet, and Voice settings show the missing-thread
+condition instead of reporting automatic voice ready. Manual recording remains
+independently available.
 Every mutating bridge command carries the caller's `expectedConnectionGeneration`;
 native validates it on its owner thread, including after permission prompts.
 A delayed command from an earlier profile cannot mutate the newly active one,
