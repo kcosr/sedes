@@ -725,7 +725,7 @@ still reports that original error. Queued items retain their normal advancement
 policy.
 
 `NativeVoiceInput` stores a preferred input's type, usable stable address, and
-product name. Each capture resolves it against fresh Android input enumeration;
+product name. Each capture resolves it against fresh Android device enumeration;
 connection-local device IDs never define the saved preference. With a stable
 address, type/address must match uniquely; otherwise type/name must match uniquely.
 Transient USB card addresses and redacted Bluetooth addresses are excluded.
@@ -736,9 +736,14 @@ interrupted recording. A null preference explicitly delegates input choice to
 Android.
 
 A Bluetooth SCO or LE input enters communication mode. On API 31 and newer,
-native selects the communication device with the same type and address as the
-chosen input and fails if Android refuses it; earlier versions start SCO.
-Recording waits up to five seconds for the route, then fails with
+the preference identifies the communication output. Native selects that output
+and lets Android select its paired input for `VOICE_COMMUNICATION`; their
+product names need not match. Before accepting audio, native verifies the
+preferred output is uniquely resolved and active, the routed input has the
+same Bluetooth type, and any addresses visible on both endpoints agree.
+Capture then stops if the input ID or selected communication output changes.
+Earlier versions start SCO and resolve the preferred input after the link is
+ready. Recording waits up to five seconds for the route, then fails with
 `microphone_route_failed`. Playback failures report `speech_timeout`,
 `audio_focus_unavailable`, `empty_pcm_stream`, `playback_drain_timeout`, or the
 fallback `playback_failed`. Capture failures report
