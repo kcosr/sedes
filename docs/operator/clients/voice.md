@@ -218,6 +218,7 @@ chevron opens its target picker when changes are allowed. While listening,
 choosing another recording target leaves the viewed thread unchanged. When idle,
 the chevron can change the saved default when pinned or no thread is open;
 it does not navigate or start recording. A finishing recording keeps its destination fixed.
+On mobile, the picker does not focus its search field automatically.
 Beside **Listening**, the infinity button toggles **Keep listening** for the current
 recording. **Keep listening by default**, available in the quick sheet and
 **Settings → Voice**, starts new manual and automatic recordings with it enabled.
@@ -307,17 +308,17 @@ During transient recognition failures, an adopted recording keeps the microphone
 open and shows **Reconnecting** while accepted audio accumulates in encrypted
 local storage. Recovery is bounded to five retries and a 60-second failure window;
 recognizing the same audio again can repeat provider cost. Permanent errors,
-exhausted retries, or storage limits stop capture and keep a saved draft. If an
-error occurs after Send, successful recognition leaves the text ready for another
-explicit Send instead of submitting automatically.
+exhausted retries, or storage limits stop capture and keep any captured audio or
+text as a saved draft. If an error occurs after Send, successful recognition leaves
+the text ready for another explicit Send instead of submitting automatically.
 
 Startup pre-roll warms the output only after audio has been idle. Voice holds
 audio focus across consecutive speech, cues, and recording, so other media
 resumes about 1.4 seconds after voice audio ends. Another app taking focus,
 including the keyboard's dictation microphone, quietly ends the current speech
 or ordinary recording without another listening attempt. An adopted recording
-is retained as saved dictation. Text already recognized still submits if only its
-success tone is interrupted. A Bluetooth
+with captured audio or text is retained as saved dictation. Text already recognized
+still submits if only its success tone is interrupted. A Bluetooth
 headset microphone is used once Android connects its voice link; recording
 waits up to 5 seconds for that route and otherwise reports that the microphone
 could not be routed.
@@ -372,6 +373,10 @@ An older input whose admission is uncertain stays accessible while ordinary
 recording continues, but must be resolved before adopting another recording.
 Use **Start new recording** in the Voice sheet when that older item permits it;
 the new recording uses the normal visible/default thread selection.
+With **Keep listening by default** enabled, resolve the older saved dictation
+first; new manual and automatic recordings cannot start, and no start cue plays.
+An interrupted startup that captured no audio or text reports its interruption
+without keeping an empty draft or blocking the next recording.
 
 Recording storage is encrypted, device-local, and excluded from backups. Each
 recording permits 32 MiB of unresolved PCM and 128 unresolved segments; all

@@ -45,6 +45,7 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
   const route = useRoute();
   const native = state.native;
   const settings = native?.settings;
+  const saved = native ? savedRecording(native) : null;
   // A dismissed sheet or lost connection must not reopen its picker on the next visit.
   if (picker && (!open || !native)) setPicker(null);
   // A pending write locks controls with aria-disabled, not disabled: a disabled control drops focus to the page.
@@ -90,8 +91,9 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
             onClick={() => { if (!state.pending) void store.reconnect().catch(() => undefined); }}>Retry voice connection</Button> : null}
         </div>
         <VoiceRecordingRecovery store={store} threads={threads} />
-        {native?.actions.keepListeningBlockedReason === "saved_recording_pending" ? <p className="voice-sheet-help">Resolve saved dictation first to enable Keep listening for the current recording.</p> : null}
-        {native && savedRecording(native)?.admission && native.actions.canStart ? <Button variant="outline" disabled={state.pending} onClick={start}>Start new recording</Button> : null}
+        {native?.actions.keepListeningBlockedReason === "saved_recording_pending" ? <p className="voice-sheet-help">Resolve saved dictation first to enable Keep listening for the current recording.</p>
+          : settings.keepListeningByDefault && saved && !native?.actions.canStart ? <p className="voice-sheet-help">Resolve saved dictation first to start with Keep listening.</p> : null}
+        {native && saved?.admission && native.actions.canStart ? <Button variant="outline" disabled={state.pending} onClick={start}>Start new recording</Button> : null}
         <div className="-mx-3 -mt-2 flex flex-col">
           <SwitchRow icon={<Ear aria-hidden="true" />} label="Auto-listen" description="Eligible notifications reopen the mic"
             checked={settings.autoListen} locked={locked} onCheckedChange={autoListen => update({ autoListen })} />

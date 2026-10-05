@@ -84,6 +84,61 @@ public class NativeDictationStoreTest {
         }
     }
 
+    @Test public void restartReleasesAuthenticatedEmptyStartupButKeepsAudioTextAndUnreadableRecords() throws Exception {
+        for (String content : new String[] { "empty", "audio", "text", "unreadable" }) {
+            root = temporary.newFolder("startup-" + content);
+            try (NativeDictationStore store = open()) {
+                NativeDictationStore.Journal journal = create(store, "startup"); journal.adopt(true);
+                if (content.equals("audio")) { journal.append(0, pcm(2)); journal.checkpoint(); }
+                if (content.equals("text")) completedSegment(journal, 0, "Saved words");
+                assertNotNull("Read-only bootstrap cannot delete a live cached startup", store.recover(BINDING));
+            }
+            if (content.equals("unreadable")) {
+                File manifest = file("manifest.enc"); byte[] bytes = Files.readAllBytes(manifest.toPath()); bytes[bytes.length - 1] ^= 1;
+                Files.write(manifest.toPath(), bytes);
+            }
+            try (NativeDictationStore store = open()) {
+                NativeDictationStore.Recording recovered = store.recover(BINDING);
+                if (content.equals("empty")) { assertNull(recovered); assertTrue(files().isEmpty()); }
+                else {
+                    assertNotNull(recovered);
+                    if (content.equals("unreadable")) assertEquals("unavailable", recovered.stage);
+                    else { assertEquals(1, recovered.durableSamples); if (content.equals("text")) assertEquals("Saved words", recovered.text); }
+                    assertFalse(files().isEmpty());
+                }
+            }
+        }
+    }
+
+    @Test public void emptySettlementPreservesKnownCapturedAudioWhenItsFirstCheckpointFailed() throws Exception {
+        NativeDictationStore.Disk disk = new NativeDictationStore.Disk() {
+            @Override void fault(String phase, File file) throws IOException {
+                if (phase.equals("before_write") && file.getName().startsWith("pcm-")) throw new IOException("first_audio_write_failed");
+            }
+        };
+        try (NativeDictationStore store = open(disk, limits(1024, 128, 4 * 1024 * 1024))) {
+            NativeDictationStore.Journal journal = create(store, "captured"); journal.adopt(true); journal.append(0, pcm(2));
+            assertEquals(1, journal.load().acceptedSamples); assertEquals(0, journal.load().durableSamples);
+            journal.interrupt("dictation_storage_unavailable");
+            assertTrue(journal.load().empty());
+            assertNotNull("A failed flush cannot reclassify known captured audio as unused startup", store.settleInterruption(BINDING, "captured", true));
+            assertTrue(store.pendingRetirements(BINDING).isEmpty());
+        }
+    }
+
+    @Test public void emptyCleanupFailureNeverPublishesATerminalDraftAsUnavailable() throws Exception {
+        for (boolean bootstrap : new boolean[] { false, true }) for (boolean beforeMarker : new boolean[] { false, true }) {
+            root = temporary.newFolder("empty-cleanup-" + bootstrap + "-" + beforeMarker);
+            try (NativeDictationStore store = open()) { create(store, "startup").adopt(true); }
+            FaultDisk disk = new FaultDisk(); disk.arm(beforeMarker ? "before_write" : "before_delete", beforeMarker ? "terminal.enc" : "manifest.enc");
+            try (NativeDictationStore store = open(disk, limits(1024, 128, 4 * 1024 * 1024))) {
+                failure("dictation_storage_unavailable", () -> { if (bootstrap) store.recover(BINDING); else store.settleInterruption(BINDING, "startup", false); });
+                assertEquals(beforeMarker ? 0 : 1, store.pendingRetirements(BINDING).size());
+                assertNull(store.recover(BINDING)); assertTrue(files().isEmpty());
+            }
+        }
+    }
+
     @Test public void authenticatedBlocksRecoverOnlyCheckpointedSamplesAndNeverStorePlaintext() throws Exception {
         byte[] pcm = pcm(12);
         try (NativeDictationStore store = open()) {
@@ -124,7 +179,7 @@ public class NativeDictationStoreTest {
 
     @Test public void ordinaryAttemptsDoNotBecomeRecoverySlotsAndCachedOrdinaryCaptureSurvivesRefresh() throws Exception {
         try (NativeDictationStore store = open()) {
-            NativeDictationStore.Journal saved = create(store, "saved"); saved.adopt(true); saved.interrupt("disconnected");
+            NativeDictationStore.Journal saved = create(store, "saved"); saved.adopt(true); saved.append(0, pcm(2)); saved.interrupt("disconnected");
             NativeDictationStore.Journal ordinary = create(store, "ordinary"); ordinary.append(0, pcm(8));
             assertEquals("saved", store.recover(BINDING).id); assertEquals(4, ordinary.load().durableSamples);
         }
@@ -162,9 +217,9 @@ public class NativeDictationStoreTest {
             failure("dictation_storage_unavailable", () -> journal.append(0, pcm(8)));
         }
         try (NativeDictationStore store = open()) {
-            NativeDictationStore.Recording record = store.recover(BINDING); assertEquals(samples, record.durableSamples);
-            assertEquals(samples, record.endSample); assertTrue(record.captureIncomplete);
-            if (samples == 0) assertFalse(files().stream().anyMatch(file -> file.getName().startsWith("pcm-")));
+            NativeDictationStore.Recording record = store.recover(BINDING);
+            if (samples == 0) { assertNull(record); assertTrue(files().isEmpty()); }
+            else { assertEquals(samples, record.durableSamples); assertEquals(samples, record.endSample); assertTrue(record.captureIncomplete); }
         }
     }
 
@@ -215,7 +270,7 @@ public class NativeDictationStoreTest {
     }
 
     @Test public void transientKeyFailureKeepsFilesAndLaterRetryRecovers() throws Exception {
-        try (NativeDictationStore store = open()) { create(store, "locked").adopt(true); }
+        try (NativeDictationStore store = open()) { NativeDictationStore.Journal journal = create(store, "locked"); journal.adopt(true); completedSegment(journal, 0, "Saved words"); }
         List<File> before = files(); AtomicBoolean unavailable = new AtomicBoolean(true);
         try (NativeDictationStore store = new NativeDictationStore(root, () -> {
             if (unavailable.get()) throw new java.security.InvalidKeyException("temporarily busy"); return key;
@@ -228,7 +283,7 @@ public class NativeDictationStoreTest {
     @Test public void ciphertextCopiedBetweenBindingsCannotAuthenticate() throws Exception {
         File source;
         try (NativeDictationStore store = open()) {
-            create(store, "owner").adopt(true); source = file("manifest.enc");
+            NativeDictationStore.Journal journal = create(store, "owner"); journal.adopt(true); completedSegment(journal, 0, "Owner words"); source = file("manifest.enc");
             store.create(OTHER, "owner", "target", null, config()).adopt(true);
         }
         File destination = files().stream().filter(value -> value.getName().equals("manifest.enc") && !value.equals(source)).findFirst().orElseThrow();

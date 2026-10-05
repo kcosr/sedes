@@ -446,6 +446,10 @@ held capture policy must succeed before the microphone starts; unavailable
 storage or a saved recording occupying the slot blocks capture. Preference
 edits affect future recordings, while the infinity control changes only the
 current recording. Strict settings record version 6 requires the field.
+Freezing an enabled default immediately clears automatic-policy and client-action
+authority, before asynchronous preflight or adoption can race a policy change.
+An unresolved retained dictation blocks default-held manual and automatic starts
+before target validation or the start cue, and makes `actions.canStart` false.
 
 The first accepted Keep listening enable adopts the complete recording,
 suppresses ordinary endpoints while adoption becomes durable, and
@@ -462,7 +466,8 @@ The voice toolbar preserves its existing 60 px row at normal text scale, includi
 320 px layouts. The left status icon opens the quick sheet and carries a small
 caret. The title/status area opens the voice target thread; a separate chevron
 opens the picker when the native state permits retargeting or an idle default can
-be chosen. Choosing a target does not navigate. Infinity is a full-size button
+be chosen. Choosing a target does not navigate. On mobile, initial picker focus
+stays outside its search input to avoid opening the keyboard. Infinity is a full-size button
 beside the title/status area, and the right-side Cancel and Send controls are separated.
 Touch regions remain distinct and at least 44 px. Reconnecting and error details
 use the existing status line. An older saved draft marks the quick-controls icon
@@ -500,7 +505,10 @@ Overflow retains the bounded recognized prefix and offending result for Copy
 and Discard. Nothing is silently truncated to make Send succeed.
 
 Interrupted adopted recordings release hardware and block new capture/queue drain
-before admission handoff. Restart restores only the draft and immutable admission
+before admission handoff. An interrupted startup with no accepted or durable
+audio samples and no recognized text releases its empty slot after serialized
+settlement; it reports the interruption without publishing an empty ready draft.
+Unreadable storage remains preserved. Restart restores only the draft and immutable admission
 request; it cannot resume the microphone, recognition, or POST automatically.
 Missing interior audio blocks Send. An explicit recovery Send can accept a
 reported incomplete trailing watermark only with `acknowledgeIncomplete: true`

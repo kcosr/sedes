@@ -50,6 +50,14 @@ public class NativeVoiceRecordingTest {
         assertNull(h.listener.error);
     }
 
+    @Test public void firstQueuedPacketIsKnownAsCapturedBeforeTheWorkerCanFlushIt() {
+        Harness h = new Harness(); h.journal.adopt(true); h.recording.start(true); h.flush();
+        assertFalse(h.recording.hasAcceptedAudio()); assertTrue(h.recording.accept(pcm(2400, 2100)));
+        assertTrue(h.recording.hasAcceptedAudio()); assertEquals(0, h.journal.accepted);
+        h.journal.failCheckpoint = true; h.recording.interrupt("voice_off"); h.flush();
+        assertTrue(h.recording.hasAcceptedAudio()); assertTrue(h.listener.retained);
+    }
+
     @Test public void aJournalAdoptedBeforeStartupHasHeldRetryAndRetentionSemanticsImmediately() {
         Harness h = new Harness(); h.journal.adopt(true); h.recording.start(true); h.flush();
         assertTrue(h.journal.keep); h.feedFrames(1);
@@ -387,16 +395,16 @@ public class NativeVoiceRecordingTest {
         }
     }
 
-    @Test public void durableAdoptionSurvivesInterruptionsBeforeTheFirstStartupWorker() throws Exception {
+    @Test public void startupInterruptionsRetainAudioAndReleaseTrulyEmptyAdoption() throws Exception {
         for (boolean retry : new boolean[] { false, true }) {
             for (String reason : new String[] { "voice_off", "connection_changed", "audio_focus_lost" })
-                assertAdoptedStartupRetained(retry, reason, false);
+                assertAdoptedStartupSettled(retry, reason, false);
         }
     }
 
-    @Test public void durableAdoptionSurvivesAnInitialJournalReadFailure() throws Exception {
+    @Test public void initialJournalReadFailuresRetainAudioAndReleaseTrulyEmptyAdoption() throws Exception {
         for (boolean retry : new boolean[] { false, true })
-            assertAdoptedStartupRetained(retry, "dictation_storage_unavailable", true);
+            assertAdoptedStartupSettled(retry, "dictation_storage_unavailable", true);
     }
 
     @Test public void anOrdinaryStartupInterruptionAndAnExplicitAdoptedDiscardStillDeleteTheirJournal() {
@@ -406,7 +414,7 @@ public class NativeVoiceRecordingTest {
         adopted.flush(); assertTrue(adopted.journal.discarded); assertNull(adopted.listener.error); assertTrue(adopted.sessions.isEmpty());
     }
 
-    private void assertAdoptedStartupRetained(boolean retry, String reason, boolean failFirstLoad) throws Exception {
+    private void assertAdoptedStartupSettled(boolean retry, String reason, boolean failFirstLoad) throws Exception {
         String binding = "profile\nhttps://sedes.example\n" + "a".repeat(64);
         javax.crypto.KeyGenerator generator = javax.crypto.KeyGenerator.getInstance("AES"); generator.init(256); SecretKey key = generator.generateKey();
         File directory = temporary.newFolder(); JSONObject config = new JSONObject(), defaults = NativeVoiceSettings.defaults().value;
@@ -429,15 +437,20 @@ public class NativeVoiceRecordingTest {
             }
             worker.run(); time.advance(60000); worker.run();
             assertTrue(time.closed); assertTrue(listener.retained); assertEquals(reason, listener.error); assertNull(listener.text);
-            NativeDictationStore.Recording retained = journal.load(); assertTrue(retained.adopted); assertEquals(retry ? "interrupted" : "ready", retained.stage);
-            assertEquals(retry ? "Saved prefix" : "", retained.text); assertEquals(retry ? 4800 : 0, retained.durableSamples);
-            if (retry) assertArrayEquals(pcm(2400, 1200), journal.read(2400, 4800));
-            assertTrue("An interruption must not create a discard marker", store.pendingRetirements(binding).isEmpty());
+            NativeDictationStore.Recording retained = store.settleInterruption(binding, "recording", recording.hasAcceptedAudio());
+            if (retry) {
+                assertNotNull(retained); assertTrue(retained.adopted); assertEquals("interrupted", retained.stage);
+                assertEquals("Saved prefix", retained.text); assertEquals(4800, retained.durableSamples);
+                assertArrayEquals(pcm(2400, 1200), journal.read(2400, 4800));
+            } else assertNull("No accepted audio or text means there is no saved work", retained);
+            assertTrue(store.pendingRetirements(binding).isEmpty());
         }
         try (NativeDictationStore reopened = new NativeDictationStore(directory, () -> key, new NativeDictationStore.Disk(), NativeDictationStore.Limits.defaults())) {
-            NativeDictationStore.Recording retained = reopened.recover(binding); assertNotNull(retained); assertTrue(retained.adopted);
-            assertEquals(retry ? "Saved prefix" : "", retained.text); assertEquals(retry ? 4800 : 0, retained.durableSamples);
-            if (retry) assertArrayEquals(pcm(2400, 1200), reopened.journal(binding, "recording").read(2400, 4800));
+            NativeDictationStore.Recording retained = reopened.recover(binding);
+            if (retry) {
+                assertNotNull(retained); assertTrue(retained.adopted); assertEquals("Saved prefix", retained.text); assertEquals(4800, retained.durableSamples);
+                assertArrayEquals(pcm(2400, 1200), reopened.journal(binding, "recording").read(2400, 4800));
+            } else assertNull(retained);
         }
     }
 

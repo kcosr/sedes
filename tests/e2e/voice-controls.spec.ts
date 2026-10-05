@@ -59,8 +59,17 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await expect(page).toHaveURL(new RegExp(`${otherThreadPath}$`, "u"));
   await expect(targetPicker).toHaveCount(0);
   expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "retargetActiveRecognition"))).toEqual([]);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await change.click();
+  await expect(targetPicker.getByRole("textbox", { name: "Search voice threads" })).toBeFocused();
+  await targetPicker.press("Escape");
+  await expect(targetPicker).toHaveCount(0);
+  await page.setViewportSize({ width: 320, height: 780 });
   await change.click();
   await expect(targetPicker).toContainText("Recognized text will be sent to the thread you select.");
+  await expect(targetPicker).toBeFocused();
+  await expect(targetPicker.getByRole("textbox", { name: "Search voice threads" })).not.toBeFocused();
+  await capture(page, testInfo, "voice-thread-picker-mobile-browsing.png");
   await targetPicker.getByRole("button", { name: "Voice navigation source", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`${otherThreadPath}$`, "u"));
   await expect(toolbar.getByRole("button", { name: /^Open thread:/u })).toBeVisible();

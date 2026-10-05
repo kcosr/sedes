@@ -1378,14 +1378,12 @@ public class NativeVoiceRuntimeTest {
                         }
                     }
                     f.flush(); assertTrue(f.speech.transcriptions.isEmpty()); assertNull(field(f.runtime, "captureOwner"));
-                    if (adoptedBeforeCancellation && !action.equals("cancel")) {
-                        assertNotNull("Recovery must run after the durable interruption boundary", restored.get());
-                        assertEquals(id, restored.get().id); assertTrue(restored.get().adopted); assertEquals(0, restored.get().endSample);
-                        assertEquals(action.equals("off") ? "voice_off" : action.equals("disconnect") ? "connection_changed" : "audio_focus_lost", restored.get().reason);
-                        if (!action.equals("disconnect")) assertEquals(id, f.runtime.snapshot().getJSONObject("recordingRecovery").getString("recordingId"));
-                    } else {
-                        f.onStore(() -> assertNull(f.dictations.recover(f.binding)));
-                        assertTrue(f.runtime.snapshot().isNull("recordingRecovery"));
+                    assertNull("Empty startup has no work for reconnect recovery", restored.get());
+                    f.onStore(() -> assertNull(f.dictations.recover(f.binding)));
+                    assertTrue(f.runtime.snapshot().isNull("recordingRecovery"));
+                    if (adoptedBeforeCancellation && !action.equals("cancel") && !action.equals("disconnect")) {
+                        String reason = action.equals("off") ? "voice_off" : "audio_focus_lost";
+                        assertEquals(1, f.errors(reason)); assertFalse(f.lastError().getString("message").contains("saved"));
                     }
                     assertFalse((boolean) field(f.runtime, "dictationStorageError"));
                     assertFalse((boolean) field(f.runtime, "dictationOperationPending"));
@@ -1422,8 +1420,48 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
+    @Test public void defaultHeldOwnershipSurvivesPolicyChangesWhilePreflightIsBlocked() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            f.automaticRecognizing(false); Object active = field(f.runtime, "active");
+            f.settings(NativeVoiceJson.object("keepListeningByDefault", true)); f.holdRecordingPreflight = true;
+            Object navigation = field(f.runtime, "inputSubmissionContext");
+            f.onOwner(() -> {
+                ((NativeVoiceRecording) field(active, "recording")).discard(); set(active, "recording", null);
+                f.invoke("closeRecordingTransport", new Class<?>[] { active.getClass() }, active);
+                f.invoke("beginCapture", new Class<?>[] { active.getClass() }, active);
+            });
+            NativeSpeechCatalog.PreflightResult preflight = f.preflights.poll(10, TimeUnit.SECONDS); assertNotNull(preflight);
+            assertFalse((boolean) field(active, "automatic")); assertTrue((boolean) field(active, "defaultHeld"));
+            assertFalse((boolean) field(active, "adopted")); assertNotSame(navigation, field(f.runtime, "inputSubmissionContext"));
+            f.settings(NativeVoiceJson.object("autoListen", false));
+            f.onOwner(() -> f.invoke("streamFailed", new Class<?>[] { String.class }, "network_unavailable"));
+            assertSame(active, field(f.runtime, "active")); assertFalse((boolean) field(active, "stopped"));
+            preflight.done(NativeSpeechCapabilities.hosted("gpt-live-transcribe"), null);
+            assertNotNull(f.speech.transcriptions.poll(10, TimeUnit.SECONDS)); f.flush();
+            assertSame(active, field(f.runtime, "active")); assertTrue((boolean) field(active, "keepListening"));
+        }
+    }
+
+    @Test public void startupRecognitionFailureReleasesEmptyAdoptionButKeepsTheFirstAcceptedPacket() throws Exception {
+        for (boolean captured : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                f.recognizing(false, true); Object active = field(f.runtime, "active");
+                if (captured) f.onOwner(() -> assertTrue(((NativeVoiceRecording) field(active, "recording")).accept(captureFrame(1000))));
+                f.synthetic.listener.failed(f.synthetic.id, null, new NativeSpeechTransport.Failure(NativeSpeechTransport.Kind.AUTHENTICATION, "recognition_authentication_failed", 401));
+                f.flush(); assertTrue(f.runtime.snapshot().isNull("active")); assertEquals(1, f.errors("recognition_authentication_failed"));
+                assertEquals(captured, !f.runtime.snapshot().isNull("recordingRecovery"));
+                f.onStore(() -> {
+                    NativeDictationStore.Recording restored = f.dictations.recover(f.binding);
+                    if (captured) { assertNotNull(restored); assertEquals(2400, restored.durableSamples); }
+                    else assertNull(restored);
+                });
+            }
+        }
+    }
+
     @Test public void defaultHeldRefusesAnOccupiedRecoverySlotWithoutStartingNormalCapture() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
+            NativeVoiceAudioTest.grant(f.context, "android.permission.RECORD_AUDIO");
             NativeDictationStore.Recording saved = f.savedRecording(true, false);
             f.onStore(() -> {
                 f.dictations.saveFinalRequest(f.binding, saved.id, NativeVoiceJson.object("mutationId", saved.mutationId, "text", saved.text,
@@ -1432,7 +1470,20 @@ public class NativeVoiceRuntimeTest {
             AtomicReference<NativeDictationStore.Recording> handedOff = new AtomicReference<>();
             f.onStore(() -> handedOff.set(f.dictations.markHandedOff(f.binding, saved.id)));
             f.onOwner(() -> { set(f.runtime, "retainedDictation", handedOff.get()); f.invoke("publish", new Class<?>[0]); });
+            assertTrue(f.runtime.snapshot().getJSONObject("actions").getBoolean("canStart"));
             f.settings(NativeVoiceJson.object("keepListeningByDefault", true));
+            assertFalse(f.runtime.snapshot().getJSONObject("actions").getBoolean("canStart"));
+            assertEquals("saved_recording_pending", f.command("startManualListen", NativeVoiceJson.object("threadId", f.target)));
+            assertTrue(f.contexts.isEmpty()); assertTrue(f.cues.isEmpty());
+            for (String boundary : new String[] { "validateTarget", "arm" }) f.onOwner(() -> {
+                Class<?> type = Class.forName("dev.sedes.local.NativeVoiceRuntime$Active");
+                Constructor<?> ctor = type.getDeclaredConstructor(String.class, String.class); ctor.setAccessible(true);
+                Object next = ctor.newInstance(f.target, "Automatic follow-up"); set(next, "automatic", true); set(f.runtime, "active", next);
+                if (boundary.equals("validateTarget")) f.invoke(boundary, new Class<?>[] { type, boolean.class }, next, true);
+                else f.invoke(boundary, new Class<?>[] { type }, next);
+                assertTrue(f.runtime.snapshot().isNull("active"));
+            });
+            assertTrue(f.contexts.isEmpty()); assertTrue(f.cues.isEmpty());
             f.onOwner(() -> {
                 Class<?> activeClass = Class.forName("dev.sedes.local.NativeVoiceRuntime$Active");
                 Constructor<?> ctor = activeClass.getDeclaredConstructor(String.class, String.class); ctor.setAccessible(true);

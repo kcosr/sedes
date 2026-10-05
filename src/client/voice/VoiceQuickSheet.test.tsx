@@ -362,6 +362,40 @@ describe("voice quick sheet", () => {
     expect(store.getSnapshot().native?.recordingRecovery).toEqual(saved);
     store.dispose();
   });
+  it("explains a retained dictation blocking default Keep listening and updates when the default changes", async () => {
+    const saved = recordingRecovery({ stage: "admitting", hasUnrecognizedAudio: false, admission: {
+      mutationId: "50000000-0000-4000-8000-000000000001", status: "uncertain", cancelled: false } });
+    const native = { ...ready(), recordingRecovery: saved };
+    const { fake, store, sheet } = await renderSheet(native);
+    const explanation = "Resolve saved dictation first to start with Keep listening.";
+    expect(within(sheet).getByRole("button", { name: "Start new recording" })).toBeEnabled();
+    expect(within(sheet).queryByText(explanation)).toBeNull();
+    act(() => fake.emit("stateChanged", { ...native, stateRevision: 2, settingsRevision: 1,
+      settings: { ...native.settings, keepListeningByDefault: true }, actions: { ...native.actions, canStart: false } }));
+    expect(within(sheet).getByRole("switch", { name: "Keep listening by default" })).toBeChecked();
+    expect(within(sheet).queryByRole("button", { name: "Start new recording" })).toBeNull();
+    expect(within(sheet).getByText(explanation)).toBeInTheDocument();
+    act(() => fake.emit("stateChanged", { ...native, stateRevision: 3, settingsRevision: 2 }));
+    expect(within(sheet).getByRole("switch", { name: "Keep listening by default" })).not.toBeChecked();
+    expect(within(sheet).getByRole("button", { name: "Start new recording" })).toBeEnabled();
+    expect(within(sheet).queryByText(explanation)).toBeNull();
+    expect(fake.plugin.startManualListen).not.toHaveBeenCalled();
+    store.dispose();
+  });
+  it("shows only the current-recording explanation when saved dictation blocks both Keep listening actions", async () => {
+    const native: NativeVoiceState = { ...ready({ keepListeningByDefault: true }), phase: "listening", active: {
+      id: "current", eventKind: "manual", threadId: "standup", threadTitle: "Daily standup notes",
+      recognitionThreadId: "standup", recognitionThreadTitle: "Daily standup notes", automatic: false,
+      recording: { id: "current-recording", keepListening: false, reconnecting: false } },
+      actions: voiceActions({ canStop: true, keepListeningBlockedReason: "saved_recording_pending" }),
+      recordingRecovery: recordingRecovery() };
+    const { store, sheet } = await renderSheet(native);
+    expect(within(sheet).getAllByText(/^Resolve saved dictation first/u)).toHaveLength(1);
+    expect(within(sheet).getByText("Resolve saved dictation first to enable Keep listening for the current recording.")).toBeInTheDocument();
+    expect(within(sheet).queryByText("Resolve saved dictation first to start with Keep listening.")).toBeNull();
+    expect(within(sheet).queryByRole("button", { name: "Start new recording" })).toBeNull();
+    store.dispose();
+  });
   it("saves an unavailable pin before starting a new recording and retains older admission", async () => {
     navigate(threadPath("long"));
     const saved = recordingRecovery({ stage: "admitting", hasUnrecognizedAudio: false, admission: {

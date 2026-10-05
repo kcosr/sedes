@@ -781,6 +781,11 @@
   with a separate target-picker chevron and full-size infinity button. Listening,
   Cancel, and Send have distinct spacing. Submitted
   voice messages show their complete text immediately without a preview label.
+  Opening the voice thread picker on mobile leaves the keyboard closed.
+
+- Interrupted voice startup no longer leaves an empty saved dictation blocking
+  recording. Default-held recordings survive automatic-policy changes during
+  startup, and an unresolved saved dictation disables unavailable held starts.
 
 - Oversized queued user input offers **Copy full text**, preserving access to
   failed or not-sent dictation without exceeding the composer's 64 KiB limit.

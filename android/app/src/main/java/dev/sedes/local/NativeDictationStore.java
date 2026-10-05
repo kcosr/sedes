@@ -252,6 +252,7 @@ final class NativeDictationStore implements AutoCloseable {
         }
         boolean complete() { return endSample >= 0 && completedSamples == endSample && segments.isEmpty(); }
         boolean overflow() { return textBytes > MAX_TEXT_BYTES; }
+        boolean empty() { return acceptedSamples == 0 && durableSamples == 0 && text.isEmpty() && request == null && !handedOff; }
     }
 
     NativeDictationStore(Context context) {
@@ -348,6 +349,27 @@ final class NativeDictationStore implements AutoCloseable {
         synchronized (LOCK) { return snapshot(require(binding, id)); }
     }
 
+    /** Called after accepted PCM has drained and the interruption boundary has settled. */
+    Recording settleInterruption(String binding, String id, boolean capturedAudio) throws Exception {
+        synchronized (LOCK) {
+            Recording record = get(binding, id);
+            if (capturedAudio || !record.empty()) return record;
+            discardEmptyStartup(binding, id); return null;
+        }
+    }
+
+    /** Only for authenticated empty journals whose capture has stopped or belongs to a previous process. */
+    private void discardEmptyStartup(String binding, String id) throws Exception {
+        try { discard(binding, id); }
+        catch (Exception error) {
+            // A failed marker write leaves no retirement to drain. Do not let this inactive cache entry
+            // look like a live startup and bypass the next bootstrap cleanup attempt.
+            Live cached = live.remove(cacheKey(binding, id));
+            if (cached != null) releaseCapture(cached);
+            throw error;
+        }
+    }
+
     /** Bootstrap only: ordinary attempts are not adopted, and durable adopted work never restarts itself. */
     Recording recover(String binding) throws Exception {
         synchronized (LOCK) {
@@ -375,6 +397,8 @@ final class NativeDictationStore implements AutoCloseable {
                         if (!cached) discard(binding, id);
                         continue;
                     }
+                    // Authenticate every stored watermark before deciding an abandoned startup has no work to keep.
+                    if (!cached && snapshot(item).empty()) { retired = true; discardEmptyStartup(binding, id); continue; }
                     if (!cached) {
                         JSONObject next = NativeVoiceJson.copy(item.manifest);
                         String stage = next.optString("stage");

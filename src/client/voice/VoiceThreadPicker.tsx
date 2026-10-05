@@ -1,9 +1,10 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, type DialogLayer } from "../components/ui/dialog.js";
 import { Button } from "../components/ui/button.js";
 import { eyebrowClass } from "../components/ui/floating.js";
 import { Input } from "../components/ui/input.js";
+import { usePickerFocus } from "../lib/use-picker-focus.js";
 import { cn } from "../lib/utils.js";
 
 export function VoiceThreadPicker({ threads, open, onOpenChange, onSelect, pinned, title = "Choose voice thread", description = "Recognized text will be sent to the thread you select.", layer = "dialog" }: {
@@ -17,16 +18,18 @@ export function VoiceThreadPicker({ threads, open, onOpenChange, onSelect, pinne
   pinned?: { threadId: string | null; label: string };
 }): React.JSX.Element {
   const [search, setSearch] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const pickerFocus = usePickerFocus(searchRef);
   const labelId = useId();
   const matching = threads.filter(thread => thread.available && (thread.inventoryState === "active" || thread.inventoryState === "settled") &&
     thread.title.text.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
   const first = pinned?.threadId ? matching.find(thread => thread.id === pinned.threadId) : undefined;
   const choices = first ? [first, ...matching.filter(thread => thread !== first)] : matching;
   return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent layer={layer}>
+    <DialogContent layer={layer} onOpenAutoFocus={pickerFocus.onOpenAutoFocus}>
       <DialogHeader><DialogTitle>{title}</DialogTitle>
         <DialogDescription>{description}</DialogDescription></DialogHeader>
-      <Input aria-label="Search voice threads" value={search} onChange={event => setSearch(event.target.value)} />
+      <Input ref={searchRef} aria-label="Search voice threads" value={search} onChange={event => setSearch(event.target.value)} />
       {choices.length ? <ul className="grid max-h-80 gap-1 overflow-y-auto" role="list" aria-label="Voice threads">
         {/* The pinned label sits outside the button, so every choice is named by its title alone. */}
         {choices.map(thread => <li key={thread.id} className={cn("grid min-w-0", thread === first && choices.length > 1 && "border-b border-border-soft pb-1")}>
