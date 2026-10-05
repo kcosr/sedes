@@ -1005,6 +1005,17 @@ describe("PendingInputStrip", () => {
     );
   });
 
+  it.each(["pending", "retry_wait", "failed"] as const)("disables oversized %s restoration even when the composer is empty", state => {
+    const reason = "This input is too large to restore to the composer (64 KiB limit).";
+    const store = new FakeStripStore(snapshot([queued("large", 1, state, { restoreUnavailableReason: { text: reason } })]));
+    const { onRestore } = renderStrip(store, false, { available: true });
+    const restore = screen.getByRole("button", { name: "Restore queued input to composer: Prompt large" });
+    expect(restore).toBeDisabled();
+    expect(restore).toHaveAttribute("title", reason);
+    fireEvent.click(restore);
+    expect(onRestore).not.toHaveBeenCalled();
+  });
+
   it("keeps pending and failure feedback row-scoped", async () => {
     let rejectHead!: (error: Error) => void;
     const store = new FakeStripStore(

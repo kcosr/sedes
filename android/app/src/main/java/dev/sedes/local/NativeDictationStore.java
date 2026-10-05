@@ -156,7 +156,7 @@ final class NativeDictationStore implements AutoCloseable {
             // Queue plus one accumulating block are accounted before capture can accept PCM. Control headroom is
             // inside the 64 MiB budget: two maximum manifests can coexist during an atomic request replacement.
             return new Limits(MAX_PENDING_PCM_BYTES, MAX_SEGMENTS, MAX_DEVICE_BYTES, BLOCK_PCM_BYTES,
-                4L * 1024 * 1024, 307_200L + BLOCK_PCM_BYTES);
+                4L * 1024 * 1024, 307_200L + 4_800 + BLOCK_PCM_BYTES + 8L * (BLOCK_HEADER_BYTES + ENCRYPTION_BYTES));
         }
     }
 
@@ -175,9 +175,9 @@ final class NativeDictationStore implements AutoCloseable {
         JSONObject manifest;
         final List<Block> blocks = new ArrayList<>();
         final ByteArrayOutputStream tail = new ByteArrayOutputStream();
-        long durableSamples, acceptedSamples, nextBlock;
-        String text;
-        boolean captureReserved;
+        long durableSamples, acceptedSamples, nextBlock, captureReservedBytes;
+        String text, pendingInterruption;
+        boolean captureReserved, drainOnly, reloadNeeded, adoptionRequested;
         Live(String binding, String id, long profileGeneration, JSONObject manifest, String text) {
             this.binding = binding; this.id = id; this.profileGeneration = profileGeneration;
             this.manifest = manifest; this.text = text;
@@ -283,17 +283,19 @@ final class NativeDictationStore implements AutoCloseable {
             checkOwner(binding); validId(id); validTarget(threadId, threadTitle); validateConfig(config);
             File directory = directory(binding, id);
             if (directory.exists() || live.containsKey(cacheKey(binding, id))) throw new IllegalStateException("dictation_identity_conflict");
-            reserveCapture();
             JSONObject manifest = NativeVoiceJson.object("version", VERSION, "id", id, "binding", binding, "revision", 0,
                 "threadId", threadId, "threadTitle", threadTitle, "config", NativeVoiceJson.copy(config), "stage", "capturing", "reason", null,
                 "adopted", false, "keepListening", false, "captureIncomplete", false, "incompleteAccepted", false,
                 "prefixRevision", 0, "textBytes", 0, "completedOrdinal", -1, "completedSamples", 0,
                 "segments", new JSONArray(), "endSample", -1, "mutationId", null, "preference", null,
                 "request", null, "requestFingerprint", null, "handedOff", false);
-            Live item = new Live(binding, id, generation(profile(binding)), manifest, ""); item.captureReserved = true;
+            Live item = new Live(binding, id, generation(profile(binding)), manifest, ""); reserveCapture(item);
             try {
-                writeJson(item, "checkpoint", NativeVoiceJson.object("version", VERSION, "samples", 0, "nextBlock", 0), true);
+                // Only initialization writes this marker, and create cannot return a Journal until its removal is durable.
+                writeJson(item, "creating", NativeVoiceJson.object("version", VERSION, "id", id, "binding", binding, "creating", true), true);
                 writeJson(item, "manifest", manifest, true);
+                writeJson(item, "checkpoint", NativeVoiceJson.object("version", VERSION, "samples", 0, "nextBlock", 0), true);
+                deleteFile(recordFile(binding, id, "creating"));
                 live.put(cacheKey(binding, id), item);
                 return journal(binding, id);
             } catch (Exception error) {
@@ -356,14 +358,19 @@ final class NativeDictationStore implements AutoCloseable {
                 String id = directory.getName();
                 if (!isId(id)) throw new Failure("dictation_storage_corrupt", true);
                 boolean cached = live.containsKey(cacheKey(binding, id));
-                Recording candidate;
+                Recording candidate; boolean retired = false;
                 try {
                     Retirement retirement = retirement(binding, id);
                     if (retirement != null) {
+                        retired = true;
                         if (retirement.mutationId == null) deleteTree(directory);
                         continue;
                     }
+                    if (!cached && incompleteCreate(binding, id, directory)) { deleteTree(directory); continue; }
                     Live item = require(binding, id);
+                    if (item.pendingInterruption != null) {
+                        interruptRecording(binding, id, item.pendingInterruption); item = require(binding, id);
+                    }
                     if (!item.manifest.optBoolean("adopted")) {
                         if (!cached) discard(binding, id);
                         continue;
@@ -380,10 +387,11 @@ final class NativeDictationStore implements AutoCloseable {
                             NativeVoiceJson.put(next, "reason", "recording_interrupted");
                             persistManifest(item, next);
                         }
-                        cleanupOrphans(item);
+                        reclaim(item);
                     }
                     candidate = snapshot(item);
                 } catch (Failure error) {
+                    if (retired) throw error; // Cleanup failure is reported separately; an acknowledged discard cannot reappear.
                     // Unreadable audio is never mistaken for an ordinary empty attempt and silently discarded.
                     candidate = unavailable(binding, id, error.code);
                 }
@@ -615,12 +623,13 @@ final class NativeDictationStore implements AutoCloseable {
                 start > MAX_SAMPLE - pcm.length / 2) throw new IllegalArgumentException("dictation_pcm_invalid");
             if ((item.acceptedSamples - item.manifest.optLong("completedSamples")) * 2 + pcm.length > limits.pendingPcmBytes)
                 throw new Failure("dictation_audio_capacity", false);
-            if (!item.captureReserved) { reserveCapture(); item.captureReserved = true; }
+            if (!item.captureReserved) reserveCapture(item);
+            replenishCapture(item);
             int offset = 0;
             while (offset < pcm.length) {
                 int count = Math.min(pcm.length - offset, limits.blockPcmBytes - item.tail.size());
                 item.tail.write(pcm, offset, count); item.acceptedSamples += count / 2; offset += count;
-                if (item.tail.size() == limits.blockPcmBytes) flush(item);
+                if (item.tail.size() == limits.blockPcmBytes) { flush(item); replenishCapture(item); }
             }
         }
     }
@@ -635,7 +644,7 @@ final class NativeDictationStore implements AutoCloseable {
         long ordinal = item.nextBlock, end = item.durableSamples + pcm.length / 2;
         ByteBuffer record = ByteBuffer.allocate(BLOCK_HEADER_BYTES + pcm.length);
         record.putLong(ordinal).putLong(item.durableSamples).putInt(pcm.length).put(pcm);
-        writeRecord(item.binding, item.id, "pcm-" + ordinal, record.array(), false);
+        writeRecord(item.binding, item.id, "pcm-" + ordinal, record.array(), false, item);
         writeJson(item, "checkpoint", NativeVoiceJson.object("version", VERSION, "samples", end, "nextBlock", ordinal + 1), true);
         item.blocks.add(new Block(ordinal, item.durableSamples, end, recordFile(item.binding, item.id, "pcm-" + ordinal)));
         item.durableSamples = end; item.nextBlock++; item.tail.reset();
@@ -664,6 +673,7 @@ final class NativeDictationStore implements AutoCloseable {
         synchronized (LOCK) {
             Live item = require(binding, id);
             if (keep) ensureCapturing(item);
+            item.adoptionRequested = true;
             flush(item);
             JSONObject next = NativeVoiceJson.copy(item.manifest);
             NativeVoiceJson.put(next, "adopted", true); NativeVoiceJson.put(next, "keepListening", keep);
@@ -715,7 +725,7 @@ final class NativeDictationStore implements AutoCloseable {
             else if (isComplete(item, next)) NativeVoiceJson.put(next, "stage", "ready");
             persistManifest(item, next); item.text = assembled;
             // The manifest links the encrypted transcript before any now-redundant PCM is reclaimed.
-            cleanupOrphans(item); return snapshot(item);
+            reclaim(item); return snapshot(item);
         }
     }
 
@@ -733,12 +743,27 @@ final class NativeDictationStore implements AutoCloseable {
 
     private Recording interruptRecording(String binding, String id, String reason) throws Exception {
         synchronized (LOCK) {
-            validReason(reason); Live item = require(binding, id); flush(item);
-            JSONObject next = NativeVoiceJson.copy(item.manifest);
-            NativeVoiceJson.put(next, "endSample", item.durableSamples); NativeVoiceJson.put(next, "reason", reason);
-            NativeVoiceJson.put(next, "captureIncomplete", true); NativeVoiceJson.put(next, "keepListening", false);
-            NativeVoiceJson.put(next, "stage", NativeVoiceJson.bytes(item.text) > MAX_TEXT_BYTES ? "overflow" : isComplete(item, next) ? "ready" : "interrupted");
-            persistManifest(item, next); releaseCapture(item); return snapshot(item);
+            validReason(reason); Live item = live.get(cacheKey(binding, id));
+            if (item != null) item.pendingInterruption = reason;
+            try {
+                item = require(binding, id); item.pendingInterruption = reason;
+                try { flush(item); }
+                catch (Exception failure) {
+                    // A PCM/checkpoint failure must not prevent the small control write that freezes its durable end.
+                    // A replacement may have committed before its acknowledgement failed; reload that watermark first.
+                    if (item.reloadNeeded) item = require(binding, id);
+                }
+                JSONObject next = NativeVoiceJson.copy(item.manifest);
+                if (item.adoptionRequested) NativeVoiceJson.put(next, "adopted", true);
+                boolean incomplete = next.optBoolean("captureIncomplete") || next.optLong("endSample", -1) < 0 || item.acceptedSamples > item.durableSamples;
+                NativeVoiceJson.put(next, "endSample", item.durableSamples); NativeVoiceJson.put(next, "reason", reason);
+                NativeVoiceJson.put(next, "captureIncomplete", incomplete); NativeVoiceJson.put(next, "keepListening", false);
+                NativeVoiceJson.put(next, "stage", NativeVoiceJson.bytes(item.text) > MAX_TEXT_BYTES ? "overflow" : isComplete(item, next) ? "ready" : "interrupted");
+                persistManifest(item, next);
+                // Once this boundary is durable, an unwritable tail cannot be appended beyond it on Retry.
+                item.tail.reset(); item.acceptedSamples = item.durableSamples; item.pendingInterruption = null;
+                return snapshot(item);
+            } finally { if (item != null) releaseCapture(item); }
         }
     }
 
@@ -763,7 +788,24 @@ final class NativeDictationStore implements AutoCloseable {
 
     private Live require(String binding, String id) throws Exception {
         checkOwner(binding); validId(id); String cacheKey = cacheKey(binding, id);
-        Live cached = live.get(cacheKey); if (cached != null) return cached;
+        Live cached = live.get(cacheKey);
+        if (cached != null && !cached.reloadNeeded) return cached;
+        Live item = loadDisk(binding, id);
+        if (cached != null) {
+            // Keep accepted PCM across control failures, but trust only freshly authenticated metadata/checkpoints.
+            byte[] tail = cached.tail.toByteArray();
+            if (tail.length != (cached.acceptedSamples - cached.durableSamples) * 2 ||
+                item.durableSamples < cached.durableSamples || item.durableSamples > cached.acceptedSamples)
+                throw new Failure("dictation_storage_corrupt", true);
+            int acknowledged = (int) ((item.durableSamples - cached.durableSamples) * 2);
+            item.tail.write(tail, acknowledged, tail.length - acknowledged); item.acceptedSamples = cached.acceptedSamples;
+            item.captureReserved = cached.captureReserved; item.captureReservedBytes = cached.captureReservedBytes;
+            item.drainOnly = cached.drainOnly; item.pendingInterruption = cached.pendingInterruption; item.adoptionRequested = cached.adoptionRequested;
+        }
+        live.put(cacheKey, item); return item;
+    }
+
+    private Live loadDisk(String binding, String id) throws Exception {
         try {
             if (hasTombstone(binding, id)) throw new IllegalStateException("dictation_discarded");
             JSONObject manifest = readJson(binding, id, "manifest", MAX_MANIFEST_BYTES);
@@ -810,7 +852,7 @@ final class NativeDictationStore implements AutoCloseable {
                 validateFinalRequest(item, request);
                 if (!digest(canonical(request)).equals(manifest.optString("requestFingerprint"))) throw new Failure("dictation_storage_corrupt", true);
             }
-            live.put(cacheKey, item); return item;
+            return item;
         } catch (Failure error) { throw error; }
         catch (IllegalStateException error) { if ("dictation_discarded".equals(error.getMessage())) throw error; throw new Failure("dictation_storage_corrupt", true, error); }
         catch (JSONException | IllegalArgumentException error) { throw new Failure("dictation_storage_corrupt", true, error); }
@@ -886,7 +928,7 @@ final class NativeDictationStore implements AutoCloseable {
     }
 
     private Recording unavailable(String binding, String id, String reason) {
-        String target = "unavailable", title = null, text = "", mutation = null;
+        String target = null, title = null, text = "", mutation = null;
         JSONObject config = new JSONObject(), preference = null, request = null;
         long revision = 0; boolean handedOff = false, adopted = true;
         try {
@@ -921,6 +963,33 @@ final class NativeDictationStore implements AutoCloseable {
     private void persistManifest(Live item, JSONObject next) throws Exception {
         NativeVoiceJson.put(next, "revision", item.manifest.getLong("revision") + 1);
         writeJson(item, "manifest", next, true); item.manifest = next;
+    }
+
+    /** Initializer-only artifacts are distinguishable from a damaged recording without guessing its adoption state. */
+    private boolean incompleteCreate(String binding, String id, File directory) throws Exception {
+        List<File> files = sortedChildren(directory);
+        boolean markerOnly = true;
+        for (File file : files) {
+            String name = file.getName();
+            if (file.isDirectory() || !Arrays.asList("creating.enc", "creating.enc.new", "manifest.enc", "manifest.enc.new", "checkpoint.enc", "checkpoint.enc.new").contains(name))
+                return false; // In particular, never sweep a prefix or PCM block on initialization evidence alone.
+            if (!name.equals("creating.enc") && !name.equals("creating.enc.new")) markerOnly = false;
+        }
+        if (markerOnly) return true;
+        if (!recordFile(binding, id, "creating").exists()) return false;
+        JSONObject marker = readJson(binding, id, "creating", MAX_CHECKPOINT_BYTES);
+        try {
+            exactKeys(marker, "version", "id", "binding", "creating");
+            NativeVoiceJson.integer(marker, "version", VERSION, VERSION);
+            if (!id.equals(marker.optString("id")) || !binding.equals(marker.optString("binding")) || !NativeVoiceJson.bool(marker, "creating"))
+                throw new IllegalArgumentException("dictation_record_invalid");
+            return true;
+        } catch (RuntimeException error) { throw new Failure("dictation_storage_corrupt", true, error); }
+    }
+
+    private void reclaim(Live item) {
+        try { cleanupOrphans(item); }
+        catch (Exception ignored) { /* Linked transcript and pending PCM remain valid; a later sweep can reclaim leftovers. */ }
     }
 
     private void cleanupOrphans(Live item) throws Exception {
@@ -981,32 +1050,66 @@ final class NativeDictationStore implements AutoCloseable {
         catch (Exception error) { throw storageFailure(error); }
     }
     private void writeRecord(String binding, String id, String name, byte[] plain, boolean control) throws Exception {
-        long reservation = plain.length + ENCRYPTION_BYTES;
-        reserve(reservation, control); File file = recordFile(binding, id, name); long oldBytes = file.length();
+        writeRecord(binding, id, name, plain, control, null);
+    }
+    private void writeRecord(String binding, String id, String name, byte[] plain, boolean control, Live capture) throws Exception {
+        long bytesNeeded = plain.length + ENCRYPTION_BYTES;
+        File file = recordFile(binding, id, name);
+        long previousFileBytes = file.length() + new File(file.getPath() + ".new").length();
+        ensureLedger();
+        boolean pcmReplacement = capture != null && previousFileBytes > 0;
+        // A duplicate of an uncheckpointed block coexists with queued staging: account it separately, from control headroom.
+        long credit = capture == null || pcmReplacement ? 0 : Math.min(capture.captureReservedBytes, bytesNeeded);
+        long extra = bytesNeeded - credit;
+        if (extra > 0) reserve(extra, control || pcmReplacement);
+        long previousBytes = ledger.bytes;
         try {
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.ENCRYPT_MODE, keys.get());
             cipher.updateAAD(aad(binding, id, name)); byte[] ciphertext = cipher.doFinal(plain);
             byte[] bytes = ByteBuffer.allocate(1 + cipher.getIV().length + ciphertext.length).put((byte) VERSION).put(cipher.getIV()).put(ciphertext).array();
-            disk.atomicWrite(file, bytes); ledger.bytes += bytes.length - oldBytes;
+            disk.atomicWrite(file, bytes); ledger.bytes += bytes.length - previousFileBytes;
         } catch (Exception error) {
-            ledger.bytes = -1;
-            Live cached = live.remove(cacheKey(binding, id)); if (cached != null) releaseCapture(cached);
+            try { ledger.bytes = disk.size(root); }
+            catch (Exception recount) { ledger.bytes = -1; error.addSuppressed(recount); }
+            Live cached = live.get(cacheKey(binding, id)); if (cached != null) cached.reloadNeeded = true;
             throw storageFailure(error);
-        } finally { ledger.reservations -= reservation; }
+        } finally {
+            // PCM replaces its owner's queued reservation with actual ciphertext; it does not reserve the same block twice.
+            long growth = ledger.bytes < 0 ? Math.max(0, file.length() + new File(file.getPath() + ".new").length() - previousFileBytes) : Math.max(0, ledger.bytes - previousBytes);
+            long consumed = Math.min(credit, growth);
+            if (capture != null) { capture.captureReservedBytes -= consumed; ledger.reservations -= consumed; }
+            ledger.reservations -= extra;
+        }
     }
     private static byte[] aad(String binding, String id, String name) {
         return (KEY_ALIAS + "\n" + binding + "\n" + id + "\n" + name).getBytes(StandardCharsets.UTF_8);
     }
-    private void reserve(long bytes, boolean control) throws Exception {
+    private void ensureLedger() throws Failure {
         try { if (ledger.bytes < 0) ledger.bytes = disk.size(root); }
         catch (Exception error) { throw storageFailure(error); }
+    }
+    private void reserve(long bytes, boolean control) throws Exception {
+        ensureLedger();
         long maximum = limits.deviceBytes - (control ? 0 : limits.controlReserveBytes);
-        if (bytes > maximum - ledger.bytes - ledger.reservations) throw new Failure("dictation_storage_capacity", false);
+        if (bytes > maximum - ledger.bytes - ledger.reservations) throw new Failure("dictation_storage_full", false);
         ledger.reservations += bytes;
     }
-    private void reserveCapture() throws Exception { reserve(limits.captureReserveBytes, false); }
+    private void reserveCapture(Live item) throws Exception {
+        reserve(limits.captureReserveBytes, false); item.captureReserved = true; item.captureReservedBytes = limits.captureReserveBytes;
+    }
+    private void replenishCapture(Live item) throws Exception {
+        if (item.drainOnly || item.captureReservedBytes == limits.captureReserveBytes) return;
+        long needed = limits.captureReserveBytes - item.captureReservedBytes;
+        try { reserve(needed, false); item.captureReservedBytes += needed; }
+        catch (Failure error) {
+            if (error.code.equals("dictation_storage_full")) item.drainOnly = true;
+            throw error;
+        }
+    }
     private void releaseCapture(Live item) {
-        if (item.captureReserved) { ledger.reservations -= limits.captureReserveBytes; item.captureReserved = false; }
+        if (item.captureReserved) {
+            ledger.reservations -= item.captureReservedBytes; item.captureReservedBytes = 0; item.captureReserved = false;
+        }
     }
     private void deleteFile(File file) throws Exception {
         long bytes = file.length();
@@ -1017,8 +1120,8 @@ final class NativeDictationStore implements AutoCloseable {
         try {
             if (file.isDirectory()) {
                 List<File> children = sortedChildren(file);
-                // A durable discard marker outlives every file whose existence could otherwise resurrect capture.
-                children.sort(Comparator.comparing(child -> child.getName().equals("terminal.enc") ? 1 : 0));
+                // Terminal and initialization proofs outlive every content file even when cleanup is interrupted.
+                children.sort(Comparator.comparing(child -> child.getName().equals("terminal.enc") || child.getName().equals("creating.enc") ? 1 : 0));
                 for (File child : children) deleteTree(child);
                 disk.delete(file);
             } else deleteFile(file);

@@ -35,7 +35,7 @@ class NativeSpeechTransport implements Closeable {
     static final int SAMPLE_RATE = 24000;
     static final int MAX_INPUT_CHARS = 4096;
     // OkHttp buffers a WebSocket message before this limit can bound JSON parsing and callback copies.
-    static final int MAX_MESSAGE_CHARS = 1024 * 1024;
+    static final int MAX_RECOGNITION_MESSAGE_BYTES = 512 * 1024;
     static final int PCM_PACKET_BYTES = 4800;
     static final int MAX_ERROR_BODY_BYTES = 16 * 1024;
     static final long MAX_QUEUED_BYTES = 512 * 1024;
@@ -433,7 +433,7 @@ class NativeSpeechTransport implements Closeable {
         }
         private synchronized void receive(String text) {
             if (!live()) return;
-            if (text.length() > MAX_MESSAGE_CHARS || text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > Math.min(MAX_MESSAGE_CHARS, capabilities.maxOutputBytes)) {
+            if (text.length() > MAX_RECOGNITION_MESSAGE_BYTES || text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > Math.min(MAX_RECOGNITION_MESSAGE_BYTES, capabilities.maxOutputBytes)) {
                 fail(Kind.LIMIT, "recognition_message_limit", 0); return;
             }
             try {

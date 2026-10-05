@@ -3363,7 +3363,7 @@ describe("CodexConversationBackendDriver", () => {
     },
   );
 
-  it("reconciles submissions by durable client identity without blind retry", async () => {
+  it("reconciles 256 KiB submissions after a fresh driver attaches without blind retry", async () => {
     const harness = new RpcHarness();
     const target = driver(harness);
     const baseline = nativeThread();
@@ -3398,13 +3398,15 @@ describe("CodexConversationBackendDriver", () => {
         nativeTurn(0),
         {
           ...nativeTurn(1),
-          items: [{ ...nativeTurn(1).items[0], clientId }],
+          items: [{ ...nativeTurn(1).items[0], clientId,
+            content: [{ type: "text", text: largeDirectInputText, text_elements: [] }] }],
         },
       ],
     });
+    const recovered = driver(harness);
     enqueueCompleteLegacyRead(harness, accepted);
     const terminalReconciliation =
-      await target.reconcileSubmission(reconcileInput);
+      await recovered.reconcileSubmission(reconcileInput);
     expect(terminalReconciliation).toMatchObject({
       status: "accepted",
       backendTurn: { status: "completed" },
@@ -3419,9 +3421,17 @@ describe("CodexConversationBackendDriver", () => {
       completionIdentity: `${terminalReconciliation.backendTurn.backendTurnId}:completed`,
     });
     enqueueCompleteLegacyRead(harness, accepted);
-    await expect(target.reconcileSubmission(reconcileInput)).resolves.toEqual(
+    await expect(recovered.reconcileSubmission(reconcileInput)).resolves.toEqual(
       terminalReconciliation,
     );
+
+    enqueueCompleteLegacyRead(harness, accepted);
+    const history = await readConversationHistory(recovered, attachInput());
+    expect(Object.values(history.snapshot.itemsById)).toContainEqual(expect.objectContaining({
+      semanticKind: "user_message", deliveryOperationId: reconcileInput.applicationOperationId,
+      content: [{ kind: "text", text: { text: largeDirectInputText } }],
+    }));
+    expect(harness.calls.some(call => call.method === "turn/start" || call.method === "turn/steer")).toBe(false);
 
     const active = nativeThread({
       status: { type: "active", activeFlags: [] },
@@ -3432,13 +3442,14 @@ describe("CodexConversationBackendDriver", () => {
           status: "inProgress",
           completedAt: null,
           durationMs: null,
-          items: [{ ...nativeTurn(1).items[0], clientId }],
+          items: [{ ...nativeTurn(1).items[0], clientId,
+            content: [{ type: "text", text: largeDirectInputText, text_elements: [] }] }],
         },
       ],
     });
     enqueueCompleteLegacyRead(harness, active);
     const activeReconciliation =
-      await target.reconcileSubmission(reconcileInput);
+      await recovered.reconcileSubmission(reconcileInput);
     expect(activeReconciliation).toMatchObject({
       status: "accepted",
       backendTurn: { status: "in_progress" },
@@ -3473,7 +3484,7 @@ describe("CodexConversationBackendDriver", () => {
       }),
     );
     await expect(
-      target.reconcileSubmission(reconcileInput),
+      recovered.reconcileSubmission(reconcileInput),
     ).resolves.toMatchObject({
       status: "unresolved",
       diagnostic: expect.objectContaining({
@@ -3486,7 +3497,7 @@ describe("CodexConversationBackendDriver", () => {
       nativeThread({ turns: [nativeTurn(0), nativeTurn(2)] }),
     );
     await expect(
-      target.reconcileSubmission(reconcileInput),
+      recovered.reconcileSubmission(reconcileInput),
     ).resolves.toMatchObject({
       status: "unresolved",
       diagnostic: expect.objectContaining({

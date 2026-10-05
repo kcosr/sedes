@@ -1,4 +1,4 @@
-import { largeDirectInputText } from "../support/large-direct-input.js";
+import { largeDirectInputText, largeDirectInputWithPrefix } from "../support/large-direct-input.js";
 import { readConversationHistory } from "../helpers/read-conversation-history.js";
 import { NO_USAGE_SINK } from "../../src/server/usage/contracts.js";
 import type { ClaudeConversationHandle } from "../../src/server/backends/claude/claude-conversation-handle.js";
@@ -307,7 +307,7 @@ describe("ClaudeConversationBackendDriver", () => {
     ).rejects.toThrow("cancelled");
   });
 
-  it("reads 256 KiB projected history and reconciles exactly by the user UUID", async () => {
+  it("reads 256 KiB projected history and reconciles on a fresh driver exactly by the user UUID", async () => {
     const sdk = fakeSdk();
     sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId });
     exposeSessionMessages(sdk, [
@@ -329,7 +329,9 @@ describe("ClaudeConversationBackendDriver", () => {
       counters: { userMessages: 1, assistantMessages: 1 },
     });
 
-    const reconciliation = await driver.reconcileSubmission({
+    await driver.close();
+    const recovered = createDriver(sdk);
+    const reconciliation = await recovered.reconcileSubmission({
       scope,
       workspace,
       binding: binding(),
@@ -343,6 +345,7 @@ describe("ClaudeConversationBackendDriver", () => {
         completionCorrelations: [operationId],
       },
     });
+    await recovered.close();
   });
 
   it("pages and locates an immutable archived cut without issuing credentials or creating a query", async () => {
@@ -692,6 +695,25 @@ describe("ClaudeConversationBackendDriver", () => {
     sdk.createQuery.mockImplementationOnce(() => { throw new Error("claude_persistent_session_configuration_conflict"); });
     outcomes.push("undelivered", "undelivered");
     await expect(driver.releaseConversationResidency(residency)).resolves.toBe("undelivered");
+  });
+
+  it.each(["submit", "steer"] as const)("rejects an unsupported leading slash command in 256 KiB %s before native input", async mode => {
+    const sdk = fakeSdk();
+    sdk.getSessionInfo.mockResolvedValue({ ...session(1), sessionId, cwd: workspace.canonicalPath });
+    sdk.getSessionMessages.mockResolvedValue([]);
+    const driver = createDriver(sdk, { confirmSettings: true });
+    const handle = await driver.attach({ scope, workspace, binding: binding(), opaqueBindingDetail: JSON.stringify({ version: 1, sessionId }) });
+    try {
+      await handle.establishProjection({ signal: new AbortController().signal });
+      const before = nativeInputCount(sdk);
+      const input = { applicationOperationId: operationId, mutationId: "large-slash", reconciliationToken: "large-slash",
+        source: { kind: "user" as const }, target: { kind: "conversation" as const },
+        text: largeDirectInputWithPrefix(" \n/not-supported "), contextExcerpts: [], attachments: [], taskContexts: [] };
+      await expect(mode === "submit" ? handle.submit(input) : handle.steer(input)).rejects.toMatchObject({
+        backendCode: "claude_slash_commands_unavailable", crossedSubmissionBoundary: false,
+      });
+      expect(nativeInputCount(sdk)).toBe(before);
+    } finally { await driver.close(); }
   });
 
   it("preserves 256 KiB conversation steering through the native input queue", async () => {

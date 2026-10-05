@@ -237,13 +237,17 @@ describe("voice quick sheet", () => {
     let release!: (value: NativeVoiceState) => void;
     fake.plugin.copyRecognizedRecordingText.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
     expect(sheet).toHaveTextContent("The end of this dictation may be missing");
-    expect(within(sheet).getByRole("button", { name: "Retry recognition" })).toBeDisabled();
+    expect(within(sheet).getByRole("button", { name: "Retry recognition" })).toHaveAttribute("aria-disabled", "true");
+    act(() => copy.focus());
     fireEvent.click(copy);
-    expect(copy).toBeDisabled();
+    expect(copy).toHaveAttribute("aria-disabled", "true");
+    expect(copy).toHaveFocus();
+    fireEvent.click(copy);
     expect(sheet).not.toHaveTextContent("Recognized text copied.");
     expect(fake.plugin.copyRecognizedRecordingText).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, recordingId: saved.recordingId, expectedRecoveryRevision: 4 });
     await act(async () => release({ ...native, stateRevision: 2 }));
     await waitFor(() => expect(sheet).toHaveTextContent("Recognized text copied. The saved dictation remains on this device."));
+    expect(copy).toHaveFocus();
     expect(store.getSnapshot().native?.recordingRecovery).toEqual(saved);
     fake.plugin.copyRecognizedRecordingText.mockRejectedValueOnce(new Error("Clipboard unavailable."));
     fireEvent.click(copy);
@@ -264,6 +268,44 @@ describe("voice quick sheet", () => {
     await act(async () => release({ ...native, stateRevision: 2 }));
     expect(sheet).not.toHaveTextContent("Recognized text copied.");
     expect(store.getSnapshot().native?.recordingRecovery?.revision).toBe(2);
+    store.dispose();
+  });
+  it("binds missing-end acknowledgment to the saved revision and preserves Send focus through pending work", async () => {
+    const saved = recordingRecovery({ stage: "ready", revision: 4, hasUnrecognizedAudio: false, captureIncomplete: true,
+      canRetryRecognition: false, canSend: true });
+    const native = voiceSnapshot({ recordingRecovery: saved });
+    const { fake, store, sheet } = await renderSheet(native);
+    const acknowledgement = within(sheet).getByRole("checkbox", { name: "Send the saved portion even if the end is missing" });
+    const send = within(sheet).getByRole("button", { name: "Send saved dictation" });
+    expect(acknowledgement).toHaveAccessibleDescription("The end of this dictation may be missing. Sending uses the saved portion.");
+    fireEvent.click(acknowledgement);
+    expect(send).not.toHaveAttribute("aria-disabled");
+    act(() => fake.emit("stateChanged", { ...native, stateRevision: 2, recordingRecovery: { ...saved, revision: 5 } }));
+    expect(acknowledgement).not.toBeChecked();
+    fireEvent.click(send);
+    expect(fake.plugin.sendRecoveredRecording).not.toHaveBeenCalled();
+    fireEvent.click(acknowledgement);
+    let release!: (value: NativeVoiceState) => void;
+    fake.plugin.sendRecoveredRecording.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    act(() => send.focus());
+    fireEvent.click(send);
+    expect(send).toHaveAttribute("aria-disabled", "true");
+    expect(send).toHaveFocus();
+    fireEvent.click(send);
+    expect(fake.plugin.sendRecoveredRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
+      recordingId: saved.recordingId, expectedRecoveryRevision: 5, acknowledgeIncomplete: true });
+    await act(async () => release({ ...native, stateRevision: 3,
+      recordingRecovery: { ...saved, revision: 6, stage: "admitting", captureIncomplete: false, canSend: false, canDiscard: false } }));
+    expect(send).toHaveAttribute("aria-disabled", "true");
+    expect(send).toHaveFocus();
+    store.dispose();
+  });
+  it("offers an explicit storage retry while Off even when the client connection is registered", async () => {
+    const native = voiceSnapshot({ readiness: "storageUnavailable", phase: "error" });
+    const { fake, store, sheet } = await renderSheet(native);
+    expect(sheet).toHaveTextContent("Recording storage is unavailable. Retry the voice connection.");
+    fireEvent.click(within(sheet).getByRole("button", { name: "Retry voice connection" }));
+    await waitFor(() => expect(fake.plugin.setConnection).toHaveBeenLastCalledWith({ ...VOICE_CONNECTION, reconnect: true }));
     store.dispose();
   });
   it.each([false, true])("starts a new recording during older admission using the visible or pinned target (pinned: %s)", async pinned => {

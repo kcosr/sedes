@@ -1043,6 +1043,8 @@ export const queuedInputSummarySchema = z
      * nothing reached the conversation and nothing was resent.
      */
     failureReason: z.enum(["not_sent"]).optional(),
+    /** Intrinsic input restrictions, independent of whether the current draft is empty. */
+    restoreUnavailableReason: boundedDisplayTextSchema.optional(),
   })
   .superRefine((item, context) => {
     if (item.failureReason !== undefined && item.state !== "failed") {

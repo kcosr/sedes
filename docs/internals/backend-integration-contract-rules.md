@@ -677,6 +677,10 @@ enabled backend, including supported steering. Once admission creates a receipt,
 provider refusal or uncertain delivery remains owned by server recovery and does
 not authorize the recording client to submit a fresh copy.
 
+Queue restoration must honor the composer's separate 64 KiB draft budget. Project
+an intrinsic restoration-unavailable reason for larger inputs and reject the
+restore atomically without changing the queued item, draft, revisions, or receipt.
+
 An agent-to-client notification with no active consumer dependency—an exact
 registered descriptor, active profile, and registered handler—may be treated as
 unused protocol traffic rather than an unsupported operation. Apply generic

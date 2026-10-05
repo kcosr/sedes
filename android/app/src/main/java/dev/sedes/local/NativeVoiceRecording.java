@@ -81,12 +81,14 @@ final class NativeVoiceRecording {
     private boolean accepting, drainScheduled, finishBarrierDone;
     // The fields below are owned exclusively by journal.executor().
     private NativeVoiceSegmenter segmenter;
+    private byte[] unfinishedPacket;
+    private long unfinishedPacketStart;
     private Pending open, uploading, inFlight;
     private NativeSpeechTransport.RecognitionSession connection;
     private String connectionId;
     private long connectionSerial, attemptSerial, retryEnd;
     private boolean initialized, retryOnly, retryTailFinished, captureFinished, initialReady, connectionReady, connectionUsed;
-    private boolean reconnecting, pumpScheduled;
+    private boolean reconnecting, pumpScheduled, outageNeedsResult;
     private int retries;
     private long outageStarted = -1;
     private Timer pumpTimer, retryTimer, outageTimer;
@@ -152,7 +154,7 @@ final class NativeVoiceRecording {
     /** Copies into a bounded queue only; the audio callback never waits for disk or a socket. */
     boolean accept(byte[] pcm) {
         if (pcm == null || pcm.length == 0 || (pcm.length & 1) != 0) {
-            requestFailure("dictation_capture_invalid", false); return false;
+            requestFailure("dictation_capture_invalid"); return false;
         }
         boolean schedule = false, overflow = false;
         synchronized (inputLock) {
@@ -166,7 +168,7 @@ final class NativeVoiceRecording {
                 if (!drainScheduled) { drainScheduled = true; schedule = true; }
             }
         }
-        if (overflow) { requestFailure("dictation_capture_backpressure", false); return false; }
+        if (overflow) { requestFailure("dictation_capture_backpressure"); return false; }
         if (schedule) execute(this::drain);
         return true;
     }
@@ -192,7 +194,7 @@ final class NativeVoiceRecording {
             if (finishRequested == null) finishRequested = reason;
             if (flushTimer == null) flushTimer = timing.after(FLUSH_TIMEOUT_MS, () -> {
                 synchronized (inputLock) {
-                    if (flushTimer != null) requestFailure("dictation_flush_timeout", false);
+                    if (flushTimer != null) requestFailure("dictation_flush_timeout");
                 }
             });
         }
@@ -215,7 +217,7 @@ final class NativeVoiceRecording {
         });
     }
 
-    void interrupt(String reason) { requestFailure(reason == null ? "dictation_interrupted" : reason, false); }
+    void interrupt(String reason) { requestFailure(reason == null ? "dictation_interrupted" : reason); }
 
     void discard() {
         if (!discarded.compareAndSet(false, true)) return;
@@ -233,8 +235,8 @@ final class NativeVoiceRecording {
     private void execute(Work work) {
         worker.execute(() -> {
             try { work.run(); }
-            catch (JournalError error) { requestFailure(code(error.getCause()), true); }
-            catch (Exception error) { requestFailure(code(error), true); }
+            catch (JournalError error) { requestFailure(code(error.getCause())); }
+            catch (Exception error) { requestFailure(code(error)); }
         });
     }
     private void drain() throws Exception {
@@ -255,9 +257,11 @@ final class NativeVoiceRecording {
                 if (bytes != null) queuedBytes -= bytes.length;
             }
             if (bytes == null) break;
-            journal.append(segmenter.samples(), bytes);
+            unfinishedPacket = bytes; unfinishedPacketStart = segmenter.samples();
+            journal.append(unfinishedPacketStart, bytes);
             segmenter.accept(bytes);
             open.end = segmenter.samples();
+            unfinishedPacket = null;
         }
         update(journal.load());
     }
@@ -335,7 +339,7 @@ final class NativeVoiceRecording {
         clearOutage();
         update(saved);
         pending.remove(done); inFlight = null;
-        if (recording.overflow()) { requestFailure("dictation_text_overflow", false); return; }
+        if (recording.overflow()) { requestFailure("dictation_text_overflow"); return; }
         fillRetryTail();
         if (!completeIfReady()) pump();
     }
@@ -345,13 +349,15 @@ final class NativeVoiceRecording {
             sendRevoked = true;
             if (recording.endSample >= 0) update(journal.finish("send_interrupted", recording.endSample));
         }
-        for (Pending item : pending) if (item.prepared)
+        for (Pending item : pending) if (item.prepared) {
+            outageNeedsResult = true;
             update(journal.failed(item.ordinal, item.attempt, failure.code, true));
+        }
         closeConnection();
         for (Pending item : pending) item.reset();
         if (open != null) open.reset();
         uploading = inFlight = null;
-        if (!adoptionIntent || !failure.retryable()) { requestFailure(failure.code, false); return; }
+        if (!adoptionIntent || !failure.retryable()) { requestFailure(failure.code); return; }
         long now = timing.nowMs();
         if (outageStarted < 0) {
             outageStarted = now;
@@ -359,18 +365,18 @@ final class NativeVoiceRecording {
             outageTimer = timing.after(OUTAGE_TIMEOUT_MS, () -> {
                 synchronized (inputLock) {
                     if (!terminal.get() && outageGeneration == generation)
-                        requestFailure("dictation_reconnect_timeout", false);
+                        requestFailure("dictation_reconnect_timeout");
                 }
             });
         }
         if (retries >= RETRY_DELAYS_MS.length || now - outageStarted >= OUTAGE_TIMEOUT_MS) {
-            requestFailure("dictation_reconnect_exhausted", false); return;
+            requestFailure("dictation_reconnect_exhausted"); return;
         }
         setReconnecting(true);
         long delay = RETRY_DELAYS_MS[retries++];
         retryTimer = timing.after(delay, () -> execute(() -> {
             if (terminal.get()) return;
-            if (timing.nowMs() - outageStarted >= OUTAGE_TIMEOUT_MS) requestFailure("dictation_reconnect_timeout", false);
+            if (timing.nowMs() - outageStarted >= OUTAGE_TIMEOUT_MS) requestFailure("dictation_reconnect_timeout");
             else openConnection();
         }));
     }
@@ -378,7 +384,7 @@ final class NativeVoiceRecording {
     private void pump() throws Exception {
         if (terminal.get() || !connectionReady || connection == null) return;
         if (outageStarted >= 0 && timing.nowMs() - outageStarted >= OUTAGE_TIMEOUT_MS) {
-            requestFailure("dictation_reconnect_timeout", false); return;
+            requestFailure("dictation_reconnect_timeout"); return;
         }
         for (int count = 0; count < 16; count++) {
             if (uploading == null) {
@@ -390,7 +396,7 @@ final class NativeVoiceRecording {
                 if (!connection.canAssign(hardSegmentMs)) {
                     if (connection.ended()) { schedulePump(); return; }
                     if (inFlight != null) return;
-                    if (!connectionUsed) { requestFailure("recognition_session_budget", false); return; }
+                    if (!connectionUsed) { requestFailure("recognition_session_budget"); return; }
                     closeConnection(); openConnection(); return;
                 }
                 uploading = next;
@@ -403,7 +409,11 @@ final class NativeVoiceRecording {
                 int bytes = (int) Math.min(NativeSpeechTransport.PCM_PACKET_BYTES, (available - item.uploaded) * 2);
                 NativeSpeechTransport.SendResult sent = connection.append(item.attempt, readExact(item.uploaded, bytes));
                 if (sent != NativeSpeechTransport.SendResult.ACCEPTED) { waitForTransport(sent); return; }
-                item.uploaded += bytes / 2; connectionUsed = true; continue;
+                item.uploaded += bytes / 2; connectionUsed = true;
+                // An open buffer has no outstanding recognition result. A ready replacement accepting
+                // its audio ends recovery without waiting for quiet audio to reach the hard cut.
+                if (outageStarted >= 0 && !outageNeedsResult && !item.sealed) clearOutage();
+                continue;
             }
             if (!item.sealed) return;
             if (item.uploaded != item.end) throw new NativeDictationStore.Failure("dictation_storage_corrupt", true);
@@ -414,7 +424,10 @@ final class NativeVoiceRecording {
                 item.paddingSent += samples; continue;
             }
             if (inFlight != null) return;
-            if (!item.prepared) { update(journal.commitStarted(item.ordinal, item.attempt)); item.prepared = true; }
+            if (!item.prepared) {
+                if (outageStarted >= 0) outageNeedsResult = true;
+                update(journal.commitStarted(item.ordinal, item.attempt)); item.prepared = true;
+            }
             NativeSpeechTransport.SendResult sent = connection.commit(item.attempt);
             if (sent != NativeSpeechTransport.SendResult.ACCEPTED) { waitForTransport(sent); return; }
             inFlight = item; uploading = null;
@@ -453,7 +466,7 @@ final class NativeVoiceRecording {
         if (old != null) old.cancel();
     }
     private void clearOutage() {
-        outageStarted = -1; retries = 0;
+        outageStarted = -1; retries = 0; outageNeedsResult = false;
         synchronized (inputLock) { outageGeneration++; }
         if (outageTimer != null) { outageTimer.cancel(); outageTimer = null; }
         if (retryTimer != null) { retryTimer.cancel(); retryTimer = null; }
@@ -468,7 +481,28 @@ final class NativeVoiceRecording {
         synchronized (inputLock) { timer = flushTimer; flushTimer = null; }
         if (timer != null) timer.cancel();
     }
-    private void requestFailure(String code, boolean storageFailure) {
+    private void drainRetainedInput() throws Exception {
+        long accepted = journal.load().acceptedSamples;
+        if (unfinishedPacket != null) {
+            long end = unfinishedPacketStart + unfinishedPacket.length / 2;
+            if (accepted < unfinishedPacketStart || accepted > end)
+                throw new NativeDictationStore.Failure("dictation_storage_corrupt", true);
+            if (accepted < end)
+                journal.append(accepted, Arrays.copyOfRange(unfinishedPacket, (int) ((accepted - unfinishedPacketStart) * 2), unfinishedPacket.length));
+            accepted = end; unfinishedPacket = null;
+        }
+        // Failed control writes must not prevent healthy PCM writes. Leave this tail unsealed for Retry.
+        while (true) {
+            byte[] bytes;
+            synchronized (inputLock) {
+                bytes = input.pollFirst();
+                if (bytes != null) queuedBytes -= bytes.length;
+            }
+            if (bytes == null) return;
+            journal.append(accepted, bytes); accepted += bytes.length / 2;
+        }
+    }
+    private void requestFailure(String code) {
         if (!terminal.compareAndSet(false, true)) return;
         synchronized (inputLock) { accepting = false; }
         cancelFlush(); timing.close();
@@ -480,14 +514,18 @@ final class NativeVoiceRecording {
             if (discarded.get()) return;
             try {
                 if (retained) {
-                    if (adoptionIntent && !journal.load().adopted) update(journal.adopt(false));
-                    if (!storageFailure && segmenter != null && !captureFinished) drainInput(Integer.MAX_VALUE);
-                    update(journal.checkpoint());
+                    try {
+                        if (adoptionIntent && !journal.load().adopted) update(journal.adopt(false));
+                    } catch (Exception ignored) { /* Still try PCM and the durable interruption boundary. */ }
+                    try {
+                        if (segmenter != null && !captureFinished && !retryOnly) drainRetainedInput();
+                    } catch (Exception ignored) { /* Interrupt persists the last durable watermark even if PCM cannot flush. */ }
                     update(journal.interrupt(code));
                 } else journal.discard();
             } catch (Exception ignored) {
                 // Durable blocks and their last authenticated watermark remain available for recovery.
             } finally {
+                unfinishedPacket = null;
                 synchronized (inputLock) { input.clear(); queuedBytes = 0; }
             }
         });

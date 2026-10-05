@@ -53,6 +53,10 @@ describe("large direct-input storage migration", () => {
         queue: database.prepare("SELECT * FROM queued_inputs").all(),
         receipts: database.prepare("SELECT * FROM direct_input_receipts").all() });
       const beforeObjects = objects();
+      const triggerOrder = () => database.prepare(`SELECT tbl_name, name FROM sqlite_schema
+        WHERE tbl_name IN ('conversation_creation_attempts', 'queued_inputs') AND type = 'trigger'
+        ORDER BY tbl_name, rowid`).all();
+      const beforeTriggerOrder = triggerOrder();
       const beforeRows = rows();
       const beforeReceipts = [receipts.lookup(scope, request.mutationId), receipts.lookup(scope, queueRequest.mutationId)];
       const foreignKeys = () => [database.pragma("foreign_key_list(conversation_creation_attempts)"), database.pragma("foreign_key_list(queued_inputs)")];
@@ -62,9 +66,11 @@ describe("large direct-input storage migration", () => {
       })).toThrow("test_upgrade_rollback");
       expect(rows()).toEqual(beforeRows);
       expect(objects()).toEqual(beforeObjects);
+      expect(triggerOrder()).toEqual(beforeTriggerOrder);
       expect(database.pragma("foreign_keys", { simple: true })).toBe(1);
       applyDatabaseMigrations(database, backendNormalizedMigrations);
       expect(objects()).toEqual(beforeObjects);
+      expect(triggerOrder()).toEqual(beforeTriggerOrder);
       expect(foreignKeys()).toEqual(beforeForeignKeys);
       expect(database.pragma("foreign_keys", { simple: true })).toBe(1);
       expect(rows()).toEqual(beforeRows);

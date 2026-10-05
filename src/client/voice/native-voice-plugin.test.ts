@@ -56,6 +56,7 @@ describe("native voice bridge helpers", () => {
     const { canDiscard: _discard, ...withoutDiscard } = state.recordingRecovery!;
     expect(nativeVoiceStateSchema.safeParse({ ...state, recordingRecovery: withoutDiscard }).success).toBe(false);
     expect(nativeVoiceStateSchema.safeParse(voiceSnapshot({ phase: "recordingRecovery", recordingRecovery: recordingRecovery() })).success).toBe(true);
+    expect(nativeVoiceStateSchema.safeParse(voiceSnapshot({ recordingRecovery: recordingRecovery({ stage: "unavailable", threadId: null, threadTitle: null }) })).success).toBe(true);
   });
   it("accepts a long dictation limit only in whole minutes from one minute through one day", () => {
     const state = voiceSnapshot();

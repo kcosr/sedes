@@ -23,7 +23,7 @@ public class NativeSpeechCapabilitiesTest {
             assertEquals("speech_server_configuration_unsupported", assertThrows(IllegalArgumentException.class,
                 () -> NativeSpeechCapabilities.server("model", missing)).getMessage());
         }
-        for (JSONObject patch : new JSONObject[] { NativeVoiceJson.object("max_buffer_bytes", 239998), NativeVoiceJson.object("max_buffer_bytes", 240001),
+        for (JSONObject patch : new JSONObject[] { NativeVoiceJson.object("max_buffer_bytes", 0), NativeVoiceJson.object("max_buffer_bytes", 239998), NativeVoiceJson.object("max_buffer_bytes", 240001),
             NativeVoiceJson.object("max_message_bytes", 8191), NativeVoiceJson.object("max_output_bytes", 524287),
             NativeVoiceJson.object("idle_timeout_seconds", 39), NativeVoiceJson.object("max_session_seconds", 0),
             NativeVoiceJson.object("max_session_seconds", "1.5"), NativeVoiceJson.object("idle_timeout_seconds", 39.9999), NativeVoiceJson.object("unknown", 1) }) {
@@ -39,14 +39,15 @@ public class NativeSpeechCapabilitiesTest {
         limits.put("idle_timeout_seconds", 40.250999); limits.put("max_session_seconds", 600.500999);
         caps = NativeSpeechCapabilities.server("model", limits);
         assertEquals(40250, caps.idleTimeoutMs); assertEquals(600500, caps.maxSessionMs);
-        limits.put("max_session_seconds", 149.999999);
+        limits.put("max_session_seconds", 181.099999);
         NativeSpeechCapabilities insufficient = NativeSpeechCapabilities.server("model", limits);
-        assertEquals(149999, insufficient.maxSessionMs);
+        assertEquals(181099, insufficient.maxSessionMs);
         assertEquals("recognition_session_timing_unsupported", assertThrows(IllegalArgumentException.class, () -> insufficient.validateTiming(60000)).getMessage());
-        limits.put("max_session_seconds", 150.001);
+        limits.put("max_session_seconds", 181.101);
         caps = NativeSpeechCapabilities.server("model", limits);
-        assertEquals(150001, caps.maxSessionMs);
-        assertEquals(150001, NativeSpeechCapabilities.server("model", caps.realtime()).maxSessionMs);
+        assertEquals(181101, caps.maxSessionMs);
+        assertEquals(181101, NativeSpeechCapabilities.server("model", caps.realtime()).maxSessionMs);
+        caps.validateTiming(60000);
     }
     @Test public void hostedPolicyRecognizesOnlyExplicitBaseModelEntries() {
         assertEquals(5, NativeSpeechCapabilities.HOSTED_MODELS.size());
@@ -59,8 +60,8 @@ public class NativeSpeechCapabilitiesTest {
     }
     @Test public void resultBudgetReservesPreviousJobNextJobAndRenewalMargin() throws Exception {
         NativeSpeechCapabilities caps = NativeSpeechCapabilities.server("model", policy());
-        assertEquals(150000, caps.minimumSessionBudgetMs(60000)); assertEquals(630000, caps.minimumSessionBudgetMs(300000));
-        JSONObject shortSession = policy(); shortSession.put("max_session_seconds", 149);
+        assertEquals(181100, caps.minimumSessionBudgetMs(60000)); assertEquals(661100, caps.minimumSessionBudgetMs(300000));
+        JSONObject shortSession = policy(); shortSession.put("max_session_seconds", 181.099);
         NativeSpeechCapabilities tooShort = NativeSpeechCapabilities.server("model", shortSession);
         assertEquals("recognition_session_timing_unsupported", assertThrows(IllegalArgumentException.class, () -> tooShort.validateTiming(60000)).getMessage());
         assertThrows(IllegalArgumentException.class, () -> caps.validateTiming(999));

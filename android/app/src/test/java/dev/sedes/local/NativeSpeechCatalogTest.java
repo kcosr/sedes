@@ -85,12 +85,15 @@ public class NativeSpeechCatalogTest {
     }
 
     @Test public void selectedModelSupportDoesNotBorrowAnotherModelsLimits() throws Exception {
-        JSONObject small = NativeSpeechCapabilitiesTest.policy(); small.put("max_buffer_bytes", 4800);
+        JSONObject small = NativeSpeechCapabilitiesTest.policy(); small.put("max_buffer_bytes", 0);
         JSONObject listing = NativeVoiceJson.object("data", new JSONArray()
             .put(NativeVoiceJson.object("id", "usable", "task", "transcription", "realtime", NativeSpeechCapabilitiesTest.policy()))
             .put(NativeVoiceJson.object("id", "too-small", "task", "transcription", "realtime", small)));
         JSONObject catalog = NativeSpeechCatalog.server(listing, "tts");
         assertEquals(60000, NativeSpeechCatalog.serverCapabilities(catalog, "usable").hardSegmentMs());
+        assertEquals(0, catalog.getJSONObject("realtime").getJSONObject("too-small").getLong("max_buffer_bytes"));
+        NativeSpeechCatalogCache restored = NativeSpeechCatalogCache.fromRecord(new NativeSpeechCatalogCache("b".repeat(64), 100, catalog).record());
+        assertEquals(0, restored.catalog.getJSONObject("realtime").getJSONObject("too-small").getLong("max_buffer_bytes"));
         assertEquals("speech_server_configuration_unsupported", assertThrows(IllegalArgumentException.class,
             () -> NativeSpeechCatalog.serverCapabilities(catalog, "too-small")).getMessage());
         assertEquals("speech_transcription_model_unsupported", assertThrows(IllegalArgumentException.class,
@@ -118,7 +121,9 @@ public class NativeSpeechCatalogTest {
                     JSONObject limits = NativeSpeechCapabilitiesTest.policy(); limits.put("max_buffer_bytes", buffer);
                     limits.put("idle_timeout_seconds", 40.25); limits.put("max_session_seconds", 600.5);
                     byte[] bytes = NativeVoiceJson.object("object", "list", "data", new JSONArray()
-                        .put(NativeVoiceJson.object("id", "selected", "task", "transcription", "realtime", limits))).toString().getBytes(StandardCharsets.UTF_8);
+                        .put(NativeVoiceJson.object("id", "selected", "task", "transcription", "realtime", limits))
+                        .put(NativeVoiceJson.object("id", "tiny-auxiliary", "task", "transcription", "realtime",
+                            NativeVoiceJson.copy(limits).put("max_buffer_bytes", 0)))).toString().getBytes(StandardCharsets.UTF_8);
                     socket.getOutputStream().write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + bytes.length + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
                     socket.getOutputStream().write(bytes); socket.getOutputStream().flush();
                 }

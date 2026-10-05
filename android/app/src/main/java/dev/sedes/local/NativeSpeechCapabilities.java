@@ -11,6 +11,10 @@ final class NativeSpeechCapabilities {
     static final Set<String> HOSTED_MODELS = Collections.unmodifiableSet(new LinkedHashSet<>(Arrays.asList(
         "gpt-live-transcribe", "gpt-transcribe", "gpt-4o-transcribe", "gpt-4o-mini-transcribe", "whisper-1")));
     static final int PCM_PACKET_BYTES = 4800;
+    static final int CAPTURE_FRAME_MS = 100;
+    static final int UPLOAD_HOLD_BACK_MS = 1000;
+    static final long MICROPHONE_ARMING_MS = 30000;
+    static final long FIRST_UPLOAD_DELAY_MS = UPLOAD_HOLD_BACK_MS + CAPTURE_FRAME_MS;
     static final long SESSION_MARGIN_MS = 30000;
     final String provider, model;
     final long maxBufferBytes, maxMessageBytes, maxOutputBytes, idleTimeoutMs, maxSessionMs;
@@ -49,10 +53,13 @@ final class NativeSpeechCapabilities {
         // Every enabled model is subject to the release's repeated-commit, lifetime and corpus validation gate.
         return new NativeSpeechCapabilities("openai", model, 600L * PCM_PACKET_BYTES, 1024 * 1024, 1024 * 1024, 0, 3600000);
     }
-    long hardSegmentMs() { return hardFrames * 100L; }
+    long hardSegmentMs() { return hardFrames * (long) CAPTURE_FRAME_MS; }
     long hardSegmentBytes() { return hardFrames * (long) PCM_PACKET_BYTES; }
     long minimumSessionBudgetMs(long resultTimeoutMs) {
-        return Math.max(hardSegmentMs(), resultTimeoutMs) + resultTimeoutMs + SESSION_MARGIN_MS;
+        // Every fresh session reserves the initial microphone route plus enough PCM for the first upload.
+        // Replacements and explicit Retry use the same conservative readiness contract.
+        return MICROPHONE_ARMING_MS + FIRST_UPLOAD_DELAY_MS +
+            Math.max(hardSegmentMs(), resultTimeoutMs) + resultTimeoutMs + SESSION_MARGIN_MS;
     }
     void validateTiming(long resultTimeoutMs) {
         if (resultTimeoutMs < 1000 || resultTimeoutMs > 300000) throw new IllegalArgumentException("recognition_invalid_timeout");

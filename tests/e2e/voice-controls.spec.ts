@@ -17,16 +17,24 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   const draft = "Keep my independently edited draft here.";
   await fillAndPersistDraft(page, draft);
   const composer = page.getByRole("textbox", { name: "Message Scripted agent", exact: true });
+  const toolbar = page.getByRole("group", { name: "Voice controls", exact: true });
+  const heights: Record<string, number> = {};
+  const measureRow = async (state: string) => {
+    heights[state] = (await toolbar.boundingBox())!.height;
+    expect(heights[state], `${state} preserves the original 60px row`).toBe(60);
+  };
+  await page.setViewportSize({ width: 320, height: 780 });
+  await expect(toolbar).toBeVisible();
+  await measureRow("idleBeforeRecording");
   const base = voiceFixtureState();
   const title = "Dictation for the release checklist and the remaining deployment verification";
   const active = { id: "interaction", eventKind: "manual", threadId, threadTitle: title, recognitionThreadId: threadId,
     recognitionThreadTitle: title, automatic: false, recording: { id: "recording", keepListening: false, reconnecting: false } };
   await publishVoiceState(page, { phase: "listening", active, actions: { ...base.actions, canStart: false, canStop: true,
     canRetarget: true, canSetKeepListening: true, keepListeningBlockedReason: null } });
-  await page.setViewportSize({ width: 320, height: 780 });
-  const toolbar = page.getByRole("group", { name: "Voice controls", exact: true });
   const keep = toolbar.getByRole("button", { name: "Keep listening", exact: true });
   await expect(keep).toHaveAttribute("aria-pressed", "false");
+  await measureRow("ordinaryListening");
   await keep.focus();
   await keep.press("Space");
   await expect(keep).toHaveAttribute("aria-pressed", "true");
@@ -41,21 +49,31 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   expect(keepBox!.x).toBeGreaterThanOrEqual(changeBox!.x + changeBox!.width);
   expect(Math.abs(keepBox!.y + keepBox!.height / 2 - changeBox!.y - changeBox!.height / 2)).toBeLessThan(1);
   expect(sendBox!.x).toBeGreaterThanOrEqual(cancelBox!.x + cancelBox!.width);
-  for (const box of [keepBox!, cancelBox!, sendBox!]) {
+  const keepHitBox = await keep.evaluate(button => {
+    const rect = button.getBoundingClientRect(), pseudo = getComputedStyle(button, "::before");
+    const width = Math.max(rect.width, parseFloat(pseudo.width)), height = Math.max(rect.height, parseFloat(pseudo.height));
+    return { x: rect.x + (rect.width - width) / 2, y: rect.y + (rect.height - height) / 2, width, height };
+  });
+  const caretBox = (await toolbar.getByRole("button", { name: "Open voice controls" }).boundingBox())!;
+  expect(keepHitBox.x + keepHitBox.width).toBeLessThanOrEqual(caretBox.x);
+  for (const box of [keepHitBox, caretBox, cancelBox!, sendBox!]) {
     expect(box.width).toBeGreaterThanOrEqual(44);
     expect(box.height).toBeGreaterThanOrEqual(44);
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(320);
   }
+  await measureRow("heldListening");
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "voice-held-listening-narrow.png");
 
   await publishVoiceState(page, { active: { ...active, recording: { id: "recording", keepListening: true, reconnecting: true } } });
   await expect(toolbar.locator(".voice-card-reconnecting")).toHaveText("Reconnecting");
+  await expect(toolbar.locator(".voice-card-title-reconnecting")).toBeVisible();
   await expect(toolbar).toContainText("Listening");
   await expect(send).toBeEnabled();
   await expect(cancel).toBeEnabled();
   await expectNoPageOverflow(page);
+  await measureRow("reconnecting");
   await capture(page, testInfo, "voice-reconnecting-narrow.png");
   await expect(composer).toHaveValue(draft);
   await send.click();
@@ -77,6 +95,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   const savedLabel = toolbar.locator(".voice-card-saved-label");
   expect(await savedLabel.evaluate(label => label.getBoundingClientRect().right <= label.parentElement!.getBoundingClientRect().right)).toBe(true);
   await expectNoPageOverflow(page);
+  await measureRow("savedOff");
   await capture(page, testInfo, "voice-saved-dictation-off-narrow.png");
   await page.reload();
   await expect(toolbar).toContainText("Saved dictation");
@@ -92,18 +111,59 @@ test("native dictation keeps its controls reachable on narrow screens and retain
     recordingRecovery: { ...saved, revision: 5, canRetryRecognition: true } });
   await toolbar.getByRole("button", { name: "Retry saved dictation" }).click();
   await expect(toolbar).toContainText("Recognizing saved audio…");
+  await expect(toolbar.getByRole("button", { name: /Stop voice interaction|Cancel voice recording/ })).toHaveCount(0);
+  await expect(toolbar.getByRole("button", { name: "Discard saved dictation" })).toBeDisabled();
   expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "retryRecordingRecognition").at(-1))).toEqual({
     method: "retryRecordingRecognition", args: { expectedConnectionGeneration: 1, recordingId: "recording", expectedRecoveryRevision: 5 },
   });
   await publishVoiceState(page, { phase: "off", active: null, ready: false, readiness: "off", settings: { ...base.settings, audioMode: "off" },
     recordingRecovery: { ...saved, revision: 7, stage: "ready", reason: null, hasUnrecognizedAudio: false, canRetryRecognition: false, canSend: true } });
   await expect(toolbar).toContainText("Ready to send");
+  await expect(toolbar).toContainText("End may be missing");
   await expect(toolbar.getByRole("button", { name: "Send saved dictation" })).toBeEnabled();
   await expectNoPageOverflow(page);
+  await measureRow("readyOff");
   await capture(page, testInfo, "voice-ready-dictation-off-narrow.png");
   await toolbar.getByRole("button", { name: "Send saved dictation" }).click();
+  await expect(sheet).toBeVisible();
+  const warning = sheet.getByText("The end of this dictation may be missing. Sending uses the saved portion.", { exact: true });
+  const acknowledge = sheet.getByRole("checkbox", { name: "Send the saved portion even if the end is missing" });
+  const sendSaved = sheet.getByRole("button", { name: "Send saved dictation" });
+  await expect(acknowledge).not.toBeChecked();
+  await expect(sendSaved).toBeDisabled();
+  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "sendRecoveredRecording"))).toEqual([]);
+  await acknowledge.check();
+  await expect(sendSaved).toBeEnabled();
+  await sendSaved.scrollIntoViewIfNeeded();
+  await expect(warning).toBeInViewport();
+  await expect(acknowledge).toBeInViewport();
+  await expect(sendSaved).toBeInViewport();
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "voice-incomplete-dictation-confirmation-narrow.png");
+  await sendSaved.click();
+  await expect(sheet).toContainText("Sending…");
   expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "sendRecoveredRecording"))).toEqual([
-    { method: "sendRecoveredRecording", args: { expectedConnectionGeneration: 1, recordingId: "recording", expectedRecoveryRevision: 7 } },
+    { method: "sendRecoveredRecording", args: { expectedConnectionGeneration: 1, recordingId: "recording", expectedRecoveryRevision: 7, acknowledgeIncomplete: true } },
   ]);
+  await sheet.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(toolbar).toContainText("Sending…");
+  await expect(toolbar.getByRole("button", { name: /Stop voice interaction|Cancel voice recording/ })).toHaveCount(0);
+  await publishVoiceState(page, { phase: "listening", settings: base.settings, ready: true, readiness: "ready",
+    active: { ...active, id: "new-interaction", recording: { id: "new-recording", keepListening: false, reconnecting: false } },
+    actions: { ...base.actions, canStart: false, canStop: true, canRetarget: true, canSetKeepListening: false, keepListeningBlockedReason: "saved_recording_pending" },
+    recordingRecovery: { ...saved, revision: 9, stage: "admitting", hasUnrecognizedAudio: false, captureIncomplete: false, canRetryRecognition: false,
+      admission: { mutationId: "original-input", status: "uncertain", cancelled: false } } });
+  const savedAccess = toolbar.getByRole("button", { name: "Saved dictation", exact: true });
+  await expect(savedAccess).toBeVisible();
+  const savedAccessBox = await savedAccess.boundingBox();
+  expect(savedAccessBox!.height).toBeGreaterThanOrEqual(44);
+  expect(savedAccessBox!.width).toBeGreaterThanOrEqual(44);
+  await expect(keep).toHaveAttribute("title", "Resolve saved dictation first");
+  await expect(savedAccess).toHaveAttribute("title", "Saved dictation");
+  await expect(savedAccess.locator(".voice-card-saved-indicator")).toBeVisible();
+  await measureRow("olderSavedDuringRecording");
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "voice-saved-access-during-recording-narrow.png");
   await expect(composer).toHaveValue(draft);
+  await testInfo.attach("voice-row-heights", { body: JSON.stringify({ viewport: 320, originalRowHeight: 60, heights }, null, 2), contentType: "application/json" });
 });

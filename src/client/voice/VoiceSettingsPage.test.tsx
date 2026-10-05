@@ -90,8 +90,8 @@ describe("voice settings page", () => {
     expect(screen.getByRole("button", { name: "Copy recognized text" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Send saved dictation" }));
     await waitFor(() => expect(fake.plugin.sendRecoveredRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
-      recordingId: saved.recordingId, expectedRecoveryRevision: 8 }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Discard saved dictation" })).toBeEnabled());
+      recordingId: saved.recordingId, expectedRecoveryRevision: 8, acknowledgeIncomplete: false }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Discard saved dictation" })).not.toHaveAttribute("aria-disabled"));
     fireEvent.click(screen.getByRole("button", { name: "Discard saved dictation" }));
     await waitFor(() => expect(fake.plugin.discardRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
       recordingId: saved.recordingId, expectedRecoveryRevision: 9 }));
@@ -100,6 +100,13 @@ describe("voice settings page", () => {
   it("offers explicit client reconnect while the native voice binding still exists", async () => {
     const { fake, store } = await renderPage(voiceSnapshot({ clientConnectionToken: null, readiness: "connecting" }));
     fireEvent.click(screen.getByRole("button", { name: "Retry client connection" }));
+    await waitFor(() => expect(fake.plugin.setConnection).toHaveBeenLastCalledWith({ ...VOICE_CONNECTION, reconnect: true }));
+    store.dispose();
+  });
+  it("offers storage retry while Off without requiring a missing client connection", async () => {
+    const { fake, store } = await renderPage(voiceSnapshot({ readiness: "storageUnavailable", phase: "error" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Recording storage is unavailable. Retry the voice connection.");
+    fireEvent.click(screen.getByRole("button", { name: "Retry voice connection" }));
     await waitFor(() => expect(fake.plugin.setConnection).toHaveBeenLastCalledWith({ ...VOICE_CONNECTION, reconnect: true }));
     store.dispose();
   });

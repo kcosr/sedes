@@ -110,8 +110,20 @@ export async function installVoiceFixture(page: Page): Promise<void> {
               id: "saved-recognition", eventKind: "manual", threadId: saved.threadId, threadTitle: saved.threadTitle,
               recognitionThreadId: saved.threadId, recognitionThreadTitle: saved.threadTitle, automatic: false,
               recording: { id: saved.recordingId, keepListening: false, reconnecting: false } },
-              recordingRecovery: { ...saved, revision: saved.revision + 1, stage: "recognizing", canRetryRecognition: false, canSend: false } });
-            if (method === "sendRecoveredRecording") fixture.publish({ recordingRecovery: { ...saved, revision: saved.revision + 1, stage: "admitting", canSend: false } });
+              actions: { ...initial.actions, canStart: false, canStop: false },
+              recordingRecovery: { ...saved, revision: saved.revision + 1, stage: "recognizing", canRetryRecognition: false,
+                canSend: false, canCopyRecognizedText: false, canDiscard: false } });
+            if (method === "sendRecoveredRecording") {
+              if (typeof args.acknowledgeIncomplete !== "boolean" || (saved.captureIncomplete && args.acknowledgeIncomplete !== true))
+                throw new Error("Acknowledge that the end may be missing before sending.");
+              fixture.publish({ phase: "submitting", active: {
+                id: "saved-send", eventKind: "manual", threadId: saved.threadId, threadTitle: saved.threadTitle,
+                recognitionThreadId: saved.threadId, recognitionThreadTitle: saved.threadTitle, automatic: false,
+                recording: { id: saved.recordingId, keepListening: false, reconnecting: false } },
+                actions: { ...initial.actions, canStart: false, canStop: false },
+                recordingRecovery: { ...saved, revision: saved.revision + 1, stage: "admitting", captureIncomplete: false,
+                  canSend: false, canRetryRecognition: false, canCopyRecognizedText: false, canDiscard: false } });
+            }
             if (method === "discardRecording") fixture.publish({ recordingRecovery: null,
               ...current.active ? {} : { phase: current.settings.audioMode === "off" ? "off" : "idle", actions: { ...initial.actions, canStart: current.settings.audioMode !== "off" } } });
           } else if (method === "listInputDevices") return { devices: [], selectedId: null };

@@ -79,7 +79,8 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
         checked={showBarWhenOff} onCheckedChange={setShowBarWhenOff} />
       {settings.audioMode !== "off" && native.actions.canResume ? <Button disabled={state.pending} onClick={() => { void resumeVoice(store).catch(() => undefined); }}>Resume voice</Button> : null}
       <p role="status">{voiceReadiness(native.readiness)}</p>
-      {!native.clientConnectionToken && <Button disabled={state.pending} onClick={() => { void store.reconnect().catch(() => undefined); }}>Retry client connection</Button>}
+      {native.readiness === "storageUnavailable" ? <Button aria-disabled={state.pending || undefined} onClick={() => { if (!state.pending) void store.reconnect().catch(() => undefined); }}>Retry voice connection</Button>
+        : !native.clientConnectionToken && <Button disabled={state.pending} onClick={() => { void store.reconnect().catch(() => undefined); }}>Retry client connection</Button>}
     </SettingsSection>
     {savedRecording(native) ? <SettingsSection title="Saved dictation" card>
       <VoiceRecordingRecovery store={store} threads={application.snapshot?.threads ?? []} />
@@ -269,6 +270,7 @@ export function inputDeviceLabels(devices: readonly { id: string; label: string;
 }
 export function voiceReadiness(readiness: string): string {
   return ({ disconnected: "Connect to Sedes to use voice.", connecting: "Connecting to Sedes…", off: "Voice is off.", needsResume: "Resume voice from this screen to start a new session.",
+    storageUnavailable: "Recording storage is unavailable. Retry the voice connection.",
     permissionRequired: "Microphone permission is required to start voice.", speechConfigurationRequired: "Configure a speech endpoint, models and voice, and add the required credential.",
     notificationsConnecting: "Connecting to Sedes notifications…", notificationsUnavailable: "Sedes notifications are unavailable. Explicit recording still works.",
     ready: "Voice is ready.", error: "Voice needs attention." } as Record<string, string>)[readiness] ?? "Voice is starting…";

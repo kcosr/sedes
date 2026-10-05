@@ -318,26 +318,33 @@ public class NativeDictationStoreTest {
         }
     }
 
-    @Test public void interruptedCaptureRequiresExplicitAcknowledgementRegardlessOfIntentTaskOrder() throws Exception {
-        for (boolean interruptFirst : new boolean[] {false, true}) {
-            String id = interruptFirst ? "interrupted_before" : "interrupted_after";
+    @Test public void missingCaptureBoundaryRequiresExplicitAcknowledgementEvenWithExistingIntent() throws Exception {
+        try (NativeDictationStore store = open()) {
+            NativeDictationStore.Journal journal = create(store, "interrupted"); journal.adopt(true); completedSegment(journal, 0, "saved");
+            journal.interrupt("recording_interrupted"); store.finishIntent(BINDING, "interrupted", "mutation", preference());
+            try { store.saveFinalRequest(BINDING, "interrupted", request("saved")); fail("Intent must not acknowledge an unverified capture end"); }
+            catch (IllegalStateException expected) { assertEquals("dictation_not_deliverable", expected.getMessage()); }
+            store.finishIntent(BINDING, "interrupted", "mutation", preference());
+            try { store.saveFinalRequest(BINDING, "interrupted", request("saved")); fail("Repeated intent must not acknowledge interruption"); }
+            catch (IllegalStateException expected) { assertEquals("dictation_not_deliverable", expected.getMessage()); }
+        }
+        try (NativeDictationStore store = open()) {
+            assertTrue(store.get(BINDING, "interrupted").captureIncomplete);
+            store.acknowledgeIncomplete(BINDING, "interrupted"); store.saveFinalRequest(BINDING, "interrupted", request("saved"));
+            assertEquals("mutation", store.get(BINDING, "interrupted").mutationId);
+        }
+    }
+
+    @Test public void recognitionInterruptionAfterDurableFinishDoesNotClaimCaptureWasIncomplete() throws Exception {
+        for (boolean failureBeforeIntent : new boolean[] {false, true}) {
+            String id = failureBeforeIntent ? "before_intent" : "after_intent";
             try (NativeDictationStore store = open()) {
                 NativeDictationStore.Journal journal = create(store, id); journal.adopt(true); completedSegment(journal, 0, "saved");
                 journal.finish("send", 1);
-                if (interruptFirst) journal.interrupt("recording_interrupted");
+                if (failureBeforeIntent) journal.interrupt("recognition_failed");
                 store.finishIntent(BINDING, id, "mutation", preference());
-                if (!interruptFirst) journal.interrupt("recording_interrupted");
-                try { store.saveFinalRequest(BINDING, id, request("saved")); fail("Queued Send must not accept partial capture"); }
-                catch (IllegalStateException expected) { assertEquals("dictation_not_deliverable", expected.getMessage()); }
-                // Repeating intent creation with the same ID also cannot acknowledge interruption.
-                store.finishIntent(BINDING, id, "mutation", preference());
-                try { store.saveFinalRequest(BINDING, id, request("saved")); fail("Intent retry must not accept partial capture"); }
-                catch (IllegalStateException expected) { assertEquals("dictation_not_deliverable", expected.getMessage()); }
-            }
-            try (NativeDictationStore store = open()) {
-                assertTrue(store.get(BINDING, id).captureIncomplete);
-                store.acknowledgeIncomplete(BINDING, id); store.saveFinalRequest(BINDING, id, request("saved"));
-                assertEquals("mutation", store.get(BINDING, id).mutationId);
+                if (!failureBeforeIntent) journal.interrupt("recognition_failed");
+                assertFalse(journal.load().captureIncomplete); store.saveFinalRequest(BINDING, id, request("saved"));
                 store.beginDiscard(BINDING, id, "mutation"); store.finishDiscard(BINDING, id);
             }
         }
@@ -384,7 +391,7 @@ public class NativeDictationStoreTest {
         NativeDictationStore.Limits limits = new NativeDictationStore.Limits(1024, 128, 10000, 8, 2048, 6000);
         try (NativeDictationStore first = open(new NativeDictationStore.Disk(), limits);
              NativeDictationStore second = open(new NativeDictationStore.Disk(), limits)) {
-            create(first, "reserved"); failure("dictation_storage_capacity", () -> create(second, "denied"));
+            create(first, "reserved"); failure("dictation_storage_full", () -> create(second, "denied"));
             first.close(); create(second, "allowed"); assertTrue(files().stream().noneMatch(file -> file.getParentFile().getName().equals("denied")));
         }
     }
@@ -401,6 +408,171 @@ public class NativeDictationStoreTest {
             catch (IllegalStateException expected) { assertEquals("dictation_not_deliverable", expected.getMessage()); }
         }
         try (NativeDictationStore store = open()) { assertEquals(262145, store.recover(BINDING).textBytes); }
+    }
+
+    private static long reserved(NativeDictationStore store) throws Exception {
+        java.lang.reflect.Field field = NativeDictationStore.class.getDeclaredField("ledger"); field.setAccessible(true);
+        Object ledger = field.get(store); field = ledger.getClass().getDeclaredField("reservations"); field.setAccessible(true);
+        return field.getLong(ledger);
+    }
+    private long initializeQuotaRecording(String id) throws Exception {
+        try (NativeDictationStore store = open()) { create(store, id).adopt(true); }
+        return new NativeDictationStore.Disk().size(root);
+    }
+
+    @Test public void pcmDrawsFromCaptureReservationAndReservedQueueStillDrainsAtTheDataLimit() throws Exception {
+        long existing = initializeQuotaRecording("full");
+        NativeDictationStore.Limits limits = new NativeDictationStore.Limits(1024, 128, existing + 256 + 4096, 8, 4096, 256);
+        try (NativeDictationStore store = open(new NativeDictationStore.Disk(), limits)) {
+            NativeDictationStore.Journal journal = store.journal(BINDING, "full");
+            // The block is already covered by staging. Only replenishment for continued capture is rejected.
+            failure("dictation_storage_full", () -> journal.append(0, pcm(8)));
+            assertEquals(4, journal.load().acceptedSamples); assertEquals(4, journal.load().durableSamples);
+            assertTrue(reserved(store) < 256);
+            journal.append(4, pcm(16));
+            assertTrue(new NativeDictationStore.Disk().size(root) + reserved(store) <= limits.deviceBytes);
+            NativeDictationStore.Recording stopped = journal.interrupt("dictation_storage_full");
+            assertEquals(12, stopped.endSample); assertEquals(12, stopped.durableSamples); assertTrue(stopped.captureIncomplete);
+            assertEquals(0, reserved(store)); assertEquals(12, journal.finish("retry", 12).endSample);
+            assertArrayEquals(pcm(16), journal.read(4, 16));
+        }
+        try (NativeDictationStore store = open()) { assertEquals(12, store.recover(BINDING).endSample); }
+    }
+
+    @Test public void uncheckpointedBlockReplacementReservesItsDuplicateSeparatelyFromQueuedPcm() throws Exception {
+        long existing = initializeQuotaRecording("replacement");
+        NativeDictationStore.Limits limits = new NativeDictationStore.Limits(1024, 128, existing + 128 + 4096, 8, 4096, 128);
+        final NativeDictationStore[] owner = new NativeDictationStore[1]; AtomicBoolean failedCheckpoint = new AtomicBoolean(), checkedReplacement = new AtomicBoolean();
+        NativeDictationStore.Disk disk = new NativeDictationStore.Disk() {
+            @Override void fault(String phase, File file) throws IOException {
+                if (phase.equals("before_write") && file.getName().equals("checkpoint.enc") && failedCheckpoint.compareAndSet(false, true))
+                    throw new IOException("checkpoint failed");
+                if (phase.equals("after_write") && file.getName().equals("pcm-0.enc") && file.exists()) {
+                    try {
+                        java.lang.reflect.Field ledgerField = NativeDictationStore.class.getDeclaredField("ledger"); ledgerField.setAccessible(true);
+                        Object ledger = ledgerField.get(owner[0]); java.lang.reflect.Field sizeField = ledger.getClass().getDeclaredField("bytes"); sizeField.setAccessible(true);
+                        long tracked = sizeField.getLong(ledger) + reserved(owner[0]);
+                        // Seventy-one reserved bytes still belong to queued/unfinished PCM after the first 57-byte file.
+                        assertTrue(tracked >= size(root) + 71); assertTrue(tracked <= limits.deviceBytes); checkedReplacement.set(true);
+                    } catch (ReflectiveOperationException error) { throw new IOException(error); }
+                    catch (Exception error) { throw new IOException(error); }
+                }
+            }
+        };
+        try (NativeDictationStore store = open(disk, limits)) {
+            owner[0] = store; NativeDictationStore.Journal journal = store.journal(BINDING, "replacement");
+            failure("dictation_storage_unavailable", () -> journal.append(0, pcm(8)));
+            assertEquals(4, journal.load().acceptedSamples); assertEquals(0, journal.load().durableSamples);
+            failure("dictation_storage_full", () -> journal.append(4, pcm(8)));
+            journal.append(4, pcm(8));
+            assertTrue(checkedReplacement.get()); assertEquals(8, journal.interrupt("dictation_storage_full").endSample);
+            assertEquals(0, reserved(store)); assertArrayEquals(pcm(8), journal.read(0, 8)); assertArrayEquals(pcm(8), journal.read(4, 8));
+        }
+    }
+
+    @Test public void failedTailFlushStillPersistsTheDurableEndWithoutLeakingReservationOrRetryTail() throws Exception {
+        long existing = initializeQuotaRecording("tail_full");
+        NativeDictationStore.Limits limits = new NativeDictationStore.Limits(1024, 128, existing + 128 + 4096, 8, 4096, 128);
+        try (NativeDictationStore store = open(new NativeDictationStore.Disk(), limits)) {
+            NativeDictationStore.Journal journal = store.journal(BINDING, "tail_full");
+            failure("dictation_storage_full", () -> journal.append(0, pcm(8)));
+            failure("dictation_storage_full", () -> journal.append(4, pcm(16)));
+            assertEquals(12, journal.load().acceptedSamples); assertEquals(8, journal.load().durableSamples);
+            NativeDictationStore.Recording stopped = journal.interrupt("dictation_storage_full");
+            assertEquals(8, stopped.endSample); assertEquals(8, stopped.acceptedSamples); assertTrue(stopped.captureIncomplete);
+            assertEquals(0, reserved(store)); assertEquals(8, journal.finish("retry", 8).durableSamples);
+            assertTrue(new NativeDictationStore.Disk().size(root) <= limits.deviceBytes);
+        }
+        try (NativeDictationStore store = open()) { assertEquals(8, store.recover(BINDING).endSample); }
+    }
+
+    @Test public void interruptionControlFailureReleasesReservationAndCachedRecoveryRetriesTheBoundary() throws Exception {
+        FaultDisk disk = new FaultDisk();
+        try (NativeDictationStore store = open(disk, limits(1024, 128, 100000))) {
+            NativeDictationStore.Journal journal = create(store, "control_full"); journal.adopt(true); journal.append(0, pcm(4));
+            disk.arm("before_write", "manifest.enc"); failure("dictation_storage_unavailable", () -> journal.interrupt("recognition_failed"));
+            assertEquals(0, reserved(store));
+            NativeDictationStore.Recording recovered = store.recover(BINDING);
+            assertEquals(2, recovered.endSample); assertEquals("interrupted", recovered.stage); assertTrue(recovered.captureIncomplete);
+            assertEquals(0, reserved(store));
+        }
+    }
+
+    @Test public void failedControlWritesPreserveTailAndReloadOnlyAuthoritativeMetadata() throws Exception {
+        for (String phase : new String[] {"before_write", "after_replace"}) {
+            FaultDisk disk = new FaultDisk(); String id = "control_" + phase;
+            try (NativeDictationStore store = open(disk, limits(1024, 128, 100000))) {
+                NativeDictationStore.Journal journal = create(store, id); journal.adopt(true); journal.append(0, pcm(4));
+                disk.arm(phase, "manifest.enc"); failure("dictation_storage_unavailable", () -> store.retarget(BINDING, id, "changed", "Changed"));
+                NativeDictationStore.Recording recovered = journal.load();
+                assertEquals(phase.equals("after_replace") ? "changed" : "target", recovered.threadId);
+                assertEquals(2, recovered.acceptedSamples); assertEquals(0, recovered.durableSamples);
+                journal.append(2, new byte[] {5,6,7,8}); assertArrayEquals(pcm(8), journal.read(0, 8));
+                journal.interrupt("recognition_failed"); store.discard(BINDING, id);
+            }
+        }
+    }
+
+    @Test public void failedAdoptionMetadataIsNotPublishedButIntentCanBeSavedByInterruption() throws Exception {
+        FaultDisk disk = new FaultDisk();
+        try (NativeDictationStore store = open(disk, limits(1024, 128, 100000))) {
+            NativeDictationStore.Journal journal = create(store, "adopt_failure"); journal.append(0, pcm(4));
+            disk.arm("before_write", "manifest.enc"); failure("dictation_storage_unavailable", () -> journal.adopt(true));
+            assertFalse(journal.load().adopted); assertEquals(2, journal.load().acceptedSamples);
+            journal.append(2, new byte[] {5,6,7,8});
+            NativeDictationStore.Recording interrupted = journal.interrupt("dictation_storage_unavailable");
+            assertTrue(interrupted.adopted); assertEquals(4, interrupted.endSample); assertArrayEquals(pcm(8), journal.read(0, 8));
+        }
+    }
+
+    @Test public void postLinkReclamationFailureDoesNotUndoTheResultOrInterruptHealthyCapture() throws Exception {
+        FaultDisk disk = new FaultDisk();
+        try (NativeDictationStore store = open(disk, limits(1024, 128, 100000))) {
+            NativeDictationStore.Journal journal = create(store, "reclaim"); journal.adopt(true); journal.append(0, pcm(8)); journal.seal(0, 0, 4, 0);
+            disk.arm("before_delete", "pcm-0.enc");
+            assertEquals("first", journal.complete(0, "first").text); assertTrue(file("pcm-0.enc").exists());
+            journal.append(4, pcm(8)); journal.seal(1, 4, 8, 0); journal.finish("send", 8);
+            assertEquals("first second", journal.complete(1, "second").text);
+            assertFalse(files().stream().anyMatch(file -> file.getName().startsWith("pcm-")));
+        }
+    }
+
+    private static final class ProcessCrash extends Error {}
+    private static final class CrashDisk extends NativeDictationStore.Disk {
+        final String phase, name;
+        CrashDisk(String phase, String name) { this.phase = phase; this.name = name; }
+        @Override void fault(String point, File file) { if (point.equals(phase) && file.getName().equals(name)) throw new ProcessCrash(); }
+    }
+    @Test public void everyInitialCreateCrashBoundaryRemainsOrdinary() throws Exception {
+        for (String[] crash : new String[][] {{"before_write", "creating.enc"}, {"after_write", "creating.enc"}, {"after_replace", "creating.enc"},
+            {"before_write", "manifest.enc"}, {"after_write", "manifest.enc"}, {"after_replace", "manifest.enc"},
+            {"before_write", "checkpoint.enc"}, {"after_write", "checkpoint.enc"}, {"before_delete", "creating.enc"}}) {
+            try (NativeDictationStore store = open(new CrashDisk(crash[0], crash[1]), limits(1024, 128, 100000))) {
+                try { create(store, "create_crash"); fail("Expected process death"); } catch (ProcessCrash expected) {}
+            }
+            try (NativeDictationStore store = open()) { assertNull(store.recover(BINDING)); assertTrue(files().isEmpty()); }
+        }
+    }
+
+    @Test public void missingAdoptedManifestWithAudioRemainsUnavailableAndHasNoInventedTarget() throws Exception {
+        try (NativeDictationStore store = open()) {
+            NativeDictationStore.Journal journal = create(store, "missing_manifest"); journal.adopt(true); journal.append(0, pcm(8));
+        }
+        Files.delete(file("manifest.enc").toPath()); List<File> preserved = files();
+        try (NativeDictationStore store = open()) {
+            NativeDictationStore.Recording unavailable = store.recover(BINDING);
+            assertEquals("unavailable", unavailable.stage); assertTrue(unavailable.adopted); assertNull(unavailable.threadId); assertEquals(preserved, files());
+        }
+    }
+
+    @Test public void tombstoneCleanupFailureIsReportedWithoutRepublishingADiscardedDraft() throws Exception {
+        FaultDisk disk = new FaultDisk();
+        try (NativeDictationStore store = open(disk, limits(1024, 128, 100000))) {
+            NativeDictationStore.Journal journal = create(store, "retired"); journal.adopt(true); journal.append(0, pcm(8));
+            store.beginDiscard(BINDING, "retired", null); disk.arm("before_delete", "manifest.enc");
+            failure("dictation_storage_unavailable", () -> store.recover(BINDING));
+            assertTrue(file("terminal.enc").exists()); assertNull(store.recover(BINDING)); assertTrue(files().isEmpty());
+        }
     }
 
     private static JSONObject preference() { return NativeVoiceJson.object("mode", "queue", "originClientId", "client"); }

@@ -72,6 +72,18 @@ public class NativeVoiceRuntimePolicyTest {
         assertTrue(NativeVoiceRuntime.message("playback_unavailable").contains("playback_unavailable"));
         assertTrue(NativeVoiceRuntime.message("some_future_code").contains("some_future_code"));
     }
+    @Test public void everyEmittedDictationAndRecognitionFailureHasASpecificMessage() throws Exception {
+        java.util.regex.Pattern errors = java.util.regex.Pattern.compile("\"((?:dictation|recognition)_[a-z_]+)\"");
+        for (String name : new String[] { "NativeDictationStore", "NativeVoiceRecording", "NativeSpeechTransport", "NativeSpeechCapabilities", "NativeSpeechCatalog" }) {
+            java.nio.file.Path source = java.nio.file.Paths.get("src/main/java/dev/sedes/local/" + name + ".java");
+            assertTrue("Missing production error-code source " + source, java.nio.file.Files.isRegularFile(source));
+            java.util.regex.Matcher matches = errors.matcher(new String(java.nio.file.Files.readAllBytes(source), java.nio.charset.StandardCharsets.UTF_8));
+            while (matches.find()) assertSpecific(matches.group(1));
+        }
+        assertEquals("Recording storage is full. Resolve saved recordings in their original profiles or remove an unused profile.",
+            NativeVoiceRuntime.message("dictation_storage_full"));
+        assertNotEquals(NativeVoiceRuntime.message("dictation_storage_full"), NativeVoiceRuntime.message("dictation_storage_capacity"));
+    }
     private static void assertSpecific(String code) {
         String message = NativeVoiceRuntime.message(code);
         assertFalse("Generic message for " + code, message.contains(code));

@@ -20,6 +20,14 @@ public class NativeVoiceNotificationTargetTest {
         NativeVoiceJson.put(state, "phase", "recognizing");
         assertTrue(NativeVoiceRuntimeService.wakeLockNeeded(state));
     }
+    @Test public void anUnavailableSavedTargetDoesNotOpenTheForegroundOrAPhantomThread() {
+        JSONObject state = idle(false, false);
+        NativeVoiceJson.put(state, "phase", "recordingRecovery");
+        NativeVoiceJson.put(state, "recordingRecovery", NativeVoiceJson.object("threadId", null, "threadTitle", null));
+        JSONObject target = NativeVoiceRuntimeService.notificationTarget(state);
+        assertTrue(target.isNull("threadId")); assertTrue(target.isNull("threadTitle"));
+    }
+
     @Test public void idleNotificationUsesPinnedDefaultInsteadOfTheForegroundThread() {
         for (boolean filtered : new boolean[] { false, true }) {
             JSONObject state = idle(true, filtered);

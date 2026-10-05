@@ -51,7 +51,8 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
   const locked = state.pending || undefined;
   const update = (patch: Partial<NativeVoiceSettings>) => { if (!state.pending) void store.update(patch).catch(() => undefined); };
   const [status, tone] = state.error ? [state.error, "warning"] : !native ? [state.loading ? "Connecting voice to this server…" : "Voice could not connect to this server.", "warning"]
-    : native.settings.audioMode === "off" ? ["Voice off", "muted"] : native.ready ? ["Ready", "success"] : [voiceReadiness(native.readiness), "warning"];
+    : native.readiness === "storageUnavailable" ? [voiceReadiness(native.readiness), "warning"]
+      : native.settings.audioMode === "off" ? ["Voice off", "muted"] : native.ready ? ["Ready", "success"] : [voiceReadiness(native.readiness), "warning"];
   const mode = settings ? modes.find(([value]) => value === settings.audioMode)! : undefined;
   // Enabling voice requires both the speech destination and its native credential.
   const blocked = settings?.audioMode === "off" && !canEnableVoice(settings, native?.speech.credentialConfigured === true);
@@ -85,8 +86,11 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
           <p className="voice-sheet-help"><strong>{mode[1]}</strong> {blocked ? "pauses voice. Set up speech in All voice settings first." : mode[3]}</p>
           {settings.audioMode !== "off" && native?.actions.canResume ? <Button className={cn("h-(--control-touch) w-full", lockedClass)} aria-disabled={locked}
             onClick={() => { if (!state.pending) void resumeVoice(store).catch(() => undefined); }}>Resume voice</Button> : null}
+          {native?.readiness === "storageUnavailable" ? <Button className={cn("h-(--control-touch) w-full", lockedClass)} aria-disabled={locked}
+            onClick={() => { if (!state.pending) void store.reconnect().catch(() => undefined); }}>Retry voice connection</Button> : null}
         </div>
         <VoiceRecordingRecovery store={store} threads={threads} />
+        {native?.actions.keepListeningBlockedReason === "saved_recording_pending" ? <p className="voice-sheet-help">Resolve saved dictation first to enable Keep listening for the current recording.</p> : null}
         {native && savedRecording(native)?.admission && native.actions.canStart ? <Button variant="outline" disabled={state.pending} onClick={start}>Start new recording</Button> : null}
         <div className="-mx-3 -mt-2 flex flex-col">
           <SwitchRow icon={<Ear aria-hidden="true" />} label="Auto-listen" description="Eligible notifications reopen the mic"

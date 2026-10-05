@@ -10,3 +10,7 @@ export const largeDirectInputText = prefix
   + chunk.repeat(Math.floor(remaining / Buffer.byteLength(chunk)))
   + "x".repeat(remaining % Buffer.byteLength(chunk))
   + suffix;
+
+export function largeDirectInputWithPrefix(prefix: string): string {
+  return prefix + "x".repeat(MAX_DIRECT_INPUT_TEXT_BYTES - Buffer.byteLength(prefix));
+}

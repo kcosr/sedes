@@ -555,10 +555,10 @@ export function PendingInputStrip({
               className="pending-input-action pending-input-restore"
               aria-label={`Restore queued input to composer: ${item.preview.text}`}
               title={
-                restoreAvailable ? "Restore to composer" : restoreUnavailableReason
+                item.restoreUnavailableReason?.text ?? (restoreAvailable ? "Restore to composer" : restoreUnavailableReason)
               }
               disabled={
-                disabled || awaitingProjection || rowPending || !restoreAvailable
+                disabled || awaitingProjection || rowPending || !restoreAvailable || item.restoreUnavailableReason !== undefined
               }
               onClick={(event) =>
                 void runAction(item, "restore", event.currentTarget)

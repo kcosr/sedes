@@ -440,6 +440,12 @@ The first adoption starts a `SystemClock.elapsedRealtime()` deadline, including
 suspend; no toggle resets it. Expiration drains recognition into a retained ready
 draft without admission. Recording settings edits apply to future recordings.
 
+The voice toolbar preserves its existing 60 px row at normal text scale, including
+320 px layouts. Infinity sits beside Change within the two-line text area, with
+distinct 44 px touch regions. Reconnecting and error details use the existing
+status line. An older saved draft marks the controls caret and opens the same
+recovery sheet without adding another row.
+
 `NativeVoiceSegmenter` counts real 24 kHz samples and analyzes absolute 100 ms
 frames. RMS 0.012 identifies likely pauses, never disposable audio. A 1,200 ms
 quiet run after speech seals a segment; after `min(30 seconds, hard limit / 2)`,
@@ -475,9 +481,15 @@ Interrupted adopted recordings release hardware and block new capture/queue drai
 before admission handoff. Restart restores only the draft and immutable admission
 request; it cannot resume the microphone, recognition, or POST automatically.
 Missing interior audio blocks Send. An explicit recovery Send can accept a
-reported incomplete trailing watermark. Key, corruption, and disk failures
+reported incomplete trailing watermark only with `acknowledgeIncomplete: true`
+from the recovery control that displays the warning. The toolbar opens that
+control for an incomplete capture. Key, corruption, and disk failures
 preserve recording files and expose unavailable recovery, rather than resetting
-them. Profile removal revokes its write generation before serialized deletion.
+them. Unknown targets are null and cannot open a thread. A bootstrap storage
+failure without a recoverable item reports storage readiness with an explicit
+reconnect action; it does not invent a saved-dictation phase. Profile removal
+revokes its write generation before serialized deletion and reports deletion
+failures even when credential cleanup succeeds.
 
 Recognition Retry uses the frozen provider/endpoint/model and fresh effective
 limits. It needs an enabled, ready voice session (including that service's
@@ -501,7 +513,11 @@ retains adopted text for Copy/Discard with Send disabled. A found receipt releas
 the local recording and journal: subsequent dispatch belongs to the thread.
 After handoff, uncertain admission releases the active slot for ordinary capture
 and playback, while the older draft still blocks adoption of another recording.
-Its callbacks cannot change a newer interaction's phase or resources.
+Its callbacks cannot change a newer interaction's phase or resources. Stop during
+recovered Send or recognition Retry preserves the draft; only its explicit
+Discard action deletes it. First-handoff preparation excludes concurrent receipt
+reconciliation. Never-adopted recordings release their spool as soon as the
+durable input journal owns the request.
 
 ## Speech protocol and capability discovery
 
@@ -525,7 +541,10 @@ limits.
 An adopted recording continues capture during allowlisted transient network,
 timeout, model-busy and retryable provider failures. It retries unresolved work
 at delays of 1, 2, 4, 8 and 16 seconds, bounded by 60 seconds from the first
-failure through a durably saved matching result, including handshakes. A fresh
+failure through recovery, including handshakes. An affected prepared or committed
+segment requires a durably saved matching result. When only an open upload was
+affected, a ready replacement session that accepts that upload ends the episode;
+the next segment boundary does not extend an already recovered outage. A fresh
 connection/attempt fences stale responses. Possibly committed recognition can
 repeat and incur provider cost; providers offer no durable recognition receipt
 or idempotent replay key. Already resolved audio is never replayed. Permanent
@@ -547,8 +566,10 @@ must include the required numeric `realtime` fields: `max_buffer_bytes`,
 `max_session_seconds`. Require at least 8,192 message bytes, 524,288 output
 bytes, 40 idle seconds, and five seconds of PCM after rounding. Byte limits are integers; finite positive timeout seconds may be fractional and
 are conservatively rounded down to milliseconds. Buffer capacity is the
-server/model effective minimum. Session timing must fit the hard segment,
-result deadline and 30-second margin; frozen capabilities, not picker data,
+server/model effective minimum. Fresh-session timing must fit 30 seconds of
+microphone arming, 1.1 seconds before the first upload, the greater of the hard
+segment and full previous result deadline, a new result deadline, and a
+30-second margin. Frozen capabilities, not picker data,
 authorize the operation. Retry refuses immutable saved ranges that no longer fit
 lowered limits.
 
@@ -648,7 +669,8 @@ only during active capture/drain; a retained draft holds no wake lock.
 Speech synthesis sends one complete bounded text chunk to `/audio/speech` and
 consumes its raw 24 kHz PCM response incrementally. Outgoing transcription
 buffers, request deadlines, and streamed audio bytes are bounded. The incoming
-WebSocket message limit is checked before JSON parsing; OkHttp has already
+WebSocket message limit is the smaller of 512 KiB and the provider output limit,
+checked before JSON parsing; OkHttp has already
 buffered that message before delivering it to the listener. Local Skip/Stop
 intent remains authoritative even if a provider completes concurrently.
 Recognition reconnection and replay follow the coordinator's bounded policy above. OkHttp may repeat a pre-upgrade WebSocket GET after HTTP 503 with

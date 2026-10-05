@@ -169,7 +169,7 @@ final class NativeSpeechCatalog {
     static void validateRealtime(JSONObject realtime, boolean hosted) {
         try {
             NativeVoiceJson.keys(realtime, "max_buffer_bytes", "max_message_bytes", "max_output_bytes", "idle_timeout_seconds", "max_session_seconds");
-            long bytes = NativeVoiceJson.integer(realtime, "max_buffer_bytes", 2, 9007199254740991L);
+            long bytes = NativeVoiceJson.integer(realtime, "max_buffer_bytes", 0, 9007199254740991L);
             if ((bytes & 1) != 0) throw new IllegalArgumentException();
             NativeVoiceJson.integer(realtime, "max_message_bytes", 1, 9007199254740991L);
             NativeVoiceJson.integer(realtime, "max_output_bytes", 1, 9007199254740991L);

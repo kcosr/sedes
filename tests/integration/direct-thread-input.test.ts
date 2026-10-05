@@ -1,4 +1,4 @@
-import { largeDirectInputText } from "../support/large-direct-input.js";
+import { largeDirectInputText, largeDirectInputWithPrefix } from "../support/large-direct-input.js";
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { MAX_DIRECT_INPUT_TEXT_BYTES, directInputRequestSchema, type DirectInputRequest } from "../../src/shared/protocol/thread-input.js";
@@ -53,10 +53,16 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
     } finally { await h.close(); }
   });
 
-  it.each(["first", "bound"] as const)("keeps a rejected 256 KiB %s delivery server-owned after durable admission", async mode => {
+  it.each((["first", "bound"] as const).flatMap(mode => [
+    { mode, backendCode: "claude_slash_commands_unavailable", category: "unavailable" as const, prefix: " \n/not-supported " },
+    { mode, backendCode: "grok_slash_command_unsupported", category: "rejected" as const, prefix: " \n/rename " },
+    { mode, backendCode: "grok_submission_text_invalid", category: "rejected" as const, prefix: "\u0000" },
+  ]))("keeps a rejected 256 KiB $mode delivery server-owned for $backendCode", async ({ mode, backendCode, category, prefix }) => {
     const h = await createInMemoryThreadRuntimeHarness({ retentionMilliseconds: 60_000, persistDeliveryInputSnapshots: true });
-    const submit = vi.fn(async () => { throw new BackendError({ category: "rejected", retryable: false,
-      crossedSubmissionBoundary: false, backendCode: "fixture_content_rejected", safeMessage: "Provider rejected this input." }); });
+    // Native driver tests establish these content restrictions. This shared
+    // admission layer must retain ownership regardless of the rejection code.
+    const submit = vi.fn(async () => { throw new BackendError({ category, retryable: false,
+      crossedSubmissionBoundary: false, backendCode, safeMessage: "Provider rejected this input." }); });
     const attach = h.driver.attach.bind(h.driver);
     let handle: Awaited<ReturnType<typeof attach>> | undefined;
     vi.spyOn(h.driver, "attach").mockImplementation(async input => {
@@ -72,7 +78,8 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
         vi.spyOn(handle!, "submit").mockImplementation(submit);
       }
       const before = h.inventoryRepository.getDraft(h.scope, id);
-      const input = request(largeDirectInputText);
+      const input = request(largeDirectInputWithPrefix(prefix));
+      expect(directInputRequestSchema.parse(input).text).toBe(input.text);
       const admitted = await h.mutations.admitInput(h.scope, id, input);
       expect(admitted.mutationId).toBe(input.mutationId);
       const status = mode === "first" ? "recovery_required" : "failed";
@@ -390,12 +397,12 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
     }
   });
 
-  it("fails Steer closed for unbound threads and backends without Steer", async () => {
+  it("fails Steer closed for unbound and submit-only backends while preserving their 256 KiB queue path", async () => {
     const h = await createInMemoryThreadRuntimeHarness({ retentionMilliseconds: 60_000 });
     const held: (() => void)[] = [];
     try {
       const unbound = (await draft(h)).applicationThreadId;
-      const turnSteer = (turnId: string): DirectInputRequest => ({ ...request(), runningPolicy: { mode: "steer", target: { kind: "turn", turnId }, onUnavailable: "queue" } });
+      const turnSteer = (turnId: string): DirectInputRequest => ({ ...request(largeDirectInputText), runningPolicy: { mode: "steer", target: { kind: "turn", turnId }, onUnavailable: "queue" } });
       const attempt = turnSteer(randomUUID());
       await expect(h.mutations.admitInput(h.scope, unbound, attempt)).rejects.toMatchObject({ code: "invalid_transition" });
       expect(h.mutations.readInputReceipt(h.scope, attempt.mutationId)).toEqual({ status: "notObserved" });
@@ -414,9 +421,17 @@ describe("direct thread input admission", { timeout: 30_000 }, () => {
       const unsupported = turnSteer(running.sourceTurnId!);
       await expect(h.mutations.admitInput(h.scope, id, unsupported)).rejects.toMatchObject({ code: "invalid_transition" });
       expect(h.mutations.readInputReceipt(h.scope, unsupported.mutationId)).toEqual({ status: "notObserved" });
+      const queued = request(largeDirectInputText);
+      const admitted = await h.mutations.admitInput(h.scope, id, queued);
+      expect(admitted).toMatchObject({ status: "queued" });
+      expect(h.database.prepare("SELECT text FROM queued_inputs WHERE id = ?").get(admitted.queuedInputId!))
+        .toEqual({ text: largeDirectInputText });
       vi.restoreAllMocks();
       for (const release of held.splice(0)) release();
       await settled(h, id);
+      await vi.waitFor(() => expect(h.mutations.readInputReceipt(h.scope, queued.mutationId)).toMatchObject({
+        status: "found", receipt: { status: "accepted" },
+      }));
     } finally {
       vi.restoreAllMocks();
       for (const release of held) release();

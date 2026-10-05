@@ -52,7 +52,7 @@ public class NativeSpeechTransportTest {
         void quiet() throws InterruptedException { assertNull("Unexpected callback", events.poll(100, TimeUnit.MILLISECONDS)); }
     }
     /** A minimal RFC6455/HTTP peer; request headers and bytes are asserted without mocking OkHttp. */
-    private static final class Peer implements Closeable {
+    static final class Peer implements Closeable {
         final ServerSocket server = new ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"));
         Socket socket;
         DataInputStream in;
@@ -286,12 +286,31 @@ public class NativeSpeechTransportTest {
         }
     }
     @Test(timeout = 10000) public void malformedAndOversizedJsonFailSafely() throws Exception {
-        for (String input : new String[] { "{", "{\"type\":42}", "[".repeat(1000) + "]".repeat(1000), " ".repeat(NativeSpeechTransport.MAX_MESSAGE_CHARS + 1) }) {
+        for (String input : new String[] { "{", "{\"type\":42}", "[".repeat(1000) + "]".repeat(1000), " ".repeat(NativeSpeechTransport.MAX_RECOGNITION_MESSAGE_BYTES + 1) }) {
             Recorder recorder = new Recorder();
             try (Peer peer = new Peer(); NativeSpeechTransport transport = transport(peer)) {
                 transport.openRecognition("stt", capabilities(), 5000, recorder); handshake(peer, recorder); peer.text(input);
-                String expected = input.length() > NativeSpeechTransport.MAX_MESSAGE_CHARS ? "recognition_message_limit" : "recognition_protocol_error";
+                String expected = input.length() > NativeSpeechTransport.MAX_RECOGNITION_MESSAGE_BYTES ? "recognition_message_limit" : "recognition_protocol_error";
                 assertEquals("failed:stt:" + expected, recorder.next()); recorder.quiet();
+            }
+        }
+    }
+    @Test(timeout = 10000) public void inboundMessageLimitCountsUtf8BytesAndAcceptsExactly512KiB() throws Exception {
+        assertEquals(512 * 1024, NativeSpeechTransport.MAX_RECOGNITION_MESSAGE_BYTES);
+        for (String unit : new String[] { "x", "é" }) {
+            Recorder recorder = new Recorder();
+            try (Peer peer = new Peer(); NativeSpeechTransport transport = transport(peer)) {
+                transport.openRecognition("stt", capabilities(), 5000, recorder); handshake(peer, recorder);
+                JSONObject notice = NativeVoiceJson.object("type", "rate_limits.updated", "padding", "");
+                int available = NativeSpeechTransport.MAX_RECOGNITION_MESSAGE_BYTES - notice.toString().getBytes(StandardCharsets.UTF_8).length;
+                int unitBytes = unit.getBytes(StandardCharsets.UTF_8).length;
+                String padding = unit.repeat(available / unitBytes) + "x".repeat(available % unitBytes);
+                notice.put("padding", padding);
+                assertEquals(512 * 1024, notice.toString().getBytes(StandardCharsets.UTF_8).length);
+                peer.text(notice); recorder.quiet();
+                notice.put("padding", padding + "x"); peer.text(notice);
+                assertEquals("failed:stt:recognition_message_limit", recorder.next());
+                assertEquals(NativeSpeechTransport.Kind.LIMIT, recorder.failures.take().kind); recorder.quiet();
             }
         }
     }
@@ -479,6 +498,25 @@ public class NativeSpeechTransportTest {
             peer.raw("HTTP/1.1 503 Unavailable\r\nRetry-After: 0\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
             assertEquals("failed:stt:recognition_http_error", recorder.next()); assertEquals(503, recorder.failures.take().httpStatus);
             peer.noNewConnection(); recorder.quiet();
+        }
+    }
+    @Test(timeout = 10000) public void actualSocketResetAfterUpgradeIsRetryableBeforeAndAfterSessionReadiness() throws Exception {
+        for (String phase : new String[] {"configuring", "ready", "committed"}) {
+            Recorder recorder = new Recorder();
+            try (Peer peer = new Peer(); NativeSpeechTransport transport = transport(peer)) {
+                NativeSpeechTransport.RecognitionSession request = transport.openRecognition("stt", capabilities(), 5000, recorder);
+                if (phase.equals("configuring")) { peer.accept(); peer.upgrade(); peer.json(); }
+                else {
+                    handshake(peer, recorder);
+                    if (phase.equals("committed")) commit(peer, request);
+                }
+                peer.socket.setSoLinger(true, 0); peer.socket.close();
+                assertEquals("failed:stt:recognition_network_error", recorder.next());
+                NativeSpeechTransport.Failure failure = recorder.failures.take();
+                assertEquals(phase, NativeSpeechTransport.Kind.NETWORK, failure.kind);
+                assertEquals("Established reader failures do not retain the HTTP upgrade response", 0, failure.httpStatus);
+                assertTrue(phase, failure.retryable()); recorder.quiet(); peer.noNewConnection();
+            }
         }
     }
     @Test(timeout = 10000) public void rejected101UpgradeIsAProtocolFailure() throws Exception {
@@ -773,13 +811,31 @@ public class NativeSpeechTransportTest {
     }
     @Test(timeout = 10000) public void freshSessionMustRetainEnoughBudgetAfterHandshake() throws Exception {
         Recorder recorder = new Recorder(); java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong(1000);
-        JSONObject limits = capabilities().realtime(); limits.put("max_session_seconds", 150);
+        JSONObject limits = capabilities().realtime(); limits.put("max_session_seconds", 181.1);
         try (Peer peer = new Peer(); NativeSpeechTransport transport = new NativeSpeechTransport(config(peer.url()), now::get)) {
             transport.openRecognition("stt", NativeSpeechCapabilities.server("fixture-stt", limits), 60000, recorder);
             peer.accept(); peer.upgrade(); peer.json(); now.addAndGet(1);
             peer.text(NativeVoiceJson.object("type", "session.created", "session", session()));
             peer.text(NativeVoiceJson.object("type", "session.updated", "session", session()));
             assertEquals("failed:stt:recognition_session_timing_unsupported", recorder.next()); assertFalse(recorder.failures.take().retryable()); peer.noNewConnection();
+        }
+    }
+    @Test(timeout = 10000) public void initialReadinessReservesArmingAndFirstUploadBeforeCaptureStarts() throws Exception {
+        for (double seconds : new double[] {181.099, 181.1}) {
+            Recorder recorder = new Recorder(); java.util.concurrent.atomic.AtomicLong now = new java.util.concurrent.atomic.AtomicLong(1000);
+            JSONObject limits = capabilities().realtime(); limits.put("max_session_seconds", seconds);
+            try (Peer peer = new Peer(); NativeSpeechTransport transport = new NativeSpeechTransport(config(peer.url()), now::get)) {
+                NativeSpeechTransport.RecognitionSession request = transport.openRecognition("stt", NativeSpeechCapabilities.server("fixture-stt", limits), 60000, recorder);
+                if (seconds < 181.1) {
+                    assertEquals("failed:stt:recognition_session_timing_unsupported", recorder.next());
+                    assertFalse(recorder.failures.take().retryable()); peer.noNewConnection();
+                } else {
+                    handshake(peer, recorder);
+                    now.addAndGet(NativeSpeechCapabilities.MICROPHONE_ARMING_MS + NativeSpeechCapabilities.FIRST_UPLOAD_DELAY_MS);
+                    assertTrue("Initial upload still fits after worst-case arming and held PCM", request.canAssign(60000));
+                    assertEquals(NativeSpeechTransport.SendResult.ACCEPTED, request.append("first", new byte[4800])); peer.json();
+                }
+            }
         }
     }
     @Test(timeout = 10000) public void hostedDateAndExpiryAreStrictAndIndependentOfDeviceWallTime() throws Exception {

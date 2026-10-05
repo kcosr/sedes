@@ -1,4 +1,6 @@
 import { largeDirectInputText } from "../support/large-direct-input.js";
+import { readConversationHistory } from "../helpers/read-conversation-history.js";
+import { OpenCodeConversationBackendDriver } from "../../src/server/backends/opencode/opencode-conversation-driver.js";
 import { createOpenCodeExecutionFixture, modelA, modelB, nativeModel } from "../support/opencode-execution-fixture.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
@@ -35,7 +37,7 @@ function withImages(input: SubmitTurnInput, count: number, imageBytes: number) {
 }
 
 describe("OpenCode execution settings and explicit actions", () => {
-  it.each(["submit", "steer"] as const)("preserves 256 KiB %s input through native delivery, history evidence, and replay", async mode => {
+  it.each(["submit", "steer"] as const)("preserves 256 KiB %s input through native delivery, fresh-driver recovery, and replay", async mode => {
     const f = fixture();
     const input = { ...f.submit("large-direct-input", largeDirectInputText), target: { kind: "conversation" as const } };
     const deliver = () => mode === "submit" ? f.delivery.submit(input) : f.delivery.steer(input);
@@ -44,7 +46,20 @@ describe("OpenCode execution settings and explicit actions", () => {
       delivery: mode === "submit" ? "queue" : "steer" });
     expect(f.wire.messages).toContainEqual(expect.objectContaining({ type: "user", text: largeDirectInputText }));
     await expect(f.observer.reconcile(input.applicationOperationId, mode)).resolves.toMatchObject({ status: "accepted" });
-    await deliver();
+    f.observer.close();
+    const recovered = new OpenCodeConversationBackendDriver(f.context);
+    await expect(recovered.reconcileSubmission({ ...f.attach, applicationOperationId: input.applicationOperationId,
+      reconciliationToken: input.reconciliationToken,
+      ...(mode === "steer" ? { steerTarget: input.target } : {}) })).resolves.toMatchObject({ status: "accepted" });
+    const history = await readConversationHistory(recovered, f.attach);
+    expect(Object.values(history.snapshot.itemsById)).toContainEqual(expect.objectContaining({
+      semanticKind: "user_message", content: [{ kind: "text", text: { text: largeDirectInputText } }],
+    }));
+    const replacement = await recovered.attach(f.attach);
+    try {
+      await replacement.establishProjection({ signal: new AbortController().signal });
+      if (mode === "submit") await replacement.submit(input); else await replacement.steer(input);
+    } finally { await replacement.close(); }
     expect(f.posts("/prompt")).toHaveLength(1);
     expect(f.evidence.get(scope, threadID, input.applicationOperationId, mode).consumedFingerprint).not.toBeNull();
   });

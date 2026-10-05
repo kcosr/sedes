@@ -1848,10 +1848,10 @@ describe("Pi interaction bridge", () => {
 });
 
 describe("Pi conversation backend driver", () => {
-  it("preserves 256 KiB direct input through submission, immutable history, and reconciliation", async () => {
+  it("preserves 256 KiB direct input through submission, fresh-driver history, reconciliation, and replay", async () => {
     const fixture = await workspace();
     const prompts: string[] = [];
-    const driver = new PiConversationBackendDriver({
+    const driverFor = () => new PiConversationBackendDriver({
       instance, connection, usage: NO_USAGE_SINK,
       nativeDiscoveryNamespaceKey: "pi-test-native-namespace", toolProvenanceKey,
       agentTools: noAgentTools, toolAccessPolicy: fullToolAccessPolicy,
@@ -1859,6 +1859,7 @@ describe("Pi conversation backend driver", () => {
       sessionFactory: fakeSessionFactory(1, false, undefined, 0, undefined, 0, undefined,
         text => { prompts.push(text); return [text]; }),
     });
+    const driver = driverFor();
     const created = await driver.create({ scope, workspace: fixture.workspace,
       applicationThreadId: "large-direct-input", applicationOperationId: "large-direct-create", source: { kind: "user" } });
     const target = { scope, workspace: fixture.workspace, binding: binding(created.backendConversationId),
@@ -1872,15 +1873,21 @@ describe("Pi conversation backend driver", () => {
       await expect(handle.submit(input)).resolves.toMatchObject({ accepted: true });
       expect(prompts).toEqual([largeDirectInputText]);
       await vi.waitFor(async () => expect((await handle.establishProjection({ signal: new AbortController().signal })).snapshot.runState).toBe("idle"));
-    } finally { await handle.close(); }
-    const history = await readConversationHistory(driver, target);
+    } finally { await handle.close(); await driver.close(); }
+    const recovered = driverFor();
+    const history = await readConversationHistory(recovered, target);
     expect(Object.values(history.snapshot.itemsById)).toContainEqual(expect.objectContaining({
       semanticKind: "user_message", deliveryOperationId: input.applicationOperationId,
       content: [{ kind: "text", text: { text: largeDirectInputText } }],
     }));
-    await expect(driver.reconcileSubmission({ ...target, applicationOperationId: input.applicationOperationId,
+    await expect(recovered.reconcileSubmission({ ...target, applicationOperationId: input.applicationOperationId,
       reconciliationToken: input.reconciliationToken })).resolves.toMatchObject({ status: "accepted" });
-    expect(prompts).toHaveLength(1);
+    const replacement = await recovered.attach(target);
+    try {
+      await replacement.establishProjection({ signal: new AbortController().signal });
+      await expect(replacement.submit(input)).resolves.toMatchObject({ accepted: true });
+      expect(prompts).toHaveLength(1);
+    } finally { await replacement.close(); await recovered.close(); }
   });
 
   it("preserves 256 KiB steering through native input, history, and replay", async () => {
@@ -1898,7 +1905,14 @@ describe("Pi conversation backend driver", () => {
         content: JSON.stringify([{ kind: "text", text: { text: largeDirectInputText } }]),
       }));
       await expect(current.reconcile(input)).resolves.toMatchObject({ status: "accepted" });
-    } finally { await current.handle.close(); }
+    } finally { await current.handle.close(); await current.driver.close(); }
+    const recovered = current.driverFor();
+    const replacement = await current.attach(recovered);
+    try {
+      await expect(current.reconcile(input, recovered)).resolves.toMatchObject({ status: "accepted" });
+      await expect(replacement.steer(input)).resolves.toMatchObject({ status: "accepted" });
+      expect(prompts).toEqual([largeDirectInputText]);
+    } finally { await replacement.close(); await recovered.close(); }
   });
 
   it.each(["local", "remote", "removed_isolated"] as const)(

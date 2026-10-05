@@ -353,7 +353,8 @@ item with **Copy recognized text**. Saved dictation remains visible with voice
 Off and after restarting the app. Retry recognizes only unresolved audio and
 requires an enabled, configured voice session; it never opens the microphone or
 sends. Sending complete text needs only the Sedes connection. An interrupted tail
-may be incomplete; the notice remains until an explicit Send accepts that ending.
+may be incomplete; its toolbar Send opens the recovery controls so the missing-end
+notice is visible before you explicitly accept that ending and send.
 An older input whose admission is uncertain stays accessible while ordinary
 recording continues, but must be resolved before adopting another recording.
 Use **Start new recording** in the Voice sheet when that older item permits it;
@@ -367,6 +368,10 @@ the recording. Complete messages are limited to 256 KiB of UTF-8 text; overflow
 remains available through Copy and Discard, without truncation. Removing a server
 profile deletes its saved recordings. Corrupt or inaccessible recording storage
 is preserved and reported, never replaced with an empty draft.
+
+Once a dictation is in the thread's input queue, text above the composer's separate
+64 KiB limit cannot use **Restore to composer**. Its queue delivery and recovery
+actions remain available.
 
 Recognized input is journaled atomically in encrypted, backup-excluded native
 storage before sending. It carries one immutable mutation ID and original

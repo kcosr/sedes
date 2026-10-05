@@ -5,6 +5,7 @@ import { composerTaskReferenceIdsSchema } from "../../shared/protocol/tasks.js";
 import {
   contextExcerptArraySchema,
   MAXIMUM_COMPOSER_INPUT_BYTES,
+  MAXIMUM_DRAFT_BYTES,
   MAXIMUM_CONTEXT_EXCERPTS,
 } from "../../shared/protocol/context-excerpts.js";
 import {
@@ -19,7 +20,6 @@ import {
   type ThreadPreferredWorktreeUpdateResult,
 } from "../../shared/protocol/workspace-files.js";
 
-const MAXIMUM_DRAFT_BYTES = 64 * 1_024;
 const MAXIMUM_STASHES_PER_THREAD = 50;
 const MAXIMUM_WAKE_REMINDER_BYTES = 4_096;
 const PUBLICATION_RETRY_MILLISECONDS = 1_000;

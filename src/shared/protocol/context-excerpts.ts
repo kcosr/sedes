@@ -18,6 +18,8 @@ export const MAXIMUM_CONTEXT_HEADING_ENTRIES = 16;
 export const MAXIMUM_CONTEXT_HEADING_BYTES = 240;
 export const MAXIMUM_CONTEXT_PROVENANCE_PATH_BYTES = 4_096;
 export const MAXIMUM_COMPOSER_INPUT_BYTES = 262_144;
+export const MAXIMUM_DRAFT_BYTES = 65_536;
+export const OVERSIZED_COMPOSER_RESTORE_REASON = "This input is too large to restore to the composer (64 KiB limit).";
 
 const encoder = new TextEncoder();
 

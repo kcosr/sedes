@@ -7,7 +7,9 @@
 - Client protocol 140 raises direct-input text to 256 KiB and its JSON request
   limit to 2 MiB. Upgrade clients with the server. Android native voice uses
   snapshot version 6 and settings record version 5; older local settings reset
-  with voice Off, preserving separately stored speech credentials.
+  with voice Off, preserving separately stored speech credentials. Database
+  migration 133 rebuilds the creation and input-queue tables with the larger
+  direct-input limit; back up the database before this one-way upgrade.
 - Own speech servers must publish per-model `realtime` capabilities. Hosted
   recognition accepts the five supported base model IDs; dated and custom
   recognition IDs are rejected.

@@ -25,7 +25,7 @@ export const nativeSpeechCatalogSchema = z.strictObject({
 });
 export type NativeSpeechCatalog = z.infer<typeof nativeSpeechCatalogSchema>;
 export const nativeRecordingRecoverySchema = z.strictObject({
-  recordingId: z.string().min(1), revision: z.number().int().nonnegative(), threadId: z.string().min(1), threadTitle: z.string().nullable(),
+  recordingId: z.string().min(1), revision: z.number().int().nonnegative(), threadId: z.string().min(1).nullable(), threadTitle: z.string().nullable(),
   stage: z.enum(["interrupted", "recognizing", "ready", "admitting", "rejected", "overflow", "unavailable"]),
   reason: z.string().nullable(), hasUnrecognizedAudio: z.boolean(), captureIncomplete: z.boolean(),
   canRetryRecognition: z.boolean(), canSend: z.boolean(), canCopyRecognizedText: z.boolean(), canDiscard: z.boolean(),
@@ -79,7 +79,7 @@ export interface NativeVoicePlugin {
   skipCurrentPlayback(input: NativeVoiceCommandContext): Promise<NativeVoiceState>;
   stopCurrentInteraction(input: NativeVoiceInteractionCommandContext): Promise<NativeVoiceState>;
   retryRecordingRecognition(input: NativeRecordingRecoveryCommandContext): Promise<NativeVoiceState>;
-  sendRecoveredRecording(input: NativeRecordingRecoveryCommandContext): Promise<NativeVoiceState>;
+  sendRecoveredRecording(input: NativeRecordingRecoveryCommandContext & { acknowledgeIncomplete: boolean }): Promise<NativeVoiceState>;
   copyRecognizedRecordingText(input: NativeRecordingRecoveryCommandContext): Promise<NativeVoiceState>;
   discardRecording(input: NativeRecordingRecoveryCommandContext): Promise<NativeVoiceState>;
   resumeInput(input: NativeVoiceCommandContext & { mutationId: string }): Promise<NativeVoiceState>;

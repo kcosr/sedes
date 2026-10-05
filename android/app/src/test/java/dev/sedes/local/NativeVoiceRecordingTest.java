@@ -2,6 +2,8 @@ package dev.sedes.local;
 
 import static org.junit.Assert.*;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -9,10 +11,16 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
+import javax.crypto.SecretKey;
 import org.json.JSONObject;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 
 public class NativeVoiceRecordingTest {
+    @Rule public TemporaryFolder temporary = new TemporaryFolder();
+
     @Test public void pipelinesOnlyAfterAckAndPersistsResultsBeforeNextCommit() {
         Harness h = new Harness(); h.start(true);
         h.feedFrames(50);
@@ -86,13 +94,60 @@ public class NativeVoiceRecordingTest {
         assertEquals("retained", h.listener.text); assertFalse(h.listener.maySubmit);
     }
 
-    @Test public void outageDeadlineIncludesReadyConnectionsWithoutCompletedResult() {
+    @Test public void replacementReadyWithoutAnyAcceptedUploadKeepsTheOutageDeadline() {
         Harness h = new Harness(); h.start(true); h.feedFrames(2);
         h.latest().fail(NativeSpeechTransport.Kind.NETWORK, "recognition_network"); h.flush();
         h.advance(1000); assertEquals(2, h.sessions.size()); assertNull(h.listener.error);
         h.advance(58999); assertNull(h.listener.error);
         h.advance(1); assertEquals("dictation_reconnect_timeout", h.listener.error);
         assertTrue(h.listener.retained); assertTrue(h.journal.interrupted);
+    }
+
+    @Test public void reconnectedQuietOpenSegmentKeepsRecordingPastTheOldOutageDeadline() {
+        Harness h = new Harness(60000); h.start(true);
+        for (int frame = 0; frame < 20; frame++) {
+            assertTrue(h.recording.accept(pcm(2400, 0))); h.advance(100);
+        }
+        assertFalse(h.latest().audio.isEmpty()); assertTrue(h.latest().commits.isEmpty());
+        h.latest().fail(NativeSpeechTransport.Kind.NETWORK, "recognition_network"); h.flush();
+        for (int frame = 0; frame < 610; frame++) {
+            assertTrue(h.recording.accept(pcm(2400, 0))); h.advance(100);
+        }
+        assertEquals(63000, h.time.now); assertEquals(2, h.sessions.size());
+        assertEquals(1, h.latest().commits.size()); assertEquals(630L * 2400, h.journal.accepted);
+        assertNull(h.listener.error); assertFalse(h.listener.reconnecting); assertNull(h.listener.text);
+    }
+
+    @Test public void retriedCommittedJobStillNeedsADurableResultBeforeTheOutageDeadline() {
+        Harness h = new Harness(); h.start(true); h.feedFrames(50);
+        String initial = h.latest().commits.get(0); h.latest().ack(initial); h.flush();
+        h.latest().fail(NativeSpeechTransport.Kind.NETWORK, "recognition_network"); h.flush();
+        h.advance(1000); h.advance(100); h.advance(100); h.advance(100);
+        String retry = h.latest().commits.get(0); h.latest().ack(retry); h.flush();
+        h.feedFrames(20); // Following open audio being accepted does not resolve the earlier committed job.
+        h.advance(60000 - h.time.now - 1); assertNull(h.listener.error);
+        h.advance(1); assertEquals("dictation_reconnect_timeout", h.listener.error);
+        assertTrue(h.listener.retained); assertTrue(h.journal.interrupted);
+    }
+
+    @Test public void segmentSealedDuringTheOutageCannotClearItsNewCommitByUploadingTheNextOpenSegment() {
+        Harness h = new Harness(); h.start(true); h.feedFrames(49);
+        h.latest().fail(NativeSpeechTransport.Kind.NETWORK, "recognition_network"); h.flush();
+        h.feedFrames(11); h.advance(1000); h.advance(100); h.advance(100); h.advance(100);
+        String attempt = h.latest().commits.get(0); h.latest().ack(attempt); h.flush();
+        h.feedFrames(10); assertEquals(2, h.latest().audio.size());
+        h.advance(60000 - h.time.now); assertEquals("dictation_reconnect_timeout", h.listener.error);
+        assertTrue(h.journal.interrupted);
+    }
+
+    @Test public void recoveryOfAnOpenUploadDoesNotRestoreTheRevokedSendContinuation() {
+        Harness h = new Harness(); h.start(true); h.feedFrames(20);
+        h.recording.beginFinish(NativeVoiceRecording.FinishReason.SEND);
+        h.latest().fail(NativeSpeechTransport.Kind.NETWORK, "recognition_network"); h.flush();
+        h.advance(1000); assertFalse(h.latest().audio.isEmpty()); assertTrue(h.latest().commits.isEmpty());
+        h.recording.finish(NativeVoiceRecording.FinishReason.SEND); h.flush();
+        String attempt = h.latest().commits.get(0); h.latest().ack(attempt); h.flush(); h.latest().result(attempt, "saved"); h.flush();
+        assertEquals("saved", h.listener.text); assertFalse(h.listener.maySubmit); assertEquals("send_interrupted", h.journal.reason);
     }
 
     @Test public void retryUsesFiveFixedDelaysAndThenStops() {
@@ -232,6 +287,122 @@ public class NativeVoiceRecordingTest {
         }
     }
 
+    @Test public void firstUploadMatchesTheAdvertisedInitialSessionBudgetDelay() {
+        Harness h = new Harness(); h.start(true);
+        long firstUpload = NativeSpeechCapabilities.FIRST_UPLOAD_DELAY_MS;
+        int frameMs = (int) NativeSpeechCapabilities.CAPTURE_FRAME_MS;
+        assertEquals(0, firstUpload % frameMs);
+        h.feedFrames((int) (firstUpload / frameMs) - 1); assertTrue(h.latest().audio.isEmpty());
+        h.feedFrames(1); assertFalse(h.latest().audio.isEmpty());
+    }
+
+    @Test public void failedSealControlWriteStillDrainsHealthyQueuedPcmWithoutRepeatedSealing() {
+        Harness h = new Harness(); h.start(true); h.feedFrames(49); h.journal.failSeal = true;
+        for (int frame = 0; frame < 10; frame++) assertTrue(h.recording.accept(pcm(2400, 2100)));
+        h.flush();
+        assertEquals("dictation_storage_unavailable", h.listener.error); assertTrue(h.journal.interrupted);
+        assertEquals(59L * 2400, h.journal.accepted); assertEquals(h.journal.accepted, h.journal.durable);
+        assertArrayEquals(pcm(59 * 2400, 2100), h.journal.pcm.toByteArray());
+    }
+
+    @Test public void partialAppendFailureRetainsAndResumesOnlyTheUnacceptedPacketRemainder() {
+        Harness h = new Harness(); h.start(true); h.journal.failAppendAfterSamples = 100;
+        ByteArrayOutputStream expected = new ByteArrayOutputStream();
+        for (int value : new int[] {2100, 2200, 2300}) {
+            byte[] frame = pcm(2400, value); expected.write(frame, 0, frame.length); assertTrue(h.recording.accept(frame));
+        }
+        h.flush();
+        assertEquals("dictation_storage_unavailable", h.listener.error); assertTrue(h.journal.interrupted);
+        assertEquals(7200, h.journal.accepted); assertEquals(7200, h.journal.durable);
+        assertArrayEquals(expected.toByteArray(), h.journal.pcm.toByteArray());
+    }
+
+    @Test public void checkpointFailureCannotSkipTheDurableInterruptionMarker() {
+        Harness h = new Harness(); h.start(true); h.feedFrames(1); h.journal.failCheckpoint = true;
+        h.recording.finish(NativeVoiceRecording.FinishReason.SEND); h.flush();
+        assertEquals("dictation_storage_unavailable", h.listener.error);
+        assertTrue(h.journal.interrupted); assertEquals(0, h.journal.end); assertTrue(h.listener.retained);
+    }
+
+    @Test public void encryptedStoreRetainsEveryAcceptedSampleAfterSealManifestFailureAndReopen() throws Exception {
+        String binding = "profile\nhttps://sedes.example\n" + "a".repeat(64);
+        javax.crypto.KeyGenerator generator = javax.crypto.KeyGenerator.getInstance("AES"); generator.init(256);
+        SecretKey key = generator.generateKey();
+        JSONObject defaults = NativeVoiceSettings.defaults().value, config = new JSONObject();
+        for (String field : new String[] {"speechProvider", "speechEndpoint", "sttModel", "inputDeviceId", "recognitionStartTimeoutMs",
+                "recognitionCompletionTimeoutMs", "recognitionEndSilenceMs", "recognitionResultTimeoutMs", "longDictationTimeoutMs",
+                "recognizeStopCommand", "recognitionCues", "cueGain", "followComposerMode"})
+            NativeVoiceJson.put(config, field, defaults.opt(field));
+        byte[] frame = pcm(2400, 2100), expected = pcm(59 * 2400, 2100);
+        for (String boundary : new String[] {"before_write", "after_replace"}) {
+            File directory = temporary.newFolder(boundary); AtomicBoolean armed = new AtomicBoolean();
+            NativeDictationStore.Disk disk = new NativeDictationStore.Disk() {
+                @Override void fault(String point, File file) throws IOException {
+                    if (armed.get() && point.equals(boundary) && file.getName().equals("manifest.enc")) {
+                        armed.set(false); throw new IOException("injected_manifest_boundary");
+                    }
+                }
+            };
+            try (NativeDictationStore store = new NativeDictationStore(directory, () -> key, disk, NativeDictationStore.Limits.defaults())) {
+                Queue queue = new Queue(); Listener listener = new Listener(); Time time = new Time();
+                NativeDictationStore.Journal journal = store.create(binding, "recording", "thread", "Thread", config);
+                NativeVoiceRecording recording = new NativeVoiceRecording("recording", onQueue(journal, queue), (id, events) -> {
+                    events.ready(id, Long.MAX_VALUE);
+                    return new NativeSpeechTransport.RecognitionSession() {
+                        boolean ended;
+                        public NativeSpeechTransport.SendResult append(String attempt, byte[] pcm) { return NativeSpeechTransport.SendResult.ACCEPTED; }
+                        public NativeSpeechTransport.SendResult commit(String attempt) { throw new AssertionError("Control fault must precede commit"); }
+                        public long deadlineMs() { return Long.MAX_VALUE; }
+                        public boolean canAssign(long duration) { return true; }
+                        public boolean ended() { return ended; }
+                        public void cancel() { ended = true; }
+                    };
+                }, listener, 5000, 15000, time);
+                recording.start(); queue.run(); recording.setKeepListening(true, error -> assertNull(error)); queue.run();
+                for (int count = 0; count < 49; count++) { assertTrue(recording.accept(frame)); queue.run(); }
+                armed.set(true);
+                for (int count = 0; count < 10; count++) assertTrue(recording.accept(frame));
+                queue.run();
+                assertFalse("Manifest fault must have fired", armed.get());
+                assertEquals("dictation_storage_unavailable", listener.error); assertTrue(listener.retained);
+                assertEquals("interrupted", journal.load().stage); assertEquals(59L * 2400, journal.load().endSample);
+                assertArrayEquals(expected, durablePcm(journal));
+            }
+            try (NativeDictationStore store = new NativeDictationStore(directory, () -> key, new NativeDictationStore.Disk(), NativeDictationStore.Limits.defaults())) {
+                NativeDictationStore.Recording recovered = store.recover(binding);
+                assertEquals("interrupted", recovered.stage); assertEquals(59L * 2400, recovered.durableSamples);
+                assertArrayEquals(expected, durablePcm(store.journal(binding, "recording")));
+            }
+        }
+    }
+
+    private static byte[] durablePcm(NativeDictationStore.Journal journal) throws Exception {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream(); long durable = journal.load().durableSamples;
+        for (long sample = 0; sample < durable;) {
+            byte[] part = journal.read(sample, (int) Math.min(48000, (durable - sample) * 2));
+            bytes.write(part); sample += part.length / 2;
+        }
+        return bytes.toByteArray();
+    }
+    private static NativeDictationStore.Journal onQueue(NativeDictationStore.Journal delegate, Queue queue) {
+        return new NativeDictationStore.Journal() {
+            public Executor executor() { return queue; }
+            public NativeDictationStore.Recording load() throws Exception { return delegate.load(); }
+            public void append(long start, byte[] pcm) throws Exception { delegate.append(start, pcm); }
+            public NativeDictationStore.Recording checkpoint() throws Exception { return delegate.checkpoint(); }
+            public NativeDictationStore.Recording seal(long ordinal, long start, long end, int padding) throws Exception { return delegate.seal(ordinal, start, end, padding); }
+            public NativeDictationStore.Recording adopt(boolean keep) throws Exception { return delegate.adopt(keep); }
+            public NativeDictationStore.Recording commitStarted(long ordinal, String attempt) throws Exception { return delegate.commitStarted(ordinal, attempt); }
+            public NativeDictationStore.Recording committed(long ordinal, String attempt, String item) throws Exception { return delegate.committed(ordinal, attempt, item); }
+            public NativeDictationStore.Recording failed(long ordinal, String attempt, String reason, boolean uncertain) throws Exception { return delegate.failed(ordinal, attempt, reason, uncertain); }
+            public NativeDictationStore.Recording complete(long ordinal, String text) throws Exception { return delegate.complete(ordinal, text); }
+            public NativeDictationStore.Recording finish(String reason, long end) throws Exception { return delegate.finish(reason, end); }
+            public NativeDictationStore.Recording interrupt(String reason) throws Exception { return delegate.interrupt(reason); }
+            public void discard() throws Exception { delegate.discard(); }
+            public byte[] read(long start, int maximum) throws Exception { return delegate.read(start, maximum); }
+        };
+    }
+
     private static byte[] pcm(int samples, int value) {
         byte[] result = new byte[samples * 2];
         for (int index = 0; index < result.length; index += 2) { result[index] = (byte) value; result[index + 1] = (byte) (value >> 8); }
@@ -304,9 +475,13 @@ public class NativeVoiceRecordingTest {
     private static final class Harness {
         final Queue worker = new Queue(); final Time time = new Time(); final Journal journal = new Journal(worker);
         final Listener listener = new Listener(); final List<Session> sessions = new ArrayList<>();
-        final NativeVoiceRecording recording = new NativeVoiceRecording("recording", journal, (id, events) -> {
-            Session session = new Session(id, events, journal); sessions.add(session); events.ready(id, Long.MAX_VALUE); return session;
-        }, listener, 5000, 15000, time);
+        final NativeVoiceRecording recording;
+        Harness() { this(5000); }
+        Harness(long hardSegmentMs) {
+            recording = new NativeVoiceRecording("recording", journal, (id, events) -> {
+                Session session = new Session(id, events, journal); sessions.add(session); events.ready(id, Long.MAX_VALUE); return session;
+            }, listener, hardSegmentMs, 15000, time);
+        }
         void start(boolean adopt) { recording.start(); flush(); if (adopt) { recording.setKeepListening(true, error -> assertNull(error)); flush(); } }
         void feedFrames(int count) { for (int index = 0; index < count; index++) { assertTrue(recording.accept(pcm(2400, 2100))); flush(); } }
         void flush() { worker.run(); }
@@ -318,7 +493,8 @@ public class NativeVoiceRecordingTest {
         final List<NativeDictationStore.Segment> segments = new ArrayList<>(); final List<String> events = new ArrayList<>();
         long revision, accepted, durable, completedOrdinal = -1, completedSamples, end = -1;
         int pendingLimit = 128;
-        String text = "", reason = "", lastPrepared; boolean adopted, keep, interrupted, discarded, truncateReads;
+        int failAppendAfterSamples = -1;
+        String text = "", reason = "", lastPrepared; boolean adopted, keep, interrupted, discarded, truncateReads, failSeal, failCheckpoint;
         Journal(Queue worker) { this.worker = worker; }
         public Executor executor() { return worker; }
         public NativeDictationStore.Recording load() {
@@ -327,11 +503,21 @@ public class NativeVoiceRecordingTest {
                 segments, null, null, null, false);
         }
         public void append(long start, byte[] value) {
-            assertEquals(accepted, start); pcm.write(value, 0, value.length); accepted += value.length / 2;
+            assertEquals(accepted, start);
+            if (failAppendAfterSamples >= 0) {
+                int bytes = Math.min(value.length, failAppendAfterSamples * 2); failAppendAfterSamples = -1;
+                pcm.write(value, 0, bytes); accepted += bytes / 2;
+                throw new IllegalStateException("dictation_storage_unavailable");
+            }
+            pcm.write(value, 0, value.length); accepted += value.length / 2;
             durable = accepted / 24000 * 24000;
         }
-        public NativeDictationStore.Recording checkpoint() { durable = accepted; revision++; return load(); }
+        public NativeDictationStore.Recording checkpoint() {
+            if (failCheckpoint) throw new IllegalStateException("dictation_storage_unavailable");
+            durable = accepted; revision++; return load();
+        }
         public NativeDictationStore.Recording seal(long ordinal, long start, long end, int padding) {
+            if (failSeal) throw new IllegalStateException("dictation_storage_unavailable");
             if (segments.size() >= pendingLimit) throw new IllegalStateException("dictation_segment_capacity");
             assertTrue(end <= durable); segments.add(new NativeDictationStore.Segment(ordinal, start, end, padding, "sealed", null, null, "", false));
             revision++; return load();
@@ -347,7 +533,10 @@ public class NativeVoiceRecordingTest {
             events.add("result:" + ordinal); revision++; return load();
         }
         public NativeDictationStore.Recording finish(String reason, long end) { this.reason = reason; this.end = end; revision++; return load(); }
-        public NativeDictationStore.Recording interrupt(String reason) { interrupted = true; this.reason = reason; revision++; return load(); }
+        public NativeDictationStore.Recording interrupt(String reason) {
+            try { checkpoint(); } catch (Exception ignored) {}
+            interrupted = true; this.reason = reason; end = durable; revision++; return load();
+        }
         public void discard() { discarded = true; }
         public byte[] read(long start, int maximumBytes) {
             assertTrue(start >= completedSamples); assertTrue(start * 2 + maximumBytes <= durable * 2);
