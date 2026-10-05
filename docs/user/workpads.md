@@ -10,16 +10,24 @@ In a thread, select the **Workpads** button (the notepad icon, beside
 **Tasks**) to open or close Workpads. It shares the workspace layout with
 **Chat** and **Files**. Resize the split, use **Workpads panel actions** to
 dock it on another edge, or collapse it; when it is collapsed, the button keeps
-an outline, and selecting it shows Workpads again. Its open state, place, and
-selected document stay with you when you switch threads. On narrow screens,
+an outline, and selecting it shows Workpads again. Its open state and place
+stay with you when you switch threads. On narrow screens,
 switch between full-stage panels using the buttons, the panel shortcuts, or the
-menu. Draft text stays mounted while the panel is collapsed, another panel is
-shown, or you switch threads. The document's scope does not change when you
-navigate.
+menu. Draft text stays mounted while the panel is collapsed or another panel
+is shown. Navigation changes the view, never a document's stored scope.
 
 Choose **Global**, **Project**, or **Thread**, then search that scope.
-**Project** starts on the current thread's project; its dropdown lists your
-projects, named as in the sidebar. Enable **Include nested scopes** to include
+**Thread** follows the current thread, and **Project** follows its project.
+Their dropdowns let you browse another thread or project until you switch
+threads again. When navigation changes the viewed scope, Workpads returns to
+that scope's list. A selected document stays open when the scope stays the
+same, including **Global** and switching threads within the same project in
+**Project** view. If the editor has unsynced changes, confirm before leaving
+it or choose **Keep editing**; synchronized drafts remain available by
+reopening the workpad and choosing **Edit workpad**.
+
+The project dropdown lists your projects, named as in the sidebar.
+Enable **Include nested scopes** to include
 its descendants, such as the workpads of a project's threads. Choose **New
 workpad** to create a titled document in the selected scope.
 

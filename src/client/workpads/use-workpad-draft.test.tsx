@@ -34,6 +34,38 @@ describe("workpad working drafts", () => {
     expect(result.current.editor?.draft.content).toBe("First change");
     expect(result.current.editor?.draft.revision).toBe(1);
   });
+  it("does not adopt a pending save into a reopened editor for the same workpad", async () => {
+    let resolve!: (value: WorkpadDraft) => void;
+    const saveWorkpadDraft = vi.fn(() => new Promise<WorkpadDraft>(done => { resolve = done; }));
+    const { result } = renderHook(() => useWorkpadDraft({ saveWorkpadDraft } as unknown as ApiClient, vi.fn()));
+    act(() => result.current.setEditor({ draft: initial, text: "Old session typing", baseText: initial.content }));
+    let pending!: Promise<WorkpadDraft>;
+    act(() => { pending = result.current.save(); });
+    act(() => result.current.setEditor(undefined));
+    act(() => result.current.setEditor({ draft: initial, text: "Reopened session typing", baseText: initial.content }));
+    await act(async () => { resolve({ ...initial, content: "Old session typing", revision: 1 }); await pending; });
+    expect(result.current.editor?.text).toBe("Reopened session typing");
+    expect(result.current.editor?.draft).toEqual(initial);
+  });
+  it("autosaves a new editor while a previous editor's discard is pending", async () => {
+    vi.useFakeTimers();
+    let resolveDiscard!: (value: WorkpadDraft) => void;
+    const discardWorkpadDraft = vi.fn(() => new Promise<WorkpadDraft>(resolve => { resolveDiscard = resolve; }));
+    const nextDraft = { ...initial, workpadId: "next-pad" };
+    const saveWorkpadDraft = vi.fn(async (_id, request) => ({ ...nextDraft, ...request, revision: 1 }));
+    const api = { discardWorkpadDraft, saveWorkpadDraft } as unknown as ApiClient;
+    const { result } = renderHook(() => useWorkpadDraft(api, vi.fn()));
+    act(() => result.current.setEditor({ draft: initial, text: initial.content, baseText: initial.content }));
+    let pending!: Promise<void>;
+    act(() => { pending = result.current.discard(); });
+    act(() => result.current.setEditor(undefined));
+    act(() => result.current.setEditor({ draft: nextDraft, text: "New editor typing", baseText: initial.content }));
+    await act(async () => { resolveDiscard(initial); await pending; await vi.advanceTimersByTimeAsync(2000); });
+    expect(saveWorkpadDraft).toHaveBeenCalledWith("next-pad", { expectedRevision: 0, baseRevision: 1, content: "New editor typing" });
+    expect(result.current.editor?.text).toBe("New editor typing");
+    expect(result.current.editor?.draft.content).toBe("New editor typing");
+  });
+
   it("preserves a local draft when another device wins the revision race", async () => {
     const remote = { ...initial, content: "Other device", revision: 2 };
     const api = { saveWorkpadDraft: vi.fn(async () => { throw new Error("Draft conflict"); }), getWorkpadDraft: vi.fn(async () => remote) } as unknown as ApiClient;
