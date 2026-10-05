@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { createRef, useEffect, useState } from "react";
+import { createRef, useEffect, useMemo, useState } from "react";
 import {
   act,
   cleanup,
@@ -22,6 +22,7 @@ import {
   type TasksHost,
 } from "../components/tasks/tasks-host.js";
 import { NavigationControlsContext } from "../app/navigation-controls.js";
+import { DropdownMenuItem } from "../components/ui/dropdown-menu.js";
 import type { ThreadClientState } from "../stores/ThreadClientStore.js";
 import type { ThreadStoreRegistry } from "../stores/ThreadStoreRegistry.js";
 import type { AssociatedTask, TerminalResource } from "../../shared/index.js";
@@ -720,6 +721,34 @@ describe("PanelLayout singleton surfaces", () => {
     fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
     expect(draft).toHaveValue("Keep this draft");
     expect(store.hasPanel("workpads")).toBe(true);
+  });
+
+  it("draws the back step and ⋯ items a tenant publishes in its panel header", async () => {
+    const onRename = vi.fn();
+    function WorkpadFixture({ context }: { context: Parameters<WorkspacePanelTenant["render"]>[0] }) {
+      const [reading, setReading] = useState(true);
+      const items = useMemo(() => reading ? <DropdownMenuItem onSelect={onRename}>Rename…</DropdownMenuItem> : undefined, [reading]);
+      useEffect(() => { context.host.setBack(reading ? { label: "Back to workpads", onBack: () => setReading(false) } : undefined); }, [context.host, reading]);
+      useEffect(() => { context.host.setMenuItems(items); }, [context.host, items]);
+      return <span>{reading ? "Document" : "List"}</span>;
+    }
+    const store = setup({ extraTenants: [{ ...filesTenant(), id: "workpads", title: "Workpads", scope: "global", render: context => <WorkpadFixture context={context} /> }] });
+    act(() => store.openPanel("workpads"));
+    const header = within(await screen.findByRole("region", { name: "Workpads panel" })).getByRole("banner", { name: "Workpads panel header" });
+    const menuRows = async () => {
+      fireEvent.pointerDown(within(header).getByRole("button", { name: "Workpads panel actions" }), { button: 0, ctrlKey: false });
+      const menu = await screen.findByRole("menu");
+      return [...menu.querySelectorAll("[role^=menuitem]")].map(row => row.textContent);
+    };
+    // Neither is busy, dirty or titled, yet the header keeps what was published.
+    expect(await menuRows()).toEqual(["Left", "Right", "Top", "Bottom", "Rename…"]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+    expect(onRename).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    fireEvent.click(within(header).getByRole("button", { name: "Back to workpads" }));
+    expect(await screen.findByText("List")).toBeInTheDocument();
+    expect(within(header).queryByRole("button", { name: "Back to workpads" })).toBeNull();
+    expect(await menuRows()).toEqual(["Left", "Right", "Top", "Bottom"]);
   });
 
   it("preserves global Workpads dirty protection after changing workspaces", async () => {

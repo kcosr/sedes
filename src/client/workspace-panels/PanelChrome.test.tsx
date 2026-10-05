@@ -2,10 +2,28 @@
 
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DropdownMenuItem } from "../components/ui/dropdown-menu.js";
 import { PanelChrome, panelContentId } from "./PanelChrome.js";
 
 function FileIcon(): React.JSX.Element {
   return <svg aria-hidden="true" />;
+}
+
+function NotepadIcon(): React.JSX.Element {
+  return <svg data-testid="tenant-icon" aria-hidden="true" />;
+}
+
+const noControls = {
+  onCollapse: () => undefined,
+  onClose: () => undefined,
+  onDock: () => undefined,
+};
+
+/** Each row of an open menu in order, separators included. */
+function menuRows(menu: HTMLElement): string[] {
+  return [...menu.querySelectorAll("[role^=menuitem], [role=separator]")].map(
+    (row) => (row.getAttribute("role") === "separator" ? "—" : row.textContent ?? ""),
+  );
 }
 
 let singlePane = false;
@@ -250,6 +268,102 @@ describe("PanelChrome", () => {
     expect(
       screen.getByRole("button", { name: "Files panel actions" }),
     ).toBeTruthy();
+  });
+
+  it("draws a back step in place of the tenant icon", () => {
+    const onBack = vi.fn();
+    const tenant = { id: "workpads", title: "Workpads", icon: NotepadIcon };
+    const { rerender } = render(
+      <PanelChrome
+        tenant={tenant}
+        status={{
+          subtitle: "Integration",
+          back: { label: "Back to workpads", onBack },
+        }}
+        controls={noControls}
+      />,
+    );
+
+    const header = screen.getByRole("banner", { name: "Workpads panel header" });
+    const back = within(header).getByRole("button", { name: "Back to workpads" });
+    expect(back).toHaveAttribute("title", "Back to workpads");
+    expect(screen.queryByTestId("tenant-icon")).toBeNull();
+    // Back, then the panel title, then the subtitle.
+    expect(header.querySelector(".workspace-panel-title")?.firstElementChild).toBe(back);
+    expect(header.querySelector(".workspace-panel-title")).toHaveTextContent(/^WorkpadsIntegration$/);
+    fireEvent.click(back);
+    expect(onBack).toHaveBeenCalledOnce();
+
+    rerender(
+      <PanelChrome
+        tenant={tenant}
+        status={{ subtitle: "Integration" }}
+        controls={noControls}
+      />,
+    );
+    expect(within(header).queryByRole("button", { name: "Back to workpads" })).toBeNull();
+    expect(screen.getByTestId("tenant-icon")).toBeTruthy();
+  });
+
+  it("lists a tenant's own menu items after the Dock group", () => {
+    const onRename = vi.fn();
+    render(
+      <PanelChrome
+        tenant={{ id: "workpads", title: "Workpads", icon: NotepadIcon }}
+        controls={{
+          ...noControls,
+          renderMenuItems: (
+            <>
+              <DropdownMenuItem onSelect={onRename}>Rename…</DropdownMenuItem>
+              <DropdownMenuItem>Archive</DropdownMenuItem>
+            </>
+          ),
+        }}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Workpads panel actions" }),
+      { button: 0, ctrlKey: false },
+    );
+    expect(menuRows(screen.getByRole("menu"))).toEqual([
+      "Left",
+      "Right",
+      "Top",
+      "Bottom",
+      "—",
+      "Rename…",
+      "Archive",
+    ]);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+    expect(onRename).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("keeps the panel menu for tenant items on single-pane layouts, without docking", () => {
+    singlePane = true;
+    const onRename = vi.fn();
+    render(
+      <PanelChrome
+        tenant={{ id: "workpads", title: "Workpads", icon: NotepadIcon }}
+        controls={{
+          ...noControls,
+          renderMenuItems: (
+            <DropdownMenuItem onSelect={onRename}>Rename…</DropdownMenuItem>
+          ),
+        }}
+      />,
+    );
+
+    fireEvent.pointerDown(
+      screen.getByRole("button", { name: "Workpads panel actions" }),
+      { button: 0, ctrlKey: false },
+    );
+    // Nothing to dock beside, so no Dock group or separator: just the items.
+    expect(menuRows(screen.getByRole("menu"))).toEqual(["Rename…"]);
+    expect(screen.queryByRole("group", { name: "Dock" })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename…" }));
+    expect(onRename).toHaveBeenCalledOnce();
   });
 
   it("keeps content ids safe for DOM use", () => {
