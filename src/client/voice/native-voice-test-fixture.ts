@@ -7,7 +7,7 @@ export const VOICE_CONNECTION = { profileId: "profile", serverOrigin: "https://s
 export const VOICE_ORIGIN_ID = "34612c41-0bbb-455f-a5af-725bfc7ae768";
 
 export function voiceSettings(patch: Partial<NativeVoiceSettings> = {}): NativeVoiceSettings {
-  return { audioMode: "off", autoListen: true, ignoreOtherDevices: true, readNotificationContext: true,
+  return { audioMode: "off", autoListen: true, ignoreOtherDevices: true, readNotificationContext: true, cleanSpeechText: true,
     speechProvider: "openai", speechEndpoint: "https://api.openai.com/v1", sttModel: "gpt-live-transcribe",
     ttsModel: "gpt-4o-mini-tts", ttsVoice: "coral", ttsSpeed: 1, speechTextLimit: 4096, voiceThreadId: null, voiceThreadTitle: null, pinDefaultVoiceThread: false, onlyVoiceThread: false, followComposerMode: false,
     inputDeviceId: null, recognitionStartTimeoutMs: 30000, recognitionCompletionTimeoutMs: 60000, recognitionEndSilenceMs: 1200, recognitionResultTimeoutMs: 60000,
@@ -15,7 +15,7 @@ export function voiceSettings(patch: Partial<NativeVoiceSettings> = {}): NativeV
 }
 export function voiceSnapshot(patch: Partial<NativeVoiceState> = {}): NativeVoiceState {
   return {
-    version: 4, stateRevision: 1, connectionGeneration: 1, ...VOICE_CONNECTION, originClientId: VOICE_ORIGIN_ID, clientConnectionToken: "a".repeat(43), settingsRevision: 0,
+    version: 5, stateRevision: 1, connectionGeneration: 1, ...VOICE_CONNECTION, originClientId: VOICE_ORIGIN_ID, clientConnectionToken: "a".repeat(43), settingsRevision: 0,
     settings: voiceSettings(), phase: "off", ready: false, readiness: "off", foreground: { visible: false, threadId: null, threadTitle: null }, active: null,
     queue: { count: 0, bytes: 0, droppedCount: 0, droppedReasons: {} },
     speech: { credentialConfigured: false, catalogStatus: "idle", catalog: null, error: null },

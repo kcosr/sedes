@@ -79,6 +79,11 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
       {!native.clientConnectionToken && <Button disabled={state.pending} onClick={() => { void store.reconnect().catch(() => undefined); }}>Retry client connection</Button>}
     </SettingsSection>
     <SpeechProviderSettings store={store} native={native} pending={state.pending} />
+    <SettingsSection title="Speech text" card>
+      <SwitchField label="Clean up formatting for speech" checked={settings.cleanSpeechText} disabled={state.pending}
+        description="Read Markdown as text, including link labels and code contents. Applies to queued and future speech."
+        onCheckedChange={cleanSpeechText => update({ cleanSpeechText })} />
+    </SettingsSection>
     <SettingsSection title="Targets and behavior" card>
       <SettingsField label="Default voice thread" description="Used when pinned or when no thread is visible.">
         <div className="flex flex-wrap gap-2"><VoiceThreadButton disabled={state.pending} onClick={() => setPicker(true)}>{voiceThreadLabel}</VoiceThreadButton>

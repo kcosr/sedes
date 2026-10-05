@@ -3939,6 +3939,13 @@ and real API, SSE, and WebSocket runtime evidence. A browser-selected server
 URL never selects tenant, principal, backend, target, or execution environment
 authority.
 
+Speech formatting is device-owned presentation over normalized notification text.
+Prepare complete notification parts independently before assembly and transport
+chunking, preserve original envelopes so queued speech can be rebuilt when settings
+change, and leave shared transcripts and backend event/history text unchanged.
+This boundary applies equally to Pi, Codex, Claude,
+Grok, and OpenCode.
+
 ### Paired-client admission
 
 Production HTTP management routes, content routes, event streams, and

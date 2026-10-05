@@ -2,8 +2,8 @@
 
 The Android `NativeVoice` Capacitor plugin exposes settings, snapshots, and
 actions. `NativeVoiceRuntime` owns the state machine on one handler thread.
-Native snapshot version 4 includes the registered `clientConnectionToken`
-alongside `originClientId`. The `pinDefaultVoiceThread` setting is scoped to the
+Native snapshot version 5 includes the `cleanSpeechText` setting and the registered
+`clientConnectionToken` alongside `originClientId`. The `pinDefaultVoiceThread` setting is scoped to the
 device/profile/identity with the other voice settings and defaults to false. When true, new explicit recordings and idle control targets use the
 saved default thread regardless of foreground navigation. A missing default
 does not fall back to the foreground thread. Automatic notification targeting
@@ -94,7 +94,7 @@ registration remain live while voice is Off. Old advisory origins retained in
 historical inputs do not become live client authority.
 
 The settings record carries an explicit `RECORD_VERSION` and validates strictly
-against it. Version 3 includes the recording pin along with provider, endpoint,
+against it. Version 4 includes speech cleanup and the recording pin along with provider, endpoint,
 model, voice, speed, text-limit, and result-timeout settings. Older settings
 records are not migrated; an upgrade resets them with voice Off. Speech
 credentials are stored separately and remain intact. A
@@ -457,6 +457,23 @@ Catalog refresh never rewrites selected model or voice IDs, requests microphone
 permission, or starts recording.
 
 ## Audio output and focus
+
+`NativeSpeechText` converts each complete notification part from CommonMark/GFM
+to speech text before assembly and request chunking. Context, result sections,
+and truncation notices are independent documents, joined with paragraph pauses;
+an unfinished code fence in one part cannot swallow another. The
+device/profile/identity-owned `cleanSpeechText` setting defaults to true. It removes formatting delimiters,
+reads link labels and image descriptions, preserves code contents and ordinary
+symbols, and keeps paragraph/list pauses, ordered-list numbers, table cell
+separators, checkbox meaning, and footnote contents with numbered references.
+Hidden link destinations and code-fence language labels are omitted. Literal HTML
+source is preserved. Parser nesting is bounded.
+Disabling cleanup preserves the original single-newline assembly. Original envelopes,
+transcripts, and shared backend notifications are never rewritten; the speech
+server receives the prepared text without a second cleanup pass. Changing this
+setting rebuilds pending utterances from their original envelopes and applies to
+future items without interrupting the active utterance. An empty result makes no
+speech request and retains any eligible follow-up listen.
 
 HTTP TTS completion is distinct from AudioTrack drain. A logical item stays
 active through all chunks, actual drain, recognition, and input admission.
