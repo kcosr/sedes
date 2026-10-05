@@ -10,10 +10,11 @@
   together with the server.
   ([#50](https://github.com/kcosr/sedes/pull/50), [#53](https://github.com/kcosr/sedes/pull/53))
 
-- Android voice uses OpenAI-compatible Realtime transcription and streamed HTTP
-  speech, with snapshot version 8 and settings record version 6. Older local
-  voice settings reset to Off; reconfigure the provider, endpoint, and models.
-  Separately stored speech credentials remain on the device.
+- Android voice uses snapshot version 9, device preferences with settings
+  version 7, and dictation manifest version 2. Earlier per-connection preferences
+  and speech credentials are not imported; configure voice and enter credentials
+  once after upgrading. Finish or copy saved dictation before upgrading: older
+  recording files are retained but unavailable until explicitly discarded.
   ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51), [#53](https://github.com/kcosr/sedes/pull/53))
 
 - Self-hosted speech servers must advertise per-model `realtime` capabilities.
@@ -428,6 +429,10 @@
 
 ### Changed
 
+- Android voice preferences and speech credentials persist across Sedes
+  connections. Thread selections and input recovery remain scoped to the server
+  and account; deleting a connection preserves device preferences and speech keys.
+
 - Voice settings offer searchable models, voices, and threads, with separate
   default recording targets and playback filters. The voice card can choose a
   current or next target without changing the default; headset and notification
@@ -771,6 +776,10 @@
   sidecar runtime protocol 14 now also carries the queued-input marker.
 
 ### Fixed
+
+- Preferred Android microphones reconnect despite device ID changes, and the
+  picker refreshes as devices connect or disconnect. Missing or ambiguous inputs
+  remain selected without silently switching microphones.
 
 - macOS desktop packages include the local-network permission description.
   ([#53](https://github.com/kcosr/sedes/pull/53))

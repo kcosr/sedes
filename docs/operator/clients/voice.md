@@ -20,8 +20,9 @@ device does not transfer ownership. The agent targets another listed client only
 when you explicitly request it.
 
 Registration also works when server pairing is disabled and remains connected
-while Audio mode is Off. Basic settings stay local to the Android profile and
-user. Enabling voice through an agent cannot grant Android permissions or supply
+while Audio mode is Off. General voice preferences stay on the Android device;
+the default thread stays with the selected Sedes connection and user.
+Enabling voice through an agent cannot grant Android permissions or supply
 missing speech configuration; the result reports any local step still needed.
 
 An end-interaction or thread switch waits until the reply finishes playing.
@@ -44,8 +45,11 @@ navigation and report voice controls as unavailable.
    select **Manual** or **Response** and grant microphone access. Enable
    notifications for visible service controls. The initial mode is Off.
 4. In **Settings → Notifications**, enable notifications and choose each event's
-   Voice action. These are server-side settings for the current user; all Voice
-   page settings are local to the Android profile and authenticated identity.
+   Voice action. These are server-side settings for the current user. Voice
+   preferences are local to the Android device and survive switching Sedes
+   connections, including changing between LAN and Tailscale addresses.
+   Default thread selections, active work, and recording recovery remain scoped
+   to the exact connection profile, server address, and authenticated identity.
 
 For USB development, reverse the speech server's port as well as Sedes's port with
 `adb reverse tcp:PORT tcp:PORT`. No example private endpoint is built into Sedes.
@@ -92,13 +96,17 @@ choice unchanged. Voice choices follow the selected speech model.
 Speech credentials are stored only on this Android device, encrypted with an
 Android Keystore-protected key and excluded from backups. The credential dialog
 can save, test, or remove a key without returning it to the WebView. Each key is
-bound to its profile, provider, and API endpoint. Switching providers or
-endpoints requires a credential for that destination. Removing the server
-profile removes its speech credentials too.
+bound to its provider and API endpoint. Switching Sedes connections preserves
+that credential; switching speech providers or endpoints requires a credential
+for that destination. Removing a Sedes server profile preserves device voice
+preferences and speech credentials. Remove a speech credential explicitly in
+the native credential dialog.
 
-Upgrading from an earlier native voice settings format resets local settings with
-voice Off. Reconfigure the provider, endpoint, and models before enabling it again.
-Separately stored speech credentials remain on the device.
+The device preference format does not import earlier per-connection settings or
+speech credentials. After upgrading, configure voice and enter the speech key or
+token once. Finish, send, or copy any saved dictation before upgrading: older
+recording manifests are unsupported and remain unavailable until explicitly
+discarded. Their files are retained; the upgrade does not convert them.
 
 The app opens without waiting for voice. While voice connects, **Settings →
 Voice** shows "Connecting voice to this server…". If voice cannot connect, the
@@ -144,7 +152,7 @@ Code symbols, ordinary punctuation, and literal HTML source
 are preserved. Hidden link destinations and code-fence language labels are omitted.
 
 Turn it off to send the original assembled text to the speech provider. The choice
-is local to this device's profile and user, applies to queued and future speech,
+is local to this Android device, applies to queued and future speech,
 and does not interrupt a reply already playing. Displayed conversations and
 stored transcripts are unchanged. A reply containing only formatting can still
 start an eligible follow-up listen without making a speech request.
@@ -189,10 +197,6 @@ picker without saving a replacement default. Only **Default voice thread** in
 quick or full settings edits the saved preference. Those selectors share the
 popup's search and row styling in a modal/mobile sheet, with no mobile search
 autofocus. Pinning does not redirect an active interaction.
-
-The pin setting changes the device settings schema. Upgrading from an earlier
-native voice build resets settings with Audio mode Off. Reconfigure the speech
-provider and endpoint; separately saved credentials remain on the device.
 
 By default, recognized input queues behind a running turn. **Follow composer's
 selected mode** instead captures the client-wide Queue/Steer preference when
@@ -303,7 +307,17 @@ speech-start timeout, 60-second maximum recording after speech starts,
 512 ms startup pre-roll, cues enabled, and 100% speech/cue gains. Input devices,
 timing, cues, gain, and headset controls can be changed in Voice settings.
 Microphones that share a product name are labelled with their input type and,
-if still identical, a number. Android detects speech and trailing silence
+if still identical, a number. A preferred microphone is remembered by its type
+and usable device address, or by its name when no stable address is available.
+The picker refreshes when devices connect or disconnect and keeps an unavailable
+selection visible. Reconnecting the same headset makes it available for the next
+recording even if Android assigns it a new device ID. Ambiguous matches stay
+unavailable; Sedes does not silently switch to a different microphone. Choose
+**System default** explicitly to let Android choose the input. Losing or changing
+the route during recording still stops capture and preserves adopted dictation;
+reconnecting does not resume that recording automatically.
+
+Android detects speech and trailing silence
 locally while uploading audio. Ordinary listening still ends at the configured
 speech-wait, completion, or silence boundary. Keep listening suspends these
 endpoints. Both modes divide audio at likely pauses and bounded hard cuts, usually
@@ -439,8 +453,9 @@ as for a composer first send; see
 After cancellation, logout, profile departure, or Off, recovery only reads
 receipts until a new explicit **Resume input** action authorizes another
 same-ID admission attempt. An absent receipt alone is not proof that an earlier
-request cannot still commit. Removing a server profile deletes its voice
-settings and saved input on this device. Saved voice records that are corrupt
+request cannot still commit. Removing a server profile deletes its default-thread
+selections and saved input on this device, preserving general voice preferences
+and speech credentials. Saved voice records that are corrupt
 are set aside and reset to defaults, with an error naming what was reset. A
 temporary Android Keystore failure keeps the saved data and reports that voice
 storage is unavailable.
