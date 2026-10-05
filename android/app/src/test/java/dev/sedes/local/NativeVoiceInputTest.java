@@ -6,6 +6,23 @@ import org.junit.Test;
 
 public class NativeVoiceInputTest {
     private static NativeVoiceInput input(int type, String address, String name) { return new NativeVoiceInput(type, address, name); }
+    @Test public void emittedNamesAreTrimmedControlFreeAndAcceptedByThePreferenceValidator() {
+        String[][] cases = {
+            { "\u007f Headset \u007f", "Headset" },
+            { "\u0085 Head\u009fset \u0080", "Headset" },
+            { "x".repeat(511) + " suffix", "x".repeat(511) },
+            { "x".repeat(511) + "\ud83d\ude00tail", "x".repeat(511) },
+            { "x".repeat(510) + "\ud83d\ude00tail", "x".repeat(510) + "\ud83d\ude00" },
+            { "", "Microphone" }, { " \u007f\u0085\u009f ", "Microphone" }, { null, "Microphone" },
+        };
+        for (String[] test : cases) {
+            String name = NativeVoiceInput.sanitizeName(test[0]);
+            assertEquals(test[1], name);
+            assertTrue(name.length() <= 512);
+            NativeVoiceInput preference = input(7, null, name);
+            assertEquals(preference, NativeVoiceInput.read(NativeVoiceJson.object("inputDevice", preference.json())));
+        }
+    }
     @Test public void reconnectResolvesCurrentInventoryByAddressWithoutDependingOnOrderOrName() {
         NativeVoiceInput preferred = input(7, "AA:BB:CC:DD:EE:FF", "Headset");
         assertEquals(0, NativeVoiceInput.resolve(preferred, List.of(preferred)));

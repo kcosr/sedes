@@ -149,10 +149,7 @@ final class NativeVoiceAudio {
         }
     }
     private static NativeVoiceInput identity(AudioDeviceInfo device) {
-        String name = device.getProductName() == null ? "" : device.getProductName().toString().trim();
-        name = name.replaceAll("\\p{Cntrl}", "");
-        if (name.isEmpty()) name = "Microphone";
-        if (name.length() > 512) name = name.substring(0, 512);
+        String name = NativeVoiceInput.sanitizeName(device.getProductName() == null ? null : device.getProductName().toString());
         return new NativeVoiceInput(device.getType(), NativeVoiceInput.stableAddress(device.getType(), Build.VERSION.SDK_INT >= 28 ? device.getAddress() : null), name);
     }
     private static AudioDeviceInfo resolve(NativeVoiceInput preference, List<AudioDeviceInfo> devices) {

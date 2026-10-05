@@ -31,6 +31,16 @@ final class NativeVoiceInput {
     }
     @Override public int hashCode() { return Objects.hash(type, address, name); }
     JSONObject json() { return NativeVoiceJson.object("type", type, "address", address, "name", name); }
+    static String sanitizeName(String raw) {
+        StringBuilder clean = new StringBuilder();
+        if (raw != null) raw.codePoints().filter(point -> !Character.isISOControl(point)).forEach(clean::appendCodePoint);
+        String name = clean.toString().trim();
+        if (name.length() > 512) {
+            int end = Character.isHighSurrogate(name.charAt(511)) && Character.isLowSurrogate(name.charAt(512)) ? 511 : 512;
+            name = name.substring(0, end).trim();
+        }
+        return name.isEmpty() ? "Microphone" : name;
+    }
     static String stableAddress(int type, String raw) {
         if (raw == null) return null;
         String address = raw.trim();
