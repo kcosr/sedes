@@ -772,6 +772,9 @@
 
 ### Fixed
 
+- macOS desktop packages include the local-network permission description.
+  ([#53](https://github.com/kcosr/sedes/pull/53))
+
 - Database upgrades preserve the deployed migration 133 checksum and correct
   input admission checks without changing stored messages or receipts.
   ([#53](https://github.com/kcosr/sedes/pull/53))

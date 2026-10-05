@@ -45,6 +45,9 @@ module.exports = {
   mac: {
     category: 'public.app-category.developer-tools',
     icon: 'assets/icon.png',
+    extendInfo: {
+      NSLocalNetworkUsageDescription: 'Sedes connects to the servers you choose on your local network.',
+    },
   },
   win: {
     icon: 'assets/icon.png',
