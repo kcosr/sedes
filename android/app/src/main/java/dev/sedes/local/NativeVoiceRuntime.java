@@ -170,6 +170,11 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         audio = new NativeVoiceAudio(context, this);
         clientControls = new NativeClientControls(http, handler, this);
         publish();
+        // Retirement does not depend on pairing or configuring voice, and failures remain visible in native state.
+        handler.post(() -> {
+            try { new SpeechCredentialStore(context); }
+            catch (Exception error) { speechCredentialError = true; report("speech_credential_cleanup_failed"); }
+        });
     }
     JSONObject snapshot() { return NativeVoiceJson.copy(state); }
     void observe(Observer observer) { observers.add(observer); audio.monitorDevices(true); handler.post(this::deliverPendingOpen); }
@@ -582,10 +587,13 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (invalidateCatalog) invalidateSpeechCatalog();
         if (reloadCredential) {
             speechCredential = null; speechCredentialError = false;
-            if (profileId != null && !settings.text("speechEndpoint").isEmpty()) {
-                try { speechCredential = new SpeechCredentialStore(context).getCredential(
-                    settings.text("speechProvider"), settings.text("speechEndpoint")); }
-                catch (Exception error) { speechCredentialError = true; report("speech_credential_storage_unavailable"); }
+            try {
+                SpeechCredentialStore credentials = new SpeechCredentialStore(context);
+                if (profileId != null && !settings.text("speechEndpoint").isEmpty())
+                    speechCredential = credentials.getCredential(settings.text("speechProvider"), settings.text("speechEndpoint"));
+            } catch (Exception error) {
+                speechCredentialError = true;
+                report("speech_credential_cleanup_failed".equals(error.getMessage()) ? "speech_credential_cleanup_failed" : "speech_credential_storage_unavailable");
             }
         }
         if (invalidateCatalog) restoreSpeechCatalog();
@@ -2404,6 +2412,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             case "speech_configuration_required": return "Choose a speech endpoint, models and voice, and add the required credential.";
             case "speech_configuration_changed": return "Speech settings changed before this action finished.";
             case "speech_credential_storage_unavailable": return "This device's secure speech credential storage could not be read.";
+            case "speech_credential_cleanup_failed": return "Obsolete speech credentials could not be removed from this device. Retry the voice connection when device storage is available.";
             case "speech_test_replaced": return "A newer speech settings check replaced this one.";
             case "speech_discovery_unavailable": return "The speech service could not be reached for model discovery.";
             case "speech_discovery_invalid": return "The speech service returned an unreadable model catalog.";

@@ -156,17 +156,26 @@ final class NativeVoiceStore {
             Iterator<String> cached = journals.keySet().iterator();
             while (cached.hasNext()) if (cached.next().startsWith(profileId + "\n")) cached.remove();
             File directory = profileDirectory(profileId);
-            NativeVoicePreferences preferences;
-            try { preferences = preferences(); }
-            catch (CorruptRecord error) {
-                // An unreadable device record cannot safely retain possibly owned thread selections.
-                file(DEVICE_BINDING, PREFERENCES_RECORD).delete(); preferences = NativeVoicePreferences.defaults();
+            Exception failure = null;
+            try {
+                NativeVoicePreferences preferences;
+                try { preferences = preferences(); }
+                catch (CorruptRecord error) {
+                    // An unreadable device record cannot safely retain possibly owned thread selections.
+                    file(DEVICE_BINDING, PREFERENCES_RECORD).delete(); preferences = NativeVoicePreferences.defaults();
+                }
+                write(DEVICE_BINDING, PREFERENCES_RECORD, preferences.removeProfile(profileId).record());
+                File quarantine = new File(directory(DEVICE_BINDING), PREFERENCES_RECORD + ".corrupt");
+                if (quarantine.exists() && !quarantine.delete()) throw new IllegalStateException("voice_storage_unavailable");
+            } catch (Exception error) { failure = error; }
+            // Journal removal needs no decryption and must still run if device preference I/O or Keystore access failed.
+            try {
+                delete(directory);
+                if (directory.exists()) throw new IllegalStateException("voice_storage_unavailable");
+            } catch (Exception error) {
+                if (failure == null) failure = error; else failure.addSuppressed(error);
             }
-            write(DEVICE_BINDING, PREFERENCES_RECORD, preferences.removeProfile(profileId).record());
-            File quarantine = new File(directory(DEVICE_BINDING), PREFERENCES_RECORD + ".corrupt");
-            if (quarantine.exists() && !quarantine.delete()) throw new IllegalStateException("voice_storage_unavailable");
-            delete(directory);
-            if (directory.exists()) throw new IllegalStateException("voice_storage_unavailable");
+            if (failure != null) throw failure;
         }
     }
     private static void delete(File file) {

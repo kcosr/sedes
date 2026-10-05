@@ -24,7 +24,26 @@ final class SpeechCredentialStore {
     private static final Object LOCK = new Object();
     private static final String KEY_ALIAS = "sedes.speech-credentials.v1";
     private final Context context;
-    SpeechCredentialStore(Context context) { this.context = context; }
+    SpeechCredentialStore(Context context) throws Exception {
+        this.context = context;
+        synchronized (LOCK) {
+            try { deleteRetired(new File(context.getNoBackupFilesDir(), "speech-credentials")); }
+            catch (Exception error) { throw new IllegalStateException("speech_credential_cleanup_failed", error); }
+        }
+    }
+
+    /** Retire the obsolete profile-owned ciphertext without opening it or following links into other stores. */
+    private static void deleteRetired(File target) throws Exception {
+        final int mode;
+        try { mode = Os.lstat(target.getPath()).st_mode; }
+        catch (ErrnoException error) { if (error.errno == OsConstants.ENOENT) return; throw error; }
+        if (OsConstants.S_ISDIR(mode)) {
+            File[] children = target.listFiles();
+            if (children == null) throw new IllegalStateException("credential_storage_unavailable");
+            for (File child : children) deleteRetired(child);
+        }
+        if (!target.delete() && !missing(target)) throw new IllegalStateException("credential_removal_failed");
+    }
 
     /** Separate purpose, provider and canonical API root prevent a Sedes token or another speech token being reused. */
     static String binding(String provider, String endpoint) {

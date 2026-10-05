@@ -2,6 +2,12 @@ package dev.sedes.local;
 
 import static org.junit.Assert.*;
 import android.content.Context;
+import android.os.Handler;
+import android.system.Os;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -14,6 +20,59 @@ import org.junit.runner.RunWith;
 
 @RunWith(AndroidJUnit4.class)
 public class SpeechCredentialStoreTest {
+    @Test public void storeInitializationRetiresAllObsoleteCiphertextWithoutTouchingCurrentSecrets() throws Exception {
+        try (NativeVoiceTestContext context = new NativeVoiceTestContext()) {
+            SpeechCredentialStore current = new SpeechCredentialStore(context);
+            current.setCredential("server", "https://speech.example/v1", "current-device-secret");
+            File retired = new File(context.getNoBackupFilesDir(), "speech-credentials");
+            for (String profile : new String[] { "profile-one", "profile-two" }) {
+                File directory = new File(retired, hash(profile)); assertTrue(directory.mkdirs());
+                for (String suffix : new String[] { ".enc", ".enc.bak", ".enc.new" })
+                    Files.write(new File(directory, "obsolete" + suffix).toPath(), new byte[] { 0, 1, 2 });
+            }
+            // A stale symlink must not make retirement traverse current credential storage.
+            Os.symlink(directory(context).getPath(), new File(retired, "stale-link").getPath());
+            SpeechCredentialStore reopened = new SpeechCredentialStore(context);
+            assertFalse(retired.exists());
+            assertEquals("current-device-secret", reopened.getCredential("server", "https://speech.example/v1"));
+        }
+    }
+
+    @Test public void unconfiguredRuntimeRetiresOldSecretsAtStartupAndReportsFailedRetirement() throws Exception {
+        for (boolean blocked : new boolean[] { false, true }) {
+            try (NativeVoiceTestContext context = new NativeVoiceTestContext()) {
+                File retired = new File(context.getNoBackupFilesDir(), "speech-credentials");
+                File profile = new File(retired, hash("old-profile")); assertTrue(profile.mkdirs());
+                Files.write(new File(profile, "old.enc").toPath(), new byte[] { 1, 2, 3 });
+                int mode = Os.stat(profile.getPath()).st_mode & 0777;
+                if (blocked) Os.chmod(profile.getPath(), 0500);
+                Constructor<NativeVoiceRuntime> constructor = NativeVoiceRuntime.class.getDeclaredConstructor(Context.class);
+                constructor.setAccessible(true); NativeVoiceRuntime runtime = constructor.newInstance(context);
+                Field handlerField = NativeVoiceRuntime.class.getDeclaredField("handler"); handlerField.setAccessible(true);
+                Handler owner = (Handler) handlerField.get(runtime);
+                try {
+                    CountDownLatch initialized = new CountDownLatch(1); owner.post(initialized::countDown);
+                    assertTrue(initialized.await(10, TimeUnit.SECONDS));
+                    assertTrue(runtime.snapshot().isNull("identity"));
+                    assertEquals("off", runtime.snapshot().getJSONObject("settings").getString("audioMode"));
+                    if (blocked) {
+                        assertEquals("speech_credential_cleanup_failed", runtime.snapshot().getJSONArray("errors").getJSONObject(0).getString("code"));
+                        assertTrue(new File(profile, "old.enc").exists());
+                        IllegalStateException failure = assertThrows(IllegalStateException.class, () -> new SpeechCredentialStore(context));
+                        assertEquals("speech_credential_cleanup_failed", failure.getMessage());
+                        Os.chmod(profile.getPath(), mode);
+                        new SpeechCredentialStore(context); assertFalse(retired.exists());
+                    } else { assertFalse(retired.exists()); assertEquals(0, runtime.snapshot().getJSONArray("errors").length()); }
+                } finally {
+                    if (profile.exists()) Os.chmod(profile.getPath(), mode);
+                    owner.getLooper().quitSafely();
+                    Field dictationsField = NativeVoiceRuntime.class.getDeclaredField("dictations"); dictationsField.setAccessible(true);
+                    ((NativeDictationStore) dictationsField.get(runtime)).close();
+                }
+            }
+        }
+    }
+
     @Test public void encryptedSpeechSecretsSurviveRestartAndSedesProfileDeletionButRemainProviderEndpointAndPurposeBound() throws Exception {
         NativeVoiceTestContext context = new NativeVoiceTestContext();
         String profile = UUID.randomUUID().toString();
