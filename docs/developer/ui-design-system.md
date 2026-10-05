@@ -48,7 +48,8 @@ stage collapses the least recently used side panels when the visible minimums
 no longer fit; resizing the window or switching threads never collapses one.
 A tenant first opens at its `size.preferredWidth`; with `size.preferredShare`
 it takes that share of the stage instead, kept between its minimum and
-preferred width (Tasks takes 35%: 300px at 1024px, 380px at 1440px). The rules
+preferred width (Tasks takes 35%: 300px at 1024px, 380px at 1440px;
+Workpads 40%, 320–480px). The rules
 are in `workspace-panels/layout-fit.ts`; declare a new tenant's minimum in its
 `size`. From then on, each side panel keeps one share of the stage width (or
 height, docked above or below) in every thread layout: a resize records it,
@@ -56,6 +57,18 @@ and each thread's splits are fitted to it, so Chat absorbs the difference
 (`workspace-panels/panel-sizes.ts`). Tasks and Workpads also share their
 place: every thread wraps its own panels in one companion arrangement, the
 edges and order the user last set (`workspace-panels/companion-layout.ts`).
+
+**Panel headers.** Every tenant except Tasks gets the shared `PanelChrome`:
+icon, title, subtitle, unsaved dot, busy spinner, then collapse, ⋯ (Dock) and
+close. A tenant puts its panel-level actions into the header by portaling
+ghost icon buttons into `context.chromeActionsTarget`, sized like the other
+bar controls (add its container to the `--bar-control` list in
+`styles.css`). Through its host it sets the subtitle, dirty and busy state,
+a back step drawn in place of the icon (`host.setBack`), and its own ⋯ items
+after the Dock group (`host.setMenuItems`, a memoized node that renders inside
+the layout's menu, so menu primitives work in it). Document actions belong in
+one hairline toolbar under the header, as in the Files editor and Workpads,
+not in the header.
 
 ## Tokens
 
