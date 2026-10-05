@@ -41,12 +41,29 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await measureRow("idleBeforeRecording");
   await capture(page, testInfo, "voice-ready-spacing-narrow.png");
   const base = voiceFixtureState();
-  await expect(toolbar.locator(".voice-card-target")).toHaveCount(0);
+  const idleChooser = toolbar.getByRole("button", { name: "Choose target thread: Voice navigation source", exact: true });
+  await expect(idleChooser).toBeVisible();
   await toolbar.locator(".voice-card-title").click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page).toHaveURL(new RegExp(`${threadPath}$`, "u"));
   const targetPicker = page.getByRole("dialog", { name: "Choose target thread", exact: true });
-  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "startManualListen"))).toEqual([]);
+  await idleChooser.click();
+  await expect(targetPicker).toHaveAttribute("data-slot", "popover-content");
+  await expect(targetPicker.getByRole("searchbox", { name: "Search voice threads" })).not.toBeFocused();
+  await targetPicker.getByRole("button", { name: "Voice navigation destination", exact: true }).click();
+  await expect(targetPicker).toHaveCount(0);
+  await expect(toolbar.locator(".voice-card-title")).toHaveText("Voice navigation destination");
+  await expect(page).toHaveURL(new RegExp(`${threadPath}$`, "u"));
+  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "setNextRecordingTarget"))).toEqual([
+    { method: "setNextRecordingTarget", args: { expectedConnectionGeneration: 1, threadId: otherThreadId, threadTitle: "Voice navigation destination" } },
+  ]);
+  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => ["startManualListen", "retargetActiveRecognition", "updateSettings"].includes(call.method)))).toEqual([]);
+  expect(await page.evaluate(() => ({ nextRecordingTarget: window.__voiceFixture.state.nextRecordingTarget,
+    savedDefault: window.__voiceFixture.state.settings.voiceThreadId }))).toEqual({
+    nextRecordingTarget: { threadId: otherThreadId, threadTitle: "Voice navigation destination" }, savedDefault: null,
+  });
+  await publishVoiceState(page, { nextRecordingTarget: null });
+  await expect(toolbar.locator(".voice-card-title")).toHaveText("Voice navigation source");
   await publishVoiceState(page, { settings: { ...base.settings, keepListeningByDefault: true } });
   const heldStart = toolbar.getByRole("button", { name: "Start recording with Keep listening", exact: true });
   await expect(heldStart.locator(".lucide-infinity")).toBeVisible();
@@ -135,7 +152,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
     };
   };
   const [tileBox, bodyBox, changeBox, keepBox, cancelBox, sendBox] = await Promise.all([tile.boundingBox(), body.boundingBox(), change.boundingBox(), keep.boundingBox(), cancel.boundingBox(), send.boundingBox()]);
-  expect(tileBox!.x + tileBox!.width + 6).toBe(bodyBox!.x);
+  expect(tileBox!.x + tileBox!.width + 8).toBe(bodyBox!.x);
   expect(bodyBox!.x + bodyBox!.width + 1).toBeLessThanOrEqual(changeBox!.x);
   expect(changeBox!.x + changeBox!.width + 1).toBeLessThanOrEqual(keepBox!.x);
   expect(keepBox!.x + keepBox!.width + 4).toBeLessThanOrEqual(cancelBox!.x);
