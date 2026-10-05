@@ -82,6 +82,18 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "sendRecording"))).toEqual([
     { method: "sendRecording", args: { expectedConnectionGeneration: 1, recordingId: "recording" } },
   ]);
+  // Native keeps ordinary live work out of recordingRecovery while its admission
+  // POST is in flight. The original interaction remains independently stoppable.
+  await publishVoiceState(page, { phase: "submitting",
+    active: { ...active, recording: { id: "recording", keepListening: true, reconnecting: false } },
+    actions: { ...base.actions, canStart: false, canStop: true }, recordingRecovery: null });
+  await expect(toolbar).toContainText("Sending…");
+  await expect(toolbar.getByRole("button", { name: "Stop voice interaction" })).toBeEnabled();
+  await expect(toolbar.getByRole("button", { name: "Discard saved dictation" })).toHaveCount(0);
+  await expect(toolbar).not.toContainText("Saved dictation");
+  await measureRow("liveSendSubmitting");
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "voice-live-send-submitting-narrow.png");
 
   const saved: NativeRecordingRecovery = { recordingId: "recording", revision: 4, threadId, threadTitle: title, stage: "interrupted",
     reason: "Voice was turned off before recognition finished.", hasUnrecognizedAudio: true, captureIncomplete: true,
@@ -112,7 +124,8 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await toolbar.getByRole("button", { name: "Retry saved dictation" }).click();
   await expect(toolbar).toContainText("Recognizing saved audio…");
   await expect(toolbar.getByRole("button", { name: /Stop voice interaction|Cancel voice recording/ })).toHaveCount(0);
-  await expect(toolbar.getByRole("button", { name: "Discard saved dictation" })).toBeDisabled();
+  await expect(toolbar.getByRole("button", { name: "Discard saved dictation" })).toBeEnabled();
+  await measureRow("savedRecognizing");
   expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "retryRecordingRecognition").at(-1))).toEqual({
     method: "retryRecordingRecognition", args: { expectedConnectionGeneration: 1, recordingId: "recording", expectedRecoveryRevision: 5 },
   });
@@ -148,10 +161,19 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await sheet.getByRole("button", { name: "Close", exact: true }).click();
   await expect(toolbar).toContainText("Sending…");
   await expect(toolbar.getByRole("button", { name: /Stop voice interaction|Cancel voice recording/ })).toHaveCount(0);
+  await measureRow("savedSubmitting");
+  await expect(toolbar.getByRole("button", { name: "Discard saved dictation" })).toBeEnabled();
+  await toolbar.getByRole("button", { name: "Discard saved dictation" }).click();
+  await expect(toolbar.getByRole("button", { name: "Discard saved dictation" })).toHaveCount(0);
+  expect(await page.evaluate(() => ({ active: window.__voiceFixture.state.active, saved: window.__voiceFixture.state.recordingRecovery }))).toEqual({ active: null, saved: null });
+  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "discardRecording"))).toEqual([
+    { method: "discardRecording", args: { expectedConnectionGeneration: 1, recordingId: "recording", expectedRecoveryRevision: 8 } },
+  ]);
+  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "stopCurrentInteraction"))).toEqual([]);
   await publishVoiceState(page, { phase: "listening", settings: base.settings, ready: true, readiness: "ready",
     active: { ...active, id: "new-interaction", recording: { id: "new-recording", keepListening: false, reconnecting: false } },
     actions: { ...base.actions, canStart: false, canStop: true, canRetarget: true, canSetKeepListening: false, keepListeningBlockedReason: "saved_recording_pending" },
-    recordingRecovery: { ...saved, revision: 9, stage: "admitting", hasUnrecognizedAudio: false, captureIncomplete: false, canRetryRecognition: false,
+    recordingRecovery: { ...saved, recordingId: "older-recording", revision: 9, stage: "admitting", hasUnrecognizedAudio: false, captureIncomplete: false, canRetryRecognition: false,
       admission: { mutationId: "original-input", status: "uncertain", cancelled: false } } });
   const savedAccess = toolbar.getByRole("button", { name: "Saved dictation", exact: true });
   await expect(savedAccess).toBeVisible();

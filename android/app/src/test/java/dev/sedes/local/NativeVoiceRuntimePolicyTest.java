@@ -84,9 +84,27 @@ public class NativeVoiceRuntimePolicyTest {
             NativeVoiceRuntime.message("dictation_storage_full"));
         assertNotEquals(NativeVoiceRuntime.message("dictation_storage_full"), NativeVoiceRuntime.message("dictation_storage_capacity"));
     }
+    @Test public void successfulFinishingReasonsAreNeutralAndInterruptionsHaveUsefulMessages() throws Exception {
+        assertNull(NativeVoiceRuntime.recordingReason(null));
+        for (String reason : new String[] { "retry", "send", "automatic" }) assertNull(NativeVoiceRuntime.recordingReason(reason));
+        java.util.regex.Pattern reasons = java.util.regex.Pattern.compile("(?:cancelActive|cancelAutomatic|interruptRecording|journal\\.interrupt|journal\\.finish)\\([^;\\n]*?\"([a-z_]+)\"");
+        java.util.Set<String> found = new java.util.HashSet<>();
+        for (String name : new String[] { "NativeVoiceRuntime", "NativeVoiceRecording" }) {
+            java.nio.file.Path source = java.nio.file.Paths.get("src/main/java/dev/sedes/local/" + name + ".java");
+            java.util.regex.Matcher matches = reasons.matcher(new String(java.nio.file.Files.readAllBytes(source), java.nio.charset.StandardCharsets.UTF_8));
+            while (matches.find()) found.add(matches.group(1));
+        }
+        found.add("audio_focus_lost");
+        assertTrue(found.contains("voice_off")); assertTrue(found.contains("service_stopped")); assertTrue(found.contains("retry"));
+        for (String reason : found) {
+            if (java.util.Arrays.asList("retry", "send", "automatic").contains(reason)) assertNull(NativeVoiceRuntime.recordingReason(reason));
+            else assertSpecific(reason);
+        }
+        assertSpecific("auto_listen_disabled"); assertSpecific("timeout");
+    }
     private static void assertSpecific(String code) {
         String message = NativeVoiceRuntime.message(code);
-        assertFalse("Generic message for " + code, message.contains(code));
+        assertFalse("Generic message for " + code, message.contains("(" + code + ")"));
         assertFalse(message.isEmpty());
     }
     private static String escape(String value) {

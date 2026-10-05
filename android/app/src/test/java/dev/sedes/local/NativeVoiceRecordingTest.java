@@ -376,6 +376,69 @@ public class NativeVoiceRecordingTest {
         }
     }
 
+    @Test public void runtimeOwnedDiscardFencesCallbacksAndTimersWithoutChangingTheEncryptedDraft() throws Exception {
+        String binding = "profile\nhttps://sedes.example\n" + "a".repeat(64);
+        javax.crypto.KeyGenerator generator = javax.crypto.KeyGenerator.getInstance("AES"); generator.init(256);
+        SecretKey key = generator.generateKey(); AtomicBoolean failTerminal = new AtomicBoolean();
+        NativeDictationStore.Disk disk = new NativeDictationStore.Disk() {
+            @Override void fault(String point, File file) throws IOException {
+                if (point.equals("before_write") && file.getName().equals("terminal.enc") && failTerminal.getAndSet(false))
+                    throw new IOException("injected_terminal_write_failure");
+            }
+        };
+        File directory = temporary.newFolder("runtime-discard");
+        JSONObject defaults = NativeVoiceSettings.defaults().value, config = new JSONObject();
+        for (String field : new String[] {"speechProvider", "speechEndpoint", "sttModel", "inputDeviceId", "recognitionStartTimeoutMs",
+                "recognitionCompletionTimeoutMs", "recognitionEndSilenceMs", "recognitionResultTimeoutMs", "longDictationTimeoutMs",
+                "recognizeStopCommand", "recognitionCues", "cueGain", "followComposerMode"}) NativeVoiceJson.put(config, field, defaults.opt(field));
+        try (NativeDictationStore store = new NativeDictationStore(directory, () -> key, disk, NativeDictationStore.Limits.defaults())) {
+            NativeDictationStore.Journal journal = store.create(binding, "recording", "thread", "Thread", config);
+            journal.adopt(true); journal.append(0, pcm(2400, 2100)); journal.checkpoint(); journal.seal(0, 0, 2400, 0);
+            journal.complete(0, "Retained prefix"); journal.append(2400, pcm(2400, 1200)); journal.checkpoint();
+            journal.seal(1, 2400, 4800, 0); journal.finish("timeout", 4800);
+            Queue worker = new Queue(); Time time = new Time(); Listener listener = new Listener();
+            List<NativeSpeechTransport.RecognitionListener> callbacks = new ArrayList<>(); List<String> connections = new ArrayList<>();
+            String[] attempt = { null }; boolean[] cancelled = { false };
+            NativeVoiceRecording recording = new NativeVoiceRecording("recording", onQueue(journal, worker), (id, events) -> {
+                callbacks.add(events); connections.add(id); events.ready(id, Long.MAX_VALUE);
+                return new NativeSpeechTransport.RecognitionSession() {
+                    public NativeSpeechTransport.SendResult append(String current, byte[] pcm) { return NativeSpeechTransport.SendResult.ACCEPTED; }
+                    public NativeSpeechTransport.SendResult commit(String current) { attempt[0] = current; return NativeSpeechTransport.SendResult.ACCEPTED; }
+                    public long deadlineMs() { return Long.MAX_VALUE; }
+                    public boolean canAssign(long duration) { return true; }
+                    public boolean ended() { return cancelled[0]; }
+                    public void cancel() { cancelled[0] = true; }
+                };
+            }, listener, 5000, 15000, time);
+            recording.retry(); worker.run(); assertNotNull(attempt[0]);
+            callbacks.get(0).committed(connections.get(0), attempt[0], "item"); worker.run();
+            NativeDictationStore.Recording before = journal.load(); Map<String, byte[]> files = encryptedFiles(directory);
+            // These callbacks were already queued before the user pressed Discard; none may change the saved draft.
+            callbacks.get(0).completed(connections.get(0), attempt[0], "item", "Late result");
+            callbacks.get(0).failed(connections.get(0), attempt[0], new NativeSpeechTransport.Failure(NativeSpeechTransport.Kind.NETWORK, "recognition_network_error", 0));
+            recording.cancelForDiscard(); worker.run(); time.advance(60000); worker.run();
+            assertTrue(cancelled[0]); assertTrue(time.closed); assertEquals(1, connections.size());
+            assertNull(listener.text); assertNull(listener.error); assertFalse(recording.accept(pcm(2400, 1)));
+            // A failed runtime tombstone must leave the same authenticated text/audio available to retry or copy.
+            failTerminal.set(true); assertThrows(NativeDictationStore.Failure.class, () -> store.beginDiscard(binding, "recording", null));
+            NativeDictationStore.Recording retained = journal.load(); assertEquals(before.revision, retained.revision);
+            assertEquals(before.stage, retained.stage); assertEquals("Retained prefix", store.transcript(binding, "recording"));
+            assertArrayEquals(pcm(2400, 1200), journal.read(2400, 4800)); assertTrue(store.pendingRetirements(binding).isEmpty());
+            Map<String, byte[]> after = encryptedFiles(directory); assertEquals(files.keySet(), after.keySet());
+            for (String name : files.keySet()) assertArrayEquals(name, files.get(name), after.get(name));
+        }
+    }
+    private static Map<String, byte[]> encryptedFiles(File root) throws IOException {
+        Map<String, byte[]> result = new LinkedHashMap<>();
+        File[] children = root.listFiles(); if (children == null) throw new IOException("unreadable_fixture_directory");
+        for (File child : children) {
+            if (child.isDirectory()) for (Map.Entry<String, byte[]> nested : encryptedFiles(child).entrySet())
+                result.put(child.getName() + "/" + nested.getKey(), nested.getValue());
+            else result.put(child.getName(), java.nio.file.Files.readAllBytes(child.toPath()));
+        }
+        return result;
+    }
+
     private static byte[] durablePcm(NativeDictationStore.Journal journal) throws Exception {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream(); long durable = journal.load().durableSamples;
         for (long sample = 0; sample < durable;) {

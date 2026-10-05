@@ -1,5 +1,6 @@
 import { ClientControlService } from "../../src/server/domain/client-control-service.js";
 import { scriptDelivery } from "../support/notification-settings.js";
+import { largeDirectInputText } from "../support/large-direct-input.js";
 import { UsageService } from "../../src/server/usage/usage-service.js";
 import { ScopedThreadEventHubRegistry } from "../../src/server/events/thread-runtime-coordinator.js";
 import { NotificationRepository } from "../../src/server/db/repositories/notification-repository.js";
@@ -4918,7 +4919,7 @@ describe("normalized HTTP application contract", () => {
     }
   });
 
-  it("reads full scoped queued input and distinguishes acceptance from cancellation without attaching a runtime", async () => {
+  it("reads full scoped 256 KiB queued input, including not-sent failure, without attaching a runtime", async () => {
     const current = await fixture();
     try {
       const workspace = await current
@@ -4933,7 +4934,7 @@ describe("normalized HTTP application contract", () => {
       current.bindThread(threadId);
       const queue = new QueuedInputRepository(current.database);
       const originalDraft = current.repository.getDraft(current.owner, threadId);
-      const text = `  ${"A long spoken input 🎤. ".repeat(100)}\nFinal sentence.  `;
+      const text = largeDirectInputText;
       const enqueue = () => queue.enqueue(current.owner, threadId, {
         mutationId: randomUUID(), text, contextExcerpts: [], attachmentIds: [], taskReferences: [],
         source: { kind: "direct_input", resolvedDeliveryMode: "submit",
@@ -4996,6 +4997,21 @@ describe("normalized HTTP application contract", () => {
         steerOperationId, expectedState: "dispatching", backendCorrelation: steerOperationId, acceptedAt,
       });
       expect((await read(steered.id).expect(200)).body).toMatchObject({ state: "accepted", deliveryOperationId: steerOperationId });
+
+      const failed = enqueue();
+      queue.claimHead(current.owner, threadId, "private-failure-anchor", Date.now());
+      queue.handleCleanFailure(current.owner, threadId, failed.id, {
+        expectedState: "dispatching", retryable: false, failureReason: "not_sent",
+        diagnostic: "No input reached the provider.", now: Date.now(),
+        retryPolicy: { maximumRetries: 0, baseDelayMilliseconds: 100, maximumDelayMilliseconds: 100 },
+      });
+      const beforeFailedRead = totalChanges();
+      expect((await read(failed.id).expect(200)).body).toMatchObject({ state: "failed",
+        content: [{ kind: "text", text: { text } }] });
+      expect(queue.get(current.owner, threadId, failed.id)).toMatchObject({ state: "failed", failureReason: "not_sent", text });
+      expect(totalChanges()).toEqual(beforeFailedRead);
+      expect(current.runtimeEstablishmentCaptures).toHaveLength(0);
+      expect(current.operationCalls).toHaveLength(0);
 
       // A stored provider correlation alone cannot become a browser operation identity.
       current.database.prepare("UPDATE queued_inputs SET backend_correlation = ? WHERE id = ?")

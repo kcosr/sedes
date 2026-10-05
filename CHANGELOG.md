@@ -775,6 +775,9 @@
 
 ### Fixed
 
+- Oversized queued user input offers **Copy full text**, preserving access to
+  failed or not-sent dictation without exceeding the composer's 64 KiB limit.
+
 - Agent tool groups scroll horizontally on narrow screens, keeping the rightmost
   groups reachable by touch.
   ([#50](https://github.com/kcosr/sedes/pull/50))

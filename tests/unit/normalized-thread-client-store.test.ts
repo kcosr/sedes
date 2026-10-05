@@ -8,6 +8,7 @@ import type {
   ThreadLoadStreamDiagnostics,
 } from "../../src/client/api/EventStreamTransport.js";
 import { BrowserEventStreamTransport } from "../../src/client/api/EventStreamTransport.js";
+import { largeDirectInputText } from "../support/large-direct-input.js";
 import {
   DeliveryRecoveryRequiredError,
   ThreadClientStore,
@@ -421,6 +422,33 @@ function emitMaterializedSteer(
 }
 
 describe("ThreadClientStore normalized operations", () => {
+  it("reads the exact retained 256 KiB user text without changing client state or the composer", async () => {
+    const readQueuedInput = vi.fn(async () => ({
+      threadId: "thread-1", queuedInputId: "large-input", origin: "user", state: "failed",
+      content: [{ kind: "text", text: { text: largeDirectInputText } }],
+    }));
+    const store = new ThreadClientStore("thread-1", { readQueuedInput } as unknown as ApiClient, new FakeTransport());
+    try {
+      const before = store.getSnapshot();
+      await expect(store.readQueuedInputText("large-input")).resolves.toBe(largeDirectInputText);
+      expect(readQueuedInput).toHaveBeenCalledExactlyOnceWith("thread-1", "large-input");
+      expect(store.getSnapshot()).toBe(before);
+    } finally { store.dispose(); }
+  });
+
+  it.each([
+    { threadId: "another-thread" }, { queuedInputId: "another-input" },
+    { origin: "automation" }, { content: [] },
+  ])("refuses mismatched or missing retained text: %j", async override => {
+    const readQueuedInput = vi.fn(async () => ({
+      threadId: "thread-1", queuedInputId: "large-input", origin: "user", state: "failed",
+      content: [{ kind: "text", text: { text: largeDirectInputText } }], ...override,
+    }));
+    const store = new ThreadClientStore("thread-1", { readQueuedInput } as unknown as ApiClient, new FakeTransport());
+    try { await expect(store.readQueuedInputText("large-input")).rejects.toThrow("The queued input did not return its full text."); }
+    finally { store.dispose(); }
+  });
+
   const serverQueueRow = (state: QueuedInputSummary["state"] = "pending"): QueuedInputSummary => ({
     id: "voice-queue", deliveryOperationId: "voice-send", sequence: 1, origin: "user",
     isHead: true, state, resolvedDeliveryMode: "submit", attachmentCount: 0, taskCount: 0,

@@ -219,13 +219,17 @@ final class NativeVoiceRecording {
 
     void interrupt(String reason) { requestFailure(reason == null ? "dictation_interrupted" : reason); }
 
-    void discard() {
+    /** Runtime-owned Discard durably tombstones both stores before removing their files. */
+    void cancelForDiscard() { cancelForDiscard(false); }
+    void discard() { cancelForDiscard(true); }
+    private void cancelForDiscard(boolean removeJournal) {
         if (!discarded.compareAndSet(false, true)) return;
         terminal.set(true);
         synchronized (inputLock) { accepting = false; input.clear(); queuedBytes = 0; }
         cancelFlush(); timing.close();
         worker.execute(() -> {
             closeConnection();
+            if (!removeJournal) return;
             try { journal.discard(); }
             catch (Exception error) { listener.failed(id, code(error), true); }
         });

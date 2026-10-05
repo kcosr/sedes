@@ -355,6 +355,9 @@ requires an enabled, configured voice session; it never opens the microphone or
 sends. Sending complete text needs only the Sedes connection. An interrupted tail
 may be incomplete; its toolbar Send opens the recovery controls so the missing-end
 notice is visible before you explicitly accept that ending and send.
+**Discard** can also cancel an active recovery Retry or Send and delete its saved
+recording. It cannot withdraw input Sedes has already received. Ordinary **Stop**
+preserves saved recovery data.
 An older input whose admission is uncertain stays accessible while ordinary
 recording continues, but must be resolved before adopting another recording.
 Use **Start new recording** in the Voice sheet when that older item permits it;
@@ -370,8 +373,10 @@ profile deletes its saved recordings. Corrupt or inaccessible recording storage
 is preserved and reported, never replaced with an empty draft.
 
 Once a dictation is in the thread's input queue, text above the composer's separate
-64 KiB limit cannot use **Restore to composer**. Its queue delivery and recovery
-actions remain available.
+64 KiB limit cannot use **Restore to composer**. Use **Copy full text** on its
+queue row to recover the complete text, including failed or not-sent input.
+Copy leaves the queued input and composer unchanged; save the text before
+choosing **Dismiss** if you want to keep it.
 
 Recognized input is journaled atomically in encrypted, backup-excluded native
 storage before sending. It carries one immutable mutation ID and original

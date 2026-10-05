@@ -295,9 +295,16 @@ describe("voice quick sheet", () => {
     expect(fake.plugin.sendRecoveredRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
       recordingId: saved.recordingId, expectedRecoveryRevision: 5, acknowledgeIncomplete: true });
     await act(async () => release({ ...native, stateRevision: 3,
-      recordingRecovery: { ...saved, revision: 6, stage: "admitting", captureIncomplete: false, canSend: false, canDiscard: false } }));
+      recordingRecovery: { ...saved, revision: 6, stage: "admitting", captureIncomplete: false, canSend: false, canDiscard: true } }));
     expect(send).toHaveAttribute("aria-disabled", "true");
     expect(send).toHaveFocus();
+    const discard = within(sheet).getByRole("button", { name: "Discard saved dictation" });
+    expect(discard).not.toHaveAttribute("aria-disabled");
+    fake.plugin.discardRecording.mockResolvedValue(voiceSnapshot({ stateRevision: 4 }));
+    fireEvent.click(discard);
+    await waitFor(() => expect(fake.plugin.discardRecording).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
+      recordingId: saved.recordingId, expectedRecoveryRevision: 6 }));
+    expect(fake.plugin.stopCurrentInteraction).not.toHaveBeenCalled();
     store.dispose();
   });
   it("offers an explicit storage retry while Off even when the client connection is registered", async () => {

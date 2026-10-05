@@ -112,7 +112,7 @@ export async function installVoiceFixture(page: Page): Promise<void> {
               recording: { id: saved.recordingId, keepListening: false, reconnecting: false } },
               actions: { ...initial.actions, canStart: false, canStop: false },
               recordingRecovery: { ...saved, revision: saved.revision + 1, stage: "recognizing", canRetryRecognition: false,
-                canSend: false, canCopyRecognizedText: false, canDiscard: false } });
+                canSend: false, canCopyRecognizedText: false, canDiscard: true } });
             if (method === "sendRecoveredRecording") {
               if (typeof args.acknowledgeIncomplete !== "boolean" || (saved.captureIncomplete && args.acknowledgeIncomplete !== true))
                 throw new Error("Acknowledge that the end may be missing before sending.");
@@ -122,10 +122,11 @@ export async function installVoiceFixture(page: Page): Promise<void> {
                 recording: { id: saved.recordingId, keepListening: false, reconnecting: false } },
                 actions: { ...initial.actions, canStart: false, canStop: false },
                 recordingRecovery: { ...saved, revision: saved.revision + 1, stage: "admitting", captureIncomplete: false,
-                  canSend: false, canRetryRecognition: false, canCopyRecognizedText: false, canDiscard: false } });
+                  canSend: false, canRetryRecognition: false, canCopyRecognizedText: false, canDiscard: true } });
             }
             if (method === "discardRecording") fixture.publish({ recordingRecovery: null,
-              ...current.active ? {} : { phase: current.settings.audioMode === "off" ? "off" : "idle", actions: { ...initial.actions, canStart: current.settings.audioMode !== "off" } } });
+              ...current.active && current.active.recording?.id !== saved.recordingId ? {} : { active: null,
+                phase: current.settings.audioMode === "off" ? "off" : "idle", actions: { ...initial.actions, canStart: current.settings.audioMode !== "off" } } });
           } else if (method === "listInputDevices") return { devices: [], selectedId: null };
           return snapshot();
         },

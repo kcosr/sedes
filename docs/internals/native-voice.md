@@ -497,6 +497,9 @@ microphone permission prerequisite) but opens no microphone and sends no message
 Copy and Discard need no speech readiness. Complete recovery Send needs Sedes
 admission readiness. A recognition failure after Send revokes automatic admission,
 even when recognition later succeeds; the user presses Send again.
+Normal finish intents (Send, automatic completion, and Retry) are not presented
+as failure reasons. The original live Send keeps its live controls, including
+Stop during admission; an active recovery Retry or Send uses the recovery controls.
 
 The recording and final-input journal merge into one recovery item as soon as
 an immutable mutation is allocated. Adopted input entries independently authenticate
@@ -506,9 +509,11 @@ a crash between journal save and handoff before publishing state. Generic
 `resumeInput`/`discardInput` reject a recording-owned mutation with
 `recording_recovery_required`. Recovery
 Send first looks up the receipt and reuses the immutable request only when
-eligible; Discard durably records retirement, removes the linked admission entry,
-then deletes the recording. Startup completes interrupted retirement before
-exposing generic recovery. A definitive pre-admission rejection
+eligible; Discard also works during an active recovery Retry or Send. It fences
+matching callbacks and stops matching work, then durably records retirement
+before removing the linked admission entry and recording files. Failure before
+durable retirement preserves the draft for recovery. Startup completes interrupted
+retirement before exposing generic recovery. A definitive pre-admission rejection
 retains adopted text for Copy/Discard with Send disabled. A found receipt releases
 the local recording and journal: subsequent dispatch belongs to the thread.
 After handoff, uncertain admission releases the active slot for ordinary capture

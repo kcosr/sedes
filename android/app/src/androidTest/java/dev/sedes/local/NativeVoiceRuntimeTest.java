@@ -1453,6 +1453,120 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
+    @Test public void discardDuringPendingRecoveredSendFencesItsFinishIntentAndNeverPosts() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            NativeDictationStore.Recording saved = f.savedRecording(true, false, false);
+            AsyncCommand sending, discarding;
+            try (WorkerBlock blocked = new WorkerBlock(f)) {
+                sending = f.beginCommand("sendRecoveredRecording", recoveryArgs(saved, false)); f.onOwner(() -> {});
+                JSONObject state = f.runtime.snapshot().getJSONObject("recordingRecovery"); assertTrue(state.getBoolean("canDiscard"));
+                discarding = f.beginCommand("discardRecording", NativeVoiceJson.object("recordingId", saved.id, "expectedRecoveryRevision", state.getLong("revision")));
+                f.onOwner(() -> {}); assertTrue(f.runtime.snapshot().isNull("active"));
+                assertFalse(f.runtime.snapshot().getJSONObject("recordingRecovery").getBoolean("canDiscard"));
+            }
+            assertEquals("recording_changed", sending.await()); assertNull(discarding.await()); f.flush();
+            assertTrue(f.runtime.snapshot().isNull("recordingRecovery")); assertEquals(0, f.store.journal(f.binding).length());
+            assertEquals(0, f.inputAttempts.get()); assertFalse((boolean) field(f.runtime, "dictationOperationPending"));
+        }
+    }
+
+    @Test public void discardFencesARecoveryPreflightThatReturnsAfterItsDraftWasRemoved() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            NativeVoiceAudioTest.grant(f.context, "android.permission.RECORD_AUDIO");
+            NativeDictationStore.Recording saved = f.savedRecording(false, false); f.holdRecordingPreflight = true;
+            AsyncCommand retrying = f.beginCommand("retryRecordingRecognition", NativeVoiceJson.object("recordingId", saved.id, "expectedRecoveryRevision", saved.revision));
+            NativeSpeechCatalog.PreflightResult preflight = f.preflights.poll(10, TimeUnit.SECONDS); assertNotNull(preflight);
+            f.onOwner(() -> {}); assertTrue(f.runtime.snapshot().getJSONObject("recordingRecovery").getBoolean("canDiscard"));
+            assertNull(f.command("discardRecording", NativeVoiceJson.object("recordingId", saved.id, "expectedRecoveryRevision", saved.revision)));
+            preflight.done(NativeSpeechCapabilities.hosted("gpt-live-transcribe"), null);
+            assertEquals("recording_changed", retrying.await()); f.flush();
+            assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.runtime.snapshot().isNull("recordingRecovery"));
+            assertTrue(f.speech.transcriptions.isEmpty()); assertEquals(0, f.inputAttempts.get());
+        }
+    }
+
+    @Test public void discardCancelsQueuedRetryResultsAndPreservesTheDraftWhenItsMarkerCannotBeWritten() throws Exception {
+        for (boolean failMarker : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                NativeVoiceAudioTest.grant(f.context, "android.permission.RECORD_AUDIO");
+                NativeDictationStore.Recording saved = f.savedRecording(false, false);
+                assertNull(f.command("retryRecordingRecognition", NativeVoiceJson.object("recordingId", saved.id, "expectedRecoveryRevision", saved.revision)));
+                RecognitionJob retry = f.speech.transcriptions.poll(10, TimeUnit.SECONDS); assertNotNull(retry);
+                retry.ready(); awaitCommit(f, retry); f.flush();
+                Method directoryMethod = NativeDictationStore.class.getDeclaredMethod("directory", String.class, String.class); directoryMethod.setAccessible(true);
+                File directory = (File) directoryMethod.invoke(f.dictations, f.binding, saved.id);
+                int mode = Os.stat(directory.getPath()).st_mode & 0777;
+                try {
+                    if (failMarker) Os.chmod(directory.getPath(), 0500);
+                    AsyncCommand discarding;
+                    try (WorkerBlock blocked = new WorkerBlock(f)) {
+                        retry.complete("Queued stale result");
+                        JSONObject current = f.runtime.snapshot().getJSONObject("recordingRecovery"); assertTrue(current.getBoolean("canDiscard"));
+                        discarding = f.beginCommand("discardRecording", NativeVoiceJson.object("recordingId", saved.id, "expectedRecoveryRevision", current.getLong("revision")));
+                        f.onOwner(() -> {}); assertTrue(f.runtime.snapshot().isNull("active"));
+                    }
+                    String failure = discarding.await(); f.flush(); assertTrue(retry.cancelled); assertEquals(0, f.inputAttempts.get());
+                    if (failMarker) {
+                        assertEquals("dictation_storage_unavailable", failure);
+                        JSONObject restored = f.runtime.snapshot().getJSONObject("recordingRecovery");
+                        assertEquals("interrupted", restored.getString("stage")); assertTrue(restored.getBoolean("canRetryRecognition")); assertTrue(restored.getBoolean("canDiscard"));
+                        f.onStore(() -> { assertEquals("", f.dictations.get(f.binding, saved.id).text); assertEquals(2400, f.dictations.get(f.binding, saved.id).durableSamples); });
+                    } else { assertNull(failure); assertTrue(f.runtime.snapshot().isNull("recordingRecovery")); assertFalse(directory.exists()); }
+                } finally { if (directory.exists()) Os.chmod(directory.getPath(), mode); }
+            }
+        }
+    }
+
+    @Test public void recoveredPostDiscardIgnoresLateAdmissionAndDoesNotStopANewerOrdinaryInteraction() throws Exception {
+        for (boolean newerInteraction : new boolean[] { false, true }) {
+            try (Fixture f = new Fixture(false, false)) {
+                NativeDictationStore.Recording saved = f.savedRecording(true, false);
+                assertNull(f.command("sendRecoveredRecording", recoveryArgs(saved, false)));
+                NativeVoiceHttp.Result post = f.inputs.poll(10, TimeUnit.SECONDS); assertNotNull(post);
+                Object[] newer = { null };
+                if (newerInteraction) f.onOwner(() -> {
+                    Object previous = field(f.runtime, "active"); f.invoke("finishItem", new Class<?>[] { previous.getClass() }, previous);
+                    Constructor<?> ctor = previous.getClass().getDeclaredConstructor(String.class, String.class); ctor.setAccessible(true);
+                    newer[0] = ctor.newInstance(UUID.randomUUID().toString(), "New target");
+                    set(f.runtime, "active", newer[0]); set(f.runtime, "phase", "validating"); f.invoke("publish", new Class<?>[0]);
+                });
+                JSONObject current = f.runtime.snapshot().getJSONObject("recordingRecovery"); assertTrue(current.getBoolean("canDiscard"));
+                assertNull(f.command("discardRecording", NativeVoiceJson.object("recordingId", saved.id, "expectedRecoveryRevision", current.getLong("revision"))));
+                post.done(200, f.receipt("queued"), null); f.flush();
+                assertEquals(0, f.store.journal(f.binding).length()); assertTrue(f.runtime.snapshot().isNull("recordingRecovery"));
+                assertSame(newer[0], field(f.runtime, "active")); assertEquals(1, f.inputAttempts.get()); assertTrue(f.submissions.isEmpty());
+            }
+        }
+    }
+
+    @Test public void successfulRetryHasNoFailureReasonAndLiveSendKeepsItsStopUntilTheSlotIsReleased() throws Exception {
+        try (Fixture f = new Fixture(false, false)) {
+            NativeVoiceAudioTest.grant(f.context, "android.permission.RECORD_AUDIO");
+            NativeDictationStore.Recording saved = f.savedRecording(false, false);
+            assertNull(f.command("retryRecordingRecognition", NativeVoiceJson.object("recordingId", saved.id, "expectedRecoveryRevision", saved.revision)));
+            RecognitionJob retry = f.speech.transcriptions.poll(10, TimeUnit.SECONDS); assertNotNull(retry);
+            retry.ready(); awaitCommit(f, retry); retry.complete("Recognized saved text"); f.flush();
+            JSONObject ready = f.runtime.snapshot().getJSONObject("recordingRecovery");
+            assertEquals("ready", ready.getString("stage")); assertTrue(ready.isNull("reason"));
+        }
+        try (Fixture f = new Fixture(false, false)) {
+            String capture = f.recognizing(false); Object active = field(f.runtime, "active");
+            f.onOwner(() -> { set(f.runtime, "phase", "listening"); f.invoke("publish", new Class<?>[0]); });
+            String id = f.runtime.snapshot().getJSONObject("active").getJSONObject("recording").getString("id");
+            assertNull(f.command("setKeepListening", NativeVoiceJson.object("recordingId", id, "enabled", true)));
+            f.onOwner(() -> assertTrue(((NativeVoiceRecording) field(active, "recording")).accept(captureFrame(1000))));
+            assertNull(f.command("sendRecording", NativeVoiceJson.object("recordingId", id)));
+            f.runtime.captureEnded(capture); f.synthetic.ready(); awaitCommit(f, f.synthetic); f.synthetic.complete("Live dictated input"); f.flush();
+            NativeVoiceHttp.Result post = f.inputs.poll(10, TimeUnit.SECONDS); assertNotNull(post);
+            JSONObject live = f.runtime.snapshot(); assertEquals("submitting", live.getString("phase"));
+            assertTrue(live.isNull("recordingRecovery")); assertTrue(live.getJSONObject("actions").getBoolean("canStop"));
+            assertNull(f.command("stopCurrentInteraction", NativeVoiceJson.object("interactionId", live.getJSONObject("active").getString("id"))));
+            post.done(0, null, "network_unavailable"); f.flush();
+            assertTrue(f.runtime.snapshot().isNull("active"));
+            assertEquals(id, f.runtime.snapshot().getJSONObject("recordingRecovery").getString("recordingId"));
+        }
+    }
+
     @Test public void incompleteRecoveryRequiresExplicitAcknowledgementBeforeAnySendWork() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
             NativeDictationStore.Recording saved = f.savedRecording(true, true);
@@ -1625,11 +1739,14 @@ public class NativeVoiceRuntimeTest {
         final NativeDictationStore dictations;
         final Handler owner;
         RecognitionJob synthetic;
+        volatile boolean holdRecordingPreflight;
+        final BlockingQueue<NativeSpeechCatalog.PreflightResult> preflights = new LinkedBlockingQueue<>();
 
         Fixture(boolean automatic, boolean retargeted) throws Exception { this(automatic, retargeted, false); }
         Fixture(boolean automatic, boolean retargeted, boolean ownSpeechServer) throws Exception {
             runtime = new NativeVoiceRuntime(context, new NativeVoiceRuntime.RecordingBackend() {
                 public okhttp3.Call preflight(NativeVoiceSettings settings, String credential, NativeSpeechCatalog.PreflightResult result) {
+                    if (holdRecordingPreflight) { preflights.add(result); return null; }
                     NativeSpeechCapabilities capabilities = ownSpeechServer ? NativeSpeechCapabilities.server(settings.text("sttModel"), NativeVoiceJson.object(
                         "max_buffer_bytes", 2880000, "max_message_bytes", 1048576, "max_output_bytes", 1048576,
                         "idle_timeout_seconds", 60, "max_session_seconds", 3600)) : NativeSpeechCapabilities.hosted("gpt-live-transcribe");
@@ -1682,7 +1799,8 @@ public class NativeVoiceRuntimeTest {
             dictations.executor().execute(() -> { try { action.run(); } catch (Throwable error) { failure.set(error); } finally { done.countDown(); } });
             assertTrue(done.await(10, TimeUnit.SECONDS)); if (failure.get() != null) throw new AssertionError(failure.get());
         }
-        NativeDictationStore.Recording savedRecording(boolean complete, boolean incomplete) throws Exception {
+        NativeDictationStore.Recording savedRecording(boolean complete, boolean incomplete) throws Exception { return savedRecording(complete, incomplete, true); }
+        NativeDictationStore.Recording savedRecording(boolean complete, boolean incomplete, boolean withIntent) throws Exception {
             AtomicReference<NativeDictationStore.Recording> saved = new AtomicReference<>();
             NativeVoiceSettings configured = NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("audioMode", "manual", "speechProvider", "server",
                 "speechEndpoint", "http://127.0.0.1:9/v1", "recognitionCues", false));
@@ -1697,7 +1815,7 @@ public class NativeVoiceRuntimeTest {
                 journal.adopt(true); journal.append(0, captureFrame(1000)); journal.checkpoint(); journal.seal(0, 0, 2400, 0);
                 if (complete) journal.complete(0, "Saved dictated text");
                 if (incomplete) journal.interrupt("recording_interrupted"); else journal.finish("timeout", 2400);
-                saved.set(dictations.finishIntent(binding, id, mutation, NativeVoiceJson.object("mode", "queue", "originClientId", request.getJSONObject("origin").getString("clientId"))));
+                saved.set(withIntent ? dictations.finishIntent(binding, id, mutation, NativeVoiceJson.object("mode", "queue", "originClientId", request.getJSONObject("origin").getString("clientId"))) : journal.load());
             });
             onOwner(() -> { set(runtime, "retainedDictation", saved.get()); set(runtime, "phase", "idle"); invoke("publish", new Class<?>[0]); });
             return saved.get();

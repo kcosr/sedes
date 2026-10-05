@@ -10,6 +10,7 @@ import {
   type DirectInputRequest,
 } from "../../src/shared/protocol/thread-input.js";
 import { expect, test } from "./fixtures";
+import { largeDirectInputText } from "../support/large-direct-input.js";
 import {
   capture,
   expectNoPageOverflow,
@@ -139,18 +140,26 @@ test("idle direct input becomes one complete transcript message while active que
   // The same API still represents genuinely queued or steering input in the
   // strip while this turn is active.
   await expect.poll(async () => (await inputContext()).runState).toBe("running");
-  const queuedText = "Queue this spoken follow-up until the current turn finishes.";
+  const queuedText = largeDirectInputText;
   const queued = await submit(queuedText, { mode: "queue" });
   expect(queued.admittedMode).toBe("queue");
   const queuedRow = strip.locator(`[data-queued-input-id="${queued.queuedInputId}"]`);
-  await expect(queuedRow).toContainText(queuedText);
+  await expect(queuedRow).toContainText("Recording transcript:");
   await expect(messages.locator(`[data-delivery-operation-id="${queued.operationId}"]`)).toHaveCount(0);
+  await expect(composer).toHaveValue(retainedDraft);
+  await page.setViewportSize({ width: 320, height: 844 });
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await expect(queuedRow.getByRole("button", { name: /^Restore queued input to composer:/ })).toBeDisabled();
+  await queuedRow.getByRole("button", { name: /^Copy full text:/ }).click();
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(queuedText);
+  await expect(queuedRow.getByRole("button", { name: /^Copied full text:/ })).toBeVisible();
   await expect(composer).toHaveValue(retainedDraft);
   await expectNoPageOverflow(page);
   await capture(page, testInfo, "direct-input-active-queue-mobile.png");
   // An ordinary queued input ahead would correctly make Steer unavailable.
-  await queuedRow.getByRole("button", { name: `Delete queued input: ${queuedText}` }).click();
+  await queuedRow.getByRole("button", { name: /^Delete queued input:/ }).click();
   await expect(queuedRow).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
 
   expect(
     (await page.request.post(`/__e2e/codex/steer-materialization/arm/${threadId}`)).status(),

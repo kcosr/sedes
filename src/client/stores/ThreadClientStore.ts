@@ -1131,6 +1131,16 @@ export class ThreadClientStore {
     });
   }
 
+  async readQueuedInputText(queuedInputId: string): Promise<string> {
+    const input = await this.#api.readQueuedInput(this.threadId, queuedInputId);
+    const textParts = input.content.filter(part => part.kind === "text");
+    if (input.threadId !== this.threadId || input.queuedInputId !== queuedInputId ||
+        input.origin !== "user" || textParts.length !== 1) {
+      throw new Error("The queued input did not return its full text.");
+    }
+    return textParts[0]!.text.text;
+  }
+
   cancelQueuedInput(queuedInputId: string): Promise<void> {
     return this.#queueMutation(async (snapshot, generation) => {
       const requestKey = `cancel\0${queuedInputId}`;

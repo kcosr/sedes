@@ -391,6 +391,11 @@ cosmetic dismiss action. A failed or not-sent entry offers **Restore**, which
 returns its text to an empty composer without sending, and **Dismiss**, which
 removes it; each entry clears on its own.
 
+Restore is disabled for user input above the composer's 64 KiB limit. Use
+**Copy full text** to preserve the complete text, including failed or not-sent
+input. Copy leaves the queued entry and current composer unchanged. Copy it
+before dismissing the entry if you want to keep it.
+
 When Steer is supported, you can convert the user-created queue head to
 **Steer** without changing the current draft. An ordinary Queue entry already
 ahead of the composer must be delivered, removed, or converted before a later
