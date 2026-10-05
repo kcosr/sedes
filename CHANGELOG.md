@@ -6,14 +6,14 @@
 
 - Client protocol 139 replaces browser-supplied input origin IDs with server
   registration. Upgrade browser and packaged clients with the server; native
-  voice snapshot version 4 shares its registered connection with the WebView.
+  voice shares its registered connection with the WebView.
   ([#50](https://github.com/kcosr/sedes/pull/50))
 
 - Android voice now uses OpenAI-compatible Realtime transcription and streamed
   HTTP speech in place of the direct-media adapter. Upgrading resets local voice
   settings with Audio mode Off; reconfigure the provider, endpoint, and models.
   Separately stored speech credentials remain on the device.
-  ([#49](https://github.com/kcosr/sedes/pull/49))
+  ([#49](https://github.com/kcosr/sedes/pull/49), [#51](https://github.com/kcosr/sedes/pull/51))
 
 - Browser and packaged clients require client protocol 138 for pending Send
   presentation. Upgrade clients together with the server.
@@ -207,6 +207,10 @@
   Migration preserves old Claude totals separately with unknown coverage. (#8)
 
 ### Added
+
+- Android voice can clean up Markdown before speaking, preserving link labels,
+  code contents, and reading pauses. The device-local setting defaults to on.
+  ([#51](https://github.com/kcosr/sedes/pull/51))
 
 - Agent client controls manage basic voice settings, end interactions, and switch
   threads after reply playback, defaulting to the client that started the turn.

@@ -155,6 +155,34 @@ public class NativeSpeechTransportTest {
             "languages", new org.json.JSONArray().put("en"), "logprobs", new org.json.JSONArray());
     }
 
+    @Test(timeout = 10000) public void preparedNotificationChunksReachTheSpeechProvider() throws Exception {
+        String markdown = "# Answer\n\nRead [the guide][ref].\n\n```\nfoo_bar * 2\n```\n\n[ref]: https://example.test/hidden";
+        JSONObject envelope = NativeVoiceJson.object("sourceEventId", "formatted", "generation", 1, "voice", "speak",
+            "payload", NativeVoiceJson.object("schemaVersion", 4, "notificationId", "formatted", "event", "turn.completed",
+                "occurredAt", "2026-10-04T00:00:00Z", "title", "Completed", "message", "Context",
+                "assistantResult", NativeVoiceJson.object("final", NativeVoiceJson.object("text", markdown))));
+        String expected = "Answer\n\nRead the guide.\n\nfoo_bar * 2";
+        for (boolean cleanup : new boolean[] { true, false }) {
+            NativeVoiceSettings settings = NativeVoiceSettings.defaults().patch(0,
+                NativeVoiceJson.object("audioMode", "response", "readNotificationContext", false, "cleanSpeechText", cleanup));
+            NativeVoiceQueue.Item item = new NativeVoiceQueue.Item(envelope, settings);
+            StringBuilder received = new StringBuilder();
+            for (String chunk : NativeVoiceQueue.chunks(item.speech, 24)) {
+                Recorder recorder = new Recorder();
+                try (Peer peer = new Peer(); NativeSpeechTransport transport = transport(peer)) {
+                    transport.speak("tts", chunk, recorder); peer.accept();
+                    assertEquals("POST /v1/audio/speech HTTP/1.1", peer.requestLine);
+                    received.append(new JSONObject(new String(peer.body, StandardCharsets.UTF_8)).getString("input"));
+                    peer.response(200, "audio/pcm", new byte[] { 1, 2 });
+                    assertEquals("started:tts", recorder.next()); assertEquals("pcm:tts", recorder.next());
+                    assertEquals("completed:tts", recorder.next());
+                }
+            }
+            assertEquals(cleanup ? expected : markdown, received.toString());
+            assertEquals(markdown, envelope.getJSONObject("payload").getJSONObject("assistantResult").getJSONObject("final").getString("text"));
+        }
+    }
+
     @Test(timeout = 10000) public void gaHandshakeCommitsExactlyOneRecordingAndCorrelatesFinal() throws Exception {
         Recorder recorder = new Recorder();
         try (Peer peer = new Peer(); NativeSpeechTransport transport = transport(peer)) {

@@ -49,6 +49,11 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
     implementation "com.squareup.okhttp3:okhttp:4.12.0"
+    implementation "org.commonmark:commonmark:0.30.0"
+    implementation "org.commonmark:commonmark-ext-gfm-strikethrough:0.30.0"
+    implementation "org.commonmark:commonmark-ext-gfm-tables:0.30.0"
+    implementation "org.commonmark:commonmark-ext-task-list-items:0.30.0"
+    implementation "org.commonmark:commonmark-ext-footnotes:0.30.0"
     testImplementation "junit:junit:$junitVersion"
     testImplementation "org.json:json:20240303"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"

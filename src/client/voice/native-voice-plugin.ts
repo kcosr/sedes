@@ -4,7 +4,7 @@ import { isAndroidClient } from "../app/client-platform.js";
 
 export const nativeVoiceSettingsSchema = z.strictObject({
   audioMode: z.enum(["off", "manual", "response"]),
-  autoListen: z.boolean(), ignoreOtherDevices: z.boolean(), readNotificationContext: z.boolean(),
+  autoListen: z.boolean(), ignoreOtherDevices: z.boolean(), readNotificationContext: z.boolean(), cleanSpeechText: z.boolean(),
   speechProvider: z.enum(["openai", "server"]), speechEndpoint: z.string(),
   sttModel: z.string().max(160), ttsModel: z.string().max(160), ttsVoice: z.string().max(160),
   ttsSpeed: z.number().min(0.25).max(4), speechTextLimit: z.number().int().min(2).max(4096),
@@ -24,7 +24,7 @@ export const nativeSpeechCatalogSchema = z.strictObject({
 });
 export type NativeSpeechCatalog = z.infer<typeof nativeSpeechCatalogSchema>;
 export const nativeVoiceStateSchema = z.strictObject({
-  version: z.literal(4), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
+  version: z.literal(5), stateRevision: z.number().int().nonnegative(), connectionGeneration: z.number().int().nonnegative(),
   profileId: z.string().nullable(), serverOrigin: z.string().nullable(), identity: z.string().nullable(), originClientId: z.uuid().nullable(), clientConnectionToken: z.string().nullable(),
   settingsRevision: z.number().int().nonnegative(), settings: nativeVoiceSettingsSchema,
   speech: z.strictObject({ credentialConfigured: z.boolean(), catalogStatus: z.enum(["idle", "loading", "ready", "error"]),

@@ -4,6 +4,18 @@ import static org.junit.Assert.*;
 import org.junit.Test;
 
 public class NativeVoiceSettingsTest {
+    @Test public void speechCleanupDefaultsOnAndPersistsAsAStrictBoolean() {
+        NativeVoiceSettings defaults = NativeVoiceSettings.defaults();
+        assertTrue(defaults.flag("cleanSpeechText"));
+        NativeVoiceSettings raw = defaults.patch(0, NativeVoiceJson.object("cleanSpeechText", false));
+        assertFalse(NativeVoiceSettings.fromRecord(raw.record()).flag("cleanSpeechText"));
+        assertTrue(defaults.speechConfigurationEquals(raw));
+        assertThrows(IllegalArgumentException.class, () -> defaults.patch(0, NativeVoiceJson.object("cleanSpeechText", "false")));
+        org.json.JSONObject missing = defaults.record(); missing.optJSONObject("settings").remove("cleanSpeechText");
+        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(missing));
+        NativeVoiceJson.put(missing, "version", 3);
+        assertThrows(IllegalArgumentException.class, () -> NativeVoiceSettings.fromRecord(missing));
+    }
     @Test public void startsOffAndPatchesByRevision() {
         NativeVoiceSettings defaults = NativeVoiceSettings.defaults();
         assertEquals("off", defaults.mode()); assertEquals(4096, defaults.number("speechTextLimit"));
