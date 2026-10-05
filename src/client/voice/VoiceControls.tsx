@@ -87,6 +87,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   // Native Stop discards a recording that has not been sent yet.
   const cancels = ["validating", "arming", "listening", "recognizing"].includes(phase);
   const showingInput = ["validating", "arming", "listening", "recognizing", "submitting", "recovering"].includes(phase);
+  const inputActions = showingInput && active !== null && !showingRecovery;
   const [targetId, targetTitle] = showingInput ? [active?.recognitionThreadId, active?.recognitionThreadTitle]
     : [active?.threadId ?? active?.recognitionThreadId, active?.threadTitle ?? active?.recognitionThreadTitle];
   const activeTitle = targetTitle ?? (targetId ? threads.find(thread => thread.id === targetId)?.title.text.trim() || "Untitled thread" : undefined);
@@ -161,7 +162,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   return <>
     {!off || showWhenOff || showingRecovery || needsStorageRetry ? <div className="voice-dock">
       <div className="voice-card" role="group" aria-label="Voice controls" data-tone={recording ? "destructive" : undefined}
-        data-off={off && !showingRecovery ? "" : undefined} data-recording={recordingTools ? "" : undefined} data-saved={showingRecovery ? "" : undefined}>
+        data-off={off && !showingRecovery ? "" : undefined} data-input-actions={inputActions ? "" : undefined} data-saved={showingRecovery ? "" : undefined}>
         <button type="button" className="voice-card-tile" data-tone={tone} aria-haspopup="dialog" aria-describedby={describedBy}
           aria-label={savedElsewhere ? "Saved dictation" : "Open voice controls"} title={savedElsewhere ? "Saved dictation" : "Open voice controls"}
           data-saved-access={savedElsewhere ? "" : undefined} onClick={() => setSheet(true)}>{tile}<ChevronDown className="voice-card-menu-mark" aria-hidden="true" />
@@ -207,7 +208,8 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
                 if (saved.captureIncomplete) { setSheet(true); return; }
                 const command = recordingRecoveryContext(native, saved);
                 act(() => store.plugin.sendRecoveredRecording({ ...command, acknowledgeIncomplete: false }));
-              }}><ArrowUp strokeWidth={1.8} aria-hidden="true" /></button> : null}
+              }}><ArrowUp strokeWidth={1.8} aria-hidden="true" /></button>
+              : saved.stage === "admitting" ? <span className="voice-card-send-slot" aria-hidden="true" /> : null}
           </> : <>
           {needsStorageRetry ? <button type="button" className="voice-card-retry" aria-label="Retry voice connection" aria-disabled={state.pending || undefined}
             onClick={() => { if (!state.pending) void store.reconnect().catch(() => undefined); }}><RotateCcw aria-hidden="true" /><span>Retry</span></button>
@@ -223,7 +225,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
             title={cancels ? "Cancel" : "Stop"} onClick={() => {
               void store.stopInteraction({ expectedConnectionGeneration: native.connectionGeneration, interactionId: active.id }).catch(() => undefined);
             }}>{cancels ? <X strokeWidth={1.8} aria-hidden="true" /> : <span className="voice-card-stop" aria-hidden="true" />}</button> : null}
-          {recordingTools ? capture.keepListening ? <button type="button" className="voice-card-button" aria-label="Send voice recording" title="Send"
+          {inputActions ? recordingTools && capture.keepListening ? <button type="button" className="voice-card-button" aria-label="Send voice recording" title="Send"
             disabled={state.pending || !native.actions.canSend} onClick={() => {
               const command = { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id };
               act(() => store.plugin.sendRecording(command));

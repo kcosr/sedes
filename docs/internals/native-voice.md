@@ -486,10 +486,13 @@ use the existing status line. An older saved draft marks the quick-controls icon
 and opens the same recovery sheet without adding another row.
 The title and status retain the Ready state's left alignment and gap from the
 status icon when recording controls appear, including narrow layouts. The
-icon-to-text gap is 8 px in every state. Ordinary capture reserves the Send
-button's space, so toggling Keep listening never moves Cancel under the user's
-last tap. The extra right-gutter space is limited to docks at most 315 px wide;
-360 px phones keep their normal inset and control gaps.
+icon-to-text gap is 8 px in every state. Input preparation, capture, recognition,
+and admission reserve the Send button's space and preserve the action sizes
+and right inset. Neither toggling Keep listening nor a repeated Start/Send tap
+moves Cancel/Stop under the user's last tap. The extra right-gutter space is
+limited to docks at most 315 px wide; 360 px phones keep their normal inset and
+control gaps. Saved dictation also reserves Send's space during admission so
+Discard cannot move into its former hit region.
 
 `NativeVoiceSegmenter` counts real 24 kHz samples and analyzes absolute 100 ms
 frames. RMS 0.012 identifies likely pauses, never disposable audio. A 1,200 ms

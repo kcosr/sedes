@@ -403,8 +403,8 @@
   width: 48px;
 }
 
-/* Reserve Send's space during ordinary capture so enabling Keep listening
-   cannot move Cancel under a repeated tap on the infinity button. */
+/* Reserve Send's space from input preparation through admission. Neither a
+   repeated Start/Send tap nor toggling Keep listening can land on Cancel. */
 .voice-card-send-slot {
   width: 48px;
   height: 48px;
@@ -497,35 +497,36 @@
     margin-inline-end: 2px;
   }
 
-  .voice-card[data-recording] {
+  .voice-card[data-input-actions] {
     gap: 4px;
     padding-inline-end: 3px;
   }
 
   /* Keep the tile and both text lines at their Ready-state positions. Only
      the gaps between the controls yield as recording adds more actions. */
-  .voice-card[data-recording] .voice-card-tile {
+  .voice-card[data-input-actions] .voice-card-tile {
     margin-inline-end: 4px;
   }
 
-  .voice-card[data-recording] .voice-card-actions,
+  .voice-card[data-input-actions] .voice-card-actions,
   .voice-card[data-saved] .voice-card-actions {
     gap: 6px;
   }
 
-  .voice-card[data-recording] .voice-card-button,
-  .voice-card[data-recording] .voice-card-send-slot,
-  .voice-card[data-recording] .voice-card-keep,
+  .voice-card[data-input-actions] .voice-card-button,
+  .voice-card[data-input-actions] .voice-card-send-slot,
+  .voice-card[data-input-actions] .voice-card-keep,
+  .voice-card[data-saved] .voice-card-send-slot,
   .voice-card[data-saved] .voice-card-button {
     width: 44px;
     height: 44px;
   }
 
-  .voice-card[data-recording] .voice-card-sub > .voice-card-dot {
+  .voice-card[data-input-actions] .voice-card-sub > .voice-card-dot {
     display: none;
   }
 
-  .voice-card[data-recording] .voice-card-reconnecting {
+  .voice-card[data-input-actions] .voice-card-reconnecting {
     display: none;
   }
 
@@ -548,14 +549,14 @@
 /* Six distinct touch regions fit a 320px phone with full-size Listening
    text. Use the right gutter only, so the Ready-state left inset stays fixed. */
 @container voice-dock (max-width: 315px) {
-  .voice-card[data-recording]:has(.voice-card-target) {
+  .voice-card[data-input-actions] {
     width: calc(100% + 8px);
     margin-inline: 0 -8px;
   }
 
   /* Reduce only the two 4px gaps beside the chooser to 1px. Keep listening
      stays 4px from Cancel, including while the chooser is unavailable. */
-  .voice-card[data-recording] .voice-card-target {
+  .voice-card[data-input-actions] .voice-card-target {
     margin-inline: -3px;
   }
 }
