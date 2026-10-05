@@ -620,9 +620,18 @@ public class NativeVoiceRuntimeTest {
                 try {
                     Exception error = assertThrows(Exception.class,
                         () -> ClientCredentialsPlugin.removeProfileCredentials(f.context, f.profile, f.runtime::profileRemoved));
-                    assertEquals("credential_removal_failed", error.getMessage());
-                    if (blockedStore.equals("speech-credentials")) assertNull(pairing.getCredential(f.profile, f.origin));
-                    else assertNull(speech.getCredential(f.profile, "server", "https://speech.example/v1"));
+                    if (blockedStore.equals("speech-credentials")) {
+                        // Runtime cleanup attempts speech-secret deletion before the plugin retries both stores.
+                        assertEquals("voice_profile_cleanup_failed", error.getMessage());
+                        assertNotNull(error.getCause());
+                        assertEquals("credential_removal_failed", error.getCause().getMessage());
+                        assertEquals(1, error.getSuppressed().length);
+                        assertEquals("credential_removal_failed", error.getSuppressed()[0].getMessage());
+                        assertNull(pairing.getCredential(f.profile, f.origin));
+                    } else {
+                        assertEquals("credential_removal_failed", error.getMessage());
+                        assertNull(speech.getCredential(f.profile, "server", "https://speech.example/v1"));
+                    }
                     assertNull(field(f.runtime, "binding"));
                 } finally {
                     assertTrue(retained.delete()); assertTrue(blocked.delete());
@@ -768,8 +777,8 @@ public class NativeVoiceRuntimeTest {
 
     @Test public void finalizedAutomaticTranscriptSurvivesPolicyChangeAndStreamLoss() throws Exception {
         for (String interruption : new String[] { "policy", "stream" }) {
-            try (Fixture f = new Fixture(true, false)) {
-                f.result(f.recognizing(true), true, "Finalized before the interruption");
+            try (Fixture f = new Fixture(false, false)) {
+                f.result(f.automaticRecognizing(true), true, "Finalized before the interruption");
                 Cue cue = f.cues.poll(10, TimeUnit.SECONDS); assertNotNull(cue);
                 if (interruption.equals("policy")) f.policy(true, true);
                 else { f.onOwner(() -> f.invoke("streamFailed", new Class<?>[] { String.class }, "stream_closed")); f.flush(); }
@@ -781,8 +790,8 @@ public class NativeVoiceRuntimeTest {
     }
 
     @Test public void automaticRecordingBeforeFinalizationIsStillCancelledByPolicyChange() throws Exception {
-        try (Fixture f = new Fixture(true, false)) {
-            String request = f.recognizing(true);
+        try (Fixture f = new Fixture(false, false)) {
+            String request = f.automaticRecognizing(true);
             f.policy(true, true);
             assertTrue(f.runtime.snapshot().isNull("active"));
             f.result(request, true, "Too late");
@@ -1066,8 +1075,8 @@ public class NativeVoiceRuntimeTest {
     @Test public void stopOffAndAutomaticSuppressionCancelPendingEmptyTranscriptRetry() throws Exception {
         for (String interruption : new String[] { "stop", "off", "auto_listen", "policy", "stream" }) {
             boolean automatic = !interruption.equals("stop") && !interruption.equals("off");
-            try (Fixture f = new Fixture(automatic, false)) {
-                String request = f.recognizing(true);
+            try (Fixture f = new Fixture(false, false)) {
+                String request = automatic ? f.automaticRecognizing(true) : f.recognizing(true);
                 f.result(request, false, "", false, "empty_transcript");
                 Cue failure = f.cue(NativeVoiceCue.Kind.FAILURE);
                 switch (interruption) {
@@ -1274,12 +1283,9 @@ public class NativeVoiceRuntimeTest {
     @Test public void deliveryModeFreezesBeforeFeedbackAndSurvivesProviderChangeDuringSteerLookup() throws Exception {
         for (String selectedMode : new String[] { "queue", "steer" }) {
             try (Fixture f = new Fixture(false, false)) {
-                String request = f.recognizing(true);
-                f.onOwner(() -> {
-                    NativeVoiceSettings settings = (NativeVoiceSettings) field(f.runtime, "settings");
-                    set(f.runtime, "settings", settings.patch(settings.revision, NativeVoiceJson.object("followComposerMode", true)));
-                    set(f.runtime, "composerMode", selectedMode);
-                });
+                // The preference belongs to the recording; the composer's selected mode freezes when capture ends.
+                String request = f.recognizing(true, false, true);
+                f.onOwner(() -> set(f.runtime, "composerMode", selectedMode));
                 f.result(request, true, "Keep original delivery mode");
                 Cue cue = f.cues.poll(10, TimeUnit.SECONDS); assertNotNull(cue);
                 f.onOwner(() -> set(f.runtime, "composerMode", selectedMode.equals("queue") ? "steer" : "queue"));
@@ -1329,7 +1335,8 @@ public class NativeVoiceRuntimeTest {
                 f.onStore(() -> { NativeDictationStore.Recording record = f.dictations.get(f.binding, id); assertTrue(record.adopted); assertTrue(record.keepListening); assertEquals(0, record.acceptedSamples); });
                 f.onOwner(() -> {
                     NativeVoiceCapturePolicy policy = (NativeVoiceCapturePolicy) field(active, "capturePolicy");
-                    for (int frame = 0; frame < 310; frame++) assertNull("The first silent pause cannot stop held capture", policy.accept(captureFrame(0)));
+                    for (int frame = 0; frame < 310; frame++) assertEquals("The first silent pause cannot stop held capture",
+                        NativeVoiceCapturePolicy.End.CONTINUE, policy.accept(captureFrame(0)));
                     set(f.runtime, "phase", "listening"); f.invoke("publish", new Class<?>[0]);
                 });
                 assertTrue(f.runtime.snapshot().getJSONObject("actions").getBoolean("canSend"));
@@ -2023,6 +2030,7 @@ public class NativeVoiceRuntimeTest {
         final NativeDictationStore dictations;
         final Handler owner;
         RecognitionJob synthetic;
+        long policyGeneration;
         volatile boolean holdRecordingPreflight;
         final BlockingQueue<NativeSpeechCatalog.PreflightResult> preflights = new LinkedBlockingQueue<>();
 
@@ -2122,6 +2130,9 @@ public class NativeVoiceRuntimeTest {
         }
         String recognizing(boolean cuesEnabled) throws Exception { return recognizing(cuesEnabled, false); }
         String recognizing(boolean cuesEnabled, boolean defaultHeld) throws Exception {
+            return recognizing(cuesEnabled, defaultHeld, false);
+        }
+        String recognizing(boolean cuesEnabled, boolean defaultHeld, boolean followComposerMode) throws Exception {
             NativeVoiceAudio.setTestCuePlayer((id, kind, gain) -> cues.add(new Cue(id, kind, gain)));
             onOwner(() -> {
                 store.removeEntry(binding, mutation);
@@ -2129,7 +2140,7 @@ public class NativeVoiceRuntimeTest {
                 set(runtime, "originId", UUID.randomUUID().toString()); set(runtime, "sessionStarted", true);
                 set(runtime, "settings", NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object(
                     "audioMode", "manual", "speechProvider", "server", "speechEndpoint", "http://127.0.0.1:9/v1",
-                    "recognitionCues", cuesEnabled, "cueGain", 45, "keepListeningByDefault", defaultHeld)));
+                    "recognitionCues", cuesEnabled, "cueGain", 45, "keepListeningByDefault", defaultHeld, "followComposerMode", followComposerMode)));
                 set(runtime, "speechCredential", "fixture-speech-token"); set(runtime, "speech", speech);
                 invoke("beginCapture", new Class<?>[] { Class.forName("dev.sedes.local.NativeVoiceRuntime$Active") }, active);
             });
@@ -2146,7 +2157,7 @@ public class NativeVoiceRuntimeTest {
                 NativeVoiceSettings settings = (NativeVoiceSettings) field(runtime, "settings");
                 String id = UUID.randomUUID().toString();
                 NativeVoiceQueue.Item notification = new NativeVoiceQueue.Item(NativeVoiceJson.object(
-                    "sourceEventId", id, "generation", 1, "voice", "speakThenListen",
+                    "sourceEventId", id, "generation", policyGeneration, "voice", "speakThenListen",
                     "recognitionTarget", NativeVoiceJson.object("threadId", target, "activityToken", "automatic-retry-epoch"),
                     "payload", NativeVoiceJson.object("schemaVersion", 4, "notificationId", id, "event", "turn.completed",
                         "occurredAt", "2026-10-04T00:00:00Z", "title", "Completed", "message", "Ready for a reply",
@@ -2225,11 +2236,12 @@ public class NativeVoiceRuntimeTest {
             policy(enabled, silenced, "none");
         }
         void policy(boolean enabled, boolean silenced, String completionVoice) throws Exception {
+            long generation = ++policyGeneration;
             JSONObject delivery = new JSONObject();
             for (String event : NativeVoiceProtocol.EVENTS) NativeVoiceJson.put(delivery, event,
                 NativeVoiceJson.object("script", false, "voice", event.equals("turn.completed") ? completionVoice : "none"));
-            JSONObject value = NativeVoiceJson.object("generation", 1, "settings", NativeVoiceJson.object("enabled", enabled, "silenced", silenced,
-                "revision", 1, "delivery", delivery, "assistantResultPhases", new JSONArray(), "scriptPath", "", "arguments", new JSONArray(), "timeoutSeconds", 30));
+            JSONObject value = NativeVoiceJson.object("generation", generation, "settings", NativeVoiceJson.object("enabled", enabled, "silenced", silenced,
+                "revision", generation, "delivery", delivery, "assistantResultPhases", new JSONArray(), "scriptPath", "", "arguments", new JSONArray(), "timeoutSeconds", 30));
             onOwner(() -> invoke("receive", new Class<?>[] { String.class, JSONObject.class }, "notification_policy", value)); flush();
         }
         void refreshed(NativeVoiceHttp.Result session) throws Exception {
@@ -2362,7 +2374,10 @@ public class NativeVoiceRuntimeTest {
                         CountDownLatch release = new CountDownLatch(1); holds.add(release); requests.incrementAndGet(); responses.add(release);
                         if (!release.await(15, TimeUnit.SECONDS)) throw new AssertionError("Discovery response was never released");
                         JSONObject listing = NativeVoiceJson.object("object", "list", "data", new JSONArray()
-                            .put(NativeVoiceJson.object("id", "fixture-stt", "task", "transcription", "realtime", NativeSpeechCapabilities.hosted("gpt-live-transcribe").realtime()))
+                            .put(NativeVoiceJson.object("id", "fixture-stt", "task", "transcription", "realtime",
+                                NativeSpeechCapabilities.server("fixture-stt", NativeVoiceJson.object(
+                                    "max_buffer_bytes", 2880000, "max_message_bytes", 1048576, "max_output_bytes", 1048576,
+                                    "idle_timeout_seconds", 60, "max_session_seconds", 3600)).realtime()))
                             .put(NativeVoiceJson.object("id", "gpt-4o-mini-tts", "task", "speech", "voices", new JSONArray().put(NativeVoiceJson.object("id", "first-voice"))))
                             .put(NativeVoiceJson.object("id", "second-tts", "task", "speech", "voices", new JSONArray().put(NativeVoiceJson.object("id", "second-voice")))));
                         byte[] body = (malformed ? "{}" : listing.toString()).getBytes(StandardCharsets.UTF_8);

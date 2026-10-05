@@ -786,9 +786,9 @@
   ([#50](https://github.com/kcosr/sedes/pull/50))
 
 - Android voice startup and Resume recover the current activity and thread
-  context after configuration changes. Silent recordings end locally without
-  submitting audio for transcription.
-  ([#49](https://github.com/kcosr/sedes/pull/49))
+  context after configuration changes and immediately show a pending service
+  start. Silent recordings end locally without submitting audio for transcription.
+  ([#49](https://github.com/kcosr/sedes/pull/49), [#53](https://github.com/kcosr/sedes/pull/53))
 
 - Android voice retries empty transcripts and handles audio-focus interruptions
   without spurious errors or loss of recognized text. Stop and Off cancel pending

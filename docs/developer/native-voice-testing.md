@@ -140,10 +140,11 @@ and speech-server ports. `SEDES_ADB_EXECUTABLE` selects adb when needed. Each
 concurrent invocation must own its own disposable emulator. Do not disable
 audio when checking AudioRecord or AudioTrack initialization.
 
-The packaged setup chooses **Own speech server**, saves the endpoint, models,
-and voice through Settings, then enters the fixture bearer token through the
-native credential dialog. Capture receives deterministic 24 kHz PCM; speech
-uses real AudioTrack. The fixture token is never entered into a WebView form.
+The packaged setup chooses **Own speech server**, saves the endpoint, and enters
+the fixture bearer token through the native credential dialog. Once authenticated
+discovery is ready, it chooses models and a voice through the Settings pickers.
+Capture receives deterministic 24 kHz PCM; speech uses real AudioTrack. The
+fixture token is never entered into a WebView form.
 Focus a scenario through the same coordinator, for example
 `npm run test:voice -- -t 'Android response/cycle'`.
 
@@ -155,11 +156,15 @@ admissions, and require one canonical user row for each admitted receipt.
 Automatic recovery is read-only; only **Resume input** resends. Startup
 restores saved settings without spontaneously recording.
 
-Device smoke cases exercise encrypted settings and credential persistence,
-backup recovery, queue limits, native runtime scheduling and cancellation,
-notification/SSE lifecycle, recognition feedback cues, real AudioRecord, and
-AudioTrack streaming, focus, drain, underrun, and cancellation. JVM checks
-cannot execute these Android framework and Keystore paths.
+Device smoke cases run each native test class in a separate instrumentation
+invocation with cleared application data, a 180-second deadline, and its own
+instrumentation and logcat files. A timeout force-stops the app before the next
+class runs. Cases exercise encrypted settings and credential persistence,
+backup recovery, queue limits, durable dictation and ownership, native runtime
+scheduling and cancellation, notification/SSE lifecycle, recognition feedback
+cues, real AudioRecord, and AudioTrack streaming, focus, drain, underrun, and
+cancellation. JVM checks cannot execute these Android framework and Keystore
+paths.
 
 Each packaged scenario reports observed `voiceResult` values to the host.
 `audioSink: "AudioTrack"` requires the runtime-owned playing track's playback

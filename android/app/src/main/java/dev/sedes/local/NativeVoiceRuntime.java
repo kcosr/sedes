@@ -501,6 +501,8 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         sessionStartId = startId;
         phase = "starting";
         final long generation = connectionGeneration;
+        // Registration can schedule a start without another state change before Android launches the service.
+        publish();
         main.post(() -> {
             if (!currentSessionStart(generation, startId)) return;
             if (!nativeVisible) { deferSessionStart(generation, startId); return; }

@@ -133,9 +133,6 @@ public class NativeVoiceE2eTest {
                 waitJs("Array.from(document.querySelectorAll('label')).some(x=>x.textContent.trim()==='Provider')", 15000);
                 selectByLabel("Provider", "server");
                 saveSpeechSetting("Speech API endpoint", "speechEndpoint", speechEndpoint);
-                saveSpeechSetting("Recognition model", "sttModel", "parakeet-local");
-                saveSpeechSetting("Speech model", "ttsModel", "kokoro-local");
-                saveSpeechSetting("Speech voice", "ttsVoice", "af_heart");
                 clickText("Manage speech credential");
                 // The fixture token goes through the real native dialog. It never
                 // enters a WebView form or a Capacitor JavaScript argument.
@@ -144,6 +141,9 @@ public class NativeVoiceE2eTest {
                 androidx.test.espresso.Espresso.onView(androidx.test.espresso.matcher.ViewMatchers.withText("Save"))
                     .perform(androidx.test.espresso.action.ViewActions.click());
                 await(() -> runtime.snapshot().optJSONObject("speech").optBoolean("credentialConfigured"), 15000, "native speech credential saved");
+                chooseSpeechSetting("Recognition model", "sttModel", "parakeet-local");
+                chooseSpeechSetting("Speech model", "ttsModel", "kokoro-local");
+                chooseSpeechSetting("Speech voice", "ttsVoice", "af_heart");
                 selectByLabel("Audio mode", mode);
                 await(() -> mode.equals(runtime.snapshot().optJSONObject("settings").optString("audioMode")), 15000, "audio mode " + mode + " saved");
             } else {
@@ -481,6 +481,19 @@ public class NativeVoiceE2eTest {
             + ");const e=l?document.getElementById(l.htmlFor):null;return e instanceof HTMLInputElement&&!e.disabled})()", 15000);
         inputByLabel(label, value); click("[aria-label=\"Save " + label + "\"]");
         await(() -> value.equals(runtime.snapshot().optJSONObject("settings").optString(field)), 15000, "speech setting saved: " + field);
+    }
+    private void chooseSpeechSetting(String label, String field, String value) throws Exception {
+        // Discovery requires the native credential. Model changes refresh the catalog before the next choice.
+        await(() -> "ready".equals(runtime.snapshot().optJSONObject("speech").optString("catalogStatus")), 15000, "speech choices ready: " + label);
+        String trigger = "button[role=\"combobox\"][aria-label=\"" + label + "\"]";
+        waitJs("(()=>{const e=document.querySelector(" + JSONObject.quote(trigger) + ");return e instanceof HTMLButtonElement&&!e.disabled})()", 15000);
+        click(trigger);
+        String search = "input[role=\"combobox\"][aria-label=\"Search " + label.toLowerCase(java.util.Locale.ROOT) + " options\"]";
+        waitJs("document.querySelector(" + JSONObject.quote(search) + ") !== null", 15000);
+        input(search, value);
+        clickTextIn("[role=\"listbox\"][aria-label=\"" + label + " options\"]", value);
+        await(() -> value.equals(runtime.snapshot().optJSONObject("settings").optString(field)), 15000, "speech choice saved: " + field);
+        waitJs("document.querySelector(" + JSONObject.quote(trigger) + ")?.getAttribute('aria-expanded') === 'false'", 15000);
     }
     private void selectByLabel(String label, String value) throws Exception {
         String lookup = "const l=Array.from(document.querySelectorAll('label')).find(x=>x.textContent.trim()===" + JSONObject.quote(label)
