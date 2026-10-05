@@ -460,9 +460,10 @@ draft without admission. Recording settings edits apply to future recordings.
 
 The voice toolbar preserves its existing 60 px row at normal text scale, including
 320 px layouts. The left status icon opens the quick sheet and carries a small
-caret. The thread title is a selector whenever the native state permits changing
-the target; there is no separate Change control. Infinity sits beside Listening
-with a visible gap, and the right-side Cancel and Send controls are separated.
+caret. The title/status area opens the voice target thread; a separate chevron
+opens the picker when the native state permits retargeting or an idle default can
+be chosen. Choosing a target does not navigate. Infinity is a full-size button
+beside the title/status area, and the right-side Cancel and Send controls are separated.
 Touch regions remain distinct and at least 44 px. Reconnecting and error details
 use the existing status line. An older saved draft marks the quick-controls icon
 and opens the same recovery sheet without adding another row.

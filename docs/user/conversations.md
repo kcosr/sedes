@@ -33,10 +33,10 @@ The second line is the state, such as **Ready · Response · Auto-listen on**,
 **Speaking** with the notice kind and queued count, or **Listening**. If voice
 needs to resume, the card offers **Resume**.
 
-The thread title has a select affordance whenever the target can be changed.
-While listening, tap the title to change the
-recording target before recognition finishes; the picker lists the visible
-thread first. Navigating to another thread alone does not redirect a recording.
+Tap the title and status area to open the voice target thread. Its separate
+chevron opens the target picker whenever the target can be changed. While
+listening, the picker changes the recording target without changing the viewed
+thread; it lists the visible thread first. Navigating to another thread alone does not redirect a recording.
 Once recognition finishes, its target and delivery policy stay fixed through
 any connection recovery. The left status icon opens the **Voice** sheet with
 **Audio mode**, **Auto-listen**, **Keep listening by default**, **Follow composer mode**, **Pin default voice

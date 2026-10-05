@@ -54,8 +54,8 @@
   border-color: var(--destructive-border);
 }
 
-/* The title and status form one 44px target when the recording thread can
-   change. Frozen work can still open its thread without a select affordance. */
+/* The title and status open the named thread. The adjacent chevron is a
+   separate 44px target, so choosing a voice target never changes this action. */
 .voice-card-body {
   position: relative;
   display: flex;
@@ -296,53 +296,31 @@
 }
 
 .voice-card-target {
-  display: flex;
-  width: 100%;
-  min-width: var(--control-touch);
+  display: grid;
+  width: var(--control-touch);
   height: var(--control-touch);
-  align-items: center;
+  flex: none;
+  place-items: center;
   border-radius: var(--radius-ctl);
-  text-align: left;
 }
 
-.voice-card-target-label {
-  display: flex;
-  min-width: 0;
-  max-width: 100%;
-  align-items: center;
-  gap: 4px;
-}
-
-.voice-card-target-label > svg {
+.voice-card-target svg {
   width: var(--icon-md);
   height: var(--icon-md);
-  flex: none;
   color: var(--muted-foreground);
-}
-
-.voice-card-target-label > .voice-card-title {
-  min-width: 0;
-  flex: 1 1 auto;
+  transform: translateY(-9px);
 }
 
 .voice-card-keep {
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: 48px;
+  height: 48px;
   flex: none;
   place-items: center;
-  border-radius: var(--radius-ctl);
-  color: var(--muted-foreground);
-}
-
-.voice-card-keep-mark {
-  display: grid;
-  width: 44px;
-  height: 26px;
-  place-items: center;
-  border: 1px solid transparent;
+  border: 1px solid var(--border-soft);
   border-radius: 999px;
-  transform: translateY(8px);
+  background: var(--accent);
+  color: var(--foreground);
 }
 
 .voice-card-keep svg {
@@ -350,13 +328,13 @@
   height: var(--icon-lg);
 }
 
-.voice-card-keep[aria-pressed="true"] .voice-card-keep-mark {
+.voice-card-keep[aria-pressed="true"] {
   border-color: var(--info-border);
   background: var(--info-soft);
   color: var(--info);
 }
 
-.voice-card-keep:active:not([aria-disabled="true"]) .voice-card-keep-mark {
+.voice-card-keep:active:not([aria-disabled="true"]) {
   background: var(--accent);
 }
 
@@ -507,12 +485,18 @@
     gap: 6px;
   }
 
+  .voice-card[data-recording] {
+    gap: 4px;
+    padding-inline: 3px;
+  }
+
   .voice-card[data-recording] .voice-card-actions,
   .voice-card[data-saved] .voice-card-actions {
     gap: 6px;
   }
 
   .voice-card[data-recording] .voice-card-button,
+  .voice-card[data-recording] .voice-card-keep,
   .voice-card[data-saved] .voice-card-button {
     width: 44px;
     height: 44px;
@@ -540,4 +524,13 @@
     display: none;
   }
 
+}
+
+/* Six distinct touch regions fit a 320px phone with full-size Listening
+   text by using three more pixels of the existing gutter on each side. */
+@container voice-dock (max-width: 359px) {
+  .voice-card[data-recording]:has(.voice-card-target) {
+    width: calc(100% + 6px);
+    margin-inline: -3px;
+  }
 }

@@ -213,10 +213,11 @@ offers **Resume**, which works like **Resume voice** in Settings. A failed
 connection hides the card; **Settings → Voice** then shows the error and
 **Retry voice connection**.
 
-The thread title looks like a select when its target can be changed. While
-listening, tap it to choose another recording target. When idle, selecting a
-thread changes the visible thread, or saves the default when pinned or no thread
-is open; it does not start recording. A finishing recording keeps its destination fixed.
+Tap the title and status area to open the voice target thread. The separate
+chevron opens its target picker when changes are allowed. While listening,
+choosing another recording target leaves the viewed thread unchanged. When idle,
+the chevron can change the saved default when pinned or no thread is open;
+it does not navigate or start recording. A finishing recording keeps its destination fixed.
 Beside **Listening**, the infinity button toggles **Keep listening** for the current
 recording. **Keep listening by default**, available in the quick sheet and
 **Settings → Voice**, starts new manual and automatic recordings with it enabled.
@@ -230,7 +231,7 @@ All audio and text already collected remain part of the same message. While
 selected, the right-side **Send** arrow stops capture, finishes recognition, and
 sends one message. The X **Cancel** discards the unsent recording. Explicit Send
 is literal, including “stop”; it does not open a review step or change the composer.
-Ordinary navigation never retargets an active recording; its title selector does,
+Ordinary navigation never retargets an active recording; its chevron picker does,
 until finishing.
 
 **Long dictation timeout** defaults to 60 minutes and accepts 1–1,440 whole minutes.

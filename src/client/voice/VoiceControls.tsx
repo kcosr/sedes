@@ -30,7 +30,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const route = useRoute();
   const composerMode = useComposerDeliveryMode();
   const [showWhenOff] = useShowVoiceBarWhenOff(store);
-  const [picker, setPicker] = useState<"start" | "default-start" | "retarget" | "default" | "visible" | null>(null);
+  const [picker, setPicker] = useState<"start" | "default-start" | "retarget" | "default" | null>(null);
   const pickerRecording = useRef<NativeRecordingCommandContext | null>(null);
   const pickerGeneration = useRef<number | null>(null);
   const [sheet, setSheet] = useState(false);
@@ -146,15 +146,15 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
   const alerting = message !== undefined && !quiet;
   const threadDescription = !busy && "thread" in line1 ? line1.thread.replace(/\.$/u, "") : undefined;
   const describedBy = [threadDescription !== undefined ? `${statusId}-thread` : undefined, statusId, alerting ? `${statusId}-alert` : undefined].filter(Boolean).join(" ");
-  // Idle choices preserve the existing target rule: a pin/default is saved;
-  // otherwise choosing a visible thread opens it without starting capture.
+  // The picker only changes an independent voice target. Without a pin, an
+  // available visible thread already determines the next manual recording.
   const targetPicker = retargets ? "retarget" : !off && !busy && !showingRecovery
-    ? settings.pinDefaultVoiceThread || threadId === null ? "default" : "visible" : null;
-  const targetLabel = targetPicker === "retarget" ? "Change recording thread" : targetPicker === "default" ? "Choose default voice thread" : "Choose voice thread";
-  const opens = targetPicker === null && cardThread != null && cardThread !== threadId;
+    && (settings.pinDefaultVoiceThread || threadId === null) ? "default" : null;
+  const targetLabel = targetPicker === "retarget" ? "Change recording thread" : "Choose default voice thread";
+  const opens = cardThread != null && cardThread !== threadId;
   const keepBlocked = state.pending ? "A voice action is in progress" : keepListeningBlockedReason(native.actions.keepListeningBlockedReason);
   const text = <span className="voice-card-text">
-    {targetPicker ? <span className="voice-card-target-label">{renderLine(line1, "voice-card-title")}<ChevronDown aria-hidden="true" /></span> : renderLine(line1, "voice-card-title")}
+    {renderLine(line1, "voice-card-title")}
     {renderLine(line2, "voice-card-sub")}
   </span>;
   return <>
@@ -167,22 +167,23 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
           {savedElsewhere ? <span className="voice-card-saved-indicator" aria-hidden="true" /> : null}</button>
         <div className="voice-card-body">
           {opens ? <button type="button" className="voice-card-open" aria-label={`Open thread: ${cardTitle ?? "Untitled thread"}`} onClick={() => openThreadRoute(cardThread, configuredPanelPresentation())} /> : null}
-          {targetPicker ? <button type="button" className="voice-card-target" aria-haspopup="dialog" aria-expanded={picker === targetPicker}
-            aria-label={cardTitle ? `${targetLabel}: ${cardTitle}` : targetLabel} aria-disabled={state.pending || undefined} onClick={() => {
-              if (state.pending) return;
-              pickerGeneration.current = native.connectionGeneration;
-              pickerRecording.current = targetPicker === "retarget" && capture
-                ? { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id } : null;
-              setPicker(targetPicker);
-            }}>{text}</button> : text}
+          {text}
         </div>
+        {targetPicker ? <button type="button" className="voice-card-target" aria-haspopup="dialog" aria-expanded={picker === targetPicker}
+          aria-label={cardTitle ? `${targetLabel}: ${cardTitle}` : targetLabel} aria-disabled={state.pending || undefined} onClick={() => {
+            if (state.pending) return;
+            pickerGeneration.current = native.connectionGeneration;
+            pickerRecording.current = targetPicker === "retarget" && capture
+              ? { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id } : null;
+            setPicker(targetPicker);
+          }}><ChevronDown aria-hidden="true" /></button> : null}
         {recordingTools ? <button type="button" className="voice-card-keep" aria-label="Keep listening" title={keepBlocked ?? "Keep listening"}
           aria-pressed={capture.keepListening} aria-disabled={state.pending || !native.actions.canSetKeepListening || undefined}
           aria-describedby={keepBlocked ? `${statusId}-keep-blocked` : undefined} onClick={() => {
             if (state.pending || !native.actions.canSetKeepListening) return;
             const command = { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id, enabled: !capture.keepListening };
             act(() => store.plugin.setKeepListening(command));
-          }}><span className="voice-card-keep-mark"><InfinityIcon strokeWidth={1.8} aria-hidden="true" /></span></button> : null}
+          }}><InfinityIcon strokeWidth={1.8} aria-hidden="true" /></button> : null}
         {showingRecovery && (saved.hasUnrecognizedAudio || saved.canRetryRecognition) ? resumable ? <button type="button" className="voice-card-retry" aria-label="Resume voice" aria-disabled={state.pending || undefined}
           onClick={() => { if (!state.pending) void resumeVoice(store).catch(() => undefined); }}><RotateCcw aria-hidden="true" /><span>Resume</span></button>
           : <button type="button" className="voice-card-retry" aria-label="Retry saved dictation" title={!saved.canRetryRecognition ? cardReadiness(native.readiness) : "Retry recognition"}
@@ -239,12 +240,10 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
     <VoiceThreadPicker threads={threads} open={picker !== null} onOpenChange={open => { if (!open) setPicker(null); }}
       title={picker === "default-start" || picker === "default" ? "Choose default voice thread" : "Choose voice thread"}
       description={picker === "default-start" ? "Save this default and start recording." : picker === "default" ? "Choose the default target for new recordings."
-        : picker === "visible" ? "Open the thread to use it for your next recording." : "Recognized text will be sent to the thread you select."}
+        : "Recognized text will be sent to the thread you select."}
       pinned={picker === "default-start" || picker === "default" ? { threadId: settings.voiceThreadId, label: "Current default voice thread" } : { threadId, label: "This thread" }} onSelect={thread => {
       const target = { threadId: thread.id, threadTitle: nativeThreadTitle(thread.title.text) ?? undefined };
-      if (picker === "visible") {
-        openThreadRoute(thread.id, configuredPanelPresentation());
-      } else if (picker === "default") {
+      if (picker === "default") {
         void store.update(current => {
           if (current.connectionGeneration !== pickerGeneration.current) throw new Error("Voice connection changed. Choose the thread again.");
           return { voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) };

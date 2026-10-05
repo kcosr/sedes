@@ -777,8 +777,9 @@
 
 ### Fixed
 
-- The compact voice bar restores its left status icon and selectable thread
-  title, with spacing between Listening, infinity, Cancel, and Send. Submitted
+- The compact voice bar restores its left status icon and thread navigation,
+  with a separate target-picker chevron and full-size infinity button. Listening,
+  Cancel, and Send have distinct spacing. Submitted
   voice messages show their complete text immediately without a preview label.
 
 - Oversized queued user input offers **Copy full text**, preserving access to

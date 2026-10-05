@@ -103,7 +103,7 @@ describe("voice controls card", () => {
     await screen.findByRole("group", { name: "Voice controls" });
     expect(lines()).toEqual(["Release review", "Ready · Response · Auto-listen on"]);
     expect(card().querySelector(".voice-card-title[data-thread]")).toHaveTextContent("Release review");
-    expect(buttons()).toEqual(["Open voice controls", "Choose voice thread: Release review", "Start voice recording"]);
+    expect(buttons()).toEqual(["Open voice controls", "Start voice recording"]);
     expect(within(card()).getByRole("button", { name: "Open voice controls" })).toHaveAccessibleDescription("Release review. Ready · Response · Auto-listen on");
     act(() => voice.fake.emit("stateChanged", ready({ stateRevision: 2, settings: voiceSettings({ audioMode: "manual", autoListen: false }) })));
     expect(lines()).toEqual(["Release review", "Ready · Manual · Auto-listen off"]);
@@ -139,7 +139,7 @@ describe("voice controls card", () => {
     await screen.findByRole("group", { name: "Voice controls" });
     expect(lines()).toEqual(["Release review", "Ready · Response · Auto-listen on"]);
     expect(card().querySelector(".voice-card-title[data-thread]")).toHaveTextContent("Release review");
-    expect(buttons()).toEqual(["Open voice controls", "Choose default voice thread: Release review", "Start voice recording"]);
+    expect(buttons()).toEqual(["Open voice controls", "Open thread: Release review", "Choose default voice thread: Release review", "Start voice recording"]);
     act(() => voice.fake.emit("stateChanged", ready({ stateRevision: 2, ready: false, readiness: "notificationsConnecting" })));
     expect(lines()).toEqual(["Choose a thread", "Connecting to Sedes notifications…"]);
     expect(card().querySelector(".voice-card-title[data-empty]")).toHaveTextContent("Choose a thread");
@@ -182,26 +182,24 @@ describe("voice controls card", () => {
     expect(voice.fake.plugin.setKeepListening).not.toHaveBeenCalled();
     expect(voice.fake.plugin.updateSettings).not.toHaveBeenCalled();
   });
-  it.each(["manual", "response"] as const)("uses the idle title to choose a visible thread in %s mode without starting or pinning", async audioMode => {
+  it.each(["manual", "response"] as const)("keeps an unpinned idle target tied to the viewed thread in %s mode without a misleading picker", async audioMode => {
     voice.fake.plugin.setConnection.mockResolvedValue(ready({ settings: voiceSettings({ audioMode }) }));
     navigate(threadPath("named"), { replace: true });
     renderControls();
-    const title = await screen.findByRole("button", { name: "Choose voice thread: Release review" });
-    expect(title.querySelector(".voice-card-target-label > .lucide-chevron-down")).not.toBeNull();
-    fireEvent.click(title);
-    const picker = await screen.findByRole("dialog", { name: "Choose voice thread" });
-    expect(picker).toHaveAccessibleDescription("Open the thread to use it for your next recording.");
-    fireEvent.click(within(picker).getByRole("button", { name: "Untitled thread" }));
-    await waitFor(() => expect(window.location.pathname).toBe(threadPath("untitled")));
-    expect(await screen.findByRole("button", { name: "Choose voice thread: Untitled thread" })).toBeInTheDocument();
+    await screen.findByRole("group", { name: "Voice controls" });
+    expect(card().querySelector(".voice-card-target")).toBeNull();
+    fireEvent.click(card().querySelector(".voice-card-title")!);
+    fireEvent.click(card().querySelector(".voice-card-sub")!);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(window.location.pathname).toBe(threadPath("named"));
     expect(voice.fake.plugin.startManualListen).not.toHaveBeenCalled();
     expect(voice.fake.plugin.retargetActiveRecognition).not.toHaveBeenCalled();
     expect(voice.fake.plugin.updateSettings).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Start voice recording" }));
     await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenCalledExactlyOnceWith({
-      expectedConnectionGeneration: 1, threadId: "untitled", threadTitle: undefined }));
+      expectedConnectionGeneration: 1, threadId: "named", threadTitle: "Release review" }));
   });
-  it.each([true, false])("uses the idle title to update the default without starting (pinned: %s)", async pinDefaultVoiceThread => {
+  it.each([true, false])("uses the idle chevron to update the default without navigating or starting (pinned: %s)", async pinDefaultVoiceThread => {
     const native = ready({ settings: voiceSettings({ audioMode: "response", pinDefaultVoiceThread, voiceThreadId: "named", voiceThreadTitle: "Release review" }) });
     voice.fake.plugin.setConnection.mockResolvedValue(native);
     voice.fake.plugin.getState.mockResolvedValue(native);
@@ -309,7 +307,8 @@ describe("voice controls card", () => {
     await screen.findByRole("group", { name: "Voice controls" });
     expect(lines()).toEqual(["Release review", "Ready · Response · Auto-listen on"]);
     expect(card().querySelector(".voice-card-title[data-thread]")).toHaveTextContent("Release review");
-    expect(within(card()).getByRole("button", { name: "Choose voice thread: Release review" })).toBeInTheDocument();
+    expect(within(card()).getByRole("button", { name: "Open thread: Release review" })).toBeInTheDocument();
+    expect(card().querySelector(".voice-card-target")).toBeNull();
     fireEvent.click(within(card()).getByRole("button", { name: "Start voice recording" }));
     await waitFor(() => expect(voice.fake.plugin.startManualListen).toHaveBeenCalledWith({ expectedConnectionGeneration: 1, threadId: "named", threadTitle: "Release review" }));
     // A saved default voice thread that is unavailable or deleted is not a target, so it is not named.
@@ -448,19 +447,24 @@ describe("voice controls card", () => {
     expect(card().querySelector(".voice-card-phase")).toHaveAttribute("data-tone", "warning");
     expect(within(card()).getByRole("button", { name: "Stop voice interaction" })).toBeEnabled();
   });
-  it("uses the recording title as its retarget picker", async () => {
+  it("separates body navigation from the recording chevron's independent retarget action", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(listening({ recognitionThreadId: "long", recognitionThreadTitle: "L".repeat(512) }));
     voice.fake.plugin.retargetActiveRecognition.mockResolvedValue(listening({ recognitionThreadId: "untitled" }));
+    navigate(threadPath("named"), { replace: true });
     renderControls();
     const chip = await screen.findByRole("button", { name: `Change recording thread: ${"L".repeat(512)}` });
-    expect(chip.querySelector(".voice-card-title")).toHaveTextContent("L".repeat(512));
-    expect(chip.querySelector(".voice-card-target-label > .lucide-chevron-down")).not.toBeNull();
+    expect(chip.textContent).toBe("");
+    expect(chip.querySelector(".lucide-chevron-down")).not.toBeNull();
     expect(chip).toHaveAttribute("aria-haspopup", "dialog");
     expect(lines()).toEqual(["L".repeat(512), "Listening"]);
     expect(card().querySelector(".voice-card-title[data-thread]")).toHaveTextContent("L".repeat(512));
-    expect(buttons()).toEqual(["Open voice controls", `Change recording thread: ${"L".repeat(512)}`, "Keep listening", "Cancel voice recording"]);
+    expect(buttons()).toEqual(["Open voice controls", `Open thread: ${"L".repeat(512)}`, `Change recording thread: ${"L".repeat(512)}`, "Keep listening", "Cancel voice recording"]);
     expect(within(card()).getByRole("status")).toHaveTextContent("Listening");
     expect(card()).toHaveAttribute("data-tone", "destructive");
+    fireEvent.click(within(card()).getByRole("button", { name: `Open thread: ${"L".repeat(512)}` }));
+    expect(window.location.pathname).toBe(threadPath("long"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(voice.fake.plugin.retargetActiveRecognition).not.toHaveBeenCalled();
     fireEvent.click(chip);
     const list = await screen.findByRole("list", { name: "Voice threads" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(3);
@@ -468,6 +472,7 @@ describe("voice controls card", () => {
     await waitFor(() => expect(voice.fake.plugin.retargetActiveRecognition).toHaveBeenCalledTimes(1));
     expect(voice.fake.plugin.retargetActiveRecognition.mock.lastCall).toEqual([{ expectedConnectionGeneration: 1, recordingId: "recording", threadId: "untitled", threadTitle: undefined }]);
     expect(await screen.findByRole("button", { name: "Change recording thread: Untitled thread" })).toBeInTheDocument();
+    expect(window.location.pathname).toBe(threadPath("long"));
     // Once native freezes retargeting, the select affordance disappears and the
     // existing thread navigation remains available without implying a change.
     act(() => voice.fake.emit("stateChanged", { ...listening({ recognitionThreadId: "untitled" }), stateRevision: 3,
@@ -477,14 +482,15 @@ describe("voice controls card", () => {
     expect(window.location.pathname).toBe(threadPath("untitled"));
     expect(voice.fake.plugin.retargetActiveRecognition).toHaveBeenCalledTimes(1);
   });
-  it("retargets from the visible recording title and Cancel discards", async () => {
+  it("retargets only from the visible recording chevron and Cancel discards", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(listening({ recognitionThreadId: "named", recognitionThreadTitle: "Release review" }));
     voice.fake.plugin.stopCurrentInteraction.mockResolvedValue(ready({ stateRevision: 2 }));
     navigate(threadPath("named"), { replace: true });
     renderControls();
     const chip = await screen.findByRole("button", { name: "Change recording thread: Release review" });
     expect(lines()).toEqual(["Release review", "Listening"]);
-    expect(chip.querySelector(".voice-card-title")).toHaveTextContent("Release review");
+    expect(chip.textContent).toBe("");
+    expect(card().querySelector(".voice-card-title")).toHaveTextContent("Release review");
     expect(buttons()).toEqual(["Open voice controls", "Change recording thread: Release review", "Keep listening", "Cancel voice recording"]);
     expect(card()).not.toHaveTextContent("This thread");
     expect(within(card()).getByRole("status")).toHaveTextContent(/^Release review\. Listening$/u);
@@ -524,7 +530,7 @@ describe("voice controls card", () => {
     const chip = await screen.findByRole("button", { name: "Change recording thread" });
     expect(lines()).toEqual(["Choose a thread", "Listening"]);
     expect(card().querySelector(".voice-card-title[data-empty]")).toHaveTextContent("Choose a thread");
-    expect(chip.querySelector(".voice-card-title")).toHaveTextContent("Choose a thread");
+    expect(card().querySelector(".voice-card-title")).toHaveTextContent("Choose a thread");
     expect(buttons()).toEqual(["Open voice controls", "Change recording thread", "Keep listening", "Cancel voice recording"]);
     act(() => voice.fake.emit("stateChanged", speaking({ eventKind: "automation.started" }, { stateRevision: 2 })));
     expect(lines()).toEqual(["Speaking", "Automation"]);
@@ -566,7 +572,7 @@ describe("voice controls card", () => {
     renderControls();
     await screen.findByRole("group", { name: "Voice controls" });
     expect(lines()).toEqual(["Release review", "Voice needs to resume"]);
-    expect(within(card()).getAllByRole("button").map(button => button.getAttribute("aria-label"))).toEqual(["Open voice controls", "Choose voice thread: Release review", "Resume voice"]);
+    expect(within(card()).getAllByRole("button").map(button => button.getAttribute("aria-label"))).toEqual(["Open voice controls", "Resume voice"]);
   });
   it("keeps a recording failure visible after native settles to idle", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(listening({ recognitionThreadId: "named", recognitionThreadTitle: "Release review" }));
@@ -985,7 +991,7 @@ describe("voice controls card lifecycle", () => {
     expect(card()).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
-  it("keeps focus on the title selector while a retarget is pending, and as it moves from the visible thread to another", async () => {
+  it("keeps focus on the separate chevron while retargeting without moving the viewed thread", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(listening({ recognitionThreadId: "named", recognitionThreadTitle: "Release review" }));
     let settle: (state: NativeVoiceState) => void = () => undefined;
     voice.fake.plugin.retargetActiveRecognition.mockImplementation(() => new Promise(resolve => { settle = resolve; }));
@@ -1008,6 +1014,8 @@ describe("voice controls card lifecycle", () => {
     expect(within(card()).getByRole("status")).toHaveTextContent(/^Untitled thread\. Listening$/u);
     expect(chip).not.toHaveAttribute("aria-disabled");
     expect(chip).toHaveFocus();
+    expect(window.location.pathname).toBe(threadPath("named"));
+    expect(screen.getByRole("button", { name: "Open thread: Untitled thread" })).toBeInTheDocument();
   });
   it("stays quiet on Settings → Voice, which announces readiness and errors itself", async () => {
     voice.fake.plugin.setConnection.mockResolvedValue(ready({ ready: false, readiness: "starting" }));
