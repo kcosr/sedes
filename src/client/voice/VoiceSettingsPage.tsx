@@ -20,7 +20,7 @@ import { canEnableVoice, resumeVoice } from "./voice-session.js";
 import { savedRecording, VoiceRecordingRecovery } from "./VoiceRecordingRecovery.js";
 
 const toggles = [
-  ["pinDefaultVoiceThread", "Pin default voice thread", "Start manual recordings here while viewing other threads."],
+  ["pinDefaultVoiceThread", "Pin default voice thread", "Use this as the initial recording target while viewing other threads."],
   ["autoListen", "Auto-listen", "Eligible notifications reopen the microphone."],
   ["keepListeningByDefault", "Keep listening by default", "Use Keep listening for new manual and auto-listen recordings. The ∞ control changes only the current recording."],
   ["ignoreOtherDevices", "Ignore voice started on other devices", "Automations are still included."],
@@ -133,9 +133,9 @@ export function VoiceSettingsPage({ store, applicationStore }: { store: NativeVo
       </div>)}
     </SettingsSection> : null}
     {native.queue.droppedCount ? <Callout>{native.queue.droppedCount} automatic voice items were dropped because the queue was full or the item became ineligible.</Callout> : null}
-    <VoiceThreadPicker threads={application.snapshot?.threads ?? []} open={picker} onOpenChange={setPicker} title="Choose default voice thread"
+    <VoiceThreadPicker threads={application.snapshot?.threads ?? []} open={picker} onOpenChange={setPicker} title="Default voice thread"
       description="Used when pinned or when no thread is visible."
-      pinned={{ threadId: settings.voiceThreadId, label: "Current default voice thread" }} onSelect={thread => update({ voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) })} />
+      selectedThreadId={settings.voiceThreadId} pinned={{ threadId: settings.voiceThreadId, label: "Current default voice thread" }} onSelect={thread => update({ voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) })} />
   </SettingsPage>;
 }
 

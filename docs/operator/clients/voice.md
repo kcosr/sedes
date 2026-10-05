@@ -165,7 +165,7 @@ view is open. Reading readiness does not start or reconnect a conversation.
 
 With pinning off, explicit recording uses the visible foreground thread, then the saved
 **Default voice thread**, then a picker. It can target a running thread. While
-voice is listening, the target chip on the voice card changes the target before
+voice is listening, the target picker on the voice card changes the target before
 finishing starts. Pickers list the visible thread first as **This thread**;
 when choosing a default, the saved thread comes first as **Current default
 voice thread**. Ordinary navigation does not change an active target. **Only play
@@ -175,12 +175,17 @@ or automatic speech stays silent. It does not change the recording target.
 and completion from another initiating client. Steering an existing turn does
 not take over its origin.
 
-**Pin default voice thread** overrides foreground selection for new explicit
+**Pin default voice thread** supplies the initial target for new explicit
 recordings, including the card, headset, and service-notification Start action.
-The idle card and notification use the default thread too. If no default is
-available, the card asks for a new default before recording; native controls
-never fall back to another foreground thread while pinned. Pinning does not
-redirect an active interaction or change automatic notification targeting.
+The row's **Choose target thread** popup overrides that initial choice for the
+next recording without editing the saved default. It remains available with
+pinning off and survives ordinary navigation. The pending choice clears when a
+manual interaction starts, on Off, or on connection change; automatic replies
+retain their notification targets. A missing initial target opens the target
+picker without saving a replacement default. Only **Default voice thread** in
+quick or full settings edits the saved preference. Those selectors share the
+popup's search and row styling in a modal/mobile sheet, with no mobile search
+autofocus. Pinning does not redirect an active interaction.
 
 The pin setting changes the device settings schema. Upgrading from an earlier
 native voice build resets settings with Audio mode Off. Reconfigure the speech

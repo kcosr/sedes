@@ -206,7 +206,7 @@ describe("voice settings page", () => {
     const { fake, store } = await renderPage(voiceSnapshot());
     expect(screen.getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Requires a default voice thread.");
     fireEvent.click(screen.getByRole("button", { name: "Default voice thread Choose thread" }));
-    expect(await screen.findByRole("dialog", { name: "Choose default voice thread" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Default voice thread" })).toBeInTheDocument();
     const list = await screen.findByRole("list", { name: "Voice threads" });
     expect(within(list).getAllByRole("listitem")).toHaveLength(3);
     fireEvent.click(within(list).getByRole("button", { name: "T".repeat(600) }));
@@ -233,7 +233,7 @@ describe("voice settings page", () => {
       settings: { ...native.settings, pinDefaultVoiceThread: true } }));
     const pin = screen.getByRole("switch", { name: "Pin default voice thread" });
     expect(pin).not.toBeChecked();
-    expect(pin).toHaveAccessibleDescription("Start manual recordings here while viewing other threads.");
+    expect(pin).toHaveAccessibleDescription("Use this as the initial recording target while viewing other threads.");
     fireEvent.click(pin);
     await waitFor(() => expect(pin).toBeChecked());
     expect(fake.plugin.updateSettings).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1, expectedRevision: 0, patch: { pinDefaultVoiceThread: true } });

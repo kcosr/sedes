@@ -34,7 +34,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
     ]);
     leftOffsets[state] = { tile: tile!.x, title: title!.x, status: status!.x, tileTextGap: title!.x - tile!.x - tile!.width };
     expect(leftOffsets[state], `${state} preserves the Ready-state icon and text positions`).toEqual(leftOffsets.idleBeforeRecording);
-    expect(leftOffsets[state].tileTextGap, `${state} preserves the Ready-state icon/text gap`).toBe(6);
+    expect(leftOffsets[state].tileTextGap, `${state} preserves the Ready-state icon/text gap`).toBe(8);
   };
   await page.setViewportSize({ width: 320, height: 780 });
   await expect(toolbar).toBeVisible();
@@ -45,7 +45,7 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await toolbar.locator(".voice-card-title").click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page).toHaveURL(new RegExp(`${threadPath}$`, "u"));
-  const targetPicker = page.getByRole("dialog", { name: "Choose voice thread", exact: true });
+  const targetPicker = page.getByRole("dialog", { name: "Choose target thread", exact: true });
   expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "startManualListen"))).toEqual([]);
   await publishVoiceState(page, { settings: { ...base.settings, keepListeningByDefault: true } });
   const heldStart = toolbar.getByRole("button", { name: "Start recording with Keep listening", exact: true });
@@ -71,14 +71,14 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "retargetActiveRecognition"))).toEqual([]);
   await page.setViewportSize({ width: 1280, height: 900 });
   await change.click();
-  await expect(targetPicker.getByRole("textbox", { name: "Search voice threads" })).toBeFocused();
+  await expect(targetPicker.getByRole("searchbox", { name: "Search voice threads" })).toBeFocused();
   await targetPicker.press("Escape");
   await expect(targetPicker).toHaveCount(0);
   await page.setViewportSize({ width: 320, height: 780 });
   await change.click();
   await expect(targetPicker).toContainText("Recognized text will be sent to the thread you select.");
   await expect(targetPicker).toBeFocused();
-  await expect(targetPicker.getByRole("textbox", { name: "Search voice threads" })).not.toBeFocused();
+  await expect(targetPicker.getByRole("searchbox", { name: "Search voice threads" })).not.toBeFocused();
   await capture(page, testInfo, "voice-thread-picker-mobile-browsing.png");
   await targetPicker.getByRole("button", { name: "Voice navigation source", exact: true }).click();
   await expect(page).toHaveURL(new RegExp(`${otherThreadPath}$`, "u"));

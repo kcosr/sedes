@@ -20,24 +20,32 @@ then your saved default voice thread, or asks you to choose one. Voice sends a s
 message and preserves the unsent composer draft. It can also make the first send to an
 empty thread.
 
-Enable **Pin default voice thread** to keep the idle bar and new recordings on
-your default thread while browsing elsewhere. If that thread is missing or
-unavailable, the record button asks for a new default before recording.
+Enable **Pin default voice thread** to use your default thread as the initial
+recording target while browsing elsewhere. The row picker can override it for
+one recording. If the initial target is missing or unavailable, Start asks you
+to choose a target without changing the saved default.
 
 The card's first line always names its thread, using its title or **Untitled
 thread**: the thread being spoken or recorded to, or, when idle, the thread a
-recording would use. When pinned, that is the default thread. Otherwise it is
-the visible thread when it can take a recording, then the default. With neither,
+recording would use. An explicit choice takes priority. Otherwise, pinning uses
+the default thread; without pinning, the visible available thread leads, then
+the default. With no available target,
 the card asks you to choose a thread.
 The second line is the state, such as **Ready · Response · Auto-listen on**,
 **Speaking** with the notice kind and queued count, or **Listening**. If voice
 needs to resume, the card offers **Resume**.
 
 Tap the title and status area to open the voice target thread. Its separate
-chevron opens the target picker whenever the target can be changed. While
-listening, the picker changes the recording target without changing the viewed
-thread; it lists the visible thread first. Navigating to another thread alone does not redirect a recording.
-On mobile, the picker leaves the keyboard closed until you tap its search field.
+chevron opens **Choose target thread**, a popup available with pinning on or off.
+While idle, it chooses the next manual recording, including headset and
+notification Start; while listening, it changes the current recording target.
+The choice leaves the viewed thread and saved default unchanged, and navigation
+does not redirect it. A next-recording choice is consumed when that interaction
+starts, and clears when voice is turned Off or the connection changes.
+Automatic notification replies keep their own targets.
+The popup lists the visible thread first. On mobile, search stays visible and
+the keyboard stays closed until you tap it. **Default voice thread** in quick
+or full settings uses the same search and rows inside a modal or mobile sheet.
 Once recognition finishes, its target and delivery policy stay fixed through
 any connection recovery. The left status icon opens the **Voice** sheet with
 **Audio mode**, **Auto-listen**, **Keep listening by default**, **Follow composer mode**, **Pin default voice
@@ -305,8 +313,8 @@ If **Show Prompts tab** is enabled, open **Prompts** above the composer.
 - Use the row's **Add to composer** icon to insert the text at the caret and
   keep editing.
 
-The desktop picker is searchable. The compact mobile picker keeps the saved
-order but omits search. If another client changes the prompt library while the
+The picker is searchable on desktop and mobile. Mobile search leaves the
+keyboard closed until you tap it; an empty search keeps the saved order. If another client changes the prompt library while the
 picker is open, use its refresh control or reopen it.
 
 ### Add a Task

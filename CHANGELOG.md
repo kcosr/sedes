@@ -6,7 +6,7 @@
 
 - Client protocol 140 raises direct-input text to 256 KiB and its JSON request
   limit to 2 MiB. Upgrade clients with the server. Android native voice uses
-  snapshot version 7 and settings record version 6; older local settings reset
+  snapshot version 8 and settings record version 6; older local settings reset
   with voice Off, preserving separately stored speech credentials. Database
   migration 133 rebuilds the creation and input-queue tables with the larger
   direct-input limit; back up the database before this one-way upgrade.
@@ -438,6 +438,11 @@
   Session stats stays in the thread menu rather than flashing during loading. (#8)
 
 ### Changed
+
+- The voice row picker chooses the current or next recording target independently
+  of the saved default, with pinning on or off. Its popup and the settings default
+  selectors share searchable rows. Mobile Prompts now has search without
+  autofocus, and the voice bar keeps an 8 px icon-to-text gap across states.
 
 - Workpads now follows the active thread in Thread view and its project in
   Project view, while Global view retains its selection. Switching scopes

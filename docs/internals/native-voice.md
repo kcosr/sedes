@@ -2,7 +2,7 @@
 
 The Android `NativeVoice` Capacitor plugin exposes settings, snapshots, and
 actions. `NativeVoiceRuntime` owns the state machine on one handler thread.
-Native snapshot version 7 includes `active.recording` (ID, Keep listening and
+Native snapshot version 8 includes `active.recording` (ID, Keep listening and
 Reconnecting), native-authoritative `canSetKeepListening`/`canSend` actions, the
 Keep listening blocked reason, and an independent `recordingRecovery` item.
 Recovery exposes identity, revision, target, stage, incomplete/unrecognized
@@ -12,10 +12,17 @@ expected connection generation plus recording ID and, for recovery, expected
 recovery revision. Retarget takes the recording ID; Stop takes the interaction
 ID. The strict bridge accepts only this version. The snapshot also includes
 `cleanSpeechText` and registered `clientConnectionToken` alongside `originClientId`. The `pinDefaultVoiceThread` setting is scoped to the
-device/profile/identity with the other voice settings and defaults to false. When true, new explicit recordings and idle control targets use the
-saved default thread regardless of foreground navigation. A missing default
-does not fall back to the foreground thread. Automatic notification targeting
-and active retargeting keep their existing rules.
+device/profile/identity with the other voice settings and defaults to false.
+Pinning supplies the initial manual target from the saved default without
+falling back to the foreground. The nullable native `nextRecordingTarget`
+contains a thread ID/title chosen through generation-fenced
+`setNextRecordingTarget`. This transient state is independent of navigation and
+saved settings. Explicit start arguments take priority, then this pending
+choice, then the pin/foreground/default policy. Manual starts (including headset
+and notification Start) consume it when the interaction is admitted, before
+asynchronous target validation. Local readiness rejection preserves it; Off and
+connection changes clear it. The setter rejects an active interaction or Off.
+Automatic notification replies preserve it and retain their own targets.
 `NativeVoiceRuntimeService` supplies Android foreground execution and controls;
 it does not run a WebView. `NativeSpeechTransport` connects directly to OpenAI
 or the OpenAI-Compatible Speech Server. `NativeVoiceHttp` owns authenticated
@@ -465,15 +472,18 @@ draft without admission. Recording settings edits apply to future recordings.
 The voice toolbar preserves its existing 60 px row at normal text scale, including
 320 px layouts. The left status icon opens the quick sheet and carries a small
 caret. The title/status area opens the voice target thread; a separate chevron
-opens the picker when the native state permits retargeting or an idle default can
-be chosen. Choosing a target does not navigate. On mobile, initial picker focus
+opens an anchored **Choose target thread** popup for native retargeting or the
+next manual recording, regardless of pinning. Choosing a target does not navigate
+or save a default. Quick and full settings share its search/list presentation in
+a **Default voice thread** modal or mobile sheet. On mobile, initial picker focus
 stays outside its search input to avoid opening the keyboard. Infinity is a full-size button
 beside the title/status area, and the right-side Cancel and Send controls are separated.
 Touch regions remain distinct and at least 44 px. Reconnecting and error details
 use the existing status line. An older saved draft marks the quick-controls icon
 and opens the same recovery sheet without adding another row.
 The title and status retain the Ready state's left alignment and gap from the
-status icon when recording controls appear, including narrow layouts.
+status icon when recording controls appear, including narrow layouts. The
+icon-to-text gap is 8 px in every state.
 
 `NativeVoiceSegmenter` counts real 24 kHz samples and analyzes absolute 100 ms
 frames. RMS 0.012 identifies likely pauses, never disposable audio. A 1,200 ms

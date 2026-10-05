@@ -110,7 +110,6 @@ export function ComposerPromptPicker({
   const preventCloseAutoFocusRef = useRef(false);
 
   const visibleCatalog = useMemo(() => {
-    if (mobile) return catalog;
     const needle = query.trim().toLocaleLowerCase();
     if (!needle) return catalog;
     return catalog.filter(
@@ -118,7 +117,7 @@ export function ComposerPromptPicker({
         title.toLocaleLowerCase().includes(needle) ||
         prompt.toLocaleLowerCase().includes(needle),
     );
-  }, [catalog, mobile, query]);
+  }, [catalog, query]);
 
   useEffect(() => {
     sendRefs.current.length = visibleCatalog.length;
@@ -247,7 +246,7 @@ export function ComposerPromptPicker({
       focusRelativeItem(row, 1, action);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      if (!mobile && row === 0) searchRef.current?.focus();
+      if (row === 0) searchRef.current?.focus();
       else focusRelativeItem(row, -1, action);
     } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       event.preventDefault();
@@ -413,6 +412,20 @@ export function ComposerPromptPicker({
     preventCloseAutoFocusRef.current = false;
     event.preventDefault();
   };
+  const searchInput = <SearchableSelectSearch
+    ref={searchRef}
+    type="search"
+    aria-label="Search saved prompts"
+    placeholder="Search prompts"
+    value={query}
+    onChange={(event) => setQuery(event.currentTarget.value)}
+    onKeyDown={(event) => {
+      if (event.key === "ArrowDown" && visibleCatalog.length > 0) {
+        event.preventDefault();
+        focusPromptAction(0, "send");
+      }
+    }}
+  />;
 
   if (mobile) {
     return (
@@ -434,6 +447,7 @@ export function ComposerPromptPicker({
             <DialogTitle>Saved prompts</DialogTitle>
             <DialogDescription>{hint}</DialogDescription>
           </DialogHeader>
+          {searchInput}
           {/* Rows reach into the inset so their text lines up with the title. */}
           <DialogBody>{list("-mx-2")}</DialogBody>
           <DialogFooter>{headerAction}</DialogFooter>
@@ -474,20 +488,7 @@ export function ComposerPromptPicker({
             {headerAction}
           </div>
         </div>
-        <SearchableSelectSearch
-          ref={searchRef}
-          type="search"
-          aria-label="Search saved prompts"
-          placeholder="Search prompts"
-          value={query}
-          onChange={(event) => setQuery(event.currentTarget.value)}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowDown" && visibleCatalog.length > 0) {
-              event.preventDefault();
-              focusPromptAction(0, "send");
-            }
-          }}
-        />
+        {searchInput}
         <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overscroll-contain p-(--menu-panel-padding)">
           {list()}
         </div>

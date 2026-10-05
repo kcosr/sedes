@@ -5,6 +5,19 @@ import org.json.JSONObject;
 import org.junit.Test;
 
 public class NativeVoiceNotificationTargetTest {
+    @Test public void chosenNextTargetOwnsIdleNotificationButDoesNotRedirectActiveOrSavedWork() {
+        JSONObject state = idle(true, true);
+        NativeVoiceJson.put(state, "nextRecordingTarget", NativeVoiceJson.object("threadId", "next", "threadTitle", "Chosen next"));
+        assertEquals("next", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
+        assertEquals("Chosen next", NativeVoiceRuntimeService.notificationTarget(state).optString("threadTitle"));
+        NativeVoiceJson.put(state, "active", NativeVoiceJson.object("threadId", "notice", "threadTitle", "Notice thread"));
+        NativeVoiceJson.put(state, "phase", "speaking");
+        assertEquals("notice", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
+        NativeVoiceJson.put(state, "active", null); NativeVoiceJson.put(state, "phase", "recordingRecovery");
+        NativeVoiceJson.put(state, "recordingRecovery", NativeVoiceJson.object("threadId", "saved", "threadTitle", "Saved thread"));
+        assertEquals("saved", NativeVoiceRuntimeService.notificationTarget(state).optString("threadId"));
+        assertEquals("next", state.optJSONObject("nextRecordingTarget").optString("threadId"));
+    }
     @Test public void aBlockingSavedRecordingUsesItsOwnTargetWithoutHoldingTheWakeLock() {
         JSONObject state = idle(false, false);
         NativeVoiceJson.put(state, "phase", "recordingRecovery");
@@ -69,7 +82,7 @@ public class NativeVoiceNotificationTargetTest {
     }
 
     private static JSONObject idle(boolean pinned, boolean filtered) {
-        return NativeVoiceJson.object("phase", "idle", "active", null,
+        return NativeVoiceJson.object("phase", "idle", "active", null, "nextRecordingTarget", null,
             "foreground", NativeVoiceJson.object("visible", true, "threadId", "foreground", "threadTitle", "Foreground thread"),
             "settings", NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("pinDefaultVoiceThread", pinned,
                 "onlyVoiceThread", filtered, "voiceThreadId", "default", "voiceThreadTitle", "Default thread")).value);

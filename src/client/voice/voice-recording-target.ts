@@ -1,9 +1,11 @@
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
-import type { NativeVoiceSettings } from "./native-voice-plugin.js";
+import type { NativeVoiceState } from "./native-voice-plugin.js";
 
-/** A pin fixes explicit recording to the default; an unavailable pin must open a picker rather than fall back. */
-export function voiceRecordingTarget(threads: readonly NormalizedApplicationThreadSummary[], settings: NativeVoiceSettings, visibleThreadId: string | null): NormalizedApplicationThreadSummary | undefined {
+/** An explicit next target leads; otherwise the pin/visible-thread policy supplies the initial choice. */
+export function voiceRecordingTarget(threads: readonly NormalizedApplicationThreadSummary[], native: NativeVoiceState, visibleThreadId: string | null): NormalizedApplicationThreadSummary | undefined {
+  const { settings, nextRecordingTarget } = native;
   const available = (id: string | null) => threads.find(thread => thread.id === id && thread.available &&
     (thread.inventoryState === "active" || thread.inventoryState === "settled"));
+  if (nextRecordingTarget) return available(nextRecordingTarget.threadId);
   return settings.pinDefaultVoiceThread ? available(settings.voiceThreadId) : available(visibleThreadId) ?? available(settings.voiceThreadId);
 }

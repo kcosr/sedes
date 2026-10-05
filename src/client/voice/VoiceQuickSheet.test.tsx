@@ -58,7 +58,7 @@ describe("voice quick sheet", () => {
     expect(within(sheet).getByRole("switch", { name: "Keep listening by default" })).toHaveAccessibleDescription("New manual and auto-listen recordings");
     expect(within(sheet).getByRole("switch", { name: "Keep listening by default" })).not.toBeChecked();
     expect(within(sheet).getByRole("button", { name: "Default voice thread" })).toHaveAccessibleDescription("Daily standup notes");
-    expect(within(sheet).getByRole("switch", { name: "Pin default voice thread" })).toHaveAccessibleDescription("Record here from any thread");
+    expect(within(sheet).getByRole("switch", { name: "Pin default voice thread" })).toHaveAccessibleDescription("Use this initial recording target");
     expect(within(sheet).getByRole("switch", { name: "Pin default voice thread" })).not.toBeChecked();
     expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).toHaveAccessibleDescription("Limit automatic playback to this thread");
     expect(within(sheet).getByRole("switch", { name: "Only play from default voice thread" })).not.toBeChecked();
@@ -195,7 +195,7 @@ describe("voice quick sheet", () => {
     const choice = within(sheet).getByRole("button", { name: "Default voice thread" });
     act(() => choice.focus());
     fireEvent.click(choice);
-    const picker = await screen.findByRole("dialog", { name: "Choose default voice thread" });
+    const picker = await screen.findByRole("dialog", { name: "Default voice thread" });
     expect(picker).toHaveAttribute("data-layer", "over-dialog");
     expect(picker).toHaveAccessibleDescription("Used when pinned or when no thread is visible.");
     const list = within(picker).getByRole("list", { name: "Voice threads" });
@@ -203,11 +203,11 @@ describe("voice quick sheet", () => {
     expect(within(list).getByRole("button", { name: "Daily standup notes" })).toHaveAccessibleDescription("Current default voice thread");
     const release = holdNextWrite(fake);
     fireEvent.click(within(list).getByRole("button", { name: longTitle }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Choose default voice thread" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Default voice thread" })).toBeNull());
     expect(choice).toHaveFocus();
     expect(choice).toHaveAttribute("aria-disabled", "true");
     fireEvent.click(choice);
-    expect(screen.queryByRole("dialog", { name: "Choose default voice thread" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Default voice thread" })).toBeNull();
     fireEvent.click(within(sheet).getByRole("switch", { name: "Only play from default voice thread" }));
     await release();
     await waitFor(() => expect(choice).toHaveAccessibleDescription("L".repeat(512)));
@@ -224,12 +224,12 @@ describe("voice quick sheet", () => {
   it("closes the default picker with its sheet and does not reopen it on the next visit", async () => {
     const { store, view, sheet, onOpenChange } = await renderSheet(ready());
     fireEvent.click(within(sheet).getByRole("button", { name: "Default voice thread" }));
-    await screen.findByRole("dialog", { name: "Choose default voice thread" });
+    await screen.findByRole("dialog", { name: "Default voice thread" });
     view.rerender(<VoiceQuickSheet store={store} threads={threads} open={false} onOpenChange={onOpenChange} />);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     view.rerender(<VoiceQuickSheet store={store} threads={threads} open onOpenChange={onOpenChange} />);
     expect(screen.getByRole("dialog", { name: "Voice" })).toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "Choose default voice thread" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Default voice thread" })).toBeNull();
     store.dispose();
   });
   it("returns focus to the visible view when choosing Off removes the card that opened the sheet", async () => {
@@ -396,25 +396,21 @@ describe("voice quick sheet", () => {
     expect(within(sheet).queryByRole("button", { name: "Start new recording" })).toBeNull();
     store.dispose();
   });
-  it("saves an unavailable pin before starting a new recording and retains older admission", async () => {
+  it("chooses a target without saving an unavailable pin and retains older admission", async () => {
     navigate(threadPath("long"));
     const saved = recordingRecovery({ stage: "admitting", hasUnrecognizedAudio: false, admission: {
       mutationId: "50000000-0000-4000-8000-000000000001", status: "reconciling", cancelled: false } });
     const native = { ...ready({ pinDefaultVoiceThread: true, voiceThreadId: "offline" }), recordingRecovery: saved };
     const { fake, store, sheet, onOpenChange } = await renderSheet(native);
     fake.plugin.startManualListen.mockResolvedValue({ ...native, stateRevision: 3 });
-    const release = holdNextWrite(fake);
     fireEvent.click(within(sheet).getByRole("button", { name: "Start new recording" }));
-    const picker = await screen.findByRole("dialog", { name: "Choose default voice thread" });
-    expect(picker).toHaveAccessibleDescription("Save this default and start recording.");
+    const picker = await screen.findByRole("dialog", { name: "Choose target thread" });
+    expect(picker).toHaveAccessibleDescription("Choose a thread and start recording.");
     expect(within(picker).queryByRole("button", { name: "Offline review" })).toBeNull();
     fireEvent.click(within(picker).getByRole("button", { name: "Daily standup notes" }));
-    expect(fake.plugin.startManualListen).not.toHaveBeenCalled();
-    expect(onOpenChange).not.toHaveBeenCalled();
-    await release();
     await waitFor(() => expect(fake.plugin.startManualListen).toHaveBeenCalledExactlyOnceWith({ expectedConnectionGeneration: 1,
       threadId: "standup", threadTitle: "Daily standup notes" }));
-    expect(patches(fake)).toEqual([{ voiceThreadId: "standup", voiceThreadTitle: "Daily standup notes" }]);
+    expect(patches(fake)).toEqual([]);
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
     expect(store.getSnapshot().native?.recordingRecovery).toEqual(saved);
     store.dispose();

@@ -71,7 +71,7 @@ public class NativeVoiceRuntimeTest {
     @Test public void staleBridgeGenerationCannotMutateNewConnectionEvenWhenSettingsRevisionMatches() throws Exception {
         try (Fixture f = new Fixture(false, false)) {
             f.onOwner(() -> set(f.runtime, "connectionGeneration", 2L));
-            String[] actions = { "updateSettings", "startManualListen", "retargetActiveRecognition", "skipCurrentPlayback",
+            String[] actions = { "updateSettings", "startManualListen", "setNextRecordingTarget", "retargetActiveRecognition", "skipCurrentPlayback",
                 "stopCurrentInteraction", "resumeInput", "discardInput", "disconnect", "setForegroundContext" };
             for (String action : actions) {
                 JSONObject args = action.equals("updateSettings") ? NativeVoiceJson.object("expectedRevision", 0,
@@ -377,7 +377,7 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
-    @Test public void pinnedDefaultOwnsExplicitHeadsetAndNotificationStartsButStillAllowsRetargeting() throws Exception {
+    @Test public void explicitTargetOverridesPinnedDefaultWhileHeadsetAndNotificationKeepIt() throws Exception {
         for (String source : new String[] { "app", "headset", "start" }) {
             try (Fixture f = new Fixture(false, false)) {
                 f.recognizing(false); assertNull(f.command("stopCurrentInteraction", new JSONObject()));
@@ -386,9 +386,9 @@ public class NativeVoiceRuntimeTest {
                 if (source.equals("app")) assertNull(f.command("startManualListen", NativeVoiceJson.object("threadId", other, "threadTitle", "Explicit other")));
                 else { f.runtime.notificationAction(source, f.runtime.snapshot().getLong("connectionGeneration")); f.flush(); }
                 JSONObject active = f.runtime.snapshot().getJSONObject("active");
-                assertEquals(source, f.target, active.getString("recognitionThreadId"));
-                assertEquals("Pinned default", active.getString("recognitionThreadTitle"));
-                assertNotNull("The pinned target still requires server validation", f.contexts.poll(10, TimeUnit.SECONDS));
+                assertEquals(source, source.equals("app") ? other : f.target, active.getString("recognitionThreadId"));
+                assertEquals(source.equals("app") ? "Explicit other" : "Pinned default", active.getString("recognitionThreadTitle"));
+                assertNotNull("The selected target still requires server validation", f.contexts.poll(10, TimeUnit.SECONDS));
                 f.onOwner(() -> f.invoke("beginCapture", new Class<?>[] { Class.forName("dev.sedes.local.NativeVoiceRuntime$Active") }, field(f.runtime, "active")));
                 assertNotNull(f.speech.transcriptions.poll(10, TimeUnit.SECONDS));
                 f.onOwner(() -> { set(f.runtime, "phase", "listening"); f.invoke("publish", new Class<?>[0]); });
@@ -398,18 +398,21 @@ public class NativeVoiceRuntimeTest {
         }
     }
 
-    @Test public void missingPinnedDefaultRefusesAllStartsWithoutFallingBackToForegroundOrExplicitThread() throws Exception {
+    @Test public void missingPinnedDefaultAllowsExplicitTargetButDoesNotFallBackToForeground() throws Exception {
         for (String source : new String[] { "app", "headset", "start" }) {
             try (Fixture f = new Fixture(false, false)) {
                 f.recognizing(false); assertNull(f.command("stopCurrentInteraction", new JSONObject()));
                 f.settings(NativeVoiceJson.object("pinDefaultVoiceThread", true)); f.foreground(f.target);
-                if (source.equals("app")) assertEquals("voice_target_required",
-                    f.command("startManualListen", NativeVoiceJson.object("threadId", f.target, "threadTitle", "Explicit target")));
+                if (source.equals("app")) {
+                    assertNull(f.command("startManualListen", NativeVoiceJson.object("threadId", f.target, "threadTitle", "Explicit target")));
+                    assertEquals(f.target, f.runtime.snapshot().getJSONObject("active").getString("recognitionThreadId"));
+                    assertNotNull(f.contexts.poll(10, TimeUnit.SECONDS));
+                }
                 else {
                     f.runtime.notificationAction(source, f.runtime.snapshot().getLong("connectionGeneration")); f.flush();
                     assertEquals("voice_target_required", f.lastError().getString("code"));
+                    assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.contexts.isEmpty());
                 }
-                assertTrue(f.runtime.snapshot().isNull("active")); assertTrue(f.contexts.isEmpty());
             }
         }
     }

@@ -5,6 +5,27 @@ import org.junit.Test;
 
 /** Pure runtime policy: blank input, definitive rejection, reconnect backoff and user-facing failure messages. */
 public class NativeVoiceRuntimePolicyTest {
+    @Test public void manualTargetPrefersExplicitThenPendingBeforePinnedOrForegroundDefaults() {
+        org.json.JSONObject settings = NativeVoiceSettings.defaults().patch(0, NativeVoiceJson.object("pinDefaultVoiceThread", true,
+            "voiceThreadId", "default", "voiceThreadTitle", "Saved default")).value;
+        org.json.JSONObject foreground = NativeVoiceJson.object("visible", true, "threadId", "foreground", "threadTitle", "Open thread");
+        org.json.JSONObject pending = NativeVoiceJson.object("threadId", "next", "threadTitle", "Chosen next");
+        org.json.JSONObject explicit = NativeVoiceJson.object("threadId", "explicit", "threadTitle", null);
+        org.json.JSONObject selected = NativeVoiceRuntime.manualTarget(explicit, pending, settings, foreground);
+        assertEquals("explicit", selected.optString("threadId")); assertTrue(selected.isNull("threadTitle"));
+        assertEquals("next", NativeVoiceRuntime.manualTarget(null, pending, settings, foreground).optString("threadId"));
+        assertEquals("default", NativeVoiceRuntime.manualTarget(null, null, settings, foreground).optString("threadId"));
+        NativeVoiceJson.put(settings, "pinDefaultVoiceThread", false);
+        assertEquals("next", NativeVoiceRuntime.manualTarget(null, pending, settings, foreground).optString("threadId"));
+        assertEquals("foreground", NativeVoiceRuntime.manualTarget(null, null, settings, foreground).optString("threadId"));
+        NativeVoiceJson.put(foreground, "visible", false);
+        assertEquals("default", NativeVoiceRuntime.manualTarget(null, null, settings, foreground).optString("threadId"));
+        NativeVoiceJson.put(settings, "pinDefaultVoiceThread", true); NativeVoiceJson.put(settings, "voiceThreadId", null);
+        assertEquals("explicit", NativeVoiceRuntime.manualTarget(explicit, pending, settings, foreground).optString("threadId"));
+        assertEquals("next", NativeVoiceRuntime.manualTarget(null, pending, settings, foreground).optString("threadId"));
+        assertTrue(NativeVoiceRuntime.manualTarget(null, null, settings, foreground).isNull("threadId"));
+        assertEquals("Chosen next", pending.optString("threadTitle"));
+    }
     @Test public void fieldValidationPreservesSchemaNamesWithoutExposingExceptionText() {
         assertEquals("invalid_threadTitle", NativeVoiceRuntime.code(new NativeVoiceJson.InvalidFieldException("threadTitle")));
         assertEquals("invalid_composerMode", NativeVoiceRuntime.code(new NativeVoiceJson.InvalidFieldException("composerMode")));

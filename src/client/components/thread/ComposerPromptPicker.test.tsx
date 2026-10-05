@@ -285,7 +285,8 @@ describe("ComposerPromptPicker", () => {
     expect(dialog).toHaveAccessibleDescription(
       "Tap a prompt to send, or add it to the composer",
     );
-    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Search saved prompts" })).toBeVisible();
+    expect(screen.getByRole("searchbox", { name: "Search saved prompts" })).not.toHaveFocus();
     // Manage sits in the sheet's footer, clear of the close button.
     expect(
       screen.getByRole("button", { name: "Manage" }).closest('[data-slot="dialog-footer"]'),
@@ -301,6 +302,25 @@ describe("ComposerPromptPicker", () => {
     expect(overlay).not.toBeNull();
     await userEvent.click(overlay!);
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
+  });
+
+  it("keeps mobile search visible without autofocus and filters after an explicit tap", async () => {
+    setMobile(true);
+    const { onSend } = renderPicker();
+    await userEvent.click(screen.getByRole("button", { name: "Open saved prompts" }));
+    const search = screen.getByRole("searchbox", { name: "Search saved prompts" });
+    expect(search).toBeVisible();
+    expect(search).not.toHaveFocus();
+    await userEvent.type(search, "focused");
+    expect(search).toHaveFocus();
+    expect(screen.queryByRole("button", { name: "Send prompt: Review changes" })).not.toBeInTheDocument();
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    const remaining = screen.getByRole("button", { name: "Send prompt: Run tests" });
+    expect(remaining).toHaveFocus();
+    fireEvent.keyDown(remaining, { key: "ArrowUp" });
+    expect(search).toHaveFocus();
+    await userEvent.click(screen.getByRole("button", { name: "Send prompt: Run tests" }));
+    expect(onSend).toHaveBeenCalledWith(catalog[1]);
   });
 
   it("does not open from the synthetic click after a downward tab swipe", async () => {

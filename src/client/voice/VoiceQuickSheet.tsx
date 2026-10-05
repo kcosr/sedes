@@ -1,5 +1,5 @@
 import "./voice-sheet.css";
-import { useId, useState, type ReactNode } from "react";
+import { useId, useRef, useState, type ReactNode } from "react";
 import { ChevronRight, Ear, Infinity as InfinityIcon, ListFilter, Merge, MessageSquare, Mic, MicOff, Pin, Settings2, Volume2 } from "lucide-react";
 import type { NormalizedApplicationThreadSummary } from "../../shared/protocol/application.js";
 import { navigate, settingsPath, useRoute } from "../app/router.js";
@@ -41,13 +41,14 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
   onOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
   const state = useVoiceState(store);
-  const [picker, setPicker] = useState<"default" | "start" | "default-start" | null>(null);
+  const [picker, setPicker] = useState<"default" | "start" | null>(null);
+  const pickerGeneration = useRef<number | null>(null);
   const route = useRoute();
   const native = state.native;
   const settings = native?.settings;
   const saved = native ? savedRecording(native) : null;
   // A dismissed sheet or lost connection must not reopen its picker on the next visit.
-  if (picker && (!open || !native)) setPicker(null);
+  if (picker && (!open || !native || native.connectionGeneration !== pickerGeneration.current || (picker === "start" && native.active !== null))) setPicker(null);
   // A pending write locks controls with aria-disabled, not disabled: a disabled control drops focus to the page.
   const locked = state.pending || undefined;
   const update = (patch: Partial<NativeVoiceSettings>) => { if (!state.pending) void store.update(patch).catch(() => undefined); };
@@ -62,8 +63,8 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
   const visibleThreadId = route.name === "thread" ? route.threadId : null;
   const start = () => {
     if (state.pending || !native?.actions.canStart) return;
-    const target = voiceRecordingTarget(threads, native.settings, visibleThreadId);
-    if (!target) { setPicker(native.settings.pinDefaultVoiceThread ? "default-start" : "start"); return; }
+    const target = voiceRecordingTarget(threads, native, visibleThreadId);
+    if (!target) { pickerGeneration.current = native.connectionGeneration; setPicker("start"); return; }
     const context = store.commandContext();
     void store.run(() => store.plugin.startManualListen({ ...context, threadId: target.id, threadTitle: nativeThreadTitle(target.title.text) ?? undefined }))
       .then(() => onOpenChange(false)).catch(() => undefined);
@@ -101,31 +102,31 @@ export function VoiceQuickSheet({ store, threads, open, onOpenChange }: {
             checked={settings.keepListeningByDefault} locked={locked} onCheckedChange={keepListeningByDefault => update({ keepListeningByDefault })} />
           <SwitchRow icon={<Merge aria-hidden="true" />} label="Follow composer mode" description="Use its Steer or Queue choice"
             checked={settings.followComposerMode} locked={locked} onCheckedChange={followComposerMode => update({ followComposerMode })} />
-          <SwitchRow icon={<Pin aria-hidden="true" />} label="Pin default voice thread" description="Record here from any thread"
+          <SwitchRow icon={<Pin aria-hidden="true" />} label="Pin default voice thread" description="Use this initial recording target"
             checked={settings.pinDefaultVoiceThread} locked={locked} onCheckedChange={pinDefaultVoiceThread => update({ pinDefaultVoiceThread })} />
           <SwitchRow icon={<ListFilter aria-hidden="true" />} label="Only play from default voice thread"
             description={settings.voiceThreadId ? "Limit automatic playback to this thread" : "Choose a default thread first"}
             checked={settings.onlyVoiceThread} locked={locked} onCheckedChange={onlyVoiceThread => update({ onlyVoiceThread })} />
-          <DefaultThreadRow choice={defaultThread} locked={locked} onClick={() => { if (!state.pending) setPicker("default"); }} />
+          <DefaultThreadRow choice={defaultThread} locked={locked} onClick={() => { if (!state.pending) { pickerGeneration.current = native!.connectionGeneration; setPicker("default"); } }} />
           <Separator className="mx-3 my-1 data-[orientation=horizontal]:w-auto" />
           <SettingsRow onOpenChange={onOpenChange} />
         </div>
       </> : <div className="-mx-3 -mt-2 flex flex-col"><SettingsRow onOpenChange={onOpenChange} /></div>}
       <VoiceThreadPicker threads={threads} open={picker !== null} onOpenChange={open => { if (!open) setPicker(null); }}
-        title={picker === "start" ? "Choose voice thread" : "Choose default voice thread"}
-        description={picker === "start" ? "Recognized text will be sent to the thread you select." : picker === "default-start" ? "Save this default and start recording." : "Used when pinned or when no thread is visible."} layer="over-dialog"
+        title={picker === "start" ? "Choose target thread" : "Default voice thread"}
+        description={picker === "start" ? "Choose a thread and start recording." : "Used when pinned or when no thread is visible."} layer="over-dialog"
+        selectedThreadId={picker === "start" ? native?.nextRecordingTarget?.threadId : settings?.voiceThreadId}
         pinned={picker === "start" ? { threadId: visibleThreadId, label: "This thread" } : { threadId: settings?.voiceThreadId ?? null, label: "Current default voice thread" }}
         onSelect={thread => {
           const target = { threadId: thread.id, threadTitle: nativeThreadTitle(thread.title.text) ?? undefined };
-          if (picker === "default") { update({ voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) }); return; }
-          const context = store.commandContext();
-          if (picker === "default-start") {
-            void store.update({ voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) }).then(() => store.run(() => {
-              if (store.commandContext().expectedConnectionGeneration !== context.expectedConnectionGeneration)
-                throw new Error("Voice connection changed. Start recording again.");
-              return store.plugin.startManualListen({ ...context, ...target });
-            })).then(() => onOpenChange(false)).catch(() => undefined);
-          } else void store.run(() => store.plugin.startManualListen({ ...context, ...target })).then(() => onOpenChange(false)).catch(() => undefined);
+          const expectedConnectionGeneration = pickerGeneration.current;
+          if (expectedConnectionGeneration === null) return;
+          if (picker === "default") {
+            void store.update(current => {
+              if (current.connectionGeneration !== expectedConnectionGeneration) throw new Error("Voice connection changed. Choose the thread again.");
+              return { voiceThreadId: thread.id, voiceThreadTitle: nativeThreadTitle(thread.title.text) };
+            }).catch(() => undefined);
+          } else void store.run(() => store.plugin.startManualListen({ expectedConnectionGeneration, ...target })).then(() => onOpenChange(false)).catch(() => undefined);
         }} />
     </DialogContent>
   </Dialog>;

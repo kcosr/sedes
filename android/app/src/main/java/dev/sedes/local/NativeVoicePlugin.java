@@ -36,6 +36,7 @@ public final class NativeVoicePlugin extends Plugin {
     @PluginMethod public void getState(PluginCall call) { run("getState", call, false); }
     @PluginMethod public void listInputDevices(PluginCall call) { run("listInputDevices", call, false); }
     @PluginMethod public void setForegroundContext(PluginCall call) { run("setForegroundContext", call, false); }
+    @PluginMethod public void setNextRecordingTarget(PluginCall call) { run("setNextRecordingTarget", call, true); }
     @PluginMethod public void retargetActiveRecognition(PluginCall call) { run("retargetActiveRecognition", call, false); }
     @PluginMethod public void setKeepListening(PluginCall call) { run("setKeepListening", call, false); }
     @PluginMethod public void sendRecording(PluginCall call) { run("sendRecording", call, false); }

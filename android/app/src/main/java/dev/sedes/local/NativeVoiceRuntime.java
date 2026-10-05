@@ -85,6 +85,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
     private NativeVoiceSettings settings = NativeVoiceSettings.defaults();
     private String profileId, origin, identity, binding, credential, csrf, originId;
     private String phase = "off", foregroundThread, foregroundTitle, composerMode = "queue";
+    private JSONObject nextRecordingTarget;
     private boolean foregroundVisible, sessionStarted, policyKnown, streamFailureReported;
     private int streamFailures;
     private volatile boolean nativeVisible;
@@ -205,6 +206,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
                         if (binding == null) throw new IllegalStateException("authentication_required");
                         refreshSpeechCatalog(NativeVoiceJson.bool(args, "force")); break;
                     case "setForegroundContext": foreground(args); break;
+                    case "setNextRecordingTarget": setNextRecordingTarget(args); break;
                     case "startManualListen": manual(args); break;
                     case "retargetActiveRecognition": retarget(args, reply); return;
                     case "setKeepListening": setKeepListening(args, reply); return;
@@ -434,6 +436,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         clientControls.disconnect();
         waitingClientAdmissions.clear(); preparingAdmissions.clear();
         inputSubmissionContext = new Object();
+        nextRecordingTarget = null;
         // Cancellation intent covers every journaled input, including the active admission.
         if (cancelIntended) cancelOutstanding(false);
         cancelActive(false, "connection_changed");
@@ -462,6 +465,7 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (catalogConfigurationChanged(previous, next)) refreshSpeechCatalog(true);
         else if (!previous.active() && next.active()) refreshSpeechCatalog(false);
         if (!next.active()) {
+            nextRecordingTarget = null;
             clientActions.clear();
             cancelOutstanding(true); cancelActive(true, "voice_off"); queue.clear("voice_off"); stopSession(); phase = "off";
         } else {
@@ -953,14 +957,38 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
         if (!sessionStarted || !speechReady() || binding == null) throw new IllegalStateException("voice_not_ready");
         if (defaultHeldBlocked()) throw new IllegalStateException("saved_recording_pending");
         if (active != null || blockingDictation()) throw new IllegalStateException("voice_busy");
-        if (settings.flag("pinDefaultVoiceThread")) {
-            target = settings.text("voiceThreadId"); title = settings.text("voiceThreadTitle");
-        } else {
-            if (target == null && foregroundVisible) { target = foregroundThread; title = foregroundTitle; }
-            if (target == null) { target = settings.text("voiceThreadId"); title = settings.text("voiceThreadTitle"); }
-        }
+        JSONObject selected = manualTarget(NativeVoiceJson.object("threadId", target, "threadTitle", title), nextRecordingTarget,
+            settings.value, NativeVoiceJson.object("visible", foregroundVisible, "threadId", foregroundThread, "threadTitle", foregroundTitle));
+        target = NativeVoiceJson.nullableString(selected, "threadId", 512); title = NativeVoiceJson.nullableString(selected, "threadTitle", 512);
         if (target == null) throw new IllegalStateException("voice_target_required");
+        nextRecordingTarget = null;
         active = new Active(target, title); validateTarget(active, false);
+    }
+    private void setNextRecordingTarget(JSONObject args) {
+        NativeVoiceJson.keys(args, "threadId", "threadTitle");
+        String target = NativeVoiceJson.string(args, "threadId", 512), title = NativeVoiceJson.nullableString(args, "threadTitle", 512);
+        if (binding == null) throw new IllegalStateException("authentication_required");
+        if (!settings.active()) throw new IllegalStateException("voice_not_ready");
+        if (active != null) throw new IllegalStateException("voice_busy");
+        clientActions.clear(); inputSubmissionContext = new Object();
+        nextRecordingTarget = NativeVoiceJson.object("threadId", target, "threadTitle", title);
+    }
+    /** Shared by manual capture and its idle Android notification label. */
+    static JSONObject manualTarget(JSONObject supplied, JSONObject pending, JSONObject settings, JSONObject foreground) {
+        String target = supplied == null ? null : NativeVoiceJson.nullableString(supplied, "threadId", 512);
+        String title = supplied == null ? null : NativeVoiceJson.nullableString(supplied, "threadTitle", 512);
+        if (target == null && pending != null) {
+            target = NativeVoiceJson.nullableString(pending, "threadId", 512); title = NativeVoiceJson.nullableString(pending, "threadTitle", 512);
+        }
+        if (target == null && settings != null) {
+            if (!settings.optBoolean("pinDefaultVoiceThread") && foreground != null && foreground.optBoolean("visible")) {
+                target = NativeVoiceJson.nullableString(foreground, "threadId", 512); title = NativeVoiceJson.nullableString(foreground, "threadTitle", 512);
+            }
+            if (target == null) {
+                target = NativeVoiceJson.nullableString(settings, "voiceThreadId", 512); title = NativeVoiceJson.nullableString(settings, "voiceThreadTitle", 512);
+            }
+        }
+        return NativeVoiceJson.object("threadId", target, "threadTitle", target == null ? null : title);
     }
     private void retarget(JSONObject args, Reply reply) {
         clientActions.clear(); inputSubmissionContext = new Object();
@@ -2231,13 +2259,13 @@ final class NativeVoiceRuntime implements NativeVoiceAudio.Listener, NativeClien
             "recognitionThreadTitle", active.targetTitle, "automatic", active.automatic, "recording", recording);
         String readiness = readiness(), blocked = keepListeningBlockedReason();
         boolean ready = readiness.equals("ready");
-        JSONObject next = NativeVoiceJson.object("version", 7, "connectionGeneration", connectionGeneration,
+        JSONObject next = NativeVoiceJson.object("version", 8, "connectionGeneration", connectionGeneration,
             "profileId", profileId, "serverOrigin", origin, "identity", identity, "originClientId", originId, "clientConnectionToken", clientConnectionToken,
             "settingsRevision", settings.revision, "settings", settings.value, "phase", phase, "ready", ready,
             "speech", NativeVoiceJson.object("credentialConfigured", speechCredential != null, "catalogStatus", catalogStatus,
                 "catalog", speechCatalog == null ? null : NativeSpeechCatalog.picker(speechCatalog), "error", catalogError == null ? null : message(catalogError)),
             "readiness", readiness, "foreground", NativeVoiceJson.object("visible", foregroundVisible, "threadId", foregroundThread, "threadTitle", foregroundTitle),
-            "active", current, "queue", queue.state(), "actions", NativeVoiceJson.object("canStart", canListen() && active == null && !blockingDictation() && !defaultHeldBlocked(),
+            "active", current, "nextRecordingTarget", nextRecordingTarget, "queue", queue.state(), "actions", NativeVoiceJson.object("canStart", canListen() && active == null && !blockingDictation() && !defaultHeldBlocked(),
                 "canStop", active != null && !active.recoveryRecognition && !active.recoverySend, "canSkip", active != null && (phase.equals("speaking") || phase.equals("synthesizing")),
                 "canRetarget", active != null && phase.equals("listening") && !active.captureStopping && !active.endpointReached && !active.recordingMutationPending,
                 "canSetKeepListening", blocked == null, "keepListeningBlockedReason", blocked,

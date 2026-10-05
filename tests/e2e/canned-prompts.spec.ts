@@ -433,9 +433,9 @@ test("saved prompts flow from principal settings through desktop and mobile deli
       (button) => button.scrollWidth <= button.clientWidth,
     ),
   ).toBe(true);
-  await expect(
-    mobilePicker.getByRole("searchbox", { name: "Search saved prompts" }),
-  ).toHaveCount(0);
+  const mobileSearch = mobilePicker.getByRole("searchbox", { name: "Search saved prompts" });
+  await expect(mobileSearch).toBeVisible();
+  await expect(mobileSearch).not.toBeFocused();
   // The shared sheet dismisses on the click a tap outside produces (a touch
   // that scrolls does not); raw CDP touches synthesize no click, so click.
   await page.mouse.click(20, 400);
