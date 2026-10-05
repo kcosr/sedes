@@ -291,6 +291,8 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   await expect(row).toHaveCount(0);
   await pane.getByRole("button", { name: "View options", exact: true }).click();
   await page.getByRole("menuitemcheckbox", { name: "Archived", exact: true }).click();
+  // View options stay open for another pick.
+  await page.keyboard.press("Escape");
   await expect(panel.getByRole("button", { name: "Remove filter: Archived", exact: true })).toBeVisible();
   await row.click();
   await panel.getByRole("button", { name: "Unarchive", exact: true }).click();
@@ -352,6 +354,8 @@ test("Workpads retain attributed history, reconcile shared drafts, and move betw
   const archivedOption = page.getByRole("menuitemcheckbox", { name: "Archived", exact: true });
   await expect(archivedOption).toBeChecked();
   await archivedOption.click();
+  // View options stay open for another pick.
+  await page.keyboard.press("Escape");
   await expect(panel.getByRole("button", { name: "Remove filter: Archived", exact: true })).toHaveCount(0);
   await expect(addRow).toHaveAttribute("placeholder", "New workpad in this project…");
   await expect(panel.getByText("No workpads in this project yet", { exact: true })).toBeVisible();
