@@ -318,10 +318,36 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await expect(toolbar.getByRole("button", { name: "Discard saved dictation" })).toBeEnabled();
   await expect(toolbar.getByRole("button", { name: "Start voice recording" })).toHaveCount(0);
   const savedLabel = toolbar.locator(".voice-card-saved-label");
-  expect(await savedLabel.evaluate(label => label.getBoundingClientRect().right <= label.parentElement!.getBoundingClientRect().right)).toBe(true);
+  const savedLabelBounds = await savedLabel.evaluate(label => ({ right: label.getBoundingClientRect().right, parentRight: label.parentElement!.getBoundingClientRect().right }));
+  expect(savedLabelBounds.right).toBeLessThanOrEqual(savedLabelBounds.parentRight);
+  const savedTargets = await Promise.all([
+    toolbar.locator(".voice-card-tile").boundingBox(), toolbar.locator(".voice-card-body").boundingBox(),
+    toolbar.getByRole("button", { name: "Retry saved dictation" }).boundingBox(),
+    toolbar.getByRole("button", { name: "Discard saved dictation" }).boundingBox(), toolbar.locator(".voice-card-send-slot").boundingBox(),
+  ]);
+  for (const [index, target] of savedTargets.entries()) {
+    expect(target!.width).toBeGreaterThanOrEqual(44);
+    expect(target!.height).toBeGreaterThanOrEqual(44);
+    expect(target!.x + target!.width).toBeLessThanOrEqual(320);
+    if (index) expect(target!.x).toBeGreaterThanOrEqual(savedTargets[index - 1]!.x + savedTargets[index - 1]!.width);
+  }
   await expectNoPageOverflow(page);
   await measureRow("savedOff");
   await capture(page, testInfo, "voice-saved-dictation-off-narrow.png");
+  await publishVoiceState(page, { phase: "recordingRecovery", settings: base.settings,
+    actions: { ...base.actions, canStart: false, canResume: true } });
+  await expect(toolbar.getByRole("button", { name: "Resume voice", exact: true })).toBeVisible();
+  const resumeLabelBounds = await savedLabel.evaluate(label => ({ right: label.getBoundingClientRect().right, parentRight: label.parentElement!.getBoundingClientRect().right }));
+  expect(resumeLabelBounds.right).toBeLessThanOrEqual(resumeLabelBounds.parentRight);
+  for (const width of [334, 344, 360, 378]) {
+    await page.setViewportSize({ width, height: 780 });
+    const bounds = await savedLabel.evaluate(label => ({ right: label.getBoundingClientRect().right, parentRight: label.parentElement!.getBoundingClientRect().right }));
+    expect(bounds.right, `Saved label fits beside Resume at ${width}px`).toBeLessThanOrEqual(bounds.parentRight);
+    await measureRow(`savedResume${width}`);
+    await expectNoPageOverflow(page);
+  }
+  await page.setViewportSize({ width: 320, height: 780 });
+  await publishVoiceState(page, { phase: "off", settings: { ...base.settings, audioMode: "off" }, actions: { ...base.actions, canStart: false } });
   await page.reload();
   await expect(toolbar).toContainText("Saved dictation");
   await toolbar.getByRole("button", { name: "Open voice controls" }).click();
@@ -334,6 +360,8 @@ test("native dictation keeps its controls reachable on narrow screens and retain
 
   await publishVoiceState(page, { phase: "recordingRecovery", ready: true, readiness: "ready", settings: base.settings,
     recordingRecovery: { ...saved, revision: 5, canRetryRecognition: true } });
+  const savedRetryBox = (await toolbar.getByRole("button", { name: "Retry saved dictation" }).boundingBox())!;
+  const interruptedDiscardBox = (await toolbar.getByRole("button", { name: "Discard saved dictation" }).boundingBox())!;
   await toolbar.getByRole("button", { name: "Retry saved dictation" }).click();
   await expect(toolbar).toContainText("Recognizing saved audio…");
   await expect(toolbar.getByRole("button", { name: /Stop voice interaction|Cancel voice recording/ })).toHaveCount(0);
@@ -347,6 +375,9 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await expect(toolbar).toContainText("Ready to send");
   await expect(toolbar).toContainText("End may be missing");
   await expect(toolbar.getByRole("button", { name: "Send saved dictation" })).toBeEnabled();
+  await expect.poll(() => toolbar.getByRole("button", { name: "Discard saved dictation" }).boundingBox()).toEqual(interruptedDiscardBox);
+  await page.mouse.click(savedRetryBox.x + savedRetryBox.width / 2, savedRetryBox.y + savedRetryBox.height / 2);
+  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "discardRecording"))).toEqual([]);
   await expectNoPageOverflow(page);
   await measureRow("readyOff");
   await capture(page, testInfo, "voice-ready-dictation-off-narrow.png");
@@ -382,11 +413,18 @@ test("native dictation keeps its controls reachable on narrow screens and retain
   await page.mouse.click(savedSendBox.x + savedSendBox.width / 2, savedSendBox.y + savedSendBox.height / 2);
   await expect(toolbar).toContainText("Sending…");
   expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "discardRecording"))).toEqual([]);
+  await publishVoiceState(page, { recordingRecovery: { ...saved, revision: 9, stage: "rejected", reason: "The server rejected this input.",
+    hasUnrecognizedAudio: false, captureIncomplete: false, canRetryRecognition: false, canSend: false } });
+  await expect.poll(() => toolbar.getByRole("button", { name: "Discard saved dictation" }).boundingBox()).toEqual(savedDiscardBox);
+  await page.mouse.click(savedSendBox.x + savedSendBox.width / 2, savedSendBox.y + savedSendBox.height / 2);
+  expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "discardRecording"))).toEqual([]);
+  await expectNoPageOverflow(page);
+  await capture(page, testInfo, "voice-saved-rejected-narrow.png");
   await toolbar.getByRole("button", { name: "Discard saved dictation" }).click();
   await expect(toolbar.getByRole("button", { name: "Discard saved dictation" })).toHaveCount(0);
   expect(await page.evaluate(() => ({ active: window.__voiceFixture.state.active, saved: window.__voiceFixture.state.recordingRecovery }))).toEqual({ active: null, saved: null });
   expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "discardRecording"))).toEqual([
-    { method: "discardRecording", args: { expectedConnectionGeneration: 1, recordingId: "recording", expectedRecoveryRevision: 8 } },
+    { method: "discardRecording", args: { expectedConnectionGeneration: 1, recordingId: "recording", expectedRecoveryRevision: 9 } },
   ]);
   expect(await page.evaluate(() => window.__voiceFixture.calls.filter(call => call.method === "stopCurrentInteraction"))).toEqual([]);
   await publishVoiceState(page, { phase: "listening", settings: base.settings, ready: true, readiness: "ready",

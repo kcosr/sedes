@@ -491,8 +491,11 @@ and admission reserve the Send button's space and preserve the action sizes
 and right inset. Neither toggling Keep listening nor a repeated Start/Send tap
 moves Cancel/Stop under the user's last tap. The extra right-gutter space is
 limited to docks at most 315 px wide; 360 px phones keep their normal inset and
-control gaps. Saved dictation also reserves Send's space during admission so
-Discard cannot move into its former hit region.
+control gaps. Every saved-dictation stage reserves Retry and Send space so
+Discard never moves into their former hit regions, and an old Retry tap cannot
+navigate through the expanded title. At the narrowest width,
+Retry/Resume uses its icon and the action gaps yield to the full saved-state
+label and fixed, non-overlapping 44 px touch targets.
 
 `NativeVoiceSegmenter` counts real 24 kHz samples and analyzes absolute 100 ms
 frames. RMS 0.012 identifies likely pauses, never disposable audio. A 1,200 ms

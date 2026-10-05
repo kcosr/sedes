@@ -441,6 +441,11 @@
   font-weight: var(--weight-medium);
 }
 
+.voice-card-retry-placeholder {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .voice-card-retry svg {
   width: var(--icon-md);
   height: var(--icon-md);
@@ -497,14 +502,16 @@
     margin-inline-end: 2px;
   }
 
-  .voice-card[data-input-actions] {
+  .voice-card[data-input-actions],
+  .voice-card[data-saved] {
     gap: 4px;
     padding-inline-end: 3px;
   }
 
   /* Keep the tile and both text lines at their Ready-state positions. Only
      the gaps between the controls yield as recording adds more actions. */
-  .voice-card[data-input-actions] .voice-card-tile {
+  .voice-card[data-input-actions] .voice-card-tile,
+  .voice-card[data-saved] .voice-card-tile {
     margin-inline-end: 4px;
   }
 
@@ -549,7 +556,8 @@
 /* Six distinct touch regions fit a 320px phone with full-size Listening
    text. Use the right gutter only, so the Ready-state left inset stays fixed. */
 @container voice-dock (max-width: 315px) {
-  .voice-card[data-input-actions] {
+  .voice-card[data-input-actions],
+  .voice-card[data-saved] {
     width: calc(100% + 8px);
     margin-inline: 0 -8px;
   }
@@ -559,4 +567,27 @@
   .voice-card[data-input-actions] .voice-card-target {
     margin-inline: -3px;
   }
+
+  .voice-card[data-saved] .voice-card-actions {
+    gap: 0;
+  }
+}
+
+@container voice-dock (max-width: 359px) {
+  /* Preserve the complete saved-state label beside Retry and the two fixed
+     action slots without reducing any touch target. */
+  .voice-card[data-saved] > .voice-card-retry {
+    margin-inline: -3px;
+    width: 44px;
+    padding-inline: 0;
+  }
+
+  .voice-card[data-saved] > .voice-card-retry span {
+    display: none;
+  }
+
+  .voice-card[data-saved] > .voice-card-retry svg {
+    display: block;
+  }
+
 }

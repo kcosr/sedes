@@ -186,14 +186,15 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
             const command = { expectedConnectionGeneration: native.connectionGeneration, recordingId: capture.id, enabled: !capture.keepListening };
             act(() => store.plugin.setKeepListening(command));
           }}><InfinityIcon strokeWidth={1.8} aria-hidden="true" /></button> : null}
-        {showingRecovery && (saved.hasUnrecognizedAudio || saved.canRetryRecognition) ? resumable ? <button type="button" className="voice-card-retry" aria-label="Resume voice" aria-disabled={state.pending || undefined}
+        {showingRecovery ? (saved.hasUnrecognizedAudio || saved.canRetryRecognition) ? resumable ? <button type="button" className="voice-card-retry" aria-label="Resume voice" title="Resume voice" aria-disabled={state.pending || undefined}
           onClick={() => { if (!state.pending) void resumeVoice(store).catch(() => undefined); }}><RotateCcw aria-hidden="true" /><span>Resume</span></button>
           : <button type="button" className="voice-card-retry" aria-label="Retry saved dictation" title={!saved.canRetryRecognition ? cardReadiness(native.readiness) : "Retry recognition"}
           aria-disabled={state.pending || !saved.canRetryRecognition || undefined} onClick={() => {
             if (state.pending || !saved.canRetryRecognition) return;
             const command = recordingRecoveryContext(native, saved);
             act(() => store.plugin.retryRecordingRecognition(command));
-          }}><RotateCcw aria-hidden="true" /><span>Retry</span></button> : null}
+          }}><RotateCcw aria-hidden="true" /><span>Retry</span></button>
+          : <span className="voice-card-retry voice-card-retry-placeholder" aria-hidden="true"><RotateCcw /><span>Retry</span></span> : null}
         <div className="voice-card-actions">
           {showingRecovery ? <>
             <button type="button" className="voice-card-button" data-variant="ghost" aria-label="Discard saved dictation" title="Discard"
@@ -209,7 +210,7 @@ function NativeVoiceControls({ store, threads }: { store: NativeVoiceStore; thre
                 const command = recordingRecoveryContext(native, saved);
                 act(() => store.plugin.sendRecoveredRecording({ ...command, acknowledgeIncomplete: false }));
               }}><ArrowUp strokeWidth={1.8} aria-hidden="true" /></button>
-              : saved.stage === "admitting" ? <span className="voice-card-send-slot" aria-hidden="true" /> : null}
+              : <span className="voice-card-send-slot" aria-hidden="true" />}
           </> : <>
           {needsStorageRetry ? <button type="button" className="voice-card-retry" aria-label="Retry voice connection" aria-disabled={state.pending || undefined}
             onClick={() => { if (!state.pending) void store.reconnect().catch(() => undefined); }}><RotateCcw aria-hidden="true" /><span>Retry</span></button>
